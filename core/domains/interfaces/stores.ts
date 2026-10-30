@@ -241,8 +241,17 @@ export class InMemoryInterfaceLinkStore implements InterfaceLinkStore {
   }
 }
 
+/**
+ * Filter for the Principal Binding projection. Without `workspaceId` the
+ * projection spans every internal partition (TASK-0118 9.1): the exact
+ * current Principal Binding is the only authority either way.
+ */
+export type InterfaceAuthorizationFilter =
+  & Omit<InterfaceListFilter, "workspaceId">
+  & { readonly workspaceId?: string };
+
 export interface InterfaceAuthorizationPageInput {
-  readonly filter: InterfaceListFilter;
+  readonly filter: InterfaceAuthorizationFilter;
   readonly subjectId: string;
   readonly permission: string;
   readonly params: PageParams;
@@ -595,14 +604,17 @@ class InMemoryInterfaceAuthorizationQuery
   async listPage(
     input: InterfaceAuthorizationPageInput,
   ): Promise<Page<Interface>> {
-    const candidates = (
-      await this.interfaces.list({
-        ...input.filter,
-        phase: input.filter.phase ?? "Resolved",
-        includeRetired: false,
-        limit: undefined,
-      })
-    ).filter((iface) => {
+    const filter = {
+      ...input.filter,
+      phase: input.filter.phase ?? "Resolved",
+      includeRetired: false,
+      limit: undefined,
+    };
+    const workspaceId = filter.workspaceId;
+    const listed = workspaceId !== undefined
+      ? await this.interfaces.list({ ...filter, workspaceId })
+      : await this.#listAcrossPartitions(filter);
+    const candidates = listed.filter((iface) => {
       if (hasUnownedCapsuleOutput(iface)) return false;
       if (
         input.uiSurfaceCandidates &&
@@ -638,6 +650,25 @@ class InMemoryInterfaceAuthorizationQuery
       createdAt: iface.metadata.createdAt,
       id: iface.metadata.id,
     }));
+  }
+
+  /** Every partition, through the store's own global keyset scan. */
+  async #listAcrossPartitions(
+    filter: InterfaceAuthorizationFilter,
+  ): Promise<readonly Interface[]> {
+    const rows: Interface[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.interfaces.listProjectionPage({
+        ...(cursor !== undefined ? { cursor } : {}),
+        limit: 500,
+      });
+      for (const iface of page) {
+        if (matches(iface, { ...filter, workspaceId: iface.metadata.workspaceId })) rows.push(iface);
+      }
+      if (page.length < 500) return rows;
+      cursor = page[page.length - 1]!.metadata.id;
+    }
   }
 }
 

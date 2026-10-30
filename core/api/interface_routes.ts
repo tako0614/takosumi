@@ -39,6 +39,18 @@ export interface RegisterInterfaceRoutesOptions {
     readonly workspaceId: string;
     readonly request: Request;
   }) => boolean | Promise<boolean>;
+  /**
+   * Optional per-app decision (TASK-0118 9.1) for an account actor that is
+   * not bound to a Workspace, on a Capsule-owned Interface or a `capsuleId`
+   * listing. `true` / `false` decide; `undefined` means the app has no
+   * ownership row yet and the Workspace decision above applies.
+   */
+  readonly authorizeInterfaceApp?: (input: {
+    readonly actor: ActorContext;
+    readonly capsuleId: string;
+    readonly access: "read" | "write";
+    readonly request: Request;
+  }) => boolean | undefined | Promise<boolean | undefined>;
 }
 
 export const INTERFACE_ENDPOINTS: readonly ApiEndpoint[] = [
@@ -51,6 +63,7 @@ export const INTERFACE_ENDPOINTS: readonly ApiEndpoint[] = [
     okSchema: "ListInterfacesResponse",
     query: [
       "workspaceId",
+      "capsuleId",
       "workspace",
       "type",
       "phase",
@@ -205,15 +218,11 @@ export function registerInterfaceRoutes(
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
-      const workspaceId = c.req.query("workspaceId");
-      if (!workspaceId) throw invalid("workspaceId is required");
-      const scoped = await scopeInterfaceWorkspace(
-        c,
-        options,
-        auth.actor,
-        workspaceId,
-      );
-      if (!scoped.ok) return scoped.response;
+      const requestedWorkspaceId = c.req.query("workspaceId");
+      const capsuleId = c.req.query("capsuleId");
+      if (requestedWorkspaceId && capsuleId) {
+        throw invalid("workspaceId and capsuleId cannot be combined");
+      }
       const phase = c.req.query("phase") as InterfacePhase | undefined;
       if (phase && !INTERFACE_PHASES.has(phase)) {
         throw invalid("phase is not a valid Interface phase");
@@ -223,14 +232,49 @@ export function registerInterfaceRoutes(
       if (ownerKind && !OWNER_KINDS.has(ownerKind)) {
         throw invalid("ownerKind is not supported");
       }
-      const filter = {
-        workspaceId,
+      const ownerId = c.req.query("ownerId");
+      if (capsuleId && ((ownerKind && ownerKind !== "Capsule") || (ownerId && ownerId !== capsuleId))) {
+        throw invalid("capsuleId selects the Capsule-owned Interfaces of that app");
+      }
+      const owner = capsuleId
+        ? { ownerKind: "Capsule" as const, ownerId: capsuleId }
+        : {
+          ...(ownerKind ? { ownerKind } : {}),
+          ...(ownerId ? { ownerId } : {}),
+        };
+      const selector = {
         ...(c.req.query("type") ? { type: c.req.query("type") } : {}),
         ...(phase ? { phase } : {}),
-        ...(ownerKind ? { ownerKind } : {}),
-        ...(c.req.query("ownerId") ? { ownerId: c.req.query("ownerId") } : {}),
+        ...owner,
         includeRetired: truthy(c.req.query("includeRetired")),
       };
+      // An app-bound runtime principal (no Workspace) discovers by its exact
+      // current Principal Bindings across every internal partition.
+      if (!requestedWorkspaceId && isRuntimePrincipal(auth.actor) && !auth.actor.workspaceId) {
+        const page = await options.service.listAuthorizedForPrincipalAcrossPartitionsPage(
+          selector,
+          auth.actor.actorAccountId,
+          requireRuntimePermission(c),
+          {},
+        );
+        return c.json({ interfaces: page.items }, 200);
+      }
+      let workspaceId = requestedWorkspaceId;
+      let scoped: InterfaceWorkspaceAuthResult;
+      if (!workspaceId && capsuleId) {
+        // The app's own partition; the per-app decision (or, for an app
+        // without an ownership row, the Workspace decision) authorizes it.
+        workspaceId = (await options.service.getAppPartition(capsuleId)).workspaceId;
+        scoped = await scopeInterface(c, options, auth.actor, {
+          workspaceId,
+          ownerRef: { kind: "Capsule", id: capsuleId },
+        });
+      } else {
+        if (!workspaceId) throw invalid("workspaceId or capsuleId is required");
+        scoped = await scopeInterfaceWorkspace(c, options, auth.actor, workspaceId);
+      }
+      if (!scoped.ok) return scoped.response;
+      const filter = { workspaceId, ...selector };
       const interfaces = isRuntimePrincipal(scoped.actor)
         ? await options.service.listAuthorizedForPrincipal(
             filter,
@@ -253,11 +297,11 @@ export function registerInterfaceRoutes(
             requireRuntimePermission(c),
           )
         : await options.service.get(c.req.param("id"));
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
-        record.metadata.workspaceId,
+        record.metadata,
       );
       if (!scoped.ok) return scoped.response;
       return withEtag(c, record, 200);
@@ -279,11 +323,11 @@ export function registerInterfaceRoutes(
         runtimeActor.actorAccountId,
         permission,
       );
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         runtimeActor,
-        iface.metadata.workspaceId,
+        iface.metadata,
       );
       if (!scoped.ok) return scoped.response;
       const issued = await options.service.issueToken(
@@ -308,11 +352,11 @@ export function registerInterfaceRoutes(
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
       const current = await options.service.get(c.req.param("id"));
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
-        current.metadata.workspaceId,
+        current.metadata,
       );
       if (!scoped.ok) return scoped.response;
       requireEtag(c, current);
@@ -335,11 +379,11 @@ export function registerInterfaceRoutes(
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
       const current = await options.service.get(c.req.param("id"));
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
-        current.metadata.workspaceId,
+        current.metadata,
       );
       if (!scoped.ok) return scoped.response;
       requireEtag(c, current);
@@ -362,11 +406,11 @@ export function registerInterfaceRoutes(
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
       const current = await options.service.get(c.req.param("id"));
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
-        current.metadata.workspaceId,
+        current.metadata,
       );
       if (!scoped.ok) return scoped.response;
       const body = await readJsonObject(c.req.raw, { maxBytes: 65_536 });
@@ -388,11 +432,11 @@ export function registerInterfaceRoutes(
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
       const iface = await options.service.get(c.req.param("id"));
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
-        iface.metadata.workspaceId,
+        iface.metadata,
       );
       if (!scoped.ok) return scoped.response;
       const body = await readJsonObject(c.req.raw, { maxBytes: 1_048_576 });
@@ -416,11 +460,11 @@ export function registerInterfaceRoutes(
             requireRuntimePermission(c),
           )
         : await options.service.get(c.req.param("id"));
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
-        iface.metadata.workspaceId,
+        iface.metadata,
       );
       if (!scoped.ok) return scoped.response;
       return c.json(
@@ -449,11 +493,11 @@ export function registerInterfaceRoutes(
             requireRuntimePermission(c),
           )
         : await options.service.get(c.req.param("id"));
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
-        iface.metadata.workspaceId,
+        iface.metadata,
       );
       if (!scoped.ok) return scoped.response;
       if (isRuntimePrincipal(scoped.actor)) {
@@ -489,11 +533,11 @@ export function registerInterfaceRoutes(
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
       const iface = await options.service.get(c.req.param("id"));
-      const scoped = await scopeInterfaceWorkspace(
+      const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
-        iface.metadata.workspaceId,
+        iface.metadata,
       );
       if (!scoped.ok) return scoped.response;
       return c.json(
@@ -568,6 +612,12 @@ async function scopeInterfaceWorkspace(
   // No actor means the configured internal deploy-control bearer was used
   // without an actor header. That remains the explicit operator authority.
   if (!actor) return { ok: true };
+  if (isRuntimePrincipal(actor) && !actor.workspaceId) {
+    // An app-bound runtime principal carries no Workspace (TASK-0118 9.1).
+    // Every runtime path resolves its exact current Principal Binding, which
+    // is the only authority; runtime principals never reach a mutation.
+    return { ok: true, actor: { ...actor, workspaceId } };
+  }
   if (actor.workspaceId && actor.workspaceId !== workspaceId) {
     return { ok: false, response: workspaceForbidden(c) };
   }
@@ -592,6 +642,60 @@ async function scopeInterfaceWorkspace(
     actor:
       actor.workspaceId === workspaceId ? actor : { ...actor, workspaceId },
   };
+}
+
+/**
+ * Scope a request to one Interface's owner. An account actor without a
+ * Workspace restriction is decided per app for a Capsule-owned Interface when
+ * the host provides {@link RegisterInterfaceRoutesOptions.authorizeInterfaceApp};
+ * otherwise (and for an app without an ownership row) the Workspace decision
+ * applies unchanged.
+ */
+async function scopeInterface(
+  c: Context,
+  options: RegisterInterfaceRoutesOptions,
+  actor: ActorContext | undefined,
+  owner: Pick<Interface["metadata"], "workspaceId" | "ownerRef">,
+): Promise<InterfaceWorkspaceAuthResult> {
+  if (
+    actor &&
+    !actor.roles.includes("runtime-principal") &&
+    !actor.workspaceId &&
+    owner.ownerRef.kind === "Capsule" &&
+    options.authorizeInterfaceApp
+  ) {
+    const decided = await options.authorizeInterfaceApp({
+      actor,
+      capsuleId: owner.ownerRef.id,
+      access: interfaceAccess(c),
+      request: c.req.raw,
+    });
+    if (decided === true) {
+      return { ok: true, actor: { ...actor, workspaceId: owner.workspaceId } };
+    }
+    if (decided === false) return { ok: false, response: appForbidden(c) };
+  }
+  return await scopeInterfaceWorkspace(c, options, actor, owner.workspaceId);
+}
+
+/** Reads and token issuance (an invocation of a Ready binding) are read access. */
+function interfaceAccess(c: Context): "read" | "write" {
+  const method = c.req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD") return "read";
+  if (method === "POST" && /\/token$/u.test(new URL(c.req.url).pathname)) return "read";
+  return "write";
+}
+
+function appForbidden(c: Context): Response {
+  return c.json(
+    apiError(
+      "forbidden",
+      "Interface belongs to an app the caller cannot manage",
+      undefined,
+      requestIdFromContext(c),
+    ),
+    403,
+  );
 }
 
 function workspaceForbidden(c: Context): Response {

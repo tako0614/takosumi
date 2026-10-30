@@ -572,7 +572,10 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
     // The existing v71-v75 runtime bridge keeps ordinary grants available.
     // Only the v76 receipt enables SQL that references the additive link table.
     const linksAvailable = await this.schema.available();
-    const clauses = ["i.workspace_id = ?", "i.phase = 'Resolved'"];
+    const clauses = [
+      ...(input.filter.workspaceId !== undefined ? ["i.workspace_id = ?"] : []),
+      "i.phase = 'Resolved'",
+    ];
     clauses.push(
       `not exists (
         select 1
@@ -596,7 +599,9 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
           )
       )`,
     );
-    const parameters: unknown[] = [input.filter.workspaceId];
+    const parameters: unknown[] = input.filter.workspaceId !== undefined
+      ? [input.filter.workspaceId]
+      : [];
     const add = (sql: string, value: unknown): void => {
       clauses.push(sql);
       parameters.push(value);

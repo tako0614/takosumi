@@ -1330,6 +1330,7 @@ export async function handlePlatformInterfaceApiRequest(
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   context?: PlatformExecutionContext,
+  appPartition: PlatformInterfaceAppPartition = platformExtensionSessionAppPartition,
 ): Promise<Response> {
   const legacyWorkspace: PlatformLegacyWorkspaceObservation = {};
   const response = await handlePlatformInterfaceApiRequestInternal(
@@ -1339,6 +1340,7 @@ export async function handlePlatformInterfaceApiRequest(
     workspaceAccess,
     context,
     legacyWorkspace,
+    appPartition,
   );
   return observePlatformLegacyWorkspaceUse(
     request,
@@ -1356,6 +1358,7 @@ async function handlePlatformInterfaceApiRequestInternal(
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   context?: PlatformExecutionContext,
   legacyWorkspace?: PlatformLegacyWorkspaceObservation,
+  appPartition: PlatformInterfaceAppPartition = platformExtensionSessionAppPartition,
 ): Promise<Response> {
   const pathname = new URL(request.url).pathname;
   const timings: ServerTimingBucket = undefined;
@@ -1384,6 +1387,7 @@ async function handlePlatformInterfaceApiRequestInternal(
       workspaceAccess,
       timings,
       legacyWorkspace,
+      (appRequest, appEnv, capsuleId) => appPartition(appRequest, appEnv, capsuleId, context),
     );
     if (!authorized.ok) {
       return appendPlatformInterfaceServerTiming(authorized.response, timings);
@@ -1525,6 +1529,7 @@ async function platformInterfaceExternalRequest(
   workspaceAccess: PlatformExtensionWorkspaceAccess,
   timings?: ServerTimingBucket,
   legacyWorkspace?: PlatformLegacyWorkspaceObservation,
+  appPartition: PlatformInterfaceAppPartition = platformExtensionSessionAppPartition,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -1561,6 +1566,7 @@ async function platformInterfaceExternalRequest(
     workspaceAccess,
     timings,
     legacyWorkspace,
+    appPartition,
   );
 }
 
@@ -1572,6 +1578,7 @@ async function platformInterfaceAuthorizedRequest(
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   timings?: ServerTimingBucket,
   legacyWorkspace?: PlatformLegacyWorkspaceObservation,
+  appPartition: PlatformInterfaceAppPartition = platformExtensionSessionAppPartition,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -1613,15 +1620,42 @@ async function platformInterfaceAuthorizedRequest(
     }, platformLegacyWorkspaceSessionFacts(session));
   }
   if (!workspaceId) {
+    const appScoped = await measureServerTiming(
+      timings,
+      "app-auth",
+      () => platformInterfaceAppScope(workspaceVerificationRequest, url, env, session, appPartition),
+    );
+    if (!appScoped) {
+      return {
+        ok: false,
+        response: Response.json(
+          {
+            error: "invalid_request",
+            error_description: "workspaceId or capsuleId is required",
+          },
+          { status: 400 },
+        ),
+      };
+    }
+    if (!appScoped.ok) return appScoped;
     return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "invalid_request",
-          error_description: "workspaceId is required",
-        },
-        { status: 400 },
-      ),
+      ok: true,
+      request: cloneRequestWithBody(materialized, (headers) => {
+        headers.set(
+          "authorization",
+          `Bearer ${String(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)}`,
+        );
+        headers.set(
+          TAKOSUMI_INTERNAL_ACTOR_HEADER,
+          encodeActorContext(
+            platformInterfaceActorContext(session, appScoped.workspaceId, request),
+          ),
+        );
+        headers.delete(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER);
+        for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
+          if (header !== "authorization") headers.delete(header);
+        }
+      }),
     };
   }
 
@@ -1663,6 +1697,101 @@ async function platformInterfaceAuthorizedRequest(
       }
     }),
   };
+}
+
+/**
+ * Workspace-free Interface ingress (TASK-0118 9.1). An installed app's own
+ * OAuth token (bound to its app by introspection) acts as a runtime
+ * principal without a Workspace: Core then resolves its exact Principal
+ * Bindings, which are the only authority, and refuses every mutation. An
+ * account session or PAT may list one app's Interfaces (`capsuleId`) after
+ * Accounts' ordinary per-app `view` decision; the actor is then scoped to
+ * that app's internal partition and Core lists only that app's Interfaces.
+ * `undefined` means the request names neither and still needs a Workspace.
+ */
+async function platformInterfaceAppScope(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+  session: PlatformExtensionSessionContext,
+  appPartition: PlatformInterfaceAppPartition,
+): Promise<
+  | { readonly ok: true; readonly workspaceId?: string }
+  | { readonly ok: false; readonly response: Response }
+  | undefined
+> {
+  if (
+    session.authKind === "oauth-access-token" &&
+    safePlatformExtensionContextId(session.capsuleId)
+  ) {
+    return { ok: true };
+  }
+  const capsuleId = safePlatformExtensionContextId(
+    url.searchParams.get("capsuleId"),
+  );
+  if (
+    !capsuleId ||
+    (session.authKind !== "session" &&
+      session.authKind !== "personal-access-token") ||
+    (request.method !== "GET" && request.method !== "HEAD") ||
+    url.pathname !== "/api/v1/interfaces"
+  ) {
+    return undefined;
+  }
+  const workspaceId = await appPartition(request, env, capsuleId);
+  return workspaceId
+    ? { ok: true, workspaceId }
+    : {
+        ok: false,
+        response: Response.json(
+          {
+            error: "access_denied",
+            error_description: "app context is not authorized",
+          },
+          { status: 403 },
+        ),
+      };
+}
+
+/** The internal partition of an app the session may view, if any. */
+export type PlatformInterfaceAppPartition = (
+  request: Request,
+  env: CloudflareWorkerEnv,
+  capsuleId: string,
+  context?: PlatformExecutionContext,
+) => Promise<string | undefined>;
+
+/**
+ * Asks Accounts for the app with the caller's own credential: a `200` from
+ * `GET /api/v1/capsules/:id` is the ordinary per-app `view` decision
+ * (including a PAT's `appIds`), and the Capsule names its partition.
+ */
+async function platformExtensionSessionAppPartition(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  capsuleId: string,
+  context?: PlatformExecutionContext,
+): Promise<string | undefined> {
+  const headers = sessionMirrorHeaders(request);
+  if (!headers) return undefined;
+  try {
+    const response = await accountsWorker.fetch(
+      new Request(
+        new URL(`/api/v1/capsules/${encodeURIComponent(capsuleId)}`, request.url),
+        { method: "GET", headers },
+      ),
+      env,
+      context,
+    );
+    if (!response.ok) return undefined;
+    const body = objectRecord(await response.json().catch(() => undefined));
+    const capsule = objectRecord(body.capsule);
+    return valueString(capsule.id) === capsuleId
+      ? workspaceIdFromCapsuleBody(body)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function platformInterfaceAccessMode(
@@ -2086,7 +2215,7 @@ async function platformDeployControlWorkspaceSelector(
 
 function platformInterfaceActorContext(
   session: PlatformExtensionSessionContext,
-  workspaceId: string,
+  workspaceId: string | undefined,
   request?: Request,
 ): ActorContext {
   const runtimePrincipal =
@@ -2104,7 +2233,7 @@ function platformInterfaceActorContext(
         ? ["owner"]
         : ["operator"],
     requestId: crypto.randomUUID(),
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
     ...(session.authKind === "service-token"
       ? { principalKind: "service", serviceId: session.subject }
       : { principalKind: "account" }),

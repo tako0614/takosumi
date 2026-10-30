@@ -495,8 +495,12 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
     ) {
       return { items: [] };
     }
-    const parameters: SqlValue[] = [input.filter.workspaceId];
-    const clauses = ["i.workspace_id = $1", "i.phase = 'Resolved'"];
+    const parameters: SqlValue[] = [];
+    const clauses = ["i.phase = 'Resolved'"];
+    if (input.filter.workspaceId !== undefined) {
+      parameters.push(input.filter.workspaceId);
+      clauses.unshift(`i.workspace_id = $${parameters.length}`);
+    }
     clauses.push(
       `not exists (
         select 1

@@ -13,7 +13,12 @@
 import type { Capsule } from "takosumi-contract/install-configs";
 import { errorJson } from "../http-helpers.ts";
 import { requireAppAccess } from "./app-authorization.ts";
-import { controlPlaneUnavailable, type ControlDispatchContext } from "./shared.ts";
+import {
+  controlPlaneUnavailable,
+  installedAppTokenDelegates,
+  isInstalledAppToken,
+  type ControlDispatchContext,
+} from "./shared.ts";
 
 /** Accessible-app pages one account-level read may enumerate (100 apps each). */
 const ACCOUNT_APP_PAGE_LIMIT = 20;
@@ -57,6 +62,14 @@ function restrictedCredential(ctx: ControlDispatchContext): boolean {
 
 export async function resolveAccountAppScope(
   ctx: ControlDispatchContext,
+  options: {
+    /**
+     * An operator-designated delegate app's own token (Takos) acts for its
+     * user on the user's other apps: skip its own-app list and let the
+     * per-app decision (which applies the delegation rules) decide each app.
+     */
+    readonly expandDelegate?: boolean;
+  } = {},
 ): Promise<AccountAppScopeResult> {
   const refused = accountReadCredentialRefusal(ctx);
   if (refused) return { ok: false, response: refused };
@@ -80,7 +93,9 @@ export async function resolveAccountAppScope(
     }
     cursor = result.nextCursor;
   }
-  const limited = ctx.session.appIds === undefined
+  const delegated = options.expandDelegate === true && isInstalledAppToken(ctx.session) &&
+    await installedAppTokenDelegates(ctx.operations, ctx.session);
+  const limited = ctx.session.appIds === undefined || delegated
     ? [...accessible]
     : [...accessible].filter((id) => ctx.session.appIds!.includes(id));
   const capsules = limited.length > 0

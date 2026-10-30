@@ -30,6 +30,8 @@ import {
   hasConfiguredOpenTofuRunner,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
+import { appActionAllowed } from "takosumi-contract/app-access";
+import { isMissingOwnershipSchemaError } from "../../../core/domains/app-ownership/store.ts";
 import { validateUninstallRequester } from "@takosjp/takosumi-accounts-service";
 import {
   PartitionedSecretBoundaryCrypto,
@@ -259,6 +261,9 @@ export async function buildComposedApp(
       ? createDeferredRuntimeInputOidcClientSource()
       : undefined;
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
+  // The authenticated bearer's app limit for each Interface request, keyed by
+  // the request object the Interface routes hand to every callback.
+  const interfaceBearers = new WeakMap<Request, { readonly appIds?: readonly string[] }>();
   const created = await createTakosumiService({
     runtimeEnv,
     publicSessionControlEndpoints: PUBLIC_SESSION_CONTROL_ENDPOINTS,
@@ -364,12 +369,17 @@ export async function buildComposedApp(
         scope: requiredScope,
       });
       if (!result.ok) return undefined;
+      interfaceBearers.set(request, {
+        ...(result.auth.appIds !== undefined ? { appIds: result.auth.appIds } : {}),
+      });
       const runtimePrincipal = result.auth.credential === "oauth-access-token";
       // Runtime OAuth subjects are pairwise client subjects, not account
       // owners. They must therefore carry the Workspace bound into the access
-      // token; session/PAT actors are checked against current account ownership
-      // once the Interface route resolves its authoritative Workspace.
-      if (runtimePrincipal && !result.auth.workspaceId) return undefined;
+      // token, or be bound to one installed app (TASK-0118 9.1): the pairwise
+      // subject is that app's own, and its exact Principal Bindings are then
+      // the only authority. Session/PAT actors are checked against current
+      // app or Workspace authority once the route resolves the Interface.
+      if (runtimePrincipal && !result.auth.workspaceId && result.auth.appIds === undefined) return undefined;
       return {
         actorAccountId: result.auth.principalSubject ?? result.auth.subject,
         ...(result.auth.workspaceId
@@ -393,6 +403,9 @@ export async function buildComposedApp(
       if (actor.roles.includes("runtime-principal")) {
         return actor.workspaceId === workspaceId;
       }
+      // An app-bound credential (a PAT with appIds) never holds Workspace
+      // authority; it reaches only its apps through authorizeInterfaceApp.
+      if (interfaceBearers.get(request)?.appIds !== undefined) return false;
       const operations = controlPlaneOperations;
       if (!operations) return false;
       try {
@@ -410,6 +423,32 @@ export async function buildComposedApp(
         // (`viewer`) membership must not reach them. An empty role set proves
         // no write role, so it is refused too.
         return member.roles.some((role) => role !== "viewer");
+      } catch {
+        return false;
+      }
+    },
+    // Capsule-owned Interfaces are decided per app once the app has an
+    // ownership row (TASK-0118 9.1): the owner or a member may read them, and
+    // change them as a settings change. `undefined` keeps the Workspace
+    // decision for an app the backfill has not reached.
+    authorizeInterfaceApp: async ({ actor, capsuleId, access, request }) => {
+      const operations = controlPlaneOperations;
+      if (!operations) return false;
+      let owned: Awaited<ReturnType<typeof operations.appOwnership.getOwnership>>;
+      try {
+        owned = await operations.appOwnership.getOwnership(capsuleId);
+      } catch (error) {
+        return isMissingOwnershipSchemaError(error) ? undefined : false;
+      }
+      if (!owned) return undefined;
+      const appIds = interfaceBearers.get(request)?.appIds;
+      if (appIds !== undefined && !appIds.includes(capsuleId)) return false;
+      try {
+        const app = await operations.appAccess.resolveAppAccess(actor.actorAccountId, capsuleId);
+        return app !== undefined && app.capsuleId === capsuleId &&
+          app.ownerAccountId === owned.ownerAccountId &&
+          app.ownershipEpoch === owned.ownershipEpoch &&
+          appActionAllowed(app.role, access === "read" ? "view" : "change_settings");
       } catch {
         return false;
       }

@@ -1365,6 +1365,66 @@ export class InterfaceService {
     };
   }
 
+  /**
+   * Workspace-free capability discovery (TASK-0118 9.1): Interfaces with a
+   * current Ready Binding for `subjectId` and `permission` in every internal
+   * partition. The exact Principal Binding stays the only authority; the
+   * filter can narrow to one provider app (`ownerKind: "Capsule"`, `ownerId`).
+   * Read-only, like {@link listAuthorizedForPrincipalPage}.
+   */
+  async listAuthorizedForPrincipalAcrossPartitionsPage(
+    filter: Omit<InterfaceListFilter, "workspaceId" | "ownerIds" | "limit">,
+    subjectId: string,
+    permission: string,
+    params: PageParams,
+  ): Promise<Page<Interface>> {
+    if (filter.type !== undefined) validateToken(filter.type, "type");
+    const normalizedSubject = requireText(subjectId, "subjectId");
+    validatePermissionToken(permission, "permission");
+    const page = await this.#stores.authorized.listPage({
+      filter: {
+        ...filter,
+        ...(filter.type !== undefined ? { type: filter.type.trim() } : {}),
+      },
+      subjectId: normalizedSubject,
+      permission: permission.trim(),
+      params,
+    });
+    return {
+      ...page,
+      items: page.items.filter(
+        (iface) =>
+          !hasUnownedCapsuleOutput(iface.metadata.ownerRef, iface.spec),
+      ),
+    };
+  }
+
+  /**
+   * The internal partition one app records its Interfaces into. It is never
+   * authority; callers decide the app first.
+   */
+  async getAppPartition(capsuleId: string): Promise<{
+    readonly capsuleId: string;
+    readonly workspaceId: string;
+    readonly status: Capsule["status"];
+  }> {
+    const id = requireText(capsuleId, "capsuleId");
+    if (!this.#capsules) {
+      throw new InterfaceServiceError("failed_precondition", "Capsule Interface authority is unavailable");
+    }
+    let capsule: Capsule;
+    try {
+      capsule = await this.#capsules.getCapsule(id);
+    } catch (error) {
+      if ((error as { code?: unknown } | undefined)?.code === "not_found") {
+        throw new InterfaceServiceError("not_found", "Capsule not found");
+      }
+      throw error;
+    }
+    if (capsule.id !== id) throw new InterfaceServiceError("not_found", "Capsule not found");
+    return { capsuleId: capsule.id, workspaceId: capsule.workspaceId, status: capsule.status };
+  }
+
   async getAuthorizedForPrincipal(
     interfaceId: string,
     subjectId: string,
