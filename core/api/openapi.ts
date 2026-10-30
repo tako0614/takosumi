@@ -1084,6 +1084,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       required: ["interfaces"],
       properties: {
         interfaces: { type: "array", items: ref("Interface") },
+        nextCursor: { type: "string" },
       },
       additionalProperties: false,
     },

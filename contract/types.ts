@@ -22,6 +22,12 @@ export interface ActorContext {
   sessionId?: string;
   scopes?: string[];
   traceId?: string;
+  /**
+   * The installed app a runtime principal's credential is bound to (an
+   * installed app's own OAuth token). Server-derived from the credential;
+   * never read from a client field.
+   */
+  capsuleId?: string;
 }
 
 export interface DomainEvent<TPayload extends JsonObject = JsonObject> {

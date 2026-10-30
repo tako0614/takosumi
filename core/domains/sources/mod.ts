@@ -154,6 +154,12 @@ export interface EnsureOwnedSourceRequest {
   readonly ref: string;
   readonly path: string;
   readonly authConnectionId?: string;
+  /**
+   * The account that will own the app (its installer, TASK-0118 P9.1-c).
+   * Until the app exists, `authConnectionId` must be this account's own
+   * connection. Not stored.
+   */
+  readonly installingAccountId?: string;
   readonly createdAt: string;
 }
 
@@ -313,7 +319,9 @@ export class SourcesService {
       await this.#captureWorkspaceManagementAuthority(request.workspaceId);
     if (request.authConnectionId !== undefined) {
       requireNonEmptyString(request.authConnectionId, "authConnectionId");
-      await this.#requireConnectionInWorkspace(request.authConnectionId, request.workspaceId, request.ownerCapsuleId);
+      await this.#requireConnectionInWorkspace(
+        request.authConnectionId, request.workspaceId, request.ownerCapsuleId, request.installingAccountId,
+      );
     }
     const source: StoredSource = {
       id: request.id, workspaceId: request.workspaceId, name: request.name,
@@ -432,6 +440,7 @@ export class SourcesService {
         patch.authConnectionId as string,
         stored.workspaceId,
         stored.ownerCapsuleId,
+        await this.#reservedSourceInstaller(stored),
       );
     }
     const persisted = await this.#writeSourceConfiguration({
@@ -1829,18 +1838,48 @@ export class SourcesService {
     return stored;
   }
 
+  /**
+   * The account that will own the app an install-reserved Source belongs to
+   * (its install plan's creator), when that app does not exist yet.
+   */
+  async #reservedSourceInstaller(source: StoredSource): Promise<string | undefined> {
+    if (!source.ownerCapsuleId || !source.createdByInstallPlanId) return undefined;
+    if (await this.#store.getCapsule(source.ownerCapsuleId)) return undefined;
+    const plan = await this.#plans?.get(source.createdByInstallPlanId);
+    return plan && sourceCreatorPlanMatchesSource(source, plan) ? plan.createdBy : undefined;
+  }
+
   async #requireConnectionInWorkspace(
     connectionId: string,
     workspaceId: string,
     ownerCapsuleId?: string,
+    installingAccountId?: string,
   ): Promise<void> {
     const connection = await this.#store.getConnection(connectionId);
     const capsule = ownerCapsuleId ? await this.#store.getCapsule(ownerCapsuleId) : undefined;
     const ownership = capsule ? await this.#appOwnership?.getOwnership(capsule.id) : undefined;
-    if (connection?.scope === "workspace" && connection.workspaceId === workspaceId && ownership === undefined) return;
-    if (connection && (connection.scope === "personal" || ownership !== undefined || (ownerCapsuleId && !capsule))) {
-      const ownerAccountId = ownership?.ownerAccountId ?? (await this.#store.getWorkspace(workspaceId))?.ownerUserId;
-      if (ownerAccountId && connection.ownerAccountId === ownerAccountId) return;
+    // An app that does not exist yet is owned by its installer once created
+    // (TASK-0118 P9.1-c): only that account's own connection may fetch its
+    // Source, whichever Workspace's columns the app fills.
+    const futureApp = ownerCapsuleId !== undefined && !capsule;
+    if (futureApp && installingAccountId === undefined) {
+      // Never fall back to the Workspace's owner for an app that is not
+      // created yet: an unknown installer lends nobody's credential.
+      throw new OpenTofuControllerError("connection_not_owned_by_app_owner", "Source connection is not owned by the app owner");
+    }
+    if (!futureApp && connection?.scope === "workspace" && connection.workspaceId === workspaceId && ownership === undefined) return;
+    if (connection && (connection.scope === "personal" || ownership !== undefined || futureApp)) {
+      let workspaceOwner: Promise<string | undefined> | undefined;
+      const ownerOfWorkspace = () =>
+        workspaceOwner ??= this.#store.getWorkspace(workspaceId).then((workspace) => workspace?.ownerUserId);
+      const ownerAccountId = ownership?.ownerAccountId ??
+        (futureApp ? installingAccountId : undefined) ??
+        await ownerOfWorkspace();
+      // A legacy Workspace row without a recorded owner is its Workspace owner's.
+      const connectionOwner = connection.ownerAccountId ??
+        (futureApp && connection.scope === "workspace" && connection.workspaceId === workspaceId
+          ? await ownerOfWorkspace() : undefined);
+      if (ownerAccountId && connectionOwner === ownerAccountId) return;
       throw new OpenTofuControllerError("connection_not_owned_by_app_owner", "Source connection is not owned by the app owner");
     }
     if (!connection || connection.workspaceId !== workspaceId) {

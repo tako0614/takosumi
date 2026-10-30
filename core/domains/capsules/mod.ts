@@ -120,6 +120,15 @@ export interface CreateCapsuleInitialAuthorityRequest {
   readonly sourceId: string;
   /** Authenticated Principal that initiated this installation. */
   readonly installingPrincipalId: string;
+  /**
+   * The app's first owner (TASK-0118 P9.1-c): the account that started the
+   * install. The install coordinator always sets it. Without it (operator
+   * routes whose principal is not an account) the Workspace's owner is used,
+   * as before.
+   */
+  readonly ownerAccountId?: string;
+  /** The delegate app whose token installed this app (TASK-0118 P9.1-b); stored privately. */
+  readonly delegateCapsuleId?: string;
   /** Auto-update opt-in (see {@link Capsule.autoUpdate}). Defaults to off. */
   readonly autoUpdate?: boolean;
   readonly capsuleId: string;
@@ -371,6 +380,8 @@ export class CapsulesService {
     requireNonEmptyString(request.name, "name");
     requireNonEmptyString(request.environment, "environment");
     requireNonEmptyString(request.sourceId, "sourceId");
+    if (request.ownerAccountId !== undefined) requireNonEmptyString(request.ownerAccountId, "ownerAccountId");
+    if (request.delegateCapsuleId !== undefined) requireNonEmptyString(request.delegateCapsuleId, "delegateCapsuleId");
     requireNonEmptyString(
       request.installingPrincipalId,
       "installingPrincipalId",
@@ -509,6 +520,7 @@ export class CapsulesService {
       // Frozen once, here. Every durable derivation reads it instead of the
       // Workspace id, so Workspace removal never moves a derived value.
       scopeRef: request.workspaceId,
+      ...(request.delegateCapsuleId !== undefined ? { delegateCapsuleId: request.delegateCapsuleId } : {}),
       projectId: project.id,
       name: request.name,
       slug: request.name,
@@ -541,7 +553,9 @@ export class CapsulesService {
         capsule,
         initialOwnership: {
           capsuleId: capsule.id,
-          ownerAccountId: workspace.ownerUserId,
+          // The first owner is the account that installed the app (TASK-0118
+          // P9.1-c), not whoever owns the Workspace whose columns it fills.
+          ownerAccountId: request.ownerAccountId ?? workspace.ownerUserId,
           ownershipEpoch: 0,
           managementState: "active",
           managementEpoch: 0,

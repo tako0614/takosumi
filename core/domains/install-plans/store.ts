@@ -71,6 +71,11 @@ export interface GitInstallAttemptFacts {
 export interface StoredGitInstallPlan extends GitInstallPlan {
   /** Exact actor boundary used for idempotency; not projected separately. */
   readonly actorSubject: string;
+  /**
+   * Private: the operator-designated delegate app (Takos) whose own token
+   * created this plan for its user (TASK-0118 P9.1-b). Copied to the Capsule.
+   */
+  readonly delegateCapsuleId?: string;
   /** SHA-256 digest of the caller's Idempotency-Key; raw key is never stored. */
   readonly idempotencyKeyHash: string;
   /** Original management admission; absent only on retained legacy rows. */
@@ -292,6 +297,7 @@ export function assertTransitionGitInstallPlanInput(
     current.id !== next.id ||
     current.workspaceId !== next.workspaceId ||
     current.actorSubject !== next.actorSubject ||
+    current.delegateCapsuleId !== next.delegateCapsuleId ||
     current.idempotencyKeyHash !== next.idempotencyKeyHash ||
     !sameWorkspaceManagementAuthority(
       current.workspaceManagementAuthority,
@@ -848,6 +854,7 @@ export function isReconcileableGitInstallPlanPhase(
 export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan {
   const {
     actorSubject: _actorSubject,
+    delegateCapsuleId: _delegateCapsuleId,
     idempotencyKeyHash: _idempotencyKeyHash,
     workspaceManagementAuthority: _workspaceManagementAuthority,
     capsuleExecutionAuthorityEpoch: _capsuleExecutionAuthorityEpoch,
@@ -881,6 +888,7 @@ export function assertImmutableScope(
     current.id !== next.id ||
     current.workspaceId !== next.workspaceId ||
     current.actorSubject !== next.actorSubject ||
+    current.delegateCapsuleId !== next.delegateCapsuleId ||
     current.idempotencyKeyHash !== next.idempotencyKeyHash ||
     !sameWorkspaceManagementAuthority(
       current.workspaceManagementAuthority,

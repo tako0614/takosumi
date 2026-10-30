@@ -13,7 +13,12 @@
 import type { Capsule } from "takosumi-contract/install-configs";
 import { errorJson } from "../http-helpers.ts";
 import { requireAppAccess } from "./app-authorization.ts";
-import { controlPlaneUnavailable, type ControlDispatchContext } from "./shared.ts";
+import {
+  controlPlaneUnavailable,
+  installedAppTokenDelegates,
+  isInstalledAppToken,
+  type ControlDispatchContext,
+} from "./shared.ts";
 
 /** Accessible-app pages one account-level read may enumerate (100 apps each). */
 const ACCOUNT_APP_PAGE_LIMIT = 20;
@@ -55,8 +60,47 @@ function restrictedCredential(ctx: ControlDispatchContext): boolean {
     session.requireCurrentMembership === true;
 }
 
+/**
+ * Whether this credential may view one candidate app of its account scope.
+ * Unrestricted credentials (sessions, account PATs) are decided by the app
+ * role that put the app in scope; restricted ones re-run the ordinary per-app
+ * decision, which applies the token's own limits.
+ */
+export async function accountAppAllowed(
+  ctx: ControlDispatchContext,
+  capsule: Capsule,
+): Promise<boolean> {
+  if (!restrictedCredential(ctx)) return true;
+  const decision = await requireAppAccess({
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    capsule,
+    action: "view",
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
+  return decision.ok;
+}
+
 export async function resolveAccountAppScope(
   ctx: ControlDispatchContext,
+  options: {
+    /**
+     * An operator-designated delegate app's own token (Takos) acts for its
+     * user on the user's other apps: skip its own-app list and let the
+     * per-app decision (which applies the delegation rules) decide each app.
+     */
+    readonly expandDelegate?: boolean;
+    /**
+     * Leave the per-app decision of a restricted credential to the caller
+     * (see {@link accountAppAllowed}) so a paged read decides only the apps
+     * it returns. The scope then lists candidates, not decided apps.
+     */
+    readonly deferRestrictedDecision?: boolean;
+  } = {},
 ): Promise<AccountAppScopeResult> {
   const refused = accountReadCredentialRefusal(ctx);
   if (refused) return { ok: false, response: refused };
@@ -80,7 +124,9 @@ export async function resolveAccountAppScope(
     }
     cursor = result.nextCursor;
   }
-  const limited = ctx.session.appIds === undefined
+  const delegated = options.expandDelegate === true && isInstalledAppToken(ctx.session) &&
+    await installedAppTokenDelegates(ctx.operations, ctx.session);
+  const limited = ctx.session.appIds === undefined || delegated
     ? [...accessible]
     : [...accessible].filter((id) => ctx.session.appIds!.includes(id));
   const capsules = limited.length > 0
@@ -90,22 +136,11 @@ export async function resolveAccountAppScope(
   for (const capsule of capsules) {
     if (limited.includes(capsule.id)) byId.set(capsule.id, capsule);
   }
-  if (restrictedCredential(ctx)) {
+  if (restrictedCredential(ctx) && options.deferRestrictedDecision !== true) {
     // The ordinary per-app decision applies the token's own limits (the
     // installed app's own app, a Workspace restriction, current membership).
     for (const capsule of [...byId.values()]) {
-      const decision = await requireAppAccess({
-        operations: ctx.operations,
-        store: ctx.store,
-        session: ctx.session,
-        workspaceId: capsule.workspaceId,
-        capsuleId: capsule.id,
-        capsule,
-        action: "view",
-        ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
-        ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
-      });
-      if (!decision.ok) byId.delete(capsule.id);
+      if (!(await accountAppAllowed(ctx, capsule))) byId.delete(capsule.id);
     }
   }
   return {

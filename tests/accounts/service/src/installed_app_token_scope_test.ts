@@ -133,11 +133,13 @@ async function fixture(options: {
     accounts.saveAccountSession({ sessionId: `sess_${subject}`, subject, createdAt: Date.now(), expiresAt: Date.now() + 60_000 });
     return { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_${subject}` };
   }
-  function appToken(capsuleId: string, workspaceId = WORKSPACE, subject = USER): Record<string, string> {
-    const token = `fixture-oauth-${capsuleId}-${workspaceId}-${subject}`;
+  /** `workspaceId: null` is a token whose live grant bound no Workspace (no Workspace membership). */
+  function appToken(capsuleId: string, workspaceId: string | null = WORKSPACE, subject = USER): Record<string, string> {
+    const token = `fixture-oauth-${capsuleId}-${workspaceId ?? "none"}-${subject}`;
     accounts.saveAccessToken(token, {
       clientId: `client_${capsuleId}`, scope: "openid capsules:read capsules:write",
-      subject: `pairwise_${capsuleId}_${subject}`, takosumiSubject: subject, capsuleId, workspaceId,
+      subject: `pairwise_${capsuleId}_${subject}`, takosumiSubject: subject, capsuleId,
+      ...(workspaceId !== null ? { workspaceId } : {}),
       expiresAt: Date.now() + 60_000,
     });
     return { authorization: `Bearer ${token}` };
@@ -239,6 +241,106 @@ describe("an installed app's own OAuth token is confined to its own app", () => 
     const configured = await fixture({ delegationSources: [DELEGATE_SOURCE] });
     // A token bound to another Workspace is not this app's delegation.
     expect((await configured.call("GET", `/capsules/${OTHER}`, configured.appToken(DELEGATE, "ws_elsewhere"))).status).toBe(403);
+  }, 180_000);
+});
+
+describe("TASK-0118 P9.1-b: only the delegate's owner delegates, and only its own installs escape the Workspace limit", () => {
+  const STRANGER = "acct_no_takos_role";
+  const ELSEWHERE = "ws_users_own";
+  const ELSEWHERE_APP = "cap_users_app_elsewhere";
+  /** Records that the delegate app installed `capsuleId` (what a delegated install writes). */
+  const markInstalledByDelegate = async (h: Awaited<ReturnType<typeof fixture>>, capsuleId: string, delegate = DELEGATE) => {
+    const current = (await h.ledger.getCapsule(capsuleId))!;
+    await h.ledger.putCapsule({ ...current, delegateCapsuleId: delegate });
+  };
+
+  test("an app the delegate installed is decided by the user's role alone, with or without a Workspace binding", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    await markInstalledByDelegate(h, OTHER);
+    for (const token of [h.appToken(DELEGATE, null), h.appToken(DELEGATE)]) {
+      expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, token)).status).toBe(200);
+      expect(await h.call("POST", `/runs/run_${OTHER}/approve`, token, {})).toMatchObject({ status: 409, message: "reached" });
+      expect(await h.call("POST", `/capsules/${OTHER}/destroy-plan`, token, {})).toMatchObject({ status: 409, message: "reached" });
+      expect((await h.call("POST", `/capsules/${OTHER}/ownership-transfers`, token, { toAccountId: MEMBER })).status).toBe(403);
+    }
+    // Workspace routes stay closed to a token that is not bound to a Workspace.
+    expect((await h.call("GET", `/workspaces/${WORKSPACE}/capsules`, h.appToken(DELEGATE, null))).status).toBe(403);
+    // Its own app keeps the ordinary own-app rules.
+    expect(await h.call("POST", `/capsules/${DELEGATE}/destroy-plan`, h.appToken(DELEGATE, null), {})).toMatchObject({ status: 403, code: "app_access_denied" });
+  }, 180_000);
+
+  test("apps the delegate did not install keep the pre-delegation rule", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    // Unmarked: reachable only through the token's own Workspace and membership.
+    expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE))).status).toBe(200);
+    expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE, null))).status).toBe(403);
+    // Installed by another delegate app: not this delegate's.
+    await markInstalledByDelegate(h, OTHER, "cap_another_delegate");
+    expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE, null))).status).toBe(403);
+    // An app in another Workspace is out of reach unless this delegate installed it.
+    const other = (await h.ledger.getCapsule(OTHER))!;
+    await h.ledger.putCapsule({ ...other, id: ELSEWHERE_APP, name: ELSEWHERE_APP, slug: ELSEWHERE_APP, workspaceId: ELSEWHERE, delegateCapsuleId: undefined });
+    h.sources.set("src_elsewhere", { ...h.sources.get("src_other")!, id: "src_elsewhere", workspaceId: ELSEWHERE, ownerCapsuleId: ELSEWHERE_APP });
+    expect(await h.core.appOwnership.initializeOwnershipIfMissing({
+      capsuleId: ELSEWHERE_APP, ownerAccountId: USER, ownershipEpoch: 0, managementState: "active",
+      managementEpoch: 0, storageRoot: `apps/${ELSEWHERE_APP}`,
+    })).toBe(true);
+    expect((await h.call("GET", `/capsules/${ELSEWHERE_APP}`, h.appToken(DELEGATE))).status).toBe(403);
+    expect((await h.call("GET", `/capsules/${ELSEWHERE_APP}`, h.appToken(DELEGATE, null))).status).toBe(403);
+    await markInstalledByDelegate(h, ELSEWHERE_APP);
+    expect((await h.call("GET", `/capsules/${ELSEWHERE_APP}`, h.appToken(DELEGATE))).status).toBe(200);
+    expect((await h.call("GET", `/capsules/${ELSEWHERE_APP}`, h.appToken(DELEGATE, null))).status).toBe(200);
+    // Someone without a role on that app gets nothing through the delegate.
+    expect((await h.call("GET", `/capsules/${ELSEWHERE_APP}`, h.appToken(DELEGATE, null, MEMBER))).status).toBe(403);
+    // The other Workspace's routes stay closed to the delegate.
+    expect((await h.call("GET", `/workspaces/${ELSEWHERE}/capsules`, h.appToken(DELEGATE))).status).toBe(403);
+  }, 180_000);
+
+  test("a member's or stranger's token never delegates, even on apps the delegate installed", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    await markInstalledByDelegate(h, OTHER);
+    const body = { mode: "attempt", source: { url: "https://git.example.test/x" } };
+    // MEMBER is a member of the delegate app and of OTHER.
+    for (const token of [h.appToken(DELEGATE, null, MEMBER), h.appToken(DELEGATE, WORKSPACE, MEMBER)]) {
+      expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, token)).status).toBe(403);
+      expect((await h.call("POST", "/install-plans", token, body)).status).toBe(403);
+    }
+    expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE, null, STRANGER))).status).toBe(403);
+    expect((await h.call("POST", "/install-plans", h.appToken(DELEGATE, null, STRANGER), body)).status).toBe(403);
+  }, 180_000);
+
+  test("an owner who loses ownership of the delegate app stops delegating at once", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    await markInstalledByDelegate(h, OTHER);
+    expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE, null))).status).toBe(200);
+    const ownership = (await h.core.appOwnership.getOwnership(DELEGATE))!;
+    expect(await h.core.appOwnership.putOwnership({ ...ownership, ownerAccountId: STRANGER, ownershipEpoch: ownership.ownershipEpoch + 1 }, ownership.ownershipEpoch))
+      .toBe(true);
+    expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE, null))).status).toBe(403);
+  }, 180_000);
+
+  test("without ownership rows a delegate still needs its own Workspace binding", async () => {
+    const h = await fixture({ owned: false, delegationSources: [DELEGATE_SOURCE] });
+    expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE, null))).status).toBe(403);
+    expect((await h.call("POST", "/install-plans", h.appToken(DELEGATE, null), { mode: "attempt", source: { url: "https://git.example.test/x" } })).status).toBe(403);
+    expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE))).status).toBe(200);
+  }, 180_000);
+
+  test("the deployed-revision ref rule is unchanged for a token without a Workspace", async () => {
+    for (const [resolved, status] of [["refs/heads/main", 200], ["refs/pull/1/head", 403], [null, 403]] as const) {
+      const h = await fixture({ delegationSources: [DELEGATE_SOURCE], delegateResolvedRef: resolved });
+      await markInstalledByDelegate(h, OTHER);
+      expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE, null))).status, String(resolved)).toBe(status);
+    }
+  }, 180_000);
+
+  test("POST /install-plans stays refused for every restricted credential that is not a delegate for its user", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    const body = { mode: "attempt", source: { url: "https://git.example.test/x" } };
+    expect(await h.call("POST", "/install-plans", h.appToken(THIRD_PARTY), body)).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await h.call("POST", "/install-plans", h.appToken(THIRD_PARTY, null), body)).toMatchObject({ status: 403, code: "app_access_denied" });
+    const undesignated = await fixture();
+    expect(await undesignated.call("POST", "/install-plans", undesignated.appToken(DELEGATE, null), body)).toMatchObject({ status: 403, code: "app_access_denied" });
   }, 180_000);
 });
 

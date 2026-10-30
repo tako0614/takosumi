@@ -7362,6 +7362,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
               and member.member_json ->> 'workspaceId'=member.workspace_id
               and member.member_json ->> 'accountId'=member.account_id
               and (member.member_json -> 'roles' ? 'owner' or member.member_json -> 'roles' ? 'admin')
+              -- Only for an app owned by the Workspace's owner (TASK-0118 P9.1-c).
+              and exists (select 1 from takosumi_workspaces as workspace
+                           where workspace.id=$4 and workspace.owner_user_id=$2)
            on conflict (capsule_id, account_id) do nothing`,
           [capsule.id, ownership.ownerAccountId, capsule.createdAt, capsule.workspaceId],
         );
