@@ -30,6 +30,7 @@ import {
   parseAppOwnershipMutationsFrozen,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
+  trustedNativeClientsFromEnv,
   type ControlPlaneOperations,
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
@@ -574,6 +575,9 @@ async function createPlatformOperatorControlMcpAuthority(
         ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
           ? { appOwnershipMutationsFrozen: true }
           : {}),
+        trustedNativeClients: trustedNativeClientsFromEnv(
+          env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
+        ),
         ...(env.TAKOSUMI_ACCOUNTS_ISSUER
           ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
           : {}),
@@ -1212,8 +1216,10 @@ function platformDiscoveryOptions(
   const operator = platformOperatorCapabilities(env);
   const mobileOidcClientId = configuredTakosumiMobileOidcClientId(env);
   const storeEndpoint = normalizePublicStoreEndpoint(env.TAKOSUMI_TCS_STORE_URL);
+  const oidcIssuer = env.TAKOSUMI_ACCOUNTS_ISSUER?.trim() || undefined;
   return {
     origin,
+    ...(oidcIssuer ? { oidcIssuer } : {}),
     ...(mobileOidcClientId ? { mobileOidcClientId } : {}),
     identity: {
       external_oidc_login: accountsExternalLoginConfigured(env),
@@ -1809,6 +1815,7 @@ export async function handlePlatformSharedAuthControlRequest(
       entry: "shared_auth",
       ...platformLegacyWorkspaceSunsetOption(env),
       ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
+      trustedNativeClients: trustedNativeClientsFromEnv(env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS),
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),
       ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),

@@ -44,6 +44,7 @@ Cloud 側のリポジトリで管理します。
 - [Resource state の取り込み](./resource-state-adoption.md)
 - [Output / Interface migration](./output-interface-migration.md)
 - [廃止済み Dependency のデータ保守](./retired-dependency-maintenance.md)
+- [Capsule の scopeRef（派生の元の凍結）と backfill](./capsule-scope-ref-backfill.md)
 - [FormRef migration](./exact-formref-migration.md)
 
 ### Security

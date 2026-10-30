@@ -748,6 +748,17 @@ export interface TakosumiOperations {
     intentId: string,
     input: RetryCapsuleInterfaceMaterializationFailureInput,
   ): Promise<CapsuleInterfaceMaterializationRetryReceipt>;
+  /** One app's dead-lettered Interface materializations (no Workspace). */
+  listCapsuleInterfaceMaterializationFailures(
+    capsuleId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly CapsuleInterfaceMaterializationFailure[]>;
+  /** Retries one failure that belongs to `capsuleId` (no Workspace). */
+  retryCapsuleInterfaceMaterializationFailure(
+    capsuleId: string,
+    intentId: string,
+    input: RetryCapsuleInterfaceMaterializationFailureInput,
+  ): Promise<CapsuleInterfaceMaterializationRetryReceipt>;
   /**
    * Activity domain service (Core Specification §27 / §34): the Workspace-scoped
    * audit trail over the same shared ledger.
@@ -1972,6 +1983,14 @@ export async function createTakosumiService(
     retryInterfaceMaterializationFailure: (workspaceId, intentId, input) =>
       interfaceMaterializationFailureService.retry(
         workspaceId,
+        intentId,
+        input,
+      ),
+    listCapsuleInterfaceMaterializationFailures: (capsuleId, options) =>
+      interfaceMaterializationFailureService.listForCapsule(capsuleId, options),
+    retryCapsuleInterfaceMaterializationFailure: (capsuleId, intentId, input) =>
+      interfaceMaterializationFailureService.retryForCapsule(
+        capsuleId,
         intentId,
         input,
       ),

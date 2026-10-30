@@ -27,6 +27,7 @@ import {
   type RequestPhaseDiagnosticsConfiguration,
 } from "./request-phase-diagnostics.ts";
 import type { InstalledAppDelegationSource } from "./installed-app-delegation.ts";
+import type { TrustedNativeClient } from "takosumi-contract";
 
 export type {
   AccountsJsonWebKey,
@@ -194,6 +195,15 @@ export {
   parseInstalledAppDelegationSources,
   type InstalledAppDelegationSource,
 } from "./installed-app-delegation.ts";
+export {
+  createTrustedNativeClientsEnvReader,
+  parseTrustedNativeClientsEnv,
+  TRUSTED_NATIVE_CLIENTS_ENV,
+  trustedNativeClientsFromEnv,
+  type TrustedNativeClientsEnvProblem,
+  type TrustedNativeClientsEnvReader,
+  type TrustedNativeClientsEnvResult,
+} from "./trusted-native-clients.ts";
 export * from "./workspace-billing-bootstrap.ts";
 export type { IdentityMergeReconciler } from "./identity-merge.ts";
 export type { CredentialUnlinkReconciler } from "./identity-unlink-state.ts";
@@ -231,6 +241,13 @@ export interface AccountsHandlerOptions {
    * return 409 while an ownership backfill runs.
    */
   appOwnershipMutationsFrozen?: boolean;
+  /**
+   * Operator-trusted native phone apps
+   * (`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`). Absent: the built-in
+   * first-party list. A screen's declared client is `verified` only when it
+   * matches an entry.
+   */
+  trustedNativeClients?: readonly TrustedNativeClient[];
   /**
    * Operator-designated repositories whose installed app may use its own
    * OAuth token as a Workspace delegation. Empty: every installed-app token is
@@ -290,6 +307,7 @@ export interface EphemeralAccountsHandlerOptions {
   hostedSessionPolicy?: boolean;
   workspaceMutationsFrozen?: boolean;
   appOwnershipMutationsFrozen?: boolean;
+  trustedNativeClients?: readonly TrustedNativeClient[];
   installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
   identityMergeReconciler?: IdentityMergeReconciler;
@@ -356,6 +374,14 @@ export interface OidcClientRegistration {
   allowedScopes?: readonly string[];
   clientSecret?: string;
   tokenEndpointAuthMethod?: OidcClientAuthMethod;
+  /**
+   * `always`: every authorization shows a consent screen, even when the user
+   * is already signed in. Used for native public clients whose custom-scheme
+   * redirect another app could claim (RFC 8252 §8.6).
+   */
+  consent?: "always";
+  /** Human-readable client name shown on the consent screen. */
+  displayName?: string;
 }
 
 export interface UpstreamOAuthOptions {
@@ -432,6 +458,7 @@ export async function createEphemeralAccountsHandler(
     hostedSessionPolicy: options.hostedSessionPolicy,
     workspaceMutationsFrozen: options.workspaceMutationsFrozen,
     ...(options.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+    ...(options.trustedNativeClients ? { trustedNativeClients: options.trustedNativeClients } : {}),
     ...(options.installedAppDelegationSources
       ? { installedAppDelegationSources: options.installedAppDelegationSources }
       : {}),
@@ -585,6 +612,15 @@ export function createAccountsHandler(
   const clients = new Map(
     (options.clients ?? []).map((client) => [client.clientId, client]),
   );
+  for (const client of clients.values()) {
+    if (client.consent !== undefined && (client.consent !== "always" || client.profile === "shared-account")) {
+      throw new TypeError("OIDC client consent must be \"always\" and cannot be combined with the shared-account profile");
+    }
+  }
+  // Consent-screen clients answer the authorize page with a same-origin POST.
+  const authorizeAcceptsPost =
+    options.hostedSessionPolicy === true ||
+    [...clients.values()].some((client) => client.consent === "always");
   const baseStore = options.store;
   const upstreamOAuth = options.upstreamOAuth ? {...options.upstreamOAuth, hostedSessionPolicy: options.hostedSessionPolicy ?? options.upstreamOAuth.hostedSessionPolicy} : undefined;
   const passkeys = options.passkeys ? {...options.passkeys, hostedSessionPolicy: options.hostedSessionPolicy ?? options.passkeys.hostedSessionPolicy} : undefined;
@@ -693,7 +729,7 @@ export function createAccountsHandler(
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH) {
-      if (request.method !== "GET" && !(request.method === "POST" && options.hostedSessionPolicy)) return methodNotAllowed(options.hostedSessionPolicy ? "GET, POST" : "GET");
+      if (request.method !== "GET" && !(request.method === "POST" && authorizeAcceptsPost)) return methodNotAllowed(authorizeAcceptsPost ? "GET, POST" : "GET");
       if (!options.oidcFlow) return reservedOidcEndpoint();
       const limited = authorizeLimiter.consume(request);
       if (limited) return limited;
@@ -1098,6 +1134,9 @@ export function createAccountsHandler(
               ? { workspaceMutationsFrozen: options.workspaceMutationsFrozen }
               : {}),
             ...(options.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+            ...(options.trustedNativeClients
+              ? { trustedNativeClients: options.trustedNativeClients }
+              : {}),
             ...(options.installedAppDelegationSources?.length
               ? { installedAppDelegationSources: options.installedAppDelegationSources }
               : {}),

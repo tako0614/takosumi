@@ -6,6 +6,7 @@ import {
   type D1AccountsSchemaMode,
   type D1Database as AccountsD1Database,
 } from "@takosjp/takosumi-accounts-service";
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 import { oidcClientActivationDigest } from "../../accounts/service/src/oidc-activation.ts";
 import { oidcAllowedScopes } from "../../accounts/service/src/oidc-live-grant.ts";
 import type { Capsule } from "../../contract/capsules.ts";
@@ -216,7 +217,7 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
         derivationKey,
         generatedSecretDerivationParts(
           profile.contract,
-          authority,
+          { scopeRef: capsuleScopeRef(capsule), capsuleId: authority.capsuleId },
           config.id,
           generated.binding,
         ),
@@ -243,7 +244,11 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
       }
       const clientId = await derivePublicOidcClientId(
         derivationKey,
-        runtimeOidcClientDerivationParts(profile.contract, authority, config.id),
+        runtimeOidcClientDerivationParts(
+          profile.contract,
+          { scopeRef: capsuleScopeRef(capsule), capsuleId: authority.capsuleId },
+          config.id,
+        ),
       );
       const identity = await deriveCapsulePublicOidcClientIdentity({
         capsule,
@@ -326,7 +331,7 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
         invalid("runtime binding commit authority changed during confirmation");
       }
       const activationDigest = await oidcClientActivationDigest({
-        workspaceId: confirmed.authority.workspaceId,
+        scopeRef: capsuleScopeRef(confirmed.capsule),
         capsuleId: confirmed.authority.capsuleId,
         executionAuthorityEpoch: confirmedExecutionAuthorityEpoch,
         installConfig: confirmed.config,
@@ -488,8 +493,10 @@ function declaredBindings(
  * includes `installConfigId`, so a Capsule whose install config is replaced
  * derives DIFFERENT bytes for the same binding — an installed app's key rotates
  * because its configuration was edited, which is not what an operator editing a
- * configuration expects. v2 drops it: workspace, Capsule and binding are the
- * identity, and the config is not part of it.
+ * configuration expects. v2 drops it: scope, Capsule and binding are the
+ * identity, and the config is not part of it. The scope slot holds the
+ * Capsule's frozen `scopeRef` (its Workspace id for every Capsule created
+ * before stage 9.0), so removing Workspace moves no value.
  *
  * v1 is not dead. `core/domains/deploy-control/runtime_secret_file_materializer.ts`
  * still pins `takosumi.runtime-binding-profile/v1` as its profile contract, so
@@ -499,22 +506,22 @@ function declaredBindings(
  */
 function generatedSecretDerivationParts(
   profileContract: RuntimeBindingProfileContract,
-  authority: RuntimeBindingAuthority,
+  scope: { readonly scopeRef: string; readonly capsuleId: string },
   installConfigId: string,
   binding: string,
 ): readonly string[] {
   return profileContract === PROFILE_CONTRACT_V1
     ? [
         AUTHORITY_CONTRACT,
-        authority.workspaceId,
-        authority.capsuleId,
+        scope.scopeRef,
+        scope.capsuleId,
         installConfigId,
         binding,
       ]
     : [
         "takosumi.runtime-generated-secret/v2",
-        authority.workspaceId,
-        authority.capsuleId,
+        scope.scopeRef,
+        scope.capsuleId,
         binding,
       ];
 }
@@ -529,20 +536,20 @@ function generatedSecretDerivationParts(
  */
 export function runtimeOidcClientDerivationParts(
   profileContract: RuntimeBindingProfileContract,
-  authority: { readonly workspaceId: string; readonly capsuleId: string },
+  scope: { readonly scopeRef: string; readonly capsuleId: string },
   installConfigId: string,
 ): readonly string[] {
   return profileContract === PROFILE_CONTRACT_V1
     ? [
         "takosumi-runtime-oidc-client-v1",
-        authority.workspaceId,
-        authority.capsuleId,
+        scope.scopeRef,
+        scope.capsuleId,
         installConfigId,
       ]
     : [
         "takosumi-runtime-oidc-client-v2",
-        authority.workspaceId,
-        authority.capsuleId,
+        scope.scopeRef,
+        scope.capsuleId,
       ];
 }
 

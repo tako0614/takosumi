@@ -1566,6 +1566,8 @@ test("composed app supplies its injected OIDC authority to a binding-delivered C
   assert.deepEqual(requests[0], {
     profileContract: RUNTIME_INPUT_PROFILE.contract,
     workspaceId: capsule.workspaceId,
+    // The frozen derivation scope (TASK-0118 Phase 9) of a new Capsule.
+    scopeRef: capsule.workspaceId,
     capsuleId: capsule.id,
     installConfigId: installConfig.id,
     bindings: RUNTIME_INPUT_PROFILE.oidcClient,

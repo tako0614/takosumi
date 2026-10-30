@@ -122,37 +122,42 @@ const PERSONAL_ACCESS_TOKEN_SCOPE_CATALOG_METADATA: Readonly<
     },
     workspaceBinding: "optional",
   },
+  // TASK-0118 9.1: hosted-resource and AI scopes no longer need a
+  // Workspace. A token is limited to its apps (`appIds`, each a live
+  // owner/member role at creation and on every use) or acts with the
+  // account's own authority; a legacy `workspace_id` binding is still
+  // accepted until Phase 9.3.
   "resources:read": {
     label: { ja: "ホストリソースの読み取り", en: "Hosted resource read" },
     description: {
-      ja: "指定した Workspace のホストリソース一覧を読み取ります。",
-      en: "Read hosted-resource inventory for one bound Workspace.",
+      ja: "ホストリソースの一覧を読み取ります。アプリを指定すると、そのアプリに限ります。",
+      en: "Read hosted-resource inventory; limited to the listed apps when appIds is set.",
     },
-    workspaceBinding: "required",
+    workspaceBinding: "optional",
   },
   "ai.models.read": {
     label: { ja: "AIモデルの読み取り", en: "AI model read" },
     description: {
-      ja: "指定した Workspace で利用できる AI モデルを読み取ります。",
-      en: "Read AI models available to one bound Workspace.",
+      ja: "利用できる AI モデルを読み取ります。アプリを指定すると、そのアプリに限ります。",
+      en: "Read available AI models; limited to the listed apps when appIds is set.",
     },
-    workspaceBinding: "required",
+    workspaceBinding: "optional",
   },
   "ai.chat": {
     label: { ja: "AIチャット", en: "AI chat" },
     description: {
-      ja: "指定した Workspace の課金枠で AI チャットを実行します。",
-      en: "Run AI chat against the billing authority of one bound Workspace.",
+      ja: "AI チャットを実行します。アプリを指定すると、そのアプリに限ります。",
+      en: "Run AI chat; limited to the listed apps when appIds is set.",
     },
-    workspaceBinding: "required",
+    workspaceBinding: "optional",
   },
   "ai.embeddings": {
     label: { ja: "AI埋め込み", en: "AI embeddings" },
     description: {
-      ja: "指定した Workspace の課金枠で AI 埋め込みを生成します。",
-      en: "Generate AI embeddings against the billing authority of one bound Workspace.",
+      ja: "AI 埋め込みを生成します。アプリを指定すると、そのアプリに限ります。",
+      en: "Generate AI embeddings; limited to the listed apps when appIds is set.",
     },
-    workspaceBinding: "required",
+    workspaceBinding: "optional",
   },
 };
 

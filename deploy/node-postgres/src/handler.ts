@@ -11,13 +11,18 @@ import type {
   UpstreamOAuthOptions,
 } from "@takosjp/takosumi-accounts-service";
 import { upstreamOAuthOptionsFromEnvironment } from "@takosjp/takosumi-accounts-service";
-import { resolveTakosumiMobileOidcClientId } from "@takosjp/takosumi-accounts-service";
+import {
+  composeTakosumiMobileOidcClients,
+  parseTakosumiMobileBuiltinClientSetting,
+} from "@takosjp/takosumi-accounts-service";
 import {
   parseAppOwnershipMutationsFrozen,
   parseInstalledAppDelegationSources,
   parseLegacyWorkspaceSunset,
+  trustedNativeClientsFromEnv,
   type InstalledAppDelegationSource,
 } from "@takosjp/takosumi-accounts-service";
+import type { TrustedNativeClient } from "takosumi-contract";
 
 export interface NodeAccountsStableOidcConfig {
   readonly privateJwkJson: string;
@@ -49,6 +54,11 @@ export interface NodeAccountsServerConfig {
   readonly subject: string | undefined;
   /** Repositories whose installed app may use its own token as a Workspace delegation. */
   readonly installedAppDelegationSources: readonly InstalledAppDelegationSource[];
+  /**
+   * `TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`: native phone apps whose screen
+   * declarations are verified. A malformed value trusts none (logged once).
+   */
+  readonly trustedNativeClients: readonly TrustedNativeClient[];
   /** `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen`: app member/transfer writes return 409. */
   readonly appOwnershipMutationsFrozen?: boolean;
   /** `TAKOSUMI_LEGACY_WORKSPACE_SUNSET`: `Sunset` announced on legacy Workspace routes. */
@@ -65,17 +75,24 @@ export function parseEnv(
       env.PORT,
       8787,
     )}`;
-  const clients = parseClients(env);
+  // The built-in public `takosumi-mobile` client lets Takosumi Mobile sign in
+  // without manual registration; TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false
+  // turns it off.
+  const { clients, mobileOidcClientId } = composeTakosumiMobileOidcClients({
+    configuredClientId: optional(env, "TAKOSUMI_MOBILE_OIDC_CLIENT_ID"),
+    builtinClient: parseTakosumiMobileBuiltinClientSetting(
+      env.TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT,
+      true,
+    ),
+    clients: parseClients(env),
+  });
   return {
     bindHost: optional(env, "TAKOSUMI_ACCOUNTS_BIND_HOST") ?? "0.0.0.0",
     port: parseIntOr(env.PORT ?? env.TAKOSUMI_ACCOUNTS_PORT, 8787),
     issuer,
     databaseUrl,
     clients,
-    mobileOidcClientId: resolveTakosumiMobileOidcClientId({
-      configuredClientId: optional(env, "TAKOSUMI_MOBILE_OIDC_CLIENT_ID"),
-      clients,
-    }),
+    mobileOidcClientId,
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
@@ -91,6 +108,9 @@ export function parseEnv(
     subject: optional(env, "TAKOSUMI_ACCOUNTS_SUBJECT"),
     installedAppDelegationSources: parseInstalledAppDelegationSources(
       env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
+    ),
+    trustedNativeClients: trustedNativeClientsFromEnv(
+      env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
     ),
     appOwnershipMutationsFrozen: parseAppOwnershipMutationsFrozen(
       env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,

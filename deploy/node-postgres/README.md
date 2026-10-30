@@ -200,11 +200,16 @@ For a Takos native shell, register a separate host-specific public client in
 the same `clientId` as `OIDC_MOBILE_CLIENT_ID` on that Takos Worker. Do not put a
 client secret in the app or reuse the browser client's id.
 
-For the standalone Takosumi app, register another public client with the exact
-`takosumi://oauth/callback` redirect and the `openid profile offline_access
-capsules:read capsules:write` scopes, then select it with the non-secret
-`TAKOSUMI_MOBILE_OIDC_CLIENT_ID`. The composed server validates and publishes
-that id through `/.well-known/takosumi`.
+The standalone Takosumi app (Takosumi Mobile) needs no registration: every
+instance includes the built-in public client `takosumi-mobile` (exact
+`takosumi://oauth/callback` redirect, `openid profile offline_access
+capsules:read capsules:write` scopes, PKCE S256) and publishes it through
+`/.well-known/takosumi`. Each authorization for it shows a consent screen,
+because another app on the phone could claim the same custom scheme. Set
+`TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` to turn it off. To use a client you
+registered yourself instead, add it to `TAKOSUMI_ACCOUNTS_CLIENTS` with the same
+redirect and scopes and select it with the non-secret
+`TAKOSUMI_MOBILE_OIDC_CLIENT_ID`; it also gets the consent screen.
 
 ## Files
 

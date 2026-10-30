@@ -105,8 +105,6 @@ import {
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
-import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
-import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
@@ -702,8 +700,6 @@ function Inner() {
   ): void => {
     if (!workspaceId) return;
     clearCapsuleListCache(workspaceId);
-    clearCurrentStateVersionCache(workspaceId);
-    clearDashboardOverviewCache(workspaceId);
     clearInstallConfigListCache(workspaceId);
   };
 

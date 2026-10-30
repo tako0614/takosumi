@@ -38,26 +38,6 @@ export function clearCapsuleListCache(workspaceId?: string): void {
   }
 }
 
-export function primeCapsuleListCache(
-  workspaceId: string,
-  capsules: readonly Capsule[],
-  options: { readonly includeDestroyed?: boolean } = {},
-): void {
-  cache.set(cacheKey(workspaceId, options), {
-    capsules,
-    cachedAt: Date.now(),
-  });
-  emitCapsuleListCacheChanged(workspaceId);
-}
-
-export function peekCapsulesCached(
-  workspaceId: string,
-  options: { readonly includeDestroyed?: boolean } = {},
-): readonly Capsule[] | undefined {
-  const current = cache.get(cacheKey(workspaceId, options));
-  return fresh(current) ? current.capsules : undefined;
-}
-
 function emitCapsuleListCacheChanged(workspaceId: string): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(

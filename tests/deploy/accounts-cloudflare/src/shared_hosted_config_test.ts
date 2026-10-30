@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  configuredOidcClientsWithTakosumiMobile,
   createCloudflareWorker,
   parseConfiguredOidcClients,
   parseHostedSessionPolicy,
@@ -150,4 +151,30 @@ test("protected bridge accepts exact v4/v5 while shared mode needs v5 without re
     if (headVersion === 5) expect(await shared.json()).toMatchObject({ issuer: "https://issuer.example.test", token_endpoint_auth_methods_supported: ["client_secret_basic"] });
     expect(ddlAttempts).toBe(0);
   }
+});
+
+test("the built-in Takosumi Mobile client is on by default and off under the shared hosted policy", () => {
+  const plain = configuredOidcClientsWithTakosumiMobile(environment());
+  expect(plain.mobileOidcClientId).toBe("takosumi-mobile");
+  expect(plain.clients?.map((client) => [client.clientId, client.consent, client.tokenEndpointAuthMethod])).toEqual([
+    ["takosumi-mobile", "always", "none"],
+  ]);
+
+  const hosted = configuredOidcClientsWithTakosumiMobile(environment({
+    TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY: "true",
+    TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([registration("server-staging", "SERVER_RP_SECRET")]),
+    SERVER_RP_SECRET: "fixture-server-secret",
+  }));
+  expect(hosted.mobileOidcClientId).toBeUndefined();
+  expect(hosted.clients?.map((client) => client.clientId)).toEqual(["server-staging"]);
+
+  // Not yet supported under the shared hosted profile: refused, not ignored.
+  expect(() => configuredOidcClientsWithTakosumiMobile(environment({
+    TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY: "true",
+    TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT: "true",
+  }))).toThrow("cannot be enabled under the shared hosted session policy");
+
+  expect(() => configuredOidcClientsWithTakosumiMobile(environment({
+    TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT: "yes",
+  }))).toThrow("TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT must be true or false");
 });

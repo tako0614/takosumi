@@ -31,8 +31,6 @@ import {
   clearCapsuleListCache,
   listCapsulesCached,
 } from "../../lib/capsule-list.ts";
-import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
-import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
 import { runCapsuleId } from "../../lib/run-approval.ts";
 import { runGroupFailures } from "../../lib/run-group-failures.ts";
@@ -73,8 +71,6 @@ function Inner() {
   const clearLauncherCaches = (workspaceId: string | undefined): void => {
     if (!workspaceId) return;
     clearCapsuleListCache(workspaceId);
-    clearCurrentStateVersionCache(workspaceId);
-    clearDashboardOverviewCache(workspaceId);
     clearInstallConfigListCache(workspaceId);
   };
 

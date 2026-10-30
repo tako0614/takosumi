@@ -313,7 +313,6 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- workspaces (スペース in the Japanese UI) -----------------------------------
   "workspace.unnamed": "Unnamed",
-  "workspace.createdOn": "Created {date}",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -817,6 +816,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Setup for this app couldn't be found. Install it again.",
   "controlError.revisionInProgress":
     "Another update for this app is being prepared. Try again after it finishes.",
+  "controlError.revisionAlreadyCurrent":
+    "This app already runs the latest version. If it is pinned to a commit, use Choose a version to switch to a branch or tag.",
   "runError.sourceSyncFailed":
     "The app's contents couldn't be fetched. Check the link and version, then try again.",
   "runError.sourceRefNotFound":

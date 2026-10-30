@@ -324,7 +324,6 @@ export const ja = {
 
   // --- workspaces (スペース in the Japanese UI) -----------------------------------
   "workspace.unnamed": "名前なし",
-  "workspace.createdOn": "{date} に作成",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
@@ -830,6 +829,8 @@ export const ja = {
     "このアプリの設定が見つかりません。インストールし直してください。",
   "controlError.revisionInProgress":
     "このアプリでは別の更新を準備しています。終わってからもう一度お試しください。",
+  "controlError.revisionAlreadyCurrent":
+    "いまの版が最新です。commit で固定しているときは、「版を指定」で branch や tag に切り替えられます。",
   "runError.sourceSyncFailed":
     "アプリの内容を取得できませんでした。リンクと版を確認して、もう一度お試しください。",
   "runError.sourceRefNotFound":

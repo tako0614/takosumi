@@ -110,6 +110,9 @@ test("Git revision plan reconciles an existing Capsule to one reviewable pinned 
     phase: "syncing_source",
     sourceSyncRunId: expect.stringMatching(/^ssr_[0-9a-f]{16}$/u),
   });
+  // An app-owned Source admits a sync only for a current account of the app:
+  // the coordinator forwards the account that asked for the change.
+  expect(fixture.sourceSyncActors).toEqual([WORKSPACE.ownerUserId]);
   expect(fixture.source).toMatchObject({
     defaultRef: "main",
     defaultPath: "deploy/app",
@@ -723,6 +726,195 @@ test("Git revision Plan does not retry a rejected initial install snapshot pin",
   expect(fixture.counts.plan).toBe(0);
 });
 
+test("a Source sync refusal that cannot change ends the revision with its own reason", async () => {
+  const cases: readonly {
+    readonly error: () => unknown;
+    readonly diagnostic: Record<string, string>;
+  }[] = [
+    {
+      error: () => new OpenTofuControllerError(
+        "failed_precondition",
+        "App-owned Source sync requires a trusted current actor and ownership epoch.",
+        { reason: "app_access_denied" },
+      ),
+      diagnostic: {
+        code: "app_access_denied",
+        controllerCode: "failed_precondition",
+        reason: "app_access_denied",
+      },
+    },
+    {
+      error: () => new OpenTofuControllerError(
+        "failed_precondition",
+        "Source src_revision is not active",
+        { reason: "source_not_active" },
+      ),
+      diagnostic: { code: "source_not_active", reason: "source_not_active" },
+    },
+    {
+      error: () => new OpenTofuControllerError("invalid_argument", "bad coordinator"),
+      diagnostic: { code: "revision_request_invalid", controllerCode: "invalid_argument" },
+    },
+    {
+      error: () => new OpenTofuControllerError("permission_denied", "not allowed"),
+      diagnostic: { code: "permission_denied", controllerCode: "permission_denied" },
+    },
+  ];
+  for (const [index, entry] of cases.entries()) {
+    const fixture = revisionFixture({ sourceSyncError: entry.error });
+    const created = await fixture.request(
+      "/api/v1/capsules/cap_revision/revision-plans",
+      "POST",
+      { ref: "release/v2" },
+      { "idempotency-key": `deterministic-sync-refusal-${index}` },
+    );
+    const planId = (await created.json()).revisionPlan.id as string;
+    const stopped = await fixture.reconcile(planId);
+    expect(stopped.status).toBe(200);
+    const body = await stopped.json();
+    expect(body).toMatchObject({
+      revisionPlan: { phase: "failed", diagnostic: entry.diagnostic },
+      nextAction: "none",
+    });
+    expect(JSON.stringify(body)).not.toContain("trusted current actor");
+    const replay = await fixture.reconcile(planId);
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).revisionPlan.generation).toBe(body.revisionPlan.generation);
+    expect(fixture.sourceSyncActors).toEqual([WORKSPACE.ownerUserId]);
+  }
+});
+
+test("a transient Source sync failure stays retryable and records the owner error", async () => {
+  const unknown = revisionFixture({ sourceSyncError: () => new Error("lost acknowledgement") });
+  const first = await unknown.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: "release/v2" },
+    { "idempotency-key": "transient-sync-unknown" },
+  );
+  const firstId = (await first.json()).revisionPlan.id as string;
+  const retried = await unknown.reconcile(firstId);
+  expect(retried.status).toBe(202);
+  const retriedPlan = (await retried.json()).revisionPlan;
+  expect(retriedPlan).toMatchObject({
+    phase: "syncing_source",
+    diagnostic: { code: "revision_plan_reconcile_retryable", planCreationStage: "source" },
+  });
+  expect(retriedPlan.diagnostic.controllerCode).toBeUndefined();
+  expect(JSON.stringify(retriedPlan)).not.toContain("lost acknowledgement");
+
+  const internal = revisionFixture({
+    sourceSyncError: () => new OpenTofuControllerError("internal_error", "storage unavailable"),
+  });
+  const second = await internal.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: "release/v2" },
+    { "idempotency-key": "transient-sync-internal" },
+  );
+  const secondId = (await second.json()).revisionPlan.id as string;
+  const recorded = await internal.reconcile(secondId);
+  expect(recorded.status).toBe(202);
+  expect((await recorded.json()).revisionPlan.diagnostic).toEqual({
+    code: "revision_plan_reconcile_retryable",
+    message:
+      "Takosumi could not confirm the last coordinator step. Reconcile again to recover canonical state.",
+    planCreationStage: "source",
+    controllerCode: "internal_error",
+  });
+});
+
+test("a revision to the exact applied commit is already current; the same commit under another ref is planned", async () => {
+  const commit = "1".repeat(40);
+  const pinned = revisionFixture({ adoptedRef: commit });
+  const created = await pinned.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: commit.toUpperCase() },
+    { "idempotency-key": "pinned-already-current" },
+  );
+  const planId = (await created.json()).revisionPlan.id as string;
+  const settled = await pinned.reconcile(planId);
+  expect(settled.status).toBe(200);
+  expect(await settled.json()).toMatchObject({
+    revisionPlan: { phase: "failed", diagnostic: { code: "revision_already_current" } },
+    nextAction: "none",
+  });
+  expect(pinned.counts).toEqual({ sync: 0, compatibility: 0, plan: 0 });
+
+  // The app follows a branch at that commit; pinning the commit changes its
+  // lane, so it is a real version change.
+  const tracking = revisionFixture();
+  const pin = await tracking.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: commit },
+    { "idempotency-key": "pin-current-commit" },
+  );
+  const pinId = (await pin.json()).revisionPlan.id as string;
+  const syncing = await tracking.reconcile(pinId);
+  expect(syncing.status).toBe(200);
+  expect((await syncing.json()).revisionPlan).toMatchObject({
+    phase: "syncing_source",
+    sourceSyncRunId: expect.stringMatching(/^ssr_/u),
+  });
+  expect(tracking.counts.sync).toBe(1);
+});
+
+test("retrying a version whose Apply failed or left the app in error plans again instead of answering already current", async () => {
+  const commit = "1".repeat(40);
+  const failedApply = revisionFixture({ adoptedRef: commit, adoptedApplyStatus: "failed" });
+  const retry = await failedApply.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: commit },
+    { "idempotency-key": "retry-failed-apply" },
+  );
+  const retryId = (await retry.json()).revisionPlan.id as string;
+  const syncing = await failedApply.reconcile(retryId);
+  expect(syncing.status).toBe(200);
+  expect((await syncing.json()).revisionPlan).toMatchObject({
+    phase: "syncing_source",
+    sourceSyncRunId: expect.stringMatching(/^ssr_/u),
+  });
+  expect(failedApply.counts.sync).toBe(1);
+
+  const broken = revisionFixture({ adoptedRef: commit });
+  broken.mutateCapsule({ status: "error" });
+  const again = await broken.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: commit },
+    { "idempotency-key": "retry-error-capsule" },
+  );
+  const againId = (await again.json()).revisionPlan.id as string;
+  const resumed = await broken.reconcile(againId);
+  expect(resumed.status).toBe(200);
+  expect((await resumed.json()).revisionPlan.phase).toBe("syncing_source");
+  expect(broken.counts.sync).toBe(1);
+});
+
+test("an ownership transfer draining the app keeps the revision retryable", async () => {
+  // The transfer starts after the reconcile was authorized and before the
+  // Source sync: the sync refuses every actor while management drains.
+  let fixture: ReturnType<typeof revisionFixture> | undefined;
+  fixture = revisionFixture({
+    sourceSyncError: () => {
+      fixture!.attachOwnership("draining");
+      return new OpenTofuControllerError(
+        "failed_precondition",
+        "App-owned Source sync requires a trusted current actor and ownership epoch.",
+        { reason: "app_access_denied" },
+      );
+    },
+  });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: "release/v2" },
+    { "idempotency-key": "revision-during-transfer-drain" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).revisionPlan.id as string;
+  const waiting = await fixture.reconcile(planId);
+  expect(waiting.status).toBe(202);
+  expect((await waiting.json()).revisionPlan).toMatchObject({
+    phase: "syncing_source",
+    diagnostic: {
+      code: "revision_plan_reconcile_retryable",
+      planCreationStage: "source",
+      controllerCode: "failed_precondition",
+      reason: "app_management_draining",
+    },
+  });
+});
+
 test("Git revision plan stops before Plan creation when compatibility is not runnable", async () => {
   const fixture = revisionFixture({ compatibilityLevel: "needs_patch" });
   const created = await fixture.request(
@@ -860,6 +1052,9 @@ function revisionFixture(
     readonly unAppliedInitialInstall?: boolean;
     readonly acceptedRepositoryInstallUx?: boolean;
     readonly planRunActor?: (runId: string) => string;
+    readonly adoptedRef?: string;
+    readonly adoptedApplyStatus?: Run["status"];
+    readonly sourceSyncError?: () => unknown;
   } = {},
 ) {
   const managementStore = new InMemoryOpenTofuControlStore();
@@ -930,6 +1125,7 @@ function revisionFixture(
   const runs = new Map<string, Run>();
   let realSourcesService: SourcesService | undefined;
   const counts = { sync: 0, compatibility: 0, plan: 0 };
+  const sourceSyncActors: (string | undefined)[] = [];
   let approvalCalls = 0;
   let applyCalls = 0;
   let preparationPausePending = options.pausePreparation === true;
@@ -996,9 +1192,12 @@ function revisionFixture(
       sourceId: string,
       request: CreateSourceSyncRequest,
       expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+      actorAccountId?: string,
     ) => {
       const identity = request.coordinator;
       if (!identity || sourceId !== source.id) throw new Error("coordinator identity missing");
+      sourceSyncActors.push(actorAccountId);
+      if (options.sourceSyncError) throw options.sourceSyncError();
       if (options.deterministicConflict === "sync") {
         throw new OpenTofuControllerError(
           "failed_precondition",
@@ -1149,12 +1348,38 @@ function revisionFixture(
       }
       return {
         sourceSnapshotId: "snap_adopted_revision",
-        ref: "refs/heads/release/v1",
+        ref: options.adoptedRef ?? "refs/heads/release/v1",
         path: options.adoptedPath ?? "deploy/app",
         resolvedCommit: "1".repeat(40),
       };
     },
+    getStateVersion: async (id: string) => {
+      if (id !== "sv_three") throw new OpenTofuControllerError("not_found", "missing");
+      return {
+        stateVersion: {
+          id,
+          workspaceId: WORKSPACE.id,
+          capsuleId: capsule.id,
+          environment: capsule.environment,
+          generation: 3,
+          stateRef: "state/sv_three",
+          digest: `sha256:${"c".repeat(64)}`,
+          createdByRunId: "apply_three",
+          createdAt: "2026-08-20T00:00:00.000Z",
+        },
+      };
+    },
     getRun: async (id: string) => {
+      if (id === "apply_three") {
+        return {
+          id,
+          workspaceId: WORKSPACE.id,
+          capsuleId: capsule.id,
+          type: "apply",
+          status: options.adoptedApplyStatus ?? "succeeded",
+          createdAt: "2026-08-20T00:00:00.000Z",
+        } satisfies Run;
+      }
       const run = runs.get(id);
       if (!run) throw new OpenTofuControllerError("not_found", "missing");
       return run;
@@ -1338,6 +1563,22 @@ function revisionFixture(
       Object.assign(source, patch);
     },
     counts,
+    sourceSyncActors,
+    /** The ownership the coordinator reads after a refused Source sync. */
+    attachOwnership(managementState: "active" | "draining" | "frozen") {
+      (operations as { appOwnership?: unknown }).appOwnership = {
+        getOwnership: async (capsuleId: string) => capsuleId === capsule.id
+          ? {
+              capsuleId,
+              ownerAccountId: WORKSPACE.ownerUserId,
+              ownershipEpoch: 1,
+              managementState,
+              managementEpoch: 1,
+              storageRoot: `apps/${capsuleId}`,
+            }
+          : undefined,
+      };
+    },
     get approvalCalls() {
       return approvalCalls;
     },

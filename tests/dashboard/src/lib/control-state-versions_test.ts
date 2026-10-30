@@ -22,7 +22,6 @@ import {
   getStateVersion,
   listActivity,
   listStateVersions,
-  listWorkspaceCurrentStateVersions,
   type PublicStateVersion,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -134,26 +133,6 @@ describe("listActivity", () => {
 
     expect(captured().url).toBe("/api/v1/workspaces/workspace_1/activity?limit=100");
     expect(captured().signal).toBe(controller.signal);
-  });
-});
-
-describe("listWorkspaceCurrentStateVersions", () => {
-  test("GETs the Workspace current-state-versions route and unwraps stateVersions", async () => {
-    const captured = stubFetch({ stateVersions: [STATE_VERSION] });
-    const rows = await listWorkspaceCurrentStateVersions("workspace 1", {
-      includeDestroyed: false,
-    });
-    const req = captured();
-    expect(req.method).toBe("GET");
-    expect(req.url).toBe(
-      "/api/v1/workspaces/workspace%201/current-state-versions?includeDestroyed=false",
-    );
-    expect(rows).toEqual([STATE_VERSION]);
-  });
-
-  test("defaults to an empty list when the body omits stateVersions", async () => {
-    stubFetch({});
-    expect(await listWorkspaceCurrentStateVersions("workspace_1")).toEqual([]);
   });
 });
 

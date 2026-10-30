@@ -1,6 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import {
+  advanceGitRevisionPlan,
   createReviewableGitRevisionPlan,
+  isRevisionAlreadyCurrent,
+  requireReviewableRevisionPlan,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
@@ -94,6 +97,52 @@ test("revision coordinator sends one ref, reconciles, and stops at review_run", 
   ]);
   expect(calls.some(({ url }) => url.endsWith("/approve"))).toBe(false);
   expect(calls.some(({ url }) => url.endsWith("/apply"))).toBe(false);
+});
+
+test("a version check that finds the applied version ends with its own answer, also when continued", async () => {
+  const alreadyCurrent = {
+    revisionPlan: {
+      id: "revision_plan_1",
+      capsuleId: "capsule_1",
+      operation: "revision",
+      phase: "failed",
+      diagnostic: {
+        code: "revision_already_current",
+        message: "This app already runs this version.",
+      },
+    },
+    nextAction: "none",
+    links: { self: "/api/v1/revision-plans/revision_plan_1" },
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/capsules/capsule_1/revision-plans") {
+      return json(revisionResponse("reconcile"), 201);
+    }
+    if (url === "/api/v1/revision-plans/revision_plan_1/reconcile") {
+      return json(alreadyCurrent);
+    }
+    throw new Error(`unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const created = await createReviewableGitRevisionPlan(
+    "capsule_1",
+    { ref: "a".repeat(40) },
+    { idempotencyKey: "check-pinned" },
+  ).then(() => undefined, (error: unknown) => error);
+  expect(isRevisionAlreadyCurrent(created)).toBe(true);
+
+  // "Continue" on a stopped check reaches the same answer instead of a
+  // generic "could not start".
+  const continued = await advanceGitRevisionPlan("revision_plan_1");
+  let thrown: unknown;
+  try {
+    requireReviewableRevisionPlan(continued);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(isRevisionAlreadyCurrent(thrown)).toBe(true);
+  expect(isRevisionAlreadyCurrent(new Error("revision_already_current"))).toBe(false);
 });
 
 test("a lost create acknowledgement is recoverable only with the same key", async () => {

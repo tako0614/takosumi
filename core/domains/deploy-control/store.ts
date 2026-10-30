@@ -93,6 +93,7 @@ import type {
   CapsuleUninstall,
   CapsuleUninstallRestorableStatus,
 } from "takosumi-contract/capsules";
+import { capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   Source,
   SourceSnapshot,
@@ -4174,6 +4175,11 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     workspaceId: string,
     limit?: number,
   ): Promise<readonly CapsuleInterfaceMaterializationIntent[]>;
+  /** The same dead-letter projection for one app, newest first. */
+  listDeadLetteredCapsuleInterfaceMaterializationIntentsForCapsule(
+    capsuleId: string,
+    limit?: number,
+  ): Promise<readonly CapsuleInterfaceMaterializationIntent[]>;
   /**
    * Atomically claims the globally oldest due/expired intent, or only the exact
    * `intentId` when supplied. Exact mode never falls through to another row.
@@ -4447,6 +4453,15 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     targetId: string,
     params: PageParams,
   ): Promise<Page<ActivityEvent>>;
+  /**
+   * Newest-first keyset page across at most 12 internal Activity partitions
+   * (the frozen namespaces the caller's apps record into). The caller filters
+   * the page to the apps it may view; this read grants nothing.
+   */
+  listActivityEventsForWorkspacesPage(
+    workspaceIds: readonly string[],
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>>;
 
   // Credential mint audit rows (spec invariant 17). Values are never persisted;
   // this ledger records only run/Workspace/Capsule/connection/phase metadata.
@@ -4511,6 +4526,15 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     workspaceId: string,
     params: PageParams,
     viewer?: AppListViewer,
+  ): Promise<Page<BackupRecord>>;
+  /**
+   * Newest-first keyset page of the backups taken of one app (`capsuleId`
+   * recorded on the backup). Workspace-wide backups name no app and are not
+   * listed here; the caller has already decided the app.
+   */
+  listBackupRecordsPageForCapsule(
+    capsuleId: string,
+    params: PageParams,
   ): Promise<Page<BackupRecord>>;
 }
 
@@ -6642,7 +6666,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           existingBindingSlot?.id === existingBinding.id &&
           epoch === 1 &&
           stableStringify(publicStoredInstallConfig(existingConfig)) === stableStringify(installConfig) &&
-          stableStringify(existingCapsule) === stableStringify(capsule) &&
+          stableStringify(capsuleWithScopeRef(existingCapsule)) ===
+            stableStringify(capsuleWithScopeRef(capsule)) &&
           stableStringify(existingBinding) === stableStringify(providerBindingSet)
           ? { status: "replayed", capsule: existingCapsule }
           : { status: "conflict" },
@@ -7661,6 +7686,31 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         .filter(
           (intent) =>
             intent.workspaceId === workspaceId &&
+            intent.status === "dead_letter",
+        )
+        .sort(
+          (left, right) =>
+            (right.deadLetteredAt ?? "").localeCompare(
+              left.deadLetteredAt ?? "",
+            ) || right.id.localeCompare(left.id),
+        )
+        .slice(0, boundedLimit),
+    );
+  }
+
+  listDeadLetteredCapsuleInterfaceMaterializationIntentsForCapsule(
+    capsuleId: string,
+    limit?: number,
+  ): Promise<readonly CapsuleInterfaceMaterializationIntent[]> {
+    if (typeof capsuleId !== "string" || capsuleId.trim() === "") {
+      throw new TypeError("capsuleId is required");
+    }
+    const boundedLimit = capsuleInterfaceMaterializationFailureListLimit(limit);
+    return Promise.resolve(
+      [...this.#capsuleInterfaceMaterializationIntents.values()]
+        .filter(
+          (intent) =>
+            intent.capsuleId === capsuleId &&
             intent.status === "dead_letter",
         )
         .sort(
@@ -8885,6 +8935,21 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(pageSortedDesc(newestFirst, params));
   }
 
+  async listActivityEventsForWorkspacesPage(
+    workspaceIds: readonly string[],
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    const ids = new Set(boundedActivityWorkspaceIds(workspaceIds));
+    if (ids.size === 0) return { items: [] };
+    const newestFirst = Array.from(this.#activityEvents.values())
+      .filter((row) => ids.has(row.workspaceId))
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      );
+    return pageSortedDesc(newestFirst, params);
+  }
+
   putCredentialMintEvent(
     event: CredentialMintEvent,
   ): Promise<CredentialMintEvent> {
@@ -9083,6 +9148,19 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const hidden = viewer ? this.#appListHidden(viewer) : undefined;
     // Newest-first listing ⇒ descending keyset pager.
     return pageSortedDesc((await this.listBackupRecords(workspaceId)).filter((row) => !hidden?.backup(row)), params);
+  }
+
+  listBackupRecordsPageForCapsule(
+    capsuleId: string,
+    params: PageParams,
+  ): Promise<Page<BackupRecord>> {
+    const newestFirst = Array.from(this.#backupRecords.values())
+      .filter((row) => row.capsuleId === capsuleId)
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      );
+    return Promise.resolve(pageSortedDesc(newestFirst, params));
   }
 }
 

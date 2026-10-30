@@ -152,7 +152,7 @@ async function liveGrantFixture() {
   store.saveOidcClient({
     ...client,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId,
+      scopeRef: workspaceId,
       capsuleId,
       executionAuthorityEpoch: state.executionAuthorityEpoch,
       installConfig: installConfig as InstallConfig,
@@ -225,7 +225,7 @@ test("a nonmember can sign in to an installed app without management or Workspac
   store.saveOidcClient({
     ...store.findOidcClient(clientId)!,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId, capsuleId, executionAuthorityEpoch: 1,
+      scopeRef: workspaceId, capsuleId, executionAuthorityEpoch: 1,
       installConfig: installConfig as InstallConfig,
     }),
   });
@@ -380,7 +380,7 @@ test("repository-materialized OIDC keeps its live grant without a static client 
   store.saveOidcClient({
     ...current,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId,
+      scopeRef: workspaceId,
       capsuleId,
       executionAuthorityEpoch: 1,
       installConfig: generic,
@@ -460,7 +460,7 @@ test("authorize materializes required Interfaces for the exact pairwise Principa
   store.saveOidcClient({
     ...currentClient,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId,
+      scopeRef: workspaceId,
       capsuleId,
       executionAuthorityEpoch: 1,
       installConfig: installConfig as InstallConfig,
@@ -500,7 +500,7 @@ test("app member outside the Workspace still materializes required Interfaces", 
   store.saveOidcClient({
     ...store.findOidcClient(clientId)!,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId, capsuleId, executionAuthorityEpoch: 1,
+      scopeRef: workspaceId, capsuleId, executionAuthorityEpoch: 1,
       installConfig: installConfig as InstallConfig,
     }),
   });
@@ -923,7 +923,7 @@ test("required Interface domain unavailability permits sign-in while infrastruct
     const { store, operations, installConfig } = await liveGrantFixture();
     installConfig.requiredInterfaces = [{ key: "ai", interface: { type: "takosumi.ai.gateway", version: "1" }, permissions: ["ai.chat"], delivery: { type: "oauth2" } }];
     const currentClient = store.findOidcClient(clientId)!;
-    store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
+    store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ scopeRef: workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
     operations.interfaces!.ensureCapsuleRequiredInterfaces = async () => { throw failure; };
     const response = await handleAuthorize({ ...authorizeRequest(), flow, clients: new Map(), store, operations });
     expect(response.status).toBe(status);
@@ -956,7 +956,7 @@ test("v75 D1 without interface_links permits OIDC sign-in and Capsule retirement
   const { store, operations, installConfig } = await liveGrantFixture();
   installConfig.requiredInterfaces = [requiredInterface];
   const currentClient = store.findOidcClient(clientId)!;
-  store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
+  store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ scopeRef: workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
   operations.interfaces!.ensureCapsuleRequiredInterfaces = service.ensureCapsuleRequiredInterfaces.bind(service);
   const response = await handleAuthorize({ ...authorizeRequest(), flow, clients: new Map(), store, operations });
   expect(response.status).toBe(302);

@@ -62,11 +62,13 @@ import {
   getInstallConfig,
   getRun,
   isInterfaceMaterializationRetryStale,
+  isRevisionAlreadyCurrent,
   listCapsuleRuns,
   listProviderConnections,
   listSourceSnapshots,
   listStateVersions,
   planCapsule,
+  requireReviewableRevisionPlan,
   retryInterfaceMaterializationFailure,
   type Run,
   type RunType,
@@ -75,8 +77,6 @@ import {
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
-import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
-import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
 import {
   getOrCreateRevisionPlanAttempt,
@@ -376,8 +376,6 @@ export default function AppManagePage(props: {
     const workspace = workspaceId();
     if (!workspace) return;
     clearCapsuleListCache(workspace);
-    clearCurrentStateVersionCache(workspace);
-    clearDashboardOverviewCache(workspace);
   };
 
   const refreshAll = async () => {
@@ -507,7 +505,12 @@ export default function AppManagePage(props: {
       );
     } catch (cause) {
       if (capsuleId() === forCapsule) {
-        setSectionError({ section, message: friendlyError(cause, t).message });
+        // Finding no newer version is an answer, not a failure.
+        if (isRevisionAlreadyCurrent(cause)) {
+          setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
+        } else {
+          setSectionError({ section, message: friendlyError(cause, t).message });
+        }
       }
     } finally {
       if (capsuleId() === forCapsule) setStarting(undefined);
@@ -750,7 +753,9 @@ export default function AppManagePage(props: {
     void startReview(
       "attention",
       "update",
-      async () => (await advanceGitRevisionPlan(revisionPlanId)).revisionPlan.planRunId,
+      async () =>
+        requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId))
+          .revisionPlan.planRunId,
       { action: "continue_revision", restartable: false },
     );
   const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);
