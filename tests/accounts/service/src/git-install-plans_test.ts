@@ -314,6 +314,74 @@ test("reviewed preflight fails closed when its pinned host authority changes bef
   expect(fixture.counts.capsule).toBe(0);
 });
 
+test("legacy reviewed preflight claims an ownerless Source only with the installer's own connection (TASK-0118 P9.1-c)", async () => {
+  const gitConnection = {
+    ...providerConnection("source_git_https_token", "conn_preflightgit01"),
+    kind: "source_git_https_token" as const,
+  } as ProviderConnection;
+  const fixture = installFixture({ providerConnections: [gitConnection] });
+  const preflight = fixture.seedPreflight({ variableDeclarations: [], sourceAuthConnectionId: gitConnection.id });
+  const body = {
+    ...createBody({ modulePath: ".", providerBindings: [] }),
+    source: { ...createBody().source, authConnectionId: gitConnection.id },
+    preflight,
+  };
+  // The Source carries the Workspace owner's Git credential; an admin's
+  // install (which the admin will own) may not claim it.
+  const refused = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans", "POST", body,
+    { "idempotency-key": "preflight-lent-connection" }, ADMIN_SUBJECT,
+  );
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error.code).toBe("source_connection_not_installer_owned");
+  // The connection's owner may.
+  const accepted = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans", "POST", body,
+    { "idempotency-key": "preflight-own-connection" },
+  );
+  expect(accepted.status).toBe(201);
+});
+
+test("a recorded ownerless Source is claimed at creation only with the installer's own connection (TASK-0118 P9.1-c)", async () => {
+  for (const [subject, expected] of [[ADMIN_SUBJECT, "failed"], [WORKSPACE.ownerUserId, "planning"]] as const) {
+    const gitConnection = {
+      ...providerConnection("source_git_https_token", "conn_recordedgit01"),
+      kind: "source_git_https_token" as const,
+    } as ProviderConnection;
+    const fixture = installFixture({ providerConnections: [gitConnection] });
+    const now = new Date().toISOString();
+    // A prior coordinator recorded this ownerless Source, carrying the
+    // Workspace owner's Git credential.
+    fixture.sources.push({
+      id: "src_recorded_legacy", workspaceId: WORKSPACE.id, name: "example",
+      url: "https://github.com/takos/example", defaultRef: "main", defaultPath: ".",
+      authConnectionId: gitConnection.id, status: "active", autoSync: false, createdAt: now, updatedAt: now,
+    } as Source);
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans", "POST",
+      { ...createBody({ modulePath: ".", providerBindings: [] }), source: { ...createBody().source, authConnectionId: gitConnection.id } },
+      { "idempotency-key": `recorded-${subject}` }, subject,
+    );
+    expect(created.status).toBe(201);
+    const planId = (await created.json()).installPlan.id as string;
+    const stored = (await fixture.planStore.get(planId))!;
+    expect((await fixture.planStore.transitionUnleased({
+      id: planId, expectedGeneration: stored.generation, expectedPhase: stored.phase,
+      plan: { ...stored, generation: stored.generation + 1, sourceId: "src_recorded_legacy" }, at: now,
+    })).status).toBe("updated");
+    let plan = (await (await fixture.request(`/api/v1/install-plans/${planId}/reconcile`, "POST", undefined, {}, subject)).json()).installPlan;
+    for (let step = 0; step < 8 && plan.phase !== "planning" && plan.phase !== "failed"; step += 1) {
+      if (plan.sourceSyncRunId) fixture.succeedSourceSync();
+      plan = (await (await fixture.request(`/api/v1/install-plans/${planId}/reconcile`, "POST", undefined, {}, subject)).json()).installPlan;
+    }
+    expect(plan.phase, subject).toBe(expected);
+    if (expected === "failed") {
+      expect(plan.diagnostic.code).toBe("source_connection_not_installer_owned");
+      expect(fixture.counts.capsule).toBe(0);
+    }
+  }
+});
+
 test("legacy reviewed preflight refuses a Source owned by another app before storing a plan", async () => {
   const fixture = installFixture();
   const preflight = fixture.seedPreflight({
@@ -970,7 +1038,9 @@ test("Git install plan fails closed when host policy requires an invalid manifes
 });
 
 for (const connectionOwner of [WORKSPACE.ownerUserId, ADMIN_SUBJECT]) {
-  test(`legacy install by an admin validates bindings against the Workspace owner: ${connectionOwner}`, async () => {
+  // TASK-0118 P9.1-c: the admin who installs owns the app, so bindings are
+  // checked against the admin's connections, not the Workspace owner's.
+  test(`legacy install by an admin validates bindings against the installer: ${connectionOwner}`, async () => {
     const provider = "registry.opentofu.org/hashicorp/aws";
     const connection = {
       ...providerConnection(provider, "conn_legacyowner01"),
@@ -995,7 +1065,7 @@ for (const connectionOwner of [WORKSPACE.ownerUserId, ADMIN_SUBJECT]) {
     const result = await reconcile();
     expect(result.status).toBe(200);
     const plan = (await result.json()).installPlan;
-    if (connectionOwner === WORKSPACE.ownerUserId) {
+    if (connectionOwner === ADMIN_SUBJECT) {
       expect(plan.phase).toBe("planning");
       expect(fixture.counts.capsule).toBe(1);
       expect(fixture.capsules[0]?.installingPrincipalId).toBe(ADMIN_SUBJECT);
@@ -1888,20 +1958,26 @@ test("workspace-less install keeps the requester's canonical personal owner for 
   ]);
 });
 
-test("install attempts offer only the future app owner's Workspace connections (TASK-0118 P9.1-d)", async () => {
-  const othersConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_admin"), ownerAccountId: ADMIN_SUBJECT };
+test("install attempts offer only the installer's Workspace connections (TASK-0118 P9.1-c)", async () => {
+  const adminsConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_admin"), ownerAccountId: ADMIN_SUBJECT };
   const legacyConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_legacy") } as ProviderConnection & { ownerAccountId?: string };
   delete legacyConnection.ownerAccountId;
   const fixture = attemptFixture({
-    providerConnections: [providerConnection(CLOUDFLARE, "conn_cloudflare01"), othersConnection, legacyConnection],
+    providerConnections: [providerConnection(CLOUDFLARE, "conn_cloudflare01"), adminsConnection, legacyConnection],
   });
-  const planId = await startAttempt(fixture);
-  const paused = await reconcileUntilIdle(fixture, planId);
-  expect(paused.installPlan.phase).toBe("awaiting_input");
-  // Someone else's connection recording this Workspace is never offered; a
-  // legacy row without an owner belongs to the Workspace owner.
-  expect(paused.userAction.connections[0].candidates.map((candidate: { id: string }) => candidate.id))
-    .toEqual(["conn_cloudflare01", "conn_cloudflare_legacy"]);
+  // The Workspace owner installs: only its own connection is offered. The
+  // admin's row is not, nor a legacy row without a recorded owner, which
+  // binding would refuse.
+  const ownerPlan = await startAttempt(fixture);
+  const ownerPaused = await reconcileUntilIdle(fixture, ownerPlan);
+  expect(ownerPaused.userAction.connections[0].candidates.map((candidate: { id: string }) => candidate.id))
+    .toEqual(["conn_cloudflare01"]);
+  // A Workspace admin installs: the app will be the admin's, so only the
+  // admin's own connection is offered.
+  const adminPlan = await startAttempt(fixture, attemptBody({ capsuleName: "admins" }), "attempt-admin", ADMIN_SUBJECT);
+  const adminPaused = await reconcileUntilIdle(fixture, adminPlan, ADMIN_SUBJECT);
+  expect(adminPaused.userAction.connections[0].candidates.map((candidate: { id: string }) => candidate.id))
+    .toEqual(["conn_cloudflare_admin"]);
 });
 
 test("install attempt pauses once for the whole sheet, auto-selects the only connection, and continues with transient values", async () => {
@@ -5043,6 +5119,7 @@ function installFixture(
         CapsuleCompatibilityReport["rootModuleVariableDeclarations"]
       >;
       readonly sourceOwnerCapsuleId?: string;
+      readonly sourceAuthConnectionId?: string;
     }) {
       const now = new Date().toISOString();
       const source: Source = {
@@ -5050,6 +5127,9 @@ function installFixture(
         workspaceId: WORKSPACE.id,
         ...(input.sourceOwnerCapsuleId
           ? { ownerCapsuleId: input.sourceOwnerCapsuleId }
+          : {}),
+        ...(input.sourceAuthConnectionId
+          ? { authConnectionId: input.sourceAuthConnectionId }
           : {}),
         name: "example",
         url: "https://github.com/takos/example",

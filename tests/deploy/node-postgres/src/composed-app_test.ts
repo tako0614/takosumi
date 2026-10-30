@@ -175,6 +175,15 @@ test("default-frozen Node composition bootstraps a fresh account and accepts its
       headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_node_fresh_install`,
         origin: "http://localhost:8787", ...init.headers },
     }));
+  // Listing never creates a Workspace (TASK-0118 P9.1-c); the explicit
+  // personal bootstrap write does.
+  const empty = await call("/api/v1/workspaces");
+  assert.equal(empty.status, 200);
+  assert.deepEqual((await empty.json() as { workspaces: unknown[] }).workspaces, []);
+  const bootstrapped = await call("/api/v1/workspaces", { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle: "fresh-installer", type: "personal" }) });
+  assert.equal(bootstrapped.status, 201);
   const listed = await call("/api/v1/workspaces");
   assert.equal(listed.status, 200);
   const { workspaces } = await listed.json() as { workspaces: Array<{ id: string; type: string; ownerUserId: string }> };
@@ -182,6 +191,7 @@ test("default-frozen Node composition bootstraps a fresh account and accepts its
   assert.equal(workspaces[0]?.type, "personal");
   assert.equal(workspaces[0]?.ownerUserId, subject);
   const workspaceId = workspaces[0]!.id;
+  assert.equal((await bootstrapped.json() as { workspace: { id: string } }).workspace.id, workspaceId);
   const replay = await call("/api/v1/workspaces", { method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ handle: "another-handle", type: "personal" }) });

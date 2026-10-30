@@ -383,6 +383,8 @@ export interface ControlPlaneOperations {
       readonly environment: string;
       readonly sourceId: string;
       readonly installingPrincipalId: string;
+      /** The app's first owner (the installing account); see CapsulesService. */
+      readonly ownerAccountId?: string;
       /** The delegate app whose token installed this app; stored privately. */
       readonly delegateCapsuleId?: string;
       readonly autoUpdate?: boolean;

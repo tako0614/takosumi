@@ -229,18 +229,27 @@ class ReplayProjectProbe extends ProjectsService {
   }
 }
 
-for (const installingPrincipalId of ["user_1", "workspace_admin"]) {
-  test(`initial authority owner is the canonical Workspace owner for requester ${installingPrincipalId}`, async () => {
+// TASK-0118 P9.1-c: the install coordinator names the installing account as
+// the first owner, also when it is a Workspace admin rather than the
+// Workspace's owner ("user_1"). A caller that names no owner (an operator
+// route whose principal is not an account) keeps the Workspace's owner.
+for (const [installingPrincipalId, ownerAccountId, expectedOwner] of [
+  ["user_1", "user_1", "user_1"],
+  ["workspace_admin", "workspace_admin", "workspace_admin"],
+  ["deploy-control-bearer", undefined, "user_1"],
+] as const) {
+  test(`initial authority owner: ${installingPrincipalId} names ${ownerAccountId ?? "no owner"}`, async () => {
     const { store, service } = build();
     await seedWorkspaceAndSource(store);
     const capsule = await createInitialCapsule(service, {
       capsuleId: "cap_owner",
       providerBindingSetId: "pbind_owner",
       installingPrincipalId,
+      ...(ownerAccountId ? { ownerAccountId } : {}),
       installConfig: initialInstallConfig("cfg_owner"),
     });
     expect((store as InMemoryOpenTofuControlStore).getCapsuleOwnership(capsule.id)).toMatchObject({
-      ownerAccountId: "user_1",
+      ownerAccountId: expectedOwner,
       storageRoot: `apps/${capsule.id}`,
     });
     expect(capsule.installingPrincipalId).toBe(installingPrincipalId);

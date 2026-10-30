@@ -27,6 +27,9 @@
 .ap-open-menu { position: absolute; z-index: 20; top: calc(100% + var(--tg-s-1)); right: 0; min-width: 12rem; margin: 0; padding: var(--tg-s-1); list-style: none; border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-elev); box-shadow: var(--tg-shadow-md); }
 .ap-open-menu a { display: block; padding: var(--tg-s-2) var(--tg-s-3); border-radius: var(--tg-r-sm); color: var(--tg-fg); text-decoration: none; overflow-wrap: anywhere; }
 .ap-open-menu a:hover, .ap-open-menu a:focus-visible { background: var(--tg-bg-subtle); }
+/* 「開き方を変える」 next to Open on a phone: a quiet link to the chooser. */
+.ap-open-change { align-self: center; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); text-decoration: underline; text-underline-offset: 2px; }
+.ap-open-change:hover, .ap-open-change:focus-visible { color: var(--tg-fg); }
 
 /* In-page jump links to each section. */
 .ap-jump { display: flex; flex-wrap: wrap; gap: var(--tg-s-1) var(--tg-s-4); padding-bottom: var(--tg-s-2); border-bottom: 1px solid var(--tg-line); font-size: var(--tg-fs-sm); }

@@ -2,7 +2,10 @@
  * Home (`/`) — the app launcher: every installed app as an icon tile.
  *
  * Apps that can be opened come first, in name order. Tapping one opens its
- * screen in a new tab; the small "Manage" link under it opens the app page.
+ * screen: in a new tab on a computer, and on a phone the way this device
+ * chose or the app declares (its verified native app, the web, or the app
+ * page's chooser; lib/open-routing.ts). The small "Manage" link under it
+ * opens the app page.
  * Apps that cannot be opened yet (installing, never applied, failed, being
  * removed, stopped) still get a tile, drawn muted with a status mark, and
  * tapping it opens the app page, where the app is kept. Nothing is folded
@@ -39,6 +42,8 @@ import { locale, type MessageKey, t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { appPageHref } from "../../lib/app-links.ts";
+import { screenOpenRoute } from "../../lib/open-choice-state.ts";
+import { openRouteAnchor, openRouteAria } from "../app/app-ui.tsx";
 
 /** One installed app on Home with the screens it may open. */
 interface HomeApp {
@@ -50,7 +55,14 @@ interface HomeApp {
   readonly role?: AccessibleApp["role"];
   readonly ownerDisplayName?: string;
   readonly state: AppState;
-  readonly surfaces: readonly { readonly name?: string; readonly url: string; readonly icon?: string }[];
+  readonly surfaces: readonly {
+    readonly name?: string;
+    readonly url: string;
+    readonly icon?: string;
+    readonly interfaceId?: string;
+    /** Only the app view carries a screen's verified native clients. */
+    readonly clients?: unknown;
+  }[];
 }
 
 /** The small status mark: a dot on the icon and a word under the name. */
@@ -230,7 +242,10 @@ function HomeAppTile(props: { readonly app: HomeApp }) {
   const shared = () => props.app.role === "member";
   const captionId = createUniqueId();
   const describedBy = () => (mark() || shared() ? captionId : undefined);
-  const openUrl = () => (homeAppOpens(props.app) ? props.app.surfaces[0]?.url : undefined);
+  const openRoute = () => {
+    const surface = homeAppOpens(props.app) ? props.app.surfaces[0] : undefined;
+    return surface ? screenOpenRoute(props.app.inst.id, surface) : undefined;
+  };
   const pageHref = () => appPageHref(props.app.inst.id);
   const tileClass = () => (homeAppWaiting(props.app) ? "av-tile av-tile-waiting" : "av-tile");
 
@@ -269,21 +284,20 @@ function HomeAppTile(props: { readonly app: HomeApp }) {
   return (
     <span class="av-tile-wrap">
       <Show
-        when={openUrl()}
+        when={openRoute()}
         fallback={
           <a class={tileClass()} href={pageHref()} aria-label={name()} aria-describedby={describedBy()}>
             {body()}
           </a>
         }
       >
-        {(url) => (
+        {(route) => (
           <>
             <a
               class={tileClass()}
-              href={url()}
-              target="_blank"
-              rel="noreferrer noopener"
-              aria-label={t("app.open.aria", { name: name() })}
+              {...openRouteAnchor(route())}
+              data-open-route={route().kind}
+              aria-label={openRouteAria(route(), name())}
               aria-describedby={describedBy()}
             >
               {body()}

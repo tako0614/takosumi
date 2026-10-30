@@ -175,7 +175,7 @@ test("Workspace creation and membership writes return the standard 409 envelope 
   expect(await f.control.listWorkspaceMembers(workspace.id)).toEqual([owner]);
 });
 
-test("default-frozen Workspace inventory bootstraps only the owner's personal singleton", async () => {
+test("default-frozen Workspace inventory never bootstraps a personal Workspace (TASK-0118 P9.1-c)", async () => {
   const f = fixture();
   let ensured = 0;
   (f.operations.workspaces as ControlPlaneOperations["workspaces"]).ensurePersonalWorkspace = async (owner, handle) => {
@@ -191,8 +191,8 @@ test("default-frozen Workspace inventory bootstraps only the owner's personal si
     subject,
   });
   expect(response?.status).toBe(200);
-  expect(ensured).toBe(1);
-  expect((await f.control.listWorkspaces())).toMatchObject([{ type: "personal", ownerUserId: subject }]);
+  expect(ensured).toBe(0);
+  expect(await f.control.listWorkspaces()).toEqual([]);
 });
 
 test("default-frozen personal POST uses strict owner-bound singleton and rejects owner hints", async () => {
