@@ -1,6 +1,7 @@
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import type { AccountBillingBinding, AppOwnershipStore, CapsuleMember, CapsuleOwnership } from "./store.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 
 export interface OwnershipBackfillContext {
   readonly control: OpenTofuControlStore;
@@ -70,7 +71,10 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
     const capsules = capsulesByWorkspace.get(workspace.id) ?? [];
     for (const capsule of capsules) {
       const existing = await context.ownership.getOwnership(capsule.id);
-      const legacyRoot = `workspaces/${workspace.id}/capsules/${capsule.id}`;
+      // The root every existing object was written under: the Capsule's frozen
+      // scope (its Workspace id when the object was written), never a Workspace
+      // id read later.
+      const legacyRoot = `workspaces/${capsuleScopeRef(capsule)}/capsules/${capsule.id}`;
       const ownerAccountId = existing?.ownerAccountId ?? workspace.ownerUserId;
       ownerByCapsuleId.set(capsule.id, ownerAccountId);
       if ((existing?.ownershipEpoch ?? 0) !== 0) transferredCapsuleIds.add(capsule.id);

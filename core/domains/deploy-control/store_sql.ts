@@ -122,7 +122,7 @@ function pgConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
 }
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import { capsuleWithScopeRef } from "takosumi-contract/capsules";
+import { capsuleScopeRef, capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   AccountWorkspaceListParams,
   AccountWorkspacePage,
@@ -8015,11 +8015,34 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async getCapsuleStorageRoot(capsuleId: string): Promise<string | undefined> {
     const result = await this.#client.query<{
       readonly workspace_id: string;
+      readonly scope_type: string | null;
+      readonly scope_text: string | null;
       readonly storage_root: string | null;
-    }>(`select space_id as workspace_id, storage_root from takosumi_capsules where id=$1`, [capsuleId]);
+    }>(
+      `select space_id as workspace_id,
+              jsonb_typeof(installation_json->'scopeRef') as scope_type,
+              installation_json->>'scopeRef' as scope_text,
+              storage_root
+         from takosumi_capsules where id=$1`,
+      [capsuleId],
+    );
     const row = result.rows[0];
     if (!row) return undefined;
-    return row.storage_root ?? `workspaces/${row.workspace_id}/capsules/${capsuleId}`;
+    if (row.storage_root !== null) return row.storage_root;
+    // The legacy root of a row without a persisted one was written under the
+    // Capsule's frozen scope, never its live Workspace id. Validated exactly
+    // as the memory and D1 stores do: an absent key falls back to the
+    // Workspace id; JSON null, a number, a boolean or a structure is invalid
+    // (`->>` alone would coerce it to text or read null as absent).
+    const scopeRef: unknown = row.scope_type === null
+      ? undefined
+      : row.scope_type === "string"
+        ? row.scope_text
+        : { type: row.scope_type };
+    return `workspaces/${capsuleScopeRef({
+      workspaceId: row.workspace_id,
+      scopeRef: scopeRef as string | undefined,
+    })}/capsules/${capsuleId}`;
   }
 
   async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
