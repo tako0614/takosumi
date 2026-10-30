@@ -1,29 +1,26 @@
 /**
  * Dispatcher for the instance's own notifications to Takosumi Mobile.
  *
- * Each run does two bounded steps:
+ * Two paths share one durable queue of delivery rows, one per (event,
+ * pusher), whose id is derived from that pair so nothing is enqueued twice:
  *
- * 1. Enqueue. Read the Activity ledger (`audit_events`, every Workspace) in
- *    `(createdAt, id)` order after the cursor, up to now. Some writers record
- *    Activity straight into the ledger without ActivityService (app
- *    ownership), so the ledger, not the service, is the source. For each
- *    notified event, resolve the recipients from the app owner and the
- *    accounts the event names, and add one row per (event, pusher). The row
- *    id is derived from that pair, so reading an event again adds nothing.
- *    That lets the cursor trail the present by a re-read window: `createdAt`
- *    is minted before the row commits and isolates can commit slightly out of
- *    order, so the last ten minutes are read again on every run instead of
- *    being deferred. An event whose recipients cannot be read keeps the cursor
- *    behind it (later events are still enqueued) until it succeeds or is six
- *    hours old. The first run starts at the present: history is never sent.
- * 2. Deliver. Lease the rows that are due and send each once with the
- *    answer rules of `web_push/delivery.ts`; retries come back on a later run.
- *
- * While no account has a pusher, a run only moves the cursor to the present,
- * so an idle instance reads nothing. On Cloudflare a pass runs on every
- * scheduled tick and, right after a notified event is recorded, once more in
- * the same request or Durable Object invocation (`waitUntil`). node-postgres
- * runs it from an in-process interval.
+ * - Immediate ({@link OwnNotificationDispatcher.deliverEvent}): the host's
+ *   Activity hook hands over the event it just stored. Its rows are enqueued
+ *   directly and only those rows are leased and sent, within a hard time
+ *   limit. Anything left (a timeout, a retryable answer) stays leased and is
+ *   picked up later by the catch-up run. It does not read or move the cursor.
+ * - Catch-up ({@link OwnNotificationDispatcher.run}): read the Activity
+ *   ledger (`audit_events`, every Workspace) in `(createdAt, id)` order after
+ *   the cursor, up to now, and enqueue what the immediate path missed (events
+ *   written without ActivityService, such as app ownership rows; hosts or
+ *   moments without an invocation to attach to). The cursor trails the
+ *   present by a re-read window because `createdAt` is minted before the row
+ *   commits; re-reads add no rows. An event whose recipients cannot be read
+ *   is parked on the cursor and retried on later runs (given up after six
+ *   hours) while the cursor moves on. Events past their TTL are dropped,
+ *   logged and counted. Then lease the due rows and send them. The first run
+ *   starts at the present; while no account has a pusher a run only moves
+ *   the cursor.
  */
 
 import type { ActivityEvent } from "takosumi-contract/activity";
@@ -33,9 +30,11 @@ import {
   type NotificationDeliverySettlement,
   type NotificationDispatchPusher,
   type NotificationDispatchStore,
+  type NotificationParkedEvent,
   notificationDeliveryId,
 } from "./dispatch_store.ts";
 import {
+  type OwnNotificationContext,
   type OwnNotificationPlan,
   type OwnNotificationRecipient,
   ownNotificationLanguage,
@@ -66,8 +65,17 @@ const SEND_CONCURRENCY = 8;
 const PRUNE_AFTER_EXPIRY_MS = 24 * 60 * 60_000;
 const PRUNE_LIMIT = 200;
 
+/** At most this many unreadable events wait on the cursor. */
+const MAX_PARKED_EVENTS = 50;
+/** Hard ceiling of one immediate delivery, send timeouts included. */
+export const IMMEDIATE_DELIVERY_TIMEOUT_MS = 20_000;
+const IMMEDIATE_SEND_TIMEOUT_MS = 8_000;
+const IMMEDIATE_MAX_ROWS = 50;
+
 export interface NotificationEventSource {
   listAfter(input: ActivityLedgerPageInput): Promise<readonly ActivityEvent[]>;
+  /** One event by id (parked events are read again by id). */
+  get(id: string): Promise<ActivityEvent | undefined>;
 }
 
 /**
@@ -116,8 +124,27 @@ export interface OwnNotificationDispatchResult {
   readonly retried: number;
   readonly failed: number;
   readonly removedPushers: number;
+  /** Unreadable events given up after six hours (or past the parking limit). */
   readonly skippedEvents: number;
+  /** Events whose recipients could not be read this run, now parked. */
+  readonly parkedEvents: number;
+  /** Notified events read only after their TTL had passed. */
+  readonly expiredEvents: number;
 }
+
+export interface OwnNotificationImmediateResult {
+  readonly enqueued: number;
+  readonly delivered: number;
+  readonly retried: number;
+  readonly failed: number;
+  readonly removedPushers: number;
+  /** Rows left leased for the catch-up run (time limit reached). */
+  readonly leftOver: number;
+}
+
+type MutableResult = {
+  -readonly [K in keyof OwnNotificationDispatchResult]: OwnNotificationDispatchResult[K];
+};
 
 export class OwnNotificationDispatcher {
   readonly #deps: OwnNotificationDispatcherDependencies;
@@ -133,7 +160,7 @@ export class OwnNotificationDispatcher {
   ): Promise<OwnNotificationDispatchResult> {
     const startedAt = this.#now();
     const deadline = startedAt + (options.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS);
-    const result = {
+    const result: MutableResult = {
       enabled: true,
       idle: false,
       events: 0,
@@ -143,17 +170,27 @@ export class OwnNotificationDispatcher {
       failed: 0,
       removedPushers: 0,
       skippedEvents: 0,
+      parkedEvents: 0,
+      expiredEvents: 0,
     };
     const vapid = await this.#deps.vapid();
     if (!vapid) return { ...result, enabled: false };
     const store = this.#deps.store;
     if (!(await store.hasAnyNotificationPusher())) {
-      await this.#moveCursorToPresent();
+      await this.#moveCursorWhileIdle();
       return { ...result, idle: true };
     }
     await this.#enqueue(result, options.maxEventPages ?? DEFAULT_MAX_EVENT_PAGES, deadline);
     if (this.#now() < deadline) {
-      await this.#deliver(result, vapid, options.maxDeliveries ?? DEFAULT_MAX_DELIVERIES, deadline);
+      const leaseToken = crypto.randomUUID();
+      const now = this.#now();
+      const claimed = await store.claimNotificationDeliveries({
+        now,
+        limit: options.maxDeliveries ?? DEFAULT_MAX_DELIVERIES,
+        leaseToken,
+        leaseExpiresAt: now + DELIVERY_LEASE_MS,
+      });
+      await this.#send(claimed, leaseToken, vapid, deadline, result);
     }
     await store.pruneNotificationDeliveries({
       expiredBefore: this.#now() - PRUNE_AFTER_EXPIRY_MS,
@@ -162,24 +199,62 @@ export class OwnNotificationDispatcher {
     return result;
   }
 
-  /** Nobody can receive anything: skip the ledger up to now. */
-  async #moveCursorToPresent(): Promise<void> {
+  /**
+   * The immediate path for one event the host just stored: enqueue its rows
+   * and send only those, within {@link IMMEDIATE_DELIVERY_TIMEOUT_MS}. It
+   * never reads or moves the cursor. Rows it could not finish stay leased and
+   * become due again for the catch-up run.
+   */
+  async deliverEvent(
+    event: ActivityEvent,
+    context?: OwnNotificationContext,
+    options: { readonly timeoutMs?: number } = {},
+  ): Promise<OwnNotificationImmediateResult> {
+    const startedAt = this.#now();
+    const deadline = startedAt + Math.min(
+      options.timeoutMs ?? IMMEDIATE_DELIVERY_TIMEOUT_MS,
+      IMMEDIATE_DELIVERY_TIMEOUT_MS,
+    );
+    const result = { enqueued: 0, delivered: 0, retried: 0, failed: 0, removedPushers: 0, leftOver: 0 };
+    const vapid = await this.#deps.vapid();
+    if (!vapid) return result;
+    const planned = await this.#rowsFor(event, startedAt, new Map(), new Map(), context);
+    const rows = planned.rows.slice(0, IMMEDIATE_MAX_ROWS);
+    if (rows.length === 0) return result;
     const store = this.#deps.store;
-    const present = new Date(this.#now()).toISOString();
+    result.enqueued = await store.enqueueNotificationDeliveries(rows);
+    const leaseToken = crypto.randomUUID();
+    const now = this.#now();
+    const claimed = await store.claimNotificationDeliveries({
+      now,
+      limit: rows.length,
+      leaseToken,
+      leaseExpiresAt: now + DELIVERY_LEASE_MS,
+      deliveryIds: rows.map((row) => row.deliveryId),
+    });
+    const sent = { delivered: 0, retried: 0, failed: 0, removedPushers: 0 };
+    const settled = await this.#send(claimed, leaseToken, vapid, deadline, sent, IMMEDIATE_SEND_TIMEOUT_MS);
+    return { ...result, ...sent, leftOver: claimed.length - settled };
+  }
+
+  /**
+   * Nobody can receive anything: skip the ledger, keeping the re-read window
+   * so an event that commits late is still read once a device registers.
+   */
+  async #moveCursorWhileIdle(): Promise<void> {
+    const store = this.#deps.store;
+    const target = new Date(this.#now() - NOTIFICATION_REREAD_WINDOW_MS).toISOString();
     const cursor = await store.getNotificationDispatchCursor();
-    if (cursor && cursor.createdAt >= present) return;
+    if (cursor && cursor.createdAt >= target) return;
     await store.compareAndSetNotificationDispatchCursor({
       expectedGeneration: cursor?.generation,
-      createdAt: present,
+      createdAt: target,
       id: "",
+      parked: cursor?.parked ?? [],
     });
   }
 
-  async #enqueue(
-    result: { events: number; enqueued: number; skippedEvents: number },
-    maxPages: number,
-    deadline: number,
-  ): Promise<void> {
+  async #enqueue(result: MutableResult, maxPages: number, deadline: number): Promise<void> {
     const store = this.#deps.store;
     const cursor = await store.getNotificationDispatchCursor();
     const now = this.#now();
@@ -190,15 +265,63 @@ export class OwnNotificationDispatcher {
         expectedGeneration: undefined,
         createdAt: present,
         id: "",
+        parked: [],
       });
       return;
     }
     const settledBefore = new Date(now - NOTIFICATION_REREAD_WINDOW_MS).toISOString();
     const pushersBySubject = new Map<string, Promise<readonly NotificationDispatchPusher[]>>();
     const names = new Map<string, Promise<string | undefined>>();
+    const parked = new Map((cursor.parked ?? []).map((entry) => [entry.eventId, entry]));
+    let parkedChanged = false;
+    const rows: NotificationDeliveryRecord[] = [];
+    const tryEvent = async (event: ActivityEvent): Promise<boolean> => {
+      try {
+        const planned = await this.#rowsFor(event, now, pushersBySubject, names);
+        if (planned.expired) {
+          result.expiredEvents += 1;
+          this.#log("own_notification_event_expired", { eventId: event.id, action: event.action });
+        }
+        rows.push(...planned.rows);
+        return true;
+      } catch (error) {
+        this.#log("own_notification_event_unreadable", {
+          eventId: event.id,
+          action: event.action,
+          errorName: error instanceof Error ? error.name : "unknown",
+        });
+        return false;
+      }
+    };
+    const giveUp = (entry: NotificationParkedEvent, reason: string) => {
+      parked.delete(entry.eventId);
+      parkedChanged = true;
+      result.skippedEvents += 1;
+      this.#log("own_notification_event_skipped", { eventId: entry.eventId, reason });
+    };
+
+    // Parked events first: read each again by id. An event handled here is
+    // not tried again when the re-read window returns it below.
+    const handled = new Set<string>();
+    for (const entry of [...parked.values()]) {
+      if (this.#now() >= deadline) break;
+      handled.add(entry.eventId);
+      const event = await this.#deps.events.get(entry.eventId);
+      if (!event) {
+        giveUp(entry, "event_missing");
+      } else if (await tryEvent(event)) {
+        parked.delete(entry.eventId);
+        parkedChanged = true;
+      } else if (Date.parse(entry.createdAt) <= now - STUCK_EVENT_SKIP_AFTER_MS) {
+        giveUp(entry, "recipients_unreadable");
+      } else {
+        parked.set(entry.eventId, { ...entry, attempts: entry.attempts + 1 });
+        parkedChanged = true;
+      }
+    }
+
     let readAfter = { createdAt: cursor.createdAt, id: cursor.id };
     let advanceTo: { readonly createdAt: string; readonly id: string } | undefined;
-    let blocked = false;
     for (let page = 0; page < maxPages && this.#now() < deadline; page += 1) {
       const events = await this.#deps.events.listAfter({
         after: readAfter,
@@ -206,44 +329,42 @@ export class OwnNotificationDispatcher {
         limit: EVENT_PAGE_LIMIT,
       });
       if (events.length === 0) break;
-      const rows: NotificationDeliveryRecord[] = [];
       for (const event of events) {
         result.events += 1;
-        try {
-          rows.push(...(await this.#rowsFor(event, now, pushersBySubject, names)));
-        } catch (error) {
-          const fields = {
-            eventId: event.id,
-            action: event.action,
-            errorName: error instanceof Error ? error.name : "unknown",
-          };
-          if (Date.parse(event.createdAt) > now - STUCK_EVENT_SKIP_AFTER_MS) {
-            // Keep the cursor behind this event; later events still go out.
-            blocked = true;
-            this.#log("own_notification_event_deferred", fields);
-          } else {
+        if (!handled.has(event.id) && !parked.has(event.id) && !(await tryEvent(event))) {
+          const entry = { eventId: event.id, createdAt: event.createdAt, attempts: 1 };
+          if (Date.parse(event.createdAt) <= now - STUCK_EVENT_SKIP_AFTER_MS) {
             result.skippedEvents += 1;
-            this.#log("own_notification_event_skipped", fields);
+            this.#log("own_notification_event_skipped", { eventId: entry.eventId, reason: "recipients_unreadable" });
+          } else {
+            // Park it and move on: it must not hold back later notifications.
+            parked.set(event.id, entry);
+            parkedChanged = true;
+            result.parkedEvents += 1;
           }
         }
-        if (!blocked && event.createdAt <= settledBefore) {
+        if (event.createdAt <= settledBefore) {
           advanceTo = { createdAt: event.createdAt, id: event.id };
         }
-      }
-      if (rows.length > 0) {
-        result.enqueued += await store.enqueueNotificationDeliveries(rows);
       }
       const last = events.at(-1)!;
       readAfter = { createdAt: last.createdAt, id: last.id };
       if (events.length < EVENT_PAGE_LIMIT) break;
     }
-    if (advanceTo) {
+    // Bound the parking list; the oldest give way.
+    const keep = [...parked.values()].sort((a, b) => a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0);
+    while (keep.length > MAX_PARKED_EVENTS) giveUp(keep.shift()!, "parking_full");
+    if (rows.length > 0) {
+      result.enqueued += await store.enqueueNotificationDeliveries(rows);
+    }
+    if (advanceTo || parkedChanged) {
       // A lost compare-and-set means another run moved the cursor; both
-      // enqueue the same rows idempotently.
+      // enqueue the same rows idempotently and parked events stay readable.
       await store.compareAndSetNotificationDispatchCursor({
         expectedGeneration: cursor.generation,
-        createdAt: advanceTo.createdAt,
-        id: advanceTo.id,
+        createdAt: advanceTo?.createdAt ?? cursor.createdAt,
+        id: advanceTo?.id ?? cursor.id,
+        parked: [...parked.values()],
       });
     }
   }
@@ -253,13 +374,14 @@ export class OwnNotificationDispatcher {
     now: number,
     pushersBySubject: Map<string, Promise<readonly NotificationDispatchPusher[]>>,
     names: Map<string, Promise<string | undefined>>,
-  ): Promise<NotificationDeliveryRecord[]> {
-    const plan = planOwnNotification(event);
-    if (!plan) return [];
+    context?: OwnNotificationContext,
+  ): Promise<{ readonly rows: NotificationDeliveryRecord[]; readonly expired: boolean }> {
+    const plan = planOwnNotification(event, context);
+    if (!plan) return { rows: [], expired: false };
     const expiresAt = plan.occurredAt + plan.ttlSeconds * 1000;
-    if (expiresAt <= now) return [];
+    if (expiresAt <= now) return { rows: [], expired: true };
     const subjects = await this.#recipients(plan.recipients);
-    if (subjects.length === 0) return [];
+    if (subjects.length === 0) return { rows: [], expired: false };
     const appName = (capsuleId: string | undefined) => {
       if (!capsuleId) return Promise.resolve(undefined);
       let name = names.get(capsuleId);
@@ -295,7 +417,7 @@ export class OwnNotificationDispatcher {
         }));
       }
     }
-    return rows;
+    return { rows, expired: false };
   }
 
   async #recipients(
@@ -356,21 +478,19 @@ export class OwnNotificationDispatcher {
     };
   }
 
-  async #deliver(
-    result: { delivered: number; retried: number; failed: number; removedPushers: number },
+  /**
+   * Send already leased rows until `deadline`, settling each. Returns how
+   * many were settled; the rest keep their lease and become due again.
+   */
+  async #send(
+    claimed: readonly NotificationDeliveryRecord[],
+    leaseToken: string,
     vapid: VapidKeyPair,
-    maxDeliveries: number,
     deadline: number,
-  ): Promise<void> {
+    result: { delivered: number; retried: number; failed: number; removedPushers: number },
+    sendTimeoutMs?: number,
+  ): Promise<number> {
     const store = this.#deps.store;
-    const now = this.#now();
-    const leaseToken = crypto.randomUUID();
-    const claimed = await store.claimNotificationDeliveries({
-      now,
-      limit: maxDeliveries,
-      leaseToken,
-      leaseExpiresAt: now + DELIVERY_LEASE_MS,
-    });
     const health: WebPushPusherHealthPort = {
       removePusher: (pusher) => store.removeNotificationPusher(pusher),
       recordPusherDelivered: (pusher, at) =>
@@ -385,11 +505,17 @@ export class OwnNotificationDispatcher {
     };
     const schedule = webPushRetrySchedule(this.#deps.random);
     let next = 0;
+    let settled = 0;
     const worker = async () => {
-      while (next < claimed.length && this.#now() < deadline) {
+      while (next < claimed.length) {
+        const remaining = deadline - this.#now();
+        if (remaining <= 0) return;
         const row = claimed[next]!;
         next += 1;
-        const settlement = await this.#attempt(row, vapid, health, schedule);
+        const timeoutMs = sendTimeoutMs === undefined
+          ? undefined
+          : Math.max(1, Math.min(sendTimeoutMs, remaining));
+        const settlement = await this.#attempt(row, vapid, health, schedule, timeoutMs);
         if (settlement.kind === "retry") result.retried += 1;
         else if (settlement.outcome === "delivered") result.delivered += 1;
         else if (settlement.outcome === "pusher_removed") result.removedPushers += 1;
@@ -400,11 +526,13 @@ export class OwnNotificationDispatcher {
           at: this.#now(),
           settlement,
         });
+        settled += 1;
       }
     };
     await Promise.all(
       Array.from({ length: Math.min(SEND_CONCURRENCY, claimed.length) }, worker),
     );
+    return settled;
   }
 
   async #attempt(
@@ -412,6 +540,7 @@ export class OwnNotificationDispatcher {
     vapid: VapidKeyPair,
     health: WebPushPusherHealthPort,
     schedule: ReturnType<typeof webPushRetrySchedule>,
+    timeoutMs?: number,
   ): Promise<NotificationDeliverySettlement> {
     const now = this.#now();
     if (row.expiresAt <= now) {
@@ -436,6 +565,7 @@ export class OwnNotificationDispatcher {
         vapid,
         subject: this.#deps.instanceOrigin,
         ...(this.#deps.fetch ? { fetch: this.#deps.fetch } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         now: this.#now,
       },
       pushers: health,

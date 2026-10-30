@@ -52,11 +52,18 @@ test("each notified kind has its recipients, link, TTL and urgency", () => {
     expect(planOwnNotification(event({ action, targetType: "capsule", targetId: "cap_9", metadata: {} })))
       .toMatchObject({ recipients: [{ kind: "app_owner", capsuleId: "cap_9" }], navigatePath: "/apps/cap_9#attention" });
   }
-  // The Connection record is deleted before the event is read: its owner
-  // travels in the event, and without it nobody is notified.
-  expect(planOwnNotification(event({ action: "connection.revoked", targetType: "connection", targetId: "conn_1", metadata: { ownerAccountId: "tsub_owner" } })))
+  // The revoked Connection's owner travels only in the unstored context the
+  // recorder hands over; public Activity never names it. A revocation by the
+  // owner, or one without that context, notifies nobody.
+  const revoked = event({ action: "connection.revoked", targetType: "connection", targetId: "conn_1", actorId: "tsub_operator", metadata: { provider: "x" } });
+  expect(planOwnNotification(revoked, { ownerAccountId: "tsub_owner", actorAccountId: "tsub_operator" }))
     .toMatchObject({ recipients: [{ kind: "account", accountId: "tsub_owner" }], navigatePath: "/connections" });
-  expect(planOwnNotification(event({ action: "connection.revoked", targetType: "connection", targetId: "conn_1" }))).toBeUndefined();
+  expect(planOwnNotification(revoked, { ownerAccountId: "tsub_owner" }))
+    .toMatchObject({ recipients: [{ kind: "account", accountId: "tsub_owner" }] });
+  expect(planOwnNotification(revoked, { ownerAccountId: "tsub_owner", actorAccountId: "tsub_owner" })).toBeUndefined();
+  expect(planOwnNotification({ ...revoked, actorId: "tsub_owner" }, { ownerAccountId: "tsub_owner" })).toBeUndefined();
+  expect(planOwnNotification(revoked)).toBeUndefined();
+  expect(planOwnNotification(event({ action: "connection.revoked", targetType: "connection", targetId: "conn_1", metadata: { ownerAccountId: "tsub_owner" } }))).toBeUndefined();
   // Drift collapses per app: a drift check that fails as a new Run each time
   // shares the app's Topic with drift itself.
   expect(planOwnNotification(event({ action: "run.failed", runId: "run_a", metadata: { capsuleId: "cap_1", phase: "drift_check" } }))?.group).toBe("drift:cap_1");

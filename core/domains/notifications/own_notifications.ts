@@ -61,9 +61,16 @@ const ATTENTION_KINDS = new Set<OwnNotificationKind>([
   "interface_materialization.dead_lettered",
 ]);
 
+/** Unstored context the recorder handed to the notification hook. */
+export interface OwnNotificationContext {
+  readonly ownerAccountId?: string;
+  readonly actorAccountId?: string;
+}
+
 /** The plan for one Activity event, or undefined when it is not notified. */
 export function planOwnNotification(
   event: ActivityEvent,
+  context?: OwnNotificationContext,
 ): OwnNotificationPlan | undefined {
   const occurredAt = Date.parse(event.createdAt);
   if (!Number.isFinite(occurredAt)) return undefined;
@@ -124,10 +131,13 @@ export function planOwnNotification(
         group: `installed:${capsuleId}`,
       };
     case "connection.revoked": {
-      // The Connection record is gone by the time the event is read, so the
-      // owner is taken from the event itself.
-      const owner = field(event, "ownerAccountId");
-      if (!owner) return undefined;
+      // The Connection record is deleted before the event is read, and its
+      // owner is not stored in the public event: the recorder hands it to the
+      // immediate path only. The owner is told only when someone else revoked
+      // it; a scheduled re-read has no owner and sends nothing.
+      const owner = context?.ownerAccountId;
+      const actor = context?.actorAccountId ?? event.actorId;
+      if (!owner || owner === actor) return undefined;
       return {
         ...base,
         kind,

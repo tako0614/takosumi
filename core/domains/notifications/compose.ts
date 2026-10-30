@@ -8,12 +8,15 @@
  * recipient, a revoked Connection's owner) need no lookup.
  */
 
+import type { ActivityEvent } from "takosumi-contract/activity";
 import type { NotificationDispatchStore } from "./dispatch_store.ts";
 import {
+  IMMEDIATE_DELIVERY_TIMEOUT_MS,
   type NotificationEventSource,
   type NotificationRecipientDirectory,
   OwnNotificationDispatcher,
 } from "./dispatcher.ts";
+import type { OwnNotificationContext } from "./own_notifications.ts";
 import {
   NOTIFICATION_PUSH_RELAY_ORIGINS_ENV,
   parseNotificationPushRelayOrigins,
@@ -122,4 +125,41 @@ export function createOwnNotificationDispatcher(input: {
     ...(input.fetch ? { fetch: input.fetch } : {}),
     ...(input.log ? { log: input.log } : {}),
   });
+}
+
+/**
+ * The immediate path for one event the host just stored: enqueue and send
+ * its rows, never longer than {@link IMMEDIATE_DELIVERY_TIMEOUT_MS} in total
+ * (send timeouts included), never throwing. Leftovers stay leased for the
+ * catch-up run.
+ */
+export async function deliverOwnNotificationNow(input: {
+  readonly dispatcher: OwnNotificationDispatcher;
+  readonly event: ActivityEvent;
+  readonly context?: OwnNotificationContext;
+  readonly log?: (event: string, fields: Record<string, unknown>) => void;
+}): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      input.dispatcher.deliverEvent(input.event, input.context, {
+        timeoutMs: IMMEDIATE_DELIVERY_TIMEOUT_MS - 2_000,
+      }),
+      new Promise<"timed_out">((resolve) => {
+        timer = setTimeout(() => resolve("timed_out"), IMMEDIATE_DELIVERY_TIMEOUT_MS);
+      }),
+    ]);
+    if (outcome === "timed_out") {
+      input.log?.("own_notification_immediate_timed_out", { eventId: input.event.id });
+    } else if (outcome.enqueued > 0 || outcome.leftOver > 0) {
+      input.log?.("own_notification_immediate", { eventId: input.event.id, ...outcome });
+    }
+  } catch (error) {
+    input.log?.("own_notification_immediate_failed", {
+      eventId: input.event.id,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

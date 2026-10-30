@@ -28,14 +28,18 @@ package for the v1 GA line.
   member additions and Interface link requests (new Activity
   `interface_link.approval_requested`) are sent as Web Push to the devices
   registered by the app owner or the account the event names (never by
-  Workspace membership). A dispatcher reads the Activity ledger with a cursor
-  that trails the present by a ten-minute re-read window, starts at the
-  present, idles while no device exists, and keeps one idempotent delivery row
-  per event and device; Cloudflare runs it on every scheduled tick and right
-  after a notified event in the same request or Durable Object invocation,
-  Bun + PostgreSQL every 30 seconds and on each notified event.
-  `connection.revoked` now records the Connection's owner. PostgreSQL needs
-  Accounts migration `048`; D1 needs no
+  Workspace membership). A notified event is delivered right away: its own
+  delivery rows are enqueued and sent within 20 seconds, on Cloudflare under
+  the `waitUntil` of the request or Durable Object invocation that recorded it
+  (never blocking it), on Bun + PostgreSQL in process. A catch-up dispatcher
+  reads the Activity ledger with a cursor that trails the present by a
+  ten-minute re-read window, parks events whose recipients cannot be read
+  instead of holding the cursor, logs and counts every event it drops, and
+  only moves the cursor while no device exists; Cloudflare runs it on every
+  scheduled tick, Bun + PostgreSQL every 30 seconds. Delivery rows are
+  idempotent per event and device. A revoked Connection's owner is told only
+  when someone else revoked it, through unstored context: public Activity does
+  not name the owner. PostgreSQL needs Accounts migration `048`; D1 needs no
   migration. `run.applied` now records the Apply's `operation`. The account
   page lists registered devices, shows failing ones and can remove them.
 - **Screens can declare their native phone apps, verified against an operator

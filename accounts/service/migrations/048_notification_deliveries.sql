@@ -8,7 +8,10 @@ CREATE TABLE IF NOT EXISTS accounts_v1.notification_dispatch_cursors (
   ),
   generation bigint NOT NULL CHECK (generation >= 0),
   cursor_created_at text NOT NULL,
-  cursor_id text NOT NULL
+  cursor_id text NOT NULL,
+  -- Events behind the cursor whose recipients could not be read yet:
+  -- [{eventId, createdAt, attempts}], retried by id on later runs.
+  parked jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 
 CREATE TABLE IF NOT EXISTS accounts_v1.notification_deliveries (

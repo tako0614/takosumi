@@ -4,6 +4,7 @@ import type {
   NotificationDeliveryRecord,
   NotificationDeliverySettlement,
   NotificationDispatchCursor,
+  NotificationParkedEvent,
 } from "../../../../core/domains/notifications/dispatch_store.ts";
 import {
   millis,
@@ -39,15 +40,31 @@ interface DeliveryRow {
 export async function getNotificationDispatchCursor(
   client: PostgresQueryClient,
 ): Promise<NotificationDispatchCursor | undefined> {
-  const row = await runFirst<{ generation: number | string; cursor_created_at: string; cursor_id: string }>(
+  const row = await runFirst<{
+    generation: number | string;
+    cursor_created_at: string;
+    cursor_id: string;
+    parked: NotificationParkedEvent[] | string;
+  }>(
     client,
-    `SELECT generation, cursor_created_at, cursor_id
+    `SELECT generation, cursor_created_at, cursor_id, parked
      FROM accounts_v1.notification_dispatch_cursors WHERE lane = $1`,
     [LANE],
   );
-  return row
-    ? { generation: Number(row.generation), createdAt: row.cursor_created_at, id: row.cursor_id }
-    : undefined;
+  if (!row) return undefined;
+  const parked = typeof row.parked === "string"
+    ? JSON.parse(row.parked) as NotificationParkedEvent[]
+    : row.parked;
+  return {
+    generation: Number(row.generation),
+    createdAt: row.cursor_created_at,
+    id: row.cursor_id,
+    parked: (parked ?? []).map((entry) => ({
+      eventId: entry.eventId,
+      createdAt: entry.createdAt,
+      attempts: Number(entry.attempts),
+    })),
+  };
 }
 
 export async function compareAndSetNotificationDispatchCursor(
@@ -56,22 +73,28 @@ export async function compareAndSetNotificationDispatchCursor(
     readonly expectedGeneration: number | undefined;
     readonly createdAt: string;
     readonly id: string;
+    readonly parked?: readonly NotificationParkedEvent[];
   },
 ): Promise<boolean> {
+  const parked = JSON.stringify((input.parked ?? []).map((entry) => ({
+    eventId: entry.eventId,
+    createdAt: entry.createdAt,
+    attempts: entry.attempts,
+  })));
   const rows = input.expectedGeneration === undefined
     ? await runRows<{ lane: string }>(
       client,
       `INSERT INTO accounts_v1.notification_dispatch_cursors
-         (lane, generation, cursor_created_at, cursor_id)
-       VALUES ($1, 0, $2, $3) ON CONFLICT (lane) DO NOTHING RETURNING lane`,
-      [LANE, input.createdAt, input.id],
+         (lane, generation, cursor_created_at, cursor_id, parked)
+       VALUES ($1, 0, $2, $3, $4::jsonb) ON CONFLICT (lane) DO NOTHING RETURNING lane`,
+      [LANE, input.createdAt, input.id, parked],
     )
     : await runRows<{ lane: string }>(
       client,
       `UPDATE accounts_v1.notification_dispatch_cursors
-       SET generation = generation + 1, cursor_created_at = $2, cursor_id = $3
+       SET generation = generation + 1, cursor_created_at = $2, cursor_id = $3, parked = $5::jsonb
        WHERE lane = $1 AND generation = $4 RETURNING lane`,
-      [LANE, input.createdAt, input.id, input.expectedGeneration],
+      [LANE, input.createdAt, input.id, input.expectedGeneration, parked],
     );
   return rows.length > 0;
 }
@@ -119,8 +142,13 @@ export async function claimNotificationDeliveries(
     readonly limit: number;
     readonly leaseToken: string;
     readonly leaseExpiresAt: number;
+    readonly deliveryIds?: readonly string[];
   },
 ): Promise<readonly NotificationDeliveryRecord[]> {
+  if (input.deliveryIds && input.deliveryIds.length > 50) {
+    throw new RangeError("at most 50 delivery ids per claim");
+  }
+  if (input.deliveryIds && input.deliveryIds.length === 0) return [];
   const rows = await runRows<DeliveryRow>(
     client,
     `UPDATE accounts_v1.notification_deliveries AS d
@@ -129,11 +157,12 @@ export async function claimNotificationDeliveries(
        SELECT delivery_id FROM accounts_v1.notification_deliveries
        WHERE state = 'pending' AND next_attempt_at <= $3
          AND (lease_expires_at IS NULL OR lease_expires_at <= $3)
+         AND ($5::text[] IS NULL OR delivery_id = ANY($5::text[]))
        ORDER BY next_attempt_at, delivery_id
        LIMIT $4
        FOR UPDATE SKIP LOCKED)
      RETURNING d.*`,
-    [input.leaseToken, toDate(input.leaseExpiresAt), toDate(input.now), input.limit],
+    [input.leaseToken, toDate(input.leaseExpiresAt), toDate(input.now), input.limit, input.deliveryIds ?? null],
   );
   return rows.map(fromRow).sort((left, right) =>
     left.nextAttemptAt - right.nextAttemptAt ||

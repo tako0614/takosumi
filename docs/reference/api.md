@@ -248,7 +248,7 @@ instance は Activity の台帳（全 Workspace の `audit_events`）を `(creat
 | `run.failed` | Run を始めた人とアプリの持ち主 | `/runs/{id}` | 259200 秒 / `normal` |
 | `run.applied`（`operation: "create"`、install の完了） | Run を始めた人 | `/apps/{id}` | 259200 秒 / `normal` |
 | `capsule.drift_detected`・`capsule.auto_update_failed`・`capsule.auto_update_apply_failed`・`capsule.uninstall_blocked`・`interface_materialization.dead_lettered` | アプリの持ち主 | `/apps/{id}#attention` | 259200 秒 / `normal` |
-| `connection.revoked` | 接続の持ち主（取り消すときに出来事へ記録した `ownerAccountId`） | `/connections` | 259200 秒 / `normal` |
+| `connection.revoked`（持ち主以外が取り消したとき） | 接続の持ち主 | `/connections` | 259200 秒 / `normal` |
 | `app.ownership_transfer_created` | 受け手 | `/apps/{id}` | 259200 秒 / `normal` |
 | `app.member_added` | 追加された人 | `/apps/{id}` | 259200 秒 / `normal` |
 | `interface_link.approval_requested` | 提供する側のアプリの持ち主 | `/apps/{id}#links` | 86400 秒 / `high` |
@@ -265,14 +265,32 @@ instance は Activity の台帳（全 Workspace の `audit_events`）を `(creat
   前後するので、cursor は今から 10 分遅れて進め、直近 10 分はどの回でも読み直します。配送の行は冪等な
   ので、読み直しても二度は送りません。最初の回は今の位置から始め、過去の出来事は送りません。TTL を
   過ぎた出来事も送りません。
-- 送る相手を読めない出来事（一時的な失敗）は、cursor をその手前に止めたまま、後ろの出来事は先に
-  送ります。6 時間たっても読めなければ諦めます。drift の検査の失敗は Run ごとに別の通知にせず、
-  drift と同じアプリ単位の `Topic` にまとめます。
-- どのアカウントにも pusher が無いあいだは、台帳を読まずに cursor を今へ進めるだけです。
-- Cloudflare では scheduled handler の各回に一度動き、加えて、通知する出来事を記録した request や
-  Durable Object の呼び出しの中で、その `waitUntil` で一度だけすぐ動きます（同時には一つ、配送は
-  lease 付き）。app ownership の行のように ActivityService を通らない出来事は次の cron で送ります。
-  Bun + PostgreSQL では 30 秒ごとの in-process loop で、通知する出来事を記録したときにも動きます。
+- TTL を過ぎて送らなかった出来事は、id と種類だけを log に出し（`own_notification_event_expired`）、
+  回の結果の `expiredEvents` に数えます。
+- 送る相手を読めない出来事（一時的な失敗）は cursor に「保留」として id を残し、cursor 自体は先へ
+  進めます。後ろの出来事は止まりません。保留した出来事は次の回から id で読み直し、6 時間たっても
+  読めないもの、台帳から消えたもの、保留が 50 件を超えたときの古いものは諦め、log に出して
+  `skippedEvents` に数えます。drift の検査の失敗は Run ごとに別の通知にせず、drift と同じアプリ単位の
+  `Topic` にまとめます。
+- どのアカウントにも pusher が無いあいだは、台帳を読まずに cursor を「今から 10 分前」へ進めるだけです。
+  端末を登録した直後の回でも、直近 10 分の出来事は届きます。
+- `connection.revoked` の接続の持ち主は、公開される Activity には残しません。取り消す処理が、削除の
+  前に読んだ持ち主と取り消した人を、保存しない文脈として通知の hook にだけ渡します。持ち主が自分で
+  取り消したときは送りません。cursor での読み直しではこの文脈が無いので、この出来事はすぐ送る経路
+  でだけ届きます。
+- すぐ送る経路: ActivityService が出来事を保存すると、通知する出来事なら、その出来事の配送の行
+  だけを直接積み、その行だけを lease して送ります。cursor には触りません。全体で 20 秒（1 回の送信は
+  8 秒以下）で打ち切り、送り切れなかった行は lease が切れた後に catch-up の回が送り直します。
+  - Cloudflare では、出来事を記録している呼び出し（request でも Durable Object の fetch／alarm でも）の
+    `waitUntil` に付けます。`cloudflare:workers` が出す `waitUntil` を platform の entry が起動時に一度だけ
+    渡し、呼ばれた時点で実行中の呼び出しに付きます。共有の service は isolate ごとに一度作られ、
+    呼び出しごとの `ctx` を ActivityService まで引き回せないためで、呼び出しをまたぐ registry や
+    「実行中」の flag は持ちません。呼び出しは配送を待たずに返り、Durable Object の fetch／alarm も
+    止めません。付けられる呼び出しが無いときは何もせず、次の cron が送ります。
+  - Bun + PostgreSQL では、同じ処理を process の中で待たずに始めます。
+- catch-up の経路: Cloudflare では scheduled handler の各回に一度、Bun + PostgreSQL では 30 秒ごとの
+  in-process loop で、cursor に沿って読み、すぐ送る経路が逃したもの（app ownership の行のように
+  ActivityService を通らない出来事を含む）を積み、期限の来た行を送ります。
 - 台帳の読み出しは `created_at >= cursor` の下限を明示しています。`audit_events` にはまだ
   `(created_at, id)` の index が無く、今は LIMIT 付きの走査です。index は Control の schema の
   migration（TASK-0118 9.6）で足します。

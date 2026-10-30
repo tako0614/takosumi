@@ -13,8 +13,8 @@ import {
   composeTakoserverHostedWorkerEnv,
   OpenTofuRunOwnerObject,
 } from "./takoserver_hosted_worker.ts";
-import { WorkerEntrypoint } from "cloudflare:workers";
-import { runWithOwnNotificationScope } from "../../worker/src/own_notification_dispatch.ts";
+import { waitUntil, WorkerEntrypoint } from "cloudflare:workers";
+import { useInvocationWaitUntil } from "../../worker/src/own_notification_dispatch.ts";
 import {
   createCloudflareTakosumiRuntimeBindingMaterializer,
   type RuntimeBindingMaterializerInput,
@@ -146,6 +146,11 @@ function runtimeBindingFailureReason(error: unknown): string {
   return "dependency_unavailable";
 }
 
+// Immediate Takosumi Mobile notifications attach to the invocation that
+// records the Activity (a request or a Durable Object call) through the
+// runtime's own per-invocation waitUntil (TASK-0119).
+useInvocationWaitUntil(waitUntil);
+
 type VersionedPlatformEnv = CloudflareWorkerEnv & {
   readonly TAKOSUMI_VERSION_METADATA?: PlatformWorkerVersionMetadata;
 };
@@ -157,13 +162,8 @@ export default {
     context?: PlatformExecutionContext,
   ): Promise<Response> {
     const composed = composeTakoserverHostedWorkerEnv(env);
-    // A notified Activity event recorded by this request is sent right after
-    // the response under waitUntil (TASK-0119 own notifications).
     return withPlatformWorkerVersion(
-      await runWithOwnNotificationScope(
-        context ? (task) => context.waitUntil(task) : undefined,
-        () => platformWorker.fetch(request, composed, context),
-      ),
+      await platformWorker.fetch(request, composed, context),
       env.TAKOSUMI_VERSION_METADATA,
     );
   },
@@ -172,13 +172,10 @@ export default {
     env: VersionedPlatformEnv,
     context?: PlatformExecutionContext,
   ): Promise<void> {
-    return runWithOwnNotificationScope(
-      context ? (task) => context.waitUntil(task) : undefined,
-      () => platformWorker.scheduled(
-        event,
-        composeTakoserverHostedWorkerEnv(env),
-        context,
-      ),
+    return platformWorker.scheduled(
+      event,
+      composeTakoserverHostedWorkerEnv(env),
+      context,
     );
   },
 };

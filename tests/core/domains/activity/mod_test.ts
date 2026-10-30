@@ -214,3 +214,19 @@ test("the recorded hook sees each stored event, never a failed write, and cannot
   expect(await failing.record(input)).toBeUndefined();
   expect(seen).toEqual(["run.approval_required"]);
 });
+
+test("the recorded hook receives the caller's context, which is never stored", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const hooked: unknown[] = [];
+  const service = new ActivityService({ store, onRecorded: (event, context) => hooked.push([event.id, context]) });
+  const stored = await service.record(
+    { workspaceId: "ws", action: "connection.revoked", targetType: "connection", targetId: "conn_1", metadata: { provider: "x" } },
+    { ownerAccountId: "tsub_owner", actorAccountId: "tsub_actor" },
+  );
+  const plain = await service.record({ workspaceId: "ws", action: "run.applied", targetType: "run", targetId: "run_1", metadata: {} });
+  expect(hooked).toEqual([
+    [stored!.id, { ownerAccountId: "tsub_owner", actorAccountId: "tsub_actor" }],
+    [plain!.id, undefined],
+  ]);
+  expect(JSON.stringify(await store.listActivityEvents("ws"))).not.toContain("tsub_owner");
+});

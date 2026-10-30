@@ -4,15 +4,21 @@
  * platform cron. The Cloudflare host runs the same dispatcher from its
  * scheduled handler.
  *
- * The server also ticks it right after a notified Activity event is stored.
- * Ticks never overlap within a process. Several processes may tick against the
+ * The server also delivers each notified Activity event right after it is
+ * stored (`deliverNow`); the interval only catches up. Ticks never overlap
+ * within a process. Several processes may tick against the
  * same database: the Activity cursor moves by compare-and-set, delivery rows
  * are keyed by (event, pusher), and sends are leased with FOR UPDATE SKIP
  * LOCKED, so a second process neither enqueues nor sends twice.
  */
 
 import type { NotificationDispatchStore } from "../../../core/domains/notifications/dispatch_store.ts";
-import { createOwnNotificationDispatcher } from "../../../core/domains/notifications/compose.ts";
+import type { ActivityEvent } from "takosumi-contract/activity";
+import type { RecordActivityContext } from "../../../core/domains/activity/mod.ts";
+import {
+  createOwnNotificationDispatcher,
+  deliverOwnNotificationNow,
+} from "../../../core/domains/notifications/compose.ts";
 import type { buildComposedApp } from "./composed-app.ts";
 
 type DispatcherOperations = Pick<
@@ -20,13 +26,18 @@ type DispatcherOperations = Pick<
   "activity" | "appOwnership" | "controller" | "capsules"
 >;
 
-/** New events are sent within about this long after the settle window. */
+/** Catch-up cadence: what the immediate path missed is sent within about this long. */
 export const OWN_NOTIFICATION_DISPATCH_INTERVAL_MS = 30 * 1000;
 const OWN_NOTIFICATION_DISPATCH_INITIAL_DELAY_MS = 15 * 1000;
 
 export interface OwnNotificationDispatcherLoop {
-  /** Runs one tick now unless one is already running. */
+  /** Runs one catch-up tick now unless one is already running. */
   tick(): Promise<void>;
+  /**
+   * The immediate path for an event the service just stored: enqueue and
+   * send its rows (bounded, never throws). Leftovers go to the next tick.
+   */
+  deliverNow(event: ActivityEvent, context?: RecordActivityContext): Promise<void>;
   stop(): void;
 }
 
@@ -59,8 +70,9 @@ export function startOwnNotificationDispatcher(input: {
     running = (async () => {
       try {
         const result = await dispatcher.run();
-        if (result.events > 0 || result.enqueued > 0 || result.delivered > 0 ||
-          result.retried > 0 || result.failed > 0 || result.removedPushers > 0) {
+        if (result.enqueued > 0 || result.delivered > 0 || result.retried > 0 ||
+          result.failed > 0 || result.removedPushers > 0 || result.skippedEvents > 0 ||
+          result.parkedEvents > 0 || result.expiredEvents > 0) {
           input.log("info", "own notification dispatch", {
             event: "own_notification_dispatch",
             ...result,
@@ -90,6 +102,13 @@ export function startOwnNotificationDispatcher(input: {
   (interval as { unref?: () => void }).unref?.();
   return {
     tick,
+    deliverNow: (event, context) =>
+      deliverOwnNotificationNow({
+        dispatcher,
+        event,
+        ...(context ? { context } : {}),
+        log: (name, fields) => input.log("info", "own notification immediate", { event: name, ...fields }),
+      }),
     stop() {
       stopped = true;
       clearTimeout(first);

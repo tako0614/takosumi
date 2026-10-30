@@ -105,7 +105,10 @@ export interface ComposedAppInput {
   /** Defaults to true; mirrors the Accounts workspace mutation rollback flag. */
   readonly workspaceMutationsFrozen?: boolean;
   /** Called after each stored Activity event (immediate notification tick). */
-  readonly onActivityRecorded?: (event: ActivityEvent) => void;
+  readonly onActivityRecorded?: (
+    event: ActivityEvent,
+    context?: import("../../../core/domains/activity/mod.ts").RecordActivityContext,
+  ) => void;
   /**
    * Optional runtime env forwarded into the embedded Takosumi service. The
    * composer ensures an internal deploy-control bearer exists for the service's

@@ -8,8 +8,7 @@ import { base64UrlEncode } from "../../../core/domains/notifications/web_push/by
 import {
   type OwnNotificationDispatchTarget,
   ownNotificationActivityObserver,
-  runWithOwnNotificationScope,
-  withOwnNotificationsSettled,
+  runOwnNotificationDispatch,
 } from "../../../worker/src/own_notification_dispatch.ts";
 import { createTestUserAgent } from "../../helpers/web_push_receiver.ts";
 
@@ -28,16 +27,13 @@ async function fixture() {
     endpoint: `${RELAY}/push/${pusherId}`, auth: base64UrlEncode(agent.auth),
     deviceDisplayName: "Pixel", lang: "en", createdAt: 1, updatedAt: 1,
   });
-  // The cursor sits just before now, as after an earlier scheduled pass.
-  await accounts.compareAndSetNotificationDispatchCursor({
-    expectedGeneration: undefined,
-    createdAt: new Date(Date.now() - 1_000).toISOString(),
-    id: "",
-  });
   const requests: Request[] = [];
   const target: OwnNotificationDispatchTarget = {
     operations: {
-      activity: { listAfter: (input) => ledger.listActivityEventsAfter(input) },
+      activity: {
+        listAfter: (input) => ledger.listActivityEventsAfter(input),
+        get: (id) => ledger.getActivityEvent(id),
+      },
       appOwnership: { getOwnership: async () => ({ ownerAccountId: OWNER }) },
       controller: { getRun: async () => ({ createdBy: OWNER }) },
       capsules: { getCapsule: async () => ({ name: "yurucommu" }) },
@@ -61,43 +57,86 @@ async function fixture() {
     await ledger.putActivityEvent(event);
     return event;
   };
-  return { target, requests, record };
+  return { target, accounts, requests, record };
 }
 
-test("a notified event recorded inside an invocation is sent before the invocation settles", async () => {
-  const { target, requests, record } = await fixture();
-  const observe = ownNotificationActivityObserver(() => target);
-  await withOwnNotificationsSettled(async () => {
-    observe(await record("act_wait", "run.approval_required"));
-    // Not notified: no pass of its own.
-    observe(await record("act_plan", "run.plan_created"));
-  });
+test("a notified event is delivered under the recording invocation's waitUntil, without the cursor", async () => {
+  const { target, accounts, requests, record } = await fixture();
+  const attached: Promise<unknown>[] = [];
+  const observe = ownNotificationActivityObserver(() => target, { waitUntil: (task) => attached.push(task) });
+  observe(await record("act_wait", "run.approval_required"));
+  // Not notified: nothing is attached.
+  observe(await record("act_plan", "run.plan_created"));
+  expect(attached).toHaveLength(1);
+  // The hook returned at once; the delivery finishes inside the attached task.
+  await Promise.all(attached);
   expect(requests).toHaveLength(1);
   expect(requests[0]!.headers.get("urgency")).toBe("high");
+  expect(await accounts.getNotificationDispatchCursor()).toBeUndefined();
 });
 
-test("outside an invocation scope the scheduled pass is left to send it", async () => {
-  const { target, requests, record } = await fixture();
-  let resolved = 0;
-  const observe = ownNotificationActivityObserver(() => {
-    resolved += 1;
-    return target;
+test("each event gets its own task; two invocations never share or wait for each other", async () => {
+  const { target, record } = await fixture();
+  const first: Promise<unknown>[] = [];
+  const second: Promise<unknown>[] = [];
+  let release: () => void = () => {};
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
   });
-  observe(await record("act_wait", "run.approval_required"));
-  expect(resolved).toBe(0);
+  const delivered: string[] = [];
+  const deliver = async (_target: OwnNotificationDispatchTarget, event: ActivityEvent) => {
+    if (event.id === "act_slow") await blocked;
+    delivered.push(event.id);
+  };
+  ownNotificationActivityObserver(() => target, { waitUntil: (task) => first.push(task), deliver })(
+    await record("act_slow", "run.approval_required"),
+  );
+  ownNotificationActivityObserver(() => target, { waitUntil: (task) => second.push(task), deliver })(
+    await record("act_fast", "run.approval_required"),
+  );
+  // The second invocation's delivery finishes while the first is still blocked.
+  await Promise.all(second);
+  expect(delivered).toEqual(["act_fast"]);
+  release();
+  await Promise.all(first);
+  expect(delivered).toEqual(["act_fast", "act_slow"]);
+});
+
+test("with no invocation to attach to, nothing starts and the catch-up pass sends it", async () => {
+  const { target, accounts, requests, record } = await fixture();
+  let started = 0;
+  const deliver = async () => {
+    started += 1;
+  };
+  await accounts.compareAndSetNotificationDispatchCursor({
+    expectedGeneration: undefined,
+    createdAt: new Date(Date.now() - 1_000).toISOString(),
+    id: "",
+  });
+  ownNotificationActivityObserver(() => target, {
+    waitUntil: () => {
+      throw new Error("no current request");
+    },
+    deliver,
+  })(await record("act_throwing", "run.approval_required"));
+  // No waitUntil passed in by the entry (and no test hook): nothing starts.
+  ownNotificationActivityObserver(() => target, { deliver })(await record("act_none", "run.approval_required"));
+  await Promise.resolve();
+  expect(started).toBe(0);
   expect(requests).toHaveLength(0);
+
+  await runOwnNotificationDispatch(target);
+  expect(requests).toHaveLength(2);
 });
 
-test("events recorded while a pass runs are picked up by one more pass", async () => {
-  const { target, requests, record } = await fixture();
-  const observe = ownNotificationActivityObserver(() => target);
-  const pending: Promise<unknown>[] = [];
-  await runWithOwnNotificationScope((task) => { pending.push(task); }, async () => {
-    observe(await record("act_one", "run.approval_required"));
-    observe(await record("act_two", "run.approval_required"));
-  });
-  // The second observation joined the running pass instead of starting another.
-  expect(new Set(pending).size).toBe(1);
-  await Promise.all(pending);
-  expect(requests).toHaveLength(2);
+test("a delivery failure stays inside the task and never reaches the recorder", async () => {
+  const { target, accounts, requests, record } = await fixture();
+  const attached: Promise<unknown>[] = [];
+  const store = Object.create(accounts) as InMemoryAccountsStore;
+  store.enqueueNotificationDeliveries = () => Promise.reject(new Error("store down"));
+  const observe = ownNotificationActivityObserver(() => ({ ...target, store }), { waitUntil: (task) => attached.push(task) });
+  observe(await record("act_wait", "run.approval_required"));
+  expect(attached).toHaveLength(1);
+  await expect(Promise.all(attached)).resolves.toBeDefined();
+  expect(requests).toHaveLength(0);
 });

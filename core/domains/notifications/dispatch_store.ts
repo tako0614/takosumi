@@ -17,6 +17,17 @@ export interface NotificationDispatchCursor {
   readonly generation: number;
   readonly createdAt: string;
   readonly id: string;
+  /**
+   * Events behind the cursor whose recipients could not be read yet; they are
+   * read again by id on later runs so they do not hold the cursor back.
+   */
+  readonly parked?: readonly NotificationParkedEvent[];
+}
+
+export interface NotificationParkedEvent {
+  readonly eventId: string;
+  readonly createdAt: string;
+  readonly attempts: number;
 }
 
 export type NotificationDeliveryOutcome =
@@ -84,6 +95,7 @@ export interface NotificationDispatchStore {
     readonly expectedGeneration: number | undefined;
     readonly createdAt: string;
     readonly id: string;
+    readonly parked?: readonly NotificationParkedEvent[];
   }): Promise<boolean>;
   /**
    * Insert rows whose delivery id is new; existing ids are left unchanged.
@@ -94,13 +106,15 @@ export interface NotificationDispatchStore {
   ): Promise<number>;
   /**
    * Lease up to `limit` pending rows due at `now` whose lease is free or
-   * expired, oldest due first, and return them as leased.
+   * expired, oldest due first, and return them as leased. `deliveryIds`
+   * (at most 50) restricts the claim to those rows (the immediate path).
    */
   claimNotificationDeliveries(input: {
     readonly now: number;
     readonly limit: number;
     readonly leaseToken: string;
     readonly leaseExpiresAt: number;
+    readonly deliveryIds?: readonly string[];
   }): Promise<readonly NotificationDeliveryRecord[]>;
   /** Apply the result of one attempt if the row still carries `leaseToken`. */
   settleNotificationDelivery(input: {

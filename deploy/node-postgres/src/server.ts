@@ -203,14 +203,16 @@ export async function buildComposedServer(
     );
   }
 
-  // A notified Activity event wakes the dispatcher loop instead of waiting
-  // for its interval (TASK-0119 own notifications).
+  // A notified Activity event is delivered right after it is stored; the
+  // dispatcher loop only catches up (TASK-0119 own notifications).
   let ownNotifications: OwnNotificationDispatcherLoop | undefined;
   const { app, operations } = await buildComposedApp({
     config,
     store,
-    onActivityRecorded: (event) => {
-      if (ownNotifications && planOwnNotification(event)) void ownNotifications.tick();
+    onActivityRecorded: (event, context) => {
+      if (ownNotifications && planOwnNotification(event, context)) {
+        void ownNotifications.deliverNow(event, context);
+      }
     },
     productDiscovery: {
       oidcIssuer: config.issuer,

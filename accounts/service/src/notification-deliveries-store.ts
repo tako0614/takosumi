@@ -9,6 +9,7 @@ import type {
   NotificationDeliverySettlement,
   NotificationDispatchCursor,
   NotificationDispatchStore,
+  NotificationParkedEvent,
 } from "../../../core/domains/notifications/dispatch_store.ts";
 import type { D1Database, D1Result } from "./d1-store.ts";
 
@@ -59,6 +60,31 @@ function byDue(left: NotificationDeliveryRecord, right: NotificationDeliveryReco
     (left.deliveryId < right.deliveryId ? -1 : left.deliveryId > right.deliveryId ? 1 : 0);
 }
 
+const MAX_CLAIM_DELIVERY_IDS = 50;
+
+function boundedDeliveryIds(ids: readonly string[]): readonly string[] {
+  if (ids.length > MAX_CLAIM_DELIVERY_IDS) {
+    throw new RangeError(`at most ${MAX_CLAIM_DELIVERY_IDS} delivery ids per claim`);
+  }
+  return ids;
+}
+
+function cursorRecord(
+  generation: number,
+  input: { readonly createdAt: string; readonly id: string; readonly parked?: readonly NotificationParkedEvent[] },
+): NotificationDispatchCursor {
+  return {
+    generation,
+    createdAt: input.createdAt,
+    id: input.id,
+    parked: (input.parked ?? []).map((entry) => ({
+      eventId: entry.eventId,
+      createdAt: entry.createdAt,
+      attempts: entry.attempts,
+    })),
+  };
+}
+
 /** In-memory reference adapter. */
 export class MemoryNotificationDeliveryRecords implements NotificationDeliveryStore {
   #cursor: NotificationDispatchCursor | undefined;
@@ -66,27 +92,24 @@ export class MemoryNotificationDeliveryRecords implements NotificationDeliverySt
   readonly #byEventPusher = new Set<string>();
 
   getNotificationDispatchCursor(): Promise<NotificationDispatchCursor | undefined> {
-    return Promise.resolve(this.#cursor ? { ...this.#cursor } : undefined);
+    return Promise.resolve(this.#cursor ? structuredClone(this.#cursor) : undefined);
   }
 
   compareAndSetNotificationDispatchCursor(input: {
     readonly expectedGeneration: number | undefined;
     readonly createdAt: string;
     readonly id: string;
+    readonly parked?: readonly NotificationParkedEvent[];
   }): Promise<boolean> {
     if (input.expectedGeneration === undefined) {
       if (this.#cursor) return Promise.resolve(false);
-      this.#cursor = { generation: 0, createdAt: input.createdAt, id: input.id };
+      this.#cursor = cursorRecord(0, input);
       return Promise.resolve(true);
     }
     if (this.#cursor?.generation !== input.expectedGeneration) {
       return Promise.resolve(false);
     }
-    this.#cursor = {
-      generation: input.expectedGeneration + 1,
-      createdAt: input.createdAt,
-      id: input.id,
-    };
+    this.#cursor = cursorRecord(input.expectedGeneration + 1, input);
     return Promise.resolve(true);
   }
 
@@ -109,9 +132,11 @@ export class MemoryNotificationDeliveryRecords implements NotificationDeliverySt
     readonly limit: number;
     readonly leaseToken: string;
     readonly leaseExpiresAt: number;
+    readonly deliveryIds?: readonly string[];
   }): Promise<readonly NotificationDeliveryRecord[]> {
+    const only = input.deliveryIds ? new Set(boundedDeliveryIds(input.deliveryIds)) : undefined;
     const claimed = [...this.#deliveries.values()]
-      .filter((record) => isDue(record, input.now))
+      .filter((record) => isDue(record, input.now) && (!only || only.has(record.deliveryId)))
       .sort(byDue)
       .slice(0, input.limit)
       .map((record) => {
@@ -186,18 +211,19 @@ export class D1NotificationDeliveryRecords implements NotificationDeliveryStore 
       .prepare("SELECT document FROM takosumi_accounts_documents WHERE bucket = ? AND key = ?")
       .bind(D1_CURSOR_BUCKET, D1_CURSOR_KEY)
       .first<{ document: string }>();
-    return row ? (JSON.parse(row.document) as NotificationDispatchCursor) : undefined;
+    return row ? cursorRecord(Number((JSON.parse(row.document) as NotificationDispatchCursor).generation), JSON.parse(row.document) as NotificationDispatchCursor) : undefined;
   }
 
   async compareAndSetNotificationDispatchCursor(input: {
     readonly expectedGeneration: number | undefined;
     readonly createdAt: string;
     readonly id: string;
+    readonly parked?: readonly NotificationParkedEvent[];
   }): Promise<boolean> {
     await this.#ready();
     const now = Date.now();
     if (input.expectedGeneration === undefined) {
-      const document = JSON.stringify({ generation: 0, createdAt: input.createdAt, id: input.id });
+      const document = JSON.stringify(cursorRecord(0, input));
       const result = await this.#db
         .prepare(
           "INSERT OR IGNORE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)",
@@ -206,11 +232,7 @@ export class D1NotificationDeliveryRecords implements NotificationDeliveryStore 
         .run();
       return (changeCount(result) ?? 0) > 0;
     }
-    const document = JSON.stringify({
-      generation: input.expectedGeneration + 1,
-      createdAt: input.createdAt,
-      id: input.id,
-    });
+    const document = JSON.stringify(cursorRecord(input.expectedGeneration + 1, input));
     const result = await this.#db
       .prepare(
         "UPDATE takosumi_accounts_documents SET document = ?, updated_at = ? WHERE bucket = ? AND key = ? " +
@@ -272,12 +294,16 @@ export class D1NotificationDeliveryRecords implements NotificationDeliveryStore 
     readonly limit: number;
     readonly leaseToken: string;
     readonly leaseExpiresAt: number;
+    readonly deliveryIds?: readonly string[];
   }): Promise<readonly NotificationDeliveryRecord[]> {
     await this.#ready();
+    const only = input.deliveryIds ? boundedDeliveryIds(input.deliveryIds) : undefined;
+    if (only && only.length === 0) return [];
     const due =
       "SELECT document_key FROM takosumi_accounts_indexes WHERE index_name = ? AND index_key = ? AND sort_key <= ? " +
+      (only ? `AND document_key IN (${only.map(() => "?").join(", ")}) ` : "") +
       "ORDER BY sort_key, document_key LIMIT ?";
-    const dueParams = [D1_DUE_INDEX, D1_INDEX_KEY, input.now, input.limit] as const;
+    const dueParams = [D1_DUE_INDEX, D1_INDEX_KEY, input.now, ...(only ?? []), input.limit] as const;
     // One transaction: lease the due documents, then push their due entries to
     // the lease expiry. Both statements select the same due set because the
     // first one does not change the index table.

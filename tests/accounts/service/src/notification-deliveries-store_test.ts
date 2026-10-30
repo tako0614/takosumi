@@ -89,10 +89,14 @@ for (const storeCase of STORES) {
         expect(await store.compareAndSetNotificationDispatchCursor({ expectedGeneration: 3, createdAt: "a", id: "x" })).toBe(false);
         expect(await store.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: "2026-10-30T00:00:00.000Z", id: "" })).toBe(true);
         expect(await store.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: "2026-10-30T00:00:09.000Z", id: "" })).toBe(false);
-        expect(await store.getNotificationDispatchCursor()).toEqual({ generation: 0, createdAt: "2026-10-30T00:00:00.000Z", id: "" });
-        expect(await store.compareAndSetNotificationDispatchCursor({ expectedGeneration: 0, createdAt: "2026-10-30T00:00:01.000Z", id: "act_1" })).toBe(true);
+        expect(await store.getNotificationDispatchCursor()).toEqual({ generation: 0, createdAt: "2026-10-30T00:00:00.000Z", id: "", parked: [] });
+        const parked = [{ eventId: "act_0", createdAt: "2026-10-29T23:59:59.000Z", attempts: 2 }];
+        expect(await store.compareAndSetNotificationDispatchCursor({ expectedGeneration: 0, createdAt: "2026-10-30T00:00:01.000Z", id: "act_1", parked })).toBe(true);
         expect(await store.compareAndSetNotificationDispatchCursor({ expectedGeneration: 0, createdAt: "2026-10-30T00:00:02.000Z", id: "act_2" })).toBe(false);
-        expect(await store.getNotificationDispatchCursor()).toEqual({ generation: 1, createdAt: "2026-10-30T00:00:01.000Z", id: "act_1" });
+        expect(await store.getNotificationDispatchCursor()).toEqual({ generation: 1, createdAt: "2026-10-30T00:00:01.000Z", id: "act_1", parked });
+        // Leaving parked out clears it.
+        expect(await store.compareAndSetNotificationDispatchCursor({ expectedGeneration: 1, createdAt: "2026-10-30T00:00:02.000Z", id: "act_2" })).toBe(true);
+        expect(await store.getNotificationDispatchCursor()).toEqual({ generation: 2, createdAt: "2026-10-30T00:00:02.000Z", id: "act_2", parked: [] });
       } finally {
         await close();
       }
@@ -151,6 +155,27 @@ for (const storeCase of STORES) {
           deliveryId: later.deliveryId, leaseToken: "lease_5", at: T0 + 63_000,
           settlement: { kind: "settled", attempts: 1, outcome: "failed", lastStatus: 403 },
         })).toBe(false);
+      } finally {
+        await close();
+      }
+    });
+
+    test("a claim limited to given deliveries leases only those that are due", async () => {
+      const { store, close } = await storeCase.open();
+      try {
+        const mine = await delivery("act_now", "npsh_a");
+        const mineLater = await delivery("act_now", "npsh_b", { nextAttemptAt: T0 + 60_000 });
+        const other = await delivery("act_old", "npsh_a");
+        expect(await store.enqueueNotificationDeliveries([mine, mineLater, other])).toBe(3);
+        const claimed = await store.claimNotificationDeliveries({
+          now: T0, limit: 10, leaseToken: "lease_now", leaseExpiresAt: T0 + 120_000,
+          deliveryIds: [mine.deliveryId, mineLater.deliveryId, "ndl_missing"],
+        });
+        expect(claimed).toEqual([{ ...mine, leaseToken: "lease_now", leaseExpiresAt: T0 + 120_000 }]);
+        // An empty list leases nothing; leaving it out leases any due row.
+        expect(await store.claimNotificationDeliveries({ now: T0, limit: 10, leaseToken: "l2", leaseExpiresAt: T0 + 1, deliveryIds: [] })).toEqual([]);
+        expect((await store.claimNotificationDeliveries({ now: T0, limit: 10, leaseToken: "l3", leaseExpiresAt: T0 + 1 })).map((row) => row.deliveryId))
+          .toEqual([other.deliveryId]);
       } finally {
         await close();
       }

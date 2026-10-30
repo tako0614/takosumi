@@ -276,7 +276,7 @@ owner.
 | `run.failed` | who started the Run, and the app owner | `/runs/{id}` | 259200 s / `normal` |
 | `run.applied` with `operation: "create"` (install finished) | who started the Run | `/apps/{id}` | 259200 s / `normal` |
 | `capsule.drift_detected`, `capsule.auto_update_failed`, `capsule.auto_update_apply_failed`, `capsule.uninstall_blocked`, `interface_materialization.dead_lettered` | app owner | `/apps/{id}#attention` | 259200 s / `normal` |
-| `connection.revoked` | connection owner (the `ownerAccountId` recorded in the event at revocation) | `/connections` | 259200 s / `normal` |
+| `connection.revoked` (revoked by someone other than the owner) | connection owner | `/connections` | 259200 s / `normal` |
 | `app.ownership_transfer_created` | recipient | `/apps/{id}` | 259200 s / `normal` |
 | `app.member_added` | added member | `/apps/{id}` | 259200 s / `normal` |
 | `interface_link.approval_requested` | providing app's owner | `/apps/{id}#links` | 86400 s / `high` |
@@ -298,18 +298,43 @@ owner.
   by ten minutes and the last ten minutes are read again on every run; delivery
   rows are idempotent, so nothing is sent twice. The first run starts at the
   present and never sends history; events past their TTL are never sent.
-- An event whose recipients cannot be read (a transient failure) holds the
-  cursor while later events still go out; it is given up after six hours.
+- An event dropped for being past its TTL is logged with its id and kind only
+  (`own_notification_event_expired`) and counted as `expiredEvents` in the run
+  result.
+- An event whose recipients cannot be read (a transient failure) is parked: its
+  id stays on the cursor while the cursor itself moves on, so later events are
+  never held back. Parked events are read again by id on later runs; one still
+  unreadable after six hours, one gone from the ledger, or the oldest once more
+  than 50 are parked is given up, logged and counted as `skippedEvents`.
   Failed drift checks do not get one notification per Run: they share the
   app-level `Topic` of drift.
-- While no account has a pusher, a run only moves the cursor to the present
-  without reading the ledger.
-- On Cloudflare a pass runs on every scheduled tick, and once more right away,
-  under `waitUntil`, in the request or Durable Object invocation that recorded
-  a notified event (one at a time; sends are leased). Events written without
-  ActivityService, such as app ownership rows, go out on the next cron.
-  Bun + PostgreSQL runs an in-process loop every 30 seconds and also when a
-  notified event is recorded.
+- While no account has a pusher, a run only moves the cursor to ten minutes
+  before now without reading the ledger, so a device registered just now still
+  receives the last ten minutes.
+- The owner of a revoked Connection is never stored in public Activity. The
+  revocation reads the owner before deleting the record and hands the owner and
+  the revoking account to the notification hook as unstored context; nothing is
+  sent when owners revoke their own Connection. Cursor re-reads have no such
+  context, so this event is delivered by the immediate path only.
+- Immediate path: when ActivityService stores a notified event, the delivery
+  rows of that event alone are enqueued directly, leased and sent; the cursor
+  is not touched. The whole attempt stops after 20 seconds (8 seconds or less
+  per send); rows not sent by then are retried by a catch-up run once their
+  lease ends.
+  - On Cloudflare the attempt is attached to the `waitUntil` of the invocation
+    recording the event, whether a request or a Durable Object fetch/alarm. The
+    platform entry passes `waitUntil` from `cloudflare:workers` once at
+    startup, and each call attaches to the invocation running at that moment.
+    The shared service is built once per isolate and cannot carry each
+    invocation's `ctx` down to ActivityService; no registry or in-flight flag
+    spans invocations. The invocation returns without waiting for delivery, so
+    a Durable Object's fetch/alarm is never held up. With no invocation to
+    attach to, nothing starts and the next cron sends the event.
+  - Bun + PostgreSQL starts the same attempt in process without awaiting it.
+- Catch-up path: on Cloudflare once per scheduled tick, on Bun + PostgreSQL in
+  an in-process loop every 30 seconds, a run reads along the cursor, enqueues
+  what the immediate path missed (including events written without
+  ActivityService, such as app ownership rows) and sends due rows.
 - The ledger read bounds `created_at >= cursor` explicitly. `audit_events` has
   no `(created_at, id)` index yet, so the read is a scan bounded by `LIMIT`; the
   index comes with a Control schema migration (TASK-0118 9.6).

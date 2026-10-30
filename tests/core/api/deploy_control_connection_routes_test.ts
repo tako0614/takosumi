@@ -10,7 +10,8 @@ import {
 } from "../../../core/domains/deploy-control/store.ts";
 import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
-import { ActivityService } from "../../../core/domains/activity/mod.ts";
+import { ActivityService, type RecordActivityContext } from "../../../core/domains/activity/mod.ts";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import { ConnectionsService } from "../../../core/domains/connections/mod.ts";
 import { WorkspacesService } from "../../../core/domains/workspaces/mod.ts";
 import type { DeployControlInternalRouteDependencies } from "../../../core/api/deploy_control_internal_routes.ts";
@@ -40,6 +41,7 @@ function makeApp(
     fetch?: typeof fetch;
     connectionOAuthHelpers?: DeployControlInternalRouteDependencies["connectionOAuthHelpers"];
     allowOperatorScopedProviderConnections?: boolean;
+    onActivityRecorded?: ConstructorParameters<typeof ActivityService>[0]["onRecorded"];
   } = {},
 ) {
   const store = new InMemoryOpenTofuControlStore();
@@ -66,6 +68,7 @@ function makeApp(
   const activityService = new ActivityService({
     store,
     now: () => new Date("2026-06-04T00:00:00.000Z"),
+    ...(options.onActivityRecorded ? { onRecorded: options.onActivityRecorded } : {}),
   });
   const connectionsService = new ConnectionsService({
     store,
@@ -1308,7 +1311,8 @@ test("POST /internal/v1/connections/{id}/test verifies aws assume-role via STS (
 });
 
 test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async () => {
-  const app = await makeApp();
+  const recorded: Array<[ActivityEvent, RecordActivityContext | undefined]> = [];
+  const app = await makeApp({ onActivityRecorded: (event, context) => recorded.push([event, context]) });
   const created = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
@@ -1356,18 +1360,21 @@ test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async 
     recipeId: "cloudflare",
     recipeAuthMode: "api_token",
     scope: "workspace",
-    // Captured before deletion so the owner can still be notified.
-    ownerAccountId: connection.ownerAccountId,
   });
   expect(connection.ownerAccountId).toBe("fixture-route-owner");
+  // Public Activity never names the owner.
+  expect(JSON.stringify(events)).not.toContain("fixture-route-owner");
   expect(JSON.stringify(events)).not.toContain("cf-secret-token");
-  // The record itself is gone, so the notification plan takes the owner from
-  // the stored event rather than from a Connection lookup.
+  // The record itself is gone: the owner, captured before deletion, reached
+  // the notification hook only as unstored context.
   const read = await app.request(`/internal/v1/connections/${connection.id}`, {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect(read.status).toBe(404);
-  expect(planOwnNotification(revokedEvent)).toMatchObject({
+  const hooked = recorded.find(([event]) => event.action === "connection.revoked");
+  expect(hooked?.[1]).toEqual({ ownerAccountId: "fixture-route-owner", actorAccountId: "acct_1" });
+  expect(planOwnNotification(revokedEvent)).toBeUndefined();
+  expect(planOwnNotification(hooked![0], hooked![1])).toMatchObject({
     kind: "connection.revoked",
     recipients: [{ kind: "account", accountId: "fixture-route-owner" }],
     navigatePath: "/connections",

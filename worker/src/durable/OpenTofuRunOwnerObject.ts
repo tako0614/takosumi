@@ -1,5 +1,4 @@
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "../bindings.ts";
-import { withOwnNotificationsSettled } from "../own_notification_dispatch.ts";
 import { cachedRunOwnerDeployControlService } from "../deploy_control_seam.ts";
 import {
   isRunnerInfrastructureRequeueError,
@@ -267,11 +266,7 @@ export class OpenTofuRunOwnerObject {
       deps.markRetriesExhausted ?? markRunRetriesExhausted;
   }
 
-  fetch(request: Request): Promise<Response> {
-    return withOwnNotificationsSettled(() => this.#fetch(request));
-  }
-
-  async #fetch(request: Request): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") {
       return Response.json({ ok: true, role: "opentofu-run-owner" });
@@ -309,13 +304,7 @@ export class OpenTofuRunOwnerObject {
     }
   }
 
-  alarm(): Promise<void> {
-    // A Run that finishes here records its Activity in this invocation; send
-    // the notification before the object goes idle (TASK-0119).
-    return withOwnNotificationsSettled(() => this.#alarm());
-  }
-
-  async #alarm(): Promise<void> {
+  async alarm(): Promise<void> {
     // Measured once per invocation, from the alarm start.
     const deadlineAt = this.#now() + RUN_OWNER_DISPATCH_BUDGET_MS;
     try {
