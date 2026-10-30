@@ -1,7 +1,7 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "../../accounts/service/src/store.ts";
 import { oidcClientActivationDigest } from "../../accounts/service/src/oidc-activation.ts";
-import type { Capsule } from "../../contract/capsules.ts";
+import { capsuleScopeRef, type Capsule } from "../../contract/capsules.ts";
 import type { InstallConfig } from "../../contract/install-configs.ts";
 import { installExperienceOidcClient } from "../../contract/install-experience.ts";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
@@ -121,7 +121,7 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
       invalid("Accounts OIDC module-variable grant is not exact");
     }
     const activationDigest = await oidcClientActivationDigest({
-      workspaceId: currentCapsule.workspaceId,
+      scopeRef: capsuleScopeRef(currentCapsule),
       capsuleId: currentCapsule.id,
       executionAuthorityEpoch: capsuleExecutionAuthorityEpoch,
       installConfig: currentConfig,
@@ -130,7 +130,8 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
       pairwiseSubjectSecret,
       [
         "takosumi-accounts-repository-oidc-client-v1",
-        currentCapsule.workspaceId,
+        // Frozen derivation scope: the client id never moves with Workspace.
+        capsuleScopeRef(currentCapsule),
         currentCapsule.id,
       ],
     );

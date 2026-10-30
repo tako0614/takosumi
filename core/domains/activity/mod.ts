@@ -19,7 +19,9 @@
 
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
+import { clampPageLimit, encodeCursor } from "takosumi-contract/pagination";
 import {
+  ACTIVITY_WORKSPACE_BATCH_LIMIT,
   boundedActivityWorkspaceIds,
   clampActivityLimit,
 } from "../deploy-control/store.ts";
@@ -180,6 +182,55 @@ export class ActivityService implements ActivityLedger {
     });
   }
 
+  /**
+   * One newest-first keyset page across any number of internal Activity
+   * partitions, read in batches of {@link ACTIVITY_WORKSPACE_BATCH_LIMIT}
+   * (the D1 bound-variable budget) and merged on the shared
+   * `(createdAt, id)` keyset, so the cursor stays the store's opaque cursor.
+   * At most {@link ACTIVITY_PARTITION_LIMIT} partitions are read; the caller
+   * passes only partitions of apps it may view and still filters each event.
+   */
+  async listAcrossWorkspacesPage(
+    workspaceIds: readonly string[],
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    const ids = [...new Set(workspaceIds.map((id) => id.trim()))];
+    if (ids.some((id) => id.length === 0)) {
+      throw new RangeError("Activity partitions must be non-empty ids");
+    }
+    if (ids.length > ACTIVITY_PARTITION_LIMIT) {
+      throw new RangeError(
+        `Activity page reads at most ${ACTIVITY_PARTITION_LIMIT} partitions`,
+      );
+    }
+    if (ids.length === 0) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const batches: string[][] = [];
+    for (let index = 0; index < ids.length; index += ACTIVITY_WORKSPACE_BATCH_LIMIT) {
+      batches.push(ids.slice(index, index + ACTIVITY_WORKSPACE_BATCH_LIMIT));
+    }
+    const pages = await Promise.all(
+      batches.map((batch) =>
+        this.#store.listActivityEventsForWorkspacesPage(batch, {
+          ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
+          limit,
+        })
+      ),
+    );
+    const merged = pages
+      .flatMap((page) => page.items)
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      );
+    const more = merged.length > limit || pages.some((page) => page.nextCursor !== undefined);
+    const items = merged.slice(0, limit);
+    const last = items[items.length - 1];
+    return more && last !== undefined
+      ? { items, nextCursor: encodeCursor(last) }
+      : { items };
+  }
+
   /** Lists one target's audit history using the shared opaque keyset cursor. */
   async listTargetPage(
     workspaceId: string,
@@ -195,6 +246,9 @@ export class ActivityService implements ActivityLedger {
     );
   }
 }
+
+/** Partitions one {@link ActivityService.listAcrossWorkspacesPage} call may read. */
+export const ACTIVITY_PARTITION_LIMIT = 96;
 
 function defaultId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;

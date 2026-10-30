@@ -220,7 +220,7 @@ test("composed Capsule abandonment retires its owned Source after the ledger com
     ownerCapsuleId: capsuleId, createdByInstallPlanId: "plan_retirement",
     url: "https://example.com/repo.git", ref: "main", path: ".", createdAt: now,
   });
-  await service.operations.capsules.createCapsuleInitialAuthority({
+  const created = await service.operations.capsules.createCapsuleInitialAuthority({
     capsuleId, workspaceId: "ws_retirement", name: "retirement",
     environment: "production", sourceId,
     installingPrincipalId: "user_one", providerBindingSetId: "pbind_retirement0001",
@@ -231,6 +231,9 @@ test("composed Capsule abandonment retires its owned Source after the ledger com
       createdAt: now, updatedAt: now,
     },
   });
+  // TASK-0118 Phase 9: a new Capsule freezes its derivation scope at creation.
+  expect(created.capsule.scopeRef).toBe("ws_retirement");
+  expect((await store.getCapsule(capsuleId))?.scopeRef).toBe("ws_retirement");
   const abandoned = await service.operations.capsules.abandonUnappliedCapsule(
     capsuleId, "user discarded install",
   );

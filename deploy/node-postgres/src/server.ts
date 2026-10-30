@@ -328,6 +328,9 @@ async function buildAccountsHandler(
     ...(config.installedAppDelegationSources?.length
       ? { installedAppDelegationSources: config.installedAppDelegationSources }
       : {}),
+    ...(config.trustedNativeClients
+      ? { trustedNativeClients: config.trustedNativeClients }
+      : {}),
     ...(config.privacyOperationsToken
       ? { privacyOperationsToken: config.privacyOperationsToken }
       : {}),

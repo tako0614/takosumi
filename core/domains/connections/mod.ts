@@ -313,6 +313,21 @@ export class ConnectionsService {
   }
 
   /**
+   * The same immutable release-owned bindable Provider Connections without a
+   * Workspace partition: release configuration is operator-owned and never
+   * belonged to a Workspace. Performs no durable store read.
+   */
+  async listReleaseOwnedBindableProviderConnections(): Promise<
+    readonly ProviderConnection[]
+  > {
+    return this.#allowOperatorScopedProviderConnections
+      ? [...this.#operatorProviderConnections.values()].filter(
+          isWorkspaceBindableOperatorConnection,
+        )
+      : [];
+  }
+
+  /**
    * The account's own non-operator Connections when the store can list them
    * by owner (in-memory); `undefined` when it cannot.
    */

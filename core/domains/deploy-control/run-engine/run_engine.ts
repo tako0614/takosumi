@@ -65,7 +65,10 @@ import type {
   CapsuleProviderRequirement,
   CapsuleRootProviderRequirement,
 } from "takosumi-contract/capsules";
-import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
+import {
+  capsuleScopeRef,
+  normalizeCompatibilityReportModulePath,
+} from "takosumi-contract/capsules";
 import {
   type ProviderBindings,
   usesDeclaredEnvCredentialRecipe,
@@ -387,13 +390,22 @@ interface DestroyRuntimeInputNonceAuthority {
 interface RunEngineGenericRootPlanContext extends GenericRootPlanContext {
   /** Immutable Capsule cursor captured before the destroy root is compiled. */
   readonly destroyRuntimeInputNonceAuthority?: DestroyRuntimeInputNonceAuthority;
+  /**
+   * The Capsule's frozen derivation scope (`capsuleScopeRef`), carried in
+   * memory beside the persisted runtime-input authority for the destroy nonce.
+   */
+  readonly runtimeInputScopeRef?: string;
 }
 
 const DESTROY_RUNTIME_INPUT_NONCE_DOMAIN =
   "takosumi.runtime-inputs.destroy-nonce/v1";
 
-async function destroyRuntimeInputNonce(input: {
-  readonly workspaceId: string;
+/**
+ * Destroy-only runtime-input nonce. The scope slot holds the Capsule's frozen
+ * `scopeRef`, hashed under the historical `workspaceId` key.
+ */
+export async function destroyRuntimeInputNonce(input: {
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly providerInstance: string;
   readonly currentStateVersionId: string | null;
@@ -401,7 +413,7 @@ async function destroyRuntimeInputNonce(input: {
 }): Promise<string> {
   const preimage = stableStringify({
     domain: DESTROY_RUNTIME_INPUT_NONCE_DOMAIN,
-    workspaceId: input.workspaceId,
+    workspaceId: input.scopeRef,
     capsuleId: input.capsuleId,
     providerInstance: input.providerInstance,
     currentStateVersionId: input.currentStateVersionId,
@@ -3900,11 +3912,14 @@ export class RunEngine {
       sourceFiles,
       input.compatibilityReport?.rootModuleVariables,
     );
+    // The module's `workspace_id` context input is the Capsule's frozen
+    // derivation scope: apps build storage paths, cookie contexts and resource
+    // names from it, so it must never move when Workspace goes away.
     const explicitVariables = mergeInstallContextVariables(
       input.installConfig.variableMapping,
       input.installConfig.installContextVariableMapping,
       {
-        workspaceId: input.capsule.workspaceId,
+        workspaceId: capsuleScopeRef(input.capsule),
         capsuleId: input.capsule.id,
       },
     );
@@ -3997,6 +4012,7 @@ export class RunEngine {
                 capsuleId: input.capsule.id,
                 installConfigId: input.installConfig.id,
               },
+              runtimeInputScopeRef: capsuleScopeRef(input.capsule),
               ...(destroyRuntimeInputNonceAuthority
                 ? { destroyRuntimeInputNonceAuthority }
                 : {}),
@@ -4201,7 +4217,7 @@ export class RunEngine {
         );
       }
       const nonce = await destroyRuntimeInputNonce({
-        workspaceId: authority.workspaceId,
+        scopeRef: context.runtimeInputScopeRef ?? authority.workspaceId,
         capsuleId: authority.capsuleId,
         providerInstance: runtimeInputProviderInstanceForStorage(wiring),
         ...stateAuthority,
@@ -4443,6 +4459,7 @@ export class RunEngine {
                 capsuleId: capsule.id,
                 installConfigId: installConfig.id,
               },
+              runtimeInputScopeRef: capsuleScopeRef(capsule),
               ...(request.operation === "destroy"
                 ? {
                     destroyRuntimeInputNonceAuthority: {

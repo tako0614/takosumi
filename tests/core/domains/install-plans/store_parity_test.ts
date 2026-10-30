@@ -515,6 +515,75 @@ test("open listing includes install plans that are not attempts only before thei
   }
 });
 
+test("open listing without a Workspace returns only the actor's attempts in every namespace, with parity", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  const postgresControl = new SqlOpenTofuControlStore({ client: postgres });
+  const d1Control = new CloudflareD1OpenTofuControlStore(d1);
+  const adapters: readonly {
+    readonly label: string;
+    readonly control: Pick<OpenTofuControlStore, "putWorkspace">;
+    readonly store: GitInstallPlanStore;
+  }[] = [
+    { label: "memory", control: memoryControl, store: new InMemoryGitInstallPlanStore(memoryControl) },
+    { label: "postgres", control: postgresControl, store: new SqlGitInstallPlanStore(postgres) },
+    { label: "d1", control: d1Control, store: new D1GitInstallPlanStore(d1) },
+  ];
+  try {
+    for (const { label, control, store } of adapters) {
+      const rows: { readonly id: string; readonly workspaceId: string; readonly actor: string; readonly phase: StoredGitInstallPlan["phase"] }[] = [
+        { id: `acct_open_a_${label}`, workspaceId: `acct_ns_a_${label}`, actor: "user_one", phase: "syncing_source" },
+        { id: `acct_open_b_${label}`, workspaceId: `acct_ns_b_${label}`, actor: "user_one", phase: "compiling_install" },
+        { id: `acct_failed_${label}`, workspaceId: `acct_ns_b_${label}`, actor: "user_one", phase: "failed" },
+        { id: `acct_other_${label}`, workspaceId: `acct_ns_a_${label}`, actor: "user_two", phase: "syncing_source" },
+      ];
+      for (const workspaceId of new Set(rows.map((row) => row.workspaceId))) {
+        await control.putWorkspace(workspace(workspaceId));
+      }
+      for (const [index, item] of rows.entries()) {
+        const authority: WorkspaceManagementAuthority = {
+          workspaceId: item.workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        };
+        const at = new Date(Date.parse("2026-10-30T00:00:00.000Z") + index * 1000).toISOString();
+        expect((await store.create({
+          ...plan(item.id, `digest_${item.id}`),
+          workspaceId: item.workspaceId,
+          workspaceManagementAuthority: authority,
+          idempotencyKeyHash: `key_${item.id}`,
+          actorSubject: item.actor,
+          createdBy: item.actor,
+          operation: "install",
+          phase: item.phase,
+          createdAt: at,
+          updatedAt: at,
+        }, authority)).status, `${label} ${item.id}`).toBe("created");
+      }
+      expect(
+        (await store.listOpenAttempts({ actorSubject: "user_one", limit: 20 })).map((item) => item.id),
+        label,
+      ).toEqual([`acct_open_b_${label}`, `acct_open_a_${label}`]);
+      expect(
+        (await store.listOpenAttempts({ actorSubject: "user_one", limit: 1 })).map((item) => item.id),
+        label,
+      ).toEqual([`acct_open_b_${label}`]);
+      expect(
+        (await store.listOpenAttempts({ actorSubject: "user_three", limit: 20 })),
+        label,
+      ).toEqual([]);
+      await expect(
+        Promise.resolve().then(() => store.listOpenAttempts({ actorSubject: "", limit: 20 })),
+        label,
+      ).rejects.toThrow(TypeError);
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
 test("Git unclaimed plans settle during a Workspace drain", async () => {
   const postgres = await PGliteSqlClient.create();
   const d1 = new SqliteFakeD1();

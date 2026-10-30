@@ -230,11 +230,34 @@ export interface TransitionGitInstallPlanInput {
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 }
 
-export interface ListOpenGitInstallAttemptsInput {
-  readonly workspaceId: string;
-  /** Absent lists every actor's open attempts (private cleanup checks). */
-  readonly actorSubject?: string;
-  readonly limit: number;
+/**
+ * At least one of `workspaceId` and `actorSubject` is required. Without a
+ * Workspace the listing is the actor's own open attempts across every
+ * internal namespace (the account-level `GET /api/v1/install-plans?open=1`).
+ */
+export type ListOpenGitInstallAttemptsInput =
+  | {
+    readonly workspaceId: string;
+    /** Absent lists every actor's open attempts (private cleanup checks). */
+    readonly actorSubject?: string;
+    readonly limit: number;
+  }
+  | {
+    readonly workspaceId?: undefined;
+    readonly actorSubject: string;
+    readonly limit: number;
+  };
+
+/** Rejects an unbounded listing that names neither a Workspace nor an actor. */
+export function assertListOpenGitInstallAttemptsScope(
+  input: ListOpenGitInstallAttemptsInput,
+): void {
+  if (
+    (input.workspaceId === undefined || input.workspaceId === "") &&
+    (input.actorSubject === undefined || input.actorSubject === "")
+  ) {
+    throw new TypeError("listOpenAttempts requires a workspaceId or an actorSubject");
+  }
 }
 
 export function assertTransitionGitInstallPlanInput(
@@ -764,10 +787,11 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
   async listOpenAttempts(
     input: ListOpenGitInstallAttemptsInput,
   ): Promise<readonly StoredGitInstallPlan[]> {
+    assertListOpenGitInstallAttemptsScope(input);
     return Array.from(this.#entries.values())
       .map(({ plan }) => plan)
       .filter((plan) =>
-        plan.workspaceId === input.workspaceId &&
+        (input.workspaceId === undefined || plan.workspaceId === input.workspaceId) &&
         (input.actorSubject === undefined || plan.actorSubject === input.actorSubject) &&
         (plan.operation ?? "install") === "install" &&
         (plan.mode === "attempt"

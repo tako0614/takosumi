@@ -35,6 +35,7 @@ import {
   requireWorkspaceAccess,
 } from "./shared.ts";
 import { visibleActivityEvents, workspaceListReads } from "./app-authorization.ts";
+import { listAccountActivity } from "./app-activity.ts";
 import {
   appendServerTiming,
   measureServerTiming,
@@ -66,7 +67,7 @@ export async function handleDashboard(
     if (method !== "GET") return methodNotAllowed("GET");
     const timings = serverTimingBucketForPath(ctx.url.pathname);
     const response = await measureServerTiming(timings, "tk_dashboard", () =>
-      dashboardBootstrap(ctx.operations, ctx.store, ctx.session, ctx.url),
+      dashboardBootstrap(ctx),
     );
     return appendServerTiming(response, timings);
   }
@@ -86,14 +87,14 @@ export async function handleDashboard(
 }
 
 async function dashboardBootstrap(
-  operations: ControlPlaneOperations,
-  store: AccountsStore,
-  session: ControlSession,
-  url: URL,
+  ctx: ControlDispatchContext,
 ): Promise<Response> {
+  const { operations, store, session, url } = ctx;
   const sessionSubject = session.subject;
+  // The Workspace inventory is opt-in (TASK-0118 9.1): the dashboard asks for
+  // it explicitly while its compatibility views still exist.
   const includeWorkspaces =
-    url.searchParams.get("includeWorkspaces") !== "false";
+    url.searchParams.get("includeWorkspaces") === "true";
   const includeNotifications =
     url.searchParams.get("includeNotifications") === "true";
   const selectedWorkspaceId = stringValue(
@@ -121,8 +122,15 @@ async function dashboardBootstrap(
       400,
     );
   }
+  // Notifications come from the caller's apps. Only a host without the
+  // app-ownership read ports (or a legacy Workspace-scoped credential) still
+  // builds them from its Workspaces.
+  const appNotifications = includeNotifications
+    ? await listAppDashboardNotifications(ctx)
+    : undefined;
+  const legacyNotifications = includeNotifications && appNotifications === undefined;
   const workspaceList =
-    includeWorkspaces || includeNotifications
+    includeWorkspaces || legacyNotifications
       ? await listActiveWorkspaceProjectionForSession(
           operations,
           store,
@@ -133,15 +141,15 @@ async function dashboardBootstrap(
           },
         )
       : undefined;
-  const notifications =
-    includeNotifications && workspaceList
+  const notifications = appNotifications ??
+    (legacyNotifications && workspaceList
       ? await listDashboardNotifications(
           operations,
           session,
           workspaceList.workspaces,
           selectedWorkspaceId,
         )
-      : undefined;
+      : undefined);
   return json(
     {
       session: { subject: sessionSubject },
@@ -400,7 +408,69 @@ interface DashboardBootstrapResponse {
 
 interface DashboardNotificationFeedEntry {
   readonly event: ActivityEvent;
+  /**
+   * Compatibility label. App-built entries carry the event's internal
+   * partition id here (never rendered as a Workspace name by new clients);
+   * `capsuleId` names the app instead.
+   */
   readonly workspaceHandle: string;
+  readonly capsuleId?: string;
+}
+
+/**
+ * The notification feed built from the caller's apps (TASK-0118 9.1): the
+ * newest page of `GET /api/v1/activity`, under the same optional-projection
+ * deadline as the legacy feed. `undefined` means the host cannot build it
+ * (no app-ownership ports, no Activity paging, or a legacy Workspace-scoped
+ * credential), and the caller falls back to the Workspace feed.
+ */
+async function listAppDashboardNotifications(
+  ctx: ControlDispatchContext,
+): Promise<readonly DashboardNotificationFeedEntry[] | undefined> {
+  const { operations, session } = ctx;
+  if (!operations.appAccess || typeof operations.activity.listAcrossWorkspacesPage !== "function") {
+    return undefined;
+  }
+  if (session.workspaceId !== undefined && session.appIds === undefined) return undefined;
+  const deadline = Date.now() + DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS;
+  const listed = await optionalDashboardProjection(
+    listAccountActivity(ctx, { limit: DASHBOARD_NOTIFICATION_FEED_LIMIT }),
+    undefined,
+    remainingDashboardProjectionMs(deadline),
+  );
+  if (!listed?.ok) return listed === undefined ? [] : undefined;
+  const shown = listed.page.events;
+  if (shown.length === 0) return [];
+  const capsuleIds = [
+    ...new Set(
+      shown
+        .map(dashboardActivityCapsuleId)
+        .filter((id): id is string => id !== undefined),
+    ),
+  ];
+  const remainingMs = remainingDashboardProjectionMs(deadline);
+  const capsules =
+    capsuleIds.length === 0 || remainingMs === 0
+      ? []
+      : await optionalDashboardProjection(
+          operations.capsules.getCapsulesByIds(capsuleIds),
+          [],
+          remainingMs,
+        );
+  const capsulesById = new Map(
+    capsules.map((capsule) => [capsule.id, capsule] as const),
+  );
+  return shown.map((event) => {
+    const capsuleId = dashboardActivityCapsuleId(event);
+    return {
+      event: compactDashboardActivityEvent(
+        event,
+        dashboardActivityCapsuleName(event, capsulesById),
+      ),
+      workspaceHandle: event.workspaceId,
+      ...(capsuleId ? { capsuleId } : {}),
+    };
+  });
 }
 
 async function listDashboardNotifications(

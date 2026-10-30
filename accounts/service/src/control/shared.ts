@@ -51,6 +51,7 @@ import {
   type AccountsBearerRequiredScope,
 } from "../account-session.ts";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
+import type { TrustedNativeClient } from "takosumi-contract";
 import type {
   InstallConfig,
   Capsule,
@@ -176,6 +177,11 @@ export interface ControlDispatchContext {
   readonly workspaceMutationsFrozen?: boolean;
   /** Operator kill switch: app member and ownership-transfer writes return 409. */
   readonly appOwnershipMutationsFrozen?: boolean;
+  /**
+   * Operator-trusted native phone apps (`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`);
+   * the built-in first-party list when absent.
+   */
+  readonly trustedNativeClients?: readonly TrustedNativeClient[];
   /** Injectable request-local clock for deterministic stream tests. */
   readonly runStreamTiming?: RunStreamTiming;
   /** Stops new work after the enclosing ordinary Run GET read budget expires. */
@@ -199,11 +205,13 @@ type PublicCapsuleInput = PublicCapsule &
       | "managementState"
       | "managementEpoch"
       | "storageRoot"
+      | "scopeRef"
     >
   >;
 
 export function publicCapsule(capsule: PublicCapsuleInput): PublicCapsule {
   const {
+    scopeRef: _scopeRef,
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttempt,
     installingPrincipalId: _installingPrincipalId,
