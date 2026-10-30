@@ -53,7 +53,11 @@ export interface CapsuleScopeRefBackfillPlan {
    * only after a later stage moved the Workspace; reported, never changed.
    */
   readonly diverged: readonly string[];
-  /** Rows refused: no usable Workspace id, or column and record disagree. */
+  /**
+   * Rows refused: no usable Workspace id in the record or the column, or the
+   * two disagree. They are never written; the operator resolves each one
+   * before the gate query can reach zero.
+   */
   readonly refused: readonly { readonly capsuleId: string; readonly reason: string }[];
   /** Digest of `writes`; `--apply` must name it. */
   readonly digest: string;
@@ -61,9 +65,18 @@ export interface CapsuleScopeRefBackfillPlan {
 
 export interface CapsuleScopeRefBackfillResult {
   readonly frozen: number;
-  /** Rows that gained a scopeRef from someone else between plan and apply. */
+  /**
+   * Reviewed rows the conditional write did not change: a writer gave them a
+   * scopeRef, or moved their Workspace, between plan and apply.
+   */
   readonly skipped: readonly string[];
-  /** Rows still missing a scopeRef after apply (expected: none). */
+  /**
+   * Writable rows still missing a scopeRef after apply. Expected 0. A row can
+   * lose a freshly frozen value to a concurrent whole-record Capsule write
+   * that read it before the backfill (reads fall back to the same Workspace
+   * id, so nothing derived moves); run the dry-run and apply again until this
+   * is 0.
+   */
   readonly remaining: number;
 }
 
@@ -84,7 +97,14 @@ export async function planCapsuleScopeRefBackfill(
       refused.push({ capsuleId: row.id, reason: "record_workspace_missing" });
       continue;
     }
-    if (row.columnWorkspaceId !== null && row.columnWorkspaceId !== workspaceId) {
+    // `freeze` conditions on the column naming the same Workspace, so a row
+    // without one could never be written: report it instead of planning a
+    // write that would only ever be skipped.
+    if (row.columnWorkspaceId === null) {
+      refused.push({ capsuleId: row.id, reason: "workspace_column_missing" });
+      continue;
+    }
+    if (row.columnWorkspaceId !== workspaceId) {
       refused.push({ capsuleId: row.id, reason: "workspace_column_mismatch" });
       continue;
     }
