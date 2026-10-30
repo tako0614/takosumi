@@ -473,6 +473,26 @@ export class BackupsService {
     };
   }
 
+  /** Lists the backups taken of one app, newest first (keyset-paged). */
+  async listCapsuleBackups(
+    capsuleId: string,
+    params?: PageParams,
+  ): Promise<ListBackupsResponse> {
+    const id = capsuleId.trim();
+    if (id.length === 0) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "capsuleId is required",
+      );
+    }
+    const { items, nextCursor } =
+      await this.#store.listBackupRecordsPageForCapsule(id, params ?? {});
+    return {
+      backups: items.filter((record) => record.capsuleId === id),
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
+  }
+
   /**
    * Reads the public-safe control-ledger projection for the Workspace and assembles
    * the bundle, stripping internal fields + secret material. Object bytes stay

@@ -68,6 +68,13 @@ import { handleAppOwnership } from "./control/app-ownership.ts";
 import { handleSourceRefResolutions } from "./control/source-ref-resolutions.ts";
 import { handleUsage } from "./control/usage.ts";
 import { handleInstallPlans } from "./control/install-plans.ts";
+import {
+  handleAccountInstallPlanList,
+  handleAccountProviderConnections,
+  handleAppInstallConfigList,
+  handleAppSourceList,
+} from "./control/account-reads.ts";
+import { handleAccountActivity } from "./control/app-activity.ts";
 import { handleRevisionPlans } from "./control/revision-plans.ts";
 import { isWorkspaceMutationRoute, workspaceFrozenResponse } from "./workspace-mutations-freeze.ts";
 import {
@@ -131,14 +138,22 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   "source-ref-resolutions": handleSourceRefResolutions,
   workspaces: handleWorkspaces,
   projects: handleProjects,
-  "install-plans": handleInstallPlans,
+  // Workspace-free replacement reads claim only their own query shapes and
+  // fall through to the legacy handler otherwise (TASK-0118 9.1).
+  "install-plans": async (ctx, segments, method) =>
+    await handleAccountInstallPlanList(ctx, segments, method) ?? await handleInstallPlans(ctx, segments, method),
+  activity: handleAccountActivity,
   "revision-plans": handleRevisionPlans,
   capsules: async (ctx, segments, method) =>
     await handleAppOwnership(ctx, segments, method) ?? await handleCapsules(ctx, segments, method),
-  "capsule-configs": handleInstallConfigs,
+  "capsule-configs": async (ctx, segments, method) =>
+    await handleAppInstallConfigList(ctx, segments, method) ?? await handleInstallConfigs(ctx, segments, method),
   "credential-recipes": handleCredentialRecipes,
-  "provider-connections": handleProviderConnections,
-  sources: handleSources,
+  "provider-connections": async (ctx, segments, method) =>
+    await handleAccountProviderConnections(ctx, segments, method) ??
+      await handleProviderConnections(ctx, segments, method),
+  sources: async (ctx, segments, method) =>
+    await handleAppSourceList(ctx, segments, method) ?? await handleSources(ctx, segments, method),
   "compatibility-reports": handleCompatibilityReports,
   "state-versions": handleStateVersions,
   runs: handleRuns,
@@ -492,9 +507,12 @@ async function dispatchAuthenticatedControlRoute(
   const appConnectionLabels = segments.length === 1 && segments[0] === "connections" &&
     request.method.toUpperCase() === "GET" && url.searchParams.get("projection") === "labels" &&
     context.session.appIds?.includes(url.searchParams.get("capsuleId") ?? "") === true;
+  const appReleaseOwnedConnections = segments.length === 1 && segments[0] === "provider-connections" &&
+    request.method.toUpperCase() === "GET" && url.searchParams.get("projection") === "release-owned" &&
+    context.session.appIds?.includes(url.searchParams.get("capsuleId") ?? "") === true;
   if (context.session.appIds !== undefined &&
-    !legacyWorkspaceAppRoute && !appConnectionLabels &&
-    !["apps", "capsules", "runs", "state-versions", "sources", "compatibility-reports", "install-plans", "revision-plans", "capsule-configs", "ownership-transfers"].includes(segments[0] ?? "")) {
+    !legacyWorkspaceAppRoute && !appConnectionLabels && !appReleaseOwnedConnections &&
+    !["apps", "activity", "capsules", "runs", "state-versions", "sources", "compatibility-reports", "install-plans", "revision-plans", "capsule-configs", "ownership-transfers"].includes(segments[0] ?? "")) {
     return appendServerTiming(errorJson("app_access_denied", "This credential is restricted to its apps.", 403, request), timings);
   }
 

@@ -417,9 +417,13 @@ test("shared Workspace menu never pins or repairs a suspended recorded owner", a
   const list = await handlePlatformSharedAuthControlRequest(request("/api/v1/workspaces?selectedWorkspaceId=ws_live"), env, deps);
   expect(list?.status).toBe(200);
   expect(await list?.json()).toMatchObject({ workspaces: [] });
-  const bootstrap = await handlePlatformSharedAuthControlRequest(request("/api/v1/dashboard/bootstrap?workspaceId=ws_live"), env, deps);
+  // The Workspace inventory is opt-in on the bootstrap (TASK-0118 9.1).
+  const bootstrap = await handlePlatformSharedAuthControlRequest(request("/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceId=ws_live"), env, deps);
   expect(bootstrap?.status).toBe(200);
   expect(await bootstrap?.json()).toMatchObject({ session: { subject: "tsub_canonical" }, workspaces: [] });
+  const defaultBootstrap = await handlePlatformSharedAuthControlRequest(request("/api/v1/dashboard/bootstrap?workspaceId=ws_live"), env, deps);
+  expect(defaultBootstrap?.status).toBe(200);
+  expect(await defaultBootstrap?.json()).not.toHaveProperty("workspaces");
   expect(repairs).toBe(0);
 });
 
