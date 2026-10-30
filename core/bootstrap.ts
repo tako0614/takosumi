@@ -1,6 +1,7 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
 import type { PublicSessionOpenApiEndpoint } from "./api/openapi.ts";
+import type { RegisterInterfaceRoutesOptions } from "./api/interface_routes.ts";
 import {
   PRIVATE_RUN_FILE_HTTP_PATH,
   type PrivateRunFileRouteDependencies,
@@ -540,16 +541,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
     readonly request: Request;
   }) => boolean | Promise<boolean>;
   /**
-   * Host-specific per-app decision for account actors without a Workspace
-   * restriction on Capsule-owned Interfaces (TASK-0118 9.1). `undefined`
+   * Host-specific per-app decision on Capsule-owned Interfaces and Interface
+   * links (TASK-0118 9.1); see `RegisterInterfaceRoutesOptions`. `undefined`
    * keeps the Workspace decision for an app without an ownership row.
    */
-  readonly authorizeInterfaceApp?: (input: {
-    readonly actor: ActorContext;
-    readonly capsuleId: string;
-    readonly access: "read" | "write";
-    readonly request: Request;
-  }) => boolean | undefined | Promise<boolean | undefined>;
+  readonly authorizeInterfaceApp?: RegisterInterfaceRoutesOptions["authorizeInterfaceApp"];
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
   /**

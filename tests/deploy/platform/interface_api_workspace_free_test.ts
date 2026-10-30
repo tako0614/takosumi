@@ -178,3 +178,34 @@ test("a Workspace session's write to a Capsule-owned Interface needs the app's o
   expect((await create(appOwner, "owner-made", { kind: "Capsule", id: "cap_platform_iface" })).status).toBe(201);
   expect((await create(accountSession, "workspace-made", { kind: "Workspace", id: "ws_platform_iface" })).status).toBe(201);
 });
+
+test("an app-scoped personal access token reaches only its apps and holds no Workspace authority", async () => {
+  const env = await environment() as { TAKOSUMI_CONTROL_DB: SqliteFakeD1 };
+  const control = new CloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB);
+  expect(await new D1AppOwnershipStore(env.TAKOSUMI_CONTROL_DB as never, control).initializeOwnershipIfMissing({
+    capsuleId: "cap_platform_iface", ownerAccountId: "tsub_app_owner", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: "apps/cap_platform_iface",
+  })).toBe(true);
+  const pat = (appIds: readonly string[]) => async (): Promise<PlatformExtensionSessionContext> => ({
+    authenticated: true, authKind: "personal-access-token", subject: "tsub_app_owner", scopes: ["read", "write"], appIds,
+  });
+  const create = (session: () => Promise<PlatformExtensionSessionContext>, name: string, ownerRef: { kind: string; id: string }) =>
+    handlePlatformInterfaceApiRequest(
+      request("/api/v1/interfaces", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: "ws_platform_iface", name, ownerRef,
+          spec: { type: "mcp.server", version: "2025-11-25", document: {}, access: { visibility: "private" } },
+        }),
+      }),
+      env as never, session, async () => "owner" as const,
+    );
+  // The owner's PAT limited to another app cannot change this app's Interfaces.
+  expect((await create(pat(["cap_somewhere_else"]), "other-scope", { kind: "Capsule", id: "cap_platform_iface" })).status).toBe(403);
+  // Limited to this app, it can; it still never holds Workspace authority.
+  const made = await create(pat(["cap_platform_iface"]), "own-scope", { kind: "Capsule", id: "cap_platform_iface" });
+  expect(made.status).toBe(201);
+  expect((await made.json()).metadata.createdUnder).toBe("app");
+  expect((await create(pat(["cap_platform_iface"]), "workspace-scope", { kind: "Workspace", id: "ws_platform_iface" })).status).toBe(403);
+});

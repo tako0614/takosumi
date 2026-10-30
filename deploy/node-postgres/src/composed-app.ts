@@ -389,6 +389,11 @@ export async function buildComposedApp(
         ...(runtimePrincipal && result.auth.appIds?.length === 1
           ? { capsuleId: result.auth.appIds[0] }
           : {}),
+        // A PAT limited to apps: Core never gives it Workspace authority and
+        // decides only those apps.
+        ...(!runtimePrincipal && result.auth.appIds !== undefined
+          ? { appIds: [...result.auth.appIds] }
+          : {}),
         // The account's real Workspace role is unknown here: the authoritative
         // Workspace is resolved later by the Interface route. A role claimed
         // from the HTTP method would be a fabricated grant, so account
@@ -435,13 +440,13 @@ export async function buildComposedApp(
     // ownership row (TASK-0118 9.1): the owner or a member may read them, and
     // change them as a settings change. `undefined` keeps the Workspace
     // decision for an app the backfill has not reached.
-    authorizeInterfaceApp: async ({ actor, capsuleId, access, request }) => {
+    authorizeInterfaceApp: async ({ actor, capsuleId, action, request }) => {
       const operations = controlPlaneOperations;
       if (!operations) return false;
       const decided = await decideInterfaceAppAccess(operations, {
         accountId: actor.actorAccountId,
         capsuleId,
-        access,
+        action,
       });
       // A PAT limited to apps reaches only those apps.
       const appIds = interfaceBearers.get(request)?.appIds;

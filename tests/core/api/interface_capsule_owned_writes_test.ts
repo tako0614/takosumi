@@ -85,6 +85,9 @@ async function harness(label: string, stores: InterfaceStores) {
       actorAccountId: "svc_probe", roles: [], requestId: "r_svc", principalKind: "service",
       serviceId: "svc_probe", workspaceId: "ns_shared",
     } as ActorContext,
+    // The app owner's personal access tokens limited to apps.
+    "owner-pat-b": { ...account(OWNER_A, "ns_shared"), appIds: ["cap_b"] },
+    "owner-pat-a": { ...account(OWNER_A), appIds: ["cap_a"] },
     "runtime-a": {
       actorAccountId: RUNTIME_A, roles: ["runtime-principal"], requestId: "r_rt", principalKind: "account", capsuleId: "cap_a",
     },
@@ -101,8 +104,8 @@ async function harness(label: string, stores: InterfaceStores) {
       // Both people are writing members of the shared legacy partition.
       authorizeInterfaceWorkspace: ({ actor, workspaceId }) =>
         workspaceId === "ns_shared" && (actor.workspaceId === undefined || actor.workspaceId === workspaceId),
-      authorizeInterfaceApp: ({ actor, capsuleId, access }) => {
-        appDecisions.push(`${actor.actorAccountId}:${capsuleId}:${access}`);
+      authorizeInterfaceApp: ({ actor, capsuleId, action }) => {
+        appDecisions.push(`${actor.actorAccountId}:${capsuleId}:${action}`);
         const owner = APP_OWNERS[capsuleId];
         return owner === undefined ? undefined : owner === actor.actorAccountId;
       },
@@ -139,17 +142,32 @@ test("Capsule-owned Interface writes need the app's owner or member, with parity
       // to another Workspace still cannot name this partition.
       const created = await h.call("owner-ws", "POST", "/api/v1/interfaces", interfaceBody("app-a", { kind: "Capsule", id: "cap_a" }));
       expect(created.status, label).toBe(201);
-      const appA = created.body as { metadata: { id: string } };
+      const appA = created.body as { metadata: { id: string; createdUnder?: string } };
+      // Written under the app's authority, recorded in every store.
+      expect(appA.metadata.createdUnder, label).toBe("app");
+      expect((await h.service.get(appA.metadata.id)).metadata.createdUnder, label).toBe("app");
       expect((await h.call("owner", "POST", "/api/v1/interfaces", interfaceBody("app-a-2", { kind: "Capsule", id: "cap_a" }))).status, label).toBe(201);
       expect((await h.call("owner-elsewhere", "POST", "/api/v1/interfaces", interfaceBody("app-a-3", { kind: "Capsule", id: "cap_a" }))).status, label).toBe(403);
       // The co-tenant still manages their own app and the Workspace's own
       // Interfaces through the Workspace decision.
       expect((await h.call("cotenant-ws", "POST", "/api/v1/interfaces", interfaceBody("app-b", { kind: "Capsule", id: "cap_b" }))).status, label).toBe(201);
       expect((await h.call("cotenant-ws", "POST", "/api/v1/interfaces", interfaceBody("shared", { kind: "Workspace", id: "ns_shared" }))).status, label).toBe(201);
-      // An app without an ownership row keeps the Workspace decision.
-      expect((await h.call("cotenant-ws", "POST", "/api/v1/interfaces", interfaceBody("legacy", { kind: "Capsule", id: "cap_legacy" }))).status, label).toBe(201);
+      // An app without an ownership row keeps the Workspace decision, and
+      // the record says so: it is not the app's own once the app has an owner.
+      const legacy = await h.call("cotenant-ws", "POST", "/api/v1/interfaces", interfaceBody("legacy", { kind: "Capsule", id: "cap_legacy" }));
+      expect(legacy.status, label).toBe(201);
+      expect((legacy.body as { metadata: { createdUnder?: string } }).metadata.createdUnder, label).toBe("workspace");
+      // Workspace-owned Interfaces record nothing.
+      const shared = (await h.service.list({ workspaceId: "ns_shared", ownerKind: "Workspace" }))[0]!;
+      expect(shared.metadata.createdUnder, label).toBeUndefined();
       // Service principals keep the Workspace decision.
-      expect((await h.call("service-ws", "POST", "/api/v1/interfaces", interfaceBody("probe", { kind: "Capsule", id: "cap_a" }))).status, label).toBe(201);
+      const probe = await h.call("service-ws", "POST", "/api/v1/interfaces", interfaceBody("probe", { kind: "Capsule", id: "cap_a" }));
+      expect(probe.status, label).toBe(201);
+      expect((probe.body as { metadata: { createdUnder?: string } }).metadata.createdUnder, label).toBe("workspace");
+      // A PAT limited to apps reaches only those apps, and never the Workspace.
+      expect((await h.call("owner-pat-b", "POST", "/api/v1/interfaces", interfaceBody("pat-b", { kind: "Capsule", id: "cap_a" }))).status, label).toBe(403);
+      expect((await h.call("owner-pat-a", "POST", "/api/v1/interfaces", interfaceBody("pat-a", { kind: "Capsule", id: "cap_a" }))).status, label).toBe(201);
+      expect((await h.call("owner-pat-a", "POST", "/api/v1/interfaces", interfaceBody("pat-shared", { kind: "Workspace", id: "ns_shared" }))).status, label).toBe(403);
 
       // Every write to app cap_a's Interface by the co-tenant is refused.
       const id = appA.metadata.id;
@@ -170,6 +188,7 @@ test("Capsule-owned Interface writes need the app's owner or member, with parity
         subjectRef: { kind: "Principal", id: RUNTIME_A }, permissions: ["mcp.invoke"], delivery: { type: "none" },
       });
       expect(binding.status, label).toBe(201);
+      expect((binding.body as { metadata: { createdUnder?: string } }).metadata.createdUnder, label).toBe("app");
       const bindingId = (binding.body as { metadata: { id: string } }).metadata.id;
       expect((await h.call("cotenant-ws", "DELETE", `/api/v1/interfaces/${id}/bindings/${bindingId}`)).status, label).toBe(403);
       expect((await h.service.listBindings(id)).map((entry) => entry.metadata.id), label).toEqual([bindingId]);
@@ -180,8 +199,12 @@ test("Capsule-owned Interface writes need the app's owner or member, with parity
       expect((await h.call("owner-ws", "PATCH", `/api/v1/interfaces/${id}`, patch, { "if-match": owned.etag })).status, label).toBe(200);
       const afterPatch = await h.call("owner", "GET", `/api/v1/interfaces/${id}`);
       expect((await h.call("owner", "DELETE", `/api/v1/interfaces/${id}`, undefined, { "if-match": afterPatch.etag })).status, label).toBe(200);
-      // Writes asked the app; Workspace-bound reads did not.
-      expect(h.appDecisions.filter((entry) => entry.startsWith(`${COTENANT_B}:cap_a:`)).every((entry) => entry.endsWith(":write")), label).toBe(true);
+      // Writes asked the app for the action they need; Workspace-bound reads
+      // did not ask. Binding create and revoke are link changes.
+      const cotenantAsked = h.appDecisions.filter((entry) => entry.startsWith(`${COTENANT_B}:cap_a:`));
+      expect(cotenantAsked.includes(`${COTENANT_B}:cap_a:view`), label).toBe(false);
+      expect(cotenantAsked.filter((entry) => entry.endsWith(":change_interface_link")).length, label).toBe(2);
+      expect(cotenantAsked.filter((entry) => entry.endsWith(":change_settings")).length, label).toBe(5);
     }
   } finally {
     await close();

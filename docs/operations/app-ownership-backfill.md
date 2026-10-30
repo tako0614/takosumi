@@ -116,6 +116,13 @@ rows are reported for confirmation and never migrated automatically. Connections
 take the Workspace owner, while operator connections retain no personal owner.
 Usage tied to a never-transferred Capsule (`ownership_epoch = 0`) takes that
 app's owner; only usage without a Capsule falls back to the Workspace owner.
+When the adapter also returns `interfaces` (an Interface service), the dry-run
+adds `interfacesNeedingReview`: for each app getting its first owner, the
+Capsule-owned Interfaces that are not the app's own records (written under
+Workspace authority before the app had an owner, or manual ones from before
+writes were recorded, on the Interface or one of its Bindings). They are never
+the app's Workspace-free evidence; hand the list to the new owner, who deletes
+them or recreates them as the app. The list is not part of the plan digest.
 Payer-less usage of a transferred app is never assigned: the current owner is
 not its historical payer. Dry-run lists it under `transferredAppUsage`. That
 report does not block apply, and re-running the tool leaves the rows

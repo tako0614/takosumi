@@ -429,11 +429,14 @@ export async function createWorkerServiceApp(
     // write by an account actor, Workspace-bound or not, needs the app's
     // owner or member; an app without an ownership row keeps the Workspace
     // decision.
-    authorizeInterfaceApp: ({ actor, capsuleId, access }) =>
-      decideInterfaceAppAccess(
-        { appOwnership: appOwnershipStore, appAccess: appOwnershipStore },
-        { accountId: actor.actorAccountId, capsuleId, access },
-      ),
+    // A personal access token limited to apps (`app_ids`) reaches only those.
+    authorizeInterfaceApp: ({ actor, capsuleId, action }) =>
+      actor.appIds !== undefined && !actor.appIds.includes(capsuleId)
+        ? false
+        : decideInterfaceAppAccess(
+          { appOwnership: appOwnershipStore, appAccess: appOwnershipStore },
+          { accountId: actor.actorAccountId, capsuleId, action },
+        ),
     workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
       env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
     ),

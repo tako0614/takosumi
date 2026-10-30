@@ -1931,3 +1931,134 @@ test("composed Interface API decides Capsule-owned Interfaces per app and lets a
   const finalDiscovery = await get("/api/v1/interfaces?type=mcp.server&permission=mcp.invoke", "takat_app_runtime");
   assert.deepEqual((await finalDiscovery.json()).interfaces.map((entry: { metadata: { id: string } }) => entry.metadata.id), [mine]);
 });
+
+test("composed Interface links and late app ownership are decided per app (review of #707)", async () => {
+  const now = Date.now();
+  const opentofuControlStore = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(opentofuControlStore, {
+    workspaceId: "ws_composed_links",
+    capsuleId: "cap_links_consumer",
+  });
+  await opentofuControlStore.putCapsule({ ...seeded.capsule, status: "active", currentStateGeneration: 1 });
+  for (const [id, name] of [["cap_links_provider", "provider"], ["cap_links_late", "late"]] as const) {
+    await opentofuControlStore.putCapsule({ ...seeded.capsule, id, name, slug: name, status: "active", currentStateGeneration: 1 });
+  }
+  // The consumer app requires an MCP server.
+  const consumerConfig = await opentofuControlStore.getInstallConfig(seeded.capsule.installConfigId);
+  await opentofuControlStore.putInstallConfig({
+    ...consumerConfig!,
+    requiredInterfaces: [{ key: "tools", interface: { type: "mcp.server", version: "2025-11-25" }, permissions: ["mcp.invoke"], delivery: { type: "none" } }],
+  });
+  const store = new InMemoryAccountsStore();
+  // The app owner is not a Workspace member; the Workspace owner (a
+  // co-tenant of the shared partition) owns only the provider app.
+  const appOwner = "tsub_links_app_owner";
+  const workspaceOwner = "user_test";
+  for (const subject of [appOwner, workspaceOwner] as const) {
+    store.saveAccount({ subject: subject as `tsub_${string}`, createdAt: now, updatedAt: now });
+    store.saveAccountSession({ sessionId: `sess_${subject}`, subject: subject as `tsub_${string}`, createdAt: now, expiresAt: now + 60_000 });
+  }
+  store.savePersonalAccessToken("takpat_links_workspace_owner", {
+    tokenId: "pat_takpat_links_workspace_owner", tokenPrefix: "takpat_l", subject: workspaceOwner as `tsub_${string}`, name: "links-ws",
+    scopes: ["read", "write"], workspaceId: seeded.workspace.id, createdAt: now, expiresAt: now + 60_000,
+  });
+  store.saveAccessToken("takat_links_late_runtime", {
+    clientId: "client_links_late", scope: "openid capsules:read",
+    subject: "pairwise_links_late", takosumiSubject: appOwner as `tsub_${string}`,
+    capsuleId: "cap_links_late", expiresAt: now + 60_000,
+  });
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: store as unknown as PostgresAccountsStore,
+    accountsHandler: accountsHandlerSpy().handler,
+    opentofuControlStore,
+    runtimeEnv: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN },
+    interfaceOAuth2ResourceAuthorizer: () => true,
+  });
+  for (const [capsuleId, owner] of [["cap_links_consumer", appOwner], ["cap_links_provider", workspaceOwner]] as const) {
+    assert.equal(await created.operations.appOwnership.initializeOwnershipIfMissing({
+      capsuleId, ownerAccountId: owner, ownershipEpoch: 0, managementState: "active",
+      managementEpoch: 0, storageRoot: `apps/${capsuleId}`,
+    }), true);
+  }
+  const app = created.app;
+  const send = async (method: string, path: string, token: string, body?: unknown, headers: Record<string, string> = {}) =>
+    await app.fetch(new Request(`http://localhost${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }));
+  const provider = await send("POST", "/api/v1/interfaces", "takpat_links_workspace_owner", {
+    workspaceId: seeded.workspace.id, name: "cotenant-provider", ownerRef: { kind: "Capsule", id: "cap_links_provider" },
+    spec: { type: "mcp.server", version: "2025-11-25", document: {}, inputs: { endpoint: { source: "literal", value: "https://cotenant.example.test/mcp" } }, access: { visibility: "workspace" } },
+  });
+  assert.equal(provider.status, 201);
+  const providerId = (await provider.json()).metadata.id as string;
+  const linkPath = "/api/v1/capsules/cap_links_consumer/interface-links/tools";
+
+  // P1: the co-tenant's Workspace credentials no longer manage the consumer
+  // app's links in Core (the Accounts per-app rule now applies there too).
+  for (const token of [`sess_${workspaceOwner}`, "takpat_links_workspace_owner"]) {
+    assert.equal((await send("GET", `${linkPath}/candidates`, token)).status, 403, token);
+    assert.equal((await send("PUT", linkPath, token, { interfaceId: providerId, expectedGeneration: 0 })).status, 403, token);
+    assert.equal((await send("PUT", "/api/v1/capsules/cap_links_consumer/interface-links/zz_missing", token, { interfaceId: providerId, expectedGeneration: 0 })).status, 403, token);
+  }
+  const noGrant = await send("GET", `/api/v1/interfaces/${providerId}/bindings`, "takpat_links_workspace_owner");
+  assert.equal(noGrant.status, 200);
+  assert.deepEqual((await noGrant.json()).bindings, []);
+  // The app's owner (no Workspace membership) manages its own links. A link
+  // to another person's provider waits for that provider's approval.
+  const ownerCandidates = await send("GET", `${linkPath}/candidates`, `sess_${appOwner}`);
+  assert.equal(ownerCandidates.status, 200);
+  const ownerPut = await send("PUT", linkPath, `sess_${appOwner}`, { interfaceId: providerId, expectedGeneration: 0 });
+  assert.equal(ownerPut.status, 200);
+  const pending = (await ownerPut.json()).link as { state: string; generation: number; approvedPermissions: string[] };
+  assert.equal(pending.state, "pending_approval");
+  assert.deepEqual(pending.approvedPermissions, []);
+  // The provider app's owner may revoke a link that points at their app.
+  const providerRevoke = await send("DELETE", linkPath, `sess_${workspaceOwner}`, { expectedGeneration: pending.generation });
+  assert.equal(providerRevoke.status, 200);
+  assert.equal((await providerRevoke.json()).link.state, "revoked");
+
+  // P2: before cap_links_late has an ownership record, the co-tenant writes
+  // an Interface "owned" by it and binds its runtime subject (Workspace
+  // decision). Once the record appears, that is not the app's evidence.
+  const pre = await send("POST", "/api/v1/interfaces", "takpat_links_workspace_owner", {
+    workspaceId: seeded.workspace.id, name: "pre-made", ownerRef: { kind: "Capsule", id: "cap_links_late" },
+    spec: { type: "mcp.server", version: "2025-11-25", document: {}, inputs: { endpoint: { source: "literal", value: "https://attacker.example.test/mcp" } }, access: { visibility: "private" } },
+  });
+  assert.equal(pre.status, 201);
+  const preRecord = await pre.json() as { metadata: { id: string; createdUnder?: string } };
+  assert.equal(preRecord.metadata.createdUnder, "workspace");
+  const preBind = await send("POST", `/api/v1/interfaces/${preRecord.metadata.id}/bindings`, "takpat_links_workspace_owner", {
+    subjectRef: { kind: "Principal", id: "pairwise_links_late" }, permissions: ["mcp.invoke"], delivery: { type: "none" },
+  });
+  assert.equal(preBind.status, 201);
+  assert.equal((await preBind.json()).metadata.createdUnder, "workspace");
+  assert.equal(await created.operations.appOwnership.initializeOwnershipIfMissing({
+    capsuleId: "cap_links_late", ownerAccountId: appOwner, ownershipEpoch: 0, managementState: "active",
+    managementEpoch: 0, storageRoot: "apps/cap_links_late",
+  }), true);
+  const lateDiscovery = await send("GET", "/api/v1/interfaces?type=mcp.server&permission=mcp.invoke", "takat_links_late_runtime");
+  assert.equal(lateDiscovery.status, 200);
+  assert.deepEqual((await lateDiscovery.json()).interfaces, []);
+  assert.equal((await send("GET", `/api/v1/interfaces/${preRecord.metadata.id}?permission=mcp.invoke`, "takat_links_late_runtime")).status, 404);
+  assert.equal((await send("POST", `/api/v1/interfaces/${preRecord.metadata.id}/token`, "takat_links_late_runtime", { permission: "mcp.invoke" })).status, 404);
+  // The app's owner sees it as needing review and removes it; the co-tenant
+  // can no longer change it.
+  const review = await send("GET", "/api/v1/interfaces?capsuleId=cap_links_late&needsReview=true", `sess_${appOwner}`);
+  assert.equal(review.status, 200);
+  assert.deepEqual((await review.json()).interfaces.map((entry: { metadata: { id: string } }) => entry.metadata.id), [preRecord.metadata.id]);
+  const preEtag = (await send("GET", `/api/v1/interfaces/${preRecord.metadata.id}`, `sess_${appOwner}`)).headers.get("etag") ?? "";
+  assert.equal((await send("DELETE", `/api/v1/interfaces/${preRecord.metadata.id}`, "takpat_links_workspace_owner", undefined, { "if-match": preEtag })).status, 403);
+  assert.equal((await send("DELETE", `/api/v1/interfaces/${preRecord.metadata.id}`, `sess_${appOwner}`, undefined, { "if-match": preEtag })).status, 200);
+  // What the owner writes as the app is its own.
+  const ownerMade = await send("POST", "/api/v1/interfaces", `sess_${appOwner}`, {
+    workspaceId: seeded.workspace.id, name: "owner-made", ownerRef: { kind: "Capsule", id: "cap_links_late" },
+    spec: { type: "mcp.server", version: "2025-11-25", document: {}, access: { visibility: "private" } },
+  });
+  assert.equal(ownerMade.status, 201);
+  assert.equal((await ownerMade.json()).metadata.createdUnder, "app");
+});

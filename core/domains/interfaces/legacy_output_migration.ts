@@ -505,12 +505,13 @@ export class LegacyOutputInterfaceMigrationService {
       return existing;
     }
     try {
+      // An operator migration of the app's own Outputs: the app's own record.
       return await this.#interfaces.create({
         workspaceId,
         name,
         ownerRef: { kind: "Capsule", id: candidate.capsuleId },
         spec,
-      });
+      }, undefined, undefined, undefined, "operator");
     } catch (error) {
       if (
         error instanceof InterfaceServiceError &&

@@ -21,9 +21,21 @@ export type InterfaceMaterializedFrom =
       readonly descriptorVersion: string;
     };
 
+/**
+ * Under whose authority a person or operator wrote a Capsule-owned Interface
+ * or its Binding through the API (TASK-0118 9.1): `app` — an owner or member
+ * of that app; `operator` — the host's deploy-control authority; `workspace`
+ * — only Workspace membership, for an app without an ownership record then.
+ * Only `app`, `operator` and materialized records count as the app's own; a
+ * `workspace` (or unrecorded, non-materialized) record waits for the app's
+ * owner to review it. It names a kind of authority, never an account.
+ */
+export type InterfaceWriteAuthority = "app" | "workspace" | "operator";
+
 /** Source-tree metadata retained for host reconciliation only. */
 export interface InterfaceMetadata extends PublicInterfaceMetadata {
   readonly materializedFrom?: InterfaceMaterializedFrom;
+  readonly createdUnder?: InterfaceWriteAuthority;
 }
 
 export interface InterfaceLiteralInput {
@@ -97,6 +109,7 @@ export interface InterfaceBinding
           /** Exact consent ledger; legacy rows without a link are not grants. */
           readonly linkId?: string;
         };
+    readonly createdUnder?: InterfaceWriteAuthority;
   };
 }
 

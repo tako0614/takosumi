@@ -1,12 +1,13 @@
 /**
- * The per-app decision for a Capsule-owned Interface (TASK-0118 9.1), from
- * the app ownership and access ports a host already composes: the owner or a
- * member may read it (`view`) and change it (`change_settings`), checked
- * against the current ownership epoch. `undefined` means the app has no
+ * The per-app decision for a Capsule-owned Interface or Interface link
+ * (TASK-0118 9.1), from the app ownership and access ports a host already
+ * composes: the owner or a member holding the app action (`view`,
+ * `change_settings`, `change_interface_link`), checked against the current
+ * ownership epoch. `undefined` means the app has no
  * ownership row yet (or the ownership schema is not there), and the caller
  * keeps the Workspace decision for it.
  */
-import { appActionAllowed, type AppAccessResolver } from "takosumi-contract/app-access";
+import { appActionAllowed, type AppAccessResolver, type AppAction } from "takosumi-contract/app-access";
 import { isMissingOwnershipSchemaError, type AppOwnershipStore } from "./store.ts";
 
 export interface InterfaceAppDecisionPorts {
@@ -19,7 +20,7 @@ export async function decideInterfaceAppAccess(
   input: {
     readonly accountId: string;
     readonly capsuleId: string;
-    readonly access: "read" | "write";
+    readonly action: Extract<AppAction, "view" | "change_settings" | "change_interface_link">;
   },
 ): Promise<boolean | undefined> {
   let owned: Awaited<ReturnType<InterfaceAppDecisionPorts["appOwnership"]["getOwnership"]>>;
@@ -34,7 +35,7 @@ export async function decideInterfaceAppAccess(
     return app !== undefined && app.capsuleId === input.capsuleId &&
       app.ownerAccountId === owned.ownerAccountId &&
       app.ownershipEpoch === owned.ownershipEpoch &&
-      appActionAllowed(app.role, input.access === "read" ? "view" : "change_settings");
+      appActionAllowed(app.role, input.action);
   } catch {
     return false;
   }
