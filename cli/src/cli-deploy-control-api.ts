@@ -26,7 +26,12 @@ export async function requestDeployControlApi(input: {
   readonly auth?: "deploy-control" | "accounts";
   readonly extraHeaders?: Readonly<Record<string, string>>;
 }): Promise<unknown> {
-  const headers = new Headers({ accept: "application/json" });
+  // `takosumi-client` is value-free self-identification read only by the
+  // server's legacy Workspace telemetry (TASK-0118 Phase 9).
+  const headers = new Headers({
+    accept: "application/json",
+    "takosumi-client": "takosumi-cli",
+  });
   const token =
     optionalStringOption(input.options, "token") ??
     (input.auth === "accounts"
