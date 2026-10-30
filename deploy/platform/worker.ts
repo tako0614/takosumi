@@ -196,6 +196,7 @@ import {
   operatorControlMcpEnabled,
   type OperatorControlMcpAuthority,
 } from "../operator-control-mcp.ts";
+import { createOperatorControlMcpAuthority } from "./operator-control-mcp-authority.ts";
 
 // Immediate Takosumi Mobile notifications attach to the invocation that
 // records the Activity through the runtime's per-invocation waitUntil
@@ -468,6 +469,9 @@ type OperatorControlMcpSessionVerifier = (
  * Optional built-in adapter route. Every MCP POST performs exact-resource
  * Interface OAuth introspection before the JSON-RPC body is read. The raw
  * bearer is neither forwarded to the public control handlers nor persisted.
+ *
+ * The token must name the MCP's own app (Capsule evidence); a Workspace it
+ * still carries is kept only as a bearer restriction (TASK-0118 P9.1-e).
  */
 export async function handlePlatformOperatorControlMcpRequest(
   request: Request,
@@ -477,7 +481,8 @@ export async function handlePlatformOperatorControlMcpRequest(
     readonly createAuthority?: (
       session: PlatformExtensionSessionContext & {
         readonly subject: string;
-        readonly workspaceId: string;
+        readonly capsuleId: string;
+        readonly workspaceId?: string;
       },
     ) => Promise<OperatorControlMcpAuthority>;
   } = {},
@@ -489,12 +494,14 @@ export async function handlePlatformOperatorControlMcpRequest(
   }
   if (request.method !== "POST") {
     return await handleOperatorControlMcpRequest(request, {
-      workspaceId: "disabled",
+      subject: "disabled",
+      capsuleId: "disabled",
       dispatchPublicControl: async () =>
         Response.json({ error: "unavailable" }, { status: 503 }),
-      installPlanWorkspaceId: async () => undefined,
-      capsuleWorkspaceId: async () => undefined,
-      runWorkspaceId: async () => undefined,
+      app: async () => undefined,
+      installPlan: async () => undefined,
+      run: async () => undefined,
+      installNamespaceId: async () => undefined,
     });
   }
   const session = await (
@@ -511,7 +518,7 @@ export async function handlePlatformOperatorControlMcpRequest(
     !session.authenticated ||
     session.authKind !== "interface-oauth-token" ||
     !subject ||
-    !workspaceId ||
+    (session.workspaceId !== undefined && !workspaceId) ||
     !capsuleId ||
     !interfaceId ||
     !interfaceBindingId ||
@@ -531,7 +538,7 @@ export async function handlePlatformOperatorControlMcpRequest(
   const exactSession = {
     ...session,
     subject,
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
     capsuleId,
     interfaceId,
     interfaceBindingId,
@@ -549,76 +556,38 @@ export async function handlePlatformOperatorControlMcpRequest(
 async function createPlatformOperatorControlMcpAuthority(
   request: Request,
   env: CloudflareWorkerEnv,
-  session: PlatformExtensionSessionContext & {
+  session: {
     readonly subject: string;
-    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly workspaceId?: string;
   },
 ): Promise<OperatorControlMcpAuthority> {
-  const operations = await controlPlaneOperationsFor(env);
-  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-    schemaMode: resolveD1AccountsSchemaMode(
-      env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+  const sunset = platformLegacyWorkspaceSunset(env);
+  return createOperatorControlMcpAuthority({
+    operations: await controlPlaneOperationsFor(env),
+    store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+      schemaMode: resolveD1AccountsSchemaMode(
+        env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+      ),
+    }),
+    session: {
+      subject: session.subject,
+      capsuleId: session.capsuleId,
+      ...(session.workspaceId ? { workspaceId: session.workspaceId } : {}),
+    },
+    requestUrl: request.url,
+    ...(env.TAKOSUMI_ACCOUNTS_ISSUER
+      ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
+      : {}),
+    ...(sunset ? { legacyWorkspaceSunset: sunset } : {}),
+    ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
+      ? { appOwnershipMutationsFrozen: true }
+      : {}),
+    trustedNativeClients: trustedNativeClientsFromEnv(
+      env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
     ),
+    ...platformActivityCursorSealerOption(env),
   });
-  return {
-    workspaceId: session.workspaceId,
-    dispatchPublicControl: async (controlRequest) => {
-      const sourceUrl = new URL(controlRequest.url);
-      const targetUrl = new URL(request.url);
-      targetUrl.pathname = sourceUrl.pathname;
-      targetUrl.search = sourceUrl.search;
-      targetUrl.hash = "";
-      const response = await handleAuthenticatedControlRoute({
-        request: new Request(targetUrl, {
-          method: controlRequest.method,
-          headers: controlRequest.headers,
-          body:
-            controlRequest.method === "GET" || controlRequest.method === "HEAD"
-              ? undefined
-              : controlRequest.body,
-        }),
-        url: targetUrl,
-        store,
-        operations,
-        subject: session.subject,
-        workspaceId: session.workspaceId,
-        entry: "operator_mcp",
-        ...platformLegacyWorkspaceSunsetOption(env),
-        ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
-          ? { appOwnershipMutationsFrozen: true }
-          : {}),
-        trustedNativeClients: trustedNativeClientsFromEnv(
-          env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
-        ),
-        ...platformActivityCursorSealerOption(env),
-        ...(env.TAKOSUMI_ACCOUNTS_ISSUER
-          ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
-          : {}),
-      });
-      return response ?? Response.json({ error: "not found" }, { status: 404 });
-    },
-    installPlanWorkspaceId: async (installPlanId) => {
-      try {
-        return (await operations.gitInstallPlans.get(installPlanId))?.workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-    capsuleWorkspaceId: async (capsuleId) => {
-      try {
-        return (await operations.capsules.getCapsule(capsuleId)).workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-    runWorkspaceId: async (runId) => {
-      try {
-        return (await operations.getRun(runId)).workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-  };
 }
 
 /**
@@ -4407,8 +4376,14 @@ function platformExtensionInterfaceOAuthSession(
     valueString(takosumi.interface_binding_id),
   );
   const interfaceResolvedRevision = takosumi.interface_resolved_revision;
+  // The Interface owner is evidence enough (TASK-0118 Phase 9): a Capsule for
+  // a Capsule-owned Interface, the Workspace only for a Workspace-owned one.
+  // A Workspace the token still carries is forwarded as compatibility
+  // context; it is never required next to a Capsule.
   if (
-    !workspaceId ||
+    (takosumi.workspace_id !== undefined && !workspaceId) ||
+    (takosumi.capsule_id !== undefined && !capsuleId) ||
+    (!workspaceId && !capsuleId) ||
     !interfaceId ||
     !interfaceBindingId ||
     typeof interfaceResolvedRevision !== "number" ||
@@ -4421,7 +4396,7 @@ function platformExtensionInterfaceOAuthSession(
     authenticated: true,
     authKind: "interface-oauth-token",
     subject,
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
     ...(capsuleId ? { capsuleId } : {}),
     audience: expectedAudience,
     interfaceId,

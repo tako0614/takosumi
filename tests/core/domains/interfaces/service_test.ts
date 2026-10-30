@@ -863,6 +863,21 @@ test("Principal oauth2 delivery requires the host issuer and mints only from an 
       interfaceResolvedRevision: iface.status.resolvedRevision + 1,
     }),
   ).toBe(false);
+  // TASK-0118 Phase 9: the Capsule-owned Interface is identified by its
+  // Capsule alone. A Workspace that is present is still compared.
+  const { workspaceId: _workspaceId, ...capsuleEvidence } = activityEvidence;
+  expect(
+    await service.validatePrincipalOAuth2TokenEvidence(capsuleEvidence),
+  ).toBe(true);
+  for (const evidence of [
+    { ...capsuleEvidence, capsuleId: "capsule_other" },
+    { ...capsuleEvidence, capsuleId: undefined },
+    { ...activityEvidence, workspaceId: "workspace_2" },
+  ]) {
+    expect(await service.validatePrincipalOAuth2TokenEvidence(evidence)).toBe(
+      false,
+    );
+  }
 
   await expect(
     service.issueToken(

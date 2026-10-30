@@ -143,9 +143,14 @@ export interface InterfacePrincipalOAuth2IssueInput {
   readonly resource: string;
 }
 
-/** Non-secret evidence persisted by a host OAuth issuer for active checks. */
+/**
+ * Non-secret evidence persisted by a host OAuth issuer for active checks.
+ * Capsule evidence alone is enough for a Capsule-owned Interface (TASK-0118
+ * Phase 9); a Workspace-owned Interface still needs its Workspace.
+ */
 export interface InterfacePrincipalOAuth2ActivityEvidence {
-  readonly workspaceId: string;
+  /** Compatibility evidence: checked when present, never required with a Capsule. */
+  readonly workspaceId?: string;
   readonly capsuleId?: string;
   readonly interfaceId: string;
   readonly bindingId: string;
@@ -1749,12 +1754,27 @@ export class InterfaceService {
    * Revalidates opaque Accounts token evidence against canonical current Core
    * state. Hosts call this at UserInfo/introspection time; a false result never
    * reveals which lifecycle, Binding, ownership, or uniqueness fence failed.
+   *
+   * The token names its Interface owner: a Capsule-owned Interface is
+   * identified by its Capsule alone, so evidence without a Workspace is
+   * accepted for it (TASK-0118 Phase 9). A Workspace in the evidence is still
+   * compared; without one, the Interface's own internal partition is used for
+   * the Binding and resource-authorizer consistency checks and grants nothing.
    */
   async validatePrincipalOAuth2TokenEvidence(
     input: InterfacePrincipalOAuth2ActivityEvidence,
   ): Promise<boolean> {
     try {
-      const workspaceId = requireText(input.workspaceId, "workspaceId");
+      const evidenceWorkspaceId = input.workspaceId === undefined
+        ? undefined
+        : requireText(input.workspaceId, "workspaceId");
+      const evidenceCapsuleId = input.capsuleId === undefined
+        ? undefined
+        : requireText(input.capsuleId, "capsuleId");
+      // A Workspace-owned Interface has no Capsule to identify it.
+      if (evidenceWorkspaceId === undefined && evidenceCapsuleId === undefined) {
+        return false;
+      }
       const interfaceId = requireText(input.interfaceId, "interfaceId");
       const bindingId = requireText(input.bindingId, "bindingId");
       const subjectId = requireText(input.subjectId, "subjectId");
@@ -1775,8 +1795,13 @@ export class InterfaceService {
         iface.metadata.ownerRef.kind === "Capsule"
           ? iface.metadata.ownerRef.id
           : undefined;
+      // The partition only keeps the Binding and resource reservation
+      // consistent with this Interface; it is never a grant.
+      const workspaceId = iface.metadata.workspaceId;
       if (
-        iface.metadata.workspaceId !== workspaceId ||
+        (evidenceWorkspaceId !== undefined &&
+          evidenceWorkspaceId !== workspaceId) ||
+        (evidenceWorkspaceId === undefined && ownerCapsuleId === undefined) ||
         iface.status.phase !== "Resolved" ||
         iface.status.resolvedRevision !== input.interfaceResolvedRevision ||
         resolvedOAuth2Resource(iface) !== resource ||
