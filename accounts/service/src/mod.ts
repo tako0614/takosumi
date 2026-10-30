@@ -55,7 +55,14 @@ import {
 import type { UpstreamOAuthProvider } from "./upstream.ts";
 import { signEs256Jwt } from "./jwt.ts";
 import { validateHostedClientConfiguration } from "./hosted-oidc-profile.ts";
-import { handleSharedAccountWorkspaceRoute, isSharedAccountWorkspaceRoute, type SharedAccountWorkspaceDirectory } from "./shared-account-workspace.ts";
+import { handleSharedAccountWorkspaceRoute, isSharedAccountWorkspaceRoute, sharedAccountWorkspaceRouteTemplate, type SharedAccountWorkspaceDirectory } from "./shared-account-workspace.ts";
+import {
+  legacyWorkspaceClientFamily,
+  reportLegacyWorkspaceRoute,
+  withLegacyWorkspaceDeprecation,
+  type LegacyWorkspaceCredential,
+  type LegacyWorkspaceUse,
+} from "./legacy-workspace-telemetry.ts";
 import { handleIdentityMergeRequest, type IdentityMergeReconciler } from "./identity-merge.ts";
 import { handleUpstreamOperationProofBeginRequest, isUpstreamOperationProofBeginPath } from "./upstream-operation-proof.ts";
 import { handleCredentialUnlinkIntentRequest, isCredentialUnlinkIntentPath } from "./identity-unlink.ts";
@@ -188,6 +195,10 @@ export * from "./shared-account-workspace.ts";
 export * from "./workspace-mutations-freeze.ts";
 export { APP_OWNERSHIP_MUTATIONS_ENV, parseAppOwnershipMutationsFrozen } from "./app-ownership-mutations-freeze.ts";
 export {
+  LEGACY_WORKSPACE_SUNSET_ENV,
+  parseLegacyWorkspaceSunset,
+} from "./legacy-workspace-telemetry.ts";
+export {
   INSTALLED_APP_DELEGATION_SOURCES_ENV,
   parseInstalledAppDelegationSources,
   type InstalledAppDelegationSource,
@@ -227,6 +238,11 @@ export interface AccountsHandlerOptions {
   hostedSessionPolicy?: boolean;
   /** Defaults to true: legacy Workspace creation/member mutations return 409. */
   workspaceMutationsFrozen?: boolean;
+  /**
+   * RFC 8594 `Sunset` (IMF-fixdate) announced on legacy Workspace routes;
+   * parsed from `TAKOSUMI_LEGACY_WORKSPACE_SUNSET`. Unset announces none.
+   */
+  legacyWorkspaceSunset?: string;
   /**
    * Defaults to false. True (`TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen`): app
    * member add/remove/leave and ownership-transfer create/accept/cancel
@@ -672,6 +688,35 @@ export function createAccountsHandler(
   const phaseDiagnostics = createRequestPhaseDiagnostics(
     options.requestPhaseDiagnostics ?? {},
   );
+  /**
+   * Reports one legacy Workspace use served outside the control dispatcher and
+   * adds the deprecation headers; the response is otherwise unchanged.
+   */
+  const observeLegacyWorkspaceUse = (
+    request: Request,
+    response: Response,
+    use: LegacyWorkspaceUse,
+    credential: LegacyWorkspaceCredential,
+    clientId?: string,
+  ): Response => {
+    reportLegacyWorkspaceRoute({
+      use,
+      method: request.method,
+      status: response.status,
+      entry: "public",
+      credential,
+      workspaceBound: false,
+      appBound: false,
+      clientFamily: legacyWorkspaceClientFamily(request.headers),
+      ...(clientId !== undefined ? { clientId } : {}),
+    });
+    return withLegacyWorkspaceDeprecation(response, use, {
+      ...(options.legacyWorkspaceSunset
+        ? { sunset: options.legacyWorkspaceSunset }
+        : {}),
+    });
+  };
+
   const inner = async (
     request: Request,
     assertActive?: () => void,
@@ -706,7 +751,10 @@ export function createAccountsHandler(
       if (!options.oidcFlow) return reservedOidcEndpoint();
       const limited = authorizeLimiter.consume(request);
       if (limited) return limited;
-      return await handleAuthorize({
+      // Counted only once a signed-in request names a Workspace: an
+      // anonymous request is redirected to sign-in and repeated afterwards.
+      let authorizeNamedWorkspace = false;
+      const authorizeResponse = await handleAuthorize({
         issuer,
         request,
         url,
@@ -717,7 +765,16 @@ export function createAccountsHandler(
         ...(resolveControlPlaneOperations
           ? { resolveOperations: resolveControlPlaneOperations }
           : {}),
+        observeWorkspaceRequest: () => {
+          authorizeNamedWorkspace = true;
+        },
       });
+      return authorizeNamedWorkspace
+        ? observeLegacyWorkspaceUse(request, authorizeResponse, {
+          surface: "authorize_workspace",
+          route: `${TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH}?workspace_id`,
+        }, "session")
+        : authorizeResponse;
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_TOKEN_PATH) {
@@ -815,15 +872,31 @@ export function createAccountsHandler(
     }
 
     if (options.hostedSessionPolicy && isSharedAccountWorkspaceRoute(url.pathname)) {
-      return (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,diagnostics,directory:options.sharedAccountWorkspaceDirectory,workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
+      // Counted only after a credential is accepted; a 401 depends on nothing.
+      let sharedWorkspaceCredential: LegacyWorkspaceCredential | undefined;
+      let sharedWorkspaceClientId: string | undefined;
+      const sharedWorkspaceResponse = (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,diagnostics,directory:options.sharedAccountWorkspaceDirectory,workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
         const token = directoryRequest.headers.get("authorization");
         if (token?.startsWith("Bearer ")) {
           const genuineSession = await store.findAccountSession(token.slice(7));
-          if (!genuineSession) return resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,clients});
+          if (!genuineSession) {
+            const grant = await resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,clients,observeClientId:(clientId) => {
+              sharedWorkspaceClientId = clientId;
+            }});
+            if (grant.ok) sharedWorkspaceCredential = "oauth-access-token";
+            return grant;
+          }
         }
         const session = await requireAccountSession({request:directoryRequest,store});
+        if (session.ok) sharedWorkspaceCredential = "session";
         return session.ok ? {ok:true,session:{subject:session.subject,sessionId:session.sessionId}} : session;
       })}))) ?? errorJson("not_found","not found",404,request);
+      return sharedWorkspaceCredential
+        ? observeLegacyWorkspaceUse(request, sharedWorkspaceResponse, {
+          surface: "shared_workspace",
+          route: sharedAccountWorkspaceRouteTemplate(request.method, url.pathname),
+        }, sharedWorkspaceCredential, sharedWorkspaceClientId)
+        : sharedWorkspaceResponse;
     }
 
     if (url.pathname === "/api/v1/account/session/global-logout" && options.hostedSessionPolicy) {
@@ -853,9 +926,13 @@ export function createAccountsHandler(
       if (request.method === "POST") {
         const limited = accountTokensLimiter.consume(request);
         if (limited) return limited;
-        return await handleCreatePersonalAccessToken({
+        let workspaceBoundToken = false;
+        const created = await handleCreatePersonalAccessToken({
           request,
           store,
+          observeWorkspaceBinding: () => {
+            workspaceBoundToken = true;
+          },
           operations: options.controlPlaneOperations,
           ...(options.patWorkspaceMembershipReader
             ? { membershipReader: options.patWorkspaceMembershipReader }
@@ -865,6 +942,12 @@ export function createAccountsHandler(
             : {}),
           extensionScopes: options.personalAccessTokenSelfServiceScopes,
         });
+        return workspaceBoundToken
+          ? observeLegacyWorkspaceUse(request, created, {
+            surface: "pat_workspace",
+            route: `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}#workspace_id`,
+          }, "session")
+          : created;
       }
       return methodNotAllowed("GET, POST");
     }
@@ -1083,6 +1166,9 @@ export function createAccountsHandler(
               : {}),
             ...(options.installedAppDelegationSources?.length
               ? { installedAppDelegationSources: options.installedAppDelegationSources }
+              : {}),
+            ...(options.legacyWorkspaceSunset
+              ? { legacyWorkspaceSunset: options.legacyWorkspaceSunset }
               : {}),
           }),
       );

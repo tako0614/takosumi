@@ -1888,6 +1888,22 @@ test("workspace-less install keeps the requester's canonical personal owner for 
   ]);
 });
 
+test("install attempts offer only the future app owner's Workspace connections (TASK-0118 P9.1-d)", async () => {
+  const othersConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_admin"), ownerAccountId: ADMIN_SUBJECT };
+  const legacyConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_legacy") } as ProviderConnection & { ownerAccountId?: string };
+  delete legacyConnection.ownerAccountId;
+  const fixture = attemptFixture({
+    providerConnections: [providerConnection(CLOUDFLARE, "conn_cloudflare01"), othersConnection, legacyConnection],
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan.phase).toBe("awaiting_input");
+  // Someone else's connection recording this Workspace is never offered; a
+  // legacy row without an owner belongs to the Workspace owner.
+  expect(paused.userAction.connections[0].candidates.map((candidate: { id: string }) => candidate.id))
+    .toEqual(["conn_cloudflare01", "conn_cloudflare_legacy"]);
+});
+
 test("install attempt pauses once for the whole sheet, auto-selects the only connection, and continues with transient values", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);

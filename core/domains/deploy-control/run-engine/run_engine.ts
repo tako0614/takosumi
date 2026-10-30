@@ -265,6 +265,7 @@ import {
 import {
   RuntimeInputPreviousGenerationError,
   runtimeInputProviderInstanceForStorage,
+  type RuntimeInputAuthority,
   type RuntimeInputMaterializer,
 } from "../runtime_input_materializer.ts";
 import { runtimeInputWiringFromResolved } from "../runtime_input_wiring.ts";
@@ -387,14 +388,59 @@ interface DestroyRuntimeInputNonceAuthority {
   readonly currentStateGeneration: number;
 }
 
-interface RunEngineGenericRootPlanContext extends GenericRootPlanContext {
-  /** Immutable Capsule cursor captured before the destroy root is compiled. */
-  readonly destroyRuntimeInputNonceAuthority?: DestroyRuntimeInputNonceAuthority;
-  /**
-   * The Capsule's frozen derivation scope (`capsuleScopeRef`), carried in
-   * memory beside the persisted runtime-input authority for the destroy nonce.
-   */
-  readonly runtimeInputScopeRef?: string;
+/**
+ * Run-scoped sensitive input authority and the Capsule's frozen derivation
+ * scope (`capsuleScopeRef`) travel together: the destroy nonce hashes the
+ * scopeRef and must never fall back to the authority's Workspace id, so a
+ * context that carries one without the other does not type-check.
+ */
+type RunEngineRuntimeInputPlanContext =
+  | {
+      readonly runtimeInputWiring?: undefined;
+      readonly runtimeInputAuthority?: undefined;
+      readonly runtimeInputScopeRef?: undefined;
+      readonly destroyRuntimeInputNonceAuthority?: undefined;
+    }
+  | {
+      readonly runtimeInputWiring: NonNullable<
+        GenericRootPlanContext["runtimeInputWiring"]
+      >;
+      readonly runtimeInputAuthority: RuntimeInputAuthority;
+      readonly runtimeInputScopeRef: string;
+      /** Immutable Capsule cursor captured before the destroy root is compiled. */
+      readonly destroyRuntimeInputNonceAuthority?: DestroyRuntimeInputNonceAuthority;
+    };
+
+type RunEngineGenericRootPlanContext =
+  & Omit<
+    GenericRootPlanContext,
+    "runtimeInputAuthority" | "runtimeInputWiring"
+  >
+  & RunEngineRuntimeInputPlanContext;
+
+/**
+ * The one constructor of {@link RunEngineRuntimeInputPlanContext}. The scope
+ * is read from the Capsule here, never from the authority's Workspace id.
+ */
+function runtimeInputPlanContext(input: {
+  readonly wiring: GenericRootPlanContext["runtimeInputWiring"];
+  readonly capsule: Pick<Capsule, "id" | "workspaceId" | "scopeRef">;
+  readonly installConfigId: string;
+  readonly destroyAuthority: DestroyRuntimeInputNonceAuthority | undefined;
+}): RunEngineRuntimeInputPlanContext {
+  if (!input.wiring) return {};
+  return {
+    runtimeInputWiring: input.wiring,
+    runtimeInputAuthority: {
+      workspaceId: input.capsule.workspaceId,
+      capsuleId: input.capsule.id,
+      installConfigId: input.installConfigId,
+    },
+    runtimeInputScopeRef: capsuleScopeRef(input.capsule),
+    ...(input.destroyAuthority
+      ? { destroyRuntimeInputNonceAuthority: input.destroyAuthority }
+      : {}),
+  };
 }
 
 const DESTROY_RUNTIME_INPUT_NONCE_DOMAIN =
@@ -4004,20 +4050,12 @@ export class RunEngine {
         providerBindings: capsulePlan.providerBindings,
         resolvedProviderBindings: capsulePlan.resolvedProviderBindings,
         outputAllowlist: input.installConfig.outputAllowlist,
-        ...(runtimeInputWiring
-          ? {
-              runtimeInputWiring,
-              runtimeInputAuthority: {
-                workspaceId: input.capsule.workspaceId,
-                capsuleId: input.capsule.id,
-                installConfigId: input.installConfig.id,
-              },
-              runtimeInputScopeRef: capsuleScopeRef(input.capsule),
-              ...(destroyRuntimeInputNonceAuthority
-                ? { destroyRuntimeInputNonceAuthority }
-                : {}),
-            }
-          : {}),
+        ...runtimeInputPlanContext({
+          wiring: runtimeInputWiring,
+          capsule: input.capsule,
+          installConfigId: input.installConfig.id,
+          destroyAuthority: destroyRuntimeInputNonceAuthority,
+        }),
         ...(input.installConfig.sourceBuild
           ? { sourceBuild: input.installConfig.sourceBuild }
           : {}),
@@ -4181,8 +4219,9 @@ export class RunEngine {
     | undefined
   > {
     const wiring = context.runtimeInputWiring;
+    if (!wiring || context.runtimeInputAuthority === undefined) return undefined;
     const authority = context.runtimeInputAuthority;
-    if (!wiring || !authority) return undefined;
+    const scopeRef = context.runtimeInputScopeRef;
     const pinnedVersion = input.rootProviderRequirements.find(
       (requirement) =>
         requirement.moduleLocalName === wiring.moduleLocalName &&
@@ -4217,7 +4256,7 @@ export class RunEngine {
         );
       }
       const nonce = await destroyRuntimeInputNonce({
-        scopeRef: context.runtimeInputScopeRef ?? authority.workspaceId,
+        scopeRef,
         capsuleId: authority.capsuleId,
         providerInstance: runtimeInputProviderInstanceForStorage(wiring),
         ...stateAuthority,
@@ -4451,26 +4490,17 @@ export class RunEngine {
         providerBindings: providerBindingsFromResolved(resolved),
         resolvedProviderBindings: resolved,
         outputAllowlist: installConfig.outputAllowlist,
-        ...(runtimeInputWiring
-          ? {
-              runtimeInputWiring,
-              runtimeInputAuthority: {
-                workspaceId: capsule.workspaceId,
-                capsuleId: capsule.id,
-                installConfigId: installConfig.id,
-              },
-              runtimeInputScopeRef: capsuleScopeRef(capsule),
-              ...(request.operation === "destroy"
-                ? {
-                    destroyRuntimeInputNonceAuthority: {
-                      currentStateVersionId:
-                        capsule.currentStateVersionId ?? null,
-                      currentStateGeneration: capsule.currentStateGeneration,
-                    },
-                  }
-                : {}),
-            }
-          : {}),
+        ...runtimeInputPlanContext({
+          wiring: runtimeInputWiring,
+          capsule,
+          installConfigId: installConfig.id,
+          destroyAuthority: request.operation === "destroy"
+            ? {
+                currentStateVersionId: capsule.currentStateVersionId ?? null,
+                currentStateGeneration: capsule.currentStateGeneration,
+              }
+            : undefined,
+        }),
         ...(installConfig.sourceBuild
           ? { sourceBuild: installConfig.sourceBuild }
           : {}),

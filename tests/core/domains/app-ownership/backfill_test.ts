@@ -99,6 +99,25 @@ test("bounded apply preserves old storage roots and owner authority and resumes 
   expect((await applyAppOwnershipBackfill(frozen, complete.digest)).applied).toBe(0);
 });
 
+test("the legacy storage root is the one written under the Capsule's frozen scopeRef", async () => {
+  const context = fixture();
+  // Unchanged for a Capsule whose scopeRef is (or defaults to) its Workspace.
+  context.capsules[0] = { ...context.capsules[0]!, scopeRef: "personal" };
+  // Its objects were written under ws_before; its authority Workspace has moved.
+  context.capsules[1] = { ...context.capsules[1]!, scopeRef: "ws_before" };
+  const plan = await planAppOwnershipBackfill(context);
+  const roots = Object.fromEntries(plan.writes.flatMap((write) =>
+    write.kind === "ownership" ? [[write.record.capsuleId, write.record.storageRoot]] : []));
+  expect(roots).toEqual({
+    "cap-personal": "workspaces/personal/capsules/cap-personal",
+    "cap-organization": "workspaces/ws_before/capsules/cap-organization",
+  });
+  // The roster is still seeded from the Workspace for a never-transferred app.
+  await applyAppOwnershipBackfill({ ...context, workspaceMutationsFrozen: true as const }, plan.digest);
+  expect(await context.ownership.listMembers("cap-organization")).toMatchObject([{ accountId: "admin", status: "active" }]);
+  expect((await planAppOwnershipBackfill(context)).writes).toEqual([]);
+});
+
 test("orphan Capsules and unresolved app usage are reported; only unresolved payer stops apply", async () => {
   const context = fixture();
   context.capsules.push({ ...context.capsules[0]!, id: "z-orphan", workspaceId: "missing" },

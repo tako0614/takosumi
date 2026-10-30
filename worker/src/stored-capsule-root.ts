@@ -46,8 +46,12 @@ export async function storedCapsuleArtifactRoot(
   // A nullable v77 row also retains its legacy root until backfill assigns one.
   // The physical column is the authority after expansion; legacy JSON may
   // still contain a root written before the schema bridge was corrected.
+  // Without a physical root the legacy root was written under the Capsule's
+  // frozen scope (`capsuleScopeRef`): its stored scopeRef, else its Workspace.
+  const scopeRef = capsule.scopeRef === undefined ? workspaceId : capsule.scopeRef;
+  if (typeof scopeRef !== "string" || scopeRef.length === 0) throw new StoredServiceUsageError();
   try {
-    return capsuleArtifactRoot(workspaceId, capsuleId, physical ?? undefined);
+    return capsuleArtifactRoot(scopeRef, capsuleId, physical ?? undefined);
   } catch {
     throw new StoredServiceUsageError();
   }

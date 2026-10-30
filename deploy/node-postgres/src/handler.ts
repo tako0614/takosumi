@@ -19,6 +19,7 @@ import {
   notificationPusherRouteOptionsFromEnv,
   parseAppOwnershipMutationsFrozen,
   parseInstalledAppDelegationSources,
+  parseLegacyWorkspaceSunset,
   trustedNativeClientsFromEnv,
   type InstalledAppDelegationSource,
   type NotificationPusherRouteOptions,
@@ -64,6 +65,8 @@ export interface NodeAccountsServerConfig {
   readonly appOwnershipMutationsFrozen?: boolean;
   /** Takosumi Mobile pushers: VAPID key from the secret-store passphrase, relay allowlist. */
   readonly notificationPushers?: NotificationPusherRouteOptions;
+  /** `TAKOSUMI_LEGACY_WORKSPACE_SUNSET`: `Sunset` announced on legacy Workspace routes. */
+  readonly legacyWorkspaceSunset?: string;
 }
 
 export function parseEnv(
@@ -117,6 +120,9 @@ export function parseEnv(
       env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,
     ),
     notificationPushers: notificationPusherRouteOptionsFromEnv(env, issuer),
+    legacyWorkspaceSunset: parseLegacyWorkspaceSunset(
+      env.TAKOSUMI_LEGACY_WORKSPACE_SUNSET,
+    ),
   };
 }
 

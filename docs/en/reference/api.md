@@ -315,7 +315,10 @@ lightly edited for readers.
 | DELETE | `/api/v1/ownership-transfers/{transferId}` | Owner; cancels pending transfer |
 | GET, POST | `/api/v1/connections` | Account's own personal connections and bindable operator connections; new connections belong to caller |
 | GET | `/api/v1/connections?capsuleId=…&projection=labels` | The owner's or a member's own session or personal access token (including appIds-scoped ones); the connections this app can bind (the owner's verified connections, operator-provided bindable connections and the current bindings) as `{ id, provider, displayName }` only, so a member can switch among them; no values, status, scope or other details. An installed app's OAuth token gets only the connections already bound to that app. Each request reads at most one fixed-size page of the owner's connections (`owner_account_id` has no index yet) and continues with `nextCursor`; a page can hold fewer than `limit` rows because unbindable connections are skipped. Binding and credential mint (connection owner must be the app owner) remain the authority |
-| POST | `/api/v1/connections/oauth/{helperId}/start` | Account credential; omit workspaceId to create a personal connection owned by caller |
+| POST | `/api/v1/connections/oauth/{helperId}/start` | Account credential (not Workspace-bound). The OAuth state carries no Workspace; the callback authorizes from the signed subject alone and the connection is the caller's. Without workspaceId it is a personal connection; a legacy request with workspaceId asks for a Workspace-scoped connection, which is recorded in the caller's own namespace (the named Workspace is not read). A callback with an older state that still names a Workspace mints nothing (`oauth_failed`) |
+| GET | `/api/v1/connections?workspaceId=…`, `/api/v1/provider-connections?workspaceId=…` | Legacy lists: only the caller's own connections that record that Workspace (plus bindable operator connections for provider-connections); Workspace members never see other people's connections |
+| POST | `/api/v1/connections/{connectionId}/test`, `/revoke` | The connection's owner only. A Workspace-scoped connection is its owner's; being the Workspace's owner or admin grants nothing (a legacy row without a recorded owner belongs to the owner of the Workspace it records). Everyone else gets a non-disclosing `404 connection_not_found` |
+| POST | `authConnectionId` on `/api/v1/sources` and `PATCH /api/v1/sources/{sourceId}` | A Source no app owns takes only the caller's own connection; an app's Source only its owner's (enforced by the Source service). Workspace membership never lends someone else's credential |
 | GET | `/api/v1/source-ref-resolutions?url=…` | Account credential with write scope; starts a runner to resolve a public Git source's stable SemVer tag |
 | POST | `/api/v1/install-plans` | Account credential; `mode: "attempt"`, no workspace field; caller owns app |
 | GET | `/api/v1/usage` | Account credential; caller's payer usage only. An independent meter event is attributed only when its usage span (event time ±2 hours, never before the app's creation or after it was recorded) lies inside one ownership interval delimited by accepted transfers; otherwise, or with incomplete transfer history, it stays unattributed |
@@ -386,6 +389,30 @@ Activity events are stored per internal partition (the frozen namespace each app
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/api/v1/views/workspaces.v1` | Read the account Workspace inventory projection |
+
+### Legacy Workspace routes {#legacy-workspace-routes}
+
+Workspace is being replaced by per-app ownership and removed in stages (TASK-0118 Phase 9). These uses are deprecated:
+
+- `/api/v1/workspaces/*`, `/api/v1/projects/*`, `/api/v1/views/workspaces.v1`
+- connections, sources, capsule-configs, provider-connections and dashboard selected by `?workspaceId=`, and connection create, connection OAuth start and Source create selected by a `workspaceId` body field
+- `/api/v1/dashboard/bootstrap` without `includeWorkspaces=false`
+- `/api/v1/account/shared-workspaces*`, `/api/v1/billing*` (responses are not marked), `/api/v1/interfaces*` when a Workspace is selected (by `?workspaceId=`, the `x-takosumi-platform-workspace-id` header, a `workspaceId` body field, or implicitly by a Workspace-bound credential), platform extension routes that receive a Workspace, `workspace_id` on `/oauth/authorize`, and personal access tokens created with `workspace_id`
+
+Their responses carry `Deprecation: @1793145600` (RFC 9745) and `Link: <…>; rel="deprecation"` pointing here, plus a `rel="successor-version"` link when a replacement route exists today and is a concrete URI (templated replacements such as `/api/v1/capsules/{capsuleId}/runs` are listed in the table below, never sent as a link), and `Sunset` (RFC 8594) once the operator schedules removal (`TAKOSUMI_LEGACY_WORKSPACE_SUNSET`). Status and body are unchanged. Clients may identify themselves with `Takosumi-Client: <name>/<version>`. The server records each authenticated use as the structured log `legacy_workspace_route`, and each compatibility `takosumi.workspace_id` claim placed in an ID token, userinfo or introspection response (and each use of a personal access token bound only to a Workspace, whether introspected or presented directly) as `legacy_workspace_claim_emitted`. Neither contains an account, Workspace or token id; the only identifier is the registered OAuth client id, which identifies an app integration or installation, not a person.
+
+| Deprecated | Replacement |
+| --- | --- |
+| `GET /api/v1/workspaces`, `GET /api/v1/workspaces/{workspaceId}/capsules`, `GET /api/v1/workspaces/{workspaceId}/installed-apps`, `GET /api/v1/views/workspaces.v1` | `GET /api/v1/apps` |
+| `POST /api/v1/workspaces/{workspaceId}/install-plans` | `POST /api/v1/install-plans` |
+| `GET /api/v1/workspaces/{workspaceId}/members` | `GET /api/v1/capsules/{capsuleId}/members` |
+| `GET /api/v1/workspaces/{workspaceId}/runs` | `GET /api/v1/capsules/{capsuleId}/runs` |
+| `GET /api/v1/workspaces/{workspaceId}/usage`, `GET /api/v1/workspaces/{workspaceId}/billing` | `GET /api/v1/usage` |
+| `POST /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | `GET /api/v1/source-ref-resolutions` |
+| `POST /api/v1/workspaces/{workspaceId}/plan-update` / `drift-check` / `backups` | `POST /api/v1/capsules/{capsuleId}/plan` / `drift-check` / `backups` |
+| `/api/v1/connections` selected by `workspaceId` | `/api/v1/connections` without `workspaceId` (personal connections) |
+
+Replacements for the remaining routes are added as their APIs land.
 
 ### Workspaces
 
@@ -797,7 +824,7 @@ change again instead of the Source's default ref.
 | POST | `/api/v1/connections/{connectionId}/revoke` | Revoke a Connection |
 | POST | `/api/v1/connections/oauth/{helperId}/start` | Start an installed credential OAuth helper |
 | GET | `/api/v1/connections/oauth/{helperId}/callback` | Complete an installed credential OAuth helper |
-| GET | `/api/v1/provider-connections` | List the caller's own and release-owned bindable ProviderConnections; `capsuleId=&projection=release-owned` for one app; `workspaceId=` is the legacy Workspace-owner list |
+| GET | `/api/v1/provider-connections` | List the caller's own and release-owned bindable ProviderConnections; `capsuleId=&projection=release-owned` for one app; `workspaceId=` is the legacy list: only the caller's own connections recording that Workspace plus bindable operator connections (never other members' connections) |
 | GET | `/api/v1/credential-recipes` | List optional guided Credential Recipes |
 
 ### Dashboard projections
