@@ -18,10 +18,14 @@ export interface RecordWorkerMetricInput {
   readonly observedAt?: Date;
 }
 
+/**
+ * Records one metric event. Never throws; resolves false only when the sink
+ * refused the write (no sink resolves true: nothing was attempted).
+ */
 export async function recordWorkerMetric(
   input: RecordWorkerMetricInput,
-): Promise<void> {
-  if (!input.observability) return;
+): Promise<boolean> {
+  if (!input.observability) return true;
   try {
     await input.observability.recordMetric({
       id: `metric_${crypto.randomUUID()}`,
@@ -34,11 +38,13 @@ export async function recordWorkerMetric(
       },
       observedAt: (input.observedAt ?? new Date()).toISOString(),
     } satisfies MetricEvent);
+    return true;
   } catch (error) {
     log.warn("worker.metric_record_failed", {
       metric: input.name,
       message: error instanceof Error ? error.message : String(error),
     });
+    return false;
   }
 }
 

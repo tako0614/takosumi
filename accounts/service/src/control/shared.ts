@@ -5,6 +5,7 @@
  * (P3 god-file split) so per-resource `control/<resource>.ts` modules import
  * cross-cutting helpers from one place.
  */
+import type { LegacyWorkspaceUseRecorder } from "../legacy-workspace-telemetry.ts";
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
@@ -142,6 +143,8 @@ export interface ControlSession {
   readonly uninstallRequester?: CapsuleUninstallRequester;
   readonly workspaceId?: string;
   readonly appIds?: readonly string[];
+  /** Registered OAuth client of an OAuth access token; telemetry only. */
+  readonly oauthClientId?: string;
   /**
    * Operator-designated repositories (with allowed refs) whose installed app
    * may use its own OAuth token as a Workspace delegation. Operator
@@ -188,6 +191,8 @@ export interface ControlDispatchContext {
   /** Stops new work after the enclosing ordinary Run GET read budget expires. */
   readonly assertActive?: () => void;
   readonly withinRunReadDeadline?: RunReadWaiter;
+  /** Records a Workspace named in a parsed body (TASK-0118 Phase 9 telemetry). */
+  readonly legacyWorkspace?: LegacyWorkspaceUseRecorder;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

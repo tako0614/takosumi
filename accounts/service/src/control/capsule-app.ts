@@ -361,7 +361,7 @@ async function readAppLinks(
   const providerInterfaces = new Map<string, Promise<Interface | undefined>>();
   // Membership alone must not advertise writes to a read-only delegated grant.
   const writeBearer = ctx.session.uninstallRequester?.grant
-    ? await requireAccountsBearer({ request: ctx.request, store: ctx.store, scope: "write" })
+    ? await requireAccountsBearer({ request: ctx.request, store: ctx.store, scope: "write", recheck: true })
     : undefined;
   const mayWrite = writeBearer === undefined ||
     (writeBearer.ok && writeBearer.auth.subject === ctx.session.subject &&

@@ -217,6 +217,9 @@ export async function controlFetch<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {
     accept: "application/json",
+    // Value-free self-identification read only by the server's legacy
+    // Workspace telemetry (TASK-0118 Phase 9).
+    "takosumi-client": "takosumi-dashboard",
     ...(opts.headers ?? {}),
   };
   let body: BodyInit | undefined;

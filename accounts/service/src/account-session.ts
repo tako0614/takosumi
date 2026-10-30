@@ -16,6 +16,7 @@ import {
 // rule has a single owner and cannot drift between the two call sites.
 import { personalAccessTokenAppIdsAreWellFormed, personalAccessTokenIsActive } from "./pat-routes.ts";
 import { sha256Text } from "./encoding.ts";
+import { reportLegacyWorkspaceClaim } from "./legacy-workspace-telemetry.ts";
 import {
   findActiveAccessToken,
   validateActiveAccessTokenRecord,
@@ -40,6 +41,8 @@ export type AccountsBearerSubject = {
     "session" | "personal-access-token" | "oauth-access-token";
   readonly workspaceId?: string;
   readonly appIds?: readonly string[];
+  /** Registered OAuth client of an OAuth access token; telemetry only. */
+  readonly oauthClientId?: string;
 };
 
 export async function requireAccountSession(input: {
@@ -356,6 +359,12 @@ export async function requireAccountsBearer(input: {
   store: AccountsStore;
   scope: AccountsBearerRequiredScope;
   readonly assertActive?: () => void;
+  /**
+   * True when the same request already authenticated this credential and this
+   * call only re-checks it; the Workspace-binding telemetry is then not
+   * written a second time.
+   */
+  readonly recheck?: boolean;
 }): Promise<
   { ok: true; auth: AccountsBearerSubject } | { ok: false; response: Response }
 > {
@@ -502,6 +511,7 @@ export async function requireAccountsBearer(input: {
         },
         principalSubject: record.subject,
         credential: "oauth-access-token",
+        oauthClientId: record.clientId,
         // A Capsule OIDC token is for that installed app, even when its user
         // has no Workspace membership and the live grant omits workspaceId.
         ...(record.capsuleId !== undefined ? { appIds: [record.capsuleId] } : {}),
@@ -540,6 +550,21 @@ export async function requireAccountsBearer(input: {
     now,
   );
   assertActive?.();
+  if (
+    !input.recheck &&
+    activePersonalAccessTokenRecord.workspaceId &&
+    activePersonalAccessTokenRecord.appIds === undefined
+  ) {
+    // TASK-0118 Phase 9: a PAT bound only to a Workspace fences every route it
+    // calls by that Workspace, successor routes included, and stage 9.4
+    // refuses it. Count each use, whatever route it reaches.
+    reportLegacyWorkspaceClaim({
+      surface: "personal_access_bearer",
+      capsuleBound: false,
+      appRole: false,
+      memberships: false,
+    });
+  }
   return {
     ok: true,
     auth: {
