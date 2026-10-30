@@ -693,6 +693,7 @@ export async function handleControlRoute(
       request,
       store,
       scope: requiredAccess,
+      recheck: true,
     });
     return current.ok &&
       current.auth.subject === initialAuth.subject &&

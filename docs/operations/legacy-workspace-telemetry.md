@@ -19,11 +19,26 @@ public client (`tko_…`) is registered per installation, so its client id maps
 Workspace claims.
 
 Only authenticated requests are counted. A request refused before its
-credential was accepted (401, or 403 before authentication, such as an
-anonymous `/oauth/authorize?workspace_id=`, which is redirected to sign-in and
-repeated afterwards) depends on nothing and writes no line. A refusal after
-authentication (for example a Workspace-scoped credential denied with 403) is
-still a use and is counted.
+credential was accepted (401) depends on nothing and writes no line. An
+anonymous `/oauth/authorize?workspace_id=` is not refused but redirected to
+sign-in; it is counted when the signed-in user is sent back to the same
+authorization request. A refusal after the Workspace was selected (for
+example a Workspace-scoped credential denied with 403, or an Interface
+request that names its Workspace but has too narrow a scope) is still a use
+and is counted.
+
+A few refusals that follow authentication but come before the Workspace is
+read are intentionally not counted, because the request never reached a
+Workspace decision and an unchanged client keeps failing the same way:
+
+- Accounts control routes: a credential without the route's scope (403
+  `insufficient_scope` from the bearer gate);
+- platform extension routes: a token without the route's required scopes
+  (401), a failed CSRF origin check for a browser session (403), and a session
+  with a malformed Workspace role (403);
+- the platform Interface API: a failed CSRF origin check (403), a session
+  with a malformed Workspace role (403), and too narrow a scope (403) when the
+  request names no Workspace and would only have used the credential's own.
 
 ### `legacy_workspace_route`
 
@@ -37,7 +52,7 @@ still a use and is counted.
 | `credential` | `session`, `personal-access-token`, `oauth-access-token`; on platform surfaces also `interface-oauth-token`, `service-token`, `run-credential`, `protocol-credential` and `deploy-control` (the operator deploy-control token); `unknown` when the entry did not say |
 | `workspaceBound`, `appBound` | Whether the credential was bound to a Workspace or to apps |
 | `clientFamily` | `Takosumi-Client` name from a fixed list (`takosumi-dashboard`, `takosumi-cli`, `takos`, `takosumi-mobile`, ...), else `client:unknown`, else a coarse User-Agent family (`ua:browser`, `ua:browser-mobile`, `ua:bun`, `ua:node`, `ua:curl`, `ua:python`, `ua:go`, `ua:okhttp`, `ua:apple-native`, `ua:none`, `ua:other`) |
-| `clientId` | Only for an OAuth access token: the registered OAuth client id. It identifies an app integration or installation (1:1 with a Capsule for a `tko_…` client), not a person or a token |
+| `clientId` | Only for an OAuth or Interface OAuth access token: the registered OAuth client id (on the platform, from introspection; on the shared Workspace directory, the shared-account grant's client). It identifies an app integration or installation (1:1 with a Capsule for a `tko_…` client), not a person or a token. Sessions, PATs, run credentials and the deploy-control token have none |
 
 The dashboard sends `Takosumi-Client: takosumi-dashboard` and the CLI sends
 `Takosumi-Client: takosumi-cli`. The header is deliberately not `x-takosumi-*`:
@@ -48,21 +63,23 @@ boundaries strip it.
 
 Written whenever an ID token, userinfo or introspection response carries a
 compatibility `takosumi.workspace_id` claim, and whenever a Workspace-bound
-personal access token is introspected or reads its own authority. A PAT may
-never expire, so a PAT created long before the 7-day window is still counted
-each time a resource server introspects it.
+personal access token is introspected, reads its own authority, or
+authenticates an Accounts request directly. A PAT may never expire, so a PAT
+created long before the 7-day window is still counted each time it is used.
+Like route lines, claim lines are written once per use, not coalesced.
 
 | Field | Values |
 | --- | --- |
-| `surface` | `id_token`, `userinfo`, `introspection`, `interface_oauth_userinfo`, `interface_oauth_introspection`, `personal_access_introspection` (a Workspace-bound PAT introspected by a resource server), `personal_access_authority` (a Workspace-bound PAT reading `/api/v1/account/tokens/current`) |
-| `clientId` | The registered OAuth client that received the claim; for `personal_access_introspection`, the introspecting client (a PAT itself names only `takosumi-accounts-pat`); absent for `personal_access_authority`. It identifies an app integration or installation (1:1 with a Capsule for a `tko_…` client), not a person or a token |
+| `surface` | `id_token`, `userinfo`, `introspection`, `interface_oauth_userinfo`, `interface_oauth_introspection`, `personal_access_introspection` (a Workspace-bound PAT introspected by a resource server), `personal_access_authority` (a Workspace-bound PAT reading `/api/v1/account/tokens/current`), `personal_access_bearer` (a PAT bound only to a Workspace, with no apps, used directly as `Authorization: Bearer` on any Accounts control route: its binding fences even successor routes such as `/api/v1/apps`, and stage 9.4 refuses such PATs) |
+| `clientId` | The registered OAuth client that received the claim; for `personal_access_introspection`, the introspecting client (a PAT itself names only `takosumi-accounts-pat`); absent for `personal_access_authority` and `personal_access_bearer`. It identifies an app integration or installation (1:1 with a Capsule for a `tko_…` client), not a person or a token |
 | `capsuleBound` | `capsule_id` was in the same claim set (the app can already use the app claims) |
 | `appRole` | `app_role` was in the same claim set |
 | `memberships` | The flat `workspace_memberships` claim was emitted too |
 
 Stage 9.4 looks for clients with `capsuleBound: false`: those still depend on
 the Workspace claim. Any `personal_access_*` line means a Workspace-bound PAT
-is still in use; find it in the PAT inventory (`workspace_id`,
+is still in use; its owner finds it in their PAT inventory
+(`/api/v1/account/tokens/inventory.v1`, fields `workspace_id` and
 `last_used_at`).
 
 ### Response headers
@@ -94,13 +111,15 @@ The counter is coalesced per isolate so it costs at most one Control D1 write
 per tag set per minute, not one per request (the dashboard bootstrap alone
 would otherwise write a row on every open). It writes on the leading edge: the
 first use of a tag set in an isolate is written at once, and later uses inside
-the minute are carried into that tag set's next write. A tag set can
-therefore never stay at 0 while a use happened, which is what the gate asks;
-the only loss is the carried tail of an isolate that is evicted before its
-next write, so the total can be low but never zero. An upsert per
-route/day/status bucket was not chosen because it needs a new Control D1
-table and migration for a trend view. Logs are not coalesced and remain the
-source for the gate; the counter is a quick trend view on `/metrics`.
+the minute are carried into that tag set's next write. A write that fails is
+handed back and retried by the next use of the tag set, so one failed write
+does not leave a used tag set at 0. Values can still be lost when an isolate
+is evicted before its next write (the carried tail, or a failed write with no
+later use there), so the counter may read low and is not gate evidence. An
+upsert per route/day/status bucket was not chosen because it needs a new
+Control D1 table and migration for a trend view. Logs are not coalesced and
+remain the source for the gate; the counter is a quick trend view on
+`/metrics`.
 
 ## Reading it in Workers Logs
 
@@ -114,12 +133,34 @@ account plan; read the gate inside the retention window.
    (or `legacy_workspace_claim_emitted`). If fields are not extracted for the
    line, filter the message text for the event name instead.
 3. Set the time range to the last 7 days and group by `route`, `selector`,
-   `credential` and `clientFamily` (add `clientId` for OAuth). Exclude the
-   allow list: `surface` in `shared_workspace` and
-   `platform_extension_workspace` (stage 9B), and operator scripts by their
-   `clientFamily` or `credential=deploy-control`.
+   `credential` and `clientFamily` (add `clientId` where present). Exclude
+   only the allow list of the plan's G-9.3: `surface=shared_workspace` and
+   the platform extension Workspace header, which is
+   `surface=platform_extension_workspace` with `selector=session` (both stage
+   9B), and operator scripts by their `clientFamily` or
+   `credential=deploy-control`. An extension request that names a Workspace
+   with `?workspaceId=` (`selector=query`) is not on the allow list.
 4. The stage 9.3 gate is met when that grouped count is 0 for 7 consecutive
    days, in production and in staging.
+
+### Stage 9.4 gate (claims and Workspace-bound PATs)
+
+All of the following are required; the absence of log lines alone does not
+prove non-use (a PAT can be used outside the window, or reach a path that is
+not instrumented):
+
+1. Over 7 consecutive days, `legacy_workspace_claim_emitted` shows no client
+   that depends on the Workspace claim (`capsuleBound: false` from a client
+   whose install has no `capsule_id` context), and no `personal_access_*`
+   line.
+2. **The Accounts store holds 0 active Workspace-bound PATs**: no record in
+   the `personal_access_tokens` bucket of Accounts D1 (the
+   `personal_access_tokens` table on Postgres) has a Workspace
+   (`workspaceId` / `workspace_id`) and no apps (`appIds` / `app_ids`), is not
+   revoked (`revokedAt` / `revoked_at`) and has not expired (`expiresAt` /
+   `expires_at` unset or in the future). Read it with a read-only query right
+   before 9.4; convert or revoke any that remain first (`pat-app-conversion`).
+3. The app-side `legacy_workspace_claim_used` is at 0 for 7 days (stage 9.2).
 
 The same filter works through the Workers Observability telemetry query API.
 For a live look, `wrangler tail <worker> --format json` piped to a filter on

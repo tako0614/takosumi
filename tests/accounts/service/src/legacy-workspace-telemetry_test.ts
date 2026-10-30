@@ -730,3 +730,80 @@ test("the shared Workspace directory is counted only after authentication", asyn
   })]);
   expect(signedIn.lines.join("\n")).not.toContain("sess_shared_directory");
 });
+
+test("a Workspace-only PAT used directly is reported on a successor route, once per request", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  store.saveAccount({ subject: SUBJECT, createdAt: now, updatedAt: now });
+  const patToken = "takpat_bearer_workspace_secret";
+  store.savePersonalAccessToken(patToken, {
+    tokenId: "pat_bearer_workspace",
+    tokenPrefix: "takpat_beare",
+    subject: SUBJECT,
+    name: "cli",
+    scopes: ["read"],
+    workspaceId: WORKSPACE_ID,
+    createdAt: now,
+  });
+  const { lines } = await captureInfo(() =>
+    control({ store, token: patToken, path: "/api/v1/apps" })
+  );
+  // `/api/v1/apps` is a successor route, so no route line is written; the
+  // binding itself is what stage 9.4 removes.
+  expect(legacyEvents(lines)).toEqual([]);
+  expect(claimEvents(lines)).toEqual([{
+    event: "legacy_workspace_claim_emitted",
+    surface: "personal_access_bearer",
+    capsuleBound: false,
+    appRole: false,
+    memberships: false,
+  }]);
+  const raw = lines.join("\n");
+  for (const value of [WORKSPACE_ID, SUBJECT, patToken, "pat_bearer_workspace"]) {
+    expect(raw).not.toContain(value);
+  }
+});
+
+test("an account PAT or an app-bound PAT used directly is not a Workspace binding", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  store.saveAccount({ subject: SUBJECT, createdAt: now, updatedAt: now });
+  store.savePersonalAccessToken("takpat_bearer_account", {
+    tokenId: "pat_bearer_account",
+    tokenPrefix: "takpat_accnt",
+    subject: SUBJECT,
+    name: "account",
+    scopes: ["read"],
+    createdAt: now,
+  });
+  store.savePersonalAccessToken("takpat_bearer_apps", {
+    tokenId: "pat_bearer_apps",
+    tokenPrefix: "takpat_appsx",
+    subject: SUBJECT,
+    name: "apps",
+    scopes: ["read"],
+    workspaceId: WORKSPACE_ID,
+    appIds: ["cap_bearer_app"],
+    createdAt: now,
+  });
+  for (const token of ["takpat_bearer_account", "takpat_bearer_apps"]) {
+    const { lines } = await captureInfo(() =>
+      control({ store, token, path: "/api/v1/apps" })
+    );
+    expect(claimEvents(lines), token).toEqual([]);
+  }
+});
+
+test("a failed counter write is handed back and retried by the next use", () => {
+  const counter = new LegacyWorkspaceRouteCounter(60_000);
+  const tags = { route: "/api/v1/workspaces", method: "GET", status: "200" };
+  expect(counter.add(tags, 1_000)).toBe(1);
+  expect(counter.add(tags, 2_000)).toBeUndefined();
+  // The leading-edge write of 1 failed: the next use writes at once, with it.
+  counter.restore(tags, 1);
+  expect(counter.add(tags, 3_000)).toBe(3);
+  expect(counter.add(tags, 4_000)).toBeUndefined();
+  // A failure for a tag set the counter never tracked is still carried.
+  counter.restore({ route: "/r/untracked", method: "GET", status: "200" }, 2);
+  expect(counter.add({ route: "/r/untracked", method: "GET", status: "200" }, 5_000)).toBe(3);
+});

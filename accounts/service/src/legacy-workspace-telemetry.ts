@@ -149,8 +149,9 @@ export interface LegacyWorkspaceRouteReport {
   readonly appBound: boolean;
   readonly clientFamily: string;
   /**
-   * Registered OAuth client id; only for an OAuth access token. Identifies an
-   * app integration or installation, never a person or a token.
+   * Registered OAuth client id; only for an OAuth or Interface OAuth access
+   * token. Identifies an app integration or installation, never a person or a
+   * token.
    */
   readonly clientId?: string;
 }
@@ -159,7 +160,9 @@ export interface LegacyWorkspaceRouteReport {
  * Where a compatibility Workspace claim was handed out.
  * `personal_access_introspection` is a Workspace-bound personal access token
  * introspected by a resource server; `personal_access_authority` is such a
- * token reading its own authority (`/api/v1/account/tokens/current`).
+ * token reading its own authority (`/api/v1/account/tokens/current`);
+ * `personal_access_bearer` is a PAT bound only to a Workspace (no apps)
+ * authenticating an Accounts request directly, on any route.
  */
 export type LegacyWorkspaceClaimSurface =
   | "id_token"
@@ -168,7 +171,8 @@ export type LegacyWorkspaceClaimSurface =
   | "interface_oauth_userinfo"
   | "interface_oauth_introspection"
   | "personal_access_introspection"
-  | "personal_access_authority";
+  | "personal_access_authority"
+  | "personal_access_bearer";
 
 export interface LegacyWorkspaceClaimReport {
   readonly surface: LegacyWorkspaceClaimSurface;
@@ -440,7 +444,8 @@ export function reportLegacyWorkspaceRoute(
       workspaceBound: report.workspaceBound,
       appBound: report.appBound,
       clientFamily: report.clientFamily,
-      ...(report.credential === "oauth-access-token" &&
+      ...((report.credential === "oauth-access-token" ||
+          report.credential === "interface-oauth-token") &&
           report.clientId !== undefined &&
           SAFE_CLIENT_ID.test(report.clientId)
         ? { clientId: report.clientId }
@@ -546,10 +551,12 @@ const LEGACY_WORKSPACE_METRIC_MAX_BUCKETS = 512;
  * It writes on the leading edge: the first use of a tag set in an isolate is
  * written at once, and later uses inside the interval are carried into that
  * tag set's next write. A tag set therefore can never read 0 while a use
- * happened (the 0-versus-nonzero question the stage 9.3 gate asks); the only
- * loss is the carried tail of an isolate that is evicted before its next
- * write, which can make the total low but never zero. The per-use log line is
- * not coalesced and remains the source for the gate.
+ * happened (the 0-versus-nonzero question the stage 9.3 gate asks). A write
+ * that fails is handed back through `restore`, so the next use of that tag set
+ * retries it at once. The only loss is the carried tail of an isolate that is
+ * evicted before its next write (or a failure with no later use in that
+ * isolate), which can make the total low. The per-use log line is not
+ * coalesced and remains the source for the gate.
  */
 export class LegacyWorkspaceRouteCounter {
   readonly #intervalMs: number;
@@ -565,9 +572,7 @@ export class LegacyWorkspaceRouteCounter {
    * interval and the use was carried.
    */
   add(tags: Readonly<Record<string, string>>, now: number): number | undefined {
-    const key = JSON.stringify(
-      Object.keys(tags).sort().map((name) => [name, tags[name]]),
-    );
+    const key = legacyWorkspaceMetricKey(tags);
     const bucket = this.#buckets.get(key);
     if (bucket && now - bucket.lastWriteAt < this.#intervalMs) {
       bucket.carried += 1;
@@ -579,6 +584,31 @@ export class LegacyWorkspaceRouteCounter {
     }
     return value;
   }
+
+  /**
+   * Returns a value whose write failed: it is carried again and the tag set
+   * is reopened, so the next use writes at once with it instead of waiting
+   * out the interval.
+   */
+  restore(tags: Readonly<Record<string, string>>, value: number): void {
+    const key = legacyWorkspaceMetricKey(tags);
+    const bucket = this.#buckets.get(key);
+    if (bucket) {
+      bucket.carried += value;
+      bucket.lastWriteAt = Number.NEGATIVE_INFINITY;
+    } else if (this.#buckets.size < LEGACY_WORKSPACE_METRIC_MAX_BUCKETS) {
+      this.#buckets.set(key, {
+        lastWriteAt: Number.NEGATIVE_INFINITY,
+        carried: value,
+      });
+    }
+  }
+}
+
+function legacyWorkspaceMetricKey(tags: Readonly<Record<string, string>>): string {
+  return JSON.stringify(
+    Object.keys(tags).sort().map((name) => [name, tags[name]]),
+  );
 }
 
 /** A client id is reported only in a bounded, printable shape. */

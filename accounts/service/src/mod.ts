@@ -643,6 +643,7 @@ export function createAccountsHandler(
     response: Response,
     use: LegacyWorkspaceUse,
     credential: LegacyWorkspaceCredential,
+    clientId?: string,
   ): Response => {
     reportLegacyWorkspaceRoute({
       use,
@@ -653,6 +654,7 @@ export function createAccountsHandler(
       workspaceBound: false,
       appBound: false,
       clientFamily: legacyWorkspaceClientFamily(request.headers),
+      ...(clientId !== undefined ? { clientId } : {}),
     });
     return withLegacyWorkspaceDeprecation(response, use, {
       ...(options.legacyWorkspaceSunset
@@ -818,12 +820,15 @@ export function createAccountsHandler(
     if (options.hostedSessionPolicy && isSharedAccountWorkspaceRoute(url.pathname)) {
       // Counted only after a credential is accepted; a 401 depends on nothing.
       let sharedWorkspaceCredential: LegacyWorkspaceCredential | undefined;
+      let sharedWorkspaceClientId: string | undefined;
       const sharedWorkspaceResponse = (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,diagnostics,directory:options.sharedAccountWorkspaceDirectory,workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
         const token = directoryRequest.headers.get("authorization");
         if (token?.startsWith("Bearer ")) {
           const genuineSession = await store.findAccountSession(token.slice(7));
           if (!genuineSession) {
-            const grant = await resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,clients});
+            const grant = await resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,clients,observeClientId:(clientId) => {
+              sharedWorkspaceClientId = clientId;
+            }});
             if (grant.ok) sharedWorkspaceCredential = "oauth-access-token";
             return grant;
           }
@@ -836,7 +841,7 @@ export function createAccountsHandler(
         ? observeLegacyWorkspaceUse(request, sharedWorkspaceResponse, {
           surface: "shared_workspace",
           route: sharedAccountWorkspaceRouteTemplate(request.method, url.pathname),
-        }, sharedWorkspaceCredential)
+        }, sharedWorkspaceCredential, sharedWorkspaceClientId)
         : sharedWorkspaceResponse;
     }
 

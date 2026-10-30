@@ -1939,6 +1939,8 @@ export async function resolveSharedAccountGrantSession(input: {
   request: Request;
   store: AccountsStore;
   clients: ReadonlyMap<string, OidcClientRegistration>;
+  /** Receives the grant's registered OAuth client (telemetry only). */
+  observeClientId?: (clientId: string) => void;
 }): Promise<{ok:true;session:SharedHostedSessionContext}|{ok:false;response:Response}> {
   const token = bearerToken(input.request.headers.get("authorization"));
   if (!token) return {ok:false,response:bearerChallenge("invalid_token")};
@@ -1950,6 +1952,7 @@ export async function resolveSharedAccountGrantSession(input: {
   };
   const record = await load();
   if (!record?.takosumiSubject) return {ok:false,response:bearerChallenge("invalid_token")};
+  input.observeClientId?.(record.clientId);
   return {ok:true,session:{kind:"shared-hosted-session",canonicalAccountId:record.takosumiSubject,assertCurrentGrant:async()=>{
     const current = await load();
     return current?.subject === record.subject && current.sid === record.sid;

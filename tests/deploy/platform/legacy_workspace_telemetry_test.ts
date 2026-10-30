@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
-import {
+import platformWorker, {
   handlePlatformExtensionRouteRequest,
   handlePlatformInterfaceApiRequest,
   type PlatformExtensionSessionContext,
+  verifyPlatformExtensionBearerToken,
 } from "../../../deploy/platform/worker.ts";
+import { CloudflareD1ObservabilitySink } from "../../../worker/src/d1_observability.ts";
 import { LEGACY_WORKSPACE_DEPRECATION } from "../../../accounts/service/src/legacy-workspace-telemetry.ts";
 
 // TASK-0118 Phase 9: every way a platform-served request selects a Workspace
@@ -223,6 +225,7 @@ test("Interface API: the operator deploy-control token is counted by query or bo
         headers: {
           authorization: "Bearer deploy-control-token",
           "content-type": "application/json",
+          "content-length": String(new TextEncoder().encode(body).byteLength),
         },
         body,
       }),
@@ -252,6 +255,132 @@ test("Interface API: the operator deploy-control token is counted by query or bo
   expect(unselected.result.headers.get("Deprecation")).toBeNull();
   expect(legacyEvents(unselected.lines)).toEqual([]);
   expectNoIds([...query.lines, ...posted.lines], "deploy-control-token");
+});
+
+test("Interface API: a deploy-control body is read for telemetry only within Core's declared bound", async () => {
+  const body = JSON.stringify({ workspaceId: WORKSPACE_ID, name: "telemetry" });
+  for (const contentLength of [undefined, "1048577", "not-a-number"]) {
+    const { result: response, lines } = await captureInfo(() =>
+      handlePlatformInterfaceApiRequest(
+        new Request(`${ORIGIN}/api/v1/interfaces`, {
+          method: "POST",
+          headers: {
+            authorization: "Bearer deploy-control-token",
+            "content-type": "application/json",
+            ...(contentLength !== undefined ? { "content-length": contentLength } : {}),
+          },
+          body,
+        }),
+        interfaceEnv(),
+      )
+    );
+    expect(legacyEvents(lines), String(contentLength)).toEqual([]);
+    expect(response.headers.get("Deprecation")).toBeNull();
+  }
+});
+
+test("Interface API: an OAuth credential's registered client is reported, from introspection", async () => {
+  const context = await verifyPlatformExtensionBearerToken(
+    new Request(`${ORIGIN}/api/v1/interfaces?workspaceId=${WORKSPACE_ID}`, {
+      headers: { authorization: "Bearer takat_introspected" },
+    }),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-platform",
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+    } as never,
+    "takat_introspected",
+    undefined,
+    async () =>
+      Response.json({
+        active: true,
+        token_use: "oauth_access",
+        client_id: "tko_installed_app",
+        scope: "openid capsules:read",
+        sub: SUBJECT,
+        takosumi: { workspace_id: WORKSPACE_ID, role: "viewer" },
+      }),
+  );
+  expect(context).toMatchObject({
+    authKind: "oauth-access-token",
+    oauthClientId: "tko_installed_app",
+  });
+  const { lines } = await captureInfo(() =>
+    handlePlatformInterfaceApiRequest(
+      new Request(`${ORIGIN}/api/v1/interfaces/if_missing`, {
+        headers: { authorization: "Bearer takat_introspected" },
+      }),
+      interfaceEnv(),
+      async () => context,
+    )
+  );
+  expect(legacyEvents(lines)).toEqual([expect.objectContaining({
+    selector: "session",
+    credential: "oauth-access-token",
+    clientId: "tko_installed_app",
+  })]);
+  expectNoIds(lines, "takat_introspected");
+});
+
+test("platform default export: the selector reaches the coalesced counter written through recordWorkerMetric", async () => {
+  const db = new SqliteFakeD1();
+  const env = {
+    TAKOSUMI_CONTROL_DB: db,
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "deploy-control-token",
+  } as never;
+  const waits: Promise<unknown>[] = [];
+  const context = { waitUntil: (task: Promise<unknown>) => waits.push(task) };
+  const counted = async (request: Request) => {
+    const response = await captureInfo(() => platformWorker.fetch(request, env, context as never));
+    await Promise.all(waits.splice(0));
+    return response;
+  };
+  const queryRequest = () =>
+    new Request(`${ORIGIN}/api/v1/interfaces?workspaceId=space_default_export`, {
+      headers: { authorization: "Bearer deploy-control-token" },
+    });
+  const metrics = async () =>
+    (await new CloudflareD1ObservabilitySink({ db }).listMetrics({
+      name: "takosumi_legacy_workspace_route_count",
+    })).map((metric) => ({ value: metric.value, tags: metric.tags }));
+
+  const first = await counted(queryRequest());
+  expect(first.result.headers.get("Deprecation")).toBe(LEGACY_WORKSPACE_DEPRECATION);
+  expect(legacyEvents(first.lines)).toHaveLength(1);
+  expect(await metrics()).toEqual([{
+    value: 1,
+    tags: {
+      environment: "test",
+      runner_profile_id: "opentofu-default",
+      route: "/api/v1/interfaces",
+      selector: "query",
+      method: "GET",
+      status: String(first.result.status),
+    },
+  }]);
+
+  // The same tag set inside the interval is carried, not written again; the
+  // log line is still written for every use.
+  const second = await counted(queryRequest());
+  expect(legacyEvents(second.lines)).toHaveLength(1);
+  expect(await metrics()).toHaveLength(1);
+
+  // Another selector is another tag set and is written at once.
+  const body = JSON.stringify({ workspaceId: "space_default_export", name: "x" });
+  await counted(new Request(`${ORIGIN}/api/v1/interfaces`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer deploy-control-token",
+      "content-type": "application/json",
+      "content-length": String(body.length),
+    },
+    body,
+  }));
+  const written = await metrics();
+  expect(written).toHaveLength(2);
+  expect(written.map((metric) => metric.tags?.selector).sort()).toEqual(["body", "query"]);
+  expect(JSON.stringify(written)).not.toContain("space_default_export");
 });
 
 const telemetryRoute = {

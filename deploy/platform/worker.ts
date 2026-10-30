@@ -987,7 +987,14 @@ export default {
       );
       if (value !== undefined) {
         await schedulePlatformSideEffect(
-          recordPlatformLegacyWorkspaceMetric(env, legacyTags, value),
+          recordPlatformLegacyWorkspaceMetric(env, legacyTags, value).then(
+            (recorded) => {
+              // A failed write is retried by the next use of the tag set.
+              if (!recorded) {
+                platformLegacyWorkspaceRouteCounter.restore(legacyTags, value);
+              }
+            },
+          ),
           context,
         );
       }
@@ -2035,6 +2042,9 @@ function platformControlRequestWorkspace(
   return undefined;
 }
 
+/** Core's own JSON body bound (`core/api/errors.ts`), reused for telemetry. */
+const PLATFORM_DEPLOY_CONTROL_TELEMETRY_BODY_MAX_BYTES = 1_048_576;
+
 /**
  * How a deploy-control request to the Interface API names a Workspace. Core
  * reads `?workspaceId=` and a `workspaceId` body field; the body is read from
@@ -2045,11 +2055,17 @@ async function platformDeployControlWorkspaceSelector(
   request: Request,
 ): Promise<LegacyWorkspaceSelector | undefined> {
   if (new URL(request.url).searchParams.has("workspaceId")) return "query";
+  // Core refuses a body over 1 MiB by its declared length; telemetry reads
+  // only a body Core could accept and whose length is declared.
+  const declaredLength = Number(request.headers.get("content-length") ?? NaN);
   if (
     request.method === "GET" ||
     request.method === "HEAD" ||
     request.body === null ||
-    !(request.headers.get("content-type") ?? "").includes("json")
+    !(request.headers.get("content-type") ?? "").includes("json") ||
+    !Number.isSafeInteger(declaredLength) ||
+    declaredLength < 0 ||
+    declaredLength > PLATFORM_DEPLOY_CONTROL_TELEMETRY_BODY_MAX_BYTES
   ) {
     return undefined;
   }
@@ -2224,12 +2240,14 @@ interface PlatformLegacyWorkspaceObservation {
   credential?: LegacyWorkspaceCredential;
   workspaceBound?: boolean;
   appBound?: boolean;
+  clientId?: string;
 }
 
 interface PlatformLegacyWorkspaceFacts {
   readonly credential: LegacyWorkspaceCredential;
   readonly workspaceBound?: boolean;
   readonly appBound?: boolean;
+  readonly clientId?: string;
 }
 
 function markPlatformLegacyWorkspaceUse(
@@ -2242,9 +2260,10 @@ function markPlatformLegacyWorkspaceUse(
   observation.credential = facts.credential;
   observation.workspaceBound = facts.workspaceBound ?? false;
   observation.appBound = facts.appBound ?? false;
+  if (facts.clientId !== undefined) observation.clientId = facts.clientId;
 }
 
-/** The credential kind and bindings of an authenticated platform session. */
+/** The credential kind, bindings and OAuth client of an authenticated platform session. */
 function platformLegacyWorkspaceSessionFacts(
   session: PlatformExtensionSessionContext,
 ): PlatformLegacyWorkspaceFacts {
@@ -2252,6 +2271,9 @@ function platformLegacyWorkspaceSessionFacts(
     credential: session.authKind ?? "unknown",
     workspaceBound: session.workspaceId !== undefined,
     appBound: session.capsuleId !== undefined,
+    ...(session.oauthClientId !== undefined
+      ? { clientId: session.oauthClientId }
+      : {}),
   };
 }
 
@@ -2287,6 +2309,9 @@ function observePlatformLegacyWorkspaceUse(
     workspaceBound: observation.workspaceBound ?? false,
     appBound: observation.appBound ?? false,
     clientFamily: legacyWorkspaceClientFamily(request.headers),
+    ...(observation.clientId !== undefined
+      ? { clientId: observation.clientId }
+      : {}),
   });
   const sunset = platformLegacyWorkspaceSunset(env);
   const marked = withLegacyWorkspaceDeprecation(
@@ -2323,16 +2348,20 @@ function platformLegacyWorkspaceSunsetOption(
   return sunset ? { legacyWorkspaceSunset: sunset } : {};
 }
 
+/**
+ * Writes one coalesced counter value. Resolves false when the write failed so
+ * the caller can carry the value into the next write; a composition without
+ * Control D1 has no sink and resolves true (there is nothing to retry).
+ */
 async function recordPlatformLegacyWorkspaceMetric(
   env: CloudflareWorkerEnv,
   tags: Record<string, string>,
   value: number,
-): Promise<void> {
-  // The metric sink lives in Control D1; a composition without it has no sink.
-  if (!env.TAKOSUMI_CONTROL_DB) return;
+): Promise<boolean> {
+  if (!env.TAKOSUMI_CONTROL_DB) return true;
   try {
     const service = await cachedDeployControlService(env);
-    await recordWorkerMetric({
+    return await recordWorkerMetric({
       observability: service.context.adapters.observability,
       env,
       name: LEGACY_WORKSPACE_ROUTE_METRIC,
@@ -2342,6 +2371,7 @@ async function recordPlatformLegacyWorkspaceMetric(
     });
   } catch {
     // Metrics are best-effort and must never change a response.
+    return false;
   }
 }
 
@@ -3160,6 +3190,11 @@ export interface PlatformExtensionSessionContext {
   readonly interfaceBindingId?: string;
   readonly interfaceResolvedRevision?: number;
   readonly scopes?: readonly string[];
+  /**
+   * Registered OAuth client of an OAuth or Interface OAuth token, from
+   * introspection. Telemetry only (TASK-0118 Phase 9); never forwarded.
+   */
+  readonly oauthClientId?: string;
 }
 
 export type PlatformExtensionSessionVerifier = (
@@ -4054,7 +4089,7 @@ async function introspectPlatformExtensionToken(
       return { authenticated: false };
     }
     if (tokenUse === "interface_oauth") {
-      return platformExtensionInterfaceOAuthSession(
+      const interfaceSession = platformExtensionInterfaceOAuthSession(
         request,
         env,
         record,
@@ -4062,6 +4097,9 @@ async function introspectPlatformExtensionToken(
         scopes,
         route,
       );
+      return interfaceSession.authenticated
+        ? { ...interfaceSession, ...platformExtensionOAuthClientId(record) }
+        : interfaceSession;
     }
     const takosumi = platformExtensionTakosumiMetadata(record);
     return {
@@ -4073,10 +4111,23 @@ async function introspectPlatformExtensionToken(
       subject,
       ...takosumi,
       scopes,
+      ...(tokenUse === "oauth_access"
+        ? platformExtensionOAuthClientId(record)
+        : {}),
     };
   } catch {
     return { authenticated: false };
   }
+}
+
+/** The introspected OAuth client id, only in a bounded printable shape. */
+function platformExtensionOAuthClientId(
+  record: Record<string, unknown>,
+): { readonly oauthClientId?: string } {
+  const value = valueString(record.client_id);
+  return value && /^[A-Za-z0-9._:-]{1,128}$/u.test(value)
+    ? { oauthClientId: value }
+    : {};
 }
 
 function safePlatformExtensionSubject(
