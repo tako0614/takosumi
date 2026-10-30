@@ -11,6 +11,11 @@ import {
   type OperatorControlMcpAppFacts,
   type OperatorControlMcpAuthority,
 } from "../../../deploy/operator-control-mcp.ts";
+import { createOperatorControlMcpAuthority } from "../../../deploy/platform/operator-control-mcp-authority.ts";
+import { deterministicInitialCapsuleId } from "../../../core/domains/install-plans/source-reservation.ts";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
+import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
+import type { ControlPlaneOperations } from "../../../accounts/service/src/control-operations.ts";
 import {
   handlePlatformOperatorControlMcpRequest,
   type CloudflareWorkerEnv,
@@ -86,6 +91,10 @@ function authorityFor(
     installPlan: async () => undefined,
     run: async () => undefined,
     installNamespaceId: async () => "workspace_a",
+    appPartitions: async (capsuleIds) =>
+      new Map(capsuleIds.flatMap((id) => apps[id] ? [[id, apps[id]!.workspaceId] as const] : [])),
+    recordedOwnership: async (capsuleIds) =>
+      new Set(capsuleIds.filter((id) => apps[id]?.ownerAccountId !== undefined)),
     ...rest,
   };
 }
@@ -210,7 +219,10 @@ test("Git install-plan tools forward only the bounded public API contract and pr
     dispatchPublicControl: async (controlRequest) => {
       dispatched.push(controlRequest);
       expect(controlRequest.headers.get("authorization")).toBeNull();
-      return Response.json({ nextAction: "reconcile" }, { status: 201 });
+      return Response.json({
+        installPlan: { id: "gip_12345678", workspaceId: "workspace_a" },
+        nextAction: "reconcile",
+      }, { status: 201 });
     },
   });
 
@@ -295,7 +307,9 @@ test("Git install-plan tools forward only the bounded public API contract and pr
     },
   );
   expect((await reconciled?.json()).result.isError).toBe(false);
-  expect(installPlanLookups).toEqual(["gip_12345678"]);
+  // The create re-reads the returned plan's internal namespace, and the
+  // reconcile fences the plan.
+  expect(installPlanLookups).toEqual(["gip_12345678", "gip_12345678"]);
   expect(new URL(dispatched[1]!.url).pathname).toBe(
     "/api/v1/install-plans/gip_12345678/reconcile",
   );
@@ -940,4 +954,229 @@ test("OAuth resource proof is exact, Capsule-owned, and disabled by default", ()
       resource: `${ORIGIN}/mcp/other`,
     }),
   ).toBe(false);
+});
+
+test("the app list trusts the handler's live owner role and reads partitions in one batch, only for a Workspace-bound token", async () => {
+  const listing = {
+    apps: [
+      { capsuleId: "capsule_target", role: "owner" },
+      { capsuleId: "capsule_elsewhere", role: "owner" },
+      { capsuleId: "capsule_shared_with_me", role: "member" },
+    ],
+  };
+  for (const workspaceId of ["workspace_a", undefined] as const) {
+    const batches: (readonly string[])[] = [];
+    let perAppReads = 0;
+    const base = authorityFor({
+      apps: { capsule_elsewhere: { ownerAccountId: "principal_a", workspaceId: "workspace_b" } },
+    });
+    const response = await handlePlatformOperatorControlMcpRequest(
+      request("tools/call", { name: "takosumi_capsules_list", arguments: {} }),
+      env(),
+      {
+        verifySession: async () => interfaceSession(workspaceId ? {} : { workspaceId: undefined }),
+        createAuthority: async () => {
+          const { workspaceId: _w, ...rest } = base;
+          return {
+            ...rest,
+            ...(workspaceId ? { workspaceId } : {}),
+            app: async (capsuleId) => {
+              if (capsuleId !== "capsule_adapter") perAppReads += 1;
+              return await base.app(capsuleId);
+            },
+            appPartitions: async (capsuleIds) => {
+              batches.push(capsuleIds);
+              return await base.appPartitions(capsuleIds);
+            },
+            dispatchPublicControl: async () => Response.json(listing),
+          };
+        },
+      },
+    );
+    const ids = ((await response?.json()).result.structuredContent.body.apps as { capsuleId: string }[])
+      .map((app) => app.capsuleId);
+    expect(perAppReads).toBe(0);
+    if (workspaceId) {
+      expect(batches).toEqual([["capsule_target", "capsule_elsewhere"]]);
+      expect(ids).toEqual(["capsule_target"]);
+    } else {
+      expect(batches).toEqual([]);
+      expect(ids).toEqual(["capsule_target", "capsule_elsewhere"]);
+    }
+  }
+});
+
+test("an idempotent replay from another of the owner's namespaces is not returned to a Workspace-bound token", async () => {
+  const create = request("tools/call", {
+    name: "takosumi_install_plan_create",
+    arguments: {
+      idempotencyKey: "agent-run-1",
+      source: { name: "source", url: "https://example.com/repo.git" },
+      capsule: { name: "capsule", environment: "production" },
+    },
+  });
+  // The namespace is read from the internal record by id, never from the
+  // public response (which stops carrying a Workspace in 9.4).
+  const internal = (workspaceId: string) => async (installPlanId: string) =>
+    installPlanId === "gip_replayed"
+      ? { workspaceId, createdBy: "principal_a", actorSubject: "principal_a" }
+      : undefined;
+  for (const [publicPlan, recordWorkspace, expected] of [
+    // Outside the restriction, whatever the public response says.
+    [{ id: "gip_replayed", workspaceId: "workspace_a" }, "workspace_personal_old", 403],
+    [{ id: "gip_replayed" }, "workspace_personal_old", 403],
+    // No id or no internal record: refused.
+    [{ workspaceId: "workspace_a" }, "workspace_a", 403],
+    [{ id: "gip_unknown", workspaceId: "workspace_a" }, "workspace_a", 403],
+    // Inside the restriction, even without a public Workspace field.
+    [{ id: "gip_replayed" }, "workspace_a", 200],
+  ] as const) {
+    const response = await handlePlatformOperatorControlMcpRequest(create.clone(), env(), {
+      verifySession: async () => interfaceSession(),
+      createAuthority: async () => authorityFor({
+        installPlan: internal(recordWorkspace),
+        dispatchPublicControl: async () => Response.json({ installPlan: publicPlan }, { status: 200 }),
+      }),
+    });
+    const result = (await response?.json()).result;
+    expect(result.structuredContent.status).toBe(expected);
+    if (expected === 403) expect(JSON.stringify(result)).not.toContain("gip_replayed");
+  }
+  // Without a Workspace restriction the replay is returned as is.
+  const unbound = await handlePlatformOperatorControlMcpRequest(create.clone(), env(), {
+    verifySession: async () => interfaceSession({ workspaceId: undefined }),
+    createAuthority: async () => {
+      const { workspaceId: _w, ...rest } = authorityFor({
+        installPlan: internal("workspace_personal_old"),
+        dispatchPublicControl: async () =>
+          Response.json({ installPlan: { id: "gip_replayed" } }, { status: 200 }),
+      });
+      return rest;
+    },
+  });
+  expect((await unbound?.json()).result.structuredContent).toEqual({
+    status: 200,
+    body: { installPlan: { id: "gip_replayed" } },
+  });
+});
+
+test("the app list leaves out owner-role apps without an ownership record, which the tools never act on", async () => {
+  for (const session of [interfaceSession(), interfaceSession({ workspaceId: undefined })]) {
+    const reads: (readonly string[])[] = [];
+    const response = await handlePlatformOperatorControlMcpRequest(
+      request("tools/call", { name: "takosumi_capsules_list", arguments: {} }),
+      env(),
+      {
+        verifySession: async () => session,
+        createAuthority: async () => {
+          const base = authorityFor({
+            apps: { capsule_unrecorded: { workspaceId: "workspace_a" } },
+            dispatchPublicControl: async () => Response.json({
+              apps: [
+                { capsuleId: "capsule_target", role: "owner" },
+                // The rollout fallback reports a Workspace owner as owner.
+                { capsuleId: "capsule_unrecorded", role: "owner" },
+              ],
+            }),
+          });
+          const authority = {
+            ...base,
+            recordedOwnership: async (capsuleIds: readonly string[]) => {
+              reads.push(capsuleIds);
+              return await base.recordedOwnership(capsuleIds);
+            },
+          };
+          if (session.workspaceId !== undefined) return authority;
+          const { workspaceId: _w, ...rest } = authority;
+          return rest;
+        },
+      },
+    );
+    const ids = ((await response?.json()).result.structuredContent.body.apps as { capsuleId: string }[])
+      .map((app) => app.capsuleId);
+    expect(ids).toEqual(["capsule_target"]);
+    expect(reads).toEqual([["capsule_target", "capsule_unrecorded"]]);
+  }
+  // The same app is refused by the per-app tools.
+  let dispatched = false;
+  const plan = await handlePlatformOperatorControlMcpRequest(
+    request("tools/call", { name: "takosumi_capsule_plan", arguments: { capsuleId: "capsule_unrecorded" } }),
+    env(),
+    {
+      verifySession: async () => interfaceSession(),
+      createAuthority: async () => authorityFor({
+        apps: { capsule_unrecorded: { workspaceId: "workspace_a" } },
+        dispatchPublicControl: async () => {
+          dispatched = true;
+          return Response.json({});
+        },
+      }),
+    },
+  );
+  expect((await plan?.json()).result.structuredContent.status).toBe(403);
+  expect(dispatched).toBe(false);
+});
+
+test("an install plan whose Capsule was committed before the plan recorded it is fenced by that app", async () => {
+  const planId = "gip_lost_ack";
+  const committed = deterministicInitialCapsuleId(planId);
+  const operationsFor = (capsuleOwner: string | undefined) => ({
+    gitInstallPlans: {
+      get: async (id: string) => id === planId
+        ? { id, workspaceId: "workspace_a", createdBy: "principal_a", actorSubject: "principal_a" }
+        : undefined,
+    },
+    capsules: {
+      getCapsule: async (capsuleId: string) => {
+        if (capsuleId === committed && capsuleOwner !== undefined) {
+          return { id: capsuleId, workspaceId: "workspace_a" };
+        }
+        if (capsuleId === "capsule_adapter") return { id: capsuleId, workspaceId: "workspace_a" };
+        throw new OpenTofuControllerError("not_found", "Capsule not found");
+      },
+      getCapsulesByIds: async () => [],
+    },
+    appOwnership: {
+      getOwnership: async (capsuleId: string) =>
+        capsuleId === "capsule_adapter"
+          ? { capsuleId, ownerAccountId: "principal_a" }
+          : capsuleId === committed && capsuleOwner
+            ? { capsuleId, ownerAccountId: capsuleOwner }
+            : undefined,
+    },
+  }) as unknown as ControlPlaneOperations;
+  const authorityWith = (capsuleOwner: string | undefined) =>
+    createOperatorControlMcpAuthority({
+      operations: operationsFor(capsuleOwner),
+      store: new InMemoryAccountsStore(),
+      session: { subject: "principal_a", capsuleId: "capsule_adapter", workspaceId: "workspace_a" },
+      requestUrl: RESOURCE,
+    });
+  expect((await authorityWith(undefined).installPlan(planId))?.capsuleId).toBeUndefined();
+  expect((await authorityWith("principal_a").installPlan(planId))?.capsuleId).toBe(committed);
+
+  for (const [capsuleOwner, expected] of [
+    [undefined, 200], // no app yet: the creator's own install
+    ["principal_a", 200], // committed app of the owner
+    ["principal_b", 403], // committed app now someone else's: the app decides
+  ] as const) {
+    let dispatched = false;
+    const base = authorityWith(capsuleOwner);
+    const response = await handlePlatformOperatorControlMcpRequest(
+      request("tools/call", { name: "takosumi_install_plan_get", arguments: { installPlanId: planId } }),
+      env(),
+      {
+        verifySession: async () => interfaceSession(),
+        createAuthority: async () => ({
+          ...base,
+          dispatchPublicControl: async () => {
+            dispatched = true;
+            return Response.json({ installPlan: { id: planId } });
+          },
+        }),
+      },
+    );
+    expect((await response?.json()).result.structuredContent.status).toBe(expected);
+    expect(dispatched).toBe(expected === 200);
+  }
 });

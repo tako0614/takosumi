@@ -1,8 +1,9 @@
 /**
- * RunGroup view (`/run-groups/:id`) — a grouped update: multiple Runs ordered
- * across a Workspace update or drift check.
- * Shows the group status + ordered member list and offers a one-shot
- * "approve all" (`POST /api/v1/run-groups/:id/approve`).
+ * RunGroup view (`/run-groups/:id`) — a historical grouped update: multiple
+ * Runs ordered across a Workspace update or drift check.
+ * Shows the group status + ordered member list. Grouped approval is retired
+ * (TASK-0118 P9.1-g: `POST /api/v1/run-groups/:id/approve` answers 410), so the
+ * view only says so; each member is reviewed and approved from its own Run.
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
@@ -21,22 +22,15 @@ import { useParams } from "@solidjs/router";
 import { Layers } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import {
-  approveRunGroup,
   getRunGroup,
   type Run,
   type RunGroupWithRuns,
 } from "../../lib/control-api.ts";
-import { createAction } from "../account/lib/action.tsx";
-import {
-  clearCapsuleListCache,
-  listCapsulesCached,
-} from "../../lib/capsule-list.ts";
-import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
+import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import { runCapsuleId } from "../../lib/run-approval.ts";
 import { runGroupFailures } from "../../lib/run-group-failures.ts";
 import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
 import { isTerminalRunStatus } from "../../lib/run-logs.ts";
-import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import Button from "../../components/ui/Button.tsx";
@@ -68,16 +62,6 @@ function Inner() {
     const latest = group.latest;
     if (latest) setSnapshot(latest);
   });
-  const clearLauncherCaches = (workspaceId: string | undefined): void => {
-    if (!workspaceId) return;
-    clearCapsuleListCache(workspaceId);
-    clearInstallConfigListCache(workspaceId);
-  };
-
-  const anyWaiting = createMemo(() =>
-    (snapshot()?.runs ?? []).some((r) => r.status === "waiting_approval"),
-  );
-
   // A grouped update executes over minutes — a single static read would never
   // show members progressing to デプロイ済み. Mirror RunView's fallback poll:
   // refetch every ~5s while any member run is non-terminal, pause on a hidden
@@ -160,50 +144,6 @@ function Inner() {
     } finally {
       setManualRefreshing(false);
     }
-  };
-
-  const approveAll = createAction(async () => {
-    await approveRunGroup(groupId());
-    await refetch();
-    // The grouped apply changes multiple Capsules — mirror RunView and drop
-    // installed-Capsule projections. The home reads runtime Interfaces through
-    // their own authoritative API when it mounts.
-    clearLauncherCaches(snapshot()?.runGroup.workspaceId);
-  });
-
-  // まとめて承認 executes every waiting member at once — unlike the single-run
-  // screen it had no confirmation. Enumerate what will run and gate behind an
-  // explicit (danger-styled when any member removes resources) confirm.
-  const { confirm } = useConfirmDialog();
-  // Fail closed, matching the single-run gate: a member that DELETES resources
-  // counts even when its run type is an ordinary update, and a member whose
-  // change counts are unknown counts too. Approving N at once must never be a
-  // weaker gate than approving one.
-  const anyDestroyMember = createMemo(() =>
-    (snapshot()?.runs ?? []).some(
-      (r) =>
-        r.type === "destroy_plan" ||
-        r.type === "destroy_apply" ||
-        (r.summary?.destroy ?? 0) > 0 ||
-        (r.status === "waiting_approval" && r.summary === undefined),
-    ),
-  );
-  const confirmApproveAll = async (): Promise<void> => {
-    const waiting = (snapshot()?.runs ?? []).filter(
-      (r) => r.status === "waiting_approval",
-    ).length;
-    const danger = anyDestroyMember();
-    const ok = await confirm({
-      title: t("runGroup.approveAllConfirm.title"),
-      message: danger
-        ? t("runGroup.approveAllConfirm.messageDanger", { n: waiting })
-        : t("runGroup.approveAllConfirm.message", { n: waiting }),
-      confirmText: t("runGroup.approveAll"),
-      cancelText: t("common.cancel"),
-      danger,
-    });
-    if (!ok) return;
-    await approveAll.run();
   };
 
   return (
@@ -289,21 +229,10 @@ function Inner() {
                         </Show>
                       </span>
                     }
-                    actions={
-                      <Show when={anyWaiting()}>
-                        <Button
-                          variant="primary"
-                          type="button"
-                          busy={approveAll.busy()}
-                          onClick={() => void confirmApproveAll()}
-                        >
-                          {approveAll.busy()
-                            ? t("run.approving")
-                            : t("runGroup.approveAll")}
-                        </Button>
-                      </Show>
-                    }
                   />
+                  {/* Grouped approval is retired: no button that can only
+                      fail. Each member is approved from its own change. */}
+                  <p class="wa-notice">{t("runGroup.approvalRetired")}</p>
                   <details class="wb-disclosure">
                     <summary>{t("run.details.title")}</summary>
                     <div class="wb-stack-sm">
@@ -325,13 +254,6 @@ function Inner() {
                       </Show>
                     </div>
                   </details>
-                  <Show when={approveAll.error()}>
-                    {(m) => (
-                      <p class="wa-error" role="alert">
-                        {m()}
-                      </p>
-                    )}
-                  </Show>
                 </Card>
 
                 <Card>

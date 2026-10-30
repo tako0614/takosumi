@@ -8,6 +8,17 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- **Platform extensions are decided by account and app (TASK-0118 P9.1-e):**
+  an extension route may declare `appContext` and receive the caller's live
+  app role (`x-takosumi-platform-app-role`), and sessions and unrestricted
+  PATs carry `x-takosumi-platform-account-id`. **Behavior change for
+  self-hosts:** a browser session or an unbound PAT may now name a Workspace
+  on extension routes (`?workspaceId=` with `workspaceContext`) and on
+  `/api/v1/interfaces?workspaceId=` only when its account owns that
+  Workspace. Non-owner Workspace members, admins included, lose those routes;
+  use the app's own routes (`capsuleId`) instead. Workspace-bound PATs and
+  OAuth tokens and shared-account (Hosted) sessions keep their previous
+  decision.
 - **Devices can register for the instance's own notifications:**
   `GET/POST/DELETE /api/v1/account/notification-pushers` stores Takosumi Mobile
   `webpush` pushers (MSC4174 field layout) in the Accounts store, one per

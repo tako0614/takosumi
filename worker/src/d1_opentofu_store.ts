@@ -2870,6 +2870,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   #predeployedSchemaVerified: boolean;
   #requestMaintenanceScope?: D1RequestMaintenanceScope;
 
+  /**
+   * `bootstrap` creates and migrates the schema on first access;
+   * `predeployed` only verifies it. Operator tools that must stay read-only
+   * refuse a bootstrap store.
+   */
+  get schemaMode(): D1OpenTofuControlSchemaMode {
+    return this.#schemaMode;
+  }
+
   constructor(
     private readonly db: D1Database,
     options: CloudflareD1OpenTofuControlStoreOptions = {},

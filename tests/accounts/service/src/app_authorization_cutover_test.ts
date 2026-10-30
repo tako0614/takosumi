@@ -427,11 +427,12 @@ describe("resources addressed by their own id resolve their app first", () => {
     for (const subject of [APP_OWNER, APP_MEMBER, DUAL]) {
       expect((await h.call("GET", "/run-groups/rg_app", h.headers.session(subject))).status, subject).toBe(200);
     }
-    // Workspace roles grant nothing on an owned app.
-    expect(await h.call("GET", "/run-groups/rg_app", h.headers.session(WORKSPACE_OWNER)))
-      .toMatchObject({ status: 403, code: "app_access_denied" });
-    expect(await h.call("GET", "/run-groups/rg_app", h.headers.session(WORKSPACE_ADMIN)))
-      .toMatchObject({ status: 403, code: "app_access_denied" });
+    // Workspace roles grant nothing on an owned app, and a non-viewer gets the
+    // same 404 as a missing group (existence is not revealed).
+    for (const subject of [WORKSPACE_OWNER, WORKSPACE_ADMIN, RECIPIENT]) {
+      expect(await h.call("GET", "/run-groups/rg_app", h.headers.session(subject)), subject)
+        .toMatchObject({ status: 404, code: "not_found" });
+    }
     // Fail closed: no members, a member without an app, or a missing group.
     for (const id of ["rg_empty", "rg_appless", "rg_mixed", "rg_missing"]) {
       expect(await h.call("GET", `/run-groups/${id}`, h.headers.session(APP_OWNER)), id)
@@ -447,6 +448,22 @@ describe("resources addressed by their own id resolve their app first", () => {
       .toMatchObject({ status: 405 });
   }, 180_000);
 });
+
+test("a historical RunGroup over an app without an ownership row never falls back to the Workspace", async () => {
+  const h = await fixture({ owned: false });
+  const reasons: AppAuthorizationFallbackReason[] = [];
+  const diagnostics: RequestPhaseObserver = {
+    async measure<T>(_phase: unknown, operation: () => T | Promise<T>) { return await operation(); },
+    observeAppAuthorizationFallback(input) { reasons.push(input.reason); },
+  };
+  for (const subject of [WORKSPACE_OWNER, WORKSPACE_ADMIN, APP_OWNER, RECIPIENT]) {
+    expect(await h.call("GET", "/run-groups/rg_app", h.headers.session(subject), undefined, {}, diagnostics), subject)
+      .toMatchObject({ status: 404, code: "not_found" });
+  }
+  // Nothing fell back to the Workspace, so no fallback is reported (the
+  // app_authorization_workspace_fallback gate is not bumped by this read).
+  expect(reasons).toEqual([]);
+}, 180_000);
 
 describe("rollout fallback: a Capsule without an ownership row keeps the Workspace decision", () => {
   test("Workspace roles decide and the fallback is observable without ids", async () => {

@@ -37,8 +37,8 @@ import {
 } from "../deploy-control/errors.ts";
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import {
+  effectiveProviderPolicy,
   evaluateProviderConnectionCredentialPolicy,
-  mergePolicyConfigs,
 } from "../deploy-control/provider_policy.ts";
 
 /** One Provider Connection binding's resolution outcome. */
@@ -388,7 +388,7 @@ export class ConnectionsService {
       );
     }
     const workspace = await this.#store.getWorkspace(input.capsule.workspaceId);
-    const policy = mergePolicyConfigs(
+    const policy = effectiveProviderPolicy(
       workspace?.policy,
       input.installConfigPolicy,
     );
@@ -700,7 +700,7 @@ export class ConnectionsService {
       this.#store.getWorkspace(capsule.workspaceId),
       this.#store.getInstallConfig(capsule.installConfigId),
     ]);
-    return mergePolicyConfigs(workspace?.policy, installConfig?.policy);
+    return effectiveProviderPolicy(workspace?.policy, installConfig?.policy);
   }
 }
 

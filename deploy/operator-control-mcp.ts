@@ -164,6 +164,11 @@ export interface OperatorControlMcpAppFacts {
 }
 
 export interface OperatorControlMcpInstallPlanFacts {
+  /**
+   * The plan's app: the recorded Capsule, or the plan's deterministic initial
+   * Capsule when it was committed before the plan recorded it (a lost
+   * acknowledgement), exactly as the public handler resolves it.
+   */
   readonly capsuleId?: string;
   readonly workspaceId: string;
   readonly createdBy: string;
@@ -201,7 +206,24 @@ export interface OperatorControlMcpAuthority {
    * install inside its Workspace restriction.
    */
   readonly installNamespaceId: () => Promise<string | undefined>;
+  /**
+   * The retained internal partition of each listed app, in one batched read.
+   * Read only for a Workspace-bound token's listing restriction.
+   */
+  readonly appPartitions: (
+    capsuleIds: readonly string[],
+  ) => Promise<ReadonlyMap<string, string>>;
+  /**
+   * Which listed apps have an ownership record, in one batched read. An app
+   * without one has no owner the MCP can act for, so it is not listed either.
+   */
+  readonly recordedOwnership: (
+    capsuleIds: readonly string[],
+  ) => Promise<ReadonlySet<string>>;
 }
+
+/** A narrowed response the MCP refuses to return (an access decision, not a failure). */
+class OperatorControlMcpRefusal extends Error {}
 
 type JsonRpcId = string | number | null;
 
@@ -554,8 +576,14 @@ async function callTool(
   if (call.narrow && response.ok) {
     try {
       body = await call.narrow(body);
-    } catch {
-      // Never return an unnarrowed listing.
+    } catch (error) {
+      if (error instanceof OperatorControlMcpRefusal) {
+        return toolResult(request.id, 403, {
+          error: "access_denied",
+          error_description: error.message,
+        });
+      }
+      // Never return an unnarrowed response.
       return toolResult(request.id, 503, {
         error: "control_unavailable",
         error_description: "Takosumi control operation failed",
@@ -612,6 +640,7 @@ function parsedToolCall(
         request: jsonRequest(`${origin}/api/v1/install-plans`, body, {
           "idempotency-key": idempotencyKey,
         }),
+        narrow: (response) => installPlanInsideRestriction(response, authority),
       };
     };
   }
@@ -913,26 +942,59 @@ async function requireInstallNamespace(
   }
 }
 
-/** Keeps only the apps the MCP's owner owns, inside the token's Workspace. */
+/**
+ * A replayed key returns the subject's plan from whichever of its own
+ * namespaces holds it, which may be outside a Workspace-bound token's
+ * restriction; the MCP does not return such a plan. The namespace is re-read
+ * from the internal record by the plan's id, never from the public response
+ * (which stops carrying a Workspace in Phase 9.4).
+ */
+async function installPlanInsideRestriction(
+  body: unknown,
+  authority: OperatorControlMcpAuthority,
+): Promise<unknown> {
+  if (authority.workspaceId === undefined) return body;
+  const planId = textValue(record(record(body).installPlan).id);
+  const plan = planId ? await authority.installPlan(planId) : undefined;
+  if (!plan || plan.workspaceId !== authority.workspaceId) {
+    throw new OperatorControlMcpRefusal("the install is outside the MCP token's Workspace");
+  }
+  return body;
+}
+
+/**
+ * Keeps only the apps the MCP's owner owns, inside the token's Workspace, so
+ * the listing and the per-app tools agree. The listing comes from the
+ * in-process public handler, whose `role` is the subject's live per-app role;
+ * that role also covers a Workspace owner's apps without an ownership record
+ * (the rollout fallback), which the tools never act on, so the recorded ones
+ * are kept with one batched read. Only a Workspace-bound token also needs one
+ * batched partition read.
+ */
 async function ownAppsOnly(
   body: unknown,
   authority: OperatorControlMcpAuthority,
 ): Promise<unknown> {
   const page = record(body);
   if (!Array.isArray(page.apps)) throw new TypeError("unexpected app listing");
-  const kept = await Promise.all(page.apps.map(async (entry: unknown) => {
+  const owned = page.apps.filter((entry: unknown) => {
     const app = record(entry);
-    const capsuleId = textValue(app.capsuleId);
-    if (!capsuleId || app.role !== "owner") return undefined;
-    try {
-      await requireAppTarget(authority, capsuleId);
-      return entry;
-    } catch {
-      return undefined;
-    }
-  }));
+    return textValue(app.capsuleId) !== undefined && app.role === "owner";
+  });
+  const ids = owned.map((entry: unknown) => textValue(record(entry).capsuleId)!);
+  const workspaceId = authority.workspaceId;
+  const [recorded, partitions] = await Promise.all([
+    ids.length > 0 ? authority.recordedOwnership(ids) : new Set<string>(),
+    workspaceId === undefined || ids.length === 0
+      ? undefined
+      : authority.appPartitions(ids),
+  ]);
   return {
-    apps: kept.filter((entry) => entry !== undefined),
+    apps: owned.filter((entry: unknown) => {
+      const capsuleId = textValue(record(entry).capsuleId)!;
+      return recorded.has(capsuleId) &&
+        (workspaceId === undefined || partitions?.get(capsuleId) === workspaceId);
+    }),
     ...(typeof page.nextCursor === "string" ? { nextCursor: page.nextCursor } : {}),
   };
 }

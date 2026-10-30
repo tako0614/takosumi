@@ -85,3 +85,26 @@ runtime 利用側はInterface APIとReady InterfaceBindingだけを読みます�
 
 移行後にInterfaceが不要になった場合は通常の Interface 廃止手順を使います。旧Output
 conventionを再有効化するrollbackはありません。
+
+## 5. 書き込み権限の記録の補完 (一度だけ)
+
+アプリの所有に移ってから (TASK-0118 9.1)、Capsule所有のInterfaceには書き込んだときの権限
+(`metadata.createdUnder`) を記録します。この記録を始める前にこの移行が作ったInterface
+(unknown third-partyの確認で作ったもの) には記録が無いため、アプリ自身の記録として扱われず、
+所有者の `needsReview` に出て、アプリのWorkspaceの無いトークンの根拠にもなりません。
+operatorは次の補完を一度だけ実行し、それらに `createdUnder: "operator"` を記録します。
+known first-partyの確認で作ったInterfaceはmaterializeされた記録なので対象外です。
+
+```bash
+bun scripts/backfill-legacy-output-interface-provenance.ts --adapter=/absolute/operator/legacy-output-provenance.ts --dry-run
+bun scripts/backfill-legacy-output-interface-provenance.ts --adapter=/absolute/operator/legacy-output-provenance.ts --apply --plan-digest=sha256:<reviewed-digest>
+```
+
+adapterは `openLegacyOutputInterfaceProvenance()` で、Control store (`listCapsules`、
+`listActivityEventsForTargetPage`) とInterface store (memory・Postgres・D1の `get`・
+`compareAndSet`) を返します。対象は、Capsuleの `interface.output_convention_migrated`
+の記録の `interfaceIds` に載り、今もそのCapsuleが同じ区画で所有し、記録も
+`materializedFrom` も無く、specのdigestが記録の `interfaceSpecDigests` にあるInterface
+だけです。移行後にspecが変わったものは、所有者の確認に残します。dry-runは読み取り
+だけで、applyはdigestが一致するときだけ、確認した行そのものを compare-and-set で書き
+ます。二度目の実行では対象がありません。書き換えるのは `metadata.createdUnder` だけです。

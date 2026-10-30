@@ -1184,13 +1184,9 @@ export const ja = {
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "アプリの更新",
-  "runGroup.subtitle": "複数のアプリの変更をまとめて確認・承認できます。",
-  "runGroup.approveAll": "まとめて承認",
-  "runGroup.approveAllConfirm.title": "まとめて承認しますか？",
-  "runGroup.approveAllConfirm.message":
-    "{n} 件のアプリの変更をまとめて実行します。",
-  "runGroup.approveAllConfirm.messageDanger":
-    "{n} 件のアプリの変更をまとめて実行します。削除を含む破壊的な変更があり、元に戻せません。",
+  "runGroup.subtitle": "複数のアプリをまとめて更新した、以前の記録です。",
+  "runGroup.approvalRetired":
+    "まとめての承認は終了しました。下の各アプリの変更内容を開いて、1 つずつ確認・承認してください。",
   "runGroup.members": "この更新に含まれるアプリ",
   "runGroup.membersEmpty": "この更新に含まれるアプリはありません。",
   "runGroup.openService": "アプリを開く",

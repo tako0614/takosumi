@@ -7,6 +7,7 @@
 // the extension implementation.
 
 import type { WorkspaceRole } from "takosumi-contract/workspaces";
+import type { AppRole } from "takosumi-contract/app-access";
 import {
   canonicalProviderSource,
   isProviderEnvName,
@@ -67,6 +68,14 @@ export interface PlatformExtensionRoute {
    * the parameter is absent.
    */
   readonly workspaceContext?: "query-required" | "query-optional";
+  /**
+   * Binds a caller-supplied `capsuleId` query parameter to the caller's live
+   * role on that app (owner or member) before dispatch (TASK-0118 Phase 9).
+   * The handler receives the app and the role; a credential bound to one app
+   * may name only that app. Optional mode dispatches without an app when the
+   * parameter is absent.
+   */
+  readonly appContext?: "query-required" | "query-optional";
   /**
    * Exact audience and scope set accepted for generic Run credentials. Both
    * must equal the installed Credential Recipe descriptor at verification.
@@ -153,8 +162,19 @@ export type PlatformExtensionAuthenticatedAuthKind =
 export interface PlatformExtensionAuthenticatedContext {
   readonly authKind: PlatformExtensionAuthenticatedAuthKind;
   readonly subject: string;
+  /**
+   * The Takosumi account that authenticated (a browser session or a personal
+   * access token); absent for app, Interface, Run and operator credentials.
+   */
+  readonly accountId?: string;
+  /**
+   * Compatibility only (TASK-0118 Phase 9): the Workspace a Hosted route
+   * selects. Present until billing and shared accounts move to accounts (9B).
+   */
   readonly workspaceId?: string;
   readonly workspaceRole?: WorkspaceRole;
+  /** The caller's live role on `capsuleId`, verified for an `appContext` route. */
+  readonly appRole?: AppRole;
   readonly scopes?: readonly string[];
   readonly capsuleId?: string;
   readonly runId?: string;
@@ -353,6 +373,12 @@ function platformExtensionRouteFromJson(
       `${label}.workspaceContext requires platform authentication`,
     );
   }
+  const appContext = platformExtensionAppContext(record.appContext, label);
+  if (appContext && authMode === "handler") {
+    throw new TypeError(
+      `${label}.appContext requires platform authentication`,
+    );
+  }
   const requiredScopes = optionalStringArray(
     record.requiredScopes,
     label,
@@ -418,6 +444,7 @@ function platformExtensionRouteFromJson(
     ...(authDelivery ? { authDelivery } : {}),
     ...(ownsPathSubtree !== undefined ? { ownsPathSubtree } : {}),
     ...(workspaceContext ? { workspaceContext } : {}),
+    ...(appContext ? { appContext } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(selfServicePatScopes ? { selfServicePatScopes } : {}),
     ...(requestScopeRules ? { requestScopeRules } : {}),
@@ -690,6 +717,17 @@ function platformExtensionWorkspaceContext(
   );
 }
 
+function platformExtensionAppContext(
+  value: unknown,
+  label: string,
+): "query-required" | "query-optional" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "query-required" || value === "query-optional") return value;
+  throw new TypeError(
+    `${label}.appContext must be query-required or query-optional`,
+  );
+}
+
 function mergePlatformExtensionRoutes(
   routes: readonly PlatformExtensionRoute[],
 ): readonly PlatformExtensionRoute[] {
@@ -746,6 +784,7 @@ function mergePlatformExtensionRoutes(
         (existing.ownsPathSubtree ?? false) !==
           (route.ownsPathSubtree ?? false) ||
         existing.workspaceContext !== route.workspaceContext ||
+        existing.appContext !== route.appContext ||
         !sameStrings(existing.requiredScopes, route.requiredScopes) ||
         !sameRequestScopeRules(
           existing.requestScopeRules,
@@ -801,7 +840,8 @@ function sameExtensionExactLeafPolicy(
     (left.authMode ?? "platform") === (right.authMode ?? "platform") &&
     (left.authDelivery ?? "headers") ===
       (right.authDelivery ?? "headers") &&
-    left.workspaceContext === right.workspaceContext
+    left.workspaceContext === right.workspaceContext &&
+    left.appContext === right.appContext
   );
 }
 

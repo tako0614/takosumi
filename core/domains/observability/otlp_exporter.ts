@@ -3,6 +3,7 @@ import type { ChainedAuditEvent } from "./audit_chain.ts";
 import type { ObservabilitySink } from "./sink.ts";
 import {
   METRIC_CAPSULE_LABEL,
+  METRIC_DROPPED_TAGS,
   type MetricEvent,
   type MetricEventQuery,
   type TraceSpanEvent,
@@ -392,8 +393,8 @@ function attributesForMetric(event: MetricEvent): readonly OtlpAttribute[] {
   // exported (TASK-0118 P9.1-g).
   const capsuleId = event.tags?.[METRIC_CAPSULE_LABEL];
   if (capsuleId) attrs.push(attribute("takosumi.capsule_id", capsuleId));
-  if (event.runGroupId)
-    attrs.push(attribute("takosumi.run_group_id", event.runGroupId));
+  // Like the Prometheus exposition, a legacy Workspace and per-run ids
+  // (RunGroup included) never become data-point attributes.
   if (event.requestId) {
     attrs.push(attribute("takosumi.request_id", event.requestId));
   }
@@ -401,7 +402,7 @@ function attributesForMetric(event: MetricEvent): readonly OtlpAttribute[] {
     attrs.push(attribute("takosumi.correlation_id", event.correlationId));
   }
   for (const [key, value] of Object.entries(event.tags ?? {}).sort()) {
-    if (key === METRIC_CAPSULE_LABEL) continue;
+    if (key === METRIC_CAPSULE_LABEL || METRIC_DROPPED_TAGS.includes(key)) continue;
     attrs.push(attribute(`tag.${key}`, value));
   }
   return attrs;

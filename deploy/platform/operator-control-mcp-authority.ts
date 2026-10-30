@@ -10,9 +10,11 @@ import {
   type ControlPlaneOperations,
 } from "@takosjp/takosumi-accounts-service";
 import { personalResourceNamespace } from "../../accounts/service/src/control/personal-resources.ts";
+import { controllerErrorCode } from "../../accounts/service/src/control/shared.ts";
 import type { AccountsStore } from "../../accounts/service/src/store.ts";
 import type { ActivityCursorSealer } from "../../accounts/service/src/control/activity-cursor.ts";
 import type { OperatorControlMcpAuthority } from "../operator-control-mcp.ts";
+import { deterministicInitialCapsuleId } from "../../core/domains/install-plans/source-reservation.ts";
 
 export interface OperatorControlMcpAuthorityInput {
   readonly operations: ControlPlaneOperations;
@@ -44,6 +46,16 @@ export function createOperatorControlMcpAuthority(
   input: OperatorControlMcpAuthorityInput,
 ): OperatorControlMcpAuthority {
   const { operations, store, session } = input;
+  const committedInitialCapsuleId = async (planId: string): Promise<string | undefined> => {
+    const capsuleId = deterministicInitialCapsuleId(planId);
+    try {
+      const capsule = await operations.capsules.getCapsule(capsuleId);
+      return capsule.id === capsuleId ? capsule.id : undefined;
+    } catch (error) {
+      if (controllerErrorCode(error) === "not_found") return undefined;
+      throw error;
+    }
+  };
   return {
     subject: session.subject,
     capsuleId: session.capsuleId,
@@ -97,8 +109,11 @@ export function createOperatorControlMcpAuthority(
       try {
         const plan = await operations.gitInstallPlans.get(installPlanId);
         if (!plan || plan.id !== installPlanId) return undefined;
+        // A Capsule committed before the plan recorded it (a lost
+        // acknowledgement) is already the app, as the handler resolves it.
+        const capsuleId = plan.capsuleId ?? await committedInitialCapsuleId(plan.id);
         return {
-          ...(plan.capsuleId ? { capsuleId: plan.capsuleId } : {}),
+          ...(capsuleId ? { capsuleId } : {}),
           workspaceId: plan.workspaceId,
           createdBy: plan.createdBy,
           actorSubject: plan.actorSubject,
@@ -116,6 +131,25 @@ export function createOperatorControlMcpAuthority(
       } catch {
         return undefined;
       }
+    },
+    appPartitions: async (capsuleIds) => {
+      const partitions = new Map<string, string>();
+      if (capsuleIds.length === 0) return partitions;
+      for (const capsule of await operations.capsules.getCapsulesByIds([...new Set(capsuleIds)])) {
+        partitions.set(capsule.id, capsule.workspaceId);
+      }
+      return partitions;
+    },
+    recordedOwnership: async (capsuleIds) => {
+      const ids = [...new Set(capsuleIds)];
+      const store = operations.appOwnership;
+      if (ids.length === 0 || !store) return new Set<string>();
+      if (store.listOwnedCapsuleIds) return await store.listOwnedCapsuleIds(ids);
+      const recorded = new Set<string>();
+      for (const id of ids) {
+        if ((await store.getOwnership(id))?.capsuleId === id) recorded.add(id);
+      }
+      return recorded;
     },
     installNamespaceId: async () => {
       try {

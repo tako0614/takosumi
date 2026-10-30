@@ -189,11 +189,11 @@ import { planRunAwaitsApproval, projectApplyRun, projectPlanRun, projectSourceSy
 import {
   canonicalProviderAddress,
   compactLayeredPolicy,
+  effectiveProviderPolicy,
   evaluateCompatibilityReportAgainstPolicy,
   evaluateConfiguredProviderAllowlist,
   evaluateProviderInstallationPolicy,
   evaluateProviderLockfilePolicy,
-  mergePolicyConfigs,
   requiredProvidersFromCompatibilityReport,
   withDefaultProviderSupplyChainPolicy,
 } from "../provider_policy.ts";
@@ -2530,6 +2530,10 @@ export class RunEngine {
     // audit keeps the system trigger distinct from that account principal.
     const eventActor = internal.autoApplyRequested ? "system:auto-update" : context.actor;
     const appOwnership = capsule ? await this.#appOwnership?.getOwnership(capsule.id) : undefined;
+    // `createdBy` and the stamped ownership epoch come from the same owner.
+    if (context.actorOwnershipEpoch !== undefined) {
+      assertActorIsAppOwner(context, appOwnership);
+    }
     const automaticProvenance = internal.autoApplyRequested
       ? { automatic: true, ...(appOwnership !== undefined && context.actor
         ? { authorizationAccountId: context.actor } : {}) }
@@ -2749,7 +2753,7 @@ export class RunEngine {
       input.installConfig.runnerId ?? this.#defaultRunnerProfileId,
     );
     const workspace = await this.#store.getWorkspace(input.capsule.workspaceId);
-    const policy = mergePolicyConfigs(
+    const policy = effectiveProviderPolicy(
       workspace?.policy,
       input.installConfig.policy,
     );
@@ -2862,6 +2866,14 @@ export class RunEngine {
       this.#requireCapsule(capsuleId),
     );
     assertCapsuleAcceptsOperation(capsule, destroy ? "destroy" : "update");
+    // Refuse early (before any preparation) when a system flow's owner read
+    // is already stale; #preparePlanRun checks again where it stamps the epoch.
+    if (context.actorOwnershipEpoch !== undefined) {
+      assertActorIsAppOwner(
+        context,
+        await this.#appOwnership?.getOwnership(capsuleId),
+      );
+    }
     // Capture the Workspace fence before any InstallConfig/Source/compatibility
     // preparation. The same immutable authority is passed to the inner Plan
     // preparation and its atomic store admission; it must not be refreshed late.
@@ -9183,7 +9195,7 @@ export class RunEngine {
       this.#store.getInstallConfig(capsule.installConfigId),
     ]);
     return withDefaultProviderSupplyChainPolicy(
-      mergePolicyConfigs(workspace?.policy, installConfig?.policy),
+      effectiveProviderPolicy(workspace?.policy, installConfig?.policy),
       {
         providerInstallationRequireMirror:
           defaultProviderMirrorRequiredForProfile(runnerProfile),
@@ -13048,4 +13060,25 @@ function runnerExecutionControl(
   runLease?: RunExecutionControl["runLease"],
 ): RunExecutionControl {
   return { signal, ...(deadlineAt === undefined ? {} : { deadlineAt }), ...(runLease ? { runLease: { ...runLease } } : {}) };
+}
+
+/**
+ * A system flow acting as the app's owner must still be that owner at the
+ * epoch it read (see `DeployControlActorContext.actorOwnershipEpoch`).
+ */
+function assertActorIsAppOwner(
+  context: DeployControlActorContext,
+  ownership: { readonly ownerAccountId: string; readonly ownershipEpoch: number } | undefined,
+): void {
+  if (
+    ownership === undefined ||
+    ownership.ownerAccountId !== context.actor ||
+    ownership.ownershipEpoch !== context.actorOwnershipEpoch
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "The app's owner changed before the Run was created",
+      { reason: "app_owner_changed" },
+    );
+  }
 }

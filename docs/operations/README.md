@@ -46,6 +46,7 @@ Cloud 側のリポジトリで管理します。
 - [廃止済み Dependency のデータ保守](./retired-dependency-maintenance.md)
 - [Capsule の scopeRef（派生の元の凍結）と backfill](./capsule-scope-ref-backfill.md)
 - [アプリの保存先（`apps/` の root）と Workspace を使わない保存](./app-storage-roots.md)
+- [Workspace policy を各アプリへ焼き込む](./workspace-policy-bake.md)
 - [FormRef migration](./exact-formref-migration.md)
 
 ### Security

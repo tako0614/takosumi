@@ -4620,6 +4620,13 @@ function coerceRunRowStatus<R extends PlanRun | ApplyRun>(
 
 export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly persistence = "ephemeral" as const;
+  /**
+   * Nothing is created or migrated on access (there is no schema). Read-only
+   * operator tools require `predeployed` from any store they are given.
+   */
+  get schemaMode(): "predeployed" {
+    return "predeployed";
+  }
   readonly #runnerProfiles = new Map<string, RunnerProfile>();
   /** Single in-memory Run ledger; typed methods below are filtered views. */
   readonly #runs = new Map<string, StoredRunRecord>();

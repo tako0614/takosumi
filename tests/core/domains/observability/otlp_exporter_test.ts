@@ -17,9 +17,17 @@ const metric: MetricEvent = {
   kind: "gauge",
   value: 1.25,
   unit: "s",
-  tags: { provider: "filesystem", capsule_id: "cap_a" },
-  // A legacy event may still carry its Workspace; it is never exported.
+  tags: {
+    provider: "filesystem",
+    capsule_id: "cap_a",
+    // Unbounded ids are dropped like the Prometheus exposition drops them.
+    workspace_id: "space_tag",
+    run_group_id: "rg_tag",
+    run_id: "run_tag",
+  },
+  // A legacy event may still carry its Workspace and RunGroup; neither is exported.
   workspaceId: "space_a",
+  runGroupId: "rg_field",
   observedAt: "2026-05-05T00:00:00.000Z",
 };
 
@@ -113,7 +121,10 @@ test("OtlpObservabilitySink records locally and exports OTLP JSON metrics", asyn
   assert.deepEqual(attributes["tag.provider"], { stringValue: "filesystem" });
   assert.equal("takosumi.workspace_id" in attributes, false);
   assert.equal("tag.capsule_id" in attributes, false);
-  assert.doesNotMatch(JSON.stringify(calls[0]?.body), /space_a|workspace/);
+  assert.doesNotMatch(
+    JSON.stringify(calls[0]?.body),
+    /space_a|space_tag|workspace|rg_tag|rg_field|run_tag|run_group_id|run_id/,
+  );
 });
 
 test("OtlpObservabilitySink records locally and exports OTLP JSON traces", async () => {

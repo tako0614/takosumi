@@ -829,3 +829,33 @@ test("concurrent provider decisions have exactly one winner", async () => {
   expect(rejected.reason).toMatchObject({ code: "conflict" });
   expect((await f.stores.links.get(pending.id))?.generation).toBe(pending.generation + 1);
 });
+
+test("provider approval is checked again inside the pre-write fence (review)", async () => {
+  const actor = { actorAccountId: "member", roles: [], requestId: "refence" };
+  // Approves at the first check, then the caller loses the provider app.
+  const losing = () => {
+    let calls = 0;
+    return {
+      assertCurrent: async () => undefined,
+      mayApproveProvider: async () => ++calls === 1,
+      calls: () => calls,
+    };
+  };
+  // A brand-new link waits for the provider instead of being approved.
+  const f = await fixture();
+  const fence = losing();
+  const fresh = await f.service.putCapsuleInterfaceLink({
+    capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: 0,
+  }, actor, fence);
+  expect(fresh).toMatchObject({ state: "pending_approval", approvedPermissions: [] });
+  expect(fresh.approval).toBeUndefined();
+  expect(fence.calls()).toBe(2);
+  expect(await f.service.getLatestCapsuleInterfaceLink("consumer", "tools")).toEqual(fresh);
+  // A replacement of that live link keeps it, exactly as without approval
+  // (without the second check the re-point would have been approved).
+  await expect(f.service.putCapsuleInterfaceLink({
+    capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id, expectedGeneration: fresh.generation,
+  }, actor, losing())).rejects.toMatchObject({ code: "interface_link_approval_required" });
+  expect(await f.service.getLatestCapsuleInterfaceLink("consumer", "tools")).toEqual(fresh);
+  expect(await f.service.listBindings(f.providers[1]!.metadata.id)).toHaveLength(0);
+});

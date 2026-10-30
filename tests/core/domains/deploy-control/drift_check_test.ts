@@ -25,6 +25,7 @@ import {
   OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { PlanRunSummary } from "@takosumi/internal/deploy-control-api";
@@ -318,4 +319,69 @@ test("listCapsulesForScheduledSweep returns only active and stale Capsules, boun
   expect((await controller.listCapsulesForScheduledSweep(1)).length).toEqual(1);
   // Non-positive limit returns empty.
   expect((await controller.listCapsulesForScheduledSweep(0)).length).toEqual(0);
+});
+
+test("a system flow acting as the owner is refused once the app changed owner", async () => {
+  // The scheduled sweep reads the owner and its ownership epoch, then creates
+  // the Run as that owner. A transfer in between must not record the previous
+  // owner as createdBy next to the new epoch (TASK-0118 P9.1-g review).
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_owner_race",
+    capsuleId: "cap_owner_race",
+    environment: "preview",
+  });
+  await seedProviderConnections(store, seeded.capsule);
+  const appOwnership = new InMemoryAppOwnershipStore(store);
+  const owner = seeded.workspace.ownerUserId;
+  expect(store.setCapsuleOwnership({
+    capsuleId: seeded.capsule.id,
+    ownerAccountId: owner,
+    ownershipEpoch: 0,
+    managementState: "active",
+    managementEpoch: 0,
+    storageRoot: `apps/${seeded.capsule.id}`,
+  })).toBe(true);
+  const controller = new OpenTofuController({
+    store,
+    appOwnership,
+    runner: summaryRunner({ add: 0, change: 0, destroy: 0 }),
+    vault: fakeProviderVault() as never,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  // The epoch the sweep read still holds: created as the owner, epoch stamped.
+  const { planRun } = await controller.createCapsuleDriftCheck(seeded.capsule.id, {
+    actor: owner,
+    actorOwnershipEpoch: 0,
+  });
+  expect(planRun.createdBy).toBe(owner);
+  expect(planRun.ownershipEpoch).toBe(0);
+
+  // A stale epoch or a different actor is refused before any Run is created.
+  for (const context of [
+    { actor: owner, actorOwnershipEpoch: 1 },
+    { actor: "acct_someone_else", actorOwnershipEpoch: 0 },
+  ]) {
+    await expect(controller.createCapsuleDriftCheck(seeded.capsule.id, context))
+      .rejects.toMatchObject({ code: "failed_precondition", details: { reason: "app_owner_changed" } });
+    await expect(controller.createCapsulePlan(seeded.capsule.id, context))
+      .rejects.toMatchObject({ code: "failed_precondition", details: { reason: "app_owner_changed" } });
+  }
+
+  // After a transfer the old owner's read is stale.
+  expect(await appOwnership.putOwnership({
+    capsuleId: seeded.capsule.id,
+    ownerAccountId: "acct_new_owner",
+    ownershipEpoch: 1,
+    managementState: "active",
+    managementEpoch: 0,
+    storageRoot: `apps/${seeded.capsule.id}`,
+  }, 0)).toBe(true);
+  const runsBefore = (await controller.listRuns("ws_owner_race")).length;
+  await expect(controller.createCapsuleDriftCheck(seeded.capsule.id, { actor: owner, actorOwnershipEpoch: 0 }))
+    .rejects.toMatchObject({ code: "failed_precondition", details: { reason: "app_owner_changed" } });
+  expect((await controller.listRuns("ws_owner_race")).length).toBe(runsBefore);
 });
