@@ -1074,7 +1074,7 @@ Apply が新しい InstallConfig を認可することはありません。
 | GET      | `/api/v1/runs/{runId}/logs`                             | Run のログを読む                |
 | GET      | `/api/v1/runs/{runId}/events`                           | Run のイベントを読む            |
 | GET      | `/api/v1/runs/{runId}/cost`                             | Run の費用見込みを読む          |
-| GET      | `/api/v1/run-groups/{runGroupId}`                       | 廃止前に作られた RunGroup を読む (含まれる全 Run のアプリを見られる場合だけ) |
+| GET      | `/api/v1/run-groups/{runGroupId}`                       | 廃止前に作られた RunGroup を読む。含まれる全 Run のアプリを、そのアプリの所有の行で見られる場合だけ。それ以外は存在しない場合と同じ `404` |
 | POST     | `/api/v1/run-groups/{runGroupId}/approve`               | 廃止済み。`410` `run_group_retired` を返す |
 | GET      | `/api/v1/state-versions/{stateVersionId}`               | StateVersion を読む             |
 | POST     | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | 以前の状態に戻す計画を作る      |

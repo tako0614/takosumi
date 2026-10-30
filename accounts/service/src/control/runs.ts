@@ -493,9 +493,11 @@ export async function handleRunGroups(
 
 /**
  * A RunGroup written before the retirement stays readable, fail-closed: the
- * caller must be able to view the app of every member Run. A group without
- * member Runs, or with a member Run that belongs to no app, is not shown; the
- * Workspace never decides.
+ * caller must be able to view the app of every member Run by that app's own
+ * ownership row. Every other case answers the same 404 as a missing group, so
+ * a non-viewer cannot tell that the group exists: no member Runs, a member Run
+ * that belongs to no app, an app the caller cannot view, or an app without an
+ * ownership row (whose Workspace fallback is never used here).
  */
 async function requireRunGroupView(
   ctx: ControlDispatchContext,
@@ -521,7 +523,7 @@ async function requireRunGroupView(
       ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
       ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
     });
-    if (!auth.ok) return auth;
+    if (!auth.ok || auth.authority !== "app") return notFound;
   }
   return { ok: true };
 }

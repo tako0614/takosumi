@@ -2,6 +2,7 @@ import type { Hono as HonoApp } from "hono";
 import type { ObservabilitySink } from "../domains/observability/mod.ts";
 import {
   METRIC_CAPSULE_LABEL,
+  METRIC_DROPPED_TAGS,
   type MetricEvent,
 } from "../domains/observability/types.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
@@ -316,7 +317,7 @@ function labelsForEvent(event: MetricEvent): Record<string, string> {
       // Tenant and per-event ids never become series labels: the app tag
       // (`capsule_id`) and a legacy Workspace tag are dropped to keep the
       // exposition's cardinality bounded.
-      .filter(([key]) => !["workspace_id", METRIC_CAPSULE_LABEL, "run_group_id", "run_id"].includes(key))
+      .filter(([key]) => key !== METRIC_CAPSULE_LABEL && !METRIC_DROPPED_TAGS.includes(key))
       .sort(([left], [right]) => left.localeCompare(right)),
   );
 }

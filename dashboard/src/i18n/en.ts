@@ -1191,14 +1191,9 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "App updates",
-  "runGroup.subtitle":
-    "Changes to several apps can be reviewed and approved together.",
-  "runGroup.approveAll": "Approve all",
-  "runGroup.approveAllConfirm.title": "Approve all changes?",
-  "runGroup.approveAllConfirm.message":
-    "This runs the pending changes for {n} apps together.",
-  "runGroup.approveAllConfirm.messageDanger":
-    "This runs the pending changes for {n} apps together, including destructive changes that delete resources. This can't be undone.",
+  "runGroup.subtitle": "A record of an earlier update that covered several apps.",
+  "runGroup.approvalRetired":
+    "Approving these together is no longer available. Open each app's change below to review and approve it.",
   "runGroup.members": "Apps in this update",
   "runGroup.membersEmpty": "No apps in this update.",
   "runGroup.openService": "Open app",

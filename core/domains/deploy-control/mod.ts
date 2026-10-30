@@ -1258,6 +1258,15 @@ export interface OpenTofuControllerDependencies {
 
 export interface DeployControlActorContext {
   readonly actor?: string;
+  /**
+   * Set only by a trusted system flow that acts as the app's owner (the
+   * scheduled sweep): the ownership epoch it read together with `actor`. Plan
+   * creation refuses with reason `app_owner_changed` unless `actor` is still
+   * the app's owner at exactly this epoch, so an ownership transfer between
+   * that read and the Run's creation never records the previous owner as
+   * `createdBy`.
+   */
+  readonly actorOwnershipEpoch?: number;
 }
 
 export interface GenericRootPlanContext {

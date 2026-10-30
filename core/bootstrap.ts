@@ -830,6 +830,8 @@ export interface TakosumiOperations {
       readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
       readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       readonly actor?: string;
+      /** Trusted system flows only; see `DeployControlActorContext`. */
+      readonly actorOwnershipEpoch?: number;
       readonly origin?: RunPlanOrigin;
     },
   ): Promise<PlanRunResponse>;
@@ -852,7 +854,10 @@ export interface TakosumiOperations {
    * read-only plan that detects state drift. Never parks waiting_approval and can
    * never be applied; emits `capsule.drift_detected` on a non-empty summary.
    */
-  createCapsuleDriftCheck(capsuleId: string, options?: { readonly actor?: string }): Promise<PlanRunResponse>;
+  createCapsuleDriftCheck(
+    capsuleId: string,
+    options?: { readonly actor?: string; readonly actorOwnershipEpoch?: number },
+  ): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
@@ -2029,7 +2034,14 @@ export async function createTakosumiService(
     createCapsulePlan: (capsuleId, options) =>
       opentofuController.createCapsulePlan(
         capsuleId,
-        options?.actor ? { actor: options.actor } : {},
+        options?.actor
+          ? {
+              actor: options.actor,
+              ...(options.actorOwnershipEpoch !== undefined
+                ? { actorOwnershipEpoch: options.actorOwnershipEpoch }
+                : {}),
+            }
+          : {},
         options?.compatibilityReportId ||
         options?.runnerProfileId ||
         options?.sourceSnapshotId ||
@@ -2077,7 +2089,12 @@ export async function createTakosumiService(
           : {},
       ),
     createCapsuleDriftCheck: (capsuleId, options) =>
-      opentofuController.createCapsuleDriftCheck(capsuleId, { actor: options?.actor }),
+      opentofuController.createCapsuleDriftCheck(capsuleId, {
+        actor: options?.actor,
+        ...(options?.actorOwnershipEpoch !== undefined
+          ? { actorOwnershipEpoch: options.actorOwnershipEpoch }
+          : {}),
+      }),
     getPlanRun: (id) => opentofuController.getPlanRun(id),
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),
