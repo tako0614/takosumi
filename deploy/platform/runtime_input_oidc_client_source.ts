@@ -27,6 +27,7 @@
  */
 
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 import { oidcClientActivationDigest } from "../../accounts/service/src/oidc-activation.ts";
 import { oidcAllowedScopes } from "../../accounts/service/src/oidc-live-grant.ts";
 import type { Capsule } from "../../contract/capsules.ts";
@@ -85,6 +86,8 @@ export type RuntimeInputCapsulePublicOrigin = (input: {
  */
 export type RuntimeInputCapsulePublicOriginRelease = (input: {
   readonly workspaceId: string;
+  /** The Capsule's frozen derivation scope; keys the host reservation. */
+  readonly scopeRef: string;
   readonly capsuleId: string;
 }) => Promise<void>;
 
@@ -119,7 +122,8 @@ export function createTakosumiRuntimeInputOidcClientSource(input: {
       capsule.id !== request.capsuleId ||
       capsule.workspaceId !== request.workspaceId ||
       capsule.installConfigId !== request.installConfigId ||
-      capsule.status === "destroyed"
+      capsule.status === "destroyed" ||
+      capsuleScopeRef(capsule) !== request.scopeRef
     ) {
       invalid("runtime input OIDC Capsule is not current");
     }
@@ -173,7 +177,11 @@ export function createTakosumiRuntimeInputOidcClientSource(input: {
     );
     const clientId = await derivePublicOidcClientId(
       derivationKey,
-      runtimeOidcClientDerivationParts(contract, request, config.id),
+      runtimeOidcClientDerivationParts(
+        contract,
+        { scopeRef: capsuleScopeRef(capsule), capsuleId: capsule.id },
+        config.id,
+      ),
     );
     const registration = {
       accounts: input.accounts,
@@ -290,6 +298,7 @@ export function createTakosumiRuntimeInputOidcClientSource(input: {
             // origin must not turn a finished teardown into a failed one.
             await input.capsulePublicOriginRelease!({
               workspaceId: authority.workspaceId,
+              scopeRef: authority.scopeRef,
               capsuleId: authority.capsuleId,
             });
           },
@@ -308,7 +317,7 @@ async function activationDigest(
     invalid("runtime input OIDC Capsule execution authority is not current");
   }
   return await oidcClientActivationDigest({
-    workspaceId: capsule.workspaceId,
+    scopeRef: capsuleScopeRef(capsule),
     capsuleId: capsule.id,
     executionAuthorityEpoch: epoch,
     installConfig,

@@ -220,6 +220,8 @@ test("apply delivers the five values, with the OIDC half sourced through the por
   expect(oidcClient.materialized[0]).toEqual({
     profileContract: "takosumi.runtime-binding-profile/v2",
     workspaceId: request.workspaceId,
+    // The frozen derivation scope of a pre-stage-9.0 Capsule is its Workspace.
+    scopeRef: request.workspaceId,
     capsuleId: request.capsuleId,
     installConfigId: request.installConfigId,
     bindings: profile!.oidcClient!,
@@ -503,6 +505,10 @@ test("a destroyed Capsule releases whatever the host holds for its origin", asyn
     installConfigId: seeded.installConfig.id,
   });
   expect(released).toEqual([
-    { workspaceId: seeded.workspace.id, capsuleId: seeded.capsule.id },
+    {
+      workspaceId: seeded.workspace.id,
+      scopeRef: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+    },
   ]);
 });

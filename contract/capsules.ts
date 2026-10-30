@@ -154,6 +154,22 @@ export interface Capsule {
   readonly storageRoot?: string;
   readonly workspaceId: string;
   /**
+   * Frozen per-app derivation scope (TASK-0118 Phase 9).
+   *
+   * Every durable value derived for this Capsule reads this opaque value where
+   * it used to read the Workspace id: generated-secret HMAC preimages, sealing
+   * AADs and nonces, the public OIDC client id and activation digest, the
+   * public-origin reservation key and label, the install-context
+   * `workspace_id` module variable and the Workspace-scoped name suffix. It is
+   * written once when the Capsule is created and never changes, so removing
+   * Workspace can never move a derived key, name or storage path.
+   *
+   * It grants nothing: no membership, listing or authorization decision reads
+   * it. Capsules created before stage 9.0 lack it until the operator backfill
+   * copies their Workspace id; read it only through {@link capsuleScopeRef}.
+   */
+  readonly scopeRef?: string;
+  /**
    * Owning Project. Capsules live under a Project; a default Project
    * (`prj_default_<workspaceId>`) is backfilled per Workspace for pre-Project
    * rows.
@@ -254,9 +270,40 @@ export interface CapsuleAdoptedSourceRevision {
   readonly resolvedCommit: string;
 }
 
+/**
+ * The Capsule's frozen derivation scope. A Capsule created before stage 9.0
+ * has no stored value yet and derives from its Workspace id, which is exactly
+ * the value the backfill stores, so the result never changes.
+ */
+export function capsuleScopeRef(
+  capsule: Pick<Capsule, "scopeRef" | "workspaceId">,
+): string {
+  const scopeRef: unknown = capsule.scopeRef;
+  if (scopeRef === undefined) return capsule.workspaceId;
+  if (typeof scopeRef !== "string" || scopeRef.length === 0) {
+    throw new TypeError("Capsule scopeRef is invalid");
+  }
+  return scopeRef;
+}
+
+/**
+ * The record as stage 9.0 and later write it. A Capsule stored before stage
+ * 9.0 gains its frozen `scopeRef` (its Workspace id, the value it always
+ * derived from), so an exact-record comparison treats the two spellings of the
+ * same Capsule as equal. Only for comparisons; never persist the result.
+ */
+export function capsuleWithScopeRef<T extends Pick<Capsule, "scopeRef" | "workspaceId">>(
+  capsule: T,
+): T {
+  return capsule.scopeRef === undefined
+    ? { ...capsule, scopeRef: capsule.workspaceId }
+    : capsule;
+}
+
 /** Public Capsule projection returned by `/api` and dashboard session routes. */
 export type PublicCapsule = Omit<
   Capsule,
+  | "scopeRef"
   | "ownerAccountId"
   | "ownershipEpoch"
   | "managementState"

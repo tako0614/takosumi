@@ -788,7 +788,7 @@ test("Cloudflare authorize revalidates a Capsule OIDC client with canonical Cont
     subjectMode: "pairwise",
     tokenEndpointAuthMethod: "none",
     activationDigest: await oidcClientActivationDigest({
-      workspaceId,
+      scopeRef: workspaceId,
       capsuleId,
       executionAuthorityEpoch: 1,
       installConfig: installConfig as never,

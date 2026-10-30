@@ -93,6 +93,7 @@ import type {
   CapsuleUninstall,
   CapsuleUninstallRestorableStatus,
 } from "takosumi-contract/capsules";
+import { capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   Source,
   SourceSnapshot,
@@ -6642,7 +6643,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           existingBindingSlot?.id === existingBinding.id &&
           epoch === 1 &&
           stableStringify(publicStoredInstallConfig(existingConfig)) === stableStringify(installConfig) &&
-          stableStringify(existingCapsule) === stableStringify(capsule) &&
+          stableStringify(capsuleWithScopeRef(existingCapsule)) ===
+            stableStringify(capsuleWithScopeRef(capsule)) &&
           stableStringify(existingBinding) === stableStringify(providerBindingSet)
           ? { status: "replayed", capsule: existingCapsule }
           : { status: "conflict" },
