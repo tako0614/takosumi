@@ -14,7 +14,7 @@ import {
 import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import type { R2Bucket, R2Object, R2ObjectBody } from "./bindings.ts";
-import { storedServiceUsageBucket, type StoredServiceComposition } from "./stored-service-usage.ts";
+import { storedServiceUsageBucket, type StoredObjectOwner, type StoredServiceComposition } from "./stored-service-usage.ts";
 import {
   digestBytes,
   maxStateArtifactCiphertextBytes,
@@ -101,7 +101,8 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     }
     const stateRef = await this.#allocate(scope);
     const handle = await handleFor(scope, stateRef);
-    const bucket = this.#bucketFor(scope.workspaceId);
+    const owner = recoveryStorageOwner(scope, stateRef);
+    const bucket = this.#bucketFor(owner);
     // Reconcile an earlier committed stage before encrypting. An unknown PUT
     // acknowledgement therefore never causes a fresh ciphertext identity.
     let prior: R2Object | null;
@@ -119,7 +120,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       }
       if (!existing) throw recoveryArtifactError("recovery state artifact readback is missing");
       const prepared = await prepareArtifactRetention(this.#storageUsage, {
-        workspaceId: scope.workspaceId,
+        owner,
         allocatedKey: stateRef,
         ciphertextBytes: existing.size,
         replayOnly: true,
@@ -138,7 +139,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     const encryptedDigest = await digestBytes(sealed.ciphertext);
     const metadata = recoveryMetadata(scope, stateRef, sealed, encryptedDigest, handle);
     const prepared = await prepareArtifactRetention(this.#storageUsage, {
-      workspaceId: scope.workspaceId,
+      owner,
       allocatedKey: stateRef,
       ciphertextBytes: sealed.ciphertextLength,
     });
@@ -157,7 +158,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       // Reconciliation below reads once; custody confirmation is outside this
       // catch so its unknown acknowledgement is never automatically retried.
     }
-    const readback = await this.#readback(stateRef, input.workspaceId);
+    const readback = await this.#readback(stateRef, owner);
     if (!readback) throw recoveryArtifactError(writeAcknowledged
       ? "recovery state artifact readback is missing"
       : "recovery state artifact write was not acknowledged");
@@ -198,7 +199,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       custodyEvidenceDigest: handleParts.custodyEvidenceDigest,
     };
     const stateRef = await this.#allocate(provisionalScope);
-    const object = await this.#readback(stateRef, input.workspaceId);
+    const object = await this.#readback(stateRef, recoveryStorageOwner(provisionalScope, stateRef));
     if (!object) throw recoveryArtifactError("staged recovery artifact is unavailable");
     const metadata = object.customMetadata;
     const scope: RecoveryStateArtifactScope = {
@@ -214,7 +215,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       throw recoveryArtifactError("staged recovery artifact scope is invalid");
     }
     const prepared = await prepareArtifactRetention(this.#storageUsage, {
-      workspaceId: scope.workspaceId,
+      owner: recoveryStorageOwner(scope, allocated),
       allocatedKey: allocated,
       ciphertextBytes: object.size,
       replayOnly: true,
@@ -222,16 +223,16 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     return await this.#verifyAndConfirmStorage(object, scope, allocated, input.artifactHandle, prepared);
   }
 
-  #bucketFor(workspaceId: string): R2Bucket {
+  #bucketFor(owner: StoredObjectOwner): R2Bucket {
     return storedServiceUsageBucket(this.#bucket, this.#storedService, {
-      bucketRole: "state", writerId: "operator-recovery", workspaceId,
+      bucketRole: "state", writerId: "operator-recovery", owner,
       maxBytes: RECOVERY_STATE_CIPHERTEXT_MAX_BYTES,
     });
   }
 
-  async #readback(stateRef: string, workspaceId: string): Promise<R2ObjectBody | null> {
+  async #readback(stateRef: string, owner: StoredObjectOwner): Promise<R2ObjectBody | null> {
     try {
-      return await this.#bucketFor(workspaceId).get(stateRef);
+      return await this.#bucketFor(owner).get(stateRef);
     } catch {
       throw recoveryArtifactError("recovery state artifact readback failed");
     }
@@ -282,6 +283,9 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       head.httpMetadata?.contentType !== RECOVERY_METADATA.encryptedContentType ||
       !Number.isSafeInteger(head.size) || head.size < 33 || head.size > RECOVERY_STATE_CIPHERTEXT_MAX_BYTES ||
       !metadata || Object.keys(expectedMetadata).some((key) => metadata[key] !== expectedMetadata[key]) ||
+      // Staged since 9.1-f: it names its persisted root, which must be this
+      // ref's root. A handle staged before has none and still verifies.
+      (metadata["takosumi-storage-root"] !== undefined && metadata["takosumi-storage-root"] !== recoveryStateRoot(scope, stateRef)) ||
       metadata["takosumi-encryption-format"] !== "aes-gcm-bytes-v2" ||
       metadata["takosumi-ciphertext-length"] !== String(head.size)
     ) throw recoveryArtifactError("recovery state artifact metadata is invalid");
@@ -358,6 +362,7 @@ function recoveryMetadata(scope: RecoveryStateArtifactScope, stateRef: string, s
 }, encryptedDigest: string, handle: string): Record<string, string> {
   return {
     ...recoveryMetadataFromScope(scope, stateRef, handle),
+    "takosumi-storage-root": recoveryStateRoot(scope, stateRef),
     "takosumi-content-digest": sealed.contentDigest,
     "takosumi-ciphertext-length": String(sealed.ciphertextLength),
     "takosumi-encryption-format": sealed.format,
@@ -385,6 +390,26 @@ function recoveryMetadataFromScope(
     "takosumi-recovery-handle": handle,
     "takosumi-content-digest": scope.plaintextSha256,
   };
+}
+
+/** The persisted Capsule root of the canonical generation-1 recovery ref. */
+function recoveryStateRoot(scope: Pick<RecoveryStateArtifactScope, "environment">, stateRef: string): string {
+  const suffix = `/environments/${safeSegment(scope.environment)}/state-versions/00000001.tfstate.enc`;
+  if (!stateRef.endsWith(suffix)) throw recoveryArtifactError("recovery state allocation is not canonical");
+  return stateRef.slice(0, -suffix.length);
+}
+
+/**
+ * Who the staged bytes are measured for (TASK-0118 P9.1-f): the Capsule of an
+ * `apps/` root, never its Workspace; the Workspace of a legacy root as before.
+ */
+function recoveryStorageOwner(
+  scope: Pick<RecoveryStateArtifactScope, "workspaceId" | "capsuleId" | "environment">,
+  stateRef: string,
+): StoredObjectOwner {
+  return recoveryStateRoot(scope, stateRef).startsWith("apps/")
+    ? { capsuleId: scope.capsuleId }
+    : { workspaceId: scope.workspaceId };
 }
 
 async function handleFor(scope: RecoveryStateArtifactScope, stateRef: string): Promise<string> {

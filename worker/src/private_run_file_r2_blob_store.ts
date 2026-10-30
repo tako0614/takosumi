@@ -78,7 +78,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     const scopeDigest = await scopeDigestFor(scope);
 
     const bucket = storedServiceUsageBucket(this.#bucket, this.#storageUsage, {
-      bucketRole: "artifacts", writerId: "private-run-files", workspaceId: ownerWorkspaceId,
+      bucketRole: "artifacts", writerId: "private-run-files", owner: { workspaceId: ownerWorkspaceId },
       beforePrepare: assertWriteAuthority, beforeDispatch: assertWriteAuthority,
     });
     let existing: R2ObjectBody | null;
@@ -134,7 +134,7 @@ export class R2PrivateRunFileBlobStore implements PrivateRunFileBlobPort {
     let object: R2ObjectBody | null;
     try {
       object = await storedServiceUsageBucket(this.#bucket, this.#storageUsage, {
-        bucketRole: "artifacts", writerId: "private-run-files", workspaceId: ownerWorkspaceId,
+        bucketRole: "artifacts", writerId: "private-run-files", owner: { workspaceId: ownerWorkspaceId },
       }).get(key);
     } catch {
       throw blobError();

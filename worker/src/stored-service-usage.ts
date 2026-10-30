@@ -4,13 +4,21 @@
 import type { R2Bucket, R2Object, R2ObjectBody, R2PutOptions } from "./bindings.ts";
 
 export type StoredBucketRole = "state" | "artifacts" | "source" | "backups";
-export interface StoredObjectContext {
+/**
+ * Who a stored object is attributed to (TASK-0118 P9.1-f). An object under a
+ * legacy `workspaces/{ws}/…` key belongs to that Workspace, as it always has;
+ * one under an app's `apps/{cap}/…` root belongs to that Capsule and never
+ * falls back to a Workspace. Exactly one of the two is present.
+ */
+export type StoredObjectOwner =
+  | { readonly workspaceId: string; readonly capsuleId?: undefined }
+  | { readonly capsuleId: string; readonly workspaceId?: undefined };
+export type StoredObjectContext = {
   readonly sourceRef: string;
   readonly bucketRole: StoredBucketRole;
   readonly writerId: string;
-  readonly workspaceId: string;
   readonly objectRef: string;
-}
+} & StoredObjectOwner;
 export interface StoredObjectIntent {
   readonly operationRef: string;
   readonly expectedRevision: number;
@@ -19,13 +27,12 @@ export interface StoredObjectIntent {
   readonly contentDigest: string | null;
   readonly state: "pending" | "confirmed" | "cancelled";
 }
-export interface StoredObjectSnapshot {
-  readonly workspaceId: string;
+export type StoredObjectSnapshot = {
   readonly revision: number;
   readonly bytes: string;
   readonly versionDigest: string | null;
   readonly pending?: StoredObjectIntent;
-}
+} & StoredObjectOwner;
 export interface StoredServiceUsagePort {
   readStoredSource(input: { readonly bucketRole: StoredBucketRole; readonly writerId: string }): Promise<{ readonly sourceRef: string; readonly epochRef: string; readonly qualificationDigest: string }>;
   readStoredObject(input: StoredObjectContext): Promise<StoredObjectSnapshot>;
@@ -50,7 +57,7 @@ export interface StoredServiceUsagePort {
 }
 export interface StoredObjectOwnerPort {
   /** Trusted allocation/ledger lookup. Raw object keys stay on the OSS side. */
-  resolveStoredObjectOwner(input: { readonly bucketRole: StoredBucketRole; readonly key: string }): Promise<{ readonly workspaceId: string } | null>;
+  resolveStoredObjectOwner(input: { readonly bucketRole: StoredBucketRole; readonly key: string }): Promise<StoredObjectOwner | null>;
 }
 export interface StoredServiceComposition {
   readonly usage: StoredServiceUsagePort;
@@ -89,6 +96,21 @@ export async function storedServiceCall<T>(call: () => Promise<T>): Promise<T> {
 }
 function id(value: unknown): asserts value is string {
   if (typeof value !== "string" || !ID.test(value)) throw new StoredServiceUsageError();
+}
+/** Exactly one valid owner id; returns a fresh object in the canonical key order. */
+export function storedObjectOwner(value: unknown): StoredObjectOwner {
+  if (!value || typeof value !== "object") throw new StoredServiceUsageError();
+  const owner = value as { readonly workspaceId?: unknown; readonly capsuleId?: unknown };
+  if ((owner.workspaceId === undefined) === (owner.capsuleId === undefined)) throw new StoredServiceUsageError();
+  if (owner.workspaceId !== undefined) {
+    id(owner.workspaceId);
+    return { workspaceId: owner.workspaceId };
+  }
+  id(owner.capsuleId);
+  return { capsuleId: owner.capsuleId };
+}
+export function sameStoredObjectOwner(left: StoredObjectOwner, right: StoredObjectOwner): boolean {
+  return left.workspaceId === right.workspaceId && left.capsuleId === right.capsuleId;
 }
 function digest(value: unknown): asserts value is string {
   if (typeof value !== "string" || !DIGEST.test(value)) throw new StoredServiceUsageError();
@@ -169,8 +191,8 @@ function validIntent(input: StoredObjectIntent): StoredObjectIntent {
   if ((input.kind === "put") !== (input.contentDigest !== null) || (input.kind === "delete" && input.bytes !== "0")) throw new StoredServiceUsageError();
   return input;
 }
-function validSnapshot(input: StoredObjectSnapshot, workspaceId: string): StoredObjectSnapshot {
-  if (!input || input.workspaceId !== workspaceId) throw new StoredServiceUsageError();
+function validSnapshot(input: StoredObjectSnapshot, owner: StoredObjectOwner): StoredObjectSnapshot {
+  if (!input || !sameStoredObjectOwner(storedObjectOwner(input), owner)) throw new StoredServiceUsageError();
   revision(input.revision); integer(input.bytes); version(input.versionDigest);
   if (input.versionDigest === null && input.bytes !== "0") throw new StoredServiceUsageError();
   if (input.pending) {
@@ -196,7 +218,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
   readonly bucketRole: StoredBucketRole;
   readonly writerId: string;
   /** Only a caller already holding Core-validated ownership may supply this. */
-  readonly workspaceId?: string;
+  readonly owner?: StoredObjectOwner;
   /** Strict local mutation authority. Historical owner reads cannot authorize
    * a custody intent. Failure occurs before any remote PREPARE mutation. */
   readonly beforePrepare?: (key: string, kind: "put" | "delete") => Promise<void>;
@@ -207,22 +229,22 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
 }): R2Bucket {
   if (!composition) return bucket;
   id(input.writerId);
-  if (input.workspaceId !== undefined) id(input.workspaceId);
+  const fixedOwner = input.owner === undefined ? undefined : storedObjectOwner(input.owner);
   const bucketRole = input.bucketRole;
   const writerId = input.writerId;
-  const ownerWorkspaceId = input.workspaceId;
   const maximum = input.maxBytes ?? DEFAULT_MAX_BYTES;
   if (!Number.isSafeInteger(maximum) || maximum <= 0 || maximum > DEFAULT_MAX_BYTES) throw new StoredServiceUsageError();
   const context = async (key: string): Promise<StoredObjectContext> => {
     keyValue(key);
-    const owner = ownerWorkspaceId === undefined ? await storedServiceCall(() => composition.owners.resolveStoredObjectOwner({ bucketRole, key })) : { workspaceId: ownerWorkspaceId };
-    if (!owner) throw new StoredServiceUsageError();
-    id(owner.workspaceId);
-    const workspaceId = owner.workspaceId;
+    const resolved = fixedOwner ?? await storedServiceCall(() => composition.owners.resolveStoredObjectOwner({ bucketRole, key }));
+    if (!resolved) throw new StoredServiceUsageError();
+    const owner = storedObjectOwner(resolved);
     const source = await storedServiceCall(() => composition.usage.readStoredSource({ bucketRole, writerId }));
     if (!source) throw new StoredServiceUsageError();
     id(source.sourceRef); id(source.epochRef); digest(source.qualificationDigest);
-    return { sourceRef: source.sourceRef, bucketRole, writerId, workspaceId, objectRef: await storedObjectReference(bucketRole, key, source.sourceRef) };
+    // Key order is part of every operation digest: a Workspace owner keeps the
+    // exact context shape it always had.
+    return { sourceRef: source.sourceRef, bucketRole, writerId, ...owner, objectRef: await storedObjectReference(bucketRole, key, source.sourceRef) };
   };
   const observe = async (key: string) => await storedServiceCall(() => bucket.head(key));
   const reconcile = async (ctx: StoredObjectContext, key: string, intent: StoredObjectIntent, dispatchToken: string, originalVersionDigest: string | null): Promise<R2ObjectBody | null> => {
@@ -248,7 +270,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
   };
   const read = async (key: string, withBody: boolean): Promise<R2Object | R2ObjectBody | null> => {
     const ctx = await context(key);
-    const snapshot = validSnapshot(await storedServiceCall(() => composition.usage.readStoredObject(ctx)), ctx.workspaceId);
+    const snapshot = validSnapshot(await storedServiceCall(() => composition.usage.readStoredObject(ctx)), storedObjectOwner(ctx));
     if (snapshot.pending) throw new StoredServiceUsageError();
     const object = await storedServiceCall(() => withBody ? bucket.get(key) : bucket.head(key));
     if ((object ? await storedNativeVersion(object) : null) !== snapshot.versionDigest || (object && String(object.size) !== snapshot.bytes)) throw new StoredServiceUsageError();
@@ -263,7 +285,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
       const bytes = await storedServiceCall(() => bytesFor(value, maximum));
       const ctx = await context(key);
       const desiredDigest = await contentDigest(bytes, putOptions);
-      const snapshot = validSnapshot(await storedServiceCall(() => composition.usage.readStoredObject(ctx)), ctx.workspaceId);
+      const snapshot = validSnapshot(await storedServiceCall(() => composition.usage.readStoredObject(ctx)), storedObjectOwner(ctx));
       if (snapshot.pending) {
         if (snapshot.pending.kind !== "put" || snapshot.pending.bytes !== String(bytes.byteLength) || snapshot.pending.contentDigest !== desiredDigest) throw new StoredServiceUsageError();
         throw new StoredServiceUsageError();
@@ -297,7 +319,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
     },
     async delete(key) {
       const ctx = await context(key);
-      const snapshot = validSnapshot(await storedServiceCall(() => composition.usage.readStoredObject(ctx)), ctx.workspaceId);
+      const snapshot = validSnapshot(await storedServiceCall(() => composition.usage.readStoredObject(ctx)), storedObjectOwner(ctx));
       if (snapshot.pending) {
         if (snapshot.pending.kind !== "delete") throw new StoredServiceUsageError();
         throw new StoredServiceUsageError();

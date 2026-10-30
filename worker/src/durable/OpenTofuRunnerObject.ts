@@ -7,7 +7,7 @@ import type {
 } from "../bindings.ts";
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
 import { artifactStorageUsageBucket } from "../artifact-storage-usage.ts";
-import { storedCapsuleArtifactRoot } from "../stored-capsule-root.ts";
+import { capsuleArtifactRoot } from "../../../core/adapters/storage/artifact-references.ts";
 import { storedServiceCompositionFromEnv, type StoredBucketRole } from "../stored-service-usage.ts";
 import { assertStoredReleaseRunLease, assertStoredRetiredSourceArchiveDeletions, assertStoredRunLease, assertStoredSourceArchiveCleanup, readStoredRunLeaseHeader, runnerStoredServiceBucket, STORED_RUN_LEASE_HEADER, type SourceArchiveCleanupAllocation, type StoredReleaseParent, type StoredRunLease } from "../stored-service-owner-context.ts";
 import {
@@ -2982,24 +2982,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     const composition = storedServiceCompositionFromEnv(this.env);
     if (composition) return runnerStoredServiceBucket(bucket, composition, this.env.TAKOSUMI_CONTROL_DB, { bucketRole: "state", runId, scope, restoreStageRef, restoreCleanup, expectedLeaseToken });
+    // An `apps/{cap}` state key is measured for its Capsule, read from the key
+    // Core allocated from the persisted root; never looked up back to the
+    // Capsule's Workspace (TASK-0118 P9.1-f).
     return artifactStorageUsageBucket(bucket, this.env.TAKOSUMI_ARTIFACT_STORAGE_USAGE, {
       maxCiphertextBytes: maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
-      resolveAppWorkspace: async (capsuleId) => {
-        const database = this.env.TAKOSUMI_CONTROL_DB;
-        if (!database) return undefined;
-        try {
-          const row = await database.prepare("select space_id from capsules where id = ? limit 2")
-            .bind(capsuleId).first<{ space_id?: unknown }>();
-          if (typeof row?.space_id !== "string" || !row.space_id) return undefined;
-          const root = await storedCapsuleArtifactRoot(database, row.space_id, capsuleId);
-          return root === `apps/${capsuleId}` ? row.space_id : undefined;
-        } catch {
-          // A workspace-less app key has no owner identity in its path. If the
-          // persisted Capsule/root lookup is unavailable, do not meter it under
-          // caller-controlled object metadata.
-          return undefined;
-        }
-      },
     });
   }
 
@@ -3609,7 +3596,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             "takosumi-generation": String(scope.generation),
             "takosumi-workspace-id": scope.workspaceId,
             ...(scope.subjectKind === "capsule"
-              ? { "takosumi-capsule-id": scope.subjectId }
+              ? {
+                  "takosumi-capsule-id": scope.subjectId,
+                  "takosumi-storage-root": stateSubjectRoot(scope),
+                }
               : { "takosumi-resource-id": scope.subjectId }),
             "takosumi-environment": scope.environment,
             "takosumi-logical-target-state-ref": objectKey,
@@ -4074,6 +4064,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             "takosumi-generation": String(scope.generation),
             "takosumi-workspace-id": scope.workspaceId,
             "takosumi-capsule-id": scope.subjectId,
+            "takosumi-storage-root": stateSubjectRoot(scope),
             "takosumi-environment": scope.environment,
             "takosumi-logical-target-state-ref": scope.stateRef,
             "takosumi-restored-from-object": restoreState.stateRef,
@@ -4310,7 +4301,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     assertRequestNotAborted(signal);
     const identity = restoreScopeIdentityFromKey(expected.scopeKey);
     if (!identity) throw new Error("Restore acknowledged scope is invalid");
-    const workspaceId = identity.workspaceId ?? await this.#restoreWorkspaceId(expected.runId, identity.capsuleId);
+    // A legacy root names its Workspace segment. An `apps/` root names none
+    // and is never looked up back to one: only the stored-service profile,
+    // whose runner scope still compares the Run's Workspace (until 9.5), reads
+    // it to fill that scope. The object itself is bound below by its storage
+    // root, or, if written before 9.1-f, by its Capsule and Workspace metadata.
+    const workspaceId = identity.workspaceId ??
+      (storedServiceCompositionFromEnv(this.env)
+        ? await this.#restoreWorkspaceId(expected.runId, identity.capsuleId)
+        : "");
     const object = await this.#r2State(expected.runId, {
       workspaceId,
       subjectKind: "capsule", subjectId: identity.capsuleId,
@@ -4319,8 +4318,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       stateRef: expected.logicalTargetStateRef,
     }, expected.stateRef, undefined, expectedLeaseToken).head(expected.stateRef);
     assertRequestNotAborted(signal);
-    if (!object || object.customMetadata?.["takosumi-workspace-id"] !== workspaceId ||
-      !isExactRestoreAckObject(object, expected)) {
+    if (!object || !stateObjectOwnerMatches(object.customMetadata, {
+      capsuleId: identity.capsuleId, root: identity.root, legacyWorkspaceId: identity.workspaceId,
+    }) || !isExactRestoreAckObject(object, expected)) {
       throw new Error("Restore acknowledged state object is missing or changed");
     }
     const current = parseRunnerRestoreAuthorityRecord(
@@ -5638,13 +5638,56 @@ function stateScopePrefix(scope: StateScope): string {
   return `${stateSubjectRoot(scope)}/environments/${safeKeySegment(scope.environment)}/state-versions`;
 }
 
+/**
+ * The state root of a scope. A Capsule's root is read back from the stateRef
+ * Core allocated from its persisted `storage_root` (TASK-0118 P9.1-f): `apps/{cap}`
+ * or a frozen legacy `workspaces/{ws}/capsules/{cap}`, checked to be this
+ * Capsule's canonical root, never rebuilt from the dispatch's live Workspace
+ * id. A stateRef of another shape keeps the historical Workspace layout, which
+ * `assertStateRefForScope` then refuses unless it matches exactly.
+ */
 function stateSubjectRoot(scope: StateScope): string {
   const legacy = `workspaces/${safeKeySegment(scope.workspaceId)}/${scope.subjectKind === "resource" ? "resources" : "capsules"}/${safeKeySegment(scope.subjectId)}`;
   if (scope.subjectKind !== "capsule") return legacy;
-  const app = `apps/${safeKeySegment(scope.subjectId)}`;
   const suffix = `/environments/${safeKeySegment(scope.environment)}/state-versions/${formatGeneration(scope.generation)}.tfstate.enc`;
-  if (scope.subjectId === safeKeySegment(scope.subjectId) && scope.stateRef === `${app}${suffix}`) return app;
+  if (scope.stateRef.endsWith(suffix)) {
+    try {
+      return capsuleArtifactRoot("", scope.subjectId, scope.stateRef.slice(0, -suffix.length));
+    } catch {
+      // Not this Capsule's canonical root.
+    }
+  }
   return legacy;
+}
+
+/** The canonical Capsule root of an immutable StateVersion key, or undefined. */
+function stateRootOfRef(stateRef: string, capsuleId: string): string | undefined {
+  const match = /^(.+)\/environments\/[A-Za-z0-9._-]+\/state-versions\/[0-9]{8,}\.tfstate\.enc$/u.exec(stateRef);
+  if (!match) return undefined;
+  try {
+    return capsuleArtifactRoot("", capsuleId, match[1]!);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The owner binding of an encrypted Capsule state object (TASK-0118 P9.1-f).
+ * An object written since 9.1-f names its Capsule and persisted root, and must
+ * match the root of the key it belongs to; no Workspace is read. An object
+ * written before names only its Workspace, which must equal
+ * `legacyWorkspaceId` when one is given (an `apps/` key has none to compare).
+ */
+function stateObjectOwnerMatches(
+  metadata: Record<string, string> | undefined,
+  input: { readonly capsuleId: string; readonly root: string | undefined; readonly legacyWorkspaceId: string | undefined },
+): boolean {
+  if (metadata?.["takosumi-capsule-id"] !== input.capsuleId) return false;
+  const root = metadata["takosumi-storage-root"];
+  if (root !== undefined) return input.root !== undefined && root === input.root;
+  const workspaceId = metadata["takosumi-workspace-id"];
+  return typeof workspaceId === "string" && workspaceId.length > 0 &&
+    (input.legacyWorkspaceId === undefined || workspaceId === input.legacyWorkspaceId);
 }
 
 function currentStateKey(scope: StateScope): string {
@@ -5667,18 +5710,25 @@ function logicalStateScopeKey(scope: StateScope): string {
 
 function restoreScopeIdentityFromKey(scopeKey: string):
   | {
+      /** The Workspace segment of a legacy root; an `apps/` root has none. */
       readonly workspaceId?: string;
       readonly capsuleId: string;
       readonly environment: string;
+      readonly root: string;
     }
   | undefined {
   const match =
     /^workspaces\/([a-zA-Z0-9._-]+)\/capsules\/([a-zA-Z0-9._-]+)\/environments\/([a-zA-Z0-9._-]+)\/state-versions$/u.exec(
       scopeKey,
     );
-  if (match) return { workspaceId: match[1]!, capsuleId: match[2]!, environment: match[3]! };
+  if (match) {
+    return {
+      workspaceId: match[1]!, capsuleId: match[2]!, environment: match[3]!,
+      root: `workspaces/${match[1]!}/capsules/${match[2]!}`,
+    };
+  }
   const app = /^apps\/([a-zA-Z0-9._-]+)\/environments\/([a-zA-Z0-9._-]+)\/state-versions$/u.exec(scopeKey);
-  return app ? { capsuleId: app[1]!, environment: app[2]! } : undefined;
+  return app ? { capsuleId: app[1]!, environment: app[2]!, root: `apps/${app[1]!}` } : undefined;
 }
 
 function hasExactRestoreScopeMetadata(
@@ -5688,10 +5738,9 @@ function hasExactRestoreScopeMetadata(
   const identity = restoreScopeIdentityFromKey(scopeKey);
   return Boolean(
     identity &&
-      typeof metadata?.["takosumi-workspace-id"] === "string" &&
-      metadata["takosumi-workspace-id"]!.length > 0 &&
-      (identity.workspaceId === undefined || metadata["takosumi-workspace-id"] === identity.workspaceId) &&
-      metadata?.["takosumi-capsule-id"] === identity.capsuleId &&
+      stateObjectOwnerMatches(metadata, {
+        capsuleId: identity.capsuleId, root: identity.root, legacyWorkspaceId: identity.workspaceId,
+      }) &&
       metadata?.["takosumi-environment"] === identity.environment,
   );
 }
@@ -6362,8 +6411,11 @@ async function assertExactRestoreSourceObject(
     metadata?.["takosumi-content-digest"] !== source.digest ||
     metadata?.["takosumi-run-id"] !== source.createdByRunId ||
     metadata?.["takosumi-generation"] !== String(source.generation) ||
-    metadata?.["takosumi-workspace-id"] !== source.workspaceId ||
-    metadata?.["takosumi-capsule-id"] !== source.capsuleId ||
+    !stateObjectOwnerMatches(metadata, {
+      capsuleId: source.capsuleId,
+      root: stateRootOfRef(refKind.logicalTargetStateRef, source.capsuleId),
+      legacyWorkspaceId: source.workspaceId,
+    }) ||
     metadata?.["takosumi-environment"] !== source.environment ||
     metadata?.["takosumi-logical-target-state-ref"] !==
       refKind.logicalTargetStateRef ||
