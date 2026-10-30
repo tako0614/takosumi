@@ -222,6 +222,38 @@ push の endpoint、`data.auth` は購読の `auth` です。product が native 
   `web_push_unavailable` です。passphrase を回すと公開鍵が変わるので、Takosumi Mobile は購読し
   直します。
 
+#### 何を通知するか
+
+instance は Activity の台帳（全 Workspace の `audit_events`）を `(createdAt, id)` の順に cursor で読み、
+次の出来事を登録された端末へ送ります。送る相手はアプリ（Capsule）の持ち主と、出来事が名指しする
+アカウントで決め、Workspace のメンバーには頼りません。`system:*` が始めた Run は持ち主にだけ届きます。
+
+| 出来事（Activity） | 送る相手 | 開く画面 | TTL / Urgency |
+| --- | --- | --- | --- |
+| `run.approval_required`（plan が承認を待つ） | アプリの持ち主 | `/runs/{id}` | 86400 秒 / `high` |
+| `run.failed` | Run を始めた人とアプリの持ち主 | `/runs/{id}` | 259200 秒 / `normal` |
+| `run.applied`（`operation: "create"`、install の完了） | Run を始めた人 | `/apps/{id}` | 259200 秒 / `normal` |
+| `capsule.drift_detected`・`capsule.auto_update_failed`・`capsule.auto_update_apply_failed`・`capsule.uninstall_blocked`・`interface_materialization.dead_lettered` | アプリの持ち主 | `/apps/{id}#attention` | 259200 秒 / `normal` |
+| `connection.revoked` | 接続の持ち主 | `/connections` | 259200 秒 / `normal` |
+| `app.ownership_transfer_created` | 受け手 | `/apps/{id}` | 259200 秒 / `normal` |
+| `app.member_added` | 追加された人 | `/apps/{id}` | 259200 秒 / `normal` |
+| `interface_link.approval_requested` | 提供する側のアプリの持ち主 | `/apps/{id}#links` | 86400 秒 / `high` |
+
+- 中身は Declarative Web Push の JSON（`{"web_push":8030,"notification":{title, body, navigate, lang, tag}}`）
+  で、平文で 2,048 byte 以下です。`navigate` は instance の Accounts issuer と同じ origin、文は pusher の
+  `lang` が `ja` なら日本語、それ以外は英語です。アプリの名前と Run の種類だけを入れ、エラー文・secret・
+  token・Output の値は入れません。`Topic` は secret-store の passphrase から導いた鍵の HMAC（pusher と
+  Run／アプリごと、32 文字）で、中継からは id を辿れません。
+- 出来事と pusher の組を冪等な key にした配送の行を積み、送ります。2xx は届いた、404・410 は pusher を
+  消す、timeout・408・429（`Retry-After` に従う）・5xx は 30 秒から 1 時間まで延ばして TTL まで送り直す、
+  それ以外の 3xx・4xx（403・413 を含む）は失敗として pusher に残し、送り直しません。
+- `createdAt` は行の commit より前に決まるので、60 秒より新しい出来事は次の回に回します。最初の回は今の
+  位置から始め、過去の出来事は送りません。TTL を過ぎた出来事も送りません。
+- Cloudflare では scheduled handler の各回（`waitUntil`）で、積んだ直後に一度送り、残りを後の回で送り
+  直します。届くまでの時間は cron の間隔に依ります。Bun + PostgreSQL では 30 秒ごとの in-process loop です。
+- 状態は Accounts の store に置きます。PostgreSQL は migration `048`（`notification_dispatch_cursors`、
+  `notification_deliveries`）、D1 は既存の document の表で、D1 の migration はありません。
+
 ## OpenTofu Stack API
 
 Stack API は通常の OpenTofu / Terraform module を Git から実行します。
@@ -541,7 +573,7 @@ providerInterfaceId, interfaceType, interfaceVersion, requestedPermissions, requ
 `decline` は `{ expectedGeneration }` で、どちらも提供側アプリの write アクセスを求め、成功時は `{ link: InterfaceLink }` を返します。
 承認した link は `approval.kind: "provider_approved"`、断った link は `declined: { declinedBy, declinedAt }` を持ちます。
 承認待ちでない link や generation の不一致は 409、提供側か利用側が稼働中でない (アンインストール予定・削除済みを含む) ときは 412 です。
-Activity には `interface_link.approved` / `interface_link.declined` を、id・権限名・type/version だけで記録します。
+Activity には、承認待ちの link を作ったときに `interface_link.approval_requested`、決めたときに `interface_link.approved` / `interface_link.declined` を、id・権限名・type/version だけで記録します。
 権限不足は 403、不正な入力は 400、generation の競合は 409、利用不可の提供元は 412 です。
 承認判断は policy port が持ち、現在の Workspace 構成では同じ Workspace の連携を即時承認します。
 

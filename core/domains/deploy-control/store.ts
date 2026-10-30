@@ -4447,6 +4447,15 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     targetId: string,
     params: PageParams,
   ): Promise<Page<ActivityEvent>>;
+  /**
+   * Oldest-first keyset page over the whole Activity ledger for the
+   * notification dispatcher: rows strictly after `after`, with
+   * `createdAt <= untilCreatedAt`, ordered by `(createdAt, id)` with bytewise
+   * id order (the scheduled-sweep cursor order).
+   */
+  listActivityEventsAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]>;
 
   // Credential mint audit rows (spec invariant 17). Values are never persisted;
   // this ledger records only run/Workspace/Capsule/connection/phase metadata.
@@ -8885,6 +8894,26 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(pageSortedDesc(newestFirst, params));
   }
 
+  listActivityEventsAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]> {
+    const limit = clampActivityLedgerPageLimit(input.limit);
+    const after = input.after;
+    return Promise.resolve(
+      Array.from(this.#activityEvents.values())
+        .filter((row) =>
+          row.createdAt <= input.untilCreatedAt &&
+          (after === undefined ||
+            row.createdAt > after.createdAt ||
+            (row.createdAt === after.createdAt && bytewiseCompare(row.id, after.id) > 0))
+        )
+        .sort((a, b) =>
+          a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : bytewiseCompare(a.id, b.id)
+        )
+        .slice(0, limit),
+    );
+  }
+
   putCredentialMintEvent(
     event: CredentialMintEvent,
   ): Promise<CredentialMintEvent> {
@@ -9102,6 +9131,26 @@ export function clampActivityLimit(limit: number | undefined): number {
 }
 
 export const ACTIVITY_WORKSPACE_BATCH_LIMIT = 12;
+
+export interface ActivityLedgerPageInput {
+  readonly after?: { readonly createdAt: string; readonly id: string };
+  /** Inclusive upper bound on `createdAt` (ISO-8601). */
+  readonly untilCreatedAt: string;
+  readonly limit: number;
+}
+
+export const ACTIVITY_LEDGER_PAGE_MAX_LIMIT = 90;
+
+export function clampActivityLedgerPageLimit(limit: number): number {
+  return Number.isSafeInteger(limit)
+    ? Math.max(1, Math.min(ACTIVITY_LEDGER_PAGE_MAX_LIMIT, limit))
+    : ACTIVITY_LEDGER_PAGE_MAX_LIMIT;
+}
+
+/** UTF-8/bytewise order for ASCII ids, matching SQLite BINARY and PostgreSQL "C". */
+function bytewiseCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 export function boundedActivityWorkspaceIds(
   workspaceIds: readonly string[],

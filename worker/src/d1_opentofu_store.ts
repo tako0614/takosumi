@@ -293,6 +293,8 @@ import {
   boundedActivityWorkspaceIds,
   capsuleInterfaceMaterializationFailureListLimit,
   clampActivityLimit,
+  clampActivityLedgerPageLimit,
+  type ActivityLedgerPageInput,
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
@@ -11388,6 +11390,31 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       },
     );
     return pageFromProbe(rows, limit);
+  }
+
+  async listActivityEventsAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]> {
+    const createdAt = schema.auditEvents.createdAt;
+    const id = d1SweepIdOrder(schema.auditEvents.id);
+    const after = input.after;
+    return await this.#drizzleManyJson<ActivityEvent>(
+      schema.auditEvents,
+      schema.auditEvents.recordJson,
+      {
+        where: and(
+          sql`${createdAt} <= ${input.untilCreatedAt}`,
+          after === undefined
+            ? undefined
+            : or(
+                gt(createdAt, after.createdAt),
+                and(eq(createdAt, after.createdAt), sql`${id} > ${after.id}`),
+              ),
+        ),
+        orderBy: [asc(createdAt), asc(id)],
+        limit: clampActivityLedgerPageLimit(input.limit),
+      },
+    );
   }
 
   // -- credential_mint_events (spec invariant 17) -----------------------------

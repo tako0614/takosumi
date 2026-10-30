@@ -290,6 +290,8 @@ import {
   boundedActivityWorkspaceIds,
   capsuleInterfaceMaterializationFailureListLimit,
   clampActivityLimit,
+  clampActivityLedgerPageLimit,
+  type ActivityLedgerPageInput,
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
@@ -11455,6 +11457,31 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       },
     );
     return pageFromProbe(rows, limit);
+  }
+
+  async listActivityEventsAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]> {
+    const createdAt = pgSchema.auditEvents.createdAt;
+    const id = pgSweepIdOrder(pgSchema.auditEvents.id);
+    const after = input.after;
+    return await this.#pgManyJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      {
+        where: and(
+          sql`${createdAt} <= ${input.untilCreatedAt}`,
+          after === undefined
+            ? undefined
+            : or(
+                gt(createdAt, after.createdAt),
+                and(eq(createdAt, after.createdAt), sql`${id} > ${after.id}`),
+              ),
+        ),
+        orderBy: [asc(createdAt), asc(id)],
+        limit: clampActivityLedgerPageLimit(input.limit),
+      },
+    );
   }
 
   // --- credential_mint_events (spec invariant 17) ---------------------------

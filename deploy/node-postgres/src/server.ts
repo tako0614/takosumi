@@ -29,6 +29,7 @@ import {
 } from "./handler.ts";
 import { buildComposedApp } from "./composed-app.ts";
 import { startCapsuleUninstallFinalizer } from "./capsule-uninstall-finalizer.ts";
+import { startOwnNotificationDispatcher } from "./own-notification-dispatcher.ts";
 import { startSourceRetirementSweeper } from "./source-retirement-sweeper.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
 import { isSecretKey, redactString } from "takosumi-contract/redaction";
@@ -274,6 +275,13 @@ export async function buildComposedServer(
   });
 
   startCapsuleUninstallFinalizer({ operations, log: structuredLog });
+  startOwnNotificationDispatcher({
+    operations,
+    store,
+    env,
+    issuer: config.issuer,
+    log: structuredLog,
+  });
   startSourceRetirementSweeper({ operations, log: structuredLog,
     enabled: process.env.TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED !== "0" });
 

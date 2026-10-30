@@ -36,6 +36,8 @@ import * as sessions from "./postgres/sessions.ts";
 import * as tokens from "./postgres/tokens.ts";
 import * as notificationPushers from "./postgres/notification-pushers.ts";
 import type { NotificationPusherStore } from "./notification-pushers-store.ts";
+import * as notificationDeliveries from "./postgres/notification-deliveries.ts";
+import type { NotificationDeliveryStore } from "./notification-deliveries-store.ts";
 
 export type { PostgresQueryClient, PostgresQueryResult };
 
@@ -123,6 +125,12 @@ export class PostgresAccountsStore implements AccountsStore {
   deleteNotificationPusher(...args: Parameters<NotificationPusherStore["deleteNotificationPusher"]>) { return notificationPushers.deleteNotificationPusher(this.#client, ...args); }
   removeNotificationPusher(...args: Parameters<NotificationPusherStore["removeNotificationPusher"]>) { return notificationPushers.removeNotificationPusher(this.#client, ...args); }
   recordNotificationPusherOutcome(...args: Parameters<NotificationPusherStore["recordNotificationPusherOutcome"]>) { return notificationPushers.recordNotificationPusherOutcome(this.#client, ...args); }
+  getNotificationDispatchCursor(...args: Parameters<NotificationDeliveryStore["getNotificationDispatchCursor"]>) { return notificationDeliveries.getNotificationDispatchCursor(this.#client, ...args); }
+  compareAndSetNotificationDispatchCursor(...args: Parameters<NotificationDeliveryStore["compareAndSetNotificationDispatchCursor"]>) { return notificationDeliveries.compareAndSetNotificationDispatchCursor(this.#client, ...args); }
+  enqueueNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["enqueueNotificationDeliveries"]>) { return notificationDeliveries.enqueueNotificationDeliveries(this.#client, ...args); }
+  claimNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["claimNotificationDeliveries"]>) { return notificationDeliveries.claimNotificationDeliveries(this.#client, ...args); }
+  settleNotificationDelivery(...args: Parameters<NotificationDeliveryStore["settleNotificationDelivery"]>) { return notificationDeliveries.settleNotificationDelivery(this.#client, ...args); }
+  pruneNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["pruneNotificationDeliveries"]>) { return notificationDeliveries.pruneNotificationDeliveries(this.#client, ...args); }
 
   resolveAccountsBearerCandidates(
     token: string,

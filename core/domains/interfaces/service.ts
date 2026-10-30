@@ -884,6 +884,28 @@ export class InterfaceService {
       await this.revokeCapsuleInterfaceLinks(input.workspaceId, input.capsuleId);
       throw new InterfaceServiceError("failed_precondition", "consumer Capsule is destroyed");
     }
+    if (next.state === "pending_approval") {
+      // The provider app's owner is asked to approve; the decision records
+      // interface_link.approved / declined in the same Workspace.
+      await this.#recordActivity({
+        ...(actor ? { actor } : {}),
+        workspaceId: iface.metadata.workspaceId,
+        action: "interface_link.approval_requested",
+        targetType: "interface_link",
+        targetId: next.id,
+        metadata: {
+          interfaceLinkId: next.id,
+          generation: next.generation,
+          consumerCapsuleId: next.consumerCapsuleId,
+          providerCapsuleId: next.providerCapsuleId,
+          providerInterfaceId: next.providerInterfaceId,
+          requirementKey: next.requirementKey,
+          interfaceType: next.interface.type,
+          interfaceVersion: next.interface.version,
+          requestedPermissions: [...next.requestedPermissions],
+        },
+      });
+    }
     return next;
   }
 

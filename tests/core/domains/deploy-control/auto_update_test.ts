@@ -36,6 +36,7 @@ import {
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import { InMemoryAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { PlanResourceChange } from "@takosumi/internal/deploy-control-api";
@@ -278,6 +279,7 @@ output "launch_url" {
     })(),
     newId,
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    activity: new ActivityService({ store }),
   });
   // First apply: plan + manual apply → active at generation 1.
   const first = await controller.createCapsulePlan("cap_auto0001",
@@ -344,6 +346,15 @@ test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client
   expect(autoPlan?.appliedApplyRunId).toBeTruthy();
   // It records the version change it made: the tracked ref's new commit.
   expect(autoPlan?.origin).toEqual({ kind: "revision", ref: newSnapshot?.ref });
+  // A clean update waits for nobody, and its Apply says it was not the first.
+  const activity = await store.listActivityEvents("ws_test001");
+  expect(activity.filter((event) => event.action === "run.approval_required")).toEqual([]);
+  expect(
+    activity.find((event) => event.action === "run.applied" && event.targetId === autoPlan?.appliedApplyRunId)?.metadata,
+  ).toMatchObject({ capsuleId: "cap_auto0001", operation: "update" });
+  // The install's first Apply is marked `create` (the install-complete notification).
+  expect(activity.filter((event) => event.action === "run.applied").map((event) => event.metadata.operation).sort())
+    .toEqual(["create", "update"]);
 });
 
 test("owned app automatic policy uses its pinned owner authority and records the system trigger", async () => {
@@ -437,6 +448,13 @@ test("a destructive update stops at waiting_approval and is never auto-applied",
   expect(autoPlan?.status).toBe("succeeded");
   expect(autoPlan?.requiresApproval).toBe(true);
   expect(autoPlan?.appliedApplyRunId).toBeUndefined();
+  // The owner is asked once (TASK-0119 own notifications read this event).
+  const waits = (await store.listActivityEvents("ws_test001")).filter(
+    (event) => event.action === "run.approval_required",
+  );
+  expect(waits.map((event) => [event.targetId, event.runId, event.metadata])).toEqual([
+    [autoPlan?.id, autoPlan?.id, { capsuleId: "cap_auto0001", operation: autoPlan?.operation }],
+  ]);
 });
 
 test("a no-op import requires approval and is never auto-applied", async () => {

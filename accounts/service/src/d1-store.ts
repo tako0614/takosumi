@@ -40,6 +40,10 @@ import {
   type NotificationPusherStore,
 } from "./notification-pushers-store.ts";
 import {
+  D1NotificationDeliveryRecords,
+  type NotificationDeliveryStore,
+} from "./notification-deliveries-store.ts";
+import {
   emptyRefreshChainPruneResult,
   isRefreshChainRetentionPhase,
   MAX_REFRESH_CHAIN_RETENTION_ROWS,
@@ -576,10 +580,12 @@ export class D1AccountsStore implements AccountsStore {
   #initialized?: Promise<void>;
   readonly #hosted: HostedIdentityRecords;
   readonly #notificationPushers: D1NotificationPusherRecords;
+  readonly #notificationDeliveries: D1NotificationDeliveryRecords;
 
   constructor(db: D1Database, options: D1AccountsStoreOptions = {}) {
     this.#db = db;
     this.#notificationPushers = new D1NotificationPusherRecords(db, () => this.initialize());
+    this.#notificationDeliveries = new D1NotificationDeliveryRecords(db, () => this.initialize());
     this.#hosted = new HostedIdentityRecords(new D1IdentityRecordRepository(db, () => this.initialize(), (value) => this.#hashSessionId(value)), this);
     this.#documents = new D1AccountsDocumentIndexStore(db);
     this.#schemaMode = resolveD1AccountsSchemaMode(options.schemaMode);
@@ -661,6 +667,12 @@ export class D1AccountsStore implements AccountsStore {
   deleteNotificationPusher(...args: Parameters<NotificationPusherStore["deleteNotificationPusher"]>) { return this.#notificationPushers.deleteNotificationPusher(...args); }
   removeNotificationPusher(...args: Parameters<NotificationPusherStore["removeNotificationPusher"]>) { return this.#notificationPushers.removeNotificationPusher(...args); }
   recordNotificationPusherOutcome(...args: Parameters<NotificationPusherStore["recordNotificationPusherOutcome"]>) { return this.#notificationPushers.recordNotificationPusherOutcome(...args); }
+  getNotificationDispatchCursor(...args: Parameters<NotificationDeliveryStore["getNotificationDispatchCursor"]>) { return this.#notificationDeliveries.getNotificationDispatchCursor(...args); }
+  compareAndSetNotificationDispatchCursor(...args: Parameters<NotificationDeliveryStore["compareAndSetNotificationDispatchCursor"]>) { return this.#notificationDeliveries.compareAndSetNotificationDispatchCursor(...args); }
+  enqueueNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["enqueueNotificationDeliveries"]>) { return this.#notificationDeliveries.enqueueNotificationDeliveries(...args); }
+  claimNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["claimNotificationDeliveries"]>) { return this.#notificationDeliveries.claimNotificationDeliveries(...args); }
+  settleNotificationDelivery(...args: Parameters<NotificationDeliveryStore["settleNotificationDelivery"]>) { return this.#notificationDeliveries.settleNotificationDelivery(...args); }
+  pruneNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["pruneNotificationDeliveries"]>) { return this.#notificationDeliveries.pruneNotificationDeliveries(...args); }
 
   async initialize(): Promise<void> {
     if (!this.#initialized) {

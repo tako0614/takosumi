@@ -23,7 +23,10 @@ import {
   boundedActivityWorkspaceIds,
   clampActivityLimit,
 } from "../deploy-control/store.ts";
-import type { OpenTofuControlStore } from "../deploy-control/store.ts";
+import type {
+  ActivityLedgerPageInput,
+  OpenTofuControlStore,
+} from "../deploy-control/store.ts";
 import { log } from "../../shared/log.ts";
 import { redactRecord } from "../../shared/redaction.ts";
 
@@ -178,6 +181,16 @@ export class ActivityService implements ActivityLedger {
     return await this.#store.listActivityEventsForWorkspaces(ids, {
       limit: clampActivityLimit(limit),
     });
+  }
+
+  /**
+   * Oldest-first page of the whole ledger, every Workspace included, for the
+   * notification dispatcher's `(createdAt, id)` cursor. Not an API surface.
+   */
+  async listAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]> {
+    return await this.#store.listActivityEventsAfter(input);
   }
 
   /** Lists one target's audit history using the shared opaque keyset cursor. */

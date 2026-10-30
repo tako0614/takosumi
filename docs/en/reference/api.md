@@ -240,6 +240,47 @@ pushers) that products use for their native apps.
   a passphrase it is `null` and POST answers 503 `web_push_unavailable`.
   Rotating the passphrase changes the key, and Takosumi Mobile subscribes again.
 
+#### What is notified
+
+The instance reads the Activity ledger (`audit_events` of every Workspace) with
+a `(createdAt, id)` cursor and sends these events to registered devices.
+Recipients come from the app (Capsule) owner and the accounts an event names,
+never from Workspace membership. A Run started by `system:*` reaches only the
+owner.
+
+| Activity | Recipients | Opens | TTL / Urgency |
+| --- | --- | --- | --- |
+| `run.approval_required` (a plan waits for approval) | app owner | `/runs/{id}` | 86400 s / `high` |
+| `run.failed` | who started the Run, and the app owner | `/runs/{id}` | 259200 s / `normal` |
+| `run.applied` with `operation: "create"` (install finished) | who started the Run | `/apps/{id}` | 259200 s / `normal` |
+| `capsule.drift_detected`, `capsule.auto_update_failed`, `capsule.auto_update_apply_failed`, `capsule.uninstall_blocked`, `interface_materialization.dead_lettered` | app owner | `/apps/{id}#attention` | 259200 s / `normal` |
+| `connection.revoked` | connection owner | `/connections` | 259200 s / `normal` |
+| `app.ownership_transfer_created` | recipient | `/apps/{id}` | 259200 s / `normal` |
+| `app.member_added` | added member | `/apps/{id}` | 259200 s / `normal` |
+| `interface_link.approval_requested` | providing app's owner | `/apps/{id}#links` | 86400 s / `high` |
+
+- The content is Declarative Web Push JSON
+  (`{"web_push":8030,"notification":{title, body, navigate, lang, tag}}`), at most
+  2,048 bytes of plaintext. `navigate` stays on the origin of the instance's
+  Accounts issuer; text is Japanese for a pusher `lang` of `ja` and English
+  otherwise. It carries the app name and the kind of Run only: no error text,
+  secret, token or Output value. `Topic` is an HMAC (per pusher and Run/app, 32
+  characters) under a key derived from the secret-store passphrase, so the relay
+  cannot map it back to ids.
+- One delivery row per (event, pusher), keyed idempotently. 2xx is delivered;
+  404/410 delete the pusher; timeout, 408, 429 (honouring `Retry-After`) and 5xx
+  are retried from 30 seconds growing to 1 hour until the TTL; other 3xx/4xx
+  (403 and 413 included) are recorded as a failure of the pusher and not retried.
+- `createdAt` is minted before the row commits, so events younger than 60
+  seconds wait for the next run. The first run starts at the present and never
+  sends history; events past their TTL are never sent.
+- On Cloudflare every scheduled run (under `waitUntil`) sends new events right
+  after enqueueing them and retries the rest on later runs, so latency follows
+  the cron interval. Bun + PostgreSQL runs an in-process loop every 30 seconds.
+- State lives in the Accounts store: PostgreSQL migration `048`
+  (`notification_dispatch_cursors`, `notification_deliveries`); D1 uses the
+  existing document table and needs no D1 migration.
+
 ## OpenTofu Stack API
 
 The Stack API runs ordinary OpenTofu / Terraform modules from Git. Existing
@@ -519,7 +560,7 @@ which is value-free (names, permission names and timestamps only). `requestedByD
 and `decline` takes `{ expectedGeneration }`; both require provider write access and return `{ link: InterfaceLink }`.
 An approved link carries `approval.kind: "provider_approved"`; a declined link carries `declined: { declinedBy, declinedAt }`.
 A link that is no longer pending or a generation mismatch is 409; a provider or consumer that is not live (including scheduled for uninstall or removed) is 412.
-Activity records `interface_link.approved` / `interface_link.declined` with ids, permission names and type/version only.
+Activity records `interface_link.approval_requested` when a pending link is created and `interface_link.approved` / `interface_link.declined` when it is decided, with ids, permission names and type/version only.
 
 GET requires consumer read access; PUT requires consumer write access; DELETE also permits
 provider write access. Insufficient access returns 403, invalid input 400, a generation conflict 409,
