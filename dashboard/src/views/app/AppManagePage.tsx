@@ -62,11 +62,13 @@ import {
   getInstallConfig,
   getRun,
   isInterfaceMaterializationRetryStale,
+  isRevisionAlreadyCurrent,
   listCapsuleRuns,
   listProviderConnections,
   listSourceSnapshots,
   listStateVersions,
   planCapsule,
+  requireReviewableRevisionPlan,
   retryInterfaceMaterializationFailure,
   type Run,
   type RunType,
@@ -507,7 +509,12 @@ export default function AppManagePage(props: {
       );
     } catch (cause) {
       if (capsuleId() === forCapsule) {
-        setSectionError({ section, message: friendlyError(cause, t).message });
+        // Finding no newer version is an answer, not a failure.
+        if (isRevisionAlreadyCurrent(cause)) {
+          setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
+        } else {
+          setSectionError({ section, message: friendlyError(cause, t).message });
+        }
       }
     } finally {
       if (capsuleId() === forCapsule) setStarting(undefined);
@@ -750,7 +757,9 @@ export default function AppManagePage(props: {
     void startReview(
       "attention",
       "update",
-      async () => (await advanceGitRevisionPlan(revisionPlanId)).revisionPlan.planRunId,
+      async () =>
+        requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId))
+          .revisionPlan.planRunId,
       { action: "continue_revision", restartable: false },
     );
   const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);

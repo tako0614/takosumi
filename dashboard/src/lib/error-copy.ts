@@ -151,6 +151,8 @@ const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
   install_config_not_found: "controlError.configNotFound",
   // A second version change while one is still being prepared (409).
   revision_in_progress: "controlError.revisionInProgress",
+  // A version check whose target is exactly the applied revision.
+  revision_already_current: "controlError.revisionAlreadyCurrent",
 };
 
 const CODE_MESSAGES: Readonly<Record<string, MessageKey>> = {

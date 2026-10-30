@@ -624,6 +624,22 @@ so reusing an Idempotency-Key with different values replays the first record
 | GET | `/api/v1/revision-plans/{revisionPlanId}` | Read a Git revision plan without advancing it |
 | POST | `/api/v1/revision-plans/{revisionPlanId}/reconcile` | Advance a Git revision plan toward a reviewable Run |
 
+When the target is the applied version itself (the same ref, path, and commit),
+there is nothing to update: the coordinator ends with `phase: "failed"`,
+`diagnostic.code: "revision_already_current"`, and `nextAction: "none"`. For an
+app pinned to a commit, asking for that commit answers without syncing the
+Source; a branch or tag answers the same after a sync finds the commit
+unchanged. The same commit under a different ref (pinning a branch's commit,
+for example) changes what the app follows and is planned as usual. A sync of
+an app-owned Source is requested for the account that created the revision,
+which is also the actor of its Plan Run. Refusals that reconciling again cannot
+change, such as a refusal for that account (`app_access_denied`), an inactive
+Source, or an invalid ref, end as `failed` with that reason as
+`diagnostic.code`. A retryable failure returns 202 with
+`diagnostic.code: "revision_plan_reconcile_retryable"`, the step
+(`planCreationStage`), and the owner's error classification (`controllerCode`,
+`reason`); exception text is never returned.
+
 ### Runs and StateVersions
 
 | Method | Path | Description |

@@ -1700,20 +1700,36 @@ export async function createReviewableGitRevisionPlan(
       reconcile: (current) =>
         reconcileGitRevisionPlan(current.revisionPlan.id, { signal }),
     });
-    if (
-      response.nextAction !== "review_run" ||
-      !response.revisionPlan.planRunId
-    ) {
-      throw new ControlApiError(
-        409,
-        response.revisionPlan.diagnostic?.code ?? "revision_plan_failed",
-        response.revisionPlan.diagnostic?.message ??
-          "The revision plan did not produce a reviewable Run.",
-        response,
-      );
-    }
-    return response;
+    return requireReviewableRevisionPlan(response);
   });
+}
+
+/**
+ * The settled revision as a reviewable Plan Run, or its own diagnostic as a
+ * `ControlApiError` (e.g. `revision_already_current` when there is nothing to
+ * update).
+ */
+export function requireReviewableRevisionPlan(
+  response: GitRevisionPlanResponse,
+): GitRevisionPlanResponse & {
+  readonly revisionPlan: { readonly planRunId: string };
+} {
+  const planRunId = response.revisionPlan.planRunId;
+  if (response.nextAction !== "review_run" || !planRunId) {
+    throw new ControlApiError(
+      409,
+      response.revisionPlan.diagnostic?.code ?? "revision_plan_failed",
+      response.revisionPlan.diagnostic?.message ??
+        "The revision plan did not produce a reviewable Run.",
+      response,
+    );
+  }
+  return { ...response, revisionPlan: { ...response.revisionPlan, planRunId } };
+}
+
+/** Whether a version check found that the app already runs that version. */
+export function isRevisionAlreadyCurrent(error: unknown): boolean {
+  return error instanceof ControlApiError && error.code === "revision_already_current";
 }
 
 const CAPSULE_STATUSES: ReadonlySet<CapsuleStatus> = new Set([

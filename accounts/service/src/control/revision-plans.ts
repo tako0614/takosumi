@@ -49,7 +49,17 @@ import { requireResourceAccess } from "./app-authorization.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_DIAGNOSTIC_CODE = 64;
+const MAX_DIAGNOSTIC_REASON = 128;
 const MAX_DIAGNOSTIC_MESSAGE = 256;
+const DIAGNOSTIC_TOKEN = /^[A-Za-z][A-Za-z0-9._:-]*$/u;
+const IMMUTABLE_COMMIT = /^[0-9a-f]{40}$/iu;
+
+/** The terminal answer when the target is exactly what the app already runs. */
+const ALREADY_CURRENT: GitInstallPlanDiagnostic = {
+  code: "revision_already_current",
+  message:
+    "This app already runs this version: the same Git ref, path and commit. There is nothing to update.",
+};
 
 type StoredGitRevisionPlan = StoredGitInstallPlan & {
   readonly operation: "revision";
@@ -380,18 +390,21 @@ async function reconcileRevisionPlan(
       retryable: false,
     };
   } catch (error) {
-    const durableConflict = permanentRevisionControllerDiagnostic(error);
+    // A deterministic refusal ends the coordinator with its own reason;
+    // reconciling again would only repeat it. Anything else may have
+    // committed before its acknowledgement was lost, so it stays retryable
+    // and records which owner error it saw.
+    const deterministic = permanentRevisionControllerDiagnostic(error);
     outcome =
       error instanceof PermanentRevisionPlanError
         ? { plan: failedPlan(acquired.plan, error.diagnostic), retryable: false }
-        : durableConflict
-          ? { plan: failedPlan(acquired.plan, durableConflict), retryable: false }
+        : deterministic
+          ? { plan: failedPlan(acquired.plan, deterministic), retryable: false }
         : {
-            plan: withDiagnostic(acquired.plan, {
-              code: "revision_plan_reconcile_retryable",
-              message:
-                "Takosumi could not confirm the last coordinator step. Reconcile again to recover canonical state.",
-            }),
+            plan: withDiagnostic(
+              acquired.plan,
+              retryableDiagnostic(acquired.plan, error),
+            ),
             retryable: true,
           };
   }
@@ -418,7 +431,38 @@ async function reconcileRevisionPlan(
 function permanentRevisionControllerDiagnostic(
   error: unknown,
 ): GitInstallPlanDiagnostic | undefined {
+  const diagnostic = permanentRevisionControllerOutcome(error);
+  return diagnostic ? { ...diagnostic, ...ownerErrorFields(error) } : undefined;
+}
+
+function permanentRevisionControllerOutcome(
+  error: unknown,
+): GitInstallPlanDiagnostic | undefined {
   switch (structuredErrorReason(error)) {
+    // An app-owned Source admits a sync only for a current account of that
+    // app with an active ownership epoch. Reconciling the same row again can
+    // never change who asked for it.
+    case "app_access_denied":
+      return {
+        code: "app_access_denied",
+        message:
+          "The account that asked for this version change can no longer sync this app's Source.",
+      };
+    case "source_not_active":
+      return {
+        code: "source_not_active",
+        message: "The app's Source is not active, so its version cannot change.",
+      };
+    case "source_owned_by_another_app":
+      return {
+        code: "source_owned_by_another_app",
+        message: "This Source belongs to another app.",
+      };
+    case "invalid_source_revision":
+      return {
+        code: "invalid_source_revision",
+        message: "Takosumi cannot sync the requested Git ref for this app.",
+      };
     case "source_sync_identity_conflict":
       return {
         code: "source_sync_identity_conflict",
@@ -444,8 +488,74 @@ function permanentRevisionControllerDiagnostic(
           "The initial install review pins a different SourceSnapshot. Apply that Plan before revising.",
       };
     default:
+      break;
+  }
+  if (!(error instanceof OpenTofuControllerError)) return undefined;
+  switch (error.code) {
+    // Input the owner rejects as malformed, or a capability this host does
+    // not have, is the same on every reconcile.
+    case "invalid_argument":
+      return {
+        code: "revision_request_invalid",
+        message: "Takosumi cannot prepare this version change as requested.",
+      };
+    case "not_implemented":
+      return {
+        code: "revision_unsupported",
+        message: "This Takosumi host cannot prepare version changes.",
+      };
+    case "connection_not_owned_by_app_owner":
+      return {
+        code: "connection_not_owned_by_app_owner",
+        message: "The Source's Git connection is not owned by the app owner.",
+      };
+    // Who asked for the change is part of this row; a refusal for that
+    // account does not change by reconciling again.
+    case "app_access_denied":
+    case "app_owner_only":
+    case "permission_denied":
+      return {
+        code: error.code,
+        message:
+          "The account that asked for this version change is not allowed to complete it.",
+      };
+    default:
       return undefined;
   }
+}
+
+/** Retryable, but never silent: which coordinator step and owner error. */
+function retryableDiagnostic(
+  plan: StoredGitRevisionPlan,
+  error: unknown,
+): GitInstallPlanDiagnostic {
+  return {
+    code: "revision_plan_reconcile_retryable",
+    message:
+      "Takosumi could not confirm the last coordinator step. Reconcile again to recover canonical state.",
+    planCreationStage: revisionPlanCreationStage(plan.phase),
+    ...ownerErrorFields(error),
+  };
+}
+
+/** Bounded owner error classification; never exception prose. */
+function ownerErrorFields(
+  error: unknown,
+): Pick<GitInstallPlanDiagnostic, "controllerCode" | "reason"> {
+  if (!(error instanceof OpenTofuControllerError)) return {};
+  const reason = structuredErrorReason(error);
+  return {
+    controllerCode: error.code,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+function revisionPlanCreationStage(
+  phase: StoredGitRevisionPlan["phase"],
+): NonNullable<GitInstallPlanDiagnostic["planCreationStage"]> {
+  if (phase === "syncing_source") return "source";
+  if (phase === "planning") return "create";
+  return "preparation";
 }
 
 interface RevisionAdvanceOutcome {
@@ -488,6 +598,14 @@ async function advanceRevisionSource(
   if (plan.sourceSyncRunId) {
     sync = await operations.getSourceSyncRun(plan.sourceSyncRunId);
   } else {
+    // An exact commit the app already runs, from the same ref and subtree,
+    // cannot have a newer version: answer without syncing it again.
+    if (
+      IMMUTABLE_COMMIT.test(plan.revision.targetRef) &&
+      isAdoptedRevision(plan, identity.adopted, plan.revision.targetRef)
+    ) {
+      return failedPlan(plan, ALREADY_CURRENT);
+    }
     sync = (
       await operations.createSourceSync(
         plan.sourceId,
@@ -502,6 +620,10 @@ async function advanceRevisionSource(
           },
         },
         plan.workspaceManagementAuthority,
+        // An app-owned Source syncs only for a current account of its app:
+        // the account that asked for this version change, which is also the
+        // actor of the Plan it prepares.
+        plan.createdBy,
       )
     ).run;
   }
@@ -521,6 +643,15 @@ async function advanceRevisionSource(
     sync.snapshotId!,
   );
   assertRevisionSnapshotMatches(snapshot, plan, sync);
+  // A branch or tag that still resolves to the applied commit has nothing
+  // newer. A different ref to the same commit is a lane change and is
+  // planned like any other version.
+  if (isAdoptedRevision(plan, identity.adopted, snapshot.resolvedCommit)) {
+    return failedPlan(
+      progressed(plan, { sourceSyncRunId: sync.id, sourceSnapshotId: snapshot.id }),
+      ALREADY_CURRENT,
+    );
+  }
   const compatibility = await revisionCompatibilityEvidence(plan, snapshot);
   return progressed(plan, {
     sourceSyncRunId: sync.id,
@@ -651,6 +782,8 @@ interface RevisionIdentity {
   readonly source: Source;
   readonly installConfig: InstallConfig;
   readonly modulePath: string;
+  /** The Source revision of the applied state, when the Capsule has one. */
+  readonly adopted?: CapsuleAdoptedSourceRevision;
 }
 
 async function assertRevisionIdentity(
@@ -741,7 +874,41 @@ async function assertRevisionIdentity(
       "The pinned Capsule, Source, state generation, or InstallConfig changed before planning.",
     );
   }
-  return { capsule, source, installConfig, modulePath };
+  return {
+    capsule,
+    source,
+    installConfig,
+    modulePath,
+    ...(adoptedSourceRevision ? { adopted: adoptedSourceRevision } : {}),
+  };
+}
+
+/**
+ * Whether the target is exactly the applied Source revision: the same Git
+ * ref (not merely the same commit), the same subtree, and the same commit.
+ */
+function isAdoptedRevision(
+  plan: StoredGitRevisionPlan,
+  adopted: CapsuleAdoptedSourceRevision | undefined,
+  resolvedCommit: string | undefined,
+): boolean {
+  return (
+    adopted !== undefined &&
+    resolvedCommit !== undefined &&
+    sameGitName(adopted.ref, plan.revision.targetRef) &&
+    adopted.path === plan.source.path &&
+    sameGitName(adopted.resolvedCommit, resolvedCommit)
+  );
+}
+
+/** Ref names compare exactly; full commit ids compare without case. */
+function sameGitName(left: string, right: string): boolean {
+  return (
+    left === right ||
+    (IMMUTABLE_COMMIT.test(left) &&
+      IMMUTABLE_COMMIT.test(right) &&
+      left.toLowerCase() === right.toLowerCase())
+  );
 }
 
 interface RevisionSourceEvidence {
@@ -1046,10 +1213,32 @@ function boundedDiagnostic(
   const message = diagnostic.message
     .replace(/[\r\n\0]/gu, " ")
     .slice(0, MAX_DIAGNOSTIC_MESSAGE);
+  const controllerCode = boundedDiagnosticToken(
+    diagnostic.controllerCode,
+    MAX_DIAGNOSTIC_CODE,
+  );
+  const reason = boundedDiagnosticToken(diagnostic.reason, MAX_DIAGNOSTIC_REASON);
   return {
     code: code.slice(0, MAX_DIAGNOSTIC_CODE),
     message: message || "Takosumi could not safely advance this revision plan.",
+    ...(diagnostic.planCreationStage === "source" ||
+    diagnostic.planCreationStage === "preparation" ||
+    diagnostic.planCreationStage === "create"
+      ? { planCreationStage: diagnostic.planCreationStage }
+      : {}),
+    ...(controllerCode ? { controllerCode } : {}),
+    ...(reason ? { reason } : {}),
   };
+}
+
+function boundedDiagnosticToken(
+  value: string | undefined,
+  maxLength: number,
+): string | undefined {
+  if (!value || value.length > maxLength || !DIAGNOSTIC_TOKEN.test(value)) {
+    return undefined;
+  }
+  return value;
 }
 
 class PermanentRevisionPlanError extends Error {
