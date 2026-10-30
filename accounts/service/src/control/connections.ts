@@ -269,19 +269,31 @@ async function listControlConnections(
   if (!page.ok) return page.response;
   // A Workspace-scoped connection is its owner's (TASK-0118 P9.1-d): the
   // caller sees only the connections it owns that record this Workspace. The
-  // page cursor still follows the store's keyset, so paging continues past
-  // rows owned by someone else.
-  const response = await operations.listConnections(workspaceId, page.params);
+  // store pages are read whole (bounded) and paged again over the visible
+  // rows, so a cursor never encodes someone else's connection.
   const owned = connectionOwnerFilter(operations, session.subject);
-  const connections: ProviderConnection[] = [];
-  for (const connection of response.connections) {
-    if (await owned(connection)) connections.push(connection);
+  const visible: ProviderConnection[] = [];
+  let cursor: string | undefined;
+  for (let reads = 0; ; reads += 1) {
+    if (reads >= LEGACY_WORKSPACE_CONNECTION_PAGE_READS) return controlPlaneUnavailable();
+    const response = await operations.listConnections(workspaceId, {
+      limit: MAX_PAGE_LIMIT, ...(cursor ? { cursor } : {}),
+    });
+    for (const connection of response.connections) {
+      if (await owned(connection)) visible.push(connection);
+    }
+    if (!response.nextCursor || response.nextCursor === cursor) break;
+    cursor = response.nextCursor;
   }
+  const result = pageSorted(visible.sort(compareKeyset), page.params);
   return json({
-    ...response,
-    connections: connections.map(publicProviderConnection),
+    connections: result.items.map(publicProviderConnection),
+    ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
   });
 }
+
+/** Store pages one legacy Workspace connection list may read. */
+const LEGACY_WORKSPACE_CONNECTION_PAGE_READS = 20;
 
 async function listAppConnectionLabels(
   operations: ControlPlaneOperations,

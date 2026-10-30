@@ -173,7 +173,10 @@ test("legacy Workspace connection list shows only the caller's own connections; 
     }) },
     // The owner's connection, a legacy row without an owner (the Workspace
     // owner's), and one the admin owns.
-    listConnections: async () => ({ connections: [row("conn_owner", "account_owner"), row("conn_legacy"), row("conn_admin", "account_admin")] }),
+    // Two store pages; the first page ends on someone else's row.
+    listConnections: async (_workspaceId: string, params: { cursor?: string }) => params.cursor === undefined
+      ? { connections: [row("conn_admin", "account_admin"), row("conn_legacy"), row("conn_owner", "account_owner")], nextCursor: "store_cursor_after_conn_owner" }
+      : { connections: [row("conn_owner_2", "account_owner")] },
     createConnection: async () => { connectionCalls++; throw new Error("unexpected mint"); },
   } as unknown as ControlPlaneOperations;
   const store = new InMemoryAccountsStore();
@@ -186,7 +189,11 @@ test("legacy Workspace connection list shows only the caller's own connections; 
   };
   const listed = await handleConnections(ctx("connections?workspaceId=ws_owner", "GET"), ["connections"], "GET");
   expect(listed?.status).toBe(200);
-  expect(((await listed!.json()).connections as { id: string }[]).map((connection) => connection.id)).toEqual(["conn_admin"]);
+  const body = await listed!.json();
+  expect((body.connections as { id: string }[]).map((connection) => connection.id)).toEqual(["conn_admin"]);
+  // No cursor is handed out that points at someone else's row.
+  expect(body.nextCursor).toBeUndefined();
+  expect(JSON.stringify(body)).not.toContain("conn_owner");
   // The Connection vault records the Workspace owner as a Workspace row's
   // owner, so nobody else may create one.
   const created = await handleConnections(ctx("connections", "POST", { workspaceId: "ws_owner" }), ["connections"], "POST");
