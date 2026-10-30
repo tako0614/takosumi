@@ -22,6 +22,10 @@ and migration `044` validates its nullable legacy-compatible shape check. A
 legacy null remains stored but is denied until an exact Apply refreshes it.
 Migration `046` adds nullable PAT `app_ids`. Existing Workspace-bound tokens
 keep their Workspace fence until a Control-owned snapshot conversion is applied.
+Migration `047` adds the `notification_pushers` table for Takosumi Mobile
+pushers (the devices that receive this instance's own notifications as Web
+Push). It is a new table only; Accounts D1 stores the same records in its
+existing document and index tables and needs no D1 migration.
 
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).

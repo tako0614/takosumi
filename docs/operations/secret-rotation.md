@@ -141,6 +141,18 @@ Any helper input file stays outside the repo and is deleted after import.
 Shell history, logs, PR comments, and terminal transcripts must not contain the
 credential.
 
+## Web Push key for Takosumi Mobile
+
+The instance's VAPID key for Takosumi Mobile notifications is not stored. It is
+derived from the global secret-store passphrase
+(`TAKOSUMI_SECRET_STORE_PASSPHRASE`, else `TAKOSUMI_SECRET_STORE_KEY`) with
+HKDF-SHA256 under the label `takosumi/web-push/vapid/v1`. Rotating the
+passphrase therefore also changes `web_push_public_key`. Until each device
+notices the new key and subscribes again, the relay answers the instance's
+pushes with 403; the instance records those pushers as failing and keeps them
+(it never deletes on 403), and the device removes the old pusher when it
+re-registers.
+
 ## Run-scoped generated secrets
 
 A repository manifest's binding-delivered `secret.generated` slots are minted

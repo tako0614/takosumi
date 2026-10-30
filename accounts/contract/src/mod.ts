@@ -38,6 +38,14 @@ export const TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND =
   "takosumi.account-pat-inventory@v1" as const;
 export const TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH =
   "/api/v1/privacy/requests";
+/**
+ * Devices that receive this instance's own notifications (Takosumi Mobile)
+ * as standard Web Push through a push relay. Takosumi's own API: unrelated to
+ * the shared `contract/notification-pushers.ts` v1 `http` pushers that
+ * products use for their native apps.
+ */
+export const TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH =
+  "/api/v1/account/notification-pushers";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH =
   "/oauth/upstream/authorize";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH =
@@ -264,6 +272,72 @@ export interface TakosumiAccountsPrivacyRequestResponse {
 
 export interface TakosumiAccountsListPrivacyRequestsResponse {
   requests: readonly TakosumiAccountsPrivacyRequest[];
+}
+
+/**
+ * Registration body. The field layout follows Matrix MSC4174 `webpush`
+ * pushers: `pushkey` is the subscription's `p256dh`, `data.url` the push
+ * endpoint and `data.auth` the subscription's `auth` secret.
+ */
+export interface TakosumiAccountsNotificationPusherRegistration {
+  readonly kind: "webpush";
+  readonly app_id: string;
+  readonly pushkey: string;
+  readonly data: { readonly url: string; readonly auth: string };
+  readonly device_display_name: string;
+  readonly lang: string;
+}
+
+/** A registered pusher. `data.auth` is never returned. */
+export interface TakosumiAccountsNotificationPusher {
+  readonly id: string;
+  readonly kind: "webpush";
+  readonly app_id: string;
+  readonly pushkey: string;
+  readonly data: { readonly url: string };
+  readonly device_display_name: string;
+  readonly lang: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly last_success_at: string | null;
+  readonly last_failure_at: string | null;
+  /** HTTP status of the last failure; null for a timeout or network error. */
+  readonly last_failure_status: number | null;
+  /** True while the most recent outcome for this pusher was a failure. */
+  readonly failing: boolean;
+}
+
+/**
+ * Why an instance cannot send Web Push: no secret-store passphrase, no relay
+ * origin configured by the operator, or an Accounts issuer that is not https.
+ */
+export type TakosumiAccountsWebPushUnavailableReason =
+  | "secret_not_configured"
+  | "relay_not_configured"
+  | "issuer_not_https";
+
+export interface TakosumiAccountsNotificationPusherList {
+  readonly pushers: readonly TakosumiAccountsNotificationPusher[];
+  /**
+   * The instance's VAPID public key (uncompressed P-256 point, base64url):
+   * the `application_server_key` for the relay subscription. Null when the
+   * instance cannot send Web Push; `web_push_unavailable_reason` says why.
+   */
+  readonly web_push_public_key: string | null;
+  readonly web_push_unavailable_reason: TakosumiAccountsWebPushUnavailableReason | null;
+}
+
+export interface TakosumiAccountsNotificationPusherResponse {
+  readonly pusher: TakosumiAccountsNotificationPusher;
+}
+
+export function takosumiAccountsNotificationPusherPath(
+  pusherId: string,
+): string {
+  return `${TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH}/${pathSegment(
+    pusherId,
+    "pusherId",
+  )}`;
 }
 
 export function takosumiAccountsAccountTokenRevokePath(
