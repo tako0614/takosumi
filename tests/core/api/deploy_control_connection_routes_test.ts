@@ -1,5 +1,6 @@
 // takos-secret-scan: synthetic — connection fixtures carry a stub PRIVATE KEY block.
 import { expect, test } from "bun:test";
+import { planOwnNotification } from "../../../core/domains/notifications/own_notifications.ts";
 
 import { createApiApp } from "../../../core/api/app.ts";
 import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
@@ -9,7 +10,8 @@ import {
 } from "../../../core/domains/deploy-control/store.ts";
 import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
-import { ActivityService } from "../../../core/domains/activity/mod.ts";
+import { ActivityService, type RecordActivityContext } from "../../../core/domains/activity/mod.ts";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import { ConnectionsService } from "../../../core/domains/connections/mod.ts";
 import { WorkspacesService } from "../../../core/domains/workspaces/mod.ts";
 import type { DeployControlInternalRouteDependencies } from "../../../core/api/deploy_control_internal_routes.ts";
@@ -39,6 +41,7 @@ function makeApp(
     fetch?: typeof fetch;
     connectionOAuthHelpers?: DeployControlInternalRouteDependencies["connectionOAuthHelpers"];
     allowOperatorScopedProviderConnections?: boolean;
+    onActivityRecorded?: ConstructorParameters<typeof ActivityService>[0]["onRecorded"];
   } = {},
 ) {
   const store = new InMemoryOpenTofuControlStore();
@@ -65,6 +68,7 @@ function makeApp(
   const activityService = new ActivityService({
     store,
     now: () => new Date("2026-06-04T00:00:00.000Z"),
+    ...(options.onActivityRecorded ? { onRecorded: options.onActivityRecorded } : {}),
   });
   const connectionsService = new ConnectionsService({
     store,
@@ -1307,7 +1311,8 @@ test("POST /internal/v1/connections/{id}/test verifies aws assume-role via STS (
 });
 
 test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async () => {
-  const app = await makeApp();
+  const recorded: Array<[ActivityEvent, RecordActivityContext | undefined]> = [];
+  const app = await makeApp({ onActivityRecorded: (event, context) => recorded.push([event, context]) });
   const created = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
@@ -1356,7 +1361,24 @@ test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async 
     recipeAuthMode: "api_token",
     scope: "workspace",
   });
+  expect(connection.ownerAccountId).toBe("fixture-route-owner");
+  // Public Activity never names the owner.
+  expect(JSON.stringify(events)).not.toContain("fixture-route-owner");
   expect(JSON.stringify(events)).not.toContain("cf-secret-token");
+  // The record itself is gone: the owner, captured before deletion, reached
+  // the notification hook only as unstored context.
+  const read = await app.request(`/internal/v1/connections/${connection.id}`, {
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(read.status).toBe(404);
+  const hooked = recorded.find(([event]) => event.action === "connection.revoked");
+  expect(hooked?.[1]).toEqual({ ownerAccountId: "fixture-route-owner", actorAccountId: "acct_1" });
+  expect(planOwnNotification(revokedEvent)).toBeUndefined();
+  expect(planOwnNotification(hooked![0], hooked![1])).toMatchObject({
+    kind: "connection.revoked",
+    recipients: [{ kind: "account", accountId: "fixture-route-owner" }],
+    navigatePath: "/connections",
+  });
 });
 
 test("connection id with an unsupported shape is rejected (400)", async () => {

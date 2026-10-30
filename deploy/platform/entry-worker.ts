@@ -13,7 +13,8 @@ import {
   composeTakoserverHostedWorkerEnv,
   OpenTofuRunOwnerObject,
 } from "./takoserver_hosted_worker.ts";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { waitUntil, WorkerEntrypoint } from "cloudflare:workers";
+import { useInvocationWaitUntil } from "../../worker/src/own_notification_dispatch.ts";
 import {
   createCloudflareTakosumiRuntimeBindingMaterializer,
   type RuntimeBindingMaterializerInput,
@@ -144,6 +145,11 @@ function runtimeBindingFailureReason(error: unknown): string {
   }
   return "dependency_unavailable";
 }
+
+// Immediate Takosumi Mobile notifications attach to the invocation that
+// records the Activity (a request or a Durable Object call) through the
+// runtime's own per-invocation waitUntil (TASK-0119).
+useInvocationWaitUntil(waitUntil);
 
 type VersionedPlatformEnv = CloudflareWorkerEnv & {
   readonly TAKOSUMI_VERSION_METADATA?: PlatformWorkerVersionMetadata;

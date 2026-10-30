@@ -134,6 +134,16 @@ export async function saveNotificationPusher(
   };
 }
 
+export async function hasAnyNotificationPusher(
+  client: PostgresQueryClient,
+): Promise<boolean> {
+  const row = await runFirst<{ present: boolean }>(
+    client,
+    "SELECT EXISTS (SELECT 1 FROM accounts_v1.notification_pushers) AS present",
+  );
+  return row?.present === true;
+}
+
 export async function listNotificationPushersForSubject(
   client: PostgresQueryClient,
   subject: TakosumiSubject,

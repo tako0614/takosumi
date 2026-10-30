@@ -110,6 +110,15 @@ export function describeActivityEvent(
             : t("notif.event.planReadyDetail"),
       };
     }
+    case "run.approval_required": {
+      const operation = operationLabel(metaString(m, "operation"));
+      return {
+        title: name
+          ? t("notif.event.approvalRequiredNamed", { name, operation })
+          : t("notif.event.approvalRequired", { operation }),
+        detail: t("notif.event.approvalRequiredDetail"),
+      };
+    }
     case "run.approved": {
       const operation = operationLabel(metaString(m, "operation"));
       return {
@@ -211,6 +220,14 @@ export function describeActivityEvent(
     }
     case "output_share.revoked": {
       return { title: t("notif.event.shareRevoked") };
+    }
+    case "interface_link.approval_requested": {
+      return {
+        title: name
+          ? t("notif.event.interfaceLinkRequestedNamed", { name })
+          : t("notif.event.interfaceLinkRequested"),
+        detail: t("notif.event.interfaceLinkRequestedDetail"),
+      };
     }
     case "interface_link.approved": {
       return { title: t("notif.event.interfaceLinkApproved") };
