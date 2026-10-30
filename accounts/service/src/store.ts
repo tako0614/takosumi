@@ -21,6 +21,10 @@ import type {
 } from "./identity-state.ts";
 
 import type { HostedIdentityStore } from "./identity-state.ts";
+import {
+  MemoryNotificationPusherRecords,
+  type NotificationPusherStore,
+} from "./notification-pushers-store.ts";
 export type { AccountEmailProofRecord, UpstreamLoginTransactionRecord, HostedOidcGrantRecord, IdentityMergeOperation, IdentityMergeMutation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord } from "./identity-state.ts";
 
 export interface AuthorizationCodeRecord {
@@ -308,7 +312,8 @@ export interface PrivacyRequestRecord {
   updatedAt: number;
 }
 
-export interface AccountsStore extends HostedIdentityStore {
+export interface AccountsStore
+  extends HostedIdentityStore, Partial<NotificationPusherStore> {
   /**
    * Optional bounded lookup for all credential kinds sharing one opaque token.
    * Implementations must use exact indexed keys and must not select a winner.
@@ -612,6 +617,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   readonly #accountSessions = new Map<string, AccountSessionRecord>();
   readonly #privacyRequests = new Map<string, PrivacyRequestRecord>();
   readonly #privacyRequestsBySubject = new Map<TakosumiSubject, Set<string>>();
+  readonly #notificationPushers = new MemoryNotificationPusherRecords();
   readonly #authorizationCodes = new Map<string, AuthorizationCodeRecord>();
   readonly #accessTokens = new Map<string, TokenRecord>();
   readonly #refreshTokens = new Map<string, TokenRecord>();
@@ -817,6 +823,13 @@ export class InMemoryAccountsStore implements AccountsStore {
     if(next.policy==="hosted")return (async()=>{await this.#hosted.rememberHostedAccountSessionAnchor(await hashSessionId(next.sessionId),next);return replace();})();
     return replace();
   }
+
+  saveNotificationPusher(...args: Parameters<NotificationPusherStore["saveNotificationPusher"]>) { return this.#notificationPushers.saveNotificationPusher(...args); }
+  listNotificationPushersForSubject(...args: Parameters<NotificationPusherStore["listNotificationPushersForSubject"]>) { return this.#notificationPushers.listNotificationPushersForSubject(...args); }
+  findNotificationPusher(...args: Parameters<NotificationPusherStore["findNotificationPusher"]>) { return this.#notificationPushers.findNotificationPusher(...args); }
+  deleteNotificationPusher(...args: Parameters<NotificationPusherStore["deleteNotificationPusher"]>) { return this.#notificationPushers.deleteNotificationPusher(...args); }
+  removeNotificationPusher(...args: Parameters<NotificationPusherStore["removeNotificationPusher"]>) { return this.#notificationPushers.removeNotificationPusher(...args); }
+  recordNotificationPusherOutcome(...args: Parameters<NotificationPusherStore["recordNotificationPusherOutcome"]>) { return this.#notificationPushers.recordNotificationPusherOutcome(...args); }
 
   savePrivacyRequest(record: PrivacyRequestRecord): void {
     const existing = this.#privacyRequests.get(record.requestId);

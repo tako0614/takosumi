@@ -38,6 +38,7 @@ import {
   parseInstalledAppDelegationSources,
   parseWorkspaceMutationsFrozen,
   parseAppOwnershipMutationsFrozen,
+  notificationPusherRouteOptionsFromEnv,
 } from "@takosjp/takosumi-accounts-service";
 import {
   isAccountsApiPath,
@@ -1343,6 +1344,9 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ),
     privacyRetentionPolicyRef: optionalString(
       env.TAKOSUMI_ACCOUNTS_PRIVACY_RETENTION_POLICY_REF,
+    ),
+    notificationPushers: notificationPusherRouteOptionsFromEnv(
+      env as unknown as Readonly<Record<string, unknown>>,
     ),
   };
   const stableOidc = await parseStableOidcFlow(env);

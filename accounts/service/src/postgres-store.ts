@@ -34,6 +34,8 @@ import * as privacy from "./postgres/privacy.ts";
 import * as refreshChain from "./postgres/refresh-chain.ts";
 import * as sessions from "./postgres/sessions.ts";
 import * as tokens from "./postgres/tokens.ts";
+import * as notificationPushers from "./postgres/notification-pushers.ts";
+import type { NotificationPusherStore } from "./notification-pushers-store.ts";
 
 export type { PostgresQueryClient, PostgresQueryResult };
 
@@ -114,6 +116,13 @@ export class PostgresAccountsStore implements AccountsStore {
   findIdentityMergeOperation(operationId: string): Promise<IdentityMergeOperation | undefined> { return this.#hosted.findIdentityMergeOperation(operationId); }
   compareAndSetIdentityMerge(input: IdentityMergeMutation): Promise<boolean> { return this.#hosted.compareAndSetIdentityMerge(input); }
   unlinkCanonicalUpstreamIdentity(input: UnlinkUpstreamIdentityInput): Promise<boolean> { return this.#hosted.unlinkCanonicalUpstreamIdentity(input); }
+
+  saveNotificationPusher(...args: Parameters<NotificationPusherStore["saveNotificationPusher"]>) { return notificationPushers.saveNotificationPusher(this.#client, ...args); }
+  listNotificationPushersForSubject(...args: Parameters<NotificationPusherStore["listNotificationPushersForSubject"]>) { return notificationPushers.listNotificationPushersForSubject(this.#client, ...args); }
+  findNotificationPusher(...args: Parameters<NotificationPusherStore["findNotificationPusher"]>) { return notificationPushers.findNotificationPusher(this.#client, ...args); }
+  deleteNotificationPusher(...args: Parameters<NotificationPusherStore["deleteNotificationPusher"]>) { return notificationPushers.deleteNotificationPusher(this.#client, ...args); }
+  removeNotificationPusher(...args: Parameters<NotificationPusherStore["removeNotificationPusher"]>) { return notificationPushers.removeNotificationPusher(this.#client, ...args); }
+  recordNotificationPusherOutcome(...args: Parameters<NotificationPusherStore["recordNotificationPusherOutcome"]>) { return notificationPushers.recordNotificationPusherOutcome(this.#client, ...args); }
 
   resolveAccountsBearerCandidates(
     token: string,

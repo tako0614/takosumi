@@ -16,9 +16,11 @@ import {
   parseTakosumiMobileBuiltinClientSetting,
 } from "@takosjp/takosumi-accounts-service";
 import {
+  notificationPusherRouteOptionsFromEnv,
   parseAppOwnershipMutationsFrozen,
   parseInstalledAppDelegationSources,
   type InstalledAppDelegationSource,
+  type NotificationPusherRouteOptions,
 } from "@takosjp/takosumi-accounts-service";
 
 export interface NodeAccountsStableOidcConfig {
@@ -53,6 +55,8 @@ export interface NodeAccountsServerConfig {
   readonly installedAppDelegationSources: readonly InstalledAppDelegationSource[];
   /** `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen`: app member/transfer writes return 409. */
   readonly appOwnershipMutationsFrozen?: boolean;
+  /** Takosumi Mobile pushers: VAPID key from the secret-store passphrase, relay allowlist. */
+  readonly notificationPushers?: NotificationPusherRouteOptions;
 }
 
 export function parseEnv(
@@ -102,6 +106,7 @@ export function parseEnv(
     appOwnershipMutationsFrozen: parseAppOwnershipMutationsFrozen(
       env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,
     ),
+    notificationPushers: notificationPusherRouteOptionsFromEnv(env),
   };
 }
 

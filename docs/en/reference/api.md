@@ -201,6 +201,45 @@ an inactive or mismatched membership returns 403
 `workspace_membership_inactive`. This read does not update `last_used_at`,
 audit, sessions, the Control schema, or Workspace / Project / TargetPool state.
 
+### Takosumi Mobile notification pushers
+
+Takosumi Mobile receives this instance's own notifications (approval waits, Run
+failures and so on) as standard Web Push (RFC 8030, 8291, 8292) through a push
+relay. The device registers a `webpush` pusher here. The fields follow Matrix
+MSC4174: `pushkey` is the subscription's `p256dh`, `data.url` the push
+endpoint, and `data.auth` the subscription's `auth`. This is Takosumi's own API,
+separate from the shared `contract/notification-pushers.ts` (v1 `http`
+pushers) that products use for their native apps.
+
+| Method | Path                                        | Description                                                             |
+| ------ | ------------------------------------------- | ----------------------------------------------------------------------- |
+| GET    | `/api/v1/account/notification-pushers`      | your pushers and `web_push_public_key` (the instance's VAPID public key) |
+| POST   | `/api/v1/account/notification-pushers`      | register or update a pusher (one per account, `app_id` and `pushkey`)    |
+| DELETE | `/api/v1/account/notification-pushers/{id}` | remove one of your pushers                                              |
+
+- Authentication: an account session, a `read` PAT, or an OAuth access token
+  with `capsules:read`. A credential limited to some apps or to a Workspace gets
+  403 `account_wide_credential_required`. Cookie-session writes must be
+  same-origin, as for every account API. Responses carry `Cache-Control: no-store`.
+- POST body: `{"kind":"webpush","app_id":"com.takosumi","pushkey":"<p256dh>","data":{"url":"<endpoint>","auth":"<auth>"},"device_display_name":"Pixel 9","lang":"ja-JP"}`.
+  `pushkey` is an uncompressed P-256 point on the curve and `auth` is 16 bytes,
+  both unpadded base64url. Unknown fields are 400. A new pusher answers 201, an
+  update of the same pusher 200.
+- Endpoint checks: https, port 443, no userinfo, at most 1,024 characters, and
+  an origin on the allowlist (400 `invalid_pusher_endpoint` with
+  `details.reason`). The default allowlist is the official relay
+  `https://push.takosumi.com`; operators add origins with
+  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`. There is no MSC4174 activation step.
+- At most 20 pushers per account; past that, 409 `notification_pusher_limit_reached`.
+- A returned pusher never includes `data.auth`. `last_success_at`,
+  `last_failure_at`, `last_failure_status` (`null` for a timeout or network
+  error) and `failing` (the latest outcome was a failure) show delivery health.
+- `web_push_public_key` is the public key of a pair derived with HKDF-SHA256
+  (label `takosumi/web-push/vapid/v1`) from the secret-store passphrase
+  (`TAKOSUMI_SECRET_STORE_PASSPHRASE`, else `TAKOSUMI_SECRET_STORE_KEY`). Without
+  a passphrase it is `null` and POST answers 503 `web_push_unavailable`.
+  Rotating the passphrase changes the key, and Takosumi Mobile subscribes again.
+
 ## OpenTofu Stack API
 
 The Stack API runs ordinary OpenTofu / Terraform modules from Git. Existing

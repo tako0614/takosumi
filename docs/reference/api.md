@@ -188,6 +188,40 @@ opaque で、malformed または subject に属する exact anchor が失われ�
 `workspace_membership_inactive` です。この read は `last_used_at`、audit、session、Control
 schema、Workspace / Project / TargetPool を更新・bootstrap しません。
 
+### Takosumi Mobile の通知の登録
+
+Takosumi Mobile は、この instance 自身の通知（承認待ち、Run の失敗など）を標準の Web Push
+（RFC 8030・8291・8292）で push 中継経由に受け取ります。端末はここに `webpush` の pusher を
+登録します。欄の並びは Matrix MSC4174 に合わせ、`pushkey` は購読の `p256dh`、`data.url` は
+push の endpoint、`data.auth` は購読の `auth` です。product が native app に使う共有
+`contract/notification-pushers.ts`（v1 の `http` pusher）とは別の、Takosumi 自身の API です。
+
+| メソッド | パス                                         | 説明                                                                   |
+| -------- | -------------------------------------------- | ---------------------------------------------------------------------- |
+| GET      | `/api/v1/account/notification-pushers`       | 自分の pusher の一覧と `web_push_public_key`（instance の VAPID 公開鍵） |
+| POST     | `/api/v1/account/notification-pushers`       | pusher を登録・更新する（アカウント、`app_id`、`pushkey` で一つ）       |
+| DELETE   | `/api/v1/account/notification-pushers/{id}`  | 自分の pusher を消す                                                   |
+
+- 認証: account session、`read` の PAT、`capsules:read` の OAuth access token。一部のアプリや
+  Workspace に限った資格は 403 `account_wide_credential_required` です。cookie の session で
+  書き込むときは、ほかの account API と同じく同一 origin だけです。応答は `Cache-Control: no-store`。
+- POST の本文: `{"kind":"webpush","app_id":"com.takosumi","pushkey":"<p256dh>","data":{"url":"<endpoint>","auth":"<auth>"},"device_display_name":"Pixel 9","lang":"ja-JP"}`。
+  `pushkey` は曲線上の P-256 非圧縮点、`auth` は 16 byte（どちらも padding 無しの base64url）。
+  知らない欄は 400。新規は 201、同じ pusher の更新は 200 です。
+- endpoint の検査: https、port 443、userinfo 無し、1,024 文字まで、宛先の origin が許可の一覧に
+  あること（400 `invalid_pusher_endpoint`、`details.reason` に理由）。一覧の既定は公式の中継
+  `https://push.takosumi.com` で、運用者は `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS` で足せます。
+  確認の手順（MSC4174 の activation）はありません。
+- アカウントあたり 20 件まで。超えると 409 `notification_pusher_limit_reached`。
+- 応答の pusher は `data.auth` を返しません。`last_success_at`、`last_failure_at`、
+  `last_failure_status`（timeout・network の失敗では `null`）、`failing`（最後の結果が失敗）で
+  届き具合が分かります。
+- `web_push_public_key` は secret-store の passphrase（`TAKOSUMI_SECRET_STORE_PASSPHRASE`、
+  無ければ `TAKOSUMI_SECRET_STORE_KEY`）から HKDF-SHA256（label `takosumi/web-push/vapid/v1`）で
+  導いた鍵の公開鍵です。passphrase が無い instance では `null` で、POST は 503
+  `web_push_unavailable` です。passphrase を回すと公開鍵が変わるので、Takosumi Mobile は購読し
+  直します。
+
 ## OpenTofu Stack API
 
 Stack API は通常の OpenTofu / Terraform module を Git から実行します。
