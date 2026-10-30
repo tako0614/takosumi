@@ -313,7 +313,6 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- workspaces (スペース in the Japanese UI) -----------------------------------
   "workspace.unnamed": "Unnamed",
-  "workspace.createdOn": "Created {date}",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",

@@ -77,8 +77,6 @@ import {
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
-import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
-import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
 import {
   getOrCreateRevisionPlanAttempt,
@@ -378,8 +376,6 @@ export default function AppManagePage(props: {
     const workspace = workspaceId();
     if (!workspace) return;
     clearCapsuleListCache(workspace);
-    clearCurrentStateVersionCache(workspace);
-    clearDashboardOverviewCache(workspace);
   };
 
   const refreshAll = async () => {

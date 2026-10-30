@@ -58,19 +58,6 @@ function cacheContainsScope(scope: string): boolean {
   );
 }
 
-/** Deduplicates pinned/current rows while retaining the first visible order. */
-export function mergeWorkspaceLists(
-  ...lists: readonly (readonly Workspace[])[]
-): readonly Workspace[] {
-  const byId = new Map<string, Workspace>();
-  for (const list of lists) {
-    for (const workspace of list) {
-      if (!byId.has(workspace.id)) byId.set(workspace.id, workspace);
-    }
-  }
-  return [...byId.values()];
-}
-
 export async function listWorkspacesCached(
   options: {
     readonly force?: boolean;

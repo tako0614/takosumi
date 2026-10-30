@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  loadNotificationFeed,
-  NOTIF_FANOUT_CONCURRENCY,
-  NOTIF_WORKSPACE_LIMIT,
   notificationFeed,
   refreshNotificationFeed,
 } from "../../../../dashboard/src/lib/notifications.ts";
@@ -51,7 +48,7 @@ function installScopedFeedFetch(): string[] {
         workspaces: [selected(id)],
         workspaceList: {
           returned: 1,
-          limit: NOTIF_WORKSPACE_LIMIT,
+          limit: 12,
           truncated: false,
         },
         notifications: [
@@ -76,57 +73,6 @@ function installScopedFeedFetch(): string[] {
 }
 
 describe("notification fan-out bounds", () => {
-  test("loads only recent Workspaces plus current with capped concurrency", async () => {
-    const requested: string[] = [];
-    let active = 0;
-    let maxActive = 0;
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      const path = typeof input === "string" ? input : String(input);
-      const match = path.match(/^\/api\/v1\/workspaces\/(ws_\d+)\/activity/);
-      if (!match?.[1]) throw new Error(`unexpected fetch: ${path}`);
-      requested.push(match[1]);
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 2));
-      active -= 1;
-      return new Response(
-        JSON.stringify({
-          events: [
-            {
-              id: `act_${match[1]}`,
-              workspaceId: match[1],
-              action: "run.applied",
-              targetType: "run",
-              targetId: `run_${match[1]}`,
-              metadata: {},
-              createdAt: "2026-07-20T00:00:00.000Z",
-            },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as typeof fetch;
-
-    const workspaces = Array.from({ length: 20 }, (_, index) =>
-      workspace(index),
-    );
-    const feed = await loadNotificationFeed(workspaces, {
-      selectedWorkspaceId: "ws_0",
-    });
-
-    expect(requested).toHaveLength(NOTIF_WORKSPACE_LIMIT + 1);
-    expect(new Set(requested)).toEqual(
-      new Set([
-        "ws_0",
-        ...Array.from(
-          { length: NOTIF_WORKSPACE_LIMIT },
-          (_, offset) => `ws_${19 - offset}`,
-        ),
-      ]),
-    );
-    expect(maxActive).toBeLessThanOrEqual(NOTIF_FANOUT_CONCURRENCY);
-    expect(feed).toHaveLength(NOTIF_WORKSPACE_LIMIT + 1);
-  });
 
   test("does not share or publish an in-flight feed for a stale selected Workspace", async () => {
     installScopedFeedFetch();

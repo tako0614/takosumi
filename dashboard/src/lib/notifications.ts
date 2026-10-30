@@ -22,10 +22,6 @@ import { fetchDashboardWorkspaceBootstrap } from "./dashboard-bootstrap.ts";
 /** Max events fetched per Workspace and rendered in the merged feed. */
 export const NOTIF_PER_WORKSPACE_LIMIT = 50;
 export const NOTIF_FEED_LIMIT = 60;
-/** Recent Workspaces included in the cross-Workspace feed (plus current). */
-export const NOTIF_WORKSPACE_LIMIT = 12;
-/** Browser requests allowed in flight for either Activity or Capsule labels. */
-export const NOTIF_FANOUT_CONCURRENCY = 4;
 
 /** An ActivityEvent plus the Workspace it came from (for cross-Workspace labelling). */
 export interface FeedEntry {
@@ -144,82 +140,6 @@ export function attentionEvents(
     open.add(event);
   }
   return open;
-}
-
-function notificationWorkspaces(
-  workspaces: readonly Workspace[],
-  selectedWorkspaceId?: string,
-): readonly Workspace[] {
-  const sorted = [...workspaces].sort(
-    (a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id),
-  );
-  const recent = sorted.slice(0, NOTIF_WORKSPACE_LIMIT);
-  const selected = selectedWorkspaceId
-    ? sorted.find((workspace) => workspace.id === selectedWorkspaceId)
-    : undefined;
-  return selected && !recent.some((workspace) => workspace.id === selected.id)
-    ? [selected, ...recent]
-    : recent;
-}
-
-async function settledNotificationFanout<T, R>(
-  items: readonly T[],
-  load: (item: T) => Promise<R>,
-): Promise<readonly R[]> {
-  if (items.length === 0) return [];
-  const results: Array<R | undefined> = new Array(items.length);
-  let nextIndex = 0;
-  const worker = async (): Promise<void> => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const item = items[index];
-      if (item === undefined) continue;
-      try {
-        results[index] = await load(item);
-      } catch {
-        // One inaccessible Workspace must not blank the reachable feed.
-      }
-    }
-  };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(NOTIF_FANOUT_CONCURRENCY, items.length) },
-      () => worker(),
-    ),
-  );
-  return results.filter((result): result is R => result !== undefined);
-}
-
-/** Load bounded recent Workspace activity and merge it newest-first. */
-export async function loadNotificationFeed(
-  workspaces: readonly Workspace[],
-  options: { readonly selectedWorkspaceId?: string } = {},
-): Promise<readonly FeedEntry[]> {
-  const candidates = notificationWorkspaces(
-    workspaces,
-    options.selectedWorkspaceId,
-  );
-  const perWorkspace = await settledNotificationFanout(
-    candidates,
-    async (workspace): Promise<readonly FeedEntry[]> => {
-      const events = await listActivity(
-        workspace.id,
-        NOTIF_PER_WORKSPACE_LIMIT,
-      );
-      return events.map((event) => ({
-        event,
-        workspaceHandle: workspace.handle,
-      }));
-    },
-  );
-  return perWorkspace
-    .flatMap((entries) => entries)
-    .sort(
-      (a, b) => Date.parse(b.event.createdAt) - Date.parse(a.event.createdAt),
-    )
-    .slice(0, NOTIF_FEED_LIMIT);
 }
 
 // --- shared feed snapshot (TopBar badge + /notifications banner) -------------

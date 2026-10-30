@@ -4,7 +4,6 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   selectAvailableWorkspaceId,
-  selectWorkspaceFromQuery,
 } from "../../../../dashboard/src/lib/workspace-state.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -30,16 +29,6 @@ test("selectAvailableWorkspaceId replaces stale persisted Workspace ids", () => 
 
 test("selectAvailableWorkspaceId clears when no Workspaces are accessible", () => {
   expect(selectAvailableWorkspaceId("ws_old", [])).toBe("");
-});
-
-test("route query selects a requested Workspace only after validation", () => {
-  const workspaces = [{ id: "ws_allowed" }, { id: "ws_other" }];
-  expect(
-    selectWorkspaceFromQuery("ws_other", "ws_allowed", workspaces),
-  ).toBe("ws_other");
-  expect(
-    selectWorkspaceFromQuery("ws_unknown", "ws_allowed", workspaces),
-  ).toBe("ws_allowed");
 });
 
 test("current Workspace storage uses one canonical key", () => {
