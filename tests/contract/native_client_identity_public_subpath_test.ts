@@ -81,3 +81,27 @@ test("names folding cannot compare are treated as reserved, without a lookalike 
     expect(identity.isTakosumiReservedClientName(name), name).toBe(true);
   }
 });
+
+test("letters without a decomposition, symbols and leftover combining marks are refused", () => {
+  const overlay = (text: string) => [...text].map((letter) => letter === " " ? letter : `${letter}\u0337`).join("");
+  for (const name of ["Straße", "Øre", "Łódź", "Æther", "©Notes", overlay("My App"), "Cafe\u0301\u0301"]) {
+    expect(identity.isTakosumiReservedClientName(name), name).toBe(true);
+  }
+  // Accents and kana marks that compose into one letter pass.
+  for (const name of ["Cafe\u0301", "Café", "か\u3099いど", "ｶﾞｲﾄﾞ"]) {
+    expect(identity.isTakosumiReservedClientName(name), name).toBe(false);
+  }
+});
+
+test("Japanese names are compared by kana: katakana, small kana, spaces and long-vowel marks", () => {
+  for (const name of ["たこすみ", "タコスミ", "ﾀｺｽﾐ", "タコ・スミ", "たこすみ公式", "たこ"]) {
+    expect(identity.isTakosumiReservedClientName(name), name).toBe(true);
+  }
+  const registered = ["ゆるこみゅ"];
+  for (const name of ["ゆるこみゅ", "ユルコミュ", "ゆるこみゅ公式", "ﾕﾙｺﾐｭ", "ゆる こみゅ", "ユルコミュー", "ゆるこみゆ", "ゆるこ"]) {
+    expect(identity.isTakosumiReservedClientName(name, registered), name).toBe(true);
+  }
+  for (const name of ["メモ帳", "たこ焼き", "すみれ", "ゆきだるま", "写真"]) {
+    expect(identity.isTakosumiReservedClientName(name, registered), name).toBe(false);
+  }
+});

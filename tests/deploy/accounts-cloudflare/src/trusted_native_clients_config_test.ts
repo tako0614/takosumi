@@ -23,7 +23,8 @@ test("absent, valid and malformed trusted native clients all keep OIDC and Accou
   const catalog = await loadD1AccountsMigrationCatalog();
   const error = spyOn(console, "error").mockImplementation(() => {});
   try {
-    for (const value of [undefined, VALID, "{\"private-marker\"", "[{\"id\":\"private-marker\"}]"]) {
+    // One malformed value: the handler reads it for both the identity and the control handler.
+    for (const value of [undefined, VALID, "[{\"id\":\"accounts-cloudflare-marker\"}]"]) {
       const database = new SqliteFakeD1();
       for (const migration of catalog.migrations) {
         await applyD1AccountsMigrationBatch(database, migration, 1_000 + migration.version);
@@ -50,8 +51,9 @@ test("absent, valid and malformed trusted native clients all keep OIDC and Accou
       expect(retired.status, String(value)).toBe(404);
       expect(await retired.json()).toMatchObject({ error: { code: "not_found" } });
     }
-    expect(error.mock.calls.length).toBeLessThanOrEqual(1);
-    expect(JSON.stringify(error.mock.calls)).not.toContain("private-marker");
+    const lines = error.mock.calls.map((call) => String(call[0]));
+    expect(lines.filter((line) => line.includes("trusted_native_clients_config_invalid"))).toHaveLength(1);
+    expect(lines.join("\n")).not.toContain("accounts-cloudflare-marker");
   } finally {
     error.mockRestore();
   }

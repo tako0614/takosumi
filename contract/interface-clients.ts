@@ -132,6 +132,9 @@ export const INTERFACE_CLIENT_BLOCKED_SCHEMES: ReadonlySet<string> = new Set([
   "ddgquicklink",
   "samsunginternet",
   "yandexbrowser-open-url",
+  "firefox-klar",
+  "onionhttp",
+  "onionhttps",
   "ws",
   "wss",
   "ftp",
@@ -173,24 +176,39 @@ export interface TrustedNativeClient {
   readonly name: string;
   readonly ios?: TrustedNativeClientIos;
   readonly android?: TrustedNativeClientAndroid;
+  /**
+   * Set only by Takosumi, never by the operator list: the entry verifies
+   * nothing, but unverified declarations still may not use its name, schemes
+   * or link hosts. See `RESERVED_DEFAULT_NATIVE_CLIENTS`.
+   */
+  readonly reservedOnly?: true;
 }
 
 const TRUSTED_CLIENT_MAX_ENTRIES = 32;
 const TRUSTED_CLIENT_MAX_LIST = 16;
 const TRUSTED_CLIENT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/u;
 
-class TrustedNativeClientsError extends TypeError {
+/**
+ * Why a trusted native client list was refused. `path` names only the entry
+ * index and field (`list`, `[0].name`, `[1].android.templates`), never a
+ * value, so hosts can log it; the message may quote the value.
+ */
+export class TrustedNativeClientsError extends TypeError {
+  readonly path: string;
   constructor(path: string, problem: string) {
     super(`trusted native clients: ${path} ${problem}`);
     this.name = "TrustedNativeClientsError";
+    this.path = path;
   }
 }
 
 /**
  * Strictly parse a trusted native client list (the operator setting).
  * Unknown keys, invalid or reserved identities, schemes, hosts or templates,
- * and an identity, scheme or host claimed by two entries all throw, so a
- * misconfigured host refuses to start instead of trusting the wrong app.
+ * and an identity, scheme or host claimed by two entries all throw a
+ * `TrustedNativeClientsError`, so a misconfigured list is never partly
+ * trusted. The Accounts host then verifies nothing and keeps the built-in
+ * clients reserved (`RESERVED_DEFAULT_NATIVE_CLIENTS`); it keeps serving.
  */
 export function parseTrustedNativeClients(
   value: unknown,
@@ -399,8 +417,9 @@ interface InterfaceClientBase {
   readonly target: InterfaceClientTarget;
   /**
    * Verified: the trusted client's name, always present. Unverified: the
-   * declared name when it passes the checks (plain Latin or Japanese text that
-   * does not imitate Takosumi or a trusted client), else absent. Consumers
+   * declared name when it passes the checks (ASCII after removing accents
+   * with NFKD, or Japanese without Latin letters, that does not imitate
+   * Takosumi or a trusted client, in Latin or in kana), else absent. Consumers
    * never fall back to the screen title or other screen metadata for an
    * unverified platform: without `name` they show a neutral label (such as
    * "Unverified app") with `target`.
@@ -463,7 +482,10 @@ export interface ParseInterfaceClientsOptions {
   readonly viewerOrigin?: string;
   /** More Takosumi-owned hosts to refuse, such as the configured issuer's. */
   readonly reservedHosts?: readonly string[];
-  /** The operator's trusted native clients; the built-in list when omitted. */
+  /**
+   * The operator's trusted native clients; the built-in list when omitted.
+   * Entries marked `reservedOnly` verify nothing but stay reserved.
+   */
   readonly trustedClients?: readonly TrustedNativeClient[];
 }
 
@@ -547,6 +569,7 @@ function parseIosClient(
   const entry = bundleId === undefined
     ? undefined
     : context.trusted.find((candidate) =>
+      candidate.reservedOnly !== true &&
       candidate.ios?.bundleId.toLowerCase() === bundleId.toLowerCase()
     );
   if (entry?.ios) {
@@ -596,6 +619,7 @@ function parseAndroidClient(
   const packageName = reverseDnsIdentifier(value.package, ANDROID_PACKAGE_PATTERN);
   if (!packageName) return undefined;
   const entry = context.trusted.find((candidate) =>
+    candidate.reservedOnly !== true &&
     candidate.android?.package.toLowerCase() === packageName.toLowerCase()
   );
   if (entry?.android) {
@@ -990,9 +1014,11 @@ const NAME_FORBIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
 /**
  * A plain display name that does not imitate Takosumi or one of
- * `protectedNames` (the trusted clients' names). Only Latin or Japanese text
- * passes: other scripts, symbols and emoji, and Latin mixed with kana or
- * kanji, are refused by `isTakosumiReservedClientName`.
+ * `protectedNames` (the trusted clients' names). Only text that is ASCII
+ * after removing accents (NFKD), or Japanese without Latin letters, passes;
+ * other scripts, undecomposable letters, symbols, emoji, uncomposed
+ * combining marks, and Latin mixed with kana or kanji are refused by
+ * `isTakosumiReservedClientName`.
  */
 function clientName(
   value: unknown,
@@ -1091,6 +1117,18 @@ export const DEFAULT_TRUSTED_NATIVE_CLIENTS: readonly TrustedNativeClient[] =
     defaultClient("yurumeet-mobile", "Yurumeet", "com.yurumeet", "yurume", "yurumeet"),
     defaultClient("takos-mobile", "Takos", "jp.takos.mobile", "takos", "takos"),
   ]);
+
+/**
+ * The built-in clients as reserved-only entries, for a malformed operator
+ * list: nothing is verified, but unverified declarations still may not use
+ * the Yurucommu, Yurumeet or Takos names, schemes or link hosts.
+ */
+export const RESERVED_DEFAULT_NATIVE_CLIENTS: readonly TrustedNativeClient[] =
+  Object.freeze(
+    DEFAULT_TRUSTED_NATIVE_CLIENTS.map((entry) =>
+      Object.freeze({ ...entry, reservedOnly: true as const })
+    ),
+  );
 
 function defaultClient(
   id: string,

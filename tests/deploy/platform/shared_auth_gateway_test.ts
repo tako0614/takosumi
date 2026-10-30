@@ -502,12 +502,13 @@ test("trusted shared-auth cookies retain first-party authority for app members a
   // A malformed trusted native client list trusts none but never fails Control requests.
   const logged = spyOn(console, "error").mockImplementation(() => {});
   try {
-    for (const value of ["{\"private-marker\"", "[{\"id\":\"private-marker\"}]"]) {
-      const malformed = { ...env, TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS: value } as CloudflareWorkerEnv;
+    const malformed = { ...env, TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS: "[{\"id\":\"platform-gateway-marker\"}]" } as CloudflareWorkerEnv;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       expect((await handlePlatformSharedAuthControlRequest(request("/api/v1/capsules/cap_shared/members"), malformed, dependencies))?.status).toBe(200);
     }
-    expect(logged.mock.calls.length).toBeLessThanOrEqual(1);
-    expect(JSON.stringify(logged.mock.calls)).not.toContain("private-marker");
+    const lines = logged.mock.calls.map((call) => String(call[0]));
+    expect(lines.filter((line) => line.includes("trusted_native_clients_config_invalid"))).toHaveLength(1);
+    expect(lines.join("\n")).not.toContain("platform-gateway-marker");
   } finally {
     logged.mockRestore();
   }

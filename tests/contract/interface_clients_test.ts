@@ -10,6 +10,7 @@ import {
   parseInterfaceClients,
   parseTrustedNativeClients,
   type TrustedNativeClient,
+  TrustedNativeClientsError,
 } from "../../contract/interface-clients.ts";
 import {
   findForbiddenRepositoryManifestMaterial,
@@ -333,6 +334,19 @@ describe("unverified clients", () => {
     }
   });
 
+  test("an unverified name may not claim a registered Japanese name in kana", () => {
+    const japanese = parseTrustedNativeClients([{ ...NOTES_CLIENT, name: "ゆるこみゅ" }]);
+    const named = (name: string) =>
+      parseInterfaceClients({ ios: { name, open: "other://open" } }, { ...OPTIONS, trustedClients: japanese })
+        ?.ios?.name;
+    for (const name of ["ゆるこみゅ", "ユルコミュ", "ゆるこみゅ公式", "ﾕﾙｺﾐｭ", "タコスミ", "たこすみ"]) {
+      expect(named(name), name).toBeUndefined();
+    }
+    for (const name of ["メモ帳", "写真アルバム"]) {
+      expect(named(name), name).toBe(name);
+    }
+  });
+
   test("an unverified client never takes the screen title as its name", () => {
     // The screen title is not part of clients; without a checked name the
     // consumer shows a neutral label with the target.
@@ -463,6 +477,8 @@ describe("custom schemes", () => {
       "opera-https://evil.example/",
       "brave://open-url?url=https%3A%2F%2Fevil.example%2F",
       "duckduckgo://evil.example/",
+      "firefox-klar://open-url?url=https://evil.example/",
+      "onionhttps://evil.example/",
       "http://notes.example.test/",
       "https://notes.example.test/",
     ]) {
@@ -836,6 +852,25 @@ describe("parseTrustedNativeClients", () => {
     for (const value of invalid) {
       expect(() => parseTrustedNativeClients(value), JSON.stringify(value).slice(0, 160)).toThrow(TypeError);
     }
+  });
+
+  test("errors name the entry index and field, never the value", () => {
+    const pathOf = (value: unknown): string | undefined => {
+      try {
+        parseTrustedNativeClients(value);
+      } catch (error) {
+        return error instanceof TrustedNativeClientsError ? error.path : "other";
+      }
+      return undefined;
+    };
+    expect(pathOf({})).toBe("list");
+    expect(pathOf([NOTES_CLIENT, entry({ id: "second", name: "Secret Name\u202E" })])).toBe("[1].name");
+    expect(pathOf([ios({ schemes: ["javascript"] })])).toBe("[0].ios.schemes");
+    expect(pathOf([entry({ "secret-key": 1 })])).toBe("[0]");
+  });
+
+  test("an operator entry cannot mark itself reserved-only", () => {
+    expect(() => parseTrustedNativeClients([entry({ reservedOnly: true })])).toThrow(TrustedNativeClientsError);
   });
 
   test("the built-in list parses and claims no Takosumi identity", () => {
