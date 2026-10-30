@@ -75,6 +75,7 @@ import {
   handleAppSourceList,
 } from "./control/account-reads.ts";
 import { handleAccountActivity } from "./control/app-activity.ts";
+import type { ActivityCursorSealer } from "./control/activity-cursor.ts";
 import { handleRevisionPlans } from "./control/revision-plans.ts";
 import { isWorkspaceMutationRoute, workspaceFrozenResponse } from "./workspace-mutations-freeze.ts";
 import {
@@ -241,6 +242,8 @@ interface ControlRouteContext {
   readonly legacyWorkspaceSunset?: string;
   /** Operator-trusted native phone apps; the built-in list when absent. */
   readonly trustedNativeClients?: readonly TrustedNativeClient[];
+  /** Seals Activity cursors; Activity paging fails closed without it. */
+  readonly activityCursorSealer?: ActivityCursorSealer;
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -627,6 +630,7 @@ async function dispatchAuthenticatedControlRouteForSession(
           ...(context.workspaceMutationsFrozen !== undefined ? { workspaceMutationsFrozen: context.workspaceMutationsFrozen } : {}),
           ...(context.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
           ...(context.trustedNativeClients ? { trustedNativeClients: context.trustedNativeClients } : {}),
+          ...(context.activityCursorSealer ? { activityCursorSealer: context.activityCursorSealer } : {}),
           session: context.session,
           legacyWorkspace,
         }),
@@ -812,6 +816,7 @@ interface DispatchInput {
   readonly appOwnershipMutationsFrozen?: boolean;
   readonly legacyWorkspace?: LegacyWorkspaceUseRecorder;
   readonly trustedNativeClients?: readonly TrustedNativeClient[];
+  readonly activityCursorSealer?: ActivityCursorSealer;
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -842,6 +847,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       ...(input.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
       ...(input.legacyWorkspace ? { legacyWorkspace: input.legacyWorkspace } : {}),
       ...(input.trustedNativeClients ? { trustedNativeClients: input.trustedNativeClients } : {}),
+      ...(input.activityCursorSealer ? { activityCursorSealer: input.activityCursorSealer } : {}),
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

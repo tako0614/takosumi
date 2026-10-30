@@ -25,12 +25,14 @@ import {
 } from "../accounts-cloudflare/src/handler.ts";
 import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
+  activityCursorSealerFromEnv,
   D1AccountsStore,
   handleAuthenticatedControlRoute,
   parseAppOwnershipMutationsFrozen,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
   trustedNativeClientsFromEnv,
+  type ActivityCursorSealer,
   type ControlPlaneOperations,
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
@@ -578,6 +580,7 @@ async function createPlatformOperatorControlMcpAuthority(
         trustedNativeClients: trustedNativeClientsFromEnv(
           env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
         ),
+        ...platformActivityCursorSealerOption(env),
         ...(env.TAKOSUMI_ACCOUNTS_ISSUER
           ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
           : {}),
@@ -1816,6 +1819,7 @@ export async function handlePlatformSharedAuthControlRequest(
       ...platformLegacyWorkspaceSunsetOption(env),
       ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
       trustedNativeClients: trustedNativeClientsFromEnv(env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS),
+      ...platformActivityCursorSealerOption(env),
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),
       ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
@@ -2353,6 +2357,14 @@ function platformLegacyWorkspaceSunsetOption(
 ): { readonly legacyWorkspaceSunset?: string } {
   const sunset = platformLegacyWorkspaceSunset(env);
   return sunset ? { legacyWorkspaceSunset: sunset } : {};
+}
+
+/** Seals Activity cursors with the secret-store passphrase, when configured. */
+function platformActivityCursorSealerOption(
+  env: CloudflareWorkerEnv,
+): { readonly activityCursorSealer?: ActivityCursorSealer } {
+  const sealer = activityCursorSealerFromEnv(env);
+  return sealer ? { activityCursorSealer: sealer } : {};
 }
 
 /**

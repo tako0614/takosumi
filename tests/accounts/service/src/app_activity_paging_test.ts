@@ -1,14 +1,20 @@
 /**
  * Review follow-ups for the Workspace-free Activity reads (TASK-0118 9.1):
- * one lookup budget per request, positional cursors that never name an
- * event, and a graceful partition cap.
+ * one lookup budget per request, sealed keyset cursors that never reveal an
+ * event and terminate at any number of rows per timestamp, a fail-closed host
+ * without a passphrase, and a graceful partition cap.
  */
 import { describe, expect, test } from "bun:test";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Run } from "takosumi-contract/runs";
-import { decodeCursor } from "takosumi-contract/pagination";
+import { decodeCursor, encodeCursor } from "takosumi-contract/pagination";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
+import {
+  createActivityCursorSealer,
+  SEALED_ACTIVITY_CURSOR_PREFIX,
+  type ActivityCursorSealer,
+} from "../../../../accounts/service/src/control/activity-cursor.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
@@ -23,8 +29,15 @@ const THEIRS = "cap_activity_theirs";
 const OWNER = "user_test";
 const OTHER = "acct_activity_other";
 const NOW = "2026-10-30T00:00:00.000Z";
+/** Test-only passphrase (not a secret); production derives from the secret store. */
+const TEST_PASSPHRASE = "activity-cursor-test-passphrase-not-a-secret-0001";
 
-async function fixture(options: { readonly extraPartitions?: number } = {}) {
+async function fixture(options: {
+  readonly extraPartitions?: number;
+  /** `null`: a host without a secret-store passphrase. */
+  readonly sealer?: ActivityCursorSealer | null;
+} = {}) {
+  const sealer = options.sealer === undefined ? createActivityCursorSealer(TEST_PASSPHRASE) : options.sealer;
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, {
     workspaceId: WORKSPACE, capsuleId: MINE, sourceId: "src_activity", snapshotId: "snap_activity", installConfigId: "cfg_activity",
@@ -68,13 +81,24 @@ async function fixture(options: { readonly extraPartitions?: number } = {}) {
   };
   async function get(path: string, credential: Record<string, string>) {
     const url = new URL(`${ORIGIN}/api/v1${path}`);
-    const response = await handleControlRoute({ request: new Request(url, { headers: credential }), url, store: accounts, operations });
-    return { status: response!.status, body: await response!.json() as { events?: ActivityEvent[]; nextCursor?: string; incomplete?: boolean } };
+    const response = await handleControlRoute({
+      request: new Request(url, { headers: credential }), url, store: accounts, operations,
+      ...(sealer ? { activityCursorSealer: sealer } : {}),
+    });
+    return {
+      status: response!.status,
+      body: await response!.json() as { events?: ActivityEvent[]; nextCursor?: string; incomplete?: boolean; error?: unknown },
+    };
   }
   async function record(event: Omit<ActivityEvent, "id" | "createdAt" | "workspaceId"> & { readonly workspaceId?: string }) {
     return await core.activity.record({ workspaceId: WORKSPACE, ...event });
   }
-  return { core, runs, runReads, session, get, record, extra };
+  async function recordAt(id: string, createdAt: string, capsuleId: string) {
+    await core.activity.recordIdempotent(id, createdAt, {
+      workspaceId: WORKSPACE, action: "capsule.updated", targetType: "capsule", targetId: capsuleId, metadata: {},
+    });
+  }
+  return { core, runs, runReads, session, get, record, recordAt, extra, sealer };
 }
 
 async function drain(h: Awaited<ReturnType<typeof fixture>>, path: string, credential: Record<string, string>, limit: number) {
@@ -83,7 +107,7 @@ async function drain(h: Awaited<ReturnType<typeof fixture>>, path: string, crede
   let cursor: string | undefined;
   for (let page = 0; page < 200; page++) {
     const separator = path.includes("?") ? "&" : "?";
-    const response = await h.get(`${path}${separator}limit=${limit}${cursor ? `&cursor=${cursor}` : ""}`, credential);
+    const response = await h.get(`${path}${separator}limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, credential);
     expect(response.status).toBe(200);
     seen.push(...response.body.events!);
     cursor = response.body.nextCursor;
@@ -115,7 +139,7 @@ describe("Activity review follow-ups", () => {
     }
   });
 
-  test("cursors are positions, never ids of events the caller cannot see", async () => {
+  test("cursors are sealed: they name no event and cannot be read, forged or replayed under another key", async () => {
     const h = await fixture();
     const hidden = new Set<string>();
     for (let index = 0; index < 30; index++) {
@@ -126,11 +150,24 @@ describe("Activity review follow-ups", () => {
     for (const path of ["/activity", `/capsules/${MINE}/activity`]) {
       const { seen, cursors } = await drain(h, path, h.session(OWNER), 1);
       expect(seen.map((event) => event.metadata.index), path).toEqual([20, 10, 0]);
+      expect(cursors.length, path).toBeGreaterThan(0);
       for (const cursor of cursors) {
-        const decoded = decodeCursor(cursor)!;
-        expect(decoded.id.startsWith("#k:"), path).toBe(true);
-        expect(hidden.has(decoded.id), path).toBe(false);
+        expect(cursor.startsWith(SEALED_ACTIVITY_CURSOR_PREFIX), path).toBe(true);
+        // Not a readable keyset, and no hidden id appears in the token.
+        expect(decodeCursor(cursor), path).toBeUndefined();
+        for (const id of hidden) expect(cursor.includes(id), path).toBe(false);
+        // Only the server can open it; the keyset may be a hidden row.
+        expect(await h.sealer!.open(cursor), path).toBeDefined();
       }
+      const [first] = cursors;
+      // A flipped character fails authentication.
+      const body = first!.slice(SEALED_ACTIVITY_CURSOR_PREFIX.length);
+      const flipped = `${SEALED_ACTIVITY_CURSOR_PREFIX}${body[0] === "A" ? "B" : "A"}${body.slice(1)}`;
+      const tampered = await h.get(`${path}?limit=1&cursor=${encodeURIComponent(flipped)}`, h.session(OWNER));
+      expect(tampered.status, path).toBe(400);
+      // A token sealed under another passphrase does not open here.
+      const foreign = await createActivityCursorSealer(`${TEST_PASSPHRASE}-other`).seal({ createdAt: NOW, id: "act_any" });
+      expect((await h.get(`${path}?limit=1&cursor=${encodeURIComponent(foreign)}`, h.session(OWNER))).status, path).toBe(400);
     }
   });
 
@@ -140,13 +177,75 @@ describe("Activity review follow-ups", () => {
     const ids: string[] = [];
     for (let index = 0; index < 7; index++) {
       const id = `act_same_${index}`;
-      await h.core.activity.recordIdempotent(id, createdAt, {
-        workspaceId: WORKSPACE, action: "capsule.updated", targetType: "capsule", targetId: index % 3 === 0 ? THEIRS : MINE, metadata: {},
-      });
+      await h.recordAt(id, createdAt, index % 3 === 0 ? THEIRS : MINE);
       if (index % 3 !== 0) ids.push(id);
     }
     const { seen } = await drain(h, "/activity", h.session(OWNER), 2);
     expect(seen.map((event) => event.id)).toEqual([...ids].sort().reverse());
+  });
+
+  test("many rows at one timestamp with a small limit terminate (review repro)", async () => {
+    const h = await fixture();
+    const createdAt = "2026-10-30T01:00:00.000Z";
+    const ids: string[] = [];
+    for (let index = 0; index < 6; index++) {
+      const id = `act_same_${index}`;
+      await h.recordAt(id, createdAt, MINE);
+      ids.push(id);
+    }
+    for (const path of ["/activity", `/capsules/${MINE}/activity`]) {
+      const { seen } = await drain(h, path, h.session(OWNER), 1);
+      expect(seen.map((event) => event.id), path).toEqual([...ids].sort().reverse());
+    }
+  });
+
+  test("hidden rows at one timestamp beyond four store pages terminate (review repro)", async () => {
+    const h = await fixture();
+    const createdAt = "2026-10-30T01:00:00.000Z";
+    for (let index = 0; index < 12; index++) {
+      await h.recordAt(`act_h_${String(index).padStart(2, "0")}`, createdAt, index === 0 ? MINE : THEIRS);
+    }
+    for (const path of ["/activity", `/capsules/${MINE}/activity`]) {
+      const { seen } = await drain(h, path, h.session(OWNER), 2);
+      expect(seen.map((event) => event.id), path).toEqual(["act_h_00"]);
+    }
+  });
+
+  test("a plain keyset cursor issued before sealing still continues after its row", async () => {
+    const h = await fixture();
+    for (let index = 0; index < 4; index++) {
+      await h.recordAt(`act_legacy_${index}`, `2026-10-30T01:00:0${index}.000Z`, MINE);
+    }
+    const legacy = encodeCursor({ createdAt: "2026-10-30T01:00:02.000Z", id: "act_legacy_2" });
+    const response = await h.get(`/activity?cursor=${legacy}`, h.session(OWNER));
+    expect(response.status).toBe(200);
+    expect(response.body.events!.map((event) => event.id)).toEqual(["act_legacy_1", "act_legacy_0"]);
+    expect(response.body.nextCursor).toBeUndefined();
+    // Positional cursors were never issued by a merged release: malformed.
+    const positional = encodeCursor({ createdAt: "2026-10-30T01:00:02.000Z", id: "#k:1" });
+    expect((await h.get(`/activity?cursor=${positional}`, h.session(OWNER))).status).toBe(400);
+    expect((await h.get("/activity?cursor=not-a-cursor", h.session(OWNER))).status).toBe(400);
+  });
+
+  test("without a secret-store passphrase, paging fails closed and a single page still reads", async () => {
+    const h = await fixture({ sealer: null });
+    await h.recordAt("act_np_0", "2026-10-30T01:00:00.000Z", MINE);
+    await h.recordAt("act_np_1", "2026-10-30T01:00:01.000Z", MINE);
+    // Everything fits: no cursor is needed.
+    const whole = await h.get("/activity", h.session(OWNER));
+    expect(whole.status).toBe(200);
+    expect(whole.body.events!.map((event) => event.id)).toEqual(["act_np_1", "act_np_0"]);
+    // A page that would carry a cursor cannot seal it.
+    for (const path of ["/activity?limit=1", `/capsules/${MINE}/activity?limit=1`]) {
+      const paged = await h.get(path, h.session(OWNER));
+      expect(paged.status, path).toBe(503);
+      expect(JSON.stringify(paged.body), path).toContain("TAKOSUMI_SECRET_STORE_PASSPHRASE");
+    }
+    const sealed = await createActivityCursorSealer(TEST_PASSPHRASE).seal({ createdAt: NOW, id: "act_np_1" });
+    expect((await h.get(`/activity?cursor=${encodeURIComponent(sealed)}`, h.session(OWNER))).status).toBe(503);
+    // The dashboard feed reads one page and needs no cursor.
+    const bootstrap = await h.get("/dashboard/bootstrap?includeNotifications=true", h.session(OWNER));
+    expect(bootstrap.status).toBe(200);
   });
 
   test("more partitions than one request reads stays a 200 and says it is incomplete", async () => {

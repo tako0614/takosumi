@@ -16,13 +16,17 @@
  *   Interface link event never reveals the other side's app to someone who
  *   cannot view it.
  *
- * The cursor is a position in the stream (a timestamp and a count of rows
- * consumed at it), never an event id. One request scans at most four store
- * pages and spends one shared budget of Run/Source/Interface reads, stopping
- * before an event it could not afford to attribute; a page can therefore
- * hold fewer than `limit` events (even none) and still carry `nextCursor`.
- * Partitions beyond {@link ACTIVITY_PARTITION_LIMIT} and apps beyond one
- * account read are left out and reported as `incomplete`.
+ * The next page starts after the last row this request examined, on the
+ * store's `(createdAt, id)` keyset. That row may be one the caller cannot
+ * see, so the cursor leaves the server only sealed (see `activity-cursor.ts`):
+ * the client can echo it back but cannot read or forge the keyset. A host
+ * without a secret-store passphrase cannot seal and fails closed when a page
+ * needs a cursor. One request scans at most four store pages and spends one
+ * shared budget of Run/Source/Interface reads, stopping before an event it
+ * could not afford to attribute; a page can therefore hold fewer than `limit`
+ * events (even none) and still carry `nextCursor`. Partitions beyond
+ * {@link ACTIVITY_PARTITION_LIMIT} and apps beyond one account read are left
+ * out and reported as `incomplete`.
  */
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Capsule } from "takosumi-contract/install-configs";
@@ -30,9 +34,10 @@ import {
   clampPageLimit,
   decodeCursor,
   encodeCursor,
-  type PageParams,
+  type PageCursor,
 } from "takosumi-contract/pagination";
-import { json, methodNotAllowed } from "../http-helpers.ts";
+import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
+import { SEALED_ACTIVITY_CURSOR_PREFIX } from "./activity-cursor.ts";
 import {
   activityAttributionLookupBound,
   attributeActivityEvents,
@@ -53,15 +58,25 @@ const APP_ACTIVITY_SCAN_PAGES = 4;
 
 export interface AppActivityPage {
   readonly events: readonly ActivityEvent[];
-  readonly nextCursor?: string;
+  /**
+   * The keyset of the last row examined when more rows remain. Server-side
+   * only: it can name a hidden event, so HTTP responses carry it sealed.
+   */
+  readonly next?: PageCursor;
   /** Some of the caller's apps were left out (see the module comment). */
   readonly incomplete?: true;
+}
+
+/** One Activity page request: a size and the keyset to continue after. */
+export interface AppActivityPageRequest {
+  readonly limit?: number;
+  readonly after?: PageCursor;
 }
 
 interface ScanInput {
   readonly ctx: ControlDispatchContext;
   readonly partitions: readonly string[];
-  readonly params: PageParams;
+  readonly request: AppActivityPageRequest;
   /** Called once per scanned store page with the attributed app ids. */
   readonly keep: (
     events: readonly ActivityEvent[],
@@ -69,50 +84,12 @@ interface ScanInput {
   ) => Promise<readonly boolean[]>;
 }
 
-/** Marks a positional cursor: `#k:<rows already consumed at createdAt>`. */
-const POSITION_MARK = "#k:";
-
-/**
- * The client cursor is a position in the newest-first Activity stream: the
- * timestamp of the last row this request consumed and how many rows at that
- * exact timestamp were consumed. It never carries an event id, so a row the
- * caller could not see is never named by the cursor.
- */
-function encodeActivityPosition(createdAt: string, consumedAtCreatedAt: number): string {
-  return encodeCursor({ createdAt, id: `${POSITION_MARK}${consumedAtCreatedAt}` });
-}
-
-interface ActivityStart {
-  readonly storeCursor?: string;
-  readonly position?: string;
-  readonly consumed: number;
-}
-
-function decodeActivityPosition(raw: string | undefined): ActivityStart {
-  const decoded = decodeCursor(raw);
-  if (!raw || !decoded) return { consumed: 0 };
-  if (!decoded.id.startsWith(POSITION_MARK)) {
-    // A keyset cursor of an event (from an earlier release) stays valid.
-    return { storeCursor: raw, consumed: 0 };
-  }
-  const consumed = Number(decoded.id.slice(POSITION_MARK.length));
-  const at = Date.parse(decoded.createdAt);
-  if (!Number.isSafeInteger(consumed) || consumed < 0 || !Number.isFinite(at)) return { consumed: 0 };
-  // Every row at or before the position's millisecond; the rows already
-  // consumed at that timestamp are skipped by count (ids order them).
-  return {
-    storeCursor: encodeCursor({ createdAt: new Date(at + 1).toISOString(), id: "" }),
-    position: decoded.createdAt,
-    consumed,
-  };
-}
-
 async function scanAppActivity(input: ScanInput): Promise<AppActivityPage | undefined> {
   const { ctx } = input;
   const activity = ctx.operations.activity;
   if (typeof activity.listAcrossWorkspacesPage !== "function") return undefined;
   if (input.partitions.length === 0) return { events: [] };
-  const limit = clampPageLimit(input.params.limit ?? APP_ACTIVITY_DEFAULT_LIMIT);
+  const limit = clampPageLimit(input.request.limit ?? APP_ACTIVITY_DEFAULT_LIMIT);
   const partitionCapsules = new Map<string, Promise<readonly Capsule[]>>();
   const capsulesOf = (workspaceId: string): Promise<readonly Capsule[]> => {
     let pending = partitionCapsules.get(workspaceId);
@@ -128,35 +105,25 @@ async function scanAppActivity(input: ScanInput): Promise<AppActivityPage | unde
   // partition): a request spends at most one budget of Run, Source and
   // Interface reads.
   const lookups = createActivityAttributionLookups();
-  const start = decodeActivityPosition(input.params.cursor);
-  let position = start.position;
-  let consumedAtPosition = start.consumed;
-  let pendingSkip = start.consumed;
-  let cursor = start.storeCursor;
-  let processedAny = false;
+  // The last row examined (shown or not): the store keyset to continue after.
+  let last: PageCursor | undefined = input.request.after;
+  let examinedAny = false;
   const events: ActivityEvent[] = [];
   for (let scanned = 0; scanned < APP_ACTIVITY_SCAN_PAGES; scanned++) {
     ctx.assertActive?.();
     const page = await activity.listAcrossWorkspacesPage.call(activity, input.partitions, {
       limit,
-      ...(cursor !== undefined ? { cursor } : {}),
+      ...(last !== undefined ? { cursor: encodeCursor(last) } : {}),
     });
-    let rows = page.items;
-    // Rows the incoming position already consumed (newest first at its
-    // timestamp, so they lead the first page).
-    while (pendingSkip > 0 && rows.length > 0 && rows[0]!.createdAt === position) {
-      rows = rows.slice(1);
-      pendingSkip--;
-    }
-    if (rows.length > 0) pendingSkip = 0;
+    const rows = page.items;
     // Admit rows only while their worst-case lookups fit the remaining
-    // budget, so no event is left undetermined (and skipped by the cursor)
+    // budget, so no event is left undetermined (and passed by the cursor)
     // for lack of budget; the next request resumes at the first row left.
     let admitted = 0;
     let reserved = 0;
     while (admitted < rows.length) {
       const cost = activityAttributionLookupBound(rows[admitted]!);
-      if (reserved + cost > lookups.budget && (admitted > 0 || processedAny)) break;
+      if (reserved + cost > lookups.budget && (admitted > 0 || examinedAny)) break;
       reserved += cost;
       admitted++;
     }
@@ -181,40 +148,93 @@ async function scanAppActivity(input: ScanInput): Promise<AppActivityPage | unde
     const kept = await input.keep(consumed, attributed);
     for (let index = 0; index < consumed.length; index++) {
       const event = consumed[index]!;
-      processedAny = true;
-      if (event.createdAt === position) consumedAtPosition++;
-      else {
-        position = event.createdAt;
-        consumedAtPosition = 1;
-      }
+      examinedAny = true;
+      last = { createdAt: event.createdAt, id: event.id };
       if (!kept[index]) continue;
       events.push(event);
       if (events.length === limit) {
         const more = index < consumed.length - 1 || admitted < rows.length || page.nextCursor !== undefined;
-        return more ? { events, nextCursor: encodeActivityPosition(position, consumedAtPosition) } : { events };
+        return more ? { events, next: last } : { events };
       }
     }
-    if (admitted < rows.length && position !== undefined) {
-      return { events, nextCursor: encodeActivityPosition(position, consumedAtPosition) };
-    }
+    // Out of lookup budget: continue at the first row left next time.
+    if (admitted < rows.length) return last !== undefined ? { events, next: last } : { events };
     if (page.nextCursor === undefined) return { events };
-    cursor = page.nextCursor;
   }
-  return position === undefined
-    ? { events }
-    : { events, nextCursor: encodeActivityPosition(position, consumedAtPosition) };
+  return last !== undefined ? { events, next: last } : { events };
 }
 
-function readPageParams(ctx: ControlDispatchContext):
-  | { readonly ok: true; readonly params: PageParams }
-  | { readonly ok: false; readonly response: Response } {
-  return parseControlPageParams(ctx.url);
+function activityCursorUnavailable(): Response {
+  return errorJson(
+    "feature_unavailable",
+    "Activity paging is unavailable: this server has no secret-store passphrase " +
+      "(TAKOSUMI_SECRET_STORE_PASSPHRASE or TAKOSUMI_SECRET_STORE_KEY, 32+ bytes) to seal cursors.",
+    503,
+  );
+}
+
+function malformedCursor(): Response {
+  return errorJson("invalid_request", "cursor is malformed", 400);
+}
+
+/**
+ * `?limit=` and `?cursor=` of an Activity read. The cursor is a sealed token
+ * this server issued, or a plain keyset cursor issued before cursors were
+ * sealed (its keyset is the caller's own input, so it reveals nothing).
+ */
+async function readActivityPageRequest(ctx: ControlDispatchContext):
+  Promise<
+    | { readonly ok: true; readonly request: AppActivityPageRequest }
+    | { readonly ok: false; readonly response: Response }
+  > {
+  const withoutCursor = new URL(ctx.url);
+  withoutCursor.searchParams.delete("cursor");
+  const parsed = parseControlPageParams(withoutCursor);
+  if (!parsed.ok) return parsed;
+  const limit = parsed.params.limit;
+  const raw = ctx.url.searchParams.get("cursor");
+  if (raw === null || raw === "") {
+    return { ok: true, request: limit !== undefined ? { limit } : {} };
+  }
+  let after: PageCursor | undefined;
+  if (raw.startsWith(SEALED_ACTIVITY_CURSOR_PREFIX)) {
+    if (!ctx.activityCursorSealer) return { ok: false, response: activityCursorUnavailable() };
+    after = await ctx.activityCursorSealer.open(raw);
+  } else {
+    after = decodeCursor(raw);
+    // Positional cursors (`#k:<count>`) were only issued by an unreleased
+    // draft of this read; they are not keysets.
+    if (after?.id.startsWith("#k:")) after = undefined;
+  }
+  if (!after) return { ok: false, response: malformedCursor() };
+  return { ok: true, request: { ...(limit !== undefined ? { limit } : {}), after } };
+}
+
+/** The response body of an Activity page, with the cursor sealed. */
+async function activityPageBody(
+  ctx: ControlDispatchContext,
+  page: AppActivityPage,
+  withIncomplete: boolean,
+): Promise<{ readonly ok: true; readonly body: Record<string, unknown> } | { readonly ok: false; readonly response: Response }> {
+  let nextCursor: string | undefined;
+  if (page.next !== undefined) {
+    if (!ctx.activityCursorSealer) return { ok: false, response: activityCursorUnavailable() };
+    nextCursor = await ctx.activityCursorSealer.seal(page.next);
+  }
+  return {
+    ok: true,
+    body: {
+      events: page.events,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+      ...(withIncomplete && page.incomplete ? { incomplete: true } : {}),
+    },
+  };
 }
 
 /** `GET /api/v1/activity`: Activity of every app in the caller's scope. */
 export async function listAccountActivity(
   ctx: ControlDispatchContext,
-  params: PageParams,
+  request: AppActivityPageRequest,
 ): Promise<{ readonly ok: true; readonly page: AppActivityPage } | { readonly ok: false; readonly response: Response }> {
   const resolved = await resolveAccountAppScope(ctx);
   if (!resolved.ok) return resolved;
@@ -226,7 +246,7 @@ export async function listAccountActivity(
   const page = await scanAppActivity({
     ctx,
     partitions,
-    params,
+    request,
     keep: async (_events, attributed) =>
       attributed.map((ids) =>
         ids !== undefined && ids.length > 0 && ids.every((id) => scope.appIds.has(id))
@@ -244,15 +264,13 @@ export async function handleAccountActivity(
 ): Promise<Response | undefined> {
   if (segments.length !== 1 || segments[0] !== "activity") return undefined;
   if (method !== "GET") return methodNotAllowed("GET");
-  const params = readPageParams(ctx);
-  if (!params.ok) return params.response;
-  const result = await listAccountActivity(ctx, params.params);
+  const request = await readActivityPageRequest(ctx);
+  if (!request.ok) return request.response;
+  const result = await listAccountActivity(ctx, request.request);
   if (!result.ok) return result.response;
-  return json({
-    events: result.page.events,
-    ...(result.page.nextCursor !== undefined ? { nextCursor: result.page.nextCursor } : {}),
-    ...(result.page.incomplete ? { incomplete: true } : {}),
-  }, 200, { "cache-control": "no-store" });
+  const body = await activityPageBody(ctx, result.page, true);
+  if (!body.ok) return body.response;
+  return json(body.body, 200, { "cache-control": "no-store" });
 }
 
 /**
@@ -266,8 +284,8 @@ export async function handleCapsuleActivity(
   method: string,
 ): Promise<Response> {
   if (method !== "GET") return methodNotAllowed("GET");
-  const params = readPageParams(ctx);
-  if (!params.ok) return params.response;
+  const request = await readActivityPageRequest(ctx);
+  if (!request.ok) return request.response;
   let others: Promise<ReadonlySet<string>> | undefined;
   const otherViewableApps = (): Promise<ReadonlySet<string>> => {
     others ??= resolveAccountAppScope(ctx).then((resolved) =>
@@ -278,7 +296,7 @@ export async function handleCapsuleActivity(
   const page = await scanAppActivity({
     ctx,
     partitions: [capsule.workspaceId],
-    params: params.params,
+    request: request.request,
     keep: async (_events, attributed) => {
       const needsOthers = attributed.some((ids) =>
         ids?.includes(capsule.id) === true && ids.some((id) => id !== capsule.id)
@@ -291,8 +309,7 @@ export async function handleCapsuleActivity(
     },
   });
   if (!page) return controlPlaneUnavailable();
-  return json({
-    events: page.events,
-    ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
-  }, 200, { "cache-control": "no-store" });
+  const body = await activityPageBody(ctx, page, false);
+  if (!body.ok) return body.response;
+  return json(body.body, 200, { "cache-control": "no-store" });
 }
