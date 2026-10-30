@@ -140,6 +140,17 @@ shows a consent screen. An endpoint whose operator set
 `TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` and no
 `TAKOSUMI_MOBILE_OIDC_CLIENT_ID` omits `oidcClientId`.
 
+The product host of the shared-account profile (Hosted,
+`TAKOSUMI_SHARED_AUTH_PROFILE=shared-account`) never returns `oidcClientId`:
+people sign in there only through the private RP, and this Worker's own
+Accounts authorize route is not mounted for them. When the operator configured
+Takosumi Mobile's sign-in (`TAKOSUMI_SHARED_AUTH_ISSUER` and
+`TAKOSUMI_SHARED_AUTH_MOBILE_CLIENT_ID`), it returns `shared_account_sign_in`
+instead: `issuer`, `client_id`, `redirect_uri`, `session_exchange`,
+`session_header` (`x-takosumi-native-session`) and `scope`
+(`openid email offline_access`). See "Takosumi Mobile sign-in on a
+shared-account host" below.
+
 ## Authentication
 
 API clients use a session cookie or bearer token depending on the endpoint.
@@ -211,6 +222,54 @@ an inactive or mismatched membership returns 403
 `workspace_membership_inactive`. This read does not update `last_used_at`,
 audit, sessions, the Control schema, or Workspace / Project / TargetPool state.
 
+### Takosumi Mobile sign-in on a shared-account host
+
+The shared-account product host accepts no human bearer (PAT, OAuth). Takosumi
+Mobile signs in at the issuer the browser uses and receives an RP session of
+the browser's kind.
+
+1. Read `shared_account_sign_in` from discovery.
+2. Start an authorization-code flow at `issuer` with `client_id`,
+   `redirect_uri`, `scope`, PKCE (S256), `state`, `nonce` and
+   `prompt=consent`. `redirect_uri` must be on the connected host's origin.
+3. The issuer returns to `redirect_uri`, an HTTPS page on this host that hands
+   the response to `takosumi://oauth/callback?code=…&state=…&iss=…` and to
+   nothing else. A response naming another issuer gets 400.
+4. The app does not redeem the code. It posts
+   `{"code":"…","code_verifier":"…","nonce":"…"}` to
+   `POST /api/v1/account/session/mobile-exchange`.
+5. The private RP redeems the code with the client secret only it holds,
+   verifies the ID token (signature through the issuer's JWKS, `iss`,
+   `aud`/`azp` = the Takosumi Mobile client, `exp`/`iat`, `nonce`), resolves
+   the canonical account like its browser callback and creates the session.
+
+- Success (200): `{"token_type":"takosumi-native-session","session_token":"…","session_header":"x-takosumi-native-session","account_id":"tsub_…","expires_at":<epoch seconds>}`.
+  `expires_at` is the RP session's absolute expiry; the RP's idle limit (12
+  hours in the current RP) ends it earlier, as in the browser. There is no refresh token: on 401, sign in again.
+- Failure: a malformed body is 400 `invalid_request`; any RP refusal (issuer,
+  audience, signature, expiry, nonce, a used code) is the same 401
+  `sign_in_refused`; an unreachable RP is 503 `authentication_unavailable`. A
+  request carrying a credential is 401, a browser request (`Sec-Fetch-*`, a web
+  `Origin`) 403 `native_client_required`, more than 10 per minute from one
+  source 429. Every answer is `Cache-Control: no-store` and sets no cookie.
+- The app then calls the management API (app list, Run approval, pushers) with
+  `x-takosumi-native-session: <session_token>`. Only that header reaches the
+  RP (no cookie, `Origin` or fetch metadata). The RP accepts only sessions
+  made by this exchange in that header, and never a browser cookie session
+  there, nor the reverse. `GET`/`DELETE /api/v1/account/session/me` with the
+  header read and sign out the session.
+- With `Authorization` or `x-takosumi-account-session`, with `Sec-Fetch-*`,
+  with an `Origin` other than a native app's (none, `null`,
+  `tauri://localhost`, `http(s)://tauri.localhost`), or malformed, the header
+  is 401 on every path. The browser's sign-in routes refuse it with 401.
+- CSRF: a browser never adds this header by itself and cannot set it
+  cross-origin without a CORS preflight this host does not grant. With no
+  ambient credential, the same-origin check for cookie writes does not apply to
+  it (Tauri always sends the webview's origin, so it could not write
+  otherwise). Cookie writes still need the product origin.
+- Self-hosted instances have none of these routes; Takosumi Mobile keeps
+  signing in directly with `oidcClientId`.
+
 ### Takosumi Mobile notification pushers
 
 Takosumi Mobile receives this instance's own notifications (approval waits, Run
@@ -249,11 +308,9 @@ pushers) that products use for their native apps.
   - Alternate URLs (workers.dev, previews) answer 404, and so does any path
     below the prefix other than the collection and one item (a trailing `/`,
     more segments). Issuer credentials are never evaluated for them.
-  - **Takosumi Mobile cannot register on this host yet.** It always sends
-    `Authorization` and therefore gets 401. How a device obtains a credential
-    for the management API in this profile is undecided (takos-control
-    `docs/platform/takosumi-app-clients.md`, open points). Only the host's
-    dashboard (the RP session) can use these routes today.
+  - Takosumi Mobile registers with the session from "Takosumi Mobile sign-in
+    on a shared-account host" above, in `x-takosumi-native-session`. No
+    `Origin` check applies to it.
 - POST body: `{"kind":"webpush","app_id":"com.takosumi","pushkey":"<p256dh>","data":{"url":"<endpoint>","auth":"<auth>"},"device_display_name":"Pixel 9","lang":"ja-JP"}`.
   `pushkey` is an uncompressed P-256 point on the curve and `auth` is 16 bytes,
   both unpadded base64url. Unknown fields are 400. A new pusher answers 201, an
