@@ -20,6 +20,7 @@ import {
   canonicalProviderSource,
   isOpenTofuBuiltinProviderSource,
 } from "takosumi-contract/provider-env-rules";
+import { stableStringify } from "../../adapters/source/digest.ts";
 import { providerMatches } from "./policy.ts";
 import { normalizeProviders } from "./validation.ts";
 import {
@@ -86,6 +87,155 @@ export function mergePolicyConfigs(
     ),
     quota: mergeQuota(spacePolicy?.quota, installPolicy?.quota),
   };
+}
+
+/**
+ * The PolicyConfig keys a Workspace policy contributes when
+ * {@link mergePolicyConfigs} layers it over an InstallConfig policy. Every
+ * other Workspace policy key (`lifecycleActions`, `repositoryInstallUx`, or an
+ * unknown key) never reached a runtime decision, so it is neither enforced nor
+ * baked (TASK-0118 P9.1-g).
+ */
+export const WORKSPACE_POLICY_CEILING_KEYS = [
+  "allowedProviders",
+  "allowedResourceTypes",
+  "allowedDataSourceTypes",
+  "allowedProvisionerTypes",
+  "destructiveChanges",
+  "providerLockfile",
+  "providerInstallation",
+  "providerCredentials",
+  "scopeBoundary",
+  "quota",
+] as const satisfies readonly (keyof PolicyConfig)[];
+
+/** Maximum persisted `scopeBoundary.rules` (`parseScopeBoundaryPolicy`). */
+export const SCOPE_BOUNDARY_RULE_LIMIT = 64;
+
+/**
+ * The part of a Workspace policy that acts as a runtime ceiling, or
+ * `undefined` when it has none.
+ */
+export function workspacePolicyCeiling(
+  policy: PolicyConfig | undefined,
+): PolicyConfig | undefined {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+    return undefined;
+  }
+  const ceiling: Record<string, unknown> = {};
+  for (const key of WORKSPACE_POLICY_CEILING_KEYS) {
+    if (policy[key] !== undefined) ceiling[key] = policy[key];
+  }
+  return Object.keys(ceiling).length > 0 ? ceiling as PolicyConfig : undefined;
+}
+
+/**
+ * Bakes a Workspace policy ceiling into one InstallConfig policy with the
+ * strictest merge (TASK-0118 data policy: "Workspace.policy is baked into each
+ * app's InstallConfig policy as the strictest composition").
+ *
+ * Each ceiling key takes the value {@link mergePolicyConfigs} enforces today
+ * (allowlists intersect, `require*` flags OR, required lists union, quotas take
+ * the minimum, both scope-boundary rule sets stay enforceable) with two
+ * changes that make the result idempotent and no weaker than the runtime
+ * composition: `destructiveChanges` requires confirmation when either layer
+ * does (the runtime let the InstallConfig layer override the Workspace), and
+ * duplicate scope-boundary rules are dropped. Keys the Workspace layer never
+ * contributes (`lifecycleActions`, `repositoryInstallUx`, unknown keys) keep
+ * the InstallConfig value. `bake(ws, bake(ws, p))` equals `bake(ws, p)`.
+ */
+export function bakeWorkspacePolicy(
+  workspacePolicy: PolicyConfig | undefined,
+  installPolicy: PolicyConfig | undefined,
+): PolicyConfig | undefined {
+  const ceiling = workspacePolicyCeiling(workspacePolicy);
+  if (!ceiling) return installPolicy;
+  const merged = mergePolicyConfigs(ceiling, installPolicy) ?? {};
+  const baked: Record<string, unknown> = { ...(installPolicy ?? {}) };
+  for (const key of WORKSPACE_POLICY_CEILING_KEYS) {
+    const value = key === "destructiveChanges"
+      ? strictestDestructiveChanges(
+          ceiling.destructiveChanges,
+          installPolicy?.destructiveChanges,
+        )
+      : key === "scopeBoundary"
+        ? withoutDuplicateScopeRules(merged.scopeBoundary)
+        : merged[key];
+    if (value === undefined) delete baked[key];
+    else baked[key] = value;
+  }
+  return baked as PolicyConfig;
+}
+
+/**
+ * Whether the Workspace policy's ceiling is already contained in the
+ * InstallConfig policy, i.e. baking would change nothing. A Workspace policy
+ * without a ceiling is trivially baked. The comparison is over canonical JSON,
+ * so a widened Workspace policy stays baked while a tightened one is unbaked
+ * again (and is enforced again, see {@link effectiveProviderPolicy}).
+ */
+export function workspacePolicyBakedInto(
+  workspacePolicy: PolicyConfig | undefined,
+  installPolicy: PolicyConfig | undefined,
+): boolean {
+  const ceiling = workspacePolicyCeiling(workspacePolicy);
+  if (!ceiling) return true;
+  return canonicalPolicyJson(bakeWorkspacePolicy(ceiling, installPolicy)) ===
+    canonicalPolicyJson(installPolicy);
+}
+
+/**
+ * The provider policy a Capsule runs under (TASK-0118 P9.1-g).
+ *
+ * The Workspace policy stops being a runtime ceiling only for an
+ * InstallConfig that already contains it ({@link workspacePolicyBakedInto});
+ * the decision is then identical, because the InstallConfig policy alone is
+ * at least as strict as the old composition. Every other InstallConfig keeps
+ * the Workspace ceiling, so nothing is loosened before the operator bake tool
+ * (`scripts/bake-workspace-policies.ts`) reports zero unbaked apps. Stage 9.5
+ * removes the Workspace read once it does.
+ */
+export function effectiveProviderPolicy(
+  workspacePolicy: PolicyConfig | undefined,
+  installPolicy: PolicyConfig | undefined,
+): PolicyConfig | undefined {
+  return workspacePolicyBakedInto(workspacePolicy, installPolicy)
+    ? mergePolicyConfigs(undefined, installPolicy)
+    : mergePolicyConfigs(workspacePolicy, installPolicy);
+}
+
+/** Canonical JSON of a policy: sorted keys, `undefined` members dropped. */
+export function canonicalPolicyJson(policy: PolicyConfig | undefined): string {
+  return stableStringify(
+    policy === undefined ? null : JSON.parse(JSON.stringify(policy)),
+  );
+}
+
+function strictestDestructiveChanges(
+  ceiling: PolicyConfig["destructiveChanges"] | undefined,
+  local: PolicyConfig["destructiveChanges"] | undefined,
+): PolicyConfig["destructiveChanges"] | undefined {
+  if (!ceiling) return local;
+  if (!local) return ceiling;
+  return {
+    requireExplicitConfirmation:
+      ceiling.requireExplicitConfirmation === true ||
+      local.requireExplicitConfirmation === true,
+  };
+}
+
+function withoutDuplicateScopeRules(
+  policy: PolicyConfig["scopeBoundary"] | undefined,
+): PolicyConfig["scopeBoundary"] | undefined {
+  if (!policy) return undefined;
+  const seen = new Set<string>();
+  const rules = policy.rules.filter((rule) => {
+    const key = stableStringify(JSON.parse(JSON.stringify(rule)));
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { ...policy, rules };
 }
 
 export function evaluateConfiguredProviderAllowlist(

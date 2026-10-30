@@ -189,11 +189,11 @@ import { projectApplyRun, projectPlanRun, projectSourceSyncRun } from "../projec
 import {
   canonicalProviderAddress,
   compactLayeredPolicy,
+  effectiveProviderPolicy,
   evaluateCompatibilityReportAgainstPolicy,
   evaluateConfiguredProviderAllowlist,
   evaluateProviderInstallationPolicy,
   evaluateProviderLockfilePolicy,
-  mergePolicyConfigs,
   requiredProvidersFromCompatibilityReport,
   withDefaultProviderSupplyChainPolicy,
 } from "../provider_policy.ts";
@@ -2750,7 +2750,7 @@ export class RunEngine {
       input.installConfig.runnerId ?? this.#defaultRunnerProfileId,
     );
     const workspace = await this.#store.getWorkspace(input.capsule.workspaceId);
-    const policy = mergePolicyConfigs(
+    const policy = effectiveProviderPolicy(
       workspace?.policy,
       input.installConfig.policy,
     );
@@ -9174,7 +9174,7 @@ export class RunEngine {
       this.#store.getInstallConfig(capsule.installConfigId),
     ]);
     return withDefaultProviderSupplyChainPolicy(
-      mergePolicyConfigs(workspace?.policy, installConfig?.policy),
+      effectiveProviderPolicy(workspace?.policy, installConfig?.policy),
       {
         providerInstallationRequireMirror:
           defaultProviderMirrorRequiredForProfile(runnerProfile),
