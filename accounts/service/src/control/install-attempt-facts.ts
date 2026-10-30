@@ -389,6 +389,7 @@ export async function connectionRequirements(
   ]);
   const policy = mergedProviderPolicy(workspace.policy, facts.providerPolicy);
   const explicit = plan.options.providerBindings ?? [];
+  // The committed app is owned by the person who started the install.
   return facts.requirements.map((requirement) => {
     const candidates: GitInstallPlanConnectionCandidate[] = connections
       .filter((connection) =>

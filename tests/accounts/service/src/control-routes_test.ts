@@ -178,18 +178,26 @@ test("release-owned ProviderConnection projection bypasses the durable provider 
   expect(durableListReads).toBe(0);
 });
 
-test("ProviderConnection inventory is owner-only even for a Workspace member", async () => {
-  let inventoryReads = 0;
+test("ProviderConnection inventory lists only the caller's own connections (TASK-0118 P9.1-d)", async () => {
+  const row = (id: string, ownerAccountId?: string) => ({
+    id, workspaceId: workspace.id, scope: "workspace", provider: "aws", providerSource: "registry.opentofu.org/hashicorp/aws",
+    status: "verified", ...(ownerAccountId ? { ownerAccountId } : {}), createdAt: workspace.createdAt, updatedAt: workspace.createdAt,
+  });
   const operations = {
     ...workspaceAuthorizationOperations(),
     members: { getMember: async () => ({ workspaceId: workspace.id, accountId: "tsub_member", status: "active", roles: ["member"] }) },
-    connections: { listProviderConnections: async () => { inventoryReads++; return []; } },
+    // The Workspace owner's connection, a legacy row without an owner (the
+    // Workspace owner's) and the member's own.
+    connections: { listProviderConnections: async () => [row("conn_owner", "tsub_owner"), row("conn_legacy"), row("conn_member", "tsub_member")] },
   } as unknown as ControlPlaneOperations;
-  const request = new Request("https://app.example.test/api/v1/provider-connections?workspaceId=ws_owner");
-  const ctx = { ...context(operations, request), session: { subject: "tsub_member" } };
-  const response = await handleProviderConnections(ctx, ["provider-connections"], "GET");
-  expect(response?.status).toBe(403);
-  expect(inventoryReads).toBe(0);
+  const listed = async (subject: string) => {
+    const request = new Request("https://app.example.test/api/v1/provider-connections?workspaceId=ws_owner");
+    const response = await handleProviderConnections({ ...context(operations, request), session: { subject } }, ["provider-connections"], "GET");
+    expect(response?.status).toBe(200);
+    return ((await response!.json()).providerConnections as { id: string }[]).map((connection) => connection.id);
+  };
+  expect(await listed("tsub_member")).toEqual(["conn_member"]);
+  expect(await listed("tsub_owner")).toEqual(["conn_owner", "conn_legacy"]);
 });
 
 test("app-scoped PATs cannot use legacy Workspace authorization even with a Workspace binding", async () => {
@@ -2508,14 +2516,10 @@ test("credential OAuth callback success preserves tk_control_init timing", async
   const operations = {
     connectionOAuth: {
       helper: {
+        // A personal state: OAuth states carry no Workspace (TASK-0118 P9.1-d).
         complete: async () => ({
-          request: { workspaceId: workspace.id },
+          request: { scope: "personal", ownerAccountId: workspace.ownerUserId },
           subject: workspace.ownerUserId,
-          expectedWorkspaceManagementAuthority: {
-            workspaceId: workspace.id,
-            managementState: "active",
-            managementEpoch: 1,
-          },
         }),
       },
     },
@@ -2528,10 +2532,12 @@ test("credential OAuth callback success preserves tk_control_init timing", async
   const request = new Request(
     "https://app.example.test/api/v1/connections/oauth/helper/callback?code=code-1&state=state-1",
   );
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({ subject: workspace.ownerUserId as never, createdAt: Date.now(), updatedAt: Date.now() });
   const response = await handleControlRoute({
     request,
     url: new URL(request.url),
-    store: new InMemoryAccountsStore(),
+    store,
     resolveOperations: async () => operations,
   });
 
@@ -4251,8 +4257,7 @@ test("browser-bound provider callbacks reject copied authorization URLs before t
   const operations = {
     connectionOAuth: { helper: { browserBindingRequired: true, complete: async () => {
       exchanges++;
-      return { request: { workspaceId: workspace.id }, subject: workspace.ownerUserId,
-        expectedWorkspaceManagementAuthority: { workspaceId: workspace.id, managementState: "active", managementEpoch: 1 } };
+      return { request: { scope: "personal", ownerAccountId: workspace.ownerUserId }, subject: workspace.ownerUserId };
     } } },
     workspaces: { getWorkspace: async () => workspace },
     createConnection: async () => ({ connection: { id: "conn_browser_bound" } }),
@@ -4260,12 +4265,14 @@ test("browser-bound provider callbacks reject copied authorization URLs before t
   } as unknown as ControlPlaneOperations;
   const url = new URL("https://app.example.test/api/v1/connections/oauth/helper/callback?code=code-fixture&state=state-fixture");
   const request = new Request(url);
-  const refused = await handleControlRoute({ request, url, store: new InMemoryAccountsStore(), operations });
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({ subject: workspace.ownerUserId as never, createdAt: Date.now(), updatedAt: Date.now() });
+  const refused = await handleControlRoute({ request, url, store, operations });
   expect(refused?.headers.get("location")).toContain("connection_error=oauth_failed");
   expect(exchanges).toBe(0);
   const flow = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify("state-fixture")))).toString("hex");
   const bound = new Request(url, { headers: { cookie: `__Host-takosumi_oauth_${flow}=1` } });
-  const response = await handleControlRoute({ request: bound, url, store: new InMemoryAccountsStore(), operations });
+  const response = await handleControlRoute({ request: bound, url, store, operations });
   expect(response?.headers.get("location")).toContain("connected=1");
   expect(response?.headers.get("set-cookie")).toContain("Max-Age=0");
   expect(exchanges).toBe(1);

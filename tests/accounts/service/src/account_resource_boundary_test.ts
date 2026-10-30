@@ -98,31 +98,37 @@ test("Postgres account resource reader preserves physical owner and payer filter
   await db.close();
 });
 
-test("Workspace admin cannot complete OAuth connection mint for another person's Workspace", async () => {
-  let minted = 0;
-  const operations = {
-    connectionOAuth: { helper: { complete: async () => ({
-      request: { workspaceId: "ws_owner" },
-      subject: "account_admin",
-      expectedWorkspaceManagementAuthority: {
-        workspaceId: "ws_owner", managementState: "active", managementEpoch: 1,
+test("OAuth callback never mints from a Workspace named in the signed state (TASK-0118 P9.1-d)", async () => {
+  // States no longer carry a Workspace. One that still does (started before
+  // the change) is refused for everyone, the Workspace's admin and its owner.
+  for (const subject of ["account_admin", "account_owner"]) {
+    let minted = 0;
+    const operations = {
+      connectionOAuth: { helper: { complete: async () => ({
+        request: { workspaceId: "ws_owner", scope: "workspace", ownerAccountId: subject },
+        subject,
+        expectedWorkspaceManagementAuthority: {
+          workspaceId: "ws_owner", managementState: "active", managementEpoch: 1,
+        },
+      }) } },
+      workspaces: { getWorkspace: async () => ({ id: "ws_owner", ownerUserId: "account_owner" }) },
+      members: { getMember: async () => ({
+        workspaceId: "ws_owner", accountId: "account_admin", roles: ["admin"], status: "active",
+      }) },
+      createConnection: async () => {
+        minted++;
+        return { connection: { id: "conn_admin" } };
       },
-    }) } },
-    workspaces: { getWorkspace: async () => ({ id: "ws_owner", ownerUserId: "account_owner" }) },
-    members: { getMember: async () => ({
-      workspaceId: "ws_owner", accountId: "account_admin", roles: ["admin"], status: "active",
-    }) },
-    createConnection: async () => {
-      minted++;
-      return { connection: { id: "conn_admin" } };
-    },
-    testConnection: async () => ({ status: "verified" }),
-  } as unknown as ControlPlaneOperations;
-  const url = new URL("https://app.example.test/api/v1/connections/oauth/helper/callback?code=proof&state=signed");
-  const response = await completeConnectionOAuth(operations, new InMemoryAccountsStore(), url, "helper");
-  expect(response.status).toBe(303);
-  expect(response.headers.get("location")).toContain("connection_error=forbidden");
-  expect(minted).toBe(0);
+      testConnection: async () => ({ status: "verified" }),
+    } as unknown as ControlPlaneOperations;
+    const url = new URL("https://app.example.test/api/v1/connections/oauth/helper/callback?code=proof&state=signed");
+    const store = new InMemoryAccountsStore();
+    store.saveAccount({ subject: subject as never, createdAt: Date.now(), updatedAt: Date.now() });
+    const response = await completeConnectionOAuth(operations, store, url, "helper");
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location"), subject).toContain("connection_error=oauth_failed");
+    expect(minted).toBe(0);
+  }
 });
 
 test("appIds-scoped PAT cannot reach account connections, payer usage, or workspace-less install", async () => {
@@ -149,8 +155,12 @@ test("appIds-scoped PAT cannot reach account connections, payer usage, or worksp
   expect(accountReads).toBe(0);
 });
 
-test("legacy Workspace connection list and create require its actual owner", async () => {
+test("legacy Workspace connection list shows only the caller's own connections; create needs the future owner", async () => {
   let connectionCalls = 0;
+  const row = (id: string, ownerAccountId?: string) => ({
+    id, workspaceId: "ws_owner", scope: "workspace", provider: "aws", status: "verified",
+    ...(ownerAccountId ? { ownerAccountId } : {}), createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z",
+  });
   const operations = {
     workspaces: {
       getWorkspace: async () => ({ id: "ws_owner", ownerUserId: "account_owner" }),
@@ -161,7 +171,12 @@ test("legacy Workspace connection list and create require its actual owner", asy
     members: { getMember: async () => ({
       workspaceId: "ws_owner", accountId: "account_admin", roles: ["admin"], status: "active",
     }) },
-    listConnections: async () => { connectionCalls++; throw new Error("unexpected list"); },
+    // The owner's connection, a legacy row without an owner (the Workspace
+    // owner's), and one the admin owns.
+    // Two store pages; the first page ends on someone else's row.
+    listConnections: async (_workspaceId: string, params: { cursor?: string }) => params.cursor === undefined
+      ? { connections: [row("conn_admin", "account_admin"), row("conn_legacy"), row("conn_owner", "account_owner")], nextCursor: "store_cursor_after_conn_owner" }
+      : { connections: [row("conn_owner_2", "account_owner")] },
     createConnection: async () => { connectionCalls++; throw new Error("unexpected mint"); },
   } as unknown as ControlPlaneOperations;
   const store = new InMemoryAccountsStore();
@@ -173,7 +188,14 @@ test("legacy Workspace connection list and create require its actual owner", asy
     return { request, url: new URL(request.url), session: { subject: "account_admin", requiredAccess: "write" }, operations, store } as ControlDispatchContext;
   };
   const listed = await handleConnections(ctx("connections?workspaceId=ws_owner", "GET"), ["connections"], "GET");
-  expect(listed?.status).toBe(403);
+  expect(listed?.status).toBe(200);
+  const body = await listed!.json();
+  expect((body.connections as { id: string }[]).map((connection) => connection.id)).toEqual(["conn_admin"]);
+  // No cursor is handed out that points at someone else's row.
+  expect(body.nextCursor).toBeUndefined();
+  expect(JSON.stringify(body)).not.toContain("conn_owner");
+  // The Connection vault records the Workspace owner as a Workspace row's
+  // owner, so nobody else may create one.
   const created = await handleConnections(ctx("connections", "POST", { workspaceId: "ws_owner" }), ["connections"], "POST");
   expect(created?.status).toBe(403);
   expect(connectionCalls).toBe(0);
