@@ -1,11 +1,12 @@
 import type { AuditEvent } from "../audit/types.ts";
 import type { ChainedAuditEvent } from "./audit_chain.ts";
 import type { ObservabilitySink } from "./sink.ts";
-import type {
-  MetricEvent,
-  MetricEventQuery,
-  TraceSpanEvent,
-  TraceSpanQuery,
+import {
+  METRIC_CAPSULE_LABEL,
+  type MetricEvent,
+  type MetricEventQuery,
+  type TraceSpanEvent,
+  type TraceSpanQuery,
 } from "./types.ts";
 
 export interface OtlpMetricsExporterOptions {
@@ -387,8 +388,10 @@ function histogramPointFor(event: MetricEvent): OtlpHistogramDataPoint {
 
 function attributesForMetric(event: MetricEvent): readonly OtlpAttribute[] {
   const attrs: OtlpAttribute[] = [attribute("takosumi.metric.id", event.id)];
-  if (event.workspaceId)
-    attrs.push(attribute("takosumi.workspace_id", event.workspaceId));
+  // The app is the tenant attribute; a legacy event's Workspace is not
+  // exported (TASK-0118 P9.1-g).
+  const capsuleId = event.tags?.[METRIC_CAPSULE_LABEL];
+  if (capsuleId) attrs.push(attribute("takosumi.capsule_id", capsuleId));
   if (event.runGroupId)
     attrs.push(attribute("takosumi.run_group_id", event.runGroupId));
   if (event.requestId) {
@@ -398,6 +401,7 @@ function attributesForMetric(event: MetricEvent): readonly OtlpAttribute[] {
     attrs.push(attribute("takosumi.correlation_id", event.correlationId));
   }
   for (const [key, value] of Object.entries(event.tags ?? {}).sort()) {
+    if (key === METRIC_CAPSULE_LABEL) continue;
     attrs.push(attribute(`tag.${key}`, value));
   }
   return attrs;
@@ -426,8 +430,6 @@ function spanForEvent(event: TraceSpanEvent): OtlpSpan {
 
 function attributesForTrace(event: TraceSpanEvent): readonly OtlpAttribute[] {
   const attrs: OtlpAttribute[] = [attribute("takosumi.span.id", event.id)];
-  if (event.workspaceId)
-    attrs.push(attribute("takosumi.workspace_id", event.workspaceId));
   if (event.runGroupId)
     attrs.push(attribute("takosumi.run_group_id", event.runGroupId));
   if (event.requestId) {

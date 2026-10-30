@@ -1570,9 +1570,11 @@ test("platform metrics route does not capture dashboard paths", async () => {
 });
 
 test("platform metrics summary captures required metric and label coverage", () => {
+  // The app is the tenant label; a scrape without any Workspace label is
+  // complete (TASK-0118 P9.1-g).
   const summary = summarizePrometheusMetrics(
     [
-      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",workspace_id="workspace",capsule_id="cap",operation_kind="apply",status="succeeded"} 1',
+      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",capsule_id="cap",operation_kind="apply",status="succeeded"} 1',
       'custom_metric{environment="production"} 1',
     ].join("\n"),
   );
@@ -1586,6 +1588,11 @@ test("platform metrics summary captures required metric and label coverage", () 
     "takosumi_apply_duration_seconds_bucket",
   );
   expect(summary.missingRequiredLabels).toEqual([]);
+  expect(
+    summarizePrometheusMetrics(
+      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",workspace_id="workspace",operation_kind="apply",status="succeeded"} 1',
+    ).missingRequiredLabels,
+  ).toEqual(["capsule_id"]);
 });
 
 test("platform OIDC metrics exclude public metadata and cover auth flows", () => {
