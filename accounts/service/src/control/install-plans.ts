@@ -111,6 +111,8 @@ import {
 } from "./sources.ts";
 import {
   controllerErrorCode,
+  installedAppTokenDelegates,
+  isInstalledAppToken,
   resolveProviderBindings,
   type ControlDispatchContext,
 } from "./shared.ts";
@@ -377,7 +379,14 @@ export async function handleInstallPlans(
 ): Promise<Response | undefined> {
   if (segments[0] === "install-plans" && segments.length === 1) {
     if (method !== "POST") return methodNotAllowed("POST");
-    if (ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) {
+    // An account credential installs for its account. The one other credential
+    // is an operator-designated delegate app's own token (Takos), which
+    // installs for its user exactly as the user's session would: the new app
+    // is created in the user's own namespace, so the user is its owner. Every
+    // other Workspace- or app-restricted credential stays refused.
+    const delegated = (ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) &&
+      isInstalledAppToken(ctx.session) && await installedAppTokenDelegates(ctx.operations, ctx.session);
+    if ((ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) && !delegated) {
       return errorJson("app_access_denied", "An account credential is required to install an app.", 403, ctx.request);
     }
     const body = await readJsonObject(ctx.request.clone());
@@ -386,7 +395,13 @@ export async function handleInstallPlans(
     }
     // The freeze permits only A's canonical owner-bound personal bootstrap.
     // Never use the general Workspace creation or membership mutation ports.
-    const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session);
+    // The namespace only fills the retained Workspace columns; it is resolved
+    // for the user, never for the delegate token's own Workspace.
+    const namespace = await personalResourceNamespace(
+      ctx.operations,
+      ctx.store,
+      delegated ? { subject: ctx.session.subject } : ctx.session,
+    );
     if (!namespace) return errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
     return await handleWorkspaceInstallPlans(ctx, namespace.id, method);
   }
@@ -401,19 +416,24 @@ export async function handleInstallPlans(
   // Before its Capsule exists an install attempt is Workspace work. Once the
   // app exists, the attempt is that app's: reading is view, answering is a
   // settings change, discarding abandons the app (owner only).
-  const auth = await requireResourceAccess({
-    operations: ctx.operations,
-    store: ctx.store,
-    session: ctx.session,
-    workspaceId: plan.workspaceId,
-    capsuleId: plan.capsuleId,
-    action: method === "GET" || method === "HEAD" ? "view"
-      : method === "DELETE" ? "uninstall"
-      : segments[2] === "reconcile" ? "update"
-      : "change_settings",
-    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
-    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
-  });
+  // A delegate token continues only its own user's capsule-less attempt in
+  // that user's own namespace (where POST /install-plans puts it), so the app
+  // it becomes is that user's; it never reaches anyone else's attempt.
+  const auth = !plan.capsuleId && await delegateContinuesOwnAttempt(ctx, plan)
+    ? { ok: true as const }
+    : await requireResourceAccess({
+        operations: ctx.operations,
+        store: ctx.store,
+        session: ctx.session,
+        workspaceId: plan.workspaceId,
+        capsuleId: plan.capsuleId,
+        action: method === "GET" || method === "HEAD" ? "view"
+          : method === "DELETE" ? "uninstall"
+          : segments[2] === "reconcile" ? "update"
+          : "change_settings",
+        ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+        ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+      });
   if (!auth.ok) return auth.response;
 
   if (segments.length === 2) {
@@ -427,6 +447,32 @@ export async function handleInstallPlans(
     return await reconcileInstallPlan(ctx, plan);
   }
   return undefined;
+}
+
+/**
+ * A designated delegate token (Takos) and the attempt it started for its user:
+ * the plan has no Capsule yet, the token's user created it and is its actor,
+ * and it lives in a Workspace that user owns (the namespace POST
+ * /install-plans fills), so committing it makes an app owned by that user.
+ * Anything else keeps the ordinary decision.
+ */
+async function delegateContinuesOwnAttempt(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): Promise<boolean> {
+  const session = ctx.session;
+  if (!isInstalledAppToken(session) || plan.createdBy !== session.subject ||
+    plan.actorSubject !== session.subject) return false;
+  if (!(await installedAppTokenDelegates(ctx.operations, session))) return false;
+  ctx.assertActive?.();
+  try {
+    const workspace = await ctx.operations.workspaces.getWorkspace(plan.workspaceId);
+    return workspace.id === plan.workspaceId && workspace.ownerUserId === session.subject &&
+      !workspace.archivedAt;
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") return false;
+    throw error;
+  }
 }
 
 /**

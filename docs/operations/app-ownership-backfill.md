@@ -384,8 +384,12 @@ tokens) are identical under both rules and are not part of this comparison.
 
 An installed app's own OAuth token reaches only its own app (and there needs
 both its app role and the Workspace decision). Only apps built from a
-repository listed in `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` keep Workspace
-delegation. On a target where Takos installs apps for its users, set that
+repository listed in `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` delegate for
+their user. Once the Takos Capsule has an ownership row, only tokens of users
+who are its owner or a member delegate (checked live), and on another app the
+user's own role there decides; the token's Workspace binding is not consulted
+for that (TASK-0118 P9.1-b). Without an ownership row the token must still be
+bound to the Takos Capsule's Workspace. On a target where Takos installs apps for its users, set that
 variable to the Takos repository coordinate, for example
 `[{"url":"https://github.com/<owner>/takos","path":".","refs":["refs/heads/main","refs/tags/v*"]}]`
 with the exact URL the Takos Capsule was installed from and the refs it is

@@ -46,6 +46,7 @@ import {
   type RequestPhaseObserver,
 } from "../request-phase-diagnostics.ts";
 import { WorkspaceManagementAdmissionConflictError } from "../../../../core/domains/deploy-control/store.ts";
+import { isMissingOwnershipSchemaError } from "../../../../core/domains/app-ownership/store.ts";
 import {
   bearerWorkspaceAllows,
   type AccountsBearerRequiredScope,
@@ -729,21 +730,30 @@ export function isInstalledAppToken(
 const installedAppDelegationDecisions = new WeakMap<ControlSession, Promise<boolean>>();
 
 /**
- * Workspace delegation for an installed app's own token. Server-side only:
+ * Delegation for an installed app's own token: the token acts for its user,
+ * within that user's own authority. Server-side only:
  * the token's single bound Capsule must be live (active or stale, no scheduled
- * uninstall) in the token's Workspace, and its currently adopted (applied)
+ * uninstall), and its currently adopted (applied)
  * revision must come from that Capsule's own Source (whose URL cannot be
  * patched) at a designated path, and its snapshot's resolved full ref
  * (`resolvedRef`) must be an allowed `refs/heads/…` or `refs/tags/…` name.
  * Bare names, an unresolved `HEAD`, `refs/pull/*`, raw commits and snapshots
- * without `resolvedRef` never qualify. Memoized per session object.
+ * without `resolvedRef` never qualify.
+ *
+ * Whose token delegates (TASK-0118 P9.1-b): once the delegate app has an
+ * ownership row, the token's user must currently be that app's owner or a
+ * member (read live, here). The token's Workspace, which the live grant
+ * derives from Workspace membership, is not an input; a token still bound to a
+ * Workspace must only not name another one. Without an ownership row (rollout
+ * fallback) the legacy rule stays: the token must be bound to the app's own
+ * Workspace. Memoized per session object.
  */
 export function installedAppTokenDelegates(
   operations: ControlPlaneOperations,
   session: ControlSession,
 ): Promise<boolean> {
   const sources = session.installedAppDelegationSources;
-  if (!isInstalledAppToken(session) || !sources?.length || session.appIds.length !== 1 || !session.workspaceId) {
+  if (!isInstalledAppToken(session) || !sources?.length || session.appIds.length !== 1) {
     return Promise.resolve(false);
   }
   let decision = installedAppDelegationDecisions.get(session);
@@ -753,9 +763,11 @@ export function installedAppTokenDelegates(
     decision = (async () => {
       try {
         const capsule = await operations.capsules.getCapsule(capsuleId);
-        if (capsule.id !== capsuleId || capsule.workspaceId !== workspaceId ||
+        if (capsule.id !== capsuleId ||
+          (workspaceId !== undefined && capsule.workspaceId !== workspaceId) ||
           (capsule.status !== "active" && capsule.status !== "stale") ||
           (capsule.uninstall !== undefined && capsule.uninstall.phase !== "cancelled")) return false;
+        if (!(await delegateAppUserMayDelegate(operations, session, capsule.id, capsule.workspaceId))) return false;
         const adopted = await operations.getCapsuleAdoptedSourceRevision(capsule.id);
         if (!adopted) return false;
         const source = (await operations.getSource(capsule.sourceId)).source;
@@ -773,6 +785,35 @@ export function installedAppTokenDelegates(
     installedAppDelegationDecisions.set(session, decision);
   }
   return decision;
+}
+
+/**
+ * The token's user may delegate through the delegate app: its live owner or
+ * member role once the app has an ownership row; without one (no ownership
+ * port, a pre-ownership schema, or a Capsule the backfill has not reached),
+ * the token's own issuance-bound Workspace must be the app's Workspace.
+ */
+async function delegateAppUserMayDelegate(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  capsuleId: string,
+  capsuleWorkspaceId: string,
+): Promise<boolean> {
+  const store = operations.appOwnership;
+  let owned = false;
+  if (store) {
+    try {
+      const fence = store.readOwnershipFence
+        ? await store.readOwnershipFence(capsuleId)
+        : { schemaAvailable: true, ownership: await store.getOwnership(capsuleId) };
+      owned = fence.schemaAvailable && fence.ownership?.capsuleId === capsuleId;
+    } catch (error) {
+      if (!isMissingOwnershipSchemaError(error)) throw error;
+    }
+  }
+  if (!owned) return session.workspaceId !== undefined && session.workspaceId === capsuleWorkspaceId;
+  const access = await operations.appAccess?.resolveAppAccess(session.subject, capsuleId);
+  return access?.capsuleId === capsuleId && (access.role === "owner" || access.role === "member");
 }
 
 /**

@@ -199,21 +199,26 @@ async function decideOwnedApp(
   ownership: CapsuleOwnership,
 ): Promise<AppAuthorizationResult> {
   const { operations, session } = input;
+  // An installed app's own token reaches only its own app unless the
+  // operator designated the app as a delegate. A delegate token acting on
+  // ANOTHER owned app acts for its user (TASK-0118 P9.1-b): the user's live
+  // role on that app is the decision, and the Workspace the token may still be
+  // bound to (derived from Workspace membership at issuance) neither limits nor
+  // grants it. The OAuth exclusions in requireAppAccess still apply.
+  const delegatedForUser = isInstalledAppToken(session) && !session.appIds.includes(input.capsuleId) &&
+    await installedAppTokenDelegates(operations, session);
+  input.assertActive?.();
+  if (isInstalledAppToken(session) && !session.appIds.includes(input.capsuleId) && !delegatedForUser) {
+    return { ok: false, response: appAccessDenied() };
+  }
   // Bearer restrictions come first and are never replaced by a role.
-  if (!bearerWorkspaceAllows(session, input.workspaceId)) return { ok: false, response: appAccessDenied() };
+  if (!delegatedForUser && !bearerWorkspaceAllows(session, input.workspaceId)) return { ok: false, response: appAccessDenied() };
   if (session.appIds !== undefined && session.credential !== "oauth-access-token" &&
     !bearerAppAllows(session, input.capsuleId)) {
     return { ok: false, response: appAccessDenied() };
   }
-  // An installed app's own token reaches only its own app unless the
-  // operator designated the app as a Workspace delegate.
-  if (isInstalledAppToken(session) && !session.appIds.includes(input.capsuleId) &&
-    !(await installedAppTokenDelegates(operations, session))) {
-    return { ok: false, response: appAccessDenied() };
-  }
-  input.assertActive?.();
   let capsule = input.capsule;
-  if (session.workspaceId !== undefined) {
+  if (session.workspaceId !== undefined && !delegatedForUser) {
     capsule ??= await operations.capsules.getCapsule(input.capsuleId);
     input.assertActive?.();
     if (capsule.id !== input.capsuleId || capsule.workspaceId !== session.workspaceId) {
@@ -245,7 +250,10 @@ async function decideOwnedApp(
   // An installed app's own OAuth token and the trusted shared-account
   // composition (current membership required) keep their Workspace limit:
   // their effective authority is the intersection, never wider than before.
-  if (session.credential === "oauth-access-token" || session.requireCurrentMembership) {
+  // A delegate token acting for its user on another app has no Workspace
+  // limit here: it is bounded by the user's app role above, exactly as the
+  // user's own session is.
+  if ((session.credential === "oauth-access-token" && !delegatedForUser) || session.requireCurrentMembership) {
     const workspaceAllowed = await canAccessWorkspace({
       operations,
       store: input.store,
