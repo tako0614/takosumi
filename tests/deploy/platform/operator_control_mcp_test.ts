@@ -8,6 +8,7 @@ import {
   OPERATOR_CONTROL_MCP_TOOLS,
   operatorControlMcpResource,
   operatorControlMcpResourceAuthorized,
+  type OperatorControlMcpAppFacts,
   type OperatorControlMcpAuthority,
 } from "../../../deploy/operator-control-mcp.ts";
 import {
@@ -61,6 +62,34 @@ function env(enabled = true): CloudflareWorkerEnv {
   } as never;
 }
 
+/**
+ * The MCP's own app (`capsule_adapter`) and a target app both owned by the
+ * token's subject in the token's Workspace, unless a test overrides them.
+ */
+function authorityFor(
+  overrides: Partial<OperatorControlMcpAuthority> & {
+    readonly apps?: Readonly<Record<string, OperatorControlMcpAppFacts>>;
+  } = {},
+): OperatorControlMcpAuthority {
+  const { apps: appOverrides, ...rest } = overrides;
+  const apps: Record<string, OperatorControlMcpAppFacts> = {
+    capsule_adapter: { ownerAccountId: "principal_a", workspaceId: "workspace_a" },
+    capsule_target: { ownerAccountId: "principal_a", workspaceId: "workspace_a" },
+    ...appOverrides,
+  };
+  return {
+    subject: "principal_a",
+    capsuleId: "capsule_adapter",
+    workspaceId: "workspace_a",
+    dispatchPublicControl: async () => Response.json({}),
+    app: async (capsuleId) => apps[capsuleId],
+    installPlan: async () => undefined,
+    run: async () => undefined,
+    installNamespaceId: async () => "workspace_a",
+    ...rest,
+  };
+}
+
 test("operator control MCP is absent until explicitly enabled", async () => {
   let verified = false;
   const response = await handlePlatformOperatorControlMcpRequest(
@@ -96,13 +125,7 @@ test("every MCP POST re-introspects exact Interface OAuth evidence and serves ad
     expect(route?.requiredScopes).toEqual(["mcp.invoke"]);
     return interfaceSession();
   };
-  const authority: OperatorControlMcpAuthority = {
-    workspaceId: "workspace_a",
-    dispatchPublicControl: async () => Response.json({}),
-    installPlanWorkspaceId: async () => "workspace_a",
-    capsuleWorkspaceId: async () => "workspace_a",
-    runWorkspaceId: async () => "workspace_a",
-  };
+  const authority = authorityFor();
   const createAuthority = async () => authority;
 
   const first = await handlePlatformOperatorControlMcpRequest(
@@ -175,13 +198,14 @@ test("every MCP POST re-introspects exact Interface OAuth evidence and serves ad
 test("Git install-plan tools forward only the bounded public API contract and preserve idempotency", async () => {
   const dispatched: Request[] = [];
   const installPlanLookups: string[] = [];
-  const createAuthority = async (): Promise<OperatorControlMcpAuthority> => ({
-    workspaceId: "workspace_a",
-    capsuleWorkspaceId: async () => undefined,
-    runWorkspaceId: async () => undefined,
-    installPlanWorkspaceId: async (installPlanId) => {
+  const createAuthority = async (): Promise<OperatorControlMcpAuthority> => authorityFor({
+    installPlan: async (installPlanId) => {
       installPlanLookups.push(installPlanId);
-      return "workspace_a";
+      return {
+        workspaceId: "workspace_a",
+        createdBy: "principal_a",
+        actorSubject: "principal_a",
+      };
     },
     dispatchPublicControl: async (controlRequest) => {
       dispatched.push(controlRequest);
@@ -228,9 +252,8 @@ test("Git install-plan tools forward only the bounded public API contract and pr
   );
   expect((await created?.json()).result.isError).toBe(false);
   expect(dispatched).toHaveLength(1);
-  expect(new URL(dispatched[0]!.url).pathname).toBe(
-    "/api/v1/workspaces/workspace_a/install-plans",
-  );
+  // The Workspace-free install route: the new app is the MCP owner's.
+  expect(new URL(dispatched[0]!.url).pathname).toBe("/api/v1/install-plans");
   expect(dispatched[0]!.headers.get("idempotency-key")).toBe(
     "agent-run-1:sample-app",
   );
@@ -278,34 +301,41 @@ test("Git install-plan tools forward only the bounded public API contract and pr
   );
 });
 
-test("install-plan reads and reconciliation are fenced to the bound Workspace", async () => {
-  let dispatched = false;
-  const response = await handlePlatformOperatorControlMcpRequest(
-    request("tools/call", {
-      name: "takosumi_install_plan_get",
-      arguments: { installPlanId: "gip_other_workspace" },
-    }),
-    env(),
-    {
-      verifySession: async () => interfaceSession(),
-      createAuthority: async () => ({
-        workspaceId: "workspace_a",
-        capsuleWorkspaceId: async () => undefined,
-        runWorkspaceId: async () => undefined,
-        installPlanWorkspaceId: async () => "workspace_b",
-        dispatchPublicControl: async () => {
-          dispatched = true;
-          return Response.json({});
-        },
+test("install-plan reads and reconciliation reach only the MCP owner's installs inside the token's Workspace", async () => {
+  for (const plan of [
+    // The owner's own pre-app install, but outside the token's Workspace.
+    { workspaceId: "workspace_b", createdBy: "principal_a", actorSubject: "principal_a" },
+    // Someone else's pre-app install in the same Workspace.
+    { workspaceId: "workspace_a", createdBy: "principal_b", actorSubject: "principal_b" },
+    // An install whose app belongs to another account.
+    { capsuleId: "capsule_other_owner", workspaceId: "workspace_a", createdBy: "principal_a", actorSubject: "principal_a" },
+  ]) {
+    let dispatched = false;
+    const response = await handlePlatformOperatorControlMcpRequest(
+      request("tools/call", {
+        name: "takosumi_install_plan_get",
+        arguments: { installPlanId: "gip_other" },
       }),
-    },
-  );
+      env(),
+      {
+        verifySession: async () => interfaceSession(),
+        createAuthority: async () => authorityFor({
+          apps: { capsule_other_owner: { ownerAccountId: "principal_b", workspaceId: "workspace_a" } },
+          installPlan: async () => plan,
+          dispatchPublicControl: async () => {
+            dispatched = true;
+            return Response.json({});
+          },
+        }),
+      },
+    );
 
-  expect(dispatched).toBe(false);
-  expect((await response?.json()).result).toMatchObject({
-    isError: true,
-    structuredContent: { status: 403 },
-  });
+    expect(dispatched).toBe(false);
+    expect((await response?.json()).result).toMatchObject({
+      isError: true,
+      structuredContent: { status: 403 },
+    });
+  }
 });
 
 test("install-plan tools reject unstable keys and retired or ambiguous option shapes before dispatch", async () => {
@@ -366,11 +396,7 @@ test("install-plan tools reject unstable keys and retired or ambiguous option sh
       env(),
       {
         verifySession: async () => interfaceSession(),
-        createAuthority: async () => ({
-          workspaceId: "workspace_a",
-          installPlanWorkspaceId: async () => undefined,
-          capsuleWorkspaceId: async () => undefined,
-          runWorkspaceId: async () => undefined,
+        createAuthority: async () => authorityFor({
           dispatchPublicControl: async () => {
             dispatched = true;
             return Response.json({});
@@ -386,7 +412,7 @@ test("install-plan tools reject unstable keys and retired or ambiguous option sh
   expect(dispatched).toBe(false);
 });
 
-test("Interface OAuth subject and Workspace are forwarded to the public control authority without a broad token", async () => {
+test("Interface OAuth subject, app and Workspace are forwarded to the public control authority without a broad token", async () => {
   const dispatched: Request[] = [];
   const targetLookups: string[] = [];
   const response = await handlePlatformOperatorControlMcpRequest(
@@ -402,17 +428,17 @@ test("Interface OAuth subject and Workspace are forwarded to the public control 
       verifySession: async () => interfaceSession(),
       createAuthority: async (session) => {
         expect(session.subject).toBe("principal_a");
+        expect(session.capsuleId).toBe("capsule_adapter");
         expect(session.workspaceId).toBe("workspace_a");
         expect(session.interfaceBindingId).toBe("binding_control");
         expect(session.interfaceResolvedRevision).toBe(7);
+        const base = authorityFor();
         return {
-          workspaceId: session.workspaceId,
-          installPlanWorkspaceId: async () => undefined,
-          capsuleWorkspaceId: async (capsuleId) => {
+          ...base,
+          app: async (capsuleId) => {
             targetLookups.push(capsuleId);
-            return "workspace_a";
+            return await base.app(capsuleId);
           },
-          runWorkspaceId: async () => undefined,
           dispatchPublicControl: async (controlRequest) => {
             dispatched.push(controlRequest);
             // The Interface bearer must never cross into the public handler.
@@ -427,7 +453,8 @@ test("Interface OAuth subject and Workspace are forwarded to the public control 
     },
   );
 
-  expect(targetLookups).toEqual(["capsule_target"]);
+  // The MCP's own app first (its owner acts), then the target.
+  expect(targetLookups).toEqual(["capsule_adapter", "capsule_target"]);
   expect(dispatched).toHaveLength(1);
   expect(new URL(dispatched[0]!.url).pathname).toBe(
     "/api/v1/capsules/capsule_target/plan",
@@ -443,6 +470,7 @@ test("Interface OAuth subject and Workspace are forwarded to the public control 
 test("Capsule destroy-plan tool stops at a reviewable Run without approving or applying", async () => {
   const dispatched: Request[] = [];
   const capsuleLookups: string[] = [];
+  const base = authorityFor();
   const response = await handlePlatformOperatorControlMcpRequest(
     request("tools/call", {
       name: "takosumi_capsule_destroy_plan",
@@ -452,13 +480,11 @@ test("Capsule destroy-plan tool stops at a reviewable Run without approving or a
     {
       verifySession: async () => interfaceSession(),
       createAuthority: async () => ({
-        workspaceId: "workspace_a",
-        installPlanWorkspaceId: async () => undefined,
-        capsuleWorkspaceId: async (capsuleId) => {
+        ...base,
+        app: async (capsuleId) => {
           capsuleLookups.push(capsuleId);
-          return "workspace_a";
+          return await base.app(capsuleId);
         },
-        runWorkspaceId: async () => undefined,
         dispatchPublicControl: async (controlRequest) => {
           dispatched.push(controlRequest);
           return Response.json(
@@ -478,7 +504,7 @@ test("Capsule destroy-plan tool stops at a reviewable Run without approving or a
     },
   );
 
-  expect(capsuleLookups).toEqual(["capsule_target"]);
+  expect(capsuleLookups).toEqual(["capsule_adapter", "capsule_target"]);
   expect(dispatched).toHaveLength(1);
   expect(dispatched[0]!.method).toBe("POST");
   expect(new URL(dispatched[0]!.url).pathname).toBe(
@@ -496,21 +522,179 @@ test("Capsule destroy-plan tool stops at a reviewable Run without approving or a
   });
 });
 
-test("tool targets are fenced to the introspected Binding Workspace before public dispatch", async () => {
-  let dispatched = false;
+test("Run targets are fenced to the MCP owner's apps inside the token's Workspace before public dispatch", async () => {
+  for (const run of [
+    { capsuleId: "capsule_other_workspace" },
+    { capsuleId: "capsule_other_owner" },
+    { capsuleId: "capsule_unowned" },
+    {},
+    undefined,
+  ]) {
+    let dispatched = false;
+    const response = await handlePlatformOperatorControlMcpRequest(
+      request("tools/call", {
+        name: "takosumi_run_apply",
+        arguments: { runId: "run_target" },
+      }),
+      env(),
+      {
+        verifySession: async () => interfaceSession(),
+        createAuthority: async () => authorityFor({
+          apps: {
+            capsule_other_workspace: { ownerAccountId: "principal_a", workspaceId: "workspace_b" },
+            capsule_other_owner: { ownerAccountId: "principal_b", workspaceId: "workspace_a" },
+            capsule_unowned: { workspaceId: "workspace_a" },
+          },
+          run: async () => run,
+          dispatchPublicControl: async () => {
+            dispatched = true;
+            return Response.json({});
+          },
+        }),
+      },
+    );
+
+    expect(dispatched).toBe(false);
+    expect((await response?.json()).result).toMatchObject({
+      isError: true,
+      structuredContent: { status: 403 },
+    });
+  }
+});
+
+test("the MCP acts only while the token's subject owns the MCP's own app", async () => {
+  const tools = [
+    { name: "takosumi_capsules_list", arguments: {} },
+    { name: "takosumi_capsule_plan", arguments: { capsuleId: "capsule_target" } },
+    { name: "takosumi_run_get", arguments: { runId: "run_target" } },
+    {
+      name: "takosumi_install_plan_create",
+      arguments: {
+        idempotencyKey: "agent-run-1",
+        source: { name: "source", url: "https://example.com/repo.git" },
+        capsule: { name: "capsule", environment: "production" },
+      },
+    },
+  ];
+  for (const own of [
+    // Transferred to someone else: the binding subject no longer acts.
+    { ownerAccountId: "principal_b", workspaceId: "workspace_a" },
+    // No ownership row: there is no owner to act for.
+    { workspaceId: "workspace_a" },
+    // A token whose Workspace is not the MCP app's own.
+    { ownerAccountId: "principal_a", workspaceId: "workspace_b" },
+    undefined,
+  ]) {
+    for (const tool of tools) {
+      let dispatched = false;
+      const response = await handlePlatformOperatorControlMcpRequest(
+        request("tools/call", tool),
+        env(),
+        {
+          verifySession: async () => interfaceSession(),
+          createAuthority: async () => ({
+            ...authorityFor({ run: async () => ({ capsuleId: "capsule_target" }) }),
+            app: async (capsuleId) =>
+              capsuleId === "capsule_adapter"
+                ? own
+                : { ownerAccountId: "principal_a", workspaceId: "workspace_a" },
+            dispatchPublicControl: async () => {
+              dispatched = true;
+              return Response.json({ apps: [] });
+            },
+          }),
+        },
+      );
+      expect(dispatched).toBe(false);
+      expect((await response?.json()).result).toMatchObject({
+        isError: true,
+        structuredContent: { status: 403 },
+      });
+    }
+  }
+});
+
+test("the app list reads /api/v1/apps and keeps only the owner's own apps inside the token's Workspace", async () => {
+  const dispatched: Request[] = [];
   const response = await handlePlatformOperatorControlMcpRequest(
     request("tools/call", {
-      name: "takosumi_run_apply",
-      arguments: { runId: "run_other_workspace" },
+      name: "takosumi_capsules_list",
+      arguments: { cursor: "page_2" },
     }),
     env(),
     {
       verifySession: async () => interfaceSession(),
-      createAuthority: async () => ({
-        workspaceId: "workspace_a",
-        installPlanWorkspaceId: async () => undefined,
-        capsuleWorkspaceId: async () => undefined,
-        runWorkspaceId: async () => "workspace_b",
+      createAuthority: async () => authorityFor({
+        apps: {
+          capsule_elsewhere: { ownerAccountId: "principal_a", workspaceId: "workspace_b" },
+          capsule_shared_with_me: { ownerAccountId: "principal_b", workspaceId: "workspace_a" },
+        },
+        dispatchPublicControl: async (controlRequest) => {
+          dispatched.push(controlRequest);
+          return Response.json({
+            apps: [
+              { capsuleId: "capsule_target", name: "target", role: "owner" },
+              { capsuleId: "capsule_elsewhere", name: "elsewhere", role: "owner" },
+              { capsuleId: "capsule_shared_with_me", name: "shared", role: "member" },
+              { capsuleId: "capsule_unknown", name: "unknown", role: "owner" },
+            ],
+            nextCursor: "page_3",
+          });
+        },
+      }),
+    },
+  );
+
+  expect(dispatched).toHaveLength(1);
+  const url = new URL(dispatched[0]!.url);
+  expect(url.pathname).toBe("/api/v1/apps");
+  expect(url.searchParams.get("cursor")).toBe("page_2");
+  expect((await response?.json()).result.structuredContent).toEqual({
+    status: 200,
+    body: {
+      apps: [{ capsuleId: "capsule_target", name: "target", role: "owner" }],
+      nextCursor: "page_3",
+    },
+  });
+
+  // A malformed cursor is refused before anything is read.
+  let dispatchedMalformed = false;
+  const malformed = await handlePlatformOperatorControlMcpRequest(
+    request("tools/call", {
+      name: "takosumi_capsules_list",
+      arguments: { cursor: "../workspaces" },
+    }),
+    env(),
+    {
+      verifySession: async () => interfaceSession(),
+      createAuthority: async () => authorityFor({
+        dispatchPublicControl: async () => {
+          dispatchedMalformed = true;
+          return Response.json({ apps: [] });
+        },
+      }),
+    },
+  );
+  expect(dispatchedMalformed).toBe(false);
+  expect((await malformed?.json()).result.structuredContent.status).toBe(403);
+});
+
+test("a Workspace-bound token installs only when the new app stays inside its Workspace", async () => {
+  let dispatched = false;
+  const response = await handlePlatformOperatorControlMcpRequest(
+    request("tools/call", {
+      name: "takosumi_install_plan_create",
+      arguments: {
+        idempotencyKey: "agent-run-1",
+        source: { name: "source", url: "https://example.com/repo.git" },
+        capsule: { name: "capsule", environment: "production" },
+      },
+    }),
+    env(),
+    {
+      verifySession: async () => interfaceSession(),
+      createAuthority: async () => authorityFor({
+        installNamespaceId: async () => "workspace_personal_elsewhere",
         dispatchPublicControl: async () => {
           dispatched = true;
           return Response.json({});
@@ -518,12 +702,56 @@ test("tool targets are fenced to the introspected Binding Workspace before publi
       }),
     },
   );
-
   expect(dispatched).toBe(false);
-  expect((await response?.json()).result).toMatchObject({
-    isError: true,
-    structuredContent: { status: 403 },
-  });
+  expect((await response?.json()).result.structuredContent.status).toBe(403);
+});
+
+test("Capsule evidence without a Workspace acts on the owner's apps with no Workspace restriction", async () => {
+  const dispatched: string[] = [];
+  const sessions: unknown[] = [];
+  for (const tool of [
+    { name: "takosumi_capsule_plan", arguments: { capsuleId: "capsule_elsewhere" } },
+    {
+      name: "takosumi_install_plan_create",
+      arguments: {
+        idempotencyKey: "agent-run-1",
+        source: { name: "source", url: "https://example.com/repo.git" },
+        capsule: { name: "capsule", environment: "production" },
+      },
+    },
+  ]) {
+    const response = await handlePlatformOperatorControlMcpRequest(
+      request("tools/call", tool),
+      env(),
+      {
+        verifySession: async () => interfaceSession({ workspaceId: undefined }),
+        createAuthority: async (session) => {
+          sessions.push(session.workspaceId);
+          const { workspaceId: _workspaceId, ...base } = authorityFor({
+            apps: {
+              capsule_elsewhere: { ownerAccountId: "principal_a", workspaceId: "workspace_b" },
+            },
+            installNamespaceId: async () => {
+              throw new Error("a token without a Workspace has no namespace restriction");
+            },
+          });
+          return {
+            ...base,
+            dispatchPublicControl: async (controlRequest) => {
+              dispatched.push(new URL(controlRequest.url).pathname);
+              return Response.json({}, { status: 201 });
+            },
+          };
+        },
+      },
+    );
+    expect((await response?.json()).result.isError).toBe(false);
+  }
+  expect(sessions).toEqual([undefined, undefined]);
+  expect(dispatched).toEqual([
+    "/api/v1/capsules/capsule_elsewhere/plan",
+    "/api/v1/install-plans",
+  ]);
 });
 
 test("non-Interface, wrong-audience, and stale-scope sessions fail closed", async () => {
@@ -532,6 +760,9 @@ test("non-Interface, wrong-audience, and stale-scope sessions fail closed", asyn
     interfaceSession({ audience: `${ORIGIN}/mcp/other` }),
     interfaceSession({ scopes: ["admin"] }),
     interfaceSession({ interfaceResolvedRevision: undefined }),
+    // The MCP's own app is required; a Workspace alone never identifies it.
+    interfaceSession({ capsuleId: undefined }),
+    interfaceSession({ workspaceId: "workspace a" }),
   ]) {
     const response = await handlePlatformOperatorControlMcpRequest(
       request("tools/list"),
@@ -586,6 +817,58 @@ test("local TLS termination introspects and verifies the canonical HTTPS MCP aud
 
   expect(resources).toEqual([RESOURCE]);
   expect(session).toEqual(interfaceSession());
+});
+
+test("Interface OAuth introspection passes with Capsule evidence alone and fails with neither owner", async () => {
+  const route = {
+    id: "operator-control-mcp.v1",
+    basePath: OPERATOR_CONTROL_MCP_PATH,
+    handlerKey: "builtin:operator-control-mcp.v1",
+    authMode: "platform" as const,
+    requiredScopes: ["mcp.invoke"],
+    capabilities: ["mcp.operator-control.v1"],
+  };
+  const introspected = (takosumi: Record<string, unknown>) =>
+    verifyPlatformExtensionBearerToken(
+      new Request(RESOURCE, { method: "POST" }),
+      {
+        ...env(),
+        TAKOSUMI_ACCOUNTS_CLIENT_ID: "platform-client",
+        TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "platform-secret",
+      } as CloudflareWorkerEnv,
+      "invocation-only-interface-token",
+      route,
+      async () =>
+        Response.json({
+          active: true,
+          token_use: "interface_oauth",
+          scope: "mcp.invoke",
+          sub: "principal_a",
+          aud: RESOURCE,
+          takosumi: {
+            interface_id: "interface_control",
+            interface_binding_id: "binding_control",
+            interface_resolved_revision: 7,
+            ...takosumi,
+          },
+        }),
+    );
+
+  expect(await introspected({ capsule_id: "capsule_adapter" })).toEqual(
+    interfaceSession({ workspaceId: undefined }),
+  );
+  // A Workspace-owned Interface keeps its Workspace evidence.
+  expect(await introspected({ workspace_id: "workspace_a" })).toEqual(
+    interfaceSession({ capsuleId: undefined }),
+  );
+  for (const evidence of [
+    {},
+    { capsule_id: "capsule adapter" },
+    { workspace_id: "workspace_a", capsule_id: "capsule adapter" },
+    { workspace_id: "workspace a", capsule_id: "capsule_adapter" },
+  ]) {
+    expect(await introspected(evidence)).toEqual({ authenticated: false });
+  }
 });
 
 test("blueprint owns the ordinary mcp.server spec while the module stays provider-independent", async () => {

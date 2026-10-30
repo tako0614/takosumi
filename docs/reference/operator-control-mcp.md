@@ -1,8 +1,9 @@
 # MCP から Takosumi を操作する
 
 Operator control MCP adapter を使うと、Takos や別の MCP client から Takosumi の
-Git install-plan、Capsule、Run を操作できます。新しい Git Source から reviewable
-Plan Run まで準備し、Capsule の一覧、plan、Run の確認、承認、apply を行えます。
+Git install-plan、アプリ、Run を操作できます。新しい Git Source から reviewable
+Plan Run まで準備し、アプリの一覧、plan、Run の確認、承認、apply を行えます。
+MCP 自身のアプリの所有者として、その人が所有するアプリだけを操作します。
 
 この adapter は任意機能です。Takos 専用の tool を組み込むのではなく、通常の
 `mcp.server` Interface として `/mcp/operator-control/v1` に公開します。client は
@@ -13,7 +14,7 @@ MCP の `tools/list` から、その endpoint が提供する tool を読み取�
 - Takosumi Accounts と dashboard が動いている
 - 外から到達できる HTTPS の Takosumi origin がある
 - operator が MCP adapter を有効にできる
-- 利用者が対象 Workspace の member である
+- 利用者が MCP の module を install し、そのアプリの所有者である
 
 ## 接続する
 
@@ -68,9 +69,9 @@ module の provider credential は client へ渡しません。
 | `takosumi_install_plan_create`      | Git Source から durable install-plan を作成・再生する |
 | `takosumi_install_plan_get`         | install-plan の現在状態を副作用なしで読む             |
 | `takosumi_install_plan_reconcile`   | install-plan を明示的に一段だけ進める                  |
-| `takosumi_capsules_list`            | Capsule の一覧を読む                                  |
-| `takosumi_capsule_plan`             | 既存 Capsule の plan を開始する                        |
-| `takosumi_capsule_destroy_plan`     | 既存 Capsule の destroy plan を作り review で停止する  |
+| `takosumi_capsules_list`            | 所有者のアプリの一覧を読む（次は `cursor`）           |
+| `takosumi_capsule_plan`             | 既存のアプリの plan を開始する                         |
+| `takosumi_capsule_destroy_plan`     | 既存のアプリの destroy plan を作り review で停止する   |
 | `takosumi_run_get`                  | Run の状態と plan の要約を読む                         |
 | `takosumi_run_approve`              | 確認済みの Run を承認する                              |
 | `takosumi_run_apply`                | 承認済みの保存済み plan を apply する                  |
@@ -87,17 +88,28 @@ Takosumi tool catalog を持たせないでください。
 
 ## 認証と安全性
 
-各 MCP request では、Takosumi が OAuth token、Interface、Binding、Workspace、
-`mcp.invoke` permission を確認します。install-plan、Capsule、Run も同じ Workspace に
-属している必要があります。
+各 MCP request では、Takosumi が OAuth token、Interface、Binding、`mcp.invoke`
+permission を確認します。token は MCP 自身のアプリ（Interface を持つ Capsule）を
+示します。adapter が動くのは、token の利用者がいまそのアプリの所有者であるあいだ
+だけで、対象もその利用者が所有するアプリ（そのアプリの install-plan、アプリが
+できる前なら本人が始めた install、アプリ自体、そのアプリの Run）に限ります。
+メンバーであるだけのアプリには MCP から届きません。MCP のアプリを他の人へ譲渡
+したあとは何もできません。新しいアプリは `POST /api/v1/install-plans` で利用者の
+個人の場所に入り、利用者が所有者になります。Workspace の route は使いません。
+
+Interface token に Workspace が残っているあいだ（TASK-0118 の Phase 9.4 まで）は、
+その Workspace を先に適用する制限として扱います。対象のアプリもその Workspace に
+ある必要があり、新しいアプリがその外に入る install は断ります。Workspace が何かを
+許可することはありません。
 
 install-plan tool は公開 `/api/v1` の bounded request だけを転送します。variable 値、
 credential、provider token、任意の control-plane path は受け付けません。Git credential
 が必要な場合は、事前に作成した `authConnectionId` だけを参照します。
 
-adapter は確認済みの Workspace と利用者情報だけを既存の Takosumi API handler に渡します。
-元の bearer token を Run、state、Output、audit、log へ保存しません。通常の Workspace
-role、policy、plan 承認、保存済み plan の digest 検証もそのまま適用されます。
+adapter は確認済みの利用者だけを、Workspace なしで既存の Takosumi API handler に
+渡します。元の bearer token を Run、state、Output、audit、log へ保存しません。
+利用者のアプリでの現在の役割、policy、plan 承認、保存済み plan の digest 検証も
+そのまま適用されます。
 
 `takosumi_run_apply` は MCP request から apply guard を上書きできません。server が
 保存済み plan、state、provider connection をもう一度検証してから実行します。
@@ -108,8 +120,8 @@ role、policy、plan 承認、保存済み plan の digest 検証もそのまま
 | --------------------------------- | --------------------------------------------------------------------------- |
 | route が `404`                    | `TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED=1` が実行環境に反映されているか      |
 | OAuth Binding が Ready にならない | Accounts issuer、公開 origin、module の `takosumi_origin` が一致しているか  |
-| `401` / `403`                     | token の audience、`mcp.invoke` permission、Workspace membership を確認する |
-| Capsule や Run が見つからない     | Binding と対象が同じ Workspace にあるか                                     |
+| `401` / `403`                     | token の audience、`mcp.invoke` permission、利用者が MCP のアプリの所有者かを確認する |
+| アプリや Run が見つからない       | 利用者が対象のアプリの所有者か（メンバーだけでは届かない）                  |
 | tool が古い                       | client の固定一覧ではなく、接続先で `tools/list` を再取得する               |
 
 運用ログへ bearer token や provider credential を出さないでください。

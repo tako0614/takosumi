@@ -357,7 +357,7 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 | POST | `/api/v1/connections/{connectionId}/test`・`/revoke` | 接続の所有者だけ。Workspace scopeの接続も所有者のもので、Workspaceの所有者・管理者であることは権限にならない (所有者の記録が無い古い行だけ、記録されたWorkspaceの所有者を所有者とみなす)。それ以外は存在を明かさない `404 connection_not_found` |
 | POST | `/api/v1/sources`、`PATCH /api/v1/sources/{sourceId}` の `authConnectionId` | どのアプリも所有しないSourceには本人の接続だけ。アプリのSourceにはアプリの所有者の接続だけ (Sourceサービスが判定)。Workspaceのメンバーであっても他人の資格情報は使えない |
 | GET | `/api/v1/source-ref-resolutions?url=…` | write scopeを持つアカウント資格情報。runnerを起動して公開Git sourceのstable SemVerタグを解決 |
-| POST | `/api/v1/install-plans` | アカウント資格情報、または代理に指定されたアプリのtoken (利用者の代理)。`mode: "attempt"`、workspace指定なし。本人 (代理なら利用者) がアプリ所有者 |
+| POST | `/api/v1/install-plans` | アカウント資格情報、または代理に指定されたアプリのtoken (利用者の代理)。install attempt (`mode: "attempt"`) か、Workspace routeと同じ普通のinstall plan (`mode` なし。reviewで止まる)。workspace指定なし。本人 (代理なら利用者) がアプリ所有者。形の正しくない普通のinstall planは、内部のnamespaceを作る前に拒否する |
 | GET | `/api/v1/usage` | アカウント資格情報。本人が支払人の使用量だけ。アプリ単位の独立した計測は、使用期間（計測時刻の前後2時間。アプリ作成より前と記録時刻より後は含めない）が受諾済みの所有権移転で区切られた1つの所有期間に収まるときだけ、その所有者が支払人。収まらない場合や移転履歴が欠けている場合は支払人なし |
 
 operator が `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen` を設定している間、メンバーの追加・削除・脱退と譲渡の申し出・受諾・取消は、アプリを読む前に `409 failed_precondition` (`details.reason: "app_ownership_mutations_frozen"`) を返します。メンバー追加は、確認済みアカウントの有無にかかわらず `202 { accepted: true }` を返します。所有者の `connections_and_code` 同意を監査記録へ保存します。譲渡を受諾すると既存メンバーを全員削除し、監査記録に通知対象を残します。メンバー管理・譲渡・受諾・取消・アンインストールには本人のセッションまたは明示的scopeを持つPATが必要で、インストール済みアプリのOAuthアクセストークンは使えません。

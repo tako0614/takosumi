@@ -409,9 +409,17 @@ export async function handleInstallPlans(
     if ((ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) && !delegated) {
       return errorJson("app_access_denied", "An account credential is required to install an app.", 403, ctx.request);
     }
+    // Either an install attempt or a plain install plan (the body the
+    // Workspace route takes, which stops at review): the replacement of
+    // `POST /workspaces/:id/install-plans` for every client (TASK-0118 9.1).
+    // Neither names a Workspace; the shared parser validates the rest.
     const body = await readJsonObject(ctx.request.clone());
-    if (!body || body.mode !== "attempt" || body.workspaceId !== undefined) {
-      return errorJson("invalid_request", "A workspace-less install attempt is required.", 400, ctx.request);
+    if (!body || body.workspaceId !== undefined ||
+      (body.mode !== undefined && body.mode !== "attempt") ||
+      // A plain plan is validated before its namespace is resolved, so a
+      // malformed request never creates one.
+      (body.mode === undefined && !parseCreateRequest(body))) {
+      return errorJson("invalid_request", "A workspace-less install request is required.", 400, ctx.request);
     }
     // The freeze permits only A's canonical owner-bound personal bootstrap.
     // Never use the general Workspace creation or membership mutation ports.

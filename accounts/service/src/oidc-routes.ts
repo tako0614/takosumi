@@ -1473,8 +1473,10 @@ async function handleUserInfoUncached(input: {
     };
     if (record.role === "interface-runtime") {
       body.token_use = "interface_oauth";
+      // The Workspace is compatibility evidence: a Capsule-owned Interface's
+      // token is complete without it (TASK-0118 Phase 9).
       body.takosumi = {
-        workspace_id: record.workspaceId,
+        ...(record.workspaceId ? { workspace_id: record.workspaceId } : {}),
         ...(record.capsuleId ? { capsule_id: record.capsuleId } : {}),
         interface_id: record.interfaceId,
         interface_binding_id: record.interfaceBindingId,
@@ -1901,7 +1903,7 @@ function introspectionBody(
     ...(interfaceOAuth
       ? {
           takosumi: {
-            workspace_id: record.workspaceId,
+            ...(record.workspaceId ? { workspace_id: record.workspaceId } : {}),
             ...(record.capsuleId ? { capsule_id: record.capsuleId } : {}),
             interface_id: record.interfaceId,
             interface_binding_id: record.interfaceBindingId,
