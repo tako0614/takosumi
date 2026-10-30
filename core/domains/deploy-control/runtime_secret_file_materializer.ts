@@ -2,6 +2,7 @@ import type {
   InstallConfigRuntimeBindingMaterialization,
   RuntimeSecretFileMaterialization,
 } from "takosumi-contract/install-configs";
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 import type { SecretBoundaryCrypto } from "../../adapters/secret-store/memory.ts";
 import type { SecretPartition } from "../../adapters/secret-store/types.ts";
 import {
@@ -110,7 +111,7 @@ export async function runtimeSecretFileRetirementProfileDigest(input: {
   readonly capsuleId: string;
   readonly installConfigId: string;
 }): Promise<string | undefined> {
-  const { config } = await currentAuthority(input.store, input);
+  const { capsule, config } = await currentAuthority(input.store, input);
   const ownerRef = runtimeSecretFileOwnerRef(input.capsuleId);
   const blob = await input.store.getSecretBlob(ownerRef);
   if (blob) {
@@ -122,7 +123,7 @@ export async function runtimeSecretFileRetirementProfileDigest(input: {
       partition: runtimeSecretFilePartition(input.capsuleId),
       aad: runtimeSecretFileAad({
         ownerRef,
-        workspaceId: input.workspaceId,
+        scopeRef: capsuleScopeRef(capsule),
         capsuleId: input.capsuleId,
         profileDigest,
       }),
@@ -157,9 +158,11 @@ export function createRuntimeSecretFileMaterializer(input: {
       )) as `sha256:${string}`;
       const ownerRef = runtimeSecretFileOwnerRef(request.capsuleId);
       const partition = runtimeSecretFilePartition(request.capsuleId);
+      // Owner fences stay on the row's Workspace column; the AAD reads the
+      // Capsule's frozen derivation scope.
       const aad = runtimeSecretFileAad({
         ownerRef,
-        workspaceId: request.workspaceId,
+        scopeRef: capsuleScopeRef(current.capsule),
         capsuleId: request.capsuleId,
         profileDigest,
       });
@@ -223,7 +226,7 @@ export function createRuntimeSecretFileMaterializer(input: {
       const partition = runtimeSecretFilePartition(request.capsuleId);
       const aad = runtimeSecretFileAad({
         ownerRef,
-        workspaceId: request.workspaceId,
+        scopeRef: capsuleScopeRef(capsule),
         capsuleId: request.capsuleId,
         profileDigest: request.profileDigest,
       });
@@ -509,16 +512,21 @@ function runtimeSecretFileBlob(input: {
   };
 }
 
+/**
+ * AAD of the sealed runtime secret file. The `workspaceId` key is historical:
+ * it holds the Capsule's frozen `scopeRef`, equal to the Workspace id for every
+ * Capsule created before stage 9.0.
+ */
 function runtimeSecretFileAad(input: {
   readonly ownerRef: string;
-  readonly workspaceId: string;
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly profileDigest: string;
 }): string {
   return stableStringify({
     contract: FILE_CONTRACT,
     ownerRef: input.ownerRef,
-    workspaceId: input.workspaceId,
+    workspaceId: input.scopeRef,
     capsuleId: input.capsuleId,
     profileDigest: input.profileDigest,
   });

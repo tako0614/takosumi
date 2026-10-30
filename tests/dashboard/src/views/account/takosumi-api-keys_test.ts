@@ -128,7 +128,10 @@ describe("Takosumi API key management", () => {
     ]);
     expect(component).toContain("listTakosumiApiKeyScopeCatalog");
     expect(component).toContain("selfService");
-    expect(component).toContain('scope.selfService && scope.workspaceBinding === "optional"');
+    expect(component).toContain("scope.selfService &&");
+    expect(component).toContain('scope.workspaceBinding === "optional"');
+    // Hosted-resource and AI keys stay out of the card until 9B.
+    expect(component).toContain("CORE_ACCOUNT_KEY_SCOPES.has(scope.scope)");
     expect(component).not.toContain(
       "TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES",
     );
@@ -258,7 +261,9 @@ describe("Takosumi API key management", () => {
         ),
       }),
     ).toThrow("scope catalog");
-    expect(() =>
+    // Hosted-resource and AI scopes are Workspace-optional since 9.1;
+    // both catalog generations validate.
+    expect(
       normalizeTakosumiApiKeyScopeCatalog({
         ...CATALOG,
         scopes: CATALOG.scopes.map((entry) =>
@@ -266,8 +271,8 @@ describe("Takosumi API key management", () => {
             ? { ...entry, workspaceBinding: "optional" }
             : entry,
         ),
-      }),
-    ).toThrow("scope catalog");
+      }).scopes.find((entry) => entry.scope === "resources:read")?.workspaceBinding,
+    ).toBe("optional");
     expect(() =>
       normalizeTakosumiApiKeyScopeCatalog({
         ...CATALOG,

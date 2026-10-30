@@ -506,6 +506,9 @@ export class CapsulesService {
     const capsule: Capsule = {
       id: request.capsuleId,
       workspaceId: request.workspaceId,
+      // Frozen once, here. Every durable derivation reads it instead of the
+      // Workspace id, so Workspace removal never moves a derived value.
+      scopeRef: request.workspaceId,
       projectId: project.id,
       name: request.name,
       slug: request.name,

@@ -163,7 +163,14 @@ PAT の公開 Accounts surface は次のとおりです。これらの応答は�
 scope catalog は core の `read` / `write` と、同じ owning route が
 `selfServicePatScopes` で明示した allowlist 済み extension scope だけを
 self-service として返します。Takosumi hosted AI の `ai.models.read` / `ai.chat` /
-`ai.embeddings` と `resources:read` は Workspace binding 必須です。`admin` や
+`ai.embeddings` と `resources:read` に Workspace binding は要りません (TASK-0118 9.1。
+catalog はすべての scope で `workspaceBinding: "optional"` を返します)。これらの token は
+`appIds` でアプリに限る (作成時に呼び出し元がそのアプリの所有者かメンバーであることを確かめ、
+アプリを対象にするリクエストのたびに今の役割を確かめ直します) か、アカウント自身の権限で動きます。旧来の `workspace_id` 指定は当面
+受け付け、Phase 9.3 で `400` にします。extension scope が core のアカウント API
+(`read` / `write` の route) に広がることはなく、まだ Workspace を要る host の route は、
+範囲を確かめられない token を引き続き拒否します。dashboard の key 作成画面は、host の route が
+アプリ単位・アカウント単位の key を受け付けるまで `read` / `write` だけを出します。`admin` や
 route が明示していない scope を request scope から推測して公開しません。
 
 `GET /api/v1/account/tokens/inventory.v1` は既存 dashboard 用一覧を置き換えません。既定
@@ -218,7 +225,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 107 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
+次の 113 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
 
 ### アプリの所有と個人の接続・使用量
 
@@ -280,9 +287,30 @@ Workspace単位のroute (一覧、Workspace設定、Workspace作成、所有者�
 
 cursorで続きを読む一覧 (`capsules`・`current-state-versions`・`runs`・`backups`・`usage`、`/dashboard/overview`、`/sources?workspaceId=`) は、表示できる行だけをstoreのquery (memory・Postgres・D1) で選びます。表示できない行がいくつ続いても、ページは表示できる行で埋まり、最後まで読み進められます。`nextCursor` はstoreが返す表示できる行のcursorで、表示できない行のIDや時刻は入りません。行の持ち主は次のとおりです。Runは自分のCapsule (Capsuleを持たない古いapply行はそのplanのCapsule)、無ければSourceのアプリです。Sourceは所有アプリ、所有アプリの無いSourceはそれを使う稼働中のアプリすべてです。backupは自分のCapsule、Capsuleを示さないbackupは稼働中の全アプリです。usageは自分のCapsule、無ければRunのアプリです。Runが残っていないusageは、所有記録のあるアプリがWorkspaceにある間は表示しません。行の持ち主のアプリが1つでも表示できなければ、その行は表示しません。所有記録のschemaが無いtarget (D1 v77・Postgres v123より前) では絞り込みません。所有ストアを持つhostがこの絞り込み付きの読み取りを提供しない場合、一覧は絞り込まずに返すのではなく `503` になります。
 
-Activityは、対象のCapsule、metadataのCapsule ID (run groupの `memberCapsuleIds` は全員)、Interfaceの所有アプリ (`ownerId`)、bindingの対象Capsule (`subjectId`) と、binding・tokenのInterfaceの提供側アプリ、Source (それを使うアプリ、または所有アプリ)、それでもアプリが分からないときはRun (`runId`、Run対象、`metadata.runId`・`planRunId`・`applyRunId`) でアプリに結び付けます。アプリを示さないbackupはWorkspace全体のbackupで、稼働中の全アプリに属します。所有記録のあるアプリがWorkspaceにある間は、アプリを決められないイベント (Run・Interfaceが見つからない、このWorkspaceに無いCapsuleのIDを指す、読み取りの上限を超えた、手がかりが無い) を表示しません。ほかの手がかりでアプリが分かっても同じです。`workspace`・`connection` のイベントと、アプリに属さないと分かったイベント (どのアプリも使わないRun・Source、削除済みのSource) はWorkspace判定のまま表示します。`/dashboard/bootstrap?includeNotifications=true` の通知も同じ規則です。読み取りは、WorkspaceのCapsule一覧と所有記録の一括読み取りが先です。所有記録のあるアプリが無ければ (v75では全アプリ)、それ以上読みません。ある場合のRun・Source・Interfaceの読み取りは、重複を除いて並列に行い、1リクエスト50件までです。Workspace一括操作 (`plan-update`、`drift-check`、Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。
+Activityは、対象のCapsule、metadataのCapsule ID (run groupの `memberCapsuleIds` は全員)、Interfaceの所有アプリ (`ownerId`)、bindingの対象Capsule (`subjectId`) と、binding・tokenのInterfaceの提供側アプリ、Source (それを使うアプリ、または所有アプリ)、それでもアプリが分からないときはRun (`runId`、Run対象、`metadata.runId`・`planRunId`・`applyRunId`) でアプリに結び付けます。アプリを示さないbackupはWorkspace全体のbackupで、稼働中の全アプリに属します。所有記録のあるアプリがWorkspaceにある間は、アプリを決められないイベント (Run・Interfaceが見つからない、このWorkspaceに無いCapsuleのIDを指す、読み取りの上限を超えた、手がかりが無い) を表示しません。ほかの手がかりでアプリが分かっても同じです。`workspace`・`connection` のイベントと、アプリに属さないと分かったイベント (どのアプリも使わないRun・Source、削除済みのSource) はWorkspace判定のまま表示します。`/dashboard/bootstrap?includeNotifications=true` の通知は、代わりに呼び出し元のアプリから作ります (次の節)。読み取りは、WorkspaceのCapsule一覧と所有記録の一括読み取りが先です。所有記録のあるアプリが無ければ (v75では全アプリ)、それ以上読みません。ある場合のRun・Source・Interfaceの読み取りは、重複を除いて並列に行い、1リクエスト50件までです。Workspace一括操作 (`plan-update`、`drift-check`、Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。
 
 **移行中の扱い。** 所有記録がまだ使えないアプリは、そのリクエストに限り従来のWorkspace判定で決めます。対象は、所有ストアがない構成、D1 v77 / Postgres v123 より前のschema、backfillがまだ所有記録を書いていないアプリです。所有記録が書かれた時点から、そのアプリはアプリでの判定だけになります。従来判定を使ったことは、IDを含まない構造化ログ `app_authorization_workspace_fallback` (`reason` は `ownership_store_unavailable`・`ownership_schema_unavailable`・`capsule_not_backfilled`) に、isolateごとに5分に1回まとめて残します。判定ごとに所有記録を1回読み、所有記録があるときは役割の解決でもう一度読みます。所有ストアの既存のschema確認を使い、D1 v77より前では「schemaが無い」結果を60秒保持するので、判定ごとの確認queryは発生しません。
+
+### Workspaceを使わないアプリの読み取り
+
+次のrouteは、Workspaceを指定する読み取りの置き換えです (TASK-0118 Phase 9.1)。どれもWorkspaceのメンバーかどうかを読みません。アプリを指定するrouteは前の節のアプリでの判定 (読み取りは `view`、再試行は `update`) を使い、アカウント単位のrouteは呼び出し元が所有またはメンバーのアプリだけを対象にします。資格情報の制限は先に効きます。PATの `appIds` は対象のアプリを絞り、インストール済みアプリ自身のOAuthトークンは自分のアプリだけを対象にします (アプリでの判定のほかの制限もそのまま)。`appIds` の無い旧Workspace束縛のPATはアカウント単位のrouteを使えません (`403 app_access_denied`)。Workspaceを指定するrouteは互換のため残します。
+
+| メソッド | パス | 権限と結果 |
+| --- | --- | --- |
+| GET | `/api/v1/install-plans?open=1` | アカウント資格情報 (セッション、または `workspaceId`・`appIds` の無いPAT)。本人が始めた未完了のinstall attemptと、attemptでない未完了のinstallを、全ての内部namespaceから新しい順に最大20件、`{ installPlans: [...] }` (Workspace routeと同じ形) で返す。attemptは始めた本人のものなので、アプリのメンバーには所有者のattemptは見えない。`open=1` (または `true`) が必須 |
+| GET | `/api/v1/activity?cursor&limit` | 呼び出し元が所有またはメンバーのアプリのActivityを新しい順に返す (`limit` は1〜100、既定50)。`{ events, nextCursor? }` |
+| GET | `/api/v1/capsules/{capsuleId}/activity?cursor&limit` | そのアプリの `view`。そのアプリのActivityを同じ形で返す |
+| GET | `/api/v1/capsules/{capsuleId}/backups?cursor&limit` | `view`。このアプリを指定して取ったbackup (backupに `capsuleId` があるもの) を新しい順に返す。アプリを示さないWorkspace全体のbackupは含めない |
+| GET | `/api/v1/capsules/{capsuleId}/interface-materialization-failures?limit` | `view`。そのアプリの、値を含まないInterface materializationの失敗 (dead letter) を返す (`limit` は1〜100)。`{ failures }` |
+| POST | `/api/v1/capsules/{capsuleId}/interface-materialization-failures/{intentId}/retries` | `update`。bodyとdigest・stateのCASはWorkspace routeと同じ。ほかのアプリの失敗は `404` |
+| GET | `/api/v1/sources?capsuleId=` | `view`。そのアプリの元のSourceを `{ sources }` で返す (所有アプリの無い旧Sourceは、それを使う全アプリの `view` も要る)。`workspaceId` と同時には指定できない |
+| GET | `/api/v1/capsule-configs?capsuleId=` | `view`。そのアプリの今のInstallConfigを `{ installConfigs }` で返す。`workspaceId` と同時には指定できない |
+| GET | `/api/v1/provider-connections` | アカウント資格情報。本人のProvider Connection (Source用のgit接続は除く) と、releaseが持つbindableなoperator接続を `{ providerConnections }` で返す。`projection=release-owned` はreleaseが持つものだけ (永続storeは読まない) |
+| GET | `/api/v1/provider-connections?capsuleId=&projection=release-owned` | `view`。そのアプリに結べる、releaseが持つ接続。アプリが選べる接続は `GET /api/v1/connections?capsuleId=&projection=labels` |
+
+Activityは内部の区画 (各アプリが記録する、固定された名前空間) ごとに保存しています。1ページは対象のアプリの区画 (1リクエスト最大96) から読み、前の節の規則でイベントごとにアプリへ結び付けて絞ります。イベントが属するアプリが全て対象のときだけ表示するので、Interface連携のイベントが、相手のアプリを見られない人に相手を明かすことはありません。アプリを決められないイベントと、アプリに属さないイベント (`workspace`・`connection` のイベント、どのアプリも使わないRun・Source) は表示しません。1リクエストで読むstoreのページは最大4つなので、件数が `limit` 未満 (0件のこともある) でも `nextCursor` が付くことがあります。cursorはstoreの不透明な `(createdAt, id)` cursorです。アカウント単位のActivityに出るのは所有者・メンバーが一覧できるアプリなので、アンインストールしたアプリの履歴は、残っている所有記録の所有者・メンバーが `GET /api/v1/capsules/{capsuleId}/activity` で読みます。
+
+`GET /api/v1/dashboard/bootstrap` は、`includeWorkspaces=true` を指定しない限りWorkspaceの一覧を含めません。`includeNotifications=true` の通知は、bootstrapの任意項目の期限の中で読んだ `GET /api/v1/activity` の最新ページ (最大60件) です。各項目は短くしたイベント、イベントがアプリを示すときの `capsuleId`、互換のための `workspaceHandle` (イベントの内部区画のID) を持ちます。アプリ所有の読み取りを持たないhostと、旧Workspace束縛の資格情報には、従来のWorkspaceからの通知を返します。
 
 ### Account views
 
@@ -370,7 +398,7 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | GET      | `/api/v1/capsules/{capsuleId}/state-versions`              | StateVersion を一覧する                      |
 | GET      | `/api/v1/capsules/{capsuleId}/provider-bindings`           | ProviderBinding の選択を読む                 |
 | GET      | `/api/v1/workspaces/{workspaceId}/current-state-versions`  | 現在の StateVersion をまとめて読む           |
-| GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
+| GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する (`capsuleId=` はそのアプリの設定) |
 | GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
 
 Capsule の削除 API は Workspace owner/admin と書き込みの scope（API キーでは `write` か `admin`、
@@ -431,6 +459,20 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 `uninstall.impact.usedBy` は、削除の影響を受ける利用側を示します。提供元を削除しても利用側の
 アプリは残り、他の提供元へは自動で切り替えません。秘密の値、Output の値、画面の起動 URL
 以外の Interface 入力は含みません。
+画面が `document.clients` でスマホの専用アプリを宣言していれば、`screens[].clients` に検査を通った
+ものだけが入ります（`preferred`、`ios` の `verified` / `trustedClientId` / `target` / `name` /
+`appStoreId` / `bundleId` / `open` / `universalLink` / `storeUrl`、`android` の `verified` /
+`trustedClientId` / `target` / `name` / `package` / `open` / `appLink` / `storeUrl`）。
+`verified` は、宣言した bundle id・package と link の雛形が運用者の信頼する専用アプリ
+（`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`）と一致したときだけ true で、そのときの `name` と
+`appStoreId` は登録の値です。`target` は link の実際の行き先（`package` / `scheme` / `host`）です。
+利用側は、未検証の専用アプリを自動では開かず、`target` を見せて確かめてから開きます。
+未検証で `name` が無いときは「未確認のアプリ」のような中立の表示を使い、画面の `title` は使いません。
+`preferred` は、どれかの OS の専用アプリが検証済みのときだけ `"native"` になり（宣言が `"web"` なら
+`"web"`）、それ以外は `"web"` です。`"native"` が効くのも検証済みの OS だけです。
+link は雛形の `{origin}` と `{url}` にその画面の URL を入れた後の値で、`storeUrl` は宣言した ID に結び付いたものだけを使い、無ければ
+`appStoreId` や `package` から作ります。宣言の書き方は[ホームにアプリを出す](../getting-started/home-launcher.md#スマホの専用アプリを宣言する)
+にあります。
 補助的な読み取りに失敗した部分は `incomplete` に名前が入ります。
 `progress.revisionPreparing` は、インストールまたは版の更新処理がまだ計画の Run を作っていない
 間だけ true です（インストールの試みは一度も適用していないアプリに限り、止まった試みは除きます）。
@@ -472,6 +514,7 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/capsules/{capsuleId}/configuration-plans` | dirty 設定を immutable successor と review-only Plan にする |
 | POST     | `/api/v1/capsules/{capsuleId}/destroy-plan` | 破棄計画 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/drift-check`  | 差分確認 Run を作る          |
+| GET      | `/api/v1/capsules/{capsuleId}/backups`      | そのアプリのバックアップを一覧する |
 | POST     | `/api/v1/capsules/{capsuleId}/backups`      | Capsule のバックアップを作る |
 
 ### Interface links
@@ -523,7 +566,7 @@ schema で、資格情報を保存しません。この変更で本番 DDL の�
 
 | メソッド | パス                                                                     | 説明                                                              |
 | -------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| GET      | `/api/v1/sources`                                                        | Source を一覧する                                                 |
+| GET      | `/api/v1/sources`                                                        | Source を一覧する (`workspaceId=`、またはアプリのSourceを返す `capsuleId=`) |
 | POST     | `/api/v1/sources`                                                        | Source を作る                                                     |
 | GET      | `/api/v1/sources/{sourceId}`                                             | Source を読む                                                     |
 | PATCH    | `/api/v1/sources/{sourceId}`                                             | Source のメタ情報を更新する                                       |
@@ -886,7 +929,7 @@ Apply が新しい InstallConfig を認可することはありません。
 | POST     | `/api/v1/connections/{connectionId}/revoke`     | Connection を失効させる                            |
 | POST     | `/api/v1/connections/oauth/{helperId}/start`    | OAuth 補助を開始する                               |
 | GET      | `/api/v1/connections/oauth/{helperId}/callback` | OAuth 補助を完了する                               |
-| GET      | `/api/v1/provider-connections`                  | 本人の ProviderConnection とoperatorのbindable接続を一覧する |
+| GET      | `/api/v1/provider-connections`                  | 本人とreleaseが持つbindableな ProviderConnection を一覧する。`capsuleId=&projection=release-owned` は1アプリ分。`workspaceId=` は旧互換の一覧で、そのWorkspaceを記録した本人の接続とoperatorのbindable接続だけ (Workspaceのメンバーでも他人の接続は見えない) |
 | GET      | `/api/v1/credential-recipes`                    | Credential Recipe を一覧する                       |
 
 Connection の作成は `POST /api/v1/connections` です。`/api/v1/provider-connections`
