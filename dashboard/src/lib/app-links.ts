@@ -14,6 +14,8 @@ import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
 /** Section fragments the app page honors, mapped to their element ids. */
 export const APP_PAGE_SECTIONS = {
   attention: "attention",
+  /** 「スマホで使う」, which on a phone is where a screen's way of opening is chosen. */
+  phone: "phone",
   version: "version",
   settings: "settings",
   connections: "connections",

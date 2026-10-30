@@ -113,6 +113,8 @@ import {
 import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.ts";
 import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
 import { AppSection, OpenAppButton } from "./app-ui.tsx";
+import { currentOpenPlatform, rememberedOpenChoice } from "../../lib/open-choice-state.ts";
+import { phoneClient } from "../../lib/open-routing.ts";
 import AppAttentionSection from "./AppAttentionSection.tsx";
 import AppPhoneSection from "./AppPhoneSection.tsx";
 import AppVersionSection from "./AppVersionSection.tsx";
@@ -175,6 +177,11 @@ export default function AppManagePage(props: {
   readonly accountId?: string;
   /** The section the URL fragment names; scrolled to once the page settles. */
   readonly section?: AppPageSection;
+  /**
+   * The screen whose chooser the URL opens (`?open=<interface>`), and whether
+   * Android's fallback brought the person back because the app did not open.
+   */
+  readonly openChooser?: { readonly interfaceId?: string; readonly missing: boolean };
   /** Shown once right after the install page applied the first install. */
   readonly justInstalled?: boolean;
   /** Every fresh read of the app, so an embedding page can follow it. */
@@ -933,6 +940,30 @@ export default function AppManagePage(props: {
 
   // --- header ------------------------------------------------------------------------
   const screens = () => openableScreens(app()?.screens ?? []);
+  // --- how a screen opens on this phone (TASK-0119) -------------------------------
+  /** The screen the chooser is for: the one the URL or Open named, else the primary. */
+  const [chooserScreenId, setChooserScreenId] = createSignal(props.openChooser?.interfaceId);
+  const chooserScreen = () => {
+    const list = screens();
+    const wanted = chooserScreenId();
+    return list.find((screen) => screen.interfaceId === wanted) ?? list[0];
+  };
+  /** Open landed on the chooser (an iPhone custom scheme not chosen yet). */
+  const showChooser = (interfaceId: string) => {
+    setChooserScreenId(interfaceId);
+    requestAnimationFrame(() => {
+      scrollToSection("phone");
+      document.querySelector<HTMLElement>("#phone a[href], #phone button:not([disabled])")?.focus({ preventScroll: true });
+    });
+  };
+  /** 「開き方を変える」: on a phone, when the primary screen has a native app or a remembered choice. */
+  const openChoiceChangeable = () => {
+    const platform = currentOpenPlatform();
+    const screen = screens()[0];
+    if (platform === "desktop" || !screen) return false;
+    return phoneClient(screen.clients, platform) !== undefined ||
+      rememberedOpenChoice(capsuleId(), screen.interfaceId) !== undefined;
+  };
   /** What installing again pre-fills: the repository, last ref and paths. */
   const reinstallInput = (view: CapsuleAppView, inst: Capsule) => {
     const config = installConfigValue();
@@ -1043,7 +1074,12 @@ export default function AppManagePage(props: {
                 <div class="ap-actions" data-testid="app-primary">
                   <Switch>
                     <Match when={view().primaryAction === "open" && screens().length > 0}>
-                      <OpenAppButton surfaces={screens()} appName={displayName()} />
+                      <OpenAppButton
+                        surfaces={screens()}
+                        appName={displayName()}
+                        capsuleId={capsuleId()}
+                        onChoose={showChooser}
+                      />
                     </Match>
                     <Match when={view().primaryAction === "reinstall"}>
                       <Button
@@ -1071,7 +1107,27 @@ export default function AppManagePage(props: {
                       another action is primary: an app that needs attention
                       may keep serving its last successful version. */}
                   <Show when={secondaryScreens(view())}>
-                    <OpenAppButton surfaces={screens()} appName={displayName()} variant="secondary" />
+                    <OpenAppButton
+                      surfaces={screens()}
+                      appName={displayName()}
+                      variant="secondary"
+                      capsuleId={capsuleId()}
+                      onChoose={showChooser}
+                    />
+                  </Show>
+                  <Show when={(view().primaryAction === "open" || secondaryScreens(view())) && openChoiceChangeable()}>
+                    <a
+                      class="ap-open-change"
+                      href="#phone"
+                      data-testid="app-open-change"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        const screen = screens()[0];
+                        if (screen) showChooser(screen.interfaceId);
+                      }}
+                    >
+                      {t("app.open.change")}
+                    </a>
                   </Show>
                   <Show when={appViewIncomplete(view(), "screens")}>
                     <Button
@@ -1159,9 +1215,19 @@ export default function AppManagePage(props: {
                 }}
               />
 
-              {/* Wherever Open is offered, the same screen can go to a phone. */}
-              <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? screens()[0] : undefined}>
-                {(screen) => <AppPhoneSection url={screen().url} appName={displayName()} />}
+              {/* Wherever Open is offered, the same screen can go to a phone,
+                  and on a phone this is where it chooses how the screen opens. */}
+              <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined}>
+                {(screen) => (
+                  <AppPhoneSection
+                    url={screen().url}
+                    appName={displayName()}
+                    capsuleId={capsuleId()}
+                    interfaceId={screen().interfaceId}
+                    clients={screen().clients}
+                    missing={props.openChooser?.missing === true && props.openChooser.interfaceId === screen().interfaceId}
+                  />
+                )}
               </Show>
 
               <Show when={managed()}>

@@ -11,6 +11,7 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../../../../../dashboard/src");
 const home = readFileSync(resolve(root, "views/apps/AppListView.tsx"), "utf8");
+const ui = readFileSync(resolve(root, "views/app/app-ui.tsx"), "utf8");
 const router = readFileSync(resolve(root, "index.tsx"), "utf8");
 const css = readFileSync(resolve(root, "styles/app-views.css"), "utf8");
 
@@ -41,10 +42,14 @@ describe("Home", () => {
   test("an open tile opens only an authorized screen; every other tile opens the app page", () => {
     expect(home).toContain("listAuthorizedUiSurfaces(id)");
     expect(home).toContain("surfaces = openableScreens(view.screens);");
-    expect(home).toContain("homeAppOpens(props.app) ? props.app.surfaces[0]?.url : undefined");
-    expect(home).toContain('target="_blank"');
-    expect(home).toContain('rel="noreferrer noopener"');
-    expect(home).toContain('aria-label={t("app.open.aria", { name: name() })}');
+    expect(home).toContain("homeAppOpens(props.app) ? props.app.surfaces[0] : undefined");
+    // The tile opens that screen the way this device chose or the app
+    // declares; on a computer (and for the web) that is a new tab.
+    expect(home).toContain("screenOpenRoute(props.app.inst.id, surface)");
+    expect(home).toContain("{...openRouteAnchor(route())}");
+    expect(ui).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
+    expect(home).toContain("aria-label={openRouteAria(route(), name())}");
+    expect(ui).toContain('return t("app.open.aria", { name });');
     expect(home).toContain("const pageHref = () => appPageHref(props.app.inst.id);");
     expect(home).toContain("href={pageHref()} aria-label={name()}");
     expect(home).toContain('t("apps.manageAria", { name: name() })');
