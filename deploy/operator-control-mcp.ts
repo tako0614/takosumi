@@ -153,16 +153,54 @@ export function operatorControlMcpResourceAuthorized(
   }
 }
 
-export interface OperatorControlMcpAuthority {
+/**
+ * Facts about one app the fence reads. `ownerAccountId` is present only when
+ * the app has an ownership row; `workspaceId` is the retained internal
+ * partition, read only for a token's compatibility Workspace restriction.
+ */
+export interface OperatorControlMcpAppFacts {
+  readonly ownerAccountId?: string;
   readonly workspaceId: string;
+}
+
+export interface OperatorControlMcpInstallPlanFacts {
+  readonly capsuleId?: string;
+  readonly workspaceId: string;
+  readonly createdBy: string;
+  readonly actorSubject: string;
+}
+
+export interface OperatorControlMcpRunFacts {
+  readonly capsuleId?: string;
+}
+
+/**
+ * What one verified Interface OAuth invocation may act as (TASK-0118 P9.1-e).
+ *
+ * The MCP acts for the token's subject only while that account is the current
+ * owner of the MCP's own app (`capsuleId`, the Interface owner named by the
+ * token), and only on that owner's own apps. A Workspace the token still
+ * carries is a bearer restriction applied first, exactly as for every other
+ * Workspace-bound credential until Workspace claims stop (Phase 9.4); it never
+ * grants anything. Public handlers then repeat the subject's live per-app
+ * decision on every request.
+ */
+export interface OperatorControlMcpAuthority {
+  readonly subject: string;
+  readonly capsuleId: string;
+  readonly workspaceId?: string;
   readonly dispatchPublicControl: (request: Request) => Promise<Response>;
-  readonly installPlanWorkspaceId: (
+  readonly app: (capsuleId: string) => Promise<OperatorControlMcpAppFacts | undefined>;
+  readonly installPlan: (
     installPlanId: string,
-  ) => Promise<string | undefined>;
-  readonly capsuleWorkspaceId: (
-    capsuleId: string,
-  ) => Promise<string | undefined>;
-  readonly runWorkspaceId: (runId: string) => Promise<string | undefined>;
+  ) => Promise<OperatorControlMcpInstallPlanFacts | undefined>;
+  readonly run: (runId: string) => Promise<OperatorControlMcpRunFacts | undefined>;
+  /**
+   * The internal namespace `POST /api/v1/install-plans` fills for the subject,
+   * without creating one. Read only to keep a Workspace-bound token's new
+   * install inside its Workspace restriction.
+   */
+  readonly installNamespaceId: () => Promise<string | undefined>;
 }
 
 type JsonRpcId = string | number | null;
@@ -178,7 +216,7 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_install_plan_create",
     description:
-      "Create or replay a durable Git install plan in the bound Workspace. The plan stops at review and never approves or applies its Run.",
+      "Create or replay a durable Git install plan for a new app owned by the MCP's owner. The plan stops at review and never approves or applies its Run.",
     inputSchema: {
       type: "object",
       properties: {
@@ -267,7 +305,7 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_install_plan_get",
     description:
-      "Read one durable Git install plan from the bound Workspace without advancing it.",
+      "Read one durable Git install plan of the MCP's owner without advancing it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -281,7 +319,7 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_install_plan_reconcile",
     description:
-      "Advance one durable Git install-plan phase in the bound Workspace. Repeat only when nextAction is reconcile.",
+      "Advance one durable Git install-plan phase of the MCP's owner. Repeat only when nextAction is reconcile.",
     inputSchema: {
       type: "object",
       properties: {
@@ -299,10 +337,17 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_capsules_list",
     description:
-      "List Capsules in the Workspace authorized by the current InterfaceBinding.",
+      "List the apps the MCP's owner owns. Pass the returned nextCursor to read the next page.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        cursor: {
+          type: "string",
+          minLength: 1,
+          maxLength: 2048,
+          pattern: "^[A-Za-z0-9_-]+$",
+        },
+      },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, destructiveHint: false },
@@ -310,7 +355,7 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_capsule_plan",
     description:
-      "Create a policy-checked plan Run for one Capsule in the bound Workspace.",
+      "Create a policy-checked plan Run for one app the MCP's owner owns.",
     inputSchema: {
       type: "object",
       properties: {
@@ -329,7 +374,7 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_capsule_destroy_plan",
     description:
-      "Create a policy-checked destroy Plan for one Capsule in the bound Workspace. The Run stops at review and is never approved or applied by this tool.",
+      "Create a policy-checked destroy Plan for one app the MCP's owner owns. The Run stops at review and is never approved or applied by this tool.",
     inputSchema: {
       type: "object",
       properties: {
@@ -347,7 +392,7 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_run_get",
     description:
-      "Read one Run from the Workspace authorized by the current InterfaceBinding.",
+      "Read one Run of an app the MCP's owner owns.",
     inputSchema: {
       type: "object",
       properties: { runId: { type: "string", minLength: 1 } },
@@ -359,7 +404,7 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_run_approve",
     description:
-      "Approve a reviewed Run in the bound Workspace through the public control service.",
+      "Approve a reviewed Run of an app the MCP's owner owns through the public control service.",
     inputSchema: {
       type: "object",
       properties: {
@@ -378,7 +423,7 @@ const TOOLS = Object.freeze([
   {
     name: "takosumi_run_apply",
     description:
-      "Apply a reviewed saved plan in the bound Workspace; Takosumi rebuilds and verifies the apply guard.",
+      "Apply a reviewed saved plan of an app the MCP's owner owns; Takosumi rebuilds and verifies the apply guard.",
     inputSchema: {
       type: "object",
       properties: { runId: { type: "string", minLength: 1 } },
@@ -479,9 +524,9 @@ async function callTool(
   if (!tool) {
     return jsonRpcResponse(jsonRpcError(request.id, -32602, "unknown tool"));
   }
-  let controlRequest: Request;
+  let call: PublicControlCall;
   try {
-    controlRequest = await publicControlRequest(tool.name, args, authority);
+    call = await publicControlRequest(tool.name, args, authority);
   } catch (error) {
     return toolResult(request.id, 403, {
       error: "access_denied",
@@ -491,7 +536,7 @@ async function callTool(
   }
   let response: Response;
   try {
-    response = await authority.dispatchPublicControl(controlRequest);
+    response = await authority.dispatchPublicControl(call.request);
   } catch {
     return toolResult(request.id, 500, {
       error: "control_unavailable",
@@ -506,29 +551,69 @@ async function callTool(
     // The public control service may return a bounded non-JSON error. Preserve
     // it as text without forwarding response headers or any credential.
   }
+  if (call.narrow && response.ok) {
+    try {
+      body = await call.narrow(body);
+    } catch {
+      // Never return an unnarrowed listing.
+      return toolResult(request.id, 503, {
+        error: "control_unavailable",
+        error_description: "Takosumi control operation failed",
+      });
+    }
+  }
   return toolResult(request.id, response.status, body);
+}
+
+interface PublicControlCall {
+  readonly request: Request;
+  /** Narrows a successful JSON body to what this MCP may see. */
+  readonly narrow?: (body: unknown) => Promise<unknown>;
 }
 
 async function publicControlRequest(
   name: (typeof TOOLS)[number]["name"],
   args: Record<string, unknown>,
   authority: OperatorControlMcpAuthority,
-): Promise<Request> {
+): Promise<PublicControlCall> {
+  // Argument shape first, so a malformed call never reads any record.
+  const call = parsedToolCall(name, args, authority);
+  // Every tool acts only while the subject owns the MCP's own app.
+  await requireMcpActor(authority);
+  return await call();
+}
+
+/**
+ * Validates the tool arguments and returns the call, which first applies the
+ * target fence and then builds the one bounded public request.
+ */
+function parsedToolCall(
+  name: (typeof TOOLS)[number]["name"],
+  args: Record<string, unknown>,
+  authority: OperatorControlMcpAuthority,
+): () => Promise<PublicControlCall> {
   const origin = "https://takosumi-control.invalid";
   if (name === "takosumi_capsules_list") {
-    assertOnlyKeys(args, []);
-    return new Request(
-      `${origin}/api/v1/workspaces/${encodeURIComponent(authority.workspaceId)}/capsules`,
-      { method: "GET" },
-    );
+    assertOnlyKeys(args, ["cursor"]);
+    const cursor = optionalCursor(args.cursor);
+    return async () => ({
+      request: new Request(
+        `${origin}/api/v1/apps${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+        { method: "GET" },
+      ),
+      narrow: (body) => ownAppsOnly(body, authority),
+    });
   }
   if (name === "takosumi_install_plan_create") {
     const { idempotencyKey, body } = installPlanCreateArguments(args);
-    return jsonRequest(
-      `${origin}/api/v1/workspaces/${encodeURIComponent(authority.workspaceId)}/install-plans`,
-      body,
-      { "idempotency-key": idempotencyKey },
-    );
+    return async () => {
+      await requireInstallNamespace(authority);
+      return {
+        request: jsonRequest(`${origin}/api/v1/install-plans`, body, {
+          "idempotency-key": idempotencyKey,
+        }),
+      };
+    };
   }
   if (
     name === "takosumi_install_plan_get" ||
@@ -536,67 +621,71 @@ async function publicControlRequest(
   ) {
     assertOnlyKeys(args, ["installPlanId"]);
     const installPlanId = requiredId(args.installPlanId, "installPlanId");
-    await requireWorkspaceTarget(
-      await authority.installPlanWorkspaceId(installPlanId),
-      authority.workspaceId,
-    );
-    const path = `${origin}/api/v1/install-plans/${encodeURIComponent(installPlanId)}`;
-    return name === "takosumi_install_plan_get"
-      ? new Request(path, { method: "GET" })
-      : jsonRequest(`${path}/reconcile`, {});
+    return async () => {
+      await requireInstallPlanTarget(authority, installPlanId);
+      const path = `${origin}/api/v1/install-plans/${encodeURIComponent(installPlanId)}`;
+      return {
+        request: name === "takosumi_install_plan_get"
+          ? new Request(path, { method: "GET" })
+          : jsonRequest(`${path}/reconcile`, {}),
+      };
+    };
   }
   if (name === "takosumi_capsule_plan") {
     assertOnlyKeys(args, ["capsuleId", "runnerProfileId"]);
     const capsuleId = requiredId(args.capsuleId, "capsuleId");
-    await requireWorkspaceTarget(
-      await authority.capsuleWorkspaceId(capsuleId),
-      authority.workspaceId,
-    );
     const runnerProfileId = optionalText(
       args.runnerProfileId,
       "runnerProfileId",
     );
-    return jsonRequest(
-      `${origin}/api/v1/capsules/${encodeURIComponent(capsuleId)}/plan`,
-      runnerProfileId ? { runnerProfileId } : {},
-    );
+    return async () => {
+      await requireAppTarget(authority, capsuleId);
+      return {
+        request: jsonRequest(
+          `${origin}/api/v1/capsules/${encodeURIComponent(capsuleId)}/plan`,
+          runnerProfileId ? { runnerProfileId } : {},
+        ),
+      };
+    };
   }
   if (name === "takosumi_capsule_destroy_plan") {
     assertOnlyKeys(args, ["capsuleId"]);
     const capsuleId = requiredId(args.capsuleId, "capsuleId");
-    await requireWorkspaceTarget(
-      await authority.capsuleWorkspaceId(capsuleId),
-      authority.workspaceId,
-    );
-    return jsonRequest(
-      `${origin}/api/v1/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`,
-      {},
-    );
+    return async () => {
+      await requireAppTarget(authority, capsuleId);
+      return {
+        request: jsonRequest(
+          `${origin}/api/v1/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`,
+          {},
+        ),
+      };
+    };
   }
   const runId = requiredId(args.runId, "runId");
-  await requireWorkspaceTarget(
-    await authority.runWorkspaceId(runId),
-    authority.workspaceId,
-  );
+  let request: Request;
   if (name === "takosumi_run_get") {
     assertOnlyKeys(args, ["runId"]);
-    return new Request(`${origin}/api/v1/runs/${encodeURIComponent(runId)}`, {
+    request = new Request(`${origin}/api/v1/runs/${encodeURIComponent(runId)}`, {
       method: "GET",
     });
-  }
-  if (name === "takosumi_run_approve") {
+  } else if (name === "takosumi_run_approve") {
     assertOnlyKeys(args, ["runId", "reason"]);
     const reason = optionalText(args.reason, "reason", 1024);
-    return jsonRequest(
+    request = jsonRequest(
       `${origin}/api/v1/runs/${encodeURIComponent(runId)}/approve`,
       reason ? { reason } : {},
     );
+  } else {
+    assertOnlyKeys(args, ["runId"]);
+    request = jsonRequest(
+      `${origin}/api/v1/runs/${encodeURIComponent(runId)}/apply`,
+      {},
+    );
   }
-  assertOnlyKeys(args, ["runId"]);
-  return jsonRequest(
-    `${origin}/api/v1/runs/${encodeURIComponent(runId)}/apply`,
-    {},
-  );
+  return async () => {
+    await requireRunTarget(authority, runId);
+    return { request };
+  };
 }
 
 function jsonRequest(
@@ -747,13 +836,118 @@ function parseInstallPlanProviderBindings(
   });
 }
 
-async function requireWorkspaceTarget(
-  targetWorkspaceId: string | undefined,
-  boundWorkspaceId: string,
-): Promise<void> {
-  if (!targetWorkspaceId || targetWorkspaceId !== boundWorkspaceId) {
-    throw new Error("target is outside the InterfaceBinding Workspace");
+/**
+ * The MCP acts only for the current owner of its own app. Ownership is read
+ * live on every call, so a transfer or an uninstall ends the MCP's authority
+ * at once. An app without an ownership row has no owner to act for (the
+ * rollout fallback is not extended to this adapter).
+ */
+async function requireMcpActor(authority: OperatorControlMcpAuthority): Promise<void> {
+  const own = await authority.app(authority.capsuleId);
+  if (!own?.ownerAccountId || own.ownerAccountId !== authority.subject) {
+    throw new Error("the MCP acts only for the current owner of its app");
   }
+  // The token's compatibility Workspace must be the MCP app's own.
+  if (authority.workspaceId !== undefined && own.workspaceId !== authority.workspaceId) {
+    throw new Error("the MCP token does not match its app");
+  }
+}
+
+/** An app the MCP's owner owns, inside the token's Workspace restriction if any. */
+async function requireAppTarget(
+  authority: OperatorControlMcpAuthority,
+  capsuleId: string,
+): Promise<void> {
+  const target = await authority.app(capsuleId);
+  if (!target?.ownerAccountId || target.ownerAccountId !== authority.subject) {
+    throw new Error("target is not an app of the MCP's owner");
+  }
+  if (authority.workspaceId !== undefined && target.workspaceId !== authority.workspaceId) {
+    throw new Error("target is outside the MCP token's Workspace");
+  }
+}
+
+/**
+ * An install plan of an app the owner owns or, before its app exists, the
+ * owner's own install (the app it becomes is the creator's).
+ */
+async function requireInstallPlanTarget(
+  authority: OperatorControlMcpAuthority,
+  installPlanId: string,
+): Promise<void> {
+  const plan = await authority.installPlan(installPlanId);
+  if (!plan) throw new Error("target is not an install of the MCP's owner");
+  if (plan.capsuleId !== undefined) {
+    await requireAppTarget(authority, plan.capsuleId);
+    return;
+  }
+  if (plan.createdBy !== authority.subject || plan.actorSubject !== authority.subject) {
+    throw new Error("target is not an install of the MCP's owner");
+  }
+  if (authority.workspaceId !== undefined && plan.workspaceId !== authority.workspaceId) {
+    throw new Error("target is outside the MCP token's Workspace");
+  }
+}
+
+/** A Run of an app the owner owns. A Run without an app is never reachable. */
+async function requireRunTarget(
+  authority: OperatorControlMcpAuthority,
+  runId: string,
+): Promise<void> {
+  const run = await authority.run(runId);
+  if (!run?.capsuleId) throw new Error("target is not a Run of the MCP's owner");
+  await requireAppTarget(authority, run.capsuleId);
+}
+
+/**
+ * A new install lands in the subject's own namespace. A token that still
+ * carries a Workspace may only install where that restriction holds, so the
+ * new app stays reachable through this token.
+ */
+async function requireInstallNamespace(
+  authority: OperatorControlMcpAuthority,
+): Promise<void> {
+  if (authority.workspaceId === undefined) return;
+  if ((await authority.installNamespaceId()) !== authority.workspaceId) {
+    throw new Error("a new app would be outside the MCP token's Workspace");
+  }
+}
+
+/** Keeps only the apps the MCP's owner owns, inside the token's Workspace. */
+async function ownAppsOnly(
+  body: unknown,
+  authority: OperatorControlMcpAuthority,
+): Promise<unknown> {
+  const page = record(body);
+  if (!Array.isArray(page.apps)) throw new TypeError("unexpected app listing");
+  const kept = await Promise.all(page.apps.map(async (entry: unknown) => {
+    const app = record(entry);
+    const capsuleId = textValue(app.capsuleId);
+    if (!capsuleId || app.role !== "owner") return undefined;
+    try {
+      await requireAppTarget(authority, capsuleId);
+      return entry;
+    } catch {
+      return undefined;
+    }
+  }));
+  return {
+    apps: kept.filter((entry) => entry !== undefined),
+    ...(typeof page.nextCursor === "string" ? { nextCursor: page.nextCursor } : {}),
+  };
+}
+
+function optionalCursor(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 2048 ||
+    !/^[A-Za-z0-9_-]+$/u.test(value)
+  ) {
+    throw new TypeError("cursor is malformed");
+  }
+  return value;
 }
 
 function toolResult(id: JsonRpcId, status: number, body: unknown): Response {
