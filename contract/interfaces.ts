@@ -296,6 +296,11 @@ export interface ReportInterfaceStatusRequest {
 
 export interface ListInterfacesResponse {
   readonly interfaces: readonly Interface[];
+  /**
+   * Opaque cursor for the next page of a Workspace-free runtime discovery
+   * (`limit` / `cursor`); absent on the last page and on Workspace lists.
+   */
+  readonly nextCursor?: string;
 }
 
 export interface CreateInterfaceBindingRequest {

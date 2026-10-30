@@ -539,6 +539,17 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
     readonly workspaceId: string;
     readonly request: Request;
   }) => boolean | Promise<boolean>;
+  /**
+   * Host-specific per-app decision for account actors without a Workspace
+   * restriction on Capsule-owned Interfaces (TASK-0118 9.1). `undefined`
+   * keeps the Workspace decision for an app without an ownership row.
+   */
+  readonly authorizeInterfaceApp?: (input: {
+    readonly actor: ActorContext;
+    readonly capsuleId: string;
+    readonly access: "read" | "write";
+    readonly request: Request;
+  }) => boolean | undefined | Promise<boolean | undefined>;
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
   /**
@@ -1834,6 +1845,9 @@ export async function createTakosumiService(
         : {}),
       ...(options.authorizeInterfaceWorkspace
         ? { authorizeInterfaceWorkspace: options.authorizeInterfaceWorkspace }
+        : {}),
+      ...(options.authorizeInterfaceApp
+        ? { authorizeInterfaceApp: options.authorizeInterfaceApp }
         : {}),
     },
     metricsRouteOptions: metricsScrapeToken

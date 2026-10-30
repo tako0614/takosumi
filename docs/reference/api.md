@@ -225,7 +225,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 113 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
+次の 114 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
 
 ### アプリの所有と個人の接続・使用量
 
@@ -307,8 +307,16 @@ Activityは、対象のCapsule、metadataのCapsule ID (run groupの `memberCaps
 | GET | `/api/v1/capsule-configs?capsuleId=` | `view`。そのアプリの今のInstallConfigを `{ installConfigs }` で返す。`workspaceId` と同時には指定できない |
 | GET | `/api/v1/provider-connections` | アカウント資格情報。本人のProvider Connection (Source用のgit接続は除く) と、releaseが持つbindableなoperator接続を `{ providerConnections }` で返す。`projection=release-owned` はreleaseが持つものだけ (永続storeは読まない) |
 | GET | `/api/v1/provider-connections?capsuleId=&projection=release-owned` | `view`。そのアプリに結べる、releaseが持つ接続。アプリが選べる接続は `GET /api/v1/connections?capsuleId=&projection=labels` |
+| GET | `/api/v1/ui-surfaces?cursor&limit&capsuleId` | 対象のアプリのうち `active`・`stale` のもののランチャー用UI surface (`interface.ui.surface` v1、`Resolved`) を `{ interfaces, nextCursor? }` で返す。呼び出し元に `ui.open` の今有効なPrincipal Bindingが要るのは従来どおり。ページはアプリのID順 (`limit` は1ページのアプリ数で1〜50、既定20)。`capsuleId` で1アプリに絞る。インストール済みアプリ自身のトークンは自分のアプリだけ、operatorが指定した代理アプリ (Takos) のトークンは、アプリでの判定のもとで利用者のアプリを対象にする。判定はそのページで返すアプリにだけ行う (1ページで判定するのは `limit` の4倍まで、残りは `nextCursor` で続ける)。`incomplete: true` は、1回のアカウント単位の読み取りで数え切れない (2000を超える) 数のアプリを管理していることを示す |
 
 Activityは内部の区画 (各アプリが記録する、固定された名前空間) ごとに保存しています。1ページは対象のアプリの区画 (1リクエスト最大96) から読み、前の節の規則でイベントごとにアプリへ結び付けて絞ります。イベントが属するアプリが全て対象のときだけ表示するので、Interface連携のイベントが、相手のアプリを見られない人に相手を明かすことはありません。アプリを決められないイベントと、アプリに属さないイベント (`workspace`・`connection` のイベント、どのアプリも使わないRun・Source) は表示しません。1リクエストで読むstoreのページは最大4つなので、件数が `limit` 未満 (0件のこともある) でも `nextCursor` が付くことがあります。cursorはstoreの不透明な `(createdAt, id)` cursorです。アカウント単位のActivityに出るのは所有者・メンバーが一覧できるアプリなので、アンインストールしたアプリの履歴は、残っている所有記録の所有者・メンバーが `GET /api/v1/capsules/{capsuleId}/activity` で読みます。
+
+Interface API (`/api/v1/interfaces…`) もWorkspaceなしで使えます。
+
+- インストール済みアプリ自身のOAuthトークン (そのアプリに結び付いたもの。Workspaceの有無は問わない) は実行時のprincipalです。Workspaceが無い場合は、`workspaceId` を付けずに `GET /api/v1/interfaces` を呼びます (`permission` は必須。`capsuleId` で提供側の1アプリに絞れる。`workspaceId` を付けると `400`)。結果は、そのトークンにその権限の今有効なPrincipal BindingがあるInterfaceだけで、`limit` と `cursor` でページを分け、続きがあれば `nextCursor` を返します。そのBindingは、トークンのアプリ自身の根拠である場合だけ数えます。つまり、そのアプリの有効なInterface連携から作られたBindingか、そのアプリ自身が所有するInterfaceのBindingです (アプリのpairwise subjectは呼び出し先の提供者に見えます。また、ある区画にBindingを書ける人は、共有された旧来の区画のほかの利用者も含めて、そこで任意のsubjectにBindingを作れます。そのため、アプリが所有していないInterfaceの手作りのBindingは根拠になりません)。`GET /api/v1/interfaces/{id}`、その `bindings`、`POST /api/v1/interfaces/{id}/token` も同じ規則で、根拠の無いInterfaceは `404`、実行時のprincipalは変更できません。アプリに結び付いていない、Workspaceも無い実行時のprincipalは拒否します。こうして発行するトークンは、そのInterfaceの区画で発行します。Workspaceに結び付いた実行時のトークンは、従来どおりそのWorkspaceに限ります。
+- Workspaceの制限が無いアカウントのセッションやPATは、`GET /api/v1/interfaces?capsuleId=` で1アプリのInterfaceを一覧できます (そのアプリの `view`。そのアプリが所有するInterfaceだけ)。`workspaceId` と `capsuleId` は同時に指定できず、どちらも無いと `400` です。
+- 同梱のAccounts host (self-host) では、Workspaceの制限が無いアカウントの呼び出し元が、IDで指定したCapsule所有のInterfaceを扱うとき、アプリに所有記録があればアプリで判定します (読み取りは `view`、InterfaceとBindingの変更は `change_settings`)。所有記録の無いアプリと、Workspace所有のInterfaceは従来のWorkspace判定のままです。`appIds` 付きのPATはそのアプリのInterfaceだけに届き、ここでWorkspaceの権限を持つことはありません。
+- platform Workerでは、shared-account (Hosted) のセッションによる `capsuleId` の一覧も、dashboardと同じshared-authの制御経路で判定します。platform extensionの認可がアプリへ移るまで (Phase 9.1-e)、IDで指定するInterface routeにはアカウントの呼び出し元でもWorkspaceが要ります。
 
 `GET /api/v1/dashboard/bootstrap` は、`includeWorkspaces=true` を指定しない限りWorkspaceの一覧を含めません。`includeNotifications=true` の通知は、bootstrapの任意項目の期限の中で読んだ `GET /api/v1/activity` の最新ページ (最大60件) です。各項目は短くしたイベント、イベントがアプリを示すときの `capsuleId`、互換のための `workspaceHandle` (イベントの内部区画のID) を持ちます。アプリ所有の読み取りを持たないhostと、旧Workspace束縛の資格情報には、従来のWorkspaceからの通知を返します。
 

@@ -38,9 +38,11 @@ import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import { WorkspaceManagementAdmissionConflictError, type WorkspaceManagementAuthority } from "../deploy-control/store.ts";
 import type {
   InterfaceListFilter,
+  InterfaceRuntimeConsumer,
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import { bindingServesRuntimeConsumer } from "./stores.ts";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
   canonicalInterfaceOAuth2ResourceUri,
@@ -1281,11 +1283,12 @@ export class InterfaceService {
     filter: InterfaceListFilter,
     subjectId: string,
     permission: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<readonly Interface[]> {
     return (
       await this.listAuthorizedForPrincipalPage(filter, subjectId, permission, {
         ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
-      })
+      }, consumer)
     ).items;
   }
 
@@ -1299,6 +1302,7 @@ export class InterfaceService {
     subjectId: string,
     permission: string,
     params: PageParams,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<Page<Interface>> {
     return await this.#listAuthorizedPage(
       filter,
@@ -1306,6 +1310,8 @@ export class InterfaceService {
       permission,
       params,
       false,
+      undefined,
+      consumer,
     );
   }
 
@@ -1338,7 +1344,9 @@ export class InterfaceService {
     params: PageParams,
     uiSurfaceCandidates: boolean,
     capsuleId?: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<Page<Interface>> {
+    if (consumer) requireText(consumer.capsuleId, "consumer.capsuleId");
     const normalizedFilter = this.#normalizeListFilter({
       ...filter,
       limit: undefined,
@@ -1355,6 +1363,7 @@ export class InterfaceService {
       params,
       ...(uiSurfaceCandidates ? { uiSurfaceCandidates: true } : {}),
       ...(normalizedCapsuleId ? { capsuleId: normalizedCapsuleId } : {}),
+      ...(consumer ? { consumer } : {}),
     });
     return {
       ...page,
@@ -1365,10 +1374,74 @@ export class InterfaceService {
     };
   }
 
+  /**
+   * Workspace-free capability discovery (TASK-0118 9.1): Interfaces with a
+   * current Ready Binding for `subjectId` and `permission` in every internal
+   * partition. The exact Principal Binding stays the only authority; the
+   * filter can narrow to one provider app (`ownerKind: "Capsule"`, `ownerId`).
+   * Read-only, like {@link listAuthorizedForPrincipalPage}.
+   */
+  async listAuthorizedForPrincipalAcrossPartitionsPage(
+    filter: Omit<InterfaceListFilter, "workspaceId" | "ownerIds" | "limit">,
+    subjectId: string,
+    permission: string,
+    params: PageParams,
+    consumer: InterfaceRuntimeConsumer,
+  ): Promise<Page<Interface>> {
+    requireText(consumer.capsuleId, "consumer.capsuleId");
+    if (filter.type !== undefined) validateToken(filter.type, "type");
+    const normalizedSubject = requireText(subjectId, "subjectId");
+    validatePermissionToken(permission, "permission");
+    const page = await this.#stores.authorized.listPage({
+      filter: {
+        ...filter,
+        ...(filter.type !== undefined ? { type: filter.type.trim() } : {}),
+      },
+      subjectId: normalizedSubject,
+      permission: permission.trim(),
+      params,
+      consumer,
+    });
+    return {
+      ...page,
+      items: page.items.filter(
+        (iface) =>
+          !hasUnownedCapsuleOutput(iface.metadata.ownerRef, iface.spec),
+      ),
+    };
+  }
+
+  /**
+   * The internal partition one app records its Interfaces into. It is never
+   * authority; callers decide the app first.
+   */
+  async getAppPartition(capsuleId: string): Promise<{
+    readonly capsuleId: string;
+    readonly workspaceId: string;
+    readonly status: Capsule["status"];
+  }> {
+    const id = requireText(capsuleId, "capsuleId");
+    if (!this.#capsules) {
+      throw new InterfaceServiceError("failed_precondition", "Capsule Interface authority is unavailable");
+    }
+    let capsule: Capsule;
+    try {
+      capsule = await this.#capsules.getCapsule(id);
+    } catch (error) {
+      if ((error as { code?: unknown } | undefined)?.code === "not_found") {
+        throw new InterfaceServiceError("not_found", "Capsule not found");
+      }
+      throw error;
+    }
+    if (capsule.id !== id) throw new InterfaceServiceError("not_found", "Capsule not found");
+    return { capsuleId: capsule.id, workspaceId: capsule.workspaceId, status: capsule.status };
+  }
+
   async getAuthorizedForPrincipal(
     interfaceId: string,
     subjectId: string,
     permission: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<Interface> {
     const iface = await this.reconcile(interfaceId, {
       allowSafetyRecovery: true,
@@ -1378,6 +1451,7 @@ export class InterfaceService {
       iface,
       requireText(subjectId, "subjectId"),
       permission.trim(),
+      consumer,
     );
     if (bindings.length === 0) {
       // Do not turn this endpoint into an Interface id oracle.
@@ -1390,6 +1464,7 @@ export class InterfaceService {
     interfaceId: string,
     subjectId: string,
     permission: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<readonly InterfaceBinding[]> {
     const iface = await this.reconcile(interfaceId, { allowSafetyRecovery: true });
     validatePermissionToken(permission, "permission");
@@ -1397,6 +1472,7 @@ export class InterfaceService {
       iface,
       requireText(subjectId, "subjectId"),
       permission.trim(),
+      consumer,
     );
     if (bindings.length === 0) throw new InterfaceServiceError("not_found", "Interface not found");
     return bindings;
@@ -1408,6 +1484,8 @@ export class InterfaceService {
     principal: {
       readonly workspaceId: string;
       readonly subjectId: string;
+      /** Set for a Workspace-free runtime principal (TASK-0118 9.1). */
+      readonly consumer?: InterfaceRuntimeConsumer;
     },
     actor?: ActorContext,
   ): Promise<IssueInterfaceTokenResponse> {
@@ -1430,7 +1508,7 @@ export class InterfaceService {
       throw new InterfaceServiceError("not_found", "Interface not found");
     }
     const binding = (
-      await this.#principalBindings(iface, subjectId, permission)
+      await this.#principalBindings(iface, subjectId, permission, principal.consumer)
     ).find(
       (candidate) =>
         candidate.metadata.workspaceId === workspaceId &&
@@ -1551,6 +1629,8 @@ export class InterfaceService {
       !resourceClaimStillCurrent ||
       !currentBinding ||
       !(await this.#bindingLinkActive(currentBinding, currentInterface, permission)) ||
+      (principal.consumer !== undefined &&
+        !bindingServesRuntimeConsumer(currentBinding, currentInterface, principal.consumer)) ||
       currentBinding.metadata.workspaceId !== workspaceId ||
       currentBinding.metadata.generation !== binding.metadata.generation ||
       currentBinding.status.phase !== "Ready" ||
@@ -2864,6 +2944,7 @@ export class InterfaceService {
     iface: Interface,
     subjectId: string,
     permission: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<readonly InterfaceBinding[]> {
     if (iface.status.phase !== "Resolved") return [];
     const bindings = (
@@ -2881,7 +2962,10 @@ export class InterfaceService {
     // This cache lives only for this read. The post-issuer authority check uses
     // fresh storage reads, so revocations during credential issuance still win.
     const cache = { links: new Map<string, InterfaceLink | undefined>(), capsules: new Map<string, Capsule | undefined>() };
-    for (const binding of bindings) if (await this.#bindingLinkActive(binding, iface, permission, cache)) accepted.push(binding);
+    for (const binding of bindings) {
+      if (consumer !== undefined && !bindingServesRuntimeConsumer(binding, iface, consumer)) continue;
+      if (await this.#bindingLinkActive(binding, iface, permission, cache)) accepted.push(binding);
+    }
     return accepted;
   }
 

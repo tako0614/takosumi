@@ -1762,3 +1762,132 @@ test("composed app keeps operator-scoped provider bindings denied by default", a
     assert.equal(fixture.planJobs.length, 0);
   }
 });
+
+test("composed Interface API decides Capsule-owned Interfaces per app and lets app-bound runtime tokens discover without a Workspace", async () => {
+  const now = Date.now();
+  const opentofuControlStore = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(opentofuControlStore, {
+    workspaceId: "ws_composed_app_iface",
+    capsuleId: "cap_composed_iface",
+  });
+  await opentofuControlStore.putCapsule({ ...seeded.capsule, status: "active", currentStateGeneration: 1 });
+  await opentofuControlStore.putCapsule({
+    ...seeded.capsule, id: "cap_composed_other", name: "other", slug: "other",
+    status: "active", currentStateGeneration: 1,
+  });
+  const store = new InMemoryAccountsStore();
+  // user_test owns the Workspace; the app owner is not a Workspace member.
+  const appOwner = "tsub_composed_app_owner";
+  const workspaceOwner = "user_test";
+  for (const subject of [appOwner, workspaceOwner] as const) {
+    store.saveAccount({ subject: subject as `tsub_${string}`, createdAt: now, updatedAt: now });
+    store.saveAccountSession({ sessionId: `sess_${subject}`, subject: subject as `tsub_${string}`, createdAt: now, expiresAt: now + 60_000 });
+  }
+  for (const [token, appIds] of [["takpat_app_scoped", ["cap_composed_iface"]], ["takpat_other_scoped", ["cap_composed_other"]]] as const) {
+    store.savePersonalAccessToken(token, {
+      tokenId: `pat_${token}`, tokenPrefix: "takpat_x", subject: appOwner as `tsub_${string}`, name: "iface",
+      scopes: ["read", "write"], appIds: [...appIds], createdAt: now, expiresAt: now + 60_000,
+    });
+  }
+  // An installed app's own OAuth token bound to its app and no Workspace.
+  store.saveAccessToken("takat_app_runtime", {
+    clientId: "client_composed_iface", scope: "openid capsules:read",
+    subject: "pairwise_composed_runtime", takosumiSubject: appOwner as `tsub_${string}`,
+    capsuleId: "cap_composed_iface", expiresAt: now + 60_000,
+  });
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: store as unknown as PostgresAccountsStore,
+    accountsHandler: accountsHandlerSpy().handler,
+    opentofuControlStore,
+    runtimeEnv: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN },
+    interfaceOAuth2ResourceAuthorizer: () => true,
+  });
+  for (const [capsuleId, owner] of [["cap_composed_iface", appOwner], ["cap_composed_other", workspaceOwner]] as const) {
+    assert.equal(await created.operations.appOwnership.initializeOwnershipIfMissing({
+      capsuleId, ownerAccountId: owner, ownershipEpoch: 0, managementState: "active",
+      managementEpoch: 0, storageRoot: `apps/${capsuleId}`,
+    }), true);
+  }
+  const app = created.app;
+  const internal = { authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}`, "content-type": "application/json" };
+  // Another owner's namespace; its owner learned the app's pairwise subject.
+  await opentofuControlStore.putWorkspace({
+    ...seeded.workspace, id: "ws_composed_foreign", handle: "ws-composed-foreign", ownerUserId: "tsub_foreign_owner",
+  });
+  const createInterface = async (
+    name: string,
+    ownerRef: { kind: "Capsule" | "Workspace"; id: string },
+    workspaceId: string = seeded.workspace.id,
+  ) => {
+    const response = await app.fetch(new Request("http://localhost/api/v1/interfaces", {
+      method: "POST", headers: internal,
+      body: JSON.stringify({
+        workspaceId, name, ownerRef,
+        spec: { type: "mcp.server", version: "2025-11-25", document: {}, access: { visibility: "private" } },
+      }),
+    }));
+    assert.equal(response.status, 201, name);
+    return (await response.json()).metadata.id as string;
+  };
+  const mine = await createInterface("mine", { kind: "Capsule", id: "cap_composed_iface" });
+  const other = await createInterface("other", { kind: "Capsule", id: "cap_composed_other" });
+  const workspaceOwned = await createInterface("workspace-owned", { kind: "Workspace", id: seeded.workspace.id });
+  const foreign = await createInterface("foreign", { kind: "Workspace", id: "ws_composed_foreign" }, "ws_composed_foreign");
+  for (const interfaceId of [mine, foreign]) {
+    const bind = await app.fetch(new Request(`http://localhost/api/v1/interfaces/${interfaceId}/bindings`, {
+      method: "POST", headers: internal,
+      body: JSON.stringify({ subjectRef: { kind: "Principal", id: "pairwise_composed_runtime" }, permissions: ["mcp.invoke"], delivery: { type: "none" } }),
+    }));
+    assert.equal(bind.status, 201);
+  }
+  const get = async (path: string, token: string) =>
+    (await app.fetch(new Request(`http://localhost${path}`, { headers: { authorization: `Bearer ${token}` } })));
+
+  // The app owner (no Workspace membership) reads its app's Interface; the
+  // Workspace owner without an app role cannot.
+  assert.equal((await get(`/api/v1/interfaces/${mine}`, `sess_${appOwner}`)).status, 200);
+  assert.equal((await get(`/api/v1/interfaces/${mine}`, `sess_${workspaceOwner}`)).status, 403);
+  assert.equal((await get(`/api/v1/interfaces/${other}`, `sess_${workspaceOwner}`)).status, 200);
+  const listed = await get("/api/v1/interfaces?capsuleId=cap_composed_iface", `sess_${appOwner}`);
+  assert.equal(listed.status, 200);
+  assert.deepEqual((await listed.json()).interfaces.map((entry: { metadata: { id: string } }) => entry.metadata.id), [mine]);
+  // A PAT limited to apps reaches only those apps and never the Workspace.
+  assert.equal((await get(`/api/v1/interfaces/${mine}`, "takpat_app_scoped")).status, 200);
+  assert.equal((await get(`/api/v1/interfaces/${mine}`, "takpat_other_scoped")).status, 403);
+  assert.equal((await get(`/api/v1/interfaces/${workspaceOwned}`, "takpat_app_scoped")).status, 403);
+  assert.equal((await get(`/api/v1/interfaces?workspaceId=${seeded.workspace.id}`, "takpat_app_scoped")).status, 403);
+  // The installed app's own token discovers its bound Interface without a Workspace.
+  const discovered = await get("/api/v1/interfaces?type=mcp.server&permission=mcp.invoke", "takat_app_runtime");
+  assert.equal(discovered.status, 200);
+  assert.deepEqual((await discovered.json()).interfaces.map((entry: { metadata: { id: string } }) => entry.metadata.id), [mine]);
+  assert.equal((await get(`/api/v1/interfaces/${other}?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  // The foreign namespace's manual Binding for the app's subject is no evidence.
+  assert.equal((await get(`/api/v1/interfaces/${foreign}?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  assert.equal((await get(`/api/v1/interfaces/${foreign}/bindings?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  // Naming that namespace does not lift the evidence rule; it is refused.
+  for (const workspaceId of ["ws_composed_foreign", seeded.workspace.id]) {
+    const viaWorkspace = await get(`/api/v1/interfaces?permission=mcp.invoke&workspaceId=${workspaceId}`, "takat_app_runtime");
+    assert.equal(viaWorkspace.status, 400, workspaceId);
+    assert.equal((await viaWorkspace.json()).interfaces, undefined, workspaceId);
+  }
+  // Co-tenant: the other app's owner (no role on cap_composed_iface) binds
+  // the app's subject on their own app's Interface in the shared partition.
+  const coTenantBind = await app.fetch(new Request(`http://localhost/api/v1/interfaces/${other}/bindings`, {
+    method: "POST", headers: { authorization: `Bearer sess_${workspaceOwner}`, "content-type": "application/json" },
+    body: JSON.stringify({ subjectRef: { kind: "Principal", id: "pairwise_composed_runtime" }, permissions: ["mcp.invoke"], delivery: { type: "none" } }),
+  }));
+  assert.equal(coTenantBind.status, 201);
+  const afterCoTenant = await get("/api/v1/interfaces?type=mcp.server&permission=mcp.invoke", "takat_app_runtime");
+  assert.equal(afterCoTenant.status, 200);
+  assert.deepEqual((await afterCoTenant.json()).interfaces.map((entry: { metadata: { id: string } }) => entry.metadata.id), [mine]);
+  assert.equal((await get(`/api/v1/interfaces/${other}?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  assert.equal((await get(`/api/v1/interfaces/${other}/bindings?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  const coTenantToken = await app.fetch(new Request(`http://localhost/api/v1/interfaces/${other}/token`, {
+    method: "POST", headers: { authorization: "Bearer takat_app_runtime", "content-type": "application/json" },
+    body: JSON.stringify({ permission: "mcp.invoke" }),
+  }));
+  assert.equal(coTenantToken.status, 404);
+});
