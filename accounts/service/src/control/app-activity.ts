@@ -16,20 +16,35 @@
  *   Interface link event never reveals the other side's app to someone who
  *   cannot view it.
  *
- * Pages use the store's opaque `(createdAt, id)` keyset cursor. One request
- * scans a bounded number of store pages; a page can therefore hold fewer than
- * `limit` events (even none) and still carry `nextCursor`.
+ * The next page starts after the last row this request examined, on the
+ * store's `(createdAt, id)` keyset. That row may be one the caller cannot
+ * see, so the cursor leaves the server only sealed (see `activity-cursor.ts`),
+ * bound to the read and the caller: the client can echo it back but cannot
+ * read, forge or choose a keyset, so unsealed cursors are refused. A host
+ * without a secret-store passphrase cannot seal and fails closed when a page
+ * needs a cursor or one is passed. One request scans at most four store pages and spends one
+ * shared budget of Run/Source/Interface reads, stopping before an event it
+ * could not afford to attribute; a page can therefore hold fewer than `limit`
+ * events (even none) and still carry `nextCursor`. Partitions beyond
+ * {@link ACTIVITY_PARTITION_LIMIT} and apps beyond one account read are left
+ * out and reported as `incomplete`.
  */
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Capsule } from "takosumi-contract/install-configs";
 import {
   clampPageLimit,
   encodeCursor,
-  type PageParams,
+  type PageCursor,
 } from "takosumi-contract/pagination";
-import { json, methodNotAllowed } from "../http-helpers.ts";
-import { attributeActivityEvents } from "./app-authorization.ts";
+import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
+import { SEALED_ACTIVITY_CURSOR_PREFIX, type ActivityCursorContext } from "./activity-cursor.ts";
+import {
+  activityAttributionLookupBound,
+  attributeActivityEvents,
+  createActivityAttributionLookups,
+} from "./app-authorization.ts";
 import { resolveAccountAppScope } from "./app-scope.ts";
+import { ACTIVITY_PARTITION_LIMIT } from "../../../../core/domains/activity/mod.ts";
 import {
   controlPlaneUnavailable,
   parseControlPageParams,
@@ -43,13 +58,25 @@ const APP_ACTIVITY_SCAN_PAGES = 4;
 
 export interface AppActivityPage {
   readonly events: readonly ActivityEvent[];
-  readonly nextCursor?: string;
+  /**
+   * The keyset of the last row examined when more rows remain. Server-side
+   * only: it can name a hidden event, so HTTP responses carry it sealed.
+   */
+  readonly next?: PageCursor;
+  /** Some of the caller's apps were left out (see the module comment). */
+  readonly incomplete?: true;
+}
+
+/** One Activity page request: a size and the keyset to continue after. */
+export interface AppActivityPageRequest {
+  readonly limit?: number;
+  readonly after?: PageCursor;
 }
 
 interface ScanInput {
   readonly ctx: ControlDispatchContext;
   readonly partitions: readonly string[];
-  readonly params: PageParams;
+  readonly request: AppActivityPageRequest;
   /** Called once per scanned store page with the attributed app ids. */
   readonly keep: (
     events: readonly ActivityEvent[],
@@ -62,7 +89,7 @@ async function scanAppActivity(input: ScanInput): Promise<AppActivityPage | unde
   const activity = ctx.operations.activity;
   if (typeof activity.listAcrossWorkspacesPage !== "function") return undefined;
   if (input.partitions.length === 0) return { events: [] };
-  const limit = clampPageLimit(input.params.limit ?? APP_ACTIVITY_DEFAULT_LIMIT);
+  const limit = clampPageLimit(input.request.limit ?? APP_ACTIVITY_DEFAULT_LIMIT);
   const partitionCapsules = new Map<string, Promise<readonly Capsule[]>>();
   const capsulesOf = (workspaceId: string): Promise<readonly Capsule[]> => {
     let pending = partitionCapsules.get(workspaceId);
@@ -74,75 +101,156 @@ async function scanAppActivity(input: ScanInput): Promise<AppActivityPage | unde
     }
     return pending;
   };
+  // One lookup budget and cache for the whole request (every page and
+  // partition): a request spends at most one budget of Run, Source and
+  // Interface reads.
+  const lookups = createActivityAttributionLookups();
+  // The last row examined (shown or not): the store keyset to continue after.
+  let last: PageCursor | undefined = input.request.after;
+  let examinedAny = false;
   const events: ActivityEvent[] = [];
-  let cursor = input.params.cursor;
   for (let scanned = 0; scanned < APP_ACTIVITY_SCAN_PAGES; scanned++) {
     ctx.assertActive?.();
     const page = await activity.listAcrossWorkspacesPage.call(activity, input.partitions, {
       limit,
-      ...(cursor !== undefined ? { cursor } : {}),
+      ...(last !== undefined ? { cursor: encodeCursor(last) } : {}),
     });
+    const rows = page.items;
+    // Admit rows only while their worst-case lookups fit the remaining
+    // budget, so no event is left undetermined (and passed by the cursor)
+    // for lack of budget; the next request resumes at the first row left.
+    let admitted = 0;
+    let reserved = 0;
+    while (admitted < rows.length) {
+      const cost = activityAttributionLookupBound(rows[admitted]!);
+      if (reserved + cost > lookups.budget && (admitted > 0 || examinedAny)) break;
+      reserved += cost;
+      admitted++;
+    }
+    const consumed = rows.slice(0, admitted);
     const byPartition = new Map<string, number[]>();
-    page.items.forEach((event, index) => {
+    consumed.forEach((event, index) => {
       byPartition.set(event.workspaceId, [...(byPartition.get(event.workspaceId) ?? []), index]);
     });
-    const attributed: (readonly string[] | undefined)[] = page.items.map(() => undefined);
+    const attributed: (readonly string[] | undefined)[] = consumed.map(() => undefined);
     await Promise.all([...byPartition].map(async ([workspaceId, indexes]) => {
       if (!input.partitions.includes(workspaceId)) return;
       const result = await attributeActivityEvents({
         operations: ctx.operations,
         capsules: await capsulesOf(workspaceId),
-        events: indexes.map((index) => page.items[index]!),
+        events: indexes.map((index) => consumed[index]!),
+        lookups,
       });
-      indexes.forEach((index, position) => {
-        attributed[index] = result[position];
+      indexes.forEach((index, at) => {
+        attributed[index] = result[at];
       });
     }));
-    const kept = await input.keep(page.items, attributed);
-    for (let index = 0; index < page.items.length; index++) {
+    const kept = await input.keep(consumed, attributed);
+    for (let index = 0; index < consumed.length; index++) {
+      const event = consumed[index]!;
+      examinedAny = true;
+      last = { createdAt: event.createdAt, id: event.id };
       if (!kept[index]) continue;
-      events.push(page.items[index]!);
+      events.push(event);
       if (events.length === limit) {
-        // Resume right after the last returned event; the rest of this store
-        // page is scanned again by the next request.
-        const last = page.items[index]!;
-        const more = index < page.items.length - 1 || page.nextCursor !== undefined;
-        return more
-          ? { events, nextCursor: encodeCursor({ createdAt: last.createdAt, id: last.id }) }
-          : { events };
+        const more = index < consumed.length - 1 || admitted < rows.length || page.nextCursor !== undefined;
+        return more ? { events, next: last } : { events };
       }
     }
+    // Out of lookup budget: continue at the first row left next time.
+    if (admitted < rows.length) return last !== undefined ? { events, next: last } : { events };
     if (page.nextCursor === undefined) return { events };
-    cursor = page.nextCursor;
   }
-  return { events, nextCursor: cursor };
+  return last !== undefined ? { events, next: last } : { events };
 }
 
-function readPageParams(ctx: ControlDispatchContext):
-  | { readonly ok: true; readonly params: PageParams }
-  | { readonly ok: false; readonly response: Response } {
-  return parseControlPageParams(ctx.url);
+function activityCursorUnavailable(): Response {
+  return errorJson(
+    "feature_unavailable",
+    "Activity paging is unavailable: this server has no secret-store passphrase " +
+      "(TAKOSUMI_SECRET_STORE_PASSPHRASE or TAKOSUMI_SECRET_STORE_KEY, 32+ bytes) to seal cursors.",
+    503,
+  );
+}
+
+function malformedCursor(): Response {
+  return errorJson("invalid_request", "cursor is malformed", 400);
+}
+
+/**
+ * `?limit=` and `?cursor=` of an Activity read. Only a sealed token this
+ * server issued for the same read and caller is a cursor; anything else is
+ * `400` and the client starts again from the newest page.
+ */
+async function readActivityPageRequest(ctx: ControlDispatchContext, context: ActivityCursorContext):
+  Promise<
+    | { readonly ok: true; readonly request: AppActivityPageRequest }
+    | { readonly ok: false; readonly response: Response }
+  > {
+  const withoutCursor = new URL(ctx.url);
+  withoutCursor.searchParams.delete("cursor");
+  const parsed = parseControlPageParams(withoutCursor);
+  if (!parsed.ok) return parsed;
+  const limit = parsed.params.limit;
+  const raw = ctx.url.searchParams.get("cursor");
+  if (raw === null || raw === "") {
+    return { ok: true, request: limit !== undefined ? { limit } : {} };
+  }
+  // An unsealed keyset would let the caller choose a position and learn,
+  // from what follows it, where hidden rows lie.
+  if (!raw.startsWith(SEALED_ACTIVITY_CURSOR_PREFIX)) return { ok: false, response: malformedCursor() };
+  if (!ctx.activityCursorSealer) return { ok: false, response: activityCursorUnavailable() };
+  const after = await ctx.activityCursorSealer.open(raw, context);
+  if (!after) return { ok: false, response: malformedCursor() };
+  return { ok: true, request: { ...(limit !== undefined ? { limit } : {}), after } };
+}
+
+/** The response body of an Activity page, with the cursor sealed. */
+async function activityPageBody(
+  ctx: ControlDispatchContext,
+  context: ActivityCursorContext,
+  page: AppActivityPage,
+  withIncomplete: boolean,
+): Promise<{ readonly ok: true; readonly body: Record<string, unknown> } | { readonly ok: false; readonly response: Response }> {
+  let nextCursor: string | undefined;
+  if (page.next !== undefined) {
+    if (!ctx.activityCursorSealer) return { ok: false, response: activityCursorUnavailable() };
+    nextCursor = await ctx.activityCursorSealer.seal(page.next, context);
+  }
+  return {
+    ok: true,
+    body: {
+      events: page.events,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+      ...(withIncomplete && page.incomplete ? { incomplete: true } : {}),
+    },
+  };
 }
 
 /** `GET /api/v1/activity`: Activity of every app in the caller's scope. */
 export async function listAccountActivity(
   ctx: ControlDispatchContext,
-  params: PageParams,
+  request: AppActivityPageRequest,
 ): Promise<{ readonly ok: true; readonly page: AppActivityPage } | { readonly ok: false; readonly response: Response }> {
   const resolved = await resolveAccountAppScope(ctx);
   if (!resolved.ok) return resolved;
   const { scope } = resolved;
-  const partitions = [...new Set([...scope.capsules.values()].map((capsule) => capsule.workspaceId))];
+  const allPartitions = [...new Set([...scope.capsules.values()].map((capsule) => capsule.workspaceId))].sort();
+  // One request reads a bounded number of partitions; beyond it the read
+  // stays well-formed and says it is incomplete instead of failing.
+  const partitions = allPartitions.slice(0, ACTIVITY_PARTITION_LIMIT);
   const page = await scanAppActivity({
     ctx,
     partitions,
-    params,
+    request,
     keep: async (_events, attributed) =>
       attributed.map((ids) =>
         ids !== undefined && ids.length > 0 && ids.every((id) => scope.appIds.has(id))
       ),
   });
-  return page ? { ok: true, page } : { ok: false, response: controlPlaneUnavailable() };
+  if (!page) return { ok: false, response: controlPlaneUnavailable() };
+  const incomplete = !scope.complete || allPartitions.length > partitions.length;
+  return { ok: true, page: incomplete ? { ...page, incomplete: true } : page };
 }
 
 export async function handleAccountActivity(
@@ -152,14 +260,14 @@ export async function handleAccountActivity(
 ): Promise<Response | undefined> {
   if (segments.length !== 1 || segments[0] !== "activity") return undefined;
   if (method !== "GET") return methodNotAllowed("GET");
-  const params = readPageParams(ctx);
-  if (!params.ok) return params.response;
-  const result = await listAccountActivity(ctx, params.params);
+  const context = { route: "activity", subject: ctx.session.subject };
+  const request = await readActivityPageRequest(ctx, context);
+  if (!request.ok) return request.response;
+  const result = await listAccountActivity(ctx, request.request);
   if (!result.ok) return result.response;
-  return json({
-    events: result.page.events,
-    ...(result.page.nextCursor !== undefined ? { nextCursor: result.page.nextCursor } : {}),
-  }, 200, { "cache-control": "no-store" });
+  const body = await activityPageBody(ctx, context, result.page, true);
+  if (!body.ok) return body.response;
+  return json(body.body, 200, { "cache-control": "no-store" });
 }
 
 /**
@@ -173,8 +281,9 @@ export async function handleCapsuleActivity(
   method: string,
 ): Promise<Response> {
   if (method !== "GET") return methodNotAllowed("GET");
-  const params = readPageParams(ctx);
-  if (!params.ok) return params.response;
+  const context = { route: `capsules/${capsule.id}/activity`, subject: ctx.session.subject };
+  const request = await readActivityPageRequest(ctx, context);
+  if (!request.ok) return request.response;
   let others: Promise<ReadonlySet<string>> | undefined;
   const otherViewableApps = (): Promise<ReadonlySet<string>> => {
     others ??= resolveAccountAppScope(ctx).then((resolved) =>
@@ -185,7 +294,7 @@ export async function handleCapsuleActivity(
   const page = await scanAppActivity({
     ctx,
     partitions: [capsule.workspaceId],
-    params: params.params,
+    request: request.request,
     keep: async (_events, attributed) => {
       const needsOthers = attributed.some((ids) =>
         ids?.includes(capsule.id) === true && ids.some((id) => id !== capsule.id)
@@ -198,8 +307,7 @@ export async function handleCapsuleActivity(
     },
   });
   if (!page) return controlPlaneUnavailable();
-  return json({
-    events: page.events,
-    ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
-  }, 200, { "cache-control": "no-store" });
+  const body = await activityPageBody(ctx, context, page, false);
+  if (!body.ok) return body.response;
+  return json(body.body, 200, { "cache-control": "no-store" });
 }

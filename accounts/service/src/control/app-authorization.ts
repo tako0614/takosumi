@@ -629,31 +629,75 @@ export async function visibleActivityEvents<T extends ActivityEvent>(input: {
  * the events' partition (destroyed ones included). Attribution grants
  * nothing: callers still filter by what the caller may view.
  */
+/** undefined: the app could not be determined. */
+type ActivityAppResolution = readonly string[] | undefined;
+
+/**
+ * Run, Source and Interface reads one request may spend on Activity
+ * attribution, and their results. Share one across every
+ * {@link attributeActivityEvents} call of a request (all pages and
+ * partitions): Run, Source and Interface ids are global, so a result read
+ * for one partition is valid for another.
+ */
+export interface ActivityAttributionLookups {
+  budget: number;
+  readonly sources: Map<string, Promise<ActivityAppResolution>>;
+  readonly runs: Map<string, Promise<ActivityAppResolution>>;
+  readonly interfaces: Map<string, Promise<ActivityAppResolution>>;
+}
+
+export function createActivityAttributionLookups(): ActivityAttributionLookups {
+  return { budget: ACTIVITY_LOOKUP_LIMIT, sources: new Map(), runs: new Map(), interfaces: new Map() };
+}
+
+/**
+ * The most lookups attributing `event` can spend (a Run may need its
+ * Source too). A caller that admits an event only while this fits the
+ * remaining budget never leaves an event undetermined for lack of budget.
+ */
+export function activityAttributionLookupBound(event: ActivityEvent): number {
+  const metadata = (event.metadata ?? {}) as Record<string, unknown>;
+  const text = (value: unknown): string | undefined => typeof value === "string" && value.length > 0 ? value : undefined;
+  const sources = new Set([
+    ...(event.targetType === "source" ? [event.targetId] : []),
+    ...ACTIVITY_SOURCE_KEYS.map((key) => text(metadata[key])),
+  ].filter((id): id is string => id !== undefined));
+  const interfaces = new Set([
+    ...(event.targetType === "interface" && metadata.ownerKind === undefined ? [event.targetId] : []),
+    ...(text(metadata.interfaceId) ? [text(metadata.interfaceId)!] : []),
+  ]);
+  const runs = new Set([
+    ...(event.runId ? [event.runId] : []),
+    ...(event.targetType === "run" ? [event.targetId] : []),
+    ...ACTIVITY_RUN_KEYS.map((key) => text(metadata[key])).filter((id): id is string => id !== undefined),
+  ]);
+  return sources.size + interfaces.size + runs.size * 2;
+}
+
 export async function attributeActivityEvents<T extends ActivityEvent>(input: {
   readonly operations: ControlPlaneOperations;
   readonly capsules: readonly Capsule[];
   readonly events: readonly T[];
+  /** Request-wide lookup budget and results; a fresh one per call by default. */
+  readonly lookups?: ActivityAttributionLookups;
 }): Promise<readonly (readonly string[] | undefined)[]> {
   const { operations, capsules } = input;
   if (!input.events.length) return [];
   const known = new Set(capsules.map((capsule) => capsule.id));
   const live = capsules.filter((capsule) => capsule.status !== "destroyed");
   const sourceApps = sourceAppsOf(live);
-  let budget = ACTIVITY_LOOKUP_LIMIT;
-  /** undefined: the app could not be determined. */
-  type Resolved = readonly string[] | undefined;
+  const lookups = input.lookups ?? createActivityAttributionLookups();
+  type Resolved = ActivityAppResolution;
   const cached = (cache: Map<string, Promise<Resolved>>, id: string, read: () => Promise<Resolved>): Promise<Resolved> => {
     const pending = cache.get(id);
     if (pending) return pending;
-    if (budget <= 0) return Promise.resolve(undefined);
-    budget--;
+    if (lookups.budget <= 0) return Promise.resolve(undefined);
+    lookups.budget--;
     const started = read();
     cache.set(id, started);
     return started;
   };
-  const sources = new Map<string, Promise<Resolved>>();
-  const runs = new Map<string, Promise<Resolved>>();
-  const interfaces = new Map<string, Promise<Resolved>>();
+  const { sources, runs, interfaces } = lookups;
   const sourceAppIds = (sourceId: string): Promise<Resolved> => {
     const apps = sourceApps.get(sourceId);
     if (apps) return Promise.resolve(apps);

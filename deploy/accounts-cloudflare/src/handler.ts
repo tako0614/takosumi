@@ -41,6 +41,8 @@ import {
   parseAppOwnershipMutationsFrozen,
   notificationPusherRouteOptionsFromEnv,
   parseLegacyWorkspaceSunset,
+  activityCursorSealerFromEnv,
+  type ActivityCursorSealer,
 } from "@takosjp/takosumi-accounts-service";
 import {
   isAccountsApiPath,
@@ -1317,6 +1319,7 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     trustedNativeClients: trustedNativeClientsFromEnv(
       env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
     ),
+    ...activityCursorSealerOption(env),
     ...(hostedSessionPolicy && options.identityMergeReconciler
       ? { identityMergeReconciler: options.identityMergeReconciler(env) }
       : {}),
@@ -2033,4 +2036,12 @@ function legacyWorkspaceSunsetOption(
 ): { readonly legacyWorkspaceSunset?: string } {
   const sunset = parseLegacyWorkspaceSunset(value);
   return sunset ? { legacyWorkspaceSunset: sunset } : {};
+}
+
+/** Seals Activity cursors with the secret-store passphrase, when configured. */
+function activityCursorSealerOption(
+  env: CloudflareWorkerEnv,
+): { readonly activityCursorSealer?: ActivityCursorSealer } {
+  const sealer = activityCursorSealerFromEnv(env);
+  return sealer ? { activityCursorSealer: sealer } : {};
 }
