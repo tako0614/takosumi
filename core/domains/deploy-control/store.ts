@@ -3886,10 +3886,12 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]>;
-  /** One bounded, atomically advanced page for the stale-auto-plan sweep. */
-  listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]>;
-  /** One bounded, atomically advanced page for the drift-check sweep. */
-  listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]>;
+  /**
+   * One bounded, atomically advanced page of live Capsules (`active` or
+   * `stale`) for the per-app scheduled sweep (stale auto-plan and drift
+   * check). Backed by the `active_capsules` cursor lane.
+   */
+  listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]>;
   /**
    * Fair oldest-attempt-first retirement outbox scan. Kept separate from
    * ordinary queued execution so archived or late-listed Workspaces cannot
@@ -4635,8 +4637,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   getRunLeaseToken(runId: string): string | undefined {
     return this.#runLeases.get(runId);
   }
+  // The `workspaces` lane row still exists in both durable schemas, but no
+  // sweep reads it any more (TASK-0118 9.1); stage 9.6 deletes the row.
   readonly #scheduledSweepCursors = new Map<
-    "workspaces" | "active_capsules" | "recoverable_runs",
+    "active_capsules" | "recoverable_runs",
     { readonly cursor: ScheduledSweepCursorPosition; readonly upper: ScheduledSweepCursorPosition }
   >();
   readonly #workspaces = new Map<string, Workspace>();
@@ -6181,24 +6185,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]> {
-    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
-    const eligible = Array.from(this.#workspaces.values())
-      .filter((workspace) => !workspace.archivedAt)
-      .sort((a, b) => compareSweepPosition(
-        { createdAt: a.createdAt, id: a.id },
-        { createdAt: b.createdAt, id: b.id },
-      ));
-    return Promise.resolve(
-      this.#takeScheduledSweepPage(
-        "workspaces",
-        eligible,
-        boundedLimit,
-        (workspace) => ({ createdAt: workspace.createdAt, id: workspace.id }),
-      ),
-    );
-  }
-
   listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
     return Promise.resolve(
       pageSorted(
@@ -6902,10 +6888,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
+  listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]> {
     const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
     const eligible = Array.from(this.#capsules.values())
-      .filter((capsule) => capsule.status === "active")
+      .filter((capsule) => SCHEDULED_SWEEP_CAPSULE_STATUSES.has(capsule.status))
       .sort((a, b) => compareSweepPosition(
         { createdAt: a.createdAt, id: a.id },
         { createdAt: b.createdAt, id: b.id },
@@ -6921,7 +6907,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   #takeScheduledSweepPage<T>(
-    lane: "workspaces" | "active_capsules" | "recoverable_runs",
+    lane: "active_capsules" | "recoverable_runs",
     rows: readonly T[],
     limit: number,
     position: (row: T) => ScheduledSweepCursorPosition,
@@ -9800,6 +9786,20 @@ function normalizeUsageEvent(event: UsageEvent): UsageEvent {
     usdMicros,
   };
 }
+
+/**
+ * Capsule statuses the per-app scheduled sweep visits: `stale` ones may get an
+ * auto-plan, `active` ones a drift check. Every store filters the
+ * `active_capsules` cursor lane by exactly this list.
+ */
+export const SCHEDULED_SWEEP_CAPSULE_STATUS_LIST = [
+  "active",
+  "stale",
+] as const satisfies readonly Capsule["status"][];
+
+const SCHEDULED_SWEEP_CAPSULE_STATUSES: ReadonlySet<string> = new Set(
+  SCHEDULED_SWEEP_CAPSULE_STATUS_LIST,
+);
 
 function compareSweepPosition(
   left: ScheduledSweepCursorPosition,

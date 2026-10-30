@@ -276,9 +276,9 @@ test("drift check with an all-zero summary emits nothing (no drift)", async () =
   ).toHaveLength(0);
 });
 
-test("listActiveCapsules returns only active Capsules, bounded", async () => {
+test("listCapsulesForScheduledSweep returns only active and stale Capsules, bounded", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  // Seed three Capsules: two active, one pending.
+  // Seed four Capsules: one active, one stale, one pending, one error.
   await seedCapsuleModel(store, {
     capsuleId: "cap_active01",
     sourceId: "src_a",
@@ -286,7 +286,7 @@ test("listActiveCapsules returns only active Capsules, bounded", async () => {
     name: "a",
   });
   await seedCapsuleModel(store, {
-    capsuleId: "cap_active02",
+    capsuleId: "cap_stale001",
     sourceId: "src_b",
     installConfigId: "cfg_b",
     name: "b",
@@ -297,19 +297,25 @@ test("listActiveCapsules returns only active Capsules, bounded", async () => {
     installConfigId: "cfg_c",
     name: "c",
   });
-  // Promote a + b to active; c stays pending.
+  await seedCapsuleModel(store, {
+    capsuleId: "cap_error001",
+    sourceId: "src_d",
+    installConfigId: "cfg_d",
+    name: "d",
+  });
   await store.patchCapsule("cap_active01", { status: "active" });
-  await store.patchCapsule("cap_active02", { status: "active" });
+  await store.patchCapsule("cap_stale001", { status: "stale" });
+  await store.patchCapsule("cap_error001", { status: "error" });
 
   const controller = new OpenTofuController({ store });
-  const active = await controller.listActiveCapsules(20);
-  expect(active.map((i) => i.id).sort()).toEqual([
+  const live = await controller.listCapsulesForScheduledSweep(20);
+  expect(live.map((i) => i.id).sort()).toEqual([
     "cap_active01",
-    "cap_active02",
+    "cap_stale001",
   ]);
 
   // Bounded: a limit of 1 returns at most one.
-  expect((await controller.listActiveCapsules(1)).length).toEqual(1);
+  expect((await controller.listCapsulesForScheduledSweep(1)).length).toEqual(1);
   // Non-positive limit returns empty.
-  expect((await controller.listActiveCapsules(0)).length).toEqual(0);
+  expect((await controller.listCapsulesForScheduledSweep(0)).length).toEqual(0);
 });

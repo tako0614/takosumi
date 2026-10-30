@@ -37,8 +37,11 @@ run は scheduled run repair sweep が拾い直すので、ここで止めても
 Workspace の keyed lookup は D1 の 100 bound parameter 上限があるため 90 件ずつ
 chunk する。
 
-stale auto-plan、drift、ordinary repair は `OpenTofuControlStore` の永続巡回
-cursor と一巡の上端 key を使う。上端は巡回開始時に固定し、wrap 時に更新するため、
+アプリごとの定期巡回 (stale auto-plan と drift) と ordinary repair は
+`OpenTofuControlStore` の永続巡回 cursor と一巡の上端 key を使う。定期巡回は
+`active_capsules` lane で `active` と `stale` の Capsule を 1 page 予約し、アプリごとに
+判断する (TASK-0118 9.1)。Workspace を一覧せず、RunGroup も作らない。`workspaces` lane の
+行は残っているが読まれず、9.6 で削除する。上端は巡回開始時に固定し、wrap 時に更新するため、
 新規対象が増え続けても現在の一巡は終わる。各 lane の bounded page の選択と cursor 更新は PG の row lock /
 D1 の transactional batch 内で同時に確定し、外部処理中は lock を保持しない。
 cursor の対象が削除されても keyset 比較で続き、末尾では先頭へ戻る。先頭の処理が
@@ -50,9 +53,11 @@ page 確定後に crash した場合、その対象は次の巡回で再試行�
 
 repair の対象判定は current heartbeat JSON と最後の billing pending/completed
 marker のまま。terminal retirement outbox の既存 oldest-attempt-first claim は別に
-維持する。drift は選択した Capsule ID を RunGroup へ渡し、active status と Workspace
-所属を再確認するため、Workspace 内で先頭を選び直すこともない。auto-plan の archived
-除外・pending Plan 抑止、各 tick の上限、opt-in flag は従来どおり。
+維持する。page の各 Capsule は単独で扱い、`stale` には未完了の更新 Plan が無いときだけ
+Plan を作り (未完了 Plan はその Capsule の Run だけから読む)、`active` には drift check を
+作る。管理状態が active でないアプリは飛ばす。各 tick の上限 (25)、opt-in flag
+(`TAKOSUMI_AUTO_PLAN_STALE_CAPSULES`、`TAKOSUMI_DRIFT_CHECK_ENABLED`) は従来どおりで、
+どちらも off なら page を予約しない。
 
 ## 3. edge の path gate は route inventory から導出する
 

@@ -119,31 +119,27 @@ dashboard の **更新する** も、安全に完了した plan を apply まで
 
 つまり、**自動更新を有効にしていない限り、検出が apply を起動することはありません。**
 
-差分だけを見る操作は Capsule 単位でも Workspace 単位でも行えます。
+差分だけを見る操作は Capsule 単位で行います。
 
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/drift-check" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
-
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/drift-check" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-## まとめて実行する
+## アプリごとに実行する
 
-Workspace 全体を更新すると、複数の Run が RunGroup としてまとめられます。
+plan、差分確認、承認はアプリ (Capsule) ごとに行います。Workspace 全体をまとめて
+更新・差分確認する `POST /api/v1/workspaces/{workspaceId}/plan-update`・`drift-check` と、
+RunGroup をまとめて承認する `POST /api/v1/run-groups/{runGroupId}/approve` は廃止され、
+`410` と `run_group_retired` を返します。廃止前に作られた RunGroup は
+`GET /api/v1/run-groups/{runGroupId}` で読めます (含まれる全 Run のアプリを見られる場合だけ)。
 
-```bash
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/plan-update" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
-```
+operator が `TAKOSUMI_AUTO_PLAN_STALE_CAPSULES=1` または `TAKOSUMI_DRIFT_CHECK_ENABLED=1` を
+設定すると、定期処理は稼働中のアプリを一定数ずつ順に見て、アプリごとに判断します。
+Source が進んだ (`stale`) アプリには、未完了の更新 plan が無ければ 1 つだけ plan を作り、
+`active` のアプリには差分確認を作ります。どちらも Workspace を一覧せず、RunGroup も作りません。
 
-承認は `/api/v1/run-groups/{runGroupId}/approve` でまとめて行えます。個々の Run の
-記録は失われません。
-
-旧 Dependency の設定が残る Capsule は `dependency_retired` で拒否されます。
-Workspace の更新や差分確認では、その Capsule の失敗を RunGroup に記録し、
-他の Capsule の処理を続けます。拒否された Capsule の Run は作成されません。
+旧 Dependency の設定が残る Capsule は `dependency_retired` で拒否され、Run は作成されません。
 database operator に残存設定の保守を依頼し、完了後に新しい plan を作成してください。
 
 ## 失敗したとき

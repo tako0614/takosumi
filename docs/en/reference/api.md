@@ -449,7 +449,7 @@ Workspace-level routes (lists, Workspace settings, Workspace creation, unowned p
 
 The cursor-paged lists (`capsules`, `current-state-versions`, `runs`, `backups`, `usage`, `/dashboard/overview`, `/sources?workspaceId=`) select only visible rows in the store query (memory, Postgres, D1). However many hidden rows come first, pages fill with visible rows and paging reaches the end. `nextCursor` is the store's cursor for a visible row; ids and timestamps of hidden rows never appear in it. A row belongs to these apps: a Run to its Capsule (an older apply row without one: its plan's Capsule), else to its Source's apps; a Source to its owner app, or, while ownerless, to every live app built from it; a backup to its Capsule, or, when it names none, to every live app; a usage event to its Capsule, else to its Run's apps. A usage event whose Run is gone is hidden while the Workspace has an app with an ownership row. A row is hidden when any app it belongs to is hidden. A target without the ownership schema (before D1 v77 / Postgres v123) does not filter. A host that wires an ownership store but does not provide these filtered reads answers these lists with `503` instead of an unfiltered list.
 
-Activity is attributed to apps by its Capsule target, Capsule ids in metadata (every `memberCapsuleIds` entry of a run group), an Interface's owner app (`ownerId`), a binding's Capsule subject (`subjectId`) and the provider app of the Interface a binding or token names, its Source (the apps built from it, or its owner app), and, when nothing else names an app, its Run (`runId`, a Run target, `metadata.runId`/`planRunId`/`applyRunId`). A backup that names no app is Workspace-wide and belongs to every live app. While the Workspace has apps with an ownership row, events whose app cannot be determined (a missing Run or Interface, a Capsule id this Workspace does not have, a lookup past the cap, no attribution) are omitted even when another reference resolves; `workspace` and `connection` events and events known to belong to no app (a Run or Source no app uses, a removed Source) keep the Workspace decision. `/dashboard/bootstrap?includeNotifications=true` is built from the caller's apps instead (see the next section). Reads: the Workspace's Capsule list and one batch ownership read first; with no owned app (every app on v75) nothing more is read. Otherwise Run, Source and Interface reads are deduplicated, run in parallel and capped at 50 per request. Workspace bulk actions (`plan-update`, `drift-check`, Workspace backup, Interface materialization retries) require the Workspace decision and, in addition, that the action is allowed on every app in the Workspace that has an ownership row.
+Activity is attributed to apps by its Capsule target, Capsule ids in metadata (every `memberCapsuleIds` entry of a run group), an Interface's owner app (`ownerId`), a binding's Capsule subject (`subjectId`) and the provider app of the Interface a binding or token names, its Source (the apps built from it, or its owner app), and, when nothing else names an app, its Run (`runId`, a Run target, `metadata.runId`/`planRunId`/`applyRunId`). A backup that names no app is Workspace-wide and belongs to every live app. While the Workspace has apps with an ownership row, events whose app cannot be determined (a missing Run or Interface, a Capsule id this Workspace does not have, a lookup past the cap, no attribution) are omitted even when another reference resolves; `workspace` and `connection` events and events known to belong to no app (a Run or Source no app uses, a removed Source) keep the Workspace decision. `/dashboard/bootstrap?includeNotifications=true` is built from the caller's apps instead (see the next section). Reads: the Workspace's Capsule list and one batch ownership read first; with no owned app (every app on v75) nothing more is read. Otherwise Run, Source and Interface reads are deduplicated, run in parallel and capped at 50 per request. Workspace bulk actions (Workspace backup, Interface materialization retries) require the Workspace decision and, in addition, that the action is allowed on every app in the Workspace that has an ownership row. The bulk `plan-update` and `drift-check` are retired and answer `410` `run_group_retired` before any Workspace is read.
 
 **During the rollout.** An app whose ownership row is not usable yet is decided by the legacy Workspace rule for that request: when the composition has no ownership store, when the schema predates D1 v77 / Postgres v123, or when the backfill has not written the app's owner yet. From the moment an ownership row exists, that app is decided per app only. Each fallback is reported as the id-free structured log `app_authorization_workspace_fallback` (`reason` is `ownership_store_unavailable`, `ownership_schema_unavailable` or `capsule_not_backfilled`), aggregated per isolate at most once every five minutes. Each decision reads the ownership row once, and the role resolution reads it again when a row exists. The ownership store's existing schema check is reused; on a pre-v77 D1 its "no schema" result is trusted for 60 seconds, so decisions do not probe on every request.
 
@@ -507,7 +507,8 @@ Their responses carry `Deprecation: @1793145600` (RFC 9745) and `Link: <…>; re
 | `GET /api/v1/workspaces/{workspaceId}/runs` | `GET /api/v1/capsules/{capsuleId}/runs` |
 | `GET /api/v1/workspaces/{workspaceId}/usage`, `GET /api/v1/workspaces/{workspaceId}/billing` | `GET /api/v1/usage` |
 | `POST /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | `GET /api/v1/source-ref-resolutions` |
-| `POST /api/v1/workspaces/{workspaceId}/plan-update` / `drift-check` / `backups` | `POST /api/v1/capsules/{capsuleId}/plan` / `drift-check` / `backups` |
+| `POST /api/v1/workspaces/{workspaceId}/backups` | `POST /api/v1/capsules/{capsuleId}/backups` |
+| `POST /api/v1/workspaces/{workspaceId}/plan-update` / `drift-check` (retired, `410` `run_group_retired`) | `POST /api/v1/capsules/{capsuleId}/plan` / `drift-check` |
 | `/api/v1/connections` selected by `workspaceId` | `/api/v1/connections` without `workspaceId` (personal connections) |
 
 Replacements for the remaining routes are added as their APIs land.
@@ -534,8 +535,8 @@ Replacements for the remaining routes are added as their APIs land.
 | GET | `/api/v1/workspaces/{workspaceId}/billing` | Read the owner's account billing state for this Workspace |
 | GET | `/api/v1/workspaces/{workspaceId}/backups` | List Workspace partial control exports |
 | POST | `/api/v1/workspaces/{workspaceId}/backups` | Create a Workspace partial control export |
-| POST | `/api/v1/workspaces/{workspaceId}/plan-update` | Create a Workspace plan update Run |
-| POST | `/api/v1/workspaces/{workspaceId}/drift-check` | Create a Workspace drift check Run |
+| POST | `/api/v1/workspaces/{workspaceId}/plan-update` | Retired: answers `410` `run_group_retired` |
+| POST | `/api/v1/workspaces/{workspaceId}/drift-check` | Retired: answers `410` `run_group_retired` |
 
 Each member list row carries the membership fields plus `displayName` when the
 account has one. `email` is returned only when the caller is an active owner or
@@ -912,8 +913,8 @@ management is temporary and stays retryable with
 | GET | `/api/v1/runs/{runId}/logs` | Read Run logs |
 | GET | `/api/v1/runs/{runId}/events` | Read Run events |
 | GET | `/api/v1/runs/{runId}/cost` | Read Run cost projection |
-| GET | `/api/v1/run-groups/{runGroupId}` | Read a grouped Run |
-| POST | `/api/v1/run-groups/{runGroupId}/approve` | Approve a grouped Run |
+| GET | `/api/v1/run-groups/{runGroupId}` | Read a RunGroup created before the retirement (only when every member app is viewable) |
+| POST | `/api/v1/run-groups/{runGroupId}/approve` | Retired: answers `410` `run_group_retired` |
 | GET | `/api/v1/state-versions/{stateVersionId}` | Read a StateVersion projection |
 | POST | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | Create a StateVersion rollback plan |
 
@@ -1219,9 +1220,9 @@ commit is stored as a `SourceSnapshot`. An active Capsule becomes `stale`
 when the new snapshot is on its adopted ref/path lane and differs from its
 currently applied snapshot. Another lane never stales it or rewrites the Source
 default. Ordinary update plans also select the latest snapshot on the adopted
-lane. From there, the existing Workspace update /
-RunGroup flow creates a reviewable plan, and apply follows the normal Run
-approval path. Takosumi does not choose or fetch application artifacts outside
+lane. From there, a per-app plan (`POST /api/v1/capsules/{capsuleId}/plan`,
+or the opt-in scheduled stale auto-plan) creates a reviewable plan, and apply
+follows the normal Run approval path. Takosumi does not choose or fetch application artifacts outside
 the OpenTofu module.
 
 An explicit update review first syncs the Source, then pins the immutable

@@ -57,6 +57,7 @@ export interface OpenApiOperation {
   readonly operationId: string;
   readonly summary: string;
   readonly tags: readonly string[];
+  readonly deprecated?: boolean;
   readonly security?: readonly Record<string, readonly string[]>[];
   readonly parameters?: readonly Record<string, unknown>[];
   readonly requestBody?: Record<string, unknown>;
@@ -315,6 +316,7 @@ function endpointOperation(
     requestBody: endpoint.openapi.requestBody,
     query: endpoint.openapi.query,
     pathParams: endpoint.openapi.pathParams,
+    ...(endpoint.openapi.retired ? { retired: true as const } : {}),
     mountedPath: MOUNTED_PATH_FAMILIES.has(familyId)
       ? endpoint.path
       : undefined,
@@ -338,12 +340,14 @@ function operation(input: {
   readonly requestBody?: Record<string, unknown>;
   readonly query?: readonly string[];
   readonly pathParams?: readonly string[];
+  readonly retired?: true;
   readonly mountedPath?: string;
 }): OpenApiOperation {
   const op: OpenApiOperation = {
     operationId: input.operationId,
     summary: input.summary,
     tags: [input.tag],
+    ...(input.retired ? { deprecated: true } : {}),
     ...(input.auth === "none"
       ? {}
       : { security: securityRequirements(input.auth) }),
@@ -354,16 +358,20 @@ function operation(input: {
         ? { requestBody: jsonRequestBody(input.requestSchema) }
         : {}),
     responses: {
-      [input.okStatus ?? "200"]:
-        input.okStatus === "204"
-          ? { description: "No content" }
-          : jsonResponse(input.okSchema),
-      ...Object.fromEntries(
-        (input.alternateOkStatuses ?? []).map((status) => [
-          status,
-          jsonResponse(input.okSchema),
-        ]),
-      ),
+      ...(input.retired
+        ? { "410": errorResponse() }
+        : {
+            [input.okStatus ?? "200"]:
+              input.okStatus === "204"
+                ? { description: "No content" }
+                : jsonResponse(input.okSchema),
+            ...Object.fromEntries(
+              (input.alternateOkStatuses ?? []).map((status) => [
+                status,
+                jsonResponse(input.okSchema),
+              ]),
+            ),
+          }),
       ...(input.auth === "none" ? {} : { "401": errorResponse() }),
       ...(input.auth === "internal-service" ? { "403": errorResponse() } : {}),
       ...(input.requestSchema || input.requestBody

@@ -1,8 +1,9 @@
 /**
  * Session-authed Workspace (`/api/v1/workspaces`)
  * control routes: workspace CRUD, members, Capsule reads, graph,
- * runs/activity, backups, billing reads, plan-update / drift-check. Extracted
- * from `control-routes.ts` (P3 god-file split).
+ * runs/activity, backups, billing reads. The retired plan-update /
+ * drift-check bulk operations answer 410 `run_group_retired`. Extracted from
+ * `control-routes.ts` (P3 god-file split).
  */
 import type {
   ApplyExpectedGuard,
@@ -83,7 +84,6 @@ import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore, TakosumiAccountRecord } from "../store.ts";
 import type {
   ControlPlaneOperations,
-  RunGroupWithRunsLike,
   ControlWorkspaceRole,
   ControlMembershipStatus,
   PublicWorkspaceMember,
@@ -94,7 +94,6 @@ import {
   json,
   methodNotAllowed,
   readJsonObject,
-  readOptionalJsonObject,
   stringValue,
 } from "../http-helpers.ts";
 import {
@@ -141,6 +140,10 @@ import {
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
 import { workspaceFrozenResponse } from "../workspace-mutations-freeze.ts";
+import {
+  isRetiredWorkspaceBulkOperation,
+  runGroupRetiredResponse,
+} from "./run-group-retirement.ts";
 import { handleWorkspaceInstallPlans } from "./install-plans.ts";
 import { handleWorkspaceInstalledApps } from "./installed-apps.ts";
 
@@ -176,6 +179,11 @@ export async function handleWorkspaces(
   }
   // /api/v1/workspaces/:workspaceId ; /api/v1/workspaces/:workspaceId/...
   if (segments[0] === "workspaces" && segments.length >= 2) {
+    // Retired bulk operations answer before any Workspace read or decision.
+    if (isRetiredWorkspaceBulkOperation(segments)) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return runGroupRetiredResponse(request);
+    }
     const workspaceId = decodeURIComponent(segments[1] ?? "");
     const leaf = segments[2];
     if (
@@ -530,31 +538,6 @@ export async function handleWorkspaces(
         ...(listed.nextCursor !== undefined ? { nextCursor: listed.nextCursor } : {}),
       });
     }
-    if (leaf === "plan-update" && segments.length === 3) {
-      if (method !== "POST") return methodNotAllowed("POST");
-      return await workspacePlanUpdate(operations, workspaceId, ctx.session.subject);
-    }
-    if (leaf === "drift-check" && segments.length === 3) {
-      if (method !== "POST") return methodNotAllowed("POST");
-      const body = await readOptionalJsonObject(request);
-      if (body === null) {
-        return errorJson("invalid_json", "invalid json body", 400);
-      }
-      const rawLimit = body.limit;
-      const limit =
-        typeof rawLimit === "number" &&
-        Number.isInteger(rawLimit) &&
-        rawLimit > 0
-          ? rawLimit
-          : undefined;
-      return jsonStatus(
-        await operations.runGroups.createWorkspaceDriftCheck(
-          workspaceId,
-          { ...(limit !== undefined ? { limit } : {}), actorAccountId: ctx.session.subject },
-        ),
-        201,
-      );
-    }
   }
   return undefined;
 }
@@ -575,8 +558,7 @@ async function workspaceBulkAppAuthorization(
     ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
   };
   let action: AppAction | undefined;
-  if ((leaf === "plan-update" || leaf === "drift-check") && segments.length === 3) action = "update";
-  else if (leaf === "backups" && segments.length === 3) action = "change_settings";
+  if (leaf === "backups" && segments.length === 3) action = "change_settings";
   else if (leaf === "interface-materialization-failures" && segments.length === 5 && segments[4] === "retries") action = "update";
   // Workspace backup restores are retired above (404); app restores go
   // through the Run approval of the restore Run (rollback).
@@ -1612,13 +1594,4 @@ async function workspaceActivity(
   return json({ events });
 }
 
-async function workspacePlanUpdate(
-  operations: ControlPlaneOperations,
-  workspaceId: string,
-  actorAccountId: string,
-): Promise<Response> {
-  return jsonStatus(
-    await operations.runGroups.createWorkspaceUpdate(workspaceId, actorAccountId),
-    201,
-  );
-}
+

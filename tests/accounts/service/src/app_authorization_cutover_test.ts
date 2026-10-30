@@ -151,7 +151,22 @@ async function fixture(options: { readonly owned?: boolean; readonly legacy?: bo
       "setCapsuleAutoUpdate", "patchCapsuleStatus", "scheduleCapsuleUninstall",
       "cancelCapsuleUninstall", "abandonUnappliedCapsule",
     ]),
-    runGroups: stubbed(coreOperations.runGroups, ["createWorkspaceUpdate", "createWorkspaceDriftCheck"]),
+    // Historical RunGroups (creation is retired), each naming its member Runs.
+    runGroups: {
+      getRunGroup: async (id: string) => {
+        const members: Record<string, readonly string[]> = {
+          rg_app: ["run_plan", "run_destroy"],
+          rg_empty: [],
+          rg_appless: ["run_workspace"],
+          rg_mixed: ["run_plan", "run_workspace"],
+        };
+        const ids = members[id];
+        return ids === undefined ? undefined : {
+          runGroup: { id, workspaceId: WORKSPACE },
+          runs: ids.map((runId) => runs.get(runId)!),
+        };
+      },
+    },
     createCapsulePlan: async () => reached(),
     createCapsuleDestroyPlan: async () => reached(),
     createStateVersionRollbackPlan: async () => reached(),
@@ -390,16 +405,46 @@ describe("resources addressed by their own id resolve their app first", () => {
     expect(await h.call("GET", "/sources/src_unowned", member)).toMatchObject({ status: 403, code: "forbidden" });
   }, 180_000);
 
-  test("Workspace bulk actions no longer reach an owned app through Workspace roles", async () => {
+  test("Workspace bulk actions are retired for every caller with a typed 410", async () => {
     const h = await fixture();
-    expect(await h.call("POST", `/workspaces/${WORKSPACE}/plan-update`, h.headers.session(WORKSPACE_OWNER)))
-      .toMatchObject({ status: 403, code: "app_access_denied" });
-    expect(await h.call("POST", `/workspaces/${WORKSPACE}/drift-check`, h.headers.session(WORKSPACE_ADMIN), {}))
-      .toMatchObject({ status: 403, code: "app_access_denied" });
-    expect(await h.call("POST", `/workspaces/${WORKSPACE}/plan-update`, h.headers.session(DUAL)))
-      .toMatchObject({ status: 409, message: "reached" });
+    for (const subject of [WORKSPACE_OWNER, WORKSPACE_ADMIN, DUAL, APP_OWNER, APP_MEMBER, RECIPIENT]) {
+      for (const leaf of ["plan-update", "drift-check"]) {
+        expect(await h.call("POST", `/workspaces/${WORKSPACE}/${leaf}`, h.headers.session(subject), {}), `${subject} ${leaf}`)
+          .toMatchObject({ status: 410, code: "run_group_retired" });
+      }
+    }
+    // An unknown Workspace answers the same: nothing about it is read.
+    expect(await h.call("POST", "/workspaces/ws_unknown/plan-update", h.headers.session(RECIPIENT)))
+      .toMatchObject({ status: 410, code: "run_group_retired" });
+    expect(await h.call("GET", `/workspaces/${WORKSPACE}/plan-update`, h.headers.session(APP_OWNER)))
+      .toMatchObject({ status: 405 });
     // Workspace lists stay Workspace compat until Phase 9.
     expect((await h.call("GET", `/workspaces/${WORKSPACE}/capsules`, h.headers.session(WORKSPACE_ADMIN))).status).toBe(200);
+  }, 180_000);
+
+  test("a historical RunGroup reads only when every member app is viewable; approval is retired", async () => {
+    const h = await fixture();
+    for (const subject of [APP_OWNER, APP_MEMBER, DUAL]) {
+      expect((await h.call("GET", "/run-groups/rg_app", h.headers.session(subject))).status, subject).toBe(200);
+    }
+    // Workspace roles grant nothing on an owned app.
+    expect(await h.call("GET", "/run-groups/rg_app", h.headers.session(WORKSPACE_OWNER)))
+      .toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await h.call("GET", "/run-groups/rg_app", h.headers.session(WORKSPACE_ADMIN)))
+      .toMatchObject({ status: 403, code: "app_access_denied" });
+    // Fail closed: no members, a member without an app, or a missing group.
+    for (const id of ["rg_empty", "rg_appless", "rg_mixed", "rg_missing"]) {
+      expect(await h.call("GET", `/run-groups/${id}`, h.headers.session(APP_OWNER)), id)
+        .toMatchObject({ status: 404, code: "not_found" });
+      expect(await h.call("GET", `/run-groups/${id}`, h.headers.session(WORKSPACE_OWNER)), id)
+        .toMatchObject({ status: 404, code: "not_found" });
+    }
+    for (const id of ["rg_app", "rg_missing"]) {
+      expect(await h.call("POST", `/run-groups/${id}/approve`, h.headers.session(APP_OWNER)), id)
+        .toMatchObject({ status: 410, code: "run_group_retired" });
+    }
+    expect(await h.call("GET", "/run-groups/rg_app/approve", h.headers.session(APP_OWNER)))
+      .toMatchObject({ status: 405 });
   }, 180_000);
 });
 
@@ -423,7 +468,8 @@ describe("rollout fallback: a Capsule without an ownership row keeps the Workspa
       .toMatchObject({ status: 403, code: "forbidden" });
     expect(await call("GET", `/capsules/${CAPSULE}`, h.headers.session(APP_MEMBER)))
       .toMatchObject({ status: 403, code: "forbidden" });
-    expect((await call("POST", `/workspaces/${WORKSPACE}/plan-update`, h.headers.session(WORKSPACE_OWNER))).message).toBe("reached");
+    expect(await call("POST", `/workspaces/${WORKSPACE}/plan-update`, h.headers.session(WORKSPACE_OWNER)))
+      .toMatchObject({ status: 410, code: "run_group_retired" });
     expect(reasons.length).toBeGreaterThan(0);
     expect(new Set(reasons)).toEqual(new Set(["capsule_not_backfilled"]));
   }, 180_000);

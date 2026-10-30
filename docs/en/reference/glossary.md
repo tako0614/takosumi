@@ -56,7 +56,7 @@ docs use a different name, read it back through this table.
 | destroy      | The operation that removes the resources a Capsule created. A plan is produced first, then applied.                                                              |
 | drift check  | The read-only operation that looks for gaps between saved state and reality.                                                                                     |
 | drift        | The gap that has appeared between saved state and reality.                                                                                                       |
-| RunGroup     | The record grouping Runs created by a Workspace-wide update or drift check. |
+| RunGroup     | The record grouping Runs created by the retired Workspace-wide update or drift check. None are created any more; existing records stay readable. |
 | Runner       | The isolated execution environment that actually runs OpenTofu. Credentials are handed over only inside it.                                                      |
 | StateVersion | The state recorded as the result of an apply, sometimes even when the apply fails. These accumulate rather than overwrite.                                                                               |
 | Output       | A non-secret value a Capsule publishes outward.                                                                                                                  |

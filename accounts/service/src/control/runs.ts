@@ -76,7 +76,6 @@ import type { JsonValue } from "takosumi-contract";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
-  RunGroupWithRunsLike,
   ControlWorkspaceRole,
   ControlMembershipStatus,
   PublicWorkspaceMember,
@@ -106,7 +105,6 @@ import {
   installedAppTokenDelegates,
   isInstalledAppToken,
   publicRun,
-  requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
 import {
@@ -116,7 +114,10 @@ import {
   runAppAction,
   runCapsuleIds,
 } from "./app-authorization.ts";
-import type { AppAction } from "takosumi-contract/app-access";
+import {
+  isRetiredRunGroupApproval,
+  runGroupRetiredResponse,
+} from "./run-group-retirement.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
@@ -470,74 +471,57 @@ export async function handleRunGroups(
   segments: readonly string[],
   method: string,
 ): Promise<Response | undefined> {
-  const { request, url, operations, store } = ctx;
+  const { request, operations } = ctx;
   // /api/v1/run-groups/:id ; .../approve
   if (segments[0] === "run-groups" && segments.length >= 2) {
+    // Approval is retired: answer before reading the group.
+    if (isRetiredRunGroupApproval(segments)) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return runGroupRetiredResponse(request);
+    }
+    if (segments.length !== 2) return undefined;
+    if (method !== "GET") return methodNotAllowed("GET");
     const runGroupId = decodeURIComponent(segments[1] ?? "");
     const existing = await operations.runGroups.getRunGroup(runGroupId);
     if (!existing) return errorJson("not_found", "not found", 404);
-    const runGroupWorkspaceId = existing.runGroup.workspaceId;
-    if (!runGroupWorkspaceId) return errorJson("not_found", "not found", 404);
-    const auth = await requireRunGroupAccess(ctx, runGroupWorkspaceId, existing.runs,
-      method !== "GET" && method !== "HEAD" ? "operate" : "view");
+    const auth = await requireRunGroupView(ctx, existing.runGroup.workspaceId, existing.runs);
     if (!auth.ok) return auth.response;
-    if (segments.length === 2) {
-      if (method !== "GET") return methodNotAllowed("GET");
-      return json(existing);
-    }
-    if (segments[2] === "approve" && segments.length === 3) {
-      if (method !== "POST") return methodNotAllowed("POST");
-      return await approveRunGroup(operations, runGroupId, ctx.session.subject);
-    }
+    return json(existing);
   }
   return undefined;
 }
 
 /**
- * A RunGroup spans Runs; every app it touches decides for itself and Runs
- * without an app keep the Workspace decision.
+ * A RunGroup written before the retirement stays readable, fail-closed: the
+ * caller must be able to view the app of every member Run. A group without
+ * member Runs, or with a member Run that belongs to no app, is not shown; the
+ * Workspace never decides.
  */
-async function requireRunGroupAccess(
+async function requireRunGroupView(
   ctx: ControlDispatchContext,
-  workspaceId: string,
+  workspaceId: string | undefined,
   runs: readonly Pick<Run, "capsuleId" | "sourceId" | "subject" | "type" | "origin">[],
-  intent: "view" | "operate",
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
-  const actions = new Map<string, AppAction>();
-  let workspaceLevel = runs.length === 0;
+  const notFound = { ok: false as const, response: errorJson("not_found", "not found", 404) };
+  if (!workspaceId || runs.length === 0) return notFound;
+  const capsuleIds = new Set<string>();
   for (const run of runs) {
-    const capsuleIds = await runCapsuleIds(ctx.operations, run);
-    if (!capsuleIds.length) {
-      workspaceLevel = true;
-      continue;
-    }
-    const action = runAppAction(run, intent);
-    for (const capsuleId of capsuleIds) {
-      const current = actions.get(capsuleId);
-      // Keep the strictest action per app (uninstall is owner only).
-      if (current === undefined || (action === "uninstall" && current !== "uninstall")) actions.set(capsuleId, action);
-    }
+    const ids = await runCapsuleIds(ctx.operations, run);
+    if (!ids.length) return notFound;
+    for (const id of ids) capsuleIds.add(id);
   }
-  for (const [capsuleId, action] of actions) {
+  for (const capsuleId of capsuleIds) {
     const auth = await requireAppAccess({
       operations: ctx.operations,
       store: ctx.store,
       session: ctx.session,
       workspaceId,
       capsuleId,
-      action,
+      action: "view",
       ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
       ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
     });
     if (!auth.ok) return auth;
-  }
-  if (workspaceLevel) {
-    return await requireWorkspaceAccess({
-      operations: ctx.operations,
-      store: ctx.store,
-      session: ctx.session,
-      workspaceId,
-    });
   }
   return { ok: true };
 }
@@ -635,23 +619,4 @@ function applyExpectedGuardFromPlanRun(
         }
       : {}),
   };
-}
-
-async function getRunGroup(
-  operations: ControlPlaneOperations,
-  runGroupId: string,
-): Promise<Response> {
-  const result = await operations.runGroups.getRunGroup(runGroupId);
-  if (!result) return errorJson("not_found", "not found", 404);
-  return json(result);
-}
-
-async function approveRunGroup(
-  operations: ControlPlaneOperations,
-  runGroupId: string,
-  actorAccountId: string,
-): Promise<Response> {
-  const result = await operations.runGroups.approveRunGroup(runGroupId, actorAccountId);
-  if (!result) return errorJson("not_found", "not found", 404);
-  return json(result);
 }

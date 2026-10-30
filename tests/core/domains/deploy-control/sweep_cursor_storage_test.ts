@@ -1,7 +1,6 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 
 import type { Capsule } from "takosumi-contract/capsules";
-import type { Workspace } from "takosumi-contract/workspaces";
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 import { postgresStorageMigrationStatements } from "../../../../core/adapters/storage/migrations.ts";
 import {
@@ -30,7 +29,7 @@ async function adapters(): Promise<readonly {
   name: string;
   first: OpenTofuControlStore;
   reopen: () => OpenTofuControlStore;
-  removeWorkspace: (id: string) => Promise<void>;
+  removeCapsule: (id: string) => Promise<void>;
 }[]> {
   const pg = await PGliteSqlClient.create();
   pgClients.push(pg);
@@ -41,46 +40,39 @@ async function adapters(): Promise<readonly {
       name: "memory",
       first: memory,
       reopen: () => memory,
-      removeWorkspace: async (id) => {
-        const row = await memory.getWorkspace(id);
-        if (row) await memory.putWorkspace({ ...row, archivedAt: "2026-10-14T00:00:00.000Z" });
+      removeCapsule: async (id) => {
+        const row = await memory.getCapsule(id);
+        if (row) await memory.putCapsule({ ...row, status: "destroyed" });
       },
     },
     {
       name: "postgres",
       first: new SqlOpenTofuControlStore({ client: pg }),
       reopen: () => new SqlOpenTofuControlStore({ client: pg }),
-      removeWorkspace: async (id) => {
-        await pg.query("delete from takosumi_workspaces where id = $1", [id]);
+      removeCapsule: async (id) => {
+        await pg.query("delete from takosumi_capsules where id = $1", [id]);
       },
     },
     {
       name: "d1",
       first: new CloudflareD1OpenTofuControlStore(d1),
       reopen: () => new CloudflareD1OpenTofuControlStore(d1),
-      removeWorkspace: async (id) => {
-        await d1.prepare("delete from workspaces where id = ?").bind(id).run();
+      removeCapsule: async (id) => {
+        await d1.prepare("delete from capsules where id = ?").bind(id).run();
       },
     },
   ];
 }
 
-function workspace(id: string, createdAt = "2026-10-14T00:00:00.000Z"): Workspace {
+function capsule(
+  id: string,
+  createdAt = "2026-10-14T00:00:00.000Z",
+  status: Capsule["status"] = "active",
+  workspaceId = "workspace_sweep",
+): Capsule {
   return {
     id,
-    handle: `h-${id}`,
-    displayName: id,
-    type: "personal",
-    ownerUserId: "user_sweep",
-    createdAt,
-    updatedAt: createdAt,
-  };
-}
-
-function capsule(id: string, createdAt = "2026-10-14T00:00:00.000Z"): Capsule {
-  return {
-    id,
-    workspaceId: "workspace_sweep",
+    workspaceId,
     projectId: "project_sweep",
     name: id,
     slug: id.toLowerCase(),
@@ -88,7 +80,7 @@ function capsule(id: string, createdAt = "2026-10-14T00:00:00.000Z"): Capsule {
     installConfigId: `config_${id}`,
     environment: "production",
     currentStateGeneration: 0,
-    status: "active",
+    status,
     createdAt,
     updatedAt: createdAt,
   };
@@ -117,64 +109,72 @@ function planRun(id: string, createdAt: number): PlanRun {
 const ids = <T extends { readonly id: string }>(rows: readonly T[]): string[] =>
   rows.map((row) => row.id);
 
-test("all adapters reserve bounded Workspace pages across new instances, deletion, and wrap", async () => {
-  for (const { name, first, reopen, removeWorkspace } of await adapters()) {
-    expect(ids(await first.listWorkspacesForSweep(2)), name).toEqual([]);
-    for (const id of ["ws_a", "ws_B", "ws_A", "ws_b"]) {
-      await first.putWorkspace(workspace(id));
+test("all adapters reserve bounded live Capsule pages across new instances, deletion, and wrap", async () => {
+  for (const { name, first, reopen, removeCapsule } of await adapters()) {
+    expect(ids(await first.listCapsulesForScheduledSweep(2)), name).toEqual([]);
+    // Stale and active apps from different Workspaces share one lane.
+    for (const [id, status, workspaceId] of [
+      ["cap_a", "active", "ws_one"],
+      ["cap_B", "stale", "ws_two"],
+      ["cap_A", "stale", "ws_three"],
+      ["cap_b", "active", "ws_one"],
+    ] as const) {
+      await first.putCapsule(capsule(id, undefined, status, workspaceId));
     }
     // Equal timestamps use database byte ordering, including mixed case.
-    expect(ids(await first.listWorkspacesForSweep(2)), name).toEqual(["ws_A", "ws_B"]);
-    expect(ids(await reopen().listWorkspacesForSweep(0)), name).toEqual([]);
-    expect(ids(await reopen().listWorkspacesForSweep(Number.NaN)), name).toEqual([]);
-    expect(ids(await reopen().listWorkspacesForSweep(Number.POSITIVE_INFINITY)), name).toEqual([]);
+    expect(ids(await first.listCapsulesForScheduledSweep(2)), name).toEqual(["cap_A", "cap_B"]);
+    expect(ids(await reopen().listCapsulesForScheduledSweep(0)), name).toEqual([]);
+    expect(ids(await reopen().listCapsulesForScheduledSweep(Number.NaN)), name).toEqual([]);
+    expect(ids(await reopen().listCapsulesForScheduledSweep(Number.POSITIVE_INFINITY)), name).toEqual([]);
     // The page is reserved before callers perform external work; a fresh adapter
     // continues even when the caller drops the prior result.
-    expect(ids(await reopen().listWorkspacesForSweep(2)), name).toEqual(["ws_a", "ws_b"]);
-    await removeWorkspace("ws_b");
+    expect(ids(await reopen().listCapsulesForScheduledSweep(2)), name).toEqual(["cap_a", "cap_b"]);
+    await removeCapsule("cap_b");
     // Deleted tails still end the lap and the next call starts at its prefix.
-    expect(ids(await reopen().listWorkspacesForSweep(2)), name).toEqual(["ws_A", "ws_B"]);
+    expect(ids(await reopen().listCapsulesForScheduledSweep(2)), name).toEqual(["cap_A", "cap_B"]);
     // SqliteFakeD1 has one synchronous connection and cannot overlap its own
     // BEGIN statements. PostgreSQL and memory exercise concurrent allocation;
     // D1 still exercises fresh-adapter allocation in sequence on real SQLite.
     const concurrent = name === "d1"
-      ? [await reopen().listWorkspacesForSweep(1), await reopen().listWorkspacesForSweep(1)]
+      ? [await reopen().listCapsulesForScheduledSweep(1), await reopen().listCapsulesForScheduledSweep(1)]
       : await Promise.all([
-          reopen().listWorkspacesForSweep(1),
-          reopen().listWorkspacesForSweep(1),
+          reopen().listCapsulesForScheduledSweep(1),
+          reopen().listCapsulesForScheduledSweep(1),
         ]);
-    expect(concurrent.map(ids).flat().sort(), name).toEqual(["ws_A", "ws_a"]);
+    expect(concurrent.map(ids).flat().sort(), name).toEqual(["cap_A", "cap_a"]);
   }
 });
 
-test("all adapters independently reserve active Capsule pages and reenter after empty lap", async () => {
+test("all adapters reserve only active and stale Capsules and reenter after an empty lap", async () => {
   for (const { name, first, reopen } of await adapters()) {
-    expect(ids(await first.listActiveCapsulesForSweep(2)), name).toEqual([]);
+    expect(ids(await first.listCapsulesForScheduledSweep(2)), name).toEqual([]);
     await first.putCapsule(capsule("cap_B"));
-    await first.putCapsule(capsule("cap_a"));
+    await first.putCapsule(capsule("cap_a", undefined, "stale"));
     await first.putCapsule(capsule("cap_A"));
-    await first.putCapsule({ ...capsule("cap_disabled"), status: "disabled" });
-    expect(ids(await first.listActiveCapsulesForSweep(2)), name).toEqual(["cap_A", "cap_B"]);
-    expect(ids(await reopen().listActiveCapsulesForSweep(2)), name).toEqual(["cap_a"]);
-    expect(ids(await reopen().listActiveCapsulesForSweep(2)), name).toEqual(["cap_A", "cap_B"]);
+    for (const status of ["pending", "disabled", "error", "uninstalled", "destroyed"] as const) {
+      await first.putCapsule(capsule(`cap_${status}`, undefined, status));
+    }
+    expect(ids(await first.listCapsulesForScheduledSweep(2)), name).toEqual(["cap_A", "cap_B"]);
+    expect(ids(await reopen().listCapsulesForScheduledSweep(2)), name).toEqual(["cap_a"]);
+    expect(ids(await reopen().listCapsulesForScheduledSweep(2)), name).toEqual(["cap_A", "cap_B"]);
   }
 });
 
-test("each Workspace lap has a fixed upper key while newer rows arrive every tick", async () => {
+test("each live Capsule lap has a fixed upper key while newer rows arrive every tick", async () => {
   for (const { name, first, reopen } of await adapters()) {
     for (let n = 1; n <= 4; n += 1) {
-      await first.putWorkspace(workspace(`old_${n}`, `2026-10-14T00:00:0${n}.000Z`));
+      await first.putCapsule(capsule(`old_${n}`, `2026-10-14T00:00:0${n}.000Z`, n % 2 ? "stale" : "active"));
     }
     // Treat the first allocation as lost to a crashed caller. Newer eligible
     // rows arrive before every subsequent tick, so a moving upper key would
     // indefinitely postpone the first row's next opportunity.
-    await first.listWorkspacesForSweep(1);
+    await first.listCapsulesForScheduledSweep(1);
     for (let n = 2; n <= 4; n += 1) {
-      await reopen().putWorkspace(workspace(`new_${n}`, `2026-10-14T00:01:0${n}.000Z`));
-      expect(ids(await reopen().listWorkspacesForSweep(1)), name).toEqual([`old_${n}`]);
+      await reopen().putCapsule(capsule(`new_${n}`, `2026-10-14T00:01:0${n}.000Z`));
+      expect(ids(await reopen().listCapsulesForScheduledSweep(1)), name).toEqual([`old_${n}`]);
     }
-    await reopen().putWorkspace(workspace("new_5", "2026-10-14T00:01:05.000Z"));
-    expect(ids(await reopen().listWorkspacesForSweep(1)), name).toEqual(["old_1"]);
+    await reopen().putCapsule(capsule("new_5", "2026-10-14T00:01:05.000Z", "stale"));
+    expect(ids(await reopen().listCapsulesForScheduledSweep(1)), name).toEqual(["old_1"]);
   }
 });
 
@@ -198,7 +198,7 @@ test("Postgres and D1 recoverable Run sweeps traverse beyond the old 5000-row pr
   const pgStore = new SqlOpenTofuControlStore({ client: pg });
   const d1Store = new CloudflareD1OpenTofuControlStore(d1);
   // Boot D1 before direct SQL seed so its migration creates the Runs table.
-  await d1Store.listWorkspacesForSweep(1);
+  await d1Store.listCapsulesForScheduledSweep(1);
 
   await pg.exec(`insert into takosumi_runs (id, kind, space_id, status, created_at, run_json)
     select 'run_' || lpad(n::text, 5, '0'), 'plan', 'workspace_sweep', 'queued', n::text,
@@ -246,7 +246,7 @@ test("recoverable cursors advance past raw SQL rows rejected by the shared predi
     ["postgres", new SqlOpenTofuControlStore({ client: pg })],
     ["d1", new CloudflareD1OpenTofuControlStore(d1)],
   ] as const;
-  await stores[1][1].listWorkspacesForSweep(1);
+  await stores[1][1].listCapsulesForScheduledSweep(1);
   const run = (id: string, status: string, createdAt: number) => ({
     id, workspaceId: "workspace_sweep", capsuleId: "capsule_sweep",
     sourceDigest: "sha256:source", variablesDigest: "sha256:variables",

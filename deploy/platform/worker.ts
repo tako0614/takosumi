@@ -109,8 +109,9 @@ import type {
 } from "../../core/domains/deploy-control/store.ts";
 import { recordWorkerMetric } from "../../worker/src/metrics.ts";
 import {
-  driftSweep,
-  type DriftSweepOperations,
+  type CapsuleSweepOperations,
+  type CapsuleSweepResult,
+  sweepCapsules,
 } from "../../worker/src/scheduled/drift.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
@@ -929,9 +930,10 @@ const platformWorker = {
   },
   // Scheduled cron tick. Source jobs claim persisted hourly/daily start markers
   // from the existing five-minute tick or their dedicated cron expressions.
-  // When the `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO
-  // runs the current compatibility drift sweep for Workspaces with active
-  // Capsules.
+  // When `TAKOSUMI_AUTO_PLAN_STALE_CAPSULES=1` or
+  // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` is set (both default OFF), ALSO runs the
+  // per-app sweep: one page of live Capsules, each handled on its own (stale
+  // auto-plan, drift check). No Workspace is listed.
   async scheduled(
     event: unknown,
     env: CloudflareWorkerEnv,
@@ -972,12 +974,7 @@ const platformWorker = {
       }));
     }), context);
     await runScheduledOpenTofuRunRepair(env);
-    if (autoPlanStaleCapsulesEnabled(env)) {
-      await runScheduledStaleCapsuleAutoPlan(env);
-    }
-    if (driftCheckEnabled(env)) {
-      await runScheduledDriftSweep(env);
-    }
+    await runScheduledCapsuleSweep(env);
   },
 };
 
@@ -4793,23 +4790,31 @@ export interface OpenTofuRunRepairOperations {
 
 type RepairRunAction = "plan" | "apply" | "source_sync" | "restore";
 
-export interface StaleCapsuleAutoPlanOperations {
+/**
+ * The deploy-control facade members the per-app sweep reads. Every read is per
+ * app; nothing here lists Workspaces.
+ */
+export interface ScheduledCapsuleSweepOperations {
   readonly appOwnership?: Pick<import("../../core/domains/app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
-  readonly workspaces: {
-    listWorkspacesForSweep(limit: number): Promise<
-      readonly { readonly id: string; readonly archivedAt?: string }[]
-    >;
-  };
-  readonly capsules: {
-    listCapsules(workspaceId: string): Promise<readonly Capsule[]>;
-  };
   readonly controller: {
-    listRuns(
-      workspaceId: string,
-      options?: { readonly limit?: number },
-    ): Promise<readonly Run[]>;
+    listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]>;
   };
-  createCapsulePlan(capsuleId: string, options: { readonly actor: string }): Promise<unknown>;
+  listCapsuleRunsPage(
+    capsuleId: string,
+    options: {
+      readonly workspaceId: string;
+      readonly limit?: number;
+      readonly types?: readonly RunType[];
+    },
+  ): Promise<{ readonly runs: readonly Run[] }>;
+  createCapsulePlan(
+    capsuleId: string,
+    options: { readonly actor: string; readonly origin: { readonly kind: "update" } },
+  ): Promise<unknown>;
+  createCapsuleDriftCheck(
+    capsuleId: string,
+    options: { readonly actor: string },
+  ): Promise<unknown>;
   readonly activity?: Pick<ActivityRecorder, "record">;
 }
 
@@ -4947,14 +4952,11 @@ async function runScheduledSourceRetirement(env: DeployControlEnv): Promise<void
   }
 }
 
-const SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT = 25;
-const SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK = 100;
-
 /**
  * Operator/Cloud opt-in: turn stale Capsules into reviewable update plans.
  *
- * Core source sync only marks Capsules `stale`; it never silently applies. This
- * scheduled sweep is an operator policy layer that creates at most one pending
+ * Core source sync only marks Capsules `stale`; it never silently applies. The
+ * per-app sweep is an operator policy layer that creates at most one pending
  * plan per stale Capsule, then leaves normal Run approval/apply semantics in
  * charge.
  */
@@ -4965,105 +4967,62 @@ export function autoPlanStaleCapsulesEnabled(
   return typeof flag === "string" && flag === "1";
 }
 
-async function runScheduledStaleCapsuleAutoPlan(
-  env: DeployControlEnv,
+async function runScheduledCapsuleSweep(
+  env: CloudflareWorkerEnv & DeployControlEnv,
 ): Promise<void> {
+  const autoPlanStale = autoPlanStaleCapsulesEnabled(env);
+  const driftCheck = driftCheckEnabled(env);
+  if (!autoPlanStale && !driftCheck) return;
   const operations = await deployControlSeam(env).operations();
-  await planStaleCapsuleUpdates(operations, {
-    workspaceLimit: SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT,
-    runLookback: SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
-  });
+  await runCapsuleSweep(operations, { autoPlanStale, driftCheck });
 }
 
-export interface StaleCapsuleAutoPlanResult {
-  readonly workspacesScanned: number;
-  readonly staleCapsulesScanned: number;
-  readonly plansCreated: number;
-}
-
-export async function planStaleCapsuleUpdates(
-  operations: StaleCapsuleAutoPlanOperations,
+/**
+ * One per-app sweep tick over the deploy-control facade (TASK-0118 9.1). Each
+ * live Capsule is handled on its own: a stale one may get an update Plan, an
+ * active one a drift check. Its open plans are read per app, never per
+ * Workspace, and no RunGroup is created.
+ */
+export async function runCapsuleSweep(
+  operations: ScheduledCapsuleSweepOperations,
   options: {
-    readonly workspaceLimit?: number;
-    readonly runLookback?: number;
-  } = {},
-): Promise<StaleCapsuleAutoPlanResult> {
-  const workspaceLimit = positiveInteger(
-    options.workspaceLimit,
-    SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT,
-  );
-  const runLookback = positiveInteger(
-    options.runLookback,
-    SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
-  );
-  const workspaces = await operations.workspaces.listWorkspacesForSweep(workspaceLimit);
-  let staleCapsulesScanned = 0;
-  let plansCreated = 0;
-  for (const workspace of workspaces) {
-    let staleCapsules: readonly Capsule[];
-    try {
-      staleCapsules = (
-        await operations.capsules.listCapsules(workspace.id)
-      ).filter((capsule) => capsule.status === "stale");
-    } catch {
-      console.warn("scheduled.stale_auto_plan_capsule_list_failed");
-      continue;
-    }
-    if (staleCapsules.length === 0) continue;
-    staleCapsulesScanned += staleCapsules.length;
-    let pendingRuns: readonly Run[];
-    try {
-      pendingRuns = await operations.controller.listRuns(workspace.id, {
-        limit: runLookback,
+    readonly autoPlanStale: boolean;
+    readonly driftCheck: boolean;
+    readonly limit?: number;
+  },
+): Promise<CapsuleSweepResult> {
+  const appOwnership = operations.appOwnership;
+  const sweepOperations: CapsuleSweepOperations = {
+    listCapsulesForScheduledSweep: (limit) =>
+      operations.controller.listCapsulesForScheduledSweep(limit),
+    ...(appOwnership
+      ? { getOwnership: (capsuleId: string) => appOwnership.getOwnership(capsuleId) }
+      : {}),
+    listCapsulePlanRuns: async (capsule, limit) =>
+      (await operations.listCapsuleRunsPage(capsule.id, {
+        // The store matches the app's own Workspace column with its id; the
+        // read never widens past this one app.
+        workspaceId: capsule.workspaceId,
+        limit,
+        types: ["plan"],
+      })).runs,
+    createCapsulePlan: (capsuleId, planOptions) =>
+      operations.createCapsulePlan(capsuleId, planOptions),
+    createCapsuleDriftCheck: (capsuleId, driftOptions) =>
+      operations.createCapsuleDriftCheck(capsuleId, driftOptions),
+    recordStaleAutoPlan: async (capsule) => {
+      // The Workspace id only fills the Activity row's column (kept until 9.6).
+      await operations.activity?.record({
+        workspaceId: capsule.workspaceId,
+        actorId: "system:stale-auto-plan",
+        action: "capsule.stale_auto_plan_created",
+        targetType: "capsule",
+        targetId: capsule.id,
+        metadata: {},
       });
-    } catch {
-      console.warn("scheduled.stale_auto_plan_run_list_failed");
-      continue;
-    }
-    const pendingPlanCapsuleIds = new Set(
-      pendingRuns
-        .filter(isPendingCapsulePlan)
-        .map((run) => run.capsuleId)
-        .filter((id): id is string => typeof id === "string" && id.length > 0),
-    );
-    for (const capsule of staleCapsules) {
-      if (pendingPlanCapsuleIds.has(capsule.id)) continue;
-      try {
-        const ownership = await operations.appOwnership?.getOwnership(capsule.id);
-        if (ownership && ownership.managementState !== "active") continue;
-        await operations.createCapsulePlan(capsule.id, {
-          actor: ownership?.ownerAccountId ?? "system:stale-auto-plan",
-        });
-        pendingPlanCapsuleIds.add(capsule.id);
-        plansCreated += 1;
-        try {
-          await operations.activity?.record({ workspaceId: workspace.id,
-            actorId: "system:stale-auto-plan", action: "capsule.stale_auto_plan_created",
-            targetType: "capsule", targetId: capsule.id, metadata: {} });
-        } catch {
-          console.warn("scheduled.stale_auto_plan_activity_failed");
-        }
-      } catch {
-        // Best-effort: one bad Capsule must not abort other update plans.
-        console.warn("scheduled.stale_auto_plan_create_failed");
-      }
-    }
-  }
-  return {
-    workspacesScanned: workspaces.length,
-    staleCapsulesScanned,
-    plansCreated,
+    },
   };
-}
-
-function isPendingCapsulePlan(run: Run): boolean {
-  return (
-    run.type === "plan" &&
-    (run.status === "queued" ||
-      run.status === "running" ||
-      run.status === "waiting_approval") &&
-    typeof run.capsuleId === "string"
-  );
+  return await sweepCapsules(sweepOperations, options);
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
@@ -5409,28 +5368,12 @@ function runTimestampMs(
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-// Cap so a single cron tick never creates an unbounded number of drift checks.
-const SCHEDULED_DRIFT_SWEEP_LIMIT = 20;
-
 /**
- * Drift-check flag (spec §28; Phase 8). The scheduled drift sweep runs ONLY when
- * `TAKOSUMI_DRIFT_CHECK_ENABLED=1` (default OFF), mirroring how the platform
- * keeps the new sweep opt-in alongside the always-on source poll.
+ * Drift-check flag (spec §28; Phase 8). The per-app sweep drift-checks active
+ * Capsules ONLY when `TAKOSUMI_DRIFT_CHECK_ENABLED=1` (default OFF), mirroring
+ * how the platform keeps the sweep opt-in alongside the always-on source poll.
  */
 export function driftCheckEnabled(env: CloudflareWorkerEnv): boolean {
   const flag = env.TAKOSUMI_DRIFT_CHECK_ENABLED;
   return typeof flag === "string" && flag === "1";
-}
-
-async function runScheduledDriftSweep(env: DeployControlEnv): Promise<void> {
-  const operations = await deployControlSeam(env).operations();
-  // Adapt the two methods the sweep needs: active Capsule listing from the
-  // controller and grouped drift checks through the current compatibility service.
-  const driftOps: DriftSweepOperations = {
-    listActiveCapsules: (limit) =>
-      operations.controller.listActiveCapsules(limit),
-    createWorkspaceDriftCheck: (workspaceId, options) =>
-      operations.runGroups.createWorkspaceDriftCheck(workspaceId, options),
-  };
-  await driftSweep(driftOps, { limit: SCHEDULED_DRIFT_SWEEP_LIMIT });
 }

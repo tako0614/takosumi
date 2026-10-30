@@ -2560,7 +2560,6 @@ export class RunEngine {
       ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
       ...(compatibilityReportId ? { compatibilityReportId } : {}),
       ...(capsuleContext ? { capsuleContext } : {}),
-      ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
       ...(internal.origin ? { origin: internal.origin } : {}),
       ...(internal.refreshOnly ? { refreshOnly: true as const } : {}),
@@ -2835,13 +2834,8 @@ export class RunEngine {
   async createCapsuleDriftCheck(
     capsuleId: string,
     context: DeployControlActorContext = {},
-    internal: Pick<CreateCapsulePlanInternal, "runGroupId"> = {},
   ): Promise<PlanRunResponse> {
-    return await this.#drift.createCapsuleDriftCheck(
-      capsuleId,
-      context,
-      internal,
-    );
+    return await this.#drift.createCapsuleDriftCheck(capsuleId, context);
   }
 
   async #createCapsulePlanRun(
@@ -3247,7 +3241,6 @@ export class RunEngine {
         ...(finalizedGenericRoot
           ? { genericRootDispatch: finalizedGenericRoot }
           : {}),
-        ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
         ...(internal.driftCheck ? { driftCheck: true as const } : {}),
         ...(internal.origin ? { origin: internal.origin } : {}),
         ...(internal.autoApplyRequested
