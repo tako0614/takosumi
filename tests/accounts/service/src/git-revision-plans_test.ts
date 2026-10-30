@@ -853,6 +853,68 @@ test("a revision to the exact applied commit is already current; the same commit
   expect(tracking.counts.sync).toBe(1);
 });
 
+test("retrying a version whose Apply failed or left the app in error plans again instead of answering already current", async () => {
+  const commit = "1".repeat(40);
+  const failedApply = revisionFixture({ adoptedRef: commit, adoptedApplyStatus: "failed" });
+  const retry = await failedApply.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: commit },
+    { "idempotency-key": "retry-failed-apply" },
+  );
+  const retryId = (await retry.json()).revisionPlan.id as string;
+  const syncing = await failedApply.reconcile(retryId);
+  expect(syncing.status).toBe(200);
+  expect((await syncing.json()).revisionPlan).toMatchObject({
+    phase: "syncing_source",
+    sourceSyncRunId: expect.stringMatching(/^ssr_/u),
+  });
+  expect(failedApply.counts.sync).toBe(1);
+
+  const broken = revisionFixture({ adoptedRef: commit });
+  broken.mutateCapsule({ status: "error" });
+  const again = await broken.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: commit },
+    { "idempotency-key": "retry-error-capsule" },
+  );
+  const againId = (await again.json()).revisionPlan.id as string;
+  const resumed = await broken.reconcile(againId);
+  expect(resumed.status).toBe(200);
+  expect((await resumed.json()).revisionPlan.phase).toBe("syncing_source");
+  expect(broken.counts.sync).toBe(1);
+});
+
+test("an ownership transfer draining the app keeps the revision retryable", async () => {
+  // The transfer starts after the reconcile was authorized and before the
+  // Source sync: the sync refuses every actor while management drains.
+  let fixture: ReturnType<typeof revisionFixture> | undefined;
+  fixture = revisionFixture({
+    sourceSyncError: () => {
+      fixture!.attachOwnership("draining");
+      return new OpenTofuControllerError(
+        "failed_precondition",
+        "App-owned Source sync requires a trusted current actor and ownership epoch.",
+        { reason: "app_access_denied" },
+      );
+    },
+  });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: "release/v2" },
+    { "idempotency-key": "revision-during-transfer-drain" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).revisionPlan.id as string;
+  const waiting = await fixture.reconcile(planId);
+  expect(waiting.status).toBe(202);
+  expect((await waiting.json()).revisionPlan).toMatchObject({
+    phase: "syncing_source",
+    diagnostic: {
+      code: "revision_plan_reconcile_retryable",
+      planCreationStage: "source",
+      controllerCode: "failed_precondition",
+      reason: "app_management_draining",
+    },
+  });
+});
+
 test("Git revision plan stops before Plan creation when compatibility is not runnable", async () => {
   const fixture = revisionFixture({ compatibilityLevel: "needs_patch" });
   const created = await fixture.request(
@@ -991,6 +1053,7 @@ function revisionFixture(
     readonly acceptedRepositoryInstallUx?: boolean;
     readonly planRunActor?: (runId: string) => string;
     readonly adoptedRef?: string;
+    readonly adoptedApplyStatus?: Run["status"];
     readonly sourceSyncError?: () => unknown;
   } = {},
 ) {
@@ -1290,7 +1353,33 @@ function revisionFixture(
         resolvedCommit: "1".repeat(40),
       };
     },
+    getStateVersion: async (id: string) => {
+      if (id !== "sv_three") throw new OpenTofuControllerError("not_found", "missing");
+      return {
+        stateVersion: {
+          id,
+          workspaceId: WORKSPACE.id,
+          capsuleId: capsule.id,
+          environment: capsule.environment,
+          generation: 3,
+          stateRef: "state/sv_three",
+          digest: `sha256:${"c".repeat(64)}`,
+          createdByRunId: "apply_three",
+          createdAt: "2026-08-20T00:00:00.000Z",
+        },
+      };
+    },
     getRun: async (id: string) => {
+      if (id === "apply_three") {
+        return {
+          id,
+          workspaceId: WORKSPACE.id,
+          capsuleId: capsule.id,
+          type: "apply",
+          status: options.adoptedApplyStatus ?? "succeeded",
+          createdAt: "2026-08-20T00:00:00.000Z",
+        } satisfies Run;
+      }
       const run = runs.get(id);
       if (!run) throw new OpenTofuControllerError("not_found", "missing");
       return run;
@@ -1475,6 +1564,21 @@ function revisionFixture(
     },
     counts,
     sourceSyncActors,
+    /** The ownership the coordinator reads after a refused Source sync. */
+    attachOwnership(managementState: "active" | "draining" | "frozen") {
+      (operations as { appOwnership?: unknown }).appOwnership = {
+        getOwnership: async (capsuleId: string) => capsuleId === capsule.id
+          ? {
+              capsuleId,
+              ownerAccountId: WORKSPACE.ownerUserId,
+              ownershipEpoch: 1,
+              managementState,
+              managementEpoch: 1,
+              storageRoot: `apps/${capsuleId}`,
+            }
+          : undefined,
+      };
+    },
     get approvalCalls() {
       return approvalCalls;
     },

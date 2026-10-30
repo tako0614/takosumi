@@ -98,6 +98,7 @@ async function compose(backend: Backend, runner: OpenTofuRunner): Promise<{
 
 async function ownedAppFixture(kind: Backend, installRef: string) {
   const branchHeads = new Map<string, string>([["main", MAIN_HEAD]]);
+  let applyFails = false;
   const syncedRefs: string[] = [];
   // Git and OpenTofu execution are the external boundary. Coordinators,
   // Sources, Capsules, ownership and the ledger are production services.
@@ -139,13 +140,28 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
       providerInstallation: [],
       planResourceChanges: [],
     }),
-    apply: async (job) => ({
-      outputs: {} as never,
-      stateDigest: STATE_DIGEST,
-      rawOutputRef: job.rawOutputRef,
-      providerInstallation: [],
-      executionEvidence: fixtureExecutionEvidence(job, "apply"),
-    }),
+    // A provider failure can persist state: the StateVersion advances while
+    // the Capsule becomes `error`.
+    apply: async (job) => applyFails
+      ? {
+          providerExecutionFailure: {
+            kind: "provider_execution_failed" as const,
+            statePersistence: "persisted" as const,
+          },
+          stateDigest: STATE_DIGEST,
+          rawOutputRef: job.rawOutputRef,
+          providerInstallation: [],
+          executionEvidence: fixtureExecutionEvidence(job, "apply", {
+            outcome: "provider_failed_state_persisted",
+          }),
+        }
+      : {
+          outputs: {} as never,
+          stateDigest: STATE_DIGEST,
+          rawOutputRef: job.rawOutputRef,
+          providerInstallation: [],
+          executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        },
   };
   const { deployStore, operations } = await compose(kind, runner);
   const workspace = await operations.workspaces.createWorkspace({
@@ -196,6 +212,11 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
       throw new Error(`apply ${applied.status}: ${await applied.text()}`);
     }
     return await applied.json();
+  }
+
+  async function reconcileRevision(planId: string) {
+    const response = await route("POST", `/api/v1/revision-plans/${planId}/reconcile`);
+    return { status: response.status, body: await response.json() };
   }
 
   // Install through the composed install coordinator, then apply.
@@ -249,16 +270,25 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
     branchHeads,
     route,
     applyPlanRun,
+    setApplyFails(fails: boolean) {
+      applyFails = fails;
+    },
+    /** Reconciles until the coordinator settles; returns the last response. */
+    async settle(planId: string) {
+      let response = await reconcileRevision(planId);
+      for (let step = 0; step < 8 && response.body.nextAction === "reconcile"; step += 1) {
+        expect(response.status).toBe(200);
+        response = await reconcileRevision(planId);
+      }
+      return response;
+    },
     sourceSyncRuns,
     async createRevision(ref: string, key: string) {
       const response = await route("POST", `/api/v1/capsules/${capsuleId}/revision-plans`, { ref }, key);
       expect(response.status).toBe(201);
       return (await response.json()).revisionPlan.id as string;
     },
-    async reconcile(planId: string) {
-      const response = await route("POST", `/api/v1/revision-plans/${planId}/reconcile`);
-      return { status: response.status, body: await response.json() };
-    },
+    reconcile: reconcileRevision,
     async appView() {
       const response = await route("GET", `/api/v1/capsules/${capsuleId}/app`);
       expect(response.status).toBe(200);
@@ -296,6 +326,42 @@ for (const kind of BACKENDS) {
     expect(fixture.syncedRefs).toEqual([]);
     expect(await fixture.operations.gitInstallPlans.hasWorkspaceManagementBlockers(fixture.workspace.id))
       .toBe(false);
+  });
+
+  test(`[${kind}] retrying an update whose Apply failed with persisted state plans again, then is current once repaired`, async () => {
+    for (const [installRef, target, moveBranch] of [
+      [PINNED, MAIN_HEAD, false],
+      ["main", "main", true],
+    ] as const) {
+      const fixture = await ownedAppFixture(kind, installRef);
+      if (moveBranch) fixture.branchHeads.set("main", MOVED_HEAD);
+      const update = await fixture.settle(await fixture.createRevision(target, `update-${installRef}`));
+      expect(update.body.revisionPlan.phase).toBe("reviewable");
+      fixture.setApplyFails(true);
+      const failed = await fixture.applyPlanRun(update.body.revisionPlan.planRunId as string);
+      expect(failed.run.status).toBe("failed");
+      const broken = await fixture.deployStore.getCapsule(fixture.capsuleId);
+      expect(broken).toMatchObject({ status: "error", currentStateGeneration: 2 });
+      // The failed Apply's state is now the adopted revision, at the target.
+      expect((await fixture.operations.getCapsuleAdoptedSourceRevision(fixture.capsuleId))?.ref)
+        .toBe(target);
+
+      // The app page's "Review again" asks for the same ref again.
+      const retry = await fixture.settle(await fixture.createRevision(target, `retry-${installRef}`));
+      expect(retry.body.revisionPlan).toMatchObject({ phase: "reviewable" });
+      expect(retry.body.revisionPlan.diagnostic).toBeUndefined();
+      fixture.setApplyFails(false);
+      const repaired = await fixture.applyPlanRun(retry.body.revisionPlan.planRunId as string);
+      expect(repaired.run.status).toBe("succeeded");
+      expect(await fixture.deployStore.getCapsule(fixture.capsuleId)).toMatchObject({ status: "active" });
+
+      // Only now, with a successful Apply behind it, is the same ref current.
+      const check = await fixture.settle(await fixture.createRevision(target, `check-${installRef}`));
+      expect(check.body.revisionPlan).toMatchObject({
+        phase: "failed",
+        diagnostic: { code: "revision_already_current" },
+      });
+    }
   });
 
   test(`[${kind}] checking a commit-pinned owned app for a new version ends as already current, without a Source sync`, async () => {

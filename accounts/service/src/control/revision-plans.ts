@@ -598,34 +598,15 @@ async function advanceRevisionSource(
   if (plan.sourceSyncRunId) {
     sync = await operations.getSourceSyncRun(plan.sourceSyncRunId);
   } else {
-    // An exact commit the app already runs, from the same ref and subtree,
-    // cannot have a newer version: answer without syncing it again.
+    // An exact commit the app already runs successfully, from the same ref
+    // and subtree, cannot have a newer version: answer without syncing it.
     if (
       IMMUTABLE_COMMIT.test(plan.revision.targetRef) &&
-      isAdoptedRevision(plan, identity.adopted, plan.revision.targetRef)
+      await runsAdoptedRevision(plan, identity, plan.revision.targetRef, operations)
     ) {
       return failedPlan(plan, ALREADY_CURRENT);
     }
-    sync = (
-      await operations.createSourceSync(
-        plan.sourceId,
-        {
-          intent: "manual_plan",
-          dedupe: true,
-          coordinator: {
-            ref: plan.revision.targetRef,
-            path: plan.source.path,
-            runId: evidence.runId,
-            snapshotId: evidence.snapshotId,
-          },
-        },
-        plan.workspaceManagementAuthority,
-        // An app-owned Source syncs only for a current account of its app:
-        // the account that asked for this version change, which is also the
-        // actor of the Plan it prepares.
-        plan.createdBy,
-      )
-    ).run;
+    sync = await createRevisionSourceSync(plan, evidence, operations);
   }
   assertSourceSyncMatches(sync, plan, identity.source, evidence);
   if (sync.status === "queued" || sync.status === "running") {
@@ -646,7 +627,7 @@ async function advanceRevisionSource(
   // A branch or tag that still resolves to the applied commit has nothing
   // newer. A different ref to the same commit is a lane change and is
   // planned like any other version.
-  if (isAdoptedRevision(plan, identity.adopted, snapshot.resolvedCommit)) {
+  if (await runsAdoptedRevision(plan, identity, snapshot.resolvedCommit, operations)) {
     return failedPlan(
       progressed(plan, { sourceSyncRunId: sync.id, sourceSnapshotId: snapshot.id }),
       ALREADY_CURRENT,
@@ -661,6 +642,52 @@ async function advanceRevisionSource(
     compatibilityReportId: compatibility.reportId,
     phase: "analyzing_compatibility",
   });
+}
+
+async function createRevisionSourceSync(
+  plan: StoredGitRevisionPlan,
+  evidence: RevisionSourceEvidence,
+  operations: ControlPlaneOperations,
+): Promise<SourceSyncRun> {
+  try {
+    return (
+      await operations.createSourceSync(
+        plan.sourceId,
+        {
+          intent: "manual_plan",
+          dedupe: true,
+          coordinator: {
+            ref: plan.revision.targetRef,
+            path: plan.source.path,
+            runId: evidence.runId,
+            snapshotId: evidence.snapshotId,
+          },
+        },
+        plan.workspaceManagementAuthority,
+        // An app-owned Source syncs only for a current account of its app:
+        // the account that asked for this version change, which is also the
+        // actor of the Plan it prepares.
+        plan.createdBy,
+      )
+    ).run;
+  } catch (error) {
+    // While the app's ownership is being transferred its management drains
+    // and Source syncs are refused for everyone; a cancelled transfer
+    // returns it to active. That refusal is temporary, not a verdict on the
+    // account that asked.
+    if (
+      structuredErrorReason(error) === "app_access_denied" &&
+      (await operations.appOwnership?.getOwnership(plan.capsuleId))
+        ?.managementState === "draining"
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "The app's management is draining for an ownership transfer.",
+        { reason: "app_management_draining" },
+      );
+    }
+    throw error;
+  }
 }
 
 async function analyzeRevisionCompatibility(
@@ -881,6 +908,54 @@ async function assertRevisionIdentity(
     modulePath,
     ...(adoptedSourceRevision ? { adopted: adoptedSourceRevision } : {}),
   };
+}
+
+/**
+ * Whether the app already runs the target: it is exactly the applied Source
+ * revision, and that state came from an Apply that succeeded on a Capsule
+ * that is not in error. A provider failure can persist state (the current
+ * StateVersion advances while the Capsule is `error`), and a restored or
+ * recovered state has no successful Apply of its own; retrying either must
+ * plan again rather than report that nothing changed.
+ */
+async function runsAdoptedRevision(
+  plan: StoredGitRevisionPlan,
+  identity: RevisionIdentity,
+  resolvedCommit: string,
+  operations: ControlPlaneOperations,
+): Promise<boolean> {
+  const { capsule } = identity;
+  if (
+    !isAdoptedRevision(plan, identity.adopted, resolvedCommit) ||
+    capsule.status === "error" ||
+    !capsule.currentStateVersionId
+  ) {
+    return false;
+  }
+  const { stateVersion } = await operations.getStateVersion(
+    capsule.currentStateVersionId,
+  );
+  if (
+    stateVersion.id !== capsule.currentStateVersionId ||
+    stateVersion.capsuleId !== capsule.id
+  ) {
+    return false;
+  }
+  let run: Run;
+  try {
+    run = await operations.getRun(stateVersion.createdByRunId);
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError && error.code === "not_found") {
+      return false;
+    }
+    throw error;
+  }
+  return (
+    run.id === stateVersion.createdByRunId &&
+    run.capsuleId === capsule.id &&
+    run.type === "apply" &&
+    run.status === "succeeded"
+  );
 }
 
 /**
