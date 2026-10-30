@@ -2602,10 +2602,11 @@ const REQUIRED_DASHBOARD_METRICS = [
   "takosumi_api_request_duration_seconds_bucket",
   "takosumi_oidc_request_count",
 ] as const;
+// The app (`capsule_id`) is the tenant label; Workspace labels are retired
+// (TASK-0118 P9.1-g).
 const REQUIRED_DASHBOARD_LABELS = [
   "environment",
   "runner_profile_id",
-  "workspace_id",
   "capsule_id",
   "operation_kind",
   "status",

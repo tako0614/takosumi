@@ -2,7 +2,10 @@ import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
 import type { ActivityRecorder } from "../activity/mod.ts";
 import { NOOP_ACTIVITY_RECORDER } from "../activity/mod.ts";
-import type { ObservabilitySink } from "../observability/mod.ts";
+import {
+  METRIC_CAPSULE_LABEL,
+  type ObservabilitySink,
+} from "../observability/mod.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import type {
   CapsuleInterfaceMaterializationIntent,
@@ -210,7 +213,7 @@ export class CapsuleInterfaceMaterializationFailureService {
       });
     }
     await this.#recordMetric({
-      workspaceId,
+      capsuleId: result.intent.capsuleId,
       name: "takosumi.interface_materialization.retry_requested",
       observedAt: retriedAt,
       tags: { error_code: projection.error.code },
@@ -229,20 +232,21 @@ export class CapsuleInterfaceMaterializationFailureService {
   }
 
   async #recordMetric(input: {
-    readonly workspaceId: string;
+    readonly capsuleId: string;
     readonly name: string;
     readonly observedAt: string;
     readonly tags: Record<string, string>;
   }): Promise<void> {
     if (!this.#observability) return;
     try {
+      // The app is the metric's only tenant label (TASK-0118 P9.1-g); the
+      // Workspace is no longer recorded on new metric events.
       await this.#observability.recordMetric({
         id: this.#newId("metric"),
         name: input.name,
         kind: "counter",
         value: 1,
-        workspaceId: input.workspaceId,
-        tags: input.tags,
+        tags: { ...input.tags, [METRIC_CAPSULE_LABEL]: input.capsuleId },
         observedAt: input.observedAt,
       });
     } catch (error) {

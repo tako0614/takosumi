@@ -17,7 +17,8 @@ const metric: MetricEvent = {
   kind: "gauge",
   value: 1.25,
   unit: "s",
-  tags: { provider: "filesystem" },
+  tags: { provider: "filesystem", capsule_id: "cap_a" },
+  // A legacy event may still carry its Workspace; it is never exported.
   workspaceId: "space_a",
   observedAt: "2026-05-05T00:00:00.000Z",
 };
@@ -34,6 +35,7 @@ const traceSpan: TraceSpanEvent = {
   endTime: "2026-05-05T00:00:01.000Z",
   requestId: "req_1",
   correlationId: "corr_1",
+  workspaceId: "space_a",
   attributes: {
     "http.request.method": "GET",
     "http.response.status_code": 200,
@@ -99,6 +101,19 @@ test("OtlpObservabilitySink records locally and exports OTLP JSON metrics", asyn
     exported?.gauge?.dataPoints[0]?.timeUnixNano,
     "1777939200000000000",
   );
+  // TASK-0118 P9.1-g: the app is the tenant attribute; no Workspace label,
+  // and the capsule tag is not exported twice.
+  const attributes = Object.fromEntries(
+    (exported?.gauge?.dataPoints[0]?.attributes ?? []).map((entry) => [
+      entry.key,
+      entry.value,
+    ]),
+  );
+  assert.deepEqual(attributes["takosumi.capsule_id"], { stringValue: "cap_a" });
+  assert.deepEqual(attributes["tag.provider"], { stringValue: "filesystem" });
+  assert.equal("takosumi.workspace_id" in attributes, false);
+  assert.equal("tag.capsule_id" in attributes, false);
+  assert.doesNotMatch(JSON.stringify(calls[0]?.body), /space_a|workspace/);
 });
 
 test("OtlpObservabilitySink records locally and exports OTLP JSON traces", async () => {
@@ -162,6 +177,8 @@ test("OtlpObservabilitySink records locally and exports OTLP JSON traces", async
         attribute.value.stringValue === "req_1",
     ),
   );
+  // A span's legacy Workspace is not exported (TASK-0118 P9.1-g).
+  assert.doesNotMatch(JSON.stringify(calls[0]?.body), /space_a|workspace/);
 });
 
 test("OtlpObservabilitySink fail-open keeps metrics when collector fails", async () => {

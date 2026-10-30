@@ -7,6 +7,16 @@ import type { IsoTimestamp } from "../../shared/time.ts";
 export type MetricEventId = string;
 export type MetricKind = "counter" | "gauge" | "histogram";
 
+/**
+ * Tag naming the app (Capsule) a metric is about (TASK-0118 P9.1-g). It is the
+ * only tenant label new metric events carry; the Workspace is no longer
+ * recorded. Its cardinality is bounded by the installed apps: the Prometheus
+ * exposition drops it from every series, and OTLP exports it as the
+ * `takosumi.capsule_id` attribute. Never put Run, request or other per-event
+ * ids in tags.
+ */
+export const METRIC_CAPSULE_LABEL = "capsule_id";
+
 export interface MetricEvent {
   readonly id: MetricEventId;
   readonly name: string;
@@ -14,6 +24,11 @@ export interface MetricEvent {
   readonly value: number;
   readonly unit?: string;
   readonly tags?: Record<string, string>;
+  /**
+   * Legacy Workspace of events recorded before TASK-0118 P9.1-g. New events
+   * leave it unset and name their app with {@link METRIC_CAPSULE_LABEL}; no
+   * exporter emits it.
+   */
   readonly workspaceId?: string;
   readonly runGroupId?: string;
   readonly actor?: ActorContext;
@@ -50,6 +65,7 @@ export interface TraceSpanEvent {
   readonly startTime: IsoTimestamp;
   readonly endTime: IsoTimestamp;
   readonly attributes?: Record<string, string | number | boolean>;
+  /** Legacy Workspace; no exporter emits it (TASK-0118 P9.1-g). */
   readonly workspaceId?: string;
   readonly runGroupId?: string;
   readonly requestId?: string;

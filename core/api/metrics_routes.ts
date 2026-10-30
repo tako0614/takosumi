@@ -1,6 +1,9 @@
 import type { Hono as HonoApp } from "hono";
 import type { ObservabilitySink } from "../domains/observability/mod.ts";
-import type { MetricEvent } from "../domains/observability/types.ts";
+import {
+  METRIC_CAPSULE_LABEL,
+  type MetricEvent,
+} from "../domains/observability/types.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import type { ApiEndpoint } from "./route_families.ts";
@@ -310,7 +313,10 @@ function labelsForEvent(event: MetricEvent): Record<string, string> {
     Object.entries({
       ...(event.tags ?? {}),
     })
-      .filter(([key]) => !["workspace_id", "capsule_id", "run_group_id", "run_id"].includes(key))
+      // Tenant and per-event ids never become series labels: the app tag
+      // (`capsule_id`) and a legacy Workspace tag are dropped to keep the
+      // exposition's cardinality bounded.
+      .filter(([key]) => !["workspace_id", METRIC_CAPSULE_LABEL, "run_group_id", "run_id"].includes(key))
       .sort(([left], [right]) => left.localeCompare(right)),
   );
 }

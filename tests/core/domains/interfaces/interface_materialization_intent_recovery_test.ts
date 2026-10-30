@@ -35,6 +35,7 @@ import {
   type CapsuleInterfaceMaterializationTarget,
 } from "../../../../core/domains/interfaces/materialization_intent_drain.ts";
 import { CapsuleInterfaceMaterializationFailureService } from "../../../../core/domains/interfaces/materialization_intent_failures.ts";
+import { InMemoryObservabilitySink } from "../../../../core/domains/observability/sink.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
@@ -1360,9 +1361,11 @@ test("per-app dead-letter listing and retry stay inside the addressed app across
         detailDigest: `sha256:${"9".repeat(64)}`,
       },
     });
+    const observability = new InMemoryObservabilitySink();
     const service = new CapsuleInterfaceMaterializationFailureService({
       store,
       now: () => RESTORE_AT,
+      observability,
     });
     const [failure] = await service.listForCapsule(seeded.capsule.id);
     expect(failure, label).toMatchObject({
@@ -1388,6 +1391,20 @@ test("per-app dead-letter listing and retry stay inside the addressed app across
       label,
     ).toMatchObject({ id: intent.id, capsuleId: seeded.capsule.id, status: "pending" });
     expect(await service.listForCapsule(seeded.capsule.id), label).toEqual([]);
+    // The retry metric names the app, not the Workspace (TASK-0118 P9.1-g).
+    const metrics = await observability.listMetrics({
+      name: "takosumi.interface_materialization.retry_requested",
+    });
+    expect(metrics, label).toEqual([
+      expect.objectContaining({
+        value: 1,
+        tags: {
+          error_code: "interface_provenance_conflict",
+          capsule_id: seeded.capsule.id,
+        },
+      }),
+    ]);
+    expect(metrics[0], label).not.toHaveProperty("workspaceId");
   }
 });
 

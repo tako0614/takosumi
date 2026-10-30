@@ -146,6 +146,14 @@ package for the v1 GA line.
   Upstream `clientSecretEnv` names must be explicitly mapped in an operator
   Compose override (see `deploy/node-postgres/README.md`). Runtime image copies
   exclude Cloudflare deployment files except the CLI's required D1 transport.
+- **Metrics name the app, not the Workspace:** OTLP metric data points carry
+  `takosumi.capsule_id` (from the `capsule_id` tag) and no longer carry
+  `takosumi.workspace_id`; OTLP spans no longer carry `takosumi.workspace_id`.
+  The Interface materialization dead-letter and retry counters record the app
+  as their `capsule_id` tag instead of a Workspace. The Prometheus exposition
+  still drops `capsule_id` (and any legacy `workspace_id`) from every series,
+  and the operator metrics dashboard no longer requires a `workspace_id` label.
+  Update collectors or dashboards that grouped by `takosumi.workspace_id`.
 
 ## 1.0.0 — Canonical control-plane model
 
