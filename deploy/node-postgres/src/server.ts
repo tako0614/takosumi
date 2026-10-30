@@ -343,6 +343,9 @@ async function buildAccountsHandler(
     ...(config.privacyRetentionPolicyRef
       ? { privacyRetentionPolicyRef: config.privacyRetentionPolicyRef }
       : {}),
+    ...(config.notificationPushers
+      ? { notificationPushers: config.notificationPushers }
+      : {}),
   };
   const stableOidc = await buildStableOidc(config.stableOidc);
   if (stableOidc) {

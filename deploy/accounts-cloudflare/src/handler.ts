@@ -39,6 +39,7 @@ import {
   trustedNativeClientsFromEnv,
   parseWorkspaceMutationsFrozen,
   parseAppOwnershipMutationsFrozen,
+  notificationPusherRouteOptionsFromEnv,
   parseLegacyWorkspaceSunset,
   activityCursorSealerFromEnv,
   type ActivityCursorSealer,
@@ -1356,6 +1357,10 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ),
     privacyRetentionPolicyRef: optionalString(
       env.TAKOSUMI_ACCOUNTS_PRIVACY_RETENTION_POLICY_REF,
+    ),
+    notificationPushers: notificationPusherRouteOptionsFromEnv(
+      env as unknown as Readonly<Record<string, unknown>>,
+      issuer,
     ),
   };
   const stableOidc = await parseStableOidcFlow(env);

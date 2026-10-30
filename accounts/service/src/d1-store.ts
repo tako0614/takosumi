@@ -36,6 +36,10 @@ import type {
 } from "./store.ts";
 import { assertPersonalAccessTokenAppAttenuation, assertPersonalAccessTokenInventoryPageInput, personalAccessTokenStoredAppIdsAreWellFormed } from "./store.ts";
 import {
+  D1NotificationPusherRecords,
+  type NotificationPusherStore,
+} from "./notification-pushers-store.ts";
+import {
   emptyRefreshChainPruneResult,
   isRefreshChainRetentionPhase,
   MAX_REFRESH_CHAIN_RETENTION_ROWS,
@@ -571,9 +575,11 @@ export class D1AccountsStore implements AccountsStore {
   readonly #sessionHashSalt: string | undefined;
   #initialized?: Promise<void>;
   readonly #hosted: HostedIdentityRecords;
+  readonly #notificationPushers: D1NotificationPusherRecords;
 
   constructor(db: D1Database, options: D1AccountsStoreOptions = {}) {
     this.#db = db;
+    this.#notificationPushers = new D1NotificationPusherRecords(db, () => this.initialize());
     this.#hosted = new HostedIdentityRecords(new D1IdentityRecordRepository(db, () => this.initialize(), (value) => this.#hashSessionId(value)), this);
     this.#documents = new D1AccountsDocumentIndexStore(db);
     this.#schemaMode = resolveD1AccountsSchemaMode(options.schemaMode);
@@ -648,6 +654,13 @@ export class D1AccountsStore implements AccountsStore {
   findIdentityMergeOperation(operationId: string): Promise<IdentityMergeOperation | undefined> { return this.#hosted.findIdentityMergeOperation(operationId); }
   compareAndSetIdentityMerge(input: IdentityMergeMutation): Promise<boolean> { return this.#hosted.compareAndSetIdentityMerge(input); }
   unlinkCanonicalUpstreamIdentity(input: UnlinkUpstreamIdentityInput): Promise<boolean> { return this.#hosted.unlinkCanonicalUpstreamIdentity(input); }
+
+  saveNotificationPusher(...args: Parameters<NotificationPusherStore["saveNotificationPusher"]>) { return this.#notificationPushers.saveNotificationPusher(...args); }
+  listNotificationPushersForSubject(...args: Parameters<NotificationPusherStore["listNotificationPushersForSubject"]>) { return this.#notificationPushers.listNotificationPushersForSubject(...args); }
+  findNotificationPusher(...args: Parameters<NotificationPusherStore["findNotificationPusher"]>) { return this.#notificationPushers.findNotificationPusher(...args); }
+  deleteNotificationPusher(...args: Parameters<NotificationPusherStore["deleteNotificationPusher"]>) { return this.#notificationPushers.deleteNotificationPusher(...args); }
+  removeNotificationPusher(...args: Parameters<NotificationPusherStore["removeNotificationPusher"]>) { return this.#notificationPushers.removeNotificationPusher(...args); }
+  recordNotificationPusherOutcome(...args: Parameters<NotificationPusherStore["recordNotificationPusherOutcome"]>) { return this.#notificationPushers.recordNotificationPusherOutcome(...args); }
 
   async initialize(): Promise<void> {
     if (!this.#initialized) {

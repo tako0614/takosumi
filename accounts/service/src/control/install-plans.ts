@@ -112,6 +112,8 @@ import {
 } from "./sources.ts";
 import {
   controllerErrorCode,
+  installedAppTokenDelegates,
+  isInstalledAppToken,
   resolveProviderBindings,
   type ControlDispatchContext,
 } from "./shared.ts";
@@ -142,8 +144,11 @@ export async function handleWorkspaceInstallPlans(
      * so a key replays per account even if the namespace changed.
      */
     readonly idempotencyWorkspaceIds?: readonly string[];
+    /** The delegate app whose own token creates the plan for its user (POST /install-plans only). */
+    readonly delegateCapsuleId?: string;
   } = {},
 ): Promise<Response> {
+  const delegateCapsuleId = options.delegateCapsuleId;
   if (method === "GET") return await listOpenInstallAttempts(ctx, workspaceId);
   if (method !== "POST") return methodNotAllowed("GET, POST");
   const key = idempotencyKey(ctx.request.headers.get("idempotency-key"));
@@ -196,9 +201,10 @@ export async function handleWorkspaceInstallPlans(
   }
   if (existing) {
     if (
-      existing.requestDigest === requestDigest ||
-      (legacyRequestDigest !== undefined &&
-        existing.requestDigest === legacyRequestDigest)
+      (existing.delegateCapsuleId ?? undefined) === (delegateCapsuleId ?? undefined) &&
+      (existing.requestDigest === requestDigest ||
+        (legacyRequestDigest !== undefined &&
+          existing.requestDigest === legacyRequestDigest))
     ) {
       return await installPlanJson(ctx, existing);
     }
@@ -221,6 +227,7 @@ export async function handleWorkspaceInstallPlans(
       workspaceId,
       createdBy: ctx.session.subject,
       actorSubject: ctx.session.subject,
+      ...(delegateCapsuleId ? { delegateCapsuleId } : {}),
       idempotencyKeyHash,
       workspaceManagementAuthority: expectedWorkspaceManagementAuthority,
       requestDigest,
@@ -298,6 +305,7 @@ export async function handleWorkspaceInstallPlans(
     workspaceId,
     createdBy: ctx.session.subject,
     actorSubject: ctx.session.subject,
+    ...(delegateCapsuleId ? { delegateCapsuleId } : {}),
     idempotencyKeyHash,
     workspaceManagementAuthority: expectedWorkspaceManagementAuthority,
     requestDigest,
@@ -391,7 +399,14 @@ export async function handleInstallPlans(
 ): Promise<Response | undefined> {
   if (segments[0] === "install-plans" && segments.length === 1) {
     if (method !== "POST") return methodNotAllowed("POST");
-    if (ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) {
+    // An account credential installs for its account. The one other credential
+    // is an operator-designated delegate app's own token (Takos), which
+    // installs for its user exactly as the user's session would: the new app
+    // is created in the user's own namespace, so the user is its owner. Every
+    // other Workspace- or app-restricted credential stays refused.
+    const delegated = (ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) &&
+      isInstalledAppToken(ctx.session) && await installedAppTokenDelegates(ctx.operations, ctx.session);
+    if ((ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) && !delegated) {
       return errorJson("app_access_denied", "An account credential is required to install an app.", 403, ctx.request);
     }
     const body = await readJsonObject(ctx.request.clone());
@@ -400,15 +415,26 @@ export async function handleInstallPlans(
     }
     // The freeze permits only A's canonical owner-bound personal bootstrap.
     // Never use the general Workspace creation or membership mutation ports.
-    const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session);
+    // The namespace only fills the retained Workspace columns; it is resolved
+    // for the user, never for the delegate token's own Workspace.
+    const namespace = await personalResourceNamespace(
+      ctx.operations,
+      ctx.store,
+      delegated ? { subject: ctx.session.subject } : ctx.session,
+    );
     if (!namespace) return errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
     // Idempotency is per account (TASK-0118 P9.1-c): a key also replays a plan
     // the actor created in any other personal namespace it owns (for example
-    // one archived since), never one in somebody else's Workspace.
+    // one archived since), never one in somebody else's Workspace. A delegated
+    // install records which delegate created it; the delegate reaches only
+    // apps it created this way (TASK-0118 P9.1-b).
     const ownNamespaces = (await ctx.operations.workspaces.listWorkspacesByOwner(ctx.session.subject))
       .filter((workspace) => workspace.type === "personal" && workspace.ownerUserId === ctx.session.subject)
       .map((workspace) => workspace.id);
-    return await handleWorkspaceInstallPlans(ctx, namespace.id, method, { idempotencyWorkspaceIds: ownNamespaces });
+    return await handleWorkspaceInstallPlans(ctx, namespace.id, method, {
+      idempotencyWorkspaceIds: ownNamespaces,
+      ...(delegated ? { delegateCapsuleId: ctx.session.appIds![0] } : {}),
+    });
   }
   if (segments[0] !== "install-plans" || segments.length < 2) {
     return undefined;
@@ -420,15 +446,17 @@ export async function handleInstallPlans(
   }
   // Before its Capsule exists an install attempt is its creator's: the app it
   // becomes will be the creator's (TASK-0118 P9.1-c), so the creator's own
-  // account credential continues it without any Workspace decision. Other
-  // people keep the legacy Workspace decision. Once the app exists, the
-  // attempt is that app's: reading is view, answering is a settings change,
-  // discarding abandons the app (owner only).
+  // account credential continues it without any Workspace decision, and so
+  // does the token of the delegate app that started it for that user
+  // (TASK-0118 P9.1-b). Other people keep the legacy Workspace decision. Once
+  // the app exists, the attempt is that app's: reading is view, answering is a
+  // settings change, discarding abandons the app (owner only).
   // A Capsule committed before the plan recorded it (a lost acknowledgement)
-  // is already the app: it decides, never the creator path.
+  // is already the app: it decides, never these paths.
   const capsuleId = plan.capsuleId ??
     (await getCapsuleIfPresent(ctx.operations, deterministicInitialCapsuleId(plan.id)))?.id;
-  const auth = !capsuleId && await installAttemptCreatorContinues(ctx, plan)
+  const auth = !capsuleId &&
+      (await installAttemptCreatorContinues(ctx, plan) || await delegateContinuesOwnAttempt(ctx, plan))
     ? { ok: true as const }
     : await requireResourceAccess({
         operations: ctx.operations,
@@ -495,6 +523,35 @@ async function installAttemptCreatorContinues(
     const workspace = await ctx.operations.workspaces.getWorkspace(plan.workspaceId);
     return workspace.id === plan.workspaceId && workspace.ownerUserId === session.subject &&
       workspace.type === "personal" && !workspace.archivedAt;
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") return false;
+    throw error;
+  }
+}
+
+/**
+ * A designated delegate token (Takos) and the attempt that same delegate
+ * started for its user: the plan has no Capsule yet, it records this token's
+ * delegate app as its creator, the token's user created it and is its actor,
+ * and it lives in a Workspace that user owns (the namespace POST
+ * /install-plans fills), so committing it makes an app owned by that user.
+ * Anything else keeps the ordinary decision.
+ */
+async function delegateContinuesOwnAttempt(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): Promise<boolean> {
+  const session = ctx.session;
+  if (!isInstalledAppToken(session) || plan.createdBy !== session.subject ||
+    plan.actorSubject !== session.subject || session.appIds.length !== 1 ||
+    plan.delegateCapsuleId !== session.appIds[0]) return false;
+  if (!(await installedAppTokenDelegates(ctx.operations, session))) return false;
+  ctx.assertActive?.();
+  try {
+    const workspace = await ctx.operations.workspaces.getWorkspace(plan.workspaceId);
+    return workspace.id === plan.workspaceId && workspace.ownerUserId === session.subject &&
+      workspace.type === "personal" &&
+      !workspace.archivedAt;
   } catch (error) {
     if (controllerErrorCode(error) === "not_found") return false;
     throw error;
@@ -2472,6 +2529,7 @@ async function createCapsule(
       installingPrincipalId: plan.createdBy,
       // The person who started the install owns the app (TASK-0118 P9.1-c).
       ownerAccountId: plan.createdBy,
+      ...(plan.delegateCapsuleId ? { delegateCapsuleId: plan.delegateCapsuleId } : {}),
       expectedWorkspaceManagementAuthority: plan.workspaceManagementAuthority,
       installConfig,
       providerBindingSetId: deterministicInitialBindingSetId(plan.id),

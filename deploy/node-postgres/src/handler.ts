@@ -17,12 +17,14 @@ import {
 } from "@takosjp/takosumi-accounts-service";
 import {
   activityCursorSealerFromEnv,
+  notificationPusherRouteOptionsFromEnv,
   parseAppOwnershipMutationsFrozen,
   parseInstalledAppDelegationSources,
   parseLegacyWorkspaceSunset,
   trustedNativeClientsFromEnv,
   type ActivityCursorSealer,
   type InstalledAppDelegationSource,
+  type NotificationPusherRouteOptions,
 } from "@takosjp/takosumi-accounts-service";
 import type { TrustedNativeClient } from "takosumi-contract";
 
@@ -63,6 +65,8 @@ export interface NodeAccountsServerConfig {
   readonly trustedNativeClients: readonly TrustedNativeClient[];
   /** `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen`: app member/transfer writes return 409. */
   readonly appOwnershipMutationsFrozen?: boolean;
+  /** Takosumi Mobile pushers: VAPID key from the secret-store passphrase, relay allowlist. */
+  readonly notificationPushers?: NotificationPusherRouteOptions;
   /** `TAKOSUMI_LEGACY_WORKSPACE_SUNSET`: `Sunset` announced on legacy Workspace routes. */
   readonly legacyWorkspaceSunset?: string;
   /** Activity cursor sealer keyed from the secret-store passphrase, when configured. */
@@ -119,6 +123,7 @@ export function parseEnv(
     appOwnershipMutationsFrozen: parseAppOwnershipMutationsFrozen(
       env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,
     ),
+    notificationPushers: notificationPusherRouteOptionsFromEnv(env, issuer),
     legacyWorkspaceSunset: parseLegacyWorkspaceSunset(
       env.TAKOSUMI_LEGACY_WORKSPACE_SUNSET,
     ),

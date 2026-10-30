@@ -8,6 +8,19 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- **Devices can register for the instance's own notifications:**
+  `GET/POST/DELETE /api/v1/account/notification-pushers` stores Takosumi Mobile
+  `webpush` pushers (MSC4174 field layout) in the Accounts store, one per
+  account, `app_id` and `pushkey`, at most 20 per account. Endpoints must be
+  https on port 443 on a push relay origin the operator lists in
+  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS` (no built-in default; unset means
+  no device can register, 409 `notification_relay_not_configured`).
+  `web_push_public_key` is a VAPID key derived from the secret-store
+  passphrase, so no new secret is needed; when the instance cannot send it is
+  `null` and `web_push_unavailable_reason` says why. PostgreSQL
+  needs Accounts migration `047`; D1 needs no migration. The Web Push sender
+  (RFC 8291/8292) and its answer rules ship with it; what is notified follows
+  separately.
 - **Screens can declare their native phone apps, verified against an operator
   allowlist:** an `interface.ui.surface` `document` may now carry `clients`
   next to `display` (`preferred`, and per platform `ios` / `android` a

@@ -81,6 +81,8 @@ const API_PATCHABLE_CAPSULE_STATUSES: ReadonlySet<CapsuleStatus> = new Set([
 
 function publicCapsule(capsule: Capsule): PublicCapsule {
   const {
+    scopeRef: _scopeRef,
+    delegateCapsuleId: _delegateCapsuleId,
     ownerAccountId: _ownerAccountId,
     ownershipEpoch: _ownershipEpoch,
     managementState: _managementState,

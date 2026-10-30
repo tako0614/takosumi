@@ -95,6 +95,10 @@ import {
   normalizePrivacyRetentionPolicyRef,
 } from "./privacy-routes.ts";
 import {
+  handleNotificationPusherRequest,
+  type NotificationPusherRouteOptions,
+} from "./notification-pusher-routes.ts";
+import {
   handleAuthorize,
   resolveSharedAccountGrantSession,
   handleIntrospect,
@@ -190,6 +194,10 @@ export * from "./upstream-config.ts";
 export * from "./passkey.ts";
 export * from "./identity.ts";
 export * from "./mobile-oidc-client.ts";
+export {
+  notificationPusherRouteOptionsFromEnv,
+  type NotificationPusherRouteOptions,
+} from "./notification-pusher-routes.ts";
 export * from "./shared-account-workspace.ts";
 export * from "./workspace-mutations-freeze.ts";
 export { APP_OWNERSHIP_MUTATIONS_ENV, parseAppOwnershipMutationsFrozen } from "./app-ownership-mutations-freeze.ts";
@@ -314,6 +322,11 @@ export interface AccountsHandlerOptions {
   privacyOperationsToken?: string;
   /** Operator-owned retention policy attached to newly created requests. */
   privacyRetentionPolicyRef?: string;
+  /**
+   * VAPID key and relay allowlist for Takosumi Mobile pushers. When absent,
+   * the pusher list reports no `web_push_public_key` and registration is 503.
+   */
+  notificationPushers?: NotificationPusherRouteOptions;
 }
 
 export interface EphemeralAccountsHandlerOptions {
@@ -346,6 +359,7 @@ export interface EphemeralAccountsHandlerOptions {
   loginEmailAllowlist?: LoginEmailAllowlist;
   privacyOperationsToken?: string;
   privacyRetentionPolicyRef?: string;
+  notificationPushers?: NotificationPusherRouteOptions;
   /**
    * Escape hatch for the fail-closed ephemeral-key guard. The ephemeral
    * handler generates a fresh per-process ECDSA signing keypair, which is
@@ -494,6 +508,9 @@ export async function createEphemeralAccountsHandler(
     loginEmailAllowlist: options.loginEmailAllowlist,
     privacyOperationsToken: options.privacyOperationsToken,
     privacyRetentionPolicyRef: options.privacyRetentionPolicyRef,
+    ...(options.notificationPushers
+      ? { notificationPushers: options.notificationPushers }
+      : {}),
     jwks: {
       keys: [
         {
@@ -678,6 +695,7 @@ export function createAccountsHandler(
   const authorizeLimiter = createInMemoryRateLimiter(60);
   const tokenLimiter = createInMemoryRateLimiter(120);
   const accountTokensLimiter = createInMemoryRateLimiter(10);
+  const notificationPushersLimiter = createInMemoryRateLimiter(30);
   // A complete dual-proof/context flow includes reads, two explicit legs and
   // provider rotations. Keep its bounded budget separate from token issuance.
   const identityFlowLimiter = createInMemoryRateLimiter(40);
@@ -948,6 +966,15 @@ export function createAccountsHandler(
       }
       return methodNotAllowed("GET, POST");
     }
+
+    const notificationPusherResponse = await handleNotificationPusherRequest({
+      request,
+      url,
+      store,
+      options: options.notificationPushers,
+      limiter: notificationPushersLimiter,
+    });
+    if (notificationPusherResponse) return notificationPusherResponse;
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
