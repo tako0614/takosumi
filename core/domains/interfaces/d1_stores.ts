@@ -656,7 +656,11 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
               ) = i.resolved_revision
           and permission.value = ?
           ${input.consumer
-            ? `and ((i.owner_kind = 'Capsule' and i.owner_id = ?)
+            ? `and ((i.owner_kind = 'Capsule' and i.owner_id = ?
+                  and (json_extract(i.record_json, '$.metadata.materializedFrom') is not null
+                    or json_extract(i.record_json, '$.metadata.createdUnder') in ('app', 'operator'))
+                  and (json_extract(b.record_json, '$.metadata.materializedFrom') is not null
+                    or json_extract(b.record_json, '$.metadata.createdUnder') in ('app', 'operator')))
                 or (json_extract(b.record_json, '$.metadata.materializedFrom.source') = 'capsule_required_interface'
                   and json_extract(b.record_json, '$.metadata.materializedFrom.capsuleId') = ?))`
             : ""}
@@ -683,8 +687,9 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
       )`,
     );
     parameters.push(input.subjectId, input.permission);
-    // Workspace-free runtime evidence (TASK-0118 9.1): an Interface this app
-    // owns, or a Binding materialized from this app's own (active) link.
+    // Workspace-free runtime evidence (TASK-0118 9.1): the app's own records
+    // on an Interface it owns, or a Binding materialized from this app's own
+    // (active) link.
     if (input.consumer) parameters.push(input.consumer.capsuleId, input.consumer.capsuleId);
     const cursor = decodeCursor(input.params.cursor);
     if (cursor) {

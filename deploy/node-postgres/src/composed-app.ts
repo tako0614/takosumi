@@ -31,8 +31,7 @@ import {
   hasConfiguredOpenTofuRunner,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
-import { appActionAllowed } from "takosumi-contract/app-access";
-import { isMissingOwnershipSchemaError } from "../../../core/domains/app-ownership/store.ts";
+import { decideInterfaceAppAccess } from "../../../core/domains/app-ownership/interface-app-decision.ts";
 import { validateUninstallRequester } from "@takosjp/takosumi-accounts-service";
 import {
   PartitionedSecretBoundaryCrypto,
@@ -397,6 +396,11 @@ export async function buildComposedApp(
         ...(runtimePrincipal && result.auth.appIds?.length === 1
           ? { capsuleId: result.auth.appIds[0] }
           : {}),
+        // A PAT limited to apps: Core never gives it Workspace authority and
+        // decides only those apps.
+        ...(!runtimePrincipal && result.auth.appIds !== undefined
+          ? { appIds: [...result.auth.appIds] }
+          : {}),
         // The account's real Workspace role is unknown here: the authoritative
         // Workspace is resolved later by the Interface route. A role claimed
         // from the HTTP method would be a fabricated grant, so account
@@ -443,27 +447,18 @@ export async function buildComposedApp(
     // ownership row (TASK-0118 9.1): the owner or a member may read them, and
     // change them as a settings change. `undefined` keeps the Workspace
     // decision for an app the backfill has not reached.
-    authorizeInterfaceApp: async ({ actor, capsuleId, access, request }) => {
+    authorizeInterfaceApp: async ({ actor, capsuleId, action, request }) => {
       const operations = controlPlaneOperations;
       if (!operations) return false;
-      let owned: Awaited<ReturnType<typeof operations.appOwnership.getOwnership>>;
-      try {
-        owned = await operations.appOwnership.getOwnership(capsuleId);
-      } catch (error) {
-        return isMissingOwnershipSchemaError(error) ? undefined : false;
-      }
-      if (!owned) return undefined;
+      const decided = await decideInterfaceAppAccess(operations, {
+        accountId: actor.actorAccountId,
+        capsuleId,
+        action,
+      });
+      // A PAT limited to apps reaches only those apps.
       const appIds = interfaceBearers.get(request)?.appIds;
-      if (appIds !== undefined && !appIds.includes(capsuleId)) return false;
-      try {
-        const app = await operations.appAccess.resolveAppAccess(actor.actorAccountId, capsuleId);
-        return app !== undefined && app.capsuleId === capsuleId &&
-          app.ownerAccountId === owned.ownerAccountId &&
-          app.ownershipEpoch === owned.ownershipEpoch &&
-          appActionAllowed(app.role, access === "read" ? "view" : "change_settings");
-      } catch {
-        return false;
-      }
+      if (decided !== undefined && appIds !== undefined && !appIds.includes(capsuleId)) return false;
+      return decided;
     },
   });
   controlPlaneOperations = created.operations;

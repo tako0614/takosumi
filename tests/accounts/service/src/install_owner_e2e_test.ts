@@ -282,6 +282,32 @@ for (const backend of BACKENDS) {
     expect(((await relisted.json()).workspaces as { id: string }[]).map((row) => row.id)).toEqual([owned[0]!.id]);
   });
 
+  test(`[${backend}] a plain install plan on the Workspace-less route is the caller's app in the caller's namespace`, async () => {
+    const fixture = await compose(backend);
+    // A malformed plain body is refused before any namespace is created.
+    for (const body of [{}, { source: { url: "https://github.com/takos/example.git" } }, { mode: "plan" }]) {
+      expect((await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", body, "malformed")).status).toBe(400);
+    }
+    expect(await fixture.operations.workspaces.listWorkspacesByOwner(NEWCOMER)).toEqual([]);
+    // The body the Workspace route takes (TASK-0118 9.1): it stops at review.
+    const created = await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", NORMAL_INSTALL("plain-app"), "plain-install");
+    expect(created.status).toBe(201);
+    const [namespace] = await fixture.operations.workspaces.listWorkspacesByOwner(NEWCOMER);
+    const createdPlan = (await created.json()).installPlan;
+    expect(createdPlan).toMatchObject({ createdBy: NEWCOMER, workspaceId: namespace!.id });
+    expect(createdPlan.mode).toBeUndefined();
+    const plan = await fixture.reconcileUntil(NEWCOMER, createdPlan.id, "planning");
+    expect(plan.phase).toBe("planning");
+    expect((await fixture.operations.appOwnership!.getOwnership(plan.capsuleId))?.ownerAccountId).toBe(NEWCOMER);
+    // Nobody else reaches it.
+    expect((await fixture.route(ADMIN, "GET", `/api/v1/install-plans/${plan.id}`)).status).toBe(403);
+    expect((await fixture.route(WORKSPACE_OWNER, "GET", `/api/v1/capsules/${plan.capsuleId}`)).status).toBe(403);
+    // The same key replays it.
+    const replay = await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", NORMAL_INSTALL("plain-app"), "plain-install");
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).installPlan.id).toBe(plan.id);
+  });
+
   test(`[${backend}] workspace-less install idempotency is per actor`, async () => {
     const fixture = await compose(backend);
     const body = { mode: "attempt", source: { url: "https://github.com/takos/example.git", ref: "main" } };

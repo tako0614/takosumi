@@ -559,10 +559,16 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
     const subject = placeholder(input.subjectId);
     const permission = placeholder(JSON.stringify([input.permission]));
     // A Workspace-free runtime principal's evidence: a Binding on an
-    // Interface its own app owns, or one materialized from its own app's
-    // link (whose activity the consent clause below still requires).
+    // Interface its own app owns, both the app's own records (materialized,
+    // or written under the app's or the operator's authority), or one
+    // materialized from its own app's link (whose activity the consent
+    // clause below still requires).
     const consumerClause = input.consumer
-      ? `and ((i.owner_kind = 'Capsule' and i.owner_id = ${placeholder(input.consumer.capsuleId)})
+      ? `and ((i.owner_kind = 'Capsule' and i.owner_id = ${placeholder(input.consumer.capsuleId)}
+            and (i.record_json->'metadata'->'materializedFrom' is not null
+              or i.record_json->'metadata'->>'createdUnder' in ('app', 'operator'))
+            and (b.record_json->'metadata'->'materializedFrom' is not null
+              or b.record_json->'metadata'->>'createdUnder' in ('app', 'operator')))
           or (b.record_json->'metadata'->'materializedFrom'->>'source' = 'capsule_required_interface'
             and b.record_json->'metadata'->'materializedFrom'->>'capsuleId' = ${placeholder(input.consumer.capsuleId)}))`
       : "";

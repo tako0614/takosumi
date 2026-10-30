@@ -227,17 +227,47 @@ test("an unrelated account, another app, a missing or malformed capsuleId and an
 
 test("a personal access token restricted to apps names only its apps; an account-wide one gets the account's role", async () => {
   const h = harness();
-  const pat = (appIds?: readonly string[]) => sessionOf({
+  const pat = (appIds?: readonly string[], extra: Partial<PlatformExtensionSessionContext> = {}) => sessionOf({
     authKind: "personal-access-token",
     scopes: ["read"],
     ...(appIds ? { appIds } : {}),
+    ...extra,
   });
   expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat([OTHER_APP]))).status).toBe(403);
+  // An empty list is a deny-all snapshot, never "unrestricted".
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat([]))).status).toBe(403);
   expect(h.decided).toEqual([]);
   expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat([APP]))).status).toBe(200);
   expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat())).status).toBe(200);
-  expect(h.forwarded.map((headers) => headers["x-takosumi-platform-app-role"])).toEqual(["owner", "owner"]);
-  expect(h.forwarded.map((headers) => headers["x-takosumi-platform-account-id"])).toEqual([OWNER, OWNER]);
+  // A Workspace-bound token (introspected binding) keeps its restriction.
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat(undefined, { workspaceId: "ws_bound" }))).status)
+    .toBe(200);
+  expect(h.forwarded.map((headers) => headers["x-takosumi-platform-app-role"])).toEqual(["owner", "owner", "owner"]);
+  // Only the unrestricted token carries the account.
+  expect(h.forwarded.map((headers) => headers["x-takosumi-platform-account-id"])).toEqual([null, OWNER, null]);
+});
+
+test("a personal access token gets an app role only with the core scope Accounts requires for the method", async () => {
+  const h = harness();
+  const pat = (scopes: readonly string[]) => sessionOf({ authKind: "personal-access-token", scopes });
+  // The route itself requires no scope, so only the app decision can refuse.
+  const post = { method: "POST", body: "{}" };
+  const route = { ...ROUTE, requiredScopes: [] as string[] };
+  // Extension-only and read-only scopes never confer a role for a change.
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat(["ai.chat"]), route, post)).status).toBe(403);
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat(["read"]), route, post)).status).toBe(403);
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat(["ai.chat"]), route)).status).toBe(403);
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat(["write"]), route)).status).toBe(403);
+  expect(h.decided).toEqual([]);
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat(["write"]), route, post)).status).toBe(200);
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat(["admin"]), route, post)).status).toBe(200);
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, pat(["read"]), route)).status).toBe(200);
+  expect(h.forwarded.map((headers) => headers["x-takosumi-platform-app-role"])).toEqual(["owner", "owner", "owner"]);
+  // A browser session has no scopes and is decided by its role alone (its
+  // change still needs the issuer Origin, as before).
+  expect((await call(h, `/extensions/app/items?capsuleId=${APP}`, sessionOf({ subject: MEMBER }), route, {
+    ...post, headers: { origin: ORIGIN },
+  })).status).toBe(200);
 });
 
 test("app-bound credentials (installed app, delegate, Interface, Run) name only their own app and gain no role or account", async () => {
@@ -278,13 +308,19 @@ test("a personal access token's app restriction survives introspection; a malfor
       undefined,
       async () => Response.json({ active: true, token_use: "personal_access", scope: "read", sub: OWNER, ...body }),
     );
-  expect(await introspected({ app_ids: [APP, APP] })).toEqual({
+  expect(await introspected({ app_ids: [APP] })).toEqual({
     authenticated: true, authKind: "personal-access-token", subject: OWNER, appIds: [APP], scopes: ["read"],
+  });
+  expect(await introspected({ app_ids: [] })).toEqual({
+    authenticated: true, authKind: "personal-access-token", subject: OWNER, appIds: [], scopes: ["read"],
   });
   expect(await introspected({})).toEqual({
     authenticated: true, authKind: "personal-access-token", subject: OWNER, scopes: ["read"],
   });
-  for (const appIds of ["cap_one", [1], [""], Array.from({ length: 101 }, (_, i) => `cap_${i}`)]) {
+  // Up to the stored PAT limit is accepted; only malformed values refuse.
+  const many = Array.from({ length: 10_000 }, (_, i) => `cap_${i}`);
+  expect((await introspected({ app_ids: many })).appIds).toHaveLength(10_000);
+  for (const appIds of ["cap_one", [1], [""], ["cap bad"], [...many, "cap_extra"]]) {
     expect(await introspected({ app_ids: appIds })).toEqual({ authenticated: false });
   }
 });

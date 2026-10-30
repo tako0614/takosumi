@@ -168,6 +168,93 @@ test("Interface OAuth activity fails closed and removes canonically stale tokens
   expect(await store.findAccessToken(unvalidated.accessToken)).toBeUndefined();
 });
 
+test("Interface OAuth evidence without a Workspace passes with its Capsule and fails with neither owner", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  // A token row as a Workspace-free issuer will write it (TASK-0118 Phase 9):
+  // the Capsule-owned Interface is named by its Capsule alone.
+  await store.saveAccessToken("taksrv_capsule_only", {
+    clientId: audience,
+    audience,
+    scope: "mcp.invoke",
+    subject: "pairwise_capsule_only",
+    capsuleId: "capsule_office",
+    role: "interface-runtime",
+    interfaceId: "if_office_mcp",
+    interfaceBindingId: "ifb_takos_office",
+    interfaceResolvedRevision: 3,
+    expiresAt: now + 30_000,
+  });
+  const observed: unknown[] = [];
+  const validator = (evidence: unknown) => {
+    observed.push(evidence);
+    return true;
+  };
+  const introspected = await handleIntrospect({
+    issuer: "https://accounts.example.test",
+    request: introspectionRequest("taksrv_capsule_only", { resource: audience }),
+    store,
+    clients: confidentialClients,
+    interfaceOAuthActivityValidator: validator,
+  });
+  expect(await introspected.json()).toMatchObject({
+    active: true,
+    token_use: "interface_oauth",
+    takosumi: {
+      capsule_id: "capsule_office",
+      interface_id: "if_office_mcp",
+      interface_binding_id: "ifb_takos_office",
+      interface_resolved_revision: 3,
+    },
+  });
+  const userInfo = await handleUserInfo({
+    request: new Request("https://accounts.example.test/oauth/userinfo", {
+      headers: { authorization: "Bearer taksrv_capsule_only" },
+    }),
+    store,
+    expectedAudience: audience,
+    interfaceOAuthActivityValidator: validator,
+  });
+  const userInfoBody = await userInfo.json();
+  expect(userInfoBody.takosumi).toEqual({
+    capsule_id: "capsule_office",
+    interface_id: "if_office_mcp",
+    interface_binding_id: "ifb_takos_office",
+    interface_resolved_revision: 3,
+  });
+  // Core receives Capsule evidence and no Workspace.
+  expect(observed).toEqual([
+    expect.not.objectContaining({ workspaceId: expect.anything() }),
+    expect.not.objectContaining({ workspaceId: expect.anything() }),
+  ]);
+  expect(observed[0]).toMatchObject({ capsuleId: "capsule_office", interfaceId: "if_office_mcp" });
+
+  // With neither a Capsule nor a Workspace the evidence is incomplete: the
+  // token is refused (and removed) without asking Core.
+  await store.saveAccessToken("taksrv_no_owner", {
+    clientId: audience,
+    audience,
+    scope: "mcp.invoke",
+    subject: "pairwise_no_owner",
+    role: "interface-runtime",
+    interfaceId: "if_office_mcp",
+    interfaceBindingId: "ifb_takos_office",
+    interfaceResolvedRevision: 3,
+    expiresAt: now + 30_000,
+  });
+  const before = observed.length;
+  const refused = await handleIntrospect({
+    issuer: "https://accounts.example.test",
+    request: introspectionRequest("taksrv_no_owner", { resource: audience }),
+    store,
+    clients: confidentialClients,
+    interfaceOAuthActivityValidator: validator,
+  });
+  expect(await refused.json()).toEqual({ active: false });
+  expect(observed).toHaveLength(before);
+  expect(await store.findAccessToken("taksrv_no_owner")).toBeUndefined();
+});
+
 test("ordinary OAuth UserInfo returns the subject account profile", async () => {
   const store = new InMemoryAccountsStore();
   await store.saveAccount({

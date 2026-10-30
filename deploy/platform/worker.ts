@@ -197,6 +197,7 @@ import {
   operatorControlMcpEnabled,
   type OperatorControlMcpAuthority,
 } from "../operator-control-mcp.ts";
+import { createOperatorControlMcpAuthority } from "./operator-control-mcp-authority.ts";
 
 // Immediate Takosumi Mobile notifications attach to the invocation that
 // records the Activity through the runtime's per-invocation waitUntil
@@ -469,6 +470,9 @@ type OperatorControlMcpSessionVerifier = (
  * Optional built-in adapter route. Every MCP POST performs exact-resource
  * Interface OAuth introspection before the JSON-RPC body is read. The raw
  * bearer is neither forwarded to the public control handlers nor persisted.
+ *
+ * The token must name the MCP's own app (Capsule evidence); a Workspace it
+ * still carries is kept only as a bearer restriction (TASK-0118 P9.1-e).
  */
 export async function handlePlatformOperatorControlMcpRequest(
   request: Request,
@@ -478,7 +482,8 @@ export async function handlePlatformOperatorControlMcpRequest(
     readonly createAuthority?: (
       session: PlatformExtensionSessionContext & {
         readonly subject: string;
-        readonly workspaceId: string;
+        readonly capsuleId: string;
+        readonly workspaceId?: string;
       },
     ) => Promise<OperatorControlMcpAuthority>;
   } = {},
@@ -490,12 +495,14 @@ export async function handlePlatformOperatorControlMcpRequest(
   }
   if (request.method !== "POST") {
     return await handleOperatorControlMcpRequest(request, {
-      workspaceId: "disabled",
+      subject: "disabled",
+      capsuleId: "disabled",
       dispatchPublicControl: async () =>
         Response.json({ error: "unavailable" }, { status: 503 }),
-      installPlanWorkspaceId: async () => undefined,
-      capsuleWorkspaceId: async () => undefined,
-      runWorkspaceId: async () => undefined,
+      app: async () => undefined,
+      installPlan: async () => undefined,
+      run: async () => undefined,
+      installNamespaceId: async () => undefined,
     });
   }
   const session = await (
@@ -512,7 +519,7 @@ export async function handlePlatformOperatorControlMcpRequest(
     !session.authenticated ||
     session.authKind !== "interface-oauth-token" ||
     !subject ||
-    !workspaceId ||
+    (session.workspaceId !== undefined && !workspaceId) ||
     !capsuleId ||
     !interfaceId ||
     !interfaceBindingId ||
@@ -532,7 +539,7 @@ export async function handlePlatformOperatorControlMcpRequest(
   const exactSession = {
     ...session,
     subject,
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
     capsuleId,
     interfaceId,
     interfaceBindingId,
@@ -550,76 +557,38 @@ export async function handlePlatformOperatorControlMcpRequest(
 async function createPlatformOperatorControlMcpAuthority(
   request: Request,
   env: CloudflareWorkerEnv,
-  session: PlatformExtensionSessionContext & {
+  session: {
     readonly subject: string;
-    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly workspaceId?: string;
   },
 ): Promise<OperatorControlMcpAuthority> {
-  const operations = await controlPlaneOperationsFor(env);
-  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-    schemaMode: resolveD1AccountsSchemaMode(
-      env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+  const sunset = platformLegacyWorkspaceSunset(env);
+  return createOperatorControlMcpAuthority({
+    operations: await controlPlaneOperationsFor(env),
+    store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+      schemaMode: resolveD1AccountsSchemaMode(
+        env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+      ),
+    }),
+    session: {
+      subject: session.subject,
+      capsuleId: session.capsuleId,
+      ...(session.workspaceId ? { workspaceId: session.workspaceId } : {}),
+    },
+    requestUrl: request.url,
+    ...(env.TAKOSUMI_ACCOUNTS_ISSUER
+      ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
+      : {}),
+    ...(sunset ? { legacyWorkspaceSunset: sunset } : {}),
+    ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
+      ? { appOwnershipMutationsFrozen: true }
+      : {}),
+    trustedNativeClients: trustedNativeClientsFromEnv(
+      env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
     ),
+    ...platformActivityCursorSealerOption(env),
   });
-  return {
-    workspaceId: session.workspaceId,
-    dispatchPublicControl: async (controlRequest) => {
-      const sourceUrl = new URL(controlRequest.url);
-      const targetUrl = new URL(request.url);
-      targetUrl.pathname = sourceUrl.pathname;
-      targetUrl.search = sourceUrl.search;
-      targetUrl.hash = "";
-      const response = await handleAuthenticatedControlRoute({
-        request: new Request(targetUrl, {
-          method: controlRequest.method,
-          headers: controlRequest.headers,
-          body:
-            controlRequest.method === "GET" || controlRequest.method === "HEAD"
-              ? undefined
-              : controlRequest.body,
-        }),
-        url: targetUrl,
-        store,
-        operations,
-        subject: session.subject,
-        workspaceId: session.workspaceId,
-        entry: "operator_mcp",
-        ...platformLegacyWorkspaceSunsetOption(env),
-        ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
-          ? { appOwnershipMutationsFrozen: true }
-          : {}),
-        trustedNativeClients: trustedNativeClientsFromEnv(
-          env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
-        ),
-        ...platformActivityCursorSealerOption(env),
-        ...(env.TAKOSUMI_ACCOUNTS_ISSUER
-          ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
-          : {}),
-      });
-      return response ?? Response.json({ error: "not found" }, { status: 404 });
-    },
-    installPlanWorkspaceId: async (installPlanId) => {
-      try {
-        return (await operations.gitInstallPlans.get(installPlanId))?.workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-    capsuleWorkspaceId: async (capsuleId) => {
-      try {
-        return (await operations.capsules.getCapsule(capsuleId)).workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-    runWorkspaceId: async (runId) => {
-      try {
-        return (await operations.getRun(runId)).workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-  };
 }
 
 /**
@@ -2309,6 +2278,11 @@ function platformInterfaceActorContext(
     safePlatformExtensionContextId(session.capsuleId)
       ? { capsuleId: safePlatformExtensionContextId(session.capsuleId) }
       : {}),
+    // A personal access token limited to apps: Core never gives it Workspace
+    // authority and decides only those apps.
+    ...(session.authKind === "personal-access-token" && session.appIds !== undefined && !runtimePrincipal
+      ? { appIds: [...session.appIds] }
+      : {}),
     ...(session.authKind === "service-token"
       ? { principalKind: "service", serviceId: session.subject }
       : { principalKind: "account" }),
@@ -3234,6 +3208,7 @@ async function handlePlatformExtensionRouteRequestObserved(
       authContext.session,
       authContext.workspaceRoleVerified,
       authContext.appRoleVerified,
+      authContext.accountId,
     );
     if (!authenticatedContext) {
       return Response.json(
@@ -3410,6 +3385,12 @@ export interface PlatformExtensionSessionContext {
     | "run-credential";
   readonly subject?: string;
   readonly capsuleId?: string;
+  /**
+   * The apps a personal access token is limited to (introspected `app_ids`).
+   * It travels to Core on the actor and narrows Workspace and app context on
+   * extension routes; it is never forwarded to an extension.
+   */
+  readonly appIds?: readonly string[];
   /** Present only on a verified, short-lived Run credential. */
   readonly runId?: string;
   /** Installer provenance re-read from the canonical Capsule ledger. */
@@ -3420,11 +3401,6 @@ export interface PlatformExtensionSessionContext {
   readonly workspaceId?: string;
   /** Live Workspace role carried by token introspection or membership lookup. */
   readonly workspaceRole?: WorkspaceRole;
-  /**
-   * A personal access token's app restriction (`app_ids` from introspection).
-   * Private: it narrows Workspace and app context and is never forwarded.
-   */
-  readonly appIds?: readonly string[];
   /** Live role on `capsuleId`, set only by a verified `appContext`. */
   readonly appRole?: AppRole;
   readonly audience?: string;
@@ -3461,6 +3437,7 @@ async function platformExtensionAuthContext(
       readonly session: PlatformExtensionSessionContext;
       readonly workspaceRoleVerified: boolean;
       readonly appRoleVerified: boolean;
+      readonly accountId?: string;
     }
   | { readonly ok: false; readonly response: Response }
 > {
@@ -3478,6 +3455,9 @@ async function platformExtensionAuthContext(
   if (sessionRoleFailure) {
     return { ok: false, response: sessionRoleFailure };
   }
+  // From the credential itself, before a selected Workspace or app changes
+  // the session: a restricted token never carries its account.
+  const accountId = platformExtensionAccountId(session);
   let workspaceRoleVerified = false;
   const headers = new Headers(request.headers);
   for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
@@ -3674,7 +3654,6 @@ async function platformExtensionAuthContext(
         safePlatformExtensionHeaderValue(sessionContext.capsuleId),
       );
     }
-    const accountId = platformExtensionAccountId(sessionContext);
     if (accountId) {
       headers.set(
         PLATFORM_EXTENSION_ACCOUNT_ID_HEADER,
@@ -3729,32 +3708,41 @@ async function platformExtensionAuthContext(
     session: sessionContext,
     workspaceRoleVerified,
     appRoleVerified,
+    ...(accountId ? { accountId } : {}),
   };
 }
 
 /**
- * The Takosumi account behind a human credential the platform verified
- * itself: a browser session (Accounts or shared account) or a personal access
- * token, whose subject is the account. OAuth subjects may be pairwise, and
- * app, Interface, Run and operator credentials act for something else, so
- * they carry no account.
+ * The Takosumi account behind an unrestricted human credential the platform
+ * verified itself: a browser session (Accounts or shared account) or a
+ * personal access token, whose subject is the account. A token limited to
+ * apps (`appIds`) or bound to a Workspace does not act for the whole account,
+ * so it carries none. OAuth subjects may be pairwise, and app, Interface, Run
+ * and operator credentials act for something else, so they carry none either.
+ * Call it on the session as the credential verified it, never after a
+ * Workspace context was added.
  */
 function platformExtensionAccountId(
   session: PlatformExtensionSessionContext,
 ): string | undefined {
-  if (
-    session.authKind !== "session" &&
-    session.authKind !== "personal-access-token"
-  ) {
-    return undefined;
+  if (session.authKind === "session") {
+    return safePlatformExtensionContextId(session.subject);
   }
-  return safePlatformExtensionContextId(session.subject);
+  if (
+    session.authKind === "personal-access-token" &&
+    session.appIds === undefined &&
+    session.workspaceId === undefined
+  ) {
+    return safePlatformExtensionContextId(session.subject);
+  }
+  return undefined;
 }
 
 function platformExtensionAuthenticatedContext(
   session: PlatformExtensionSessionContext,
   workspaceRoleVerified: boolean,
   appRoleVerified = false,
+  accountId?: string,
 ): PlatformExtensionAuthenticatedContext | undefined {
   if (!session.authenticated) return undefined;
   const authKind = session.authKind;
@@ -3812,7 +3800,6 @@ function platformExtensionAuthenticatedContext(
       ? undefined
       : safePlatformWorkspaceRole(session.workspaceRole);
   if (session.workspaceRole !== undefined && !workspaceRole) return undefined;
-  const accountId = platformExtensionAccountId(session);
   const appRole = appRoleVerified ? safePlatformAppRole(session.appRole) : undefined;
   if (appRoleVerified && !appRole) return undefined;
 
@@ -3972,12 +3959,16 @@ function platformExtensionWorkspaceAccessFailure(): {
 
 /**
  * May this session name `workspaceId` for a compatibility Workspace context
- * (TASK-0118 P9.1-e)? Decided by the account, in-process, without the legacy
- * `/api/v1/workspaces/:id` routes: only the Workspace's owner may name it, and
- * the forwarded role is `owner`. Workspace membership no longer grants this
- * (there are no non-owner members in production, and member writes are
- * frozen). A shared-account (Hosted) session keeps the shared RP's decision
- * until stage 9B.
+ * (TASK-0118 P9.1-e)? This live check runs for browser sessions and personal
+ * access tokens without a Workspace binding. It is decided by the account,
+ * in-process, without the legacy `/api/v1/workspaces/:id` routes: only the
+ * Workspace's owner may name it, and the forwarded role is `owner`. For these
+ * credentials Workspace membership no longer grants this (there are no
+ * non-owner members in production, and member writes are frozen). A
+ * credential already bound to a Workspace (a Workspace-bound PAT or OAuth
+ * token) never reaches this check: it may name only its own Workspace, with
+ * the member role its introspection reports. A shared-account (Hosted)
+ * session keeps the shared RP's decision until stage 9B.
  *
  * The credential gates the Accounts route applied are kept: a personal access
  * token restricted to apps never names a Workspace, and one without a core
@@ -4049,8 +4040,10 @@ export type PlatformExtensionAppAccess = (
  * A credential bound to one app (an installed app's OAuth token, an
  * Interface OAuth token, a Run credential) may name only that app and gains
  * no role. An account session or personal access token gets its live owner or
- * member role on the app; a token restricted to apps must list it. Operator
- * service tokens and unbound OAuth tokens cannot name an app.
+ * member role on the app; a token needs the core scope Accounts requires for
+ * the method (`read` to read, `write` to change, or `admin`), and a token
+ * restricted to apps must list it. Operator service tokens and unbound OAuth
+ * tokens cannot name an app.
  */
 export async function platformExtensionVerifiedAppSession(
   request: Request,
@@ -4072,8 +4065,21 @@ export async function platformExtensionVerifiedAppSession(
   if (session.authKind !== "session" && session.authKind !== "personal-access-token") {
     return platformExtensionAppAccessFailure();
   }
-  if (session.appIds !== undefined && !session.appIds.includes(requestedCapsuleId)) {
-    return platformExtensionAppAccessFailure();
+  if (session.authKind === "personal-access-token") {
+    // A token gets an app role only with the core scope Accounts' own per-app
+    // decision requires for this method: `read` to read, `write` to change
+    // (`admin` covers both). Extension-only scopes never confer one.
+    const scopes = session.scopes ?? [];
+    const required = request.method === "GET" || request.method === "HEAD" ||
+        request.method === "OPTIONS"
+      ? "read"
+      : "write";
+    if (!scopes.includes(required) && !scopes.includes("admin")) {
+      return platformExtensionAppAccessFailure();
+    }
+    if (session.appIds !== undefined && !session.appIds.includes(requestedCapsuleId)) {
+      return platformExtensionAppAccessFailure();
+    }
   }
   const live = await appAccess(request, env, requestedCapsuleId, session);
   if (typeof live === "object") return { ok: false, response: sharedAuthUnavailableResponse() };
@@ -4543,10 +4549,8 @@ async function introspectPlatformExtensionToken(
     }
     const takosumi = platformExtensionTakosumiMetadata(record);
     // A personal access token restricted to apps keeps that restriction on
-    // the platform seam (TASK-0118 9.1-h/9.1-e); a malformed list refuses.
-    const appIds = tokenUse === "personal_access"
-      ? platformExtensionPatAppIds(record.app_ids)
-      : undefined;
+    // the platform seam; a malformed list refuses the token.
+    const appIds = tokenUse === "personal_access" ? platformExtensionPatAppIds(record) : undefined;
     if (appIds === null) return { authenticated: false };
     return {
       authenticated: true,
@@ -4556,7 +4560,7 @@ async function introspectPlatformExtensionToken(
           : "personal-access-token",
       subject,
       ...takosumi,
-      ...(appIds ? { appIds } : {}),
+      ...(appIds !== undefined ? { appIds } : {}),
       scopes,
       ...(tokenUse === "oauth_access"
         ? platformExtensionOAuthClientId(record)
@@ -4567,19 +4571,20 @@ async function introspectPlatformExtensionToken(
   }
 }
 
-/** `undefined` when absent; `null` when present but not a list of app ids. */
+/**
+ * The apps a personal access token is limited to (introspection `app_ids`):
+ * `undefined` when unlimited, `null` (refuse the token) when malformed. An
+ * empty list is a deny-all snapshot and stays empty. The bound is the stored
+ * PAT limit (10,000), so no valid token is refused for its length.
+ */
 function platformExtensionPatAppIds(
-  value: unknown,
+  record: Record<string, unknown>,
 ): readonly string[] | undefined | null {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > 100) return null;
-  if (!value.every((entry) =>
-    typeof entry === "string" && entry.length > 0 && entry.length <= 256 &&
-    !/[\u0000-\u001f\u007f]/u.test(entry)
-  )) return null;
-  // Exact strings: a requested app id is compared, never normalized, so an
-  // entry can only narrow what the token reaches.
-  return Object.freeze([...new Set(value as string[])]);
+  const raw = record.app_ids;
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > 10_000) return null;
+  const ids = raw.map((value) => typeof value === "string" ? safePlatformExtensionContextId(value) : undefined);
+  return ids.every((id): id is string => id !== undefined) ? ids : null;
 }
 
 /** The introspected OAuth client id, only in a bounded printable shape. */
@@ -4633,8 +4638,14 @@ function platformExtensionInterfaceOAuthSession(
     valueString(takosumi.interface_binding_id),
   );
   const interfaceResolvedRevision = takosumi.interface_resolved_revision;
+  // The Interface owner is evidence enough (TASK-0118 Phase 9): a Capsule for
+  // a Capsule-owned Interface, the Workspace only for a Workspace-owned one.
+  // A Workspace the token still carries is forwarded as compatibility
+  // context; it is never required next to a Capsule.
   if (
-    !workspaceId ||
+    (takosumi.workspace_id !== undefined && !workspaceId) ||
+    (takosumi.capsule_id !== undefined && !capsuleId) ||
+    (!workspaceId && !capsuleId) ||
     !interfaceId ||
     !interfaceBindingId ||
     typeof interfaceResolvedRevision !== "number" ||
@@ -4647,7 +4658,7 @@ function platformExtensionInterfaceOAuthSession(
     authenticated: true,
     authKind: "interface-oauth-token",
     subject,
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
     ...(capsuleId ? { capsuleId } : {}),
     audience: expectedAudience,
     interfaceId,

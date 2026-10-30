@@ -357,7 +357,7 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 | POST | `/api/v1/connections/{connectionId}/test`・`/revoke` | 接続の所有者だけ。Workspace scopeの接続も所有者のもので、Workspaceの所有者・管理者であることは権限にならない (所有者の記録が無い古い行だけ、記録されたWorkspaceの所有者を所有者とみなす)。それ以外は存在を明かさない `404 connection_not_found` |
 | POST | `/api/v1/sources`、`PATCH /api/v1/sources/{sourceId}` の `authConnectionId` | どのアプリも所有しないSourceには本人の接続だけ。アプリのSourceにはアプリの所有者の接続だけ (Sourceサービスが判定)。Workspaceのメンバーであっても他人の資格情報は使えない |
 | GET | `/api/v1/source-ref-resolutions?url=…` | write scopeを持つアカウント資格情報。runnerを起動して公開Git sourceのstable SemVerタグを解決 |
-| POST | `/api/v1/install-plans` | アカウント資格情報、または代理に指定されたアプリのtoken (利用者の代理)。`mode: "attempt"`、workspace指定なし。本人 (代理なら利用者) がアプリ所有者 |
+| POST | `/api/v1/install-plans` | アカウント資格情報、または代理に指定されたアプリのtoken (利用者の代理)。install attempt (`mode: "attempt"`) か、Workspace routeと同じ普通のinstall plan (`mode` なし。reviewで止まる)。workspace指定なし。本人 (代理なら利用者) がアプリ所有者。形の正しくない普通のinstall planは、内部のnamespaceを作る前に拒否する |
 | GET | `/api/v1/usage` | アカウント資格情報。本人が支払人の使用量だけ。アプリ単位の独立した計測は、使用期間（計測時刻の前後2時間。アプリ作成より前と記録時刻より後は含めない）が受諾済みの所有権移転で区切られた1つの所有期間に収まるときだけ、その所有者が支払人。収まらない場合や移転履歴が欠けている場合は支払人なし |
 
 operator が `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen` を設定している間、メンバーの追加・削除・脱退と譲渡の申し出・受諾・取消は、アプリを読む前に `409 failed_precondition` (`details.reason: "app_ownership_mutations_frozen"`) を返します。メンバー追加は、確認済みアカウントの有無にかかわらず `202 { accepted: true }` を返します。所有者の `connections_and_code` 同意を監査記録へ保存します。譲渡を受諾すると既存メンバーを全員削除し、監査記録に通知対象を残します。メンバー管理・譲渡・受諾・取消・アンインストールには本人のセッションまたは明示的scopeを持つPATが必要で、インストール済みアプリのOAuthアクセストークンは使えません。
@@ -370,12 +370,12 @@ PATには `appIds` を指定できます。実効権限はscopeと現在のア�
 
 | 操作 (`AppAction`) | 所有者 | メンバー | 主なroute |
 | --- | --- | --- | --- |
-| 表示 (`view`) | 可 | 可 | `GET /capsules/{id}` と配下のGET、そのアプリのRun・StateVersion・Source・InstallConfig・互換レポートのGET |
-| 設定変更 (`change_settings`) | 可 | 可 | `PATCH /capsules/{id}`、`configuration-plans`、`install-config-re-adoptions`、`backups`、所有Sourceの `PATCH`・hook secret |
+| 表示 (`view`) | 可 | 可 | `GET /capsules/{id}` と配下のGET、そのアプリのRun・StateVersion・Source・InstallConfig・互換レポートのGET、そのアプリが所有するInterfaceの読み取り (`GET /interfaces?capsuleId=`、`GET /interfaces/{id}`) とlinkの `candidates` |
+| 設定変更 (`change_settings`) | 可 | 可 | `PATCH /capsules/{id}`、`configuration-plans`、`install-config-re-adoptions`、`backups`、所有Sourceの `PATCH`・hook secret、そのアプリが所有するInterfaceの変更 (Capsuleの `ownerRef` を付けた `POST /interfaces`、`PATCH`・`DELETE /interfaces/{id}`、`POST /interfaces/{id}/status`) |
 | 更新 (`update`) | 可 | 可 | `plan`、`revision-plans`、`drift-check`、所有Sourceの `sync`・`compatibility-check`、通常のRunの承認・適用・取消 |
 | ロールバック (`rollback`) | 可 | 可 | `POST /state-versions/{id}/rollback-plan`、restore Runの承認 |
 | 接続の選択 (`choose_connection`) | 可 | 可 | `providerBindings` を含む `configuration-plans`。選べるのは所有者の接続とoperatorのbindable接続だけ |
-| Interface linkの変更 (`change_interface_link`) | 可 | 可 | `PUT`・`DELETE /capsules/{id}/interface-links/{key}`、提供側アプリとしての `interface-links/requests` の一覧と `approve`・`decline` |
+| Interface linkの変更 (`change_interface_link`) | 可 | 可 | `PUT`・`DELETE /capsules/{id}/interface-links/{key}`、提供側アプリとしての `interface-links/requests` の一覧と `approve`・`decline`、そのアプリが所有するInterfaceを誰かに渡すこと (`POST /interfaces/{id}/bindings`、`DELETE /interfaces/{id}/bindings/{bindingId}`) |
 | アンインストール (`uninstall`) | 可 | 不可 | `DELETE /capsules/{id}`、`uninstall`・`cancel-uninstall`・`abandon`・`destroy-plan`、destroy Runの承認・適用・取消、所有Sourceの `DELETE` |
 | 所有者の譲渡 (`transfer_ownership`) | 可 | 不可 | `ownership-transfers` |
 | メンバー管理 (`manage_members`) | 可 | 不可 | `members` の追加・削除 (メンバー本人の離脱は可) |
@@ -425,13 +425,15 @@ Interface API (`/api/v1/interfaces…`) もWorkspaceなしで使えます。
 - インストール済みアプリ自身のOAuthトークン (そのアプリに結び付いたもの。Workspaceの有無は問わない) は実行時のprincipalです。Workspaceが無い場合は、`workspaceId` を付けずに `GET /api/v1/interfaces` を呼びます (`permission` は必須。`capsuleId` で提供側の1アプリに絞れる。`workspaceId` を付けると `400`)。結果は、そのトークンにその権限の今有効なPrincipal BindingがあるInterfaceだけで、`limit` と `cursor` でページを分け、続きがあれば `nextCursor` を返します。そのBindingは、トークンのアプリ自身の根拠である場合だけ数えます。つまり、そのアプリの有効なInterface連携から作られたBindingか、そのアプリ自身が所有するInterfaceのBindingです (アプリのpairwise subjectは呼び出し先の提供者に見えます。また、ある区画にBindingを書ける人は、共有された旧来の区画のほかの利用者も含めて、そこで任意のsubjectにBindingを作れます。そのため、アプリが所有していないInterfaceの手作りのBindingは根拠になりません)。`GET /api/v1/interfaces/{id}`、その `bindings`、`POST /api/v1/interfaces/{id}/token` も同じ規則で、根拠の無いInterfaceは `404`、実行時のprincipalは変更できません。アプリに結び付いていない、Workspaceも無い実行時のprincipalは拒否します。こうして発行するトークンは、そのInterfaceの区画で発行します。Workspaceに結び付いた実行時のトークンは、従来どおりそのWorkspaceに限ります。
 - Workspaceの制限が無いアカウントのセッションやPATは、`GET /api/v1/interfaces?capsuleId=` で1アプリのInterfaceを一覧できます (そのアプリの `view`。そのアプリが所有するInterfaceだけ)。`workspaceId` と `capsuleId` は同時に指定できず、どちらも無いと `400` です。
 - 同梱のAccounts host (self-host) では、Workspaceの制限が無いアカウントの呼び出し元が、IDで指定したCapsule所有のInterfaceを扱うとき、アプリに所有記録があればアプリで判定します (読み取りは `view`、InterfaceとBindingの変更は `change_settings`)。所有記録の無いアプリと、Workspace所有のInterfaceは従来のWorkspace判定のままです。`appIds` 付きのPATはそのアプリのInterfaceだけに届き、ここでWorkspaceの権限を持つことはありません。
+- self-hostとplatform Workerのどちらでも、アカウントの呼び出し元によるCapsule所有のInterfaceの変更は、アプリに所有記録があればアプリで判定します。Workspaceに束縛された資格情報でも同じです (その資格情報はInterfaceの区画を指している必要もあります)。Capsuleの `ownerRef` を付けた `POST /api/v1/interfaces`、`PATCH`・`DELETE`・`/status` には `change_settings`、Bindingの作成と取り消しには `change_interface_link` が要ります。Coreが受けるInterface linkのroute (`GET …/interface-links/{key}/candidates`、`…/interface-links/{key}` の `PUT`・`DELETE`。self-hostではAccountsより先にCoreが受けます) も、Accountsのlinkのrouteと同じく判定します。どのアカウントの呼び出し元でも利用側アプリの `view`・`change_interface_link` が要り、提供側アプリは自分を指すlinkを取り消せます。新しいlinkは、呼び出し元が提供側アプリでも `change_interface_link` を持つときだけ作成時に承認し、それ以外は `pending_approval` です。Workspaceのメンバーであるだけでは他人のアプリを変えられないので、共有された旧来の区画のほかの利用者は、アプリのInterfaceを作る・向け先を変える・廃止する・Bindingを付ける・linkをつなぐことができません。`appIds` 付きのPATはWorkspaceの権限を持たず、そのアプリだけに届きます (platform Workerではintrospectionの `app_ids` から)。Workspaceに束縛された資格情報での読み取り、Workspace所有のInterface、所有記録の無いアプリ、service principalは従来のWorkspace判定のままです。
+- Capsule所有のInterfaceと、そのBindingには、書き込んだときの権限を `metadata.createdUnder` に記録します。`app` (所有者かメンバー)、`operator` (hostのdeploy-controlの権限)、`workspace` (Workspaceのメンバーであることだけ。その時点でアプリに所有記録が無かったとき) のどれかで、権限の種類を表し、アカウントは記録しません。アプリ自身の記録として扱うのは、materializeされた記録と、`app`・`operator` で書かれた記録だけです。アプリに束縛された実行時のトークンが、アプリの所有するInterfaceを根拠にするには、InterfaceとBindingの両方がアプリ自身の記録である必要があります。アプリに所有記録ができる前にほかの利用者が書いたInterfaceやBinding、記録を始める前の手作業の記録は、根拠になりません。`GET /api/v1/interfaces?capsuleId=…&needsReview=true` (`view`) は、Interfaceか今のBindingのどれかがアプリ自身の記録でないため、所有者の確認を待つそのアプリのInterfaceを一覧します。所有者はそれを削除するか、アプリとして作り直します。
 - platform Workerでは、shared-account (Hosted) のセッションによる `capsuleId` の一覧も、dashboardと同じshared-authの制御経路で判定します。platform extensionの認可がアプリへ移るまで (Phase 9.1-e)、IDで指定するInterface routeにはアカウントの呼び出し元でもWorkspaceが要ります。
 
 platform extension の route も、アカウントとアプリで判定します (TASK-0118 Phase 9.1-e)。
 
-- route が `appContext` (`query-required` か `query-optional`) を宣言すると、`?capsuleId=` で1つのアプリを指定できます。platform は呼び出し元のそのアプリでの今の役割 (所有者かメンバー) を確かめてから渡し、handler は `x-takosumi-platform-capsule-id` と `x-takosumi-platform-app-role` (typed context では `capsuleId` と `appRole`) を受け取ります。アカウントのセッションとPATだけが役割を得ます。`appIds` 付きのPATはそのアプリだけを指定でき、Workspaceに束縛された資格情報はそのWorkspaceのアプリだけに届きます。1つのアプリに結び付いた資格情報 (インストール済みアプリ自身のトークン、代理アプリのトークン、Interface OAuthトークン、Run credential) は自分のアプリだけを指定でき、役割は付きません。operatorのservice token と、アプリに結び付かないOAuthトークンはアプリを指定できません。shared-account (Hosted) のセッションは、dashboardと同じshared-authのアプリの判定も通る必要があります。
-- アカウントのセッションとPATでは、認証したアカウントを `x-takosumi-platform-account-id` (typed context では `accountId`) で渡します。OAuthトークン (subjectがpairwiseのことがある)、Interface、Run、operatorの資格情報には付きません。
-- `workspaceContext` と `x-takosumi-platform-workspace-id` は、Hostedが課金の相手を選ぶための互換として 9B まで残します。セッションやPATが `?workspaceId=` で指定できるのは、そのアカウントが所有するWorkspaceだけで、渡す役割は `owner` です。Workspaceのメンバーであることは、もう指定の根拠になりません。判定は platform の中で行い、`/api/v1/workspaces/{id}` などの旧routeは呼びません。`appIds` 付きのPATと、`read` (か `admin`) のscopeを持たないPATはWorkspaceを指定できません (従来のAccountsの判定と同じ)。shared-account (Hosted) のセッションは、従来どおりshared-authの判定です。Workspaceを受け取る利用は引き続き `legacy_workspace_route` に記録します。
+- route が `appContext` (`query-required` か `query-optional`) を宣言すると、`?capsuleId=` で1つのアプリを指定できます。platform は呼び出し元のそのアプリでの今の役割 (所有者かメンバー) を確かめてから渡し、handler は `x-takosumi-platform-capsule-id` と `x-takosumi-platform-app-role` (typed context では `capsuleId` と `appRole`) を受け取ります。アカウントのセッションとPATだけが役割を得ます。`appIds` 付きのPATはそのアプリだけを指定でき、Workspaceに束縛された資格情報はそのWorkspaceのアプリだけに届きます。1つのアプリに結び付いた資格情報 (インストール済みアプリ自身のトークン、代理アプリのトークン、Interface OAuthトークン、Run credential) は自分のアプリだけを指定でき、役割は付きません。PATが役割を得るには、Accountsのアプリの判定と同じく、読み取りに `read`、変更 (GET・HEAD・OPTIONS以外) に `write` のscope (どちらも `admin` で可) が要り、extension専用のscopeだけでは得られません。operatorのservice token と、アプリに結び付かないOAuthトークンはアプリを指定できません。shared-account (Hosted) のセッションは、dashboardと同じshared-authのアプリの判定も通る必要があります。
+- アカウントのセッションと、制限の無いPATでは、認証したアカウントを `x-takosumi-platform-account-id` (typed context では `accountId`) で渡します。`appIds` 付きのPAT、Workspaceに束縛されたPAT、OAuthトークン (subjectがpairwiseのことがある)、Interface、Run、operatorの資格情報には付きません。
+- `workspaceContext` と `x-takosumi-platform-workspace-id` は、Hostedが課金の相手を選ぶための互換として 9B まで残します。セッションと、Workspaceに束縛されていないPATが `?workspaceId=` で指定できるのは、そのアカウントが所有するWorkspaceだけで、渡す役割は `owner` です。これらの資格情報では、Workspaceのメンバーであることはもう指定の根拠になりません。Workspaceに束縛されたPATとOAuthトークンは従来どおり、自分のWorkspaceだけを、introspectionが返すメンバーの役割で指定できます。判定は platform の中で行い、`/api/v1/workspaces/{id}` などの旧routeは呼びません。`appIds` 付きのPATと、`read` (か `admin`) のscopeを持たないPATはWorkspaceを指定できません (従来のAccountsの判定と同じ)。shared-account (Hosted) のセッションは、従来どおりshared-authの判定です。Workspaceを受け取る利用は引き続き `legacy_workspace_route` に記録します。
 
 `GET /api/v1/dashboard/bootstrap` は、`includeWorkspaces=true` を指定しない限りWorkspaceの一覧を含めません。`includeNotifications=true` の通知は、bootstrapの任意項目の期限の中で読んだ `GET /api/v1/activity` の最新ページ (最大60件) です。各項目は短くしたイベント、イベントがアプリを示すときの `capsuleId`、互換のための `workspaceHandle` (イベントの内部区画のID) を持ちます。アプリ所有の読み取りを持たないhostと、旧Workspace束縛の資格情報には、従来のWorkspaceからの通知を返します。
 
@@ -472,6 +474,12 @@ Workspace はアプリごとの所有に置き換わり、段階を分けて撤�
 | `workspaceId` で選ぶ `/api/v1/connections` | `workspaceId` を付けない `/api/v1/connections` (個人の接続) |
 
 ほかの route の後継は、置き換えの API ができたものから順に足します。
+
+移行の途中で変わる挙動:
+
+- Workspaceの無い、インストール済みアプリ自身のOAuthトークンが使えるのは、根拠のあるInterfaceだけです。根拠は、そのアプリの有効なInterface連携から作られたBindingか、そのアプリが所有するInterfaceのBindingです。Workspace所有のInterfaceや、ほかのアプリのInterfaceに誰かが手作業でアプリのsubjectを結んだものには届かなくなりました。それらはInterface連携でつないでください。探索で `workspaceId` を指定すると `400` です。
+- Capsule所有のInterfaceの変更 (作成・更新・廃止・status・Bindingの作成と取り消し) とアプリのInterface linkの変更には、Workspaceに束縛された資格情報でも、そのアプリの所有者かメンバーである必要があります。アプリに入っていないWorkspaceのメンバーは、Workspaceの資格情報で読むことと、Workspace所有のInterfaceを従来どおり扱うことはできます。
+- アプリに所有記録ができる前に、Workspaceのメンバーであるだけの人がそのアプリのために書いたInterfaceとBindingは、所有記録ができた後はアプリの根拠になりません。`GET /api/v1/interfaces?capsuleId=…&needsReview=true` は、それら (と以前の手作業の記録) を、所有者が削除するか作り直すために一覧します。
 
 ### Workspace
 

@@ -16,6 +16,7 @@ import type {
   InterfaceProjectionSink,
   InterfacePhase,
   InterfaceSpec,
+  InterfaceWriteAuthority,
   IssueInterfaceTokenRequest,
   IssueInterfaceTokenResponse,
   JsonObject,
@@ -42,7 +43,7 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
-import { bindingServesRuntimeConsumer } from "./stores.ts";
+import { bindingServesRuntimeConsumer, isAppOwnRecord } from "./stores.ts";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
   canonicalInterfaceOAuth2ResourceUri,
@@ -142,9 +143,14 @@ export interface InterfacePrincipalOAuth2IssueInput {
   readonly resource: string;
 }
 
-/** Non-secret evidence persisted by a host OAuth issuer for active checks. */
+/**
+ * Non-secret evidence persisted by a host OAuth issuer for active checks.
+ * Capsule evidence alone is enough for a Capsule-owned Interface (TASK-0118
+ * Phase 9); a Workspace-owned Interface still needs its Workspace.
+ */
 export interface InterfacePrincipalOAuth2ActivityEvidence {
-  readonly workspaceId: string;
+  /** Compatibility evidence: checked when present, never required with a Capsule. */
+  readonly workspaceId?: string;
   readonly capsuleId?: string;
   readonly interfaceId: string;
   readonly bindingId: string;
@@ -369,6 +375,8 @@ export class InterfaceService {
     actor?: ActorContext,
     materialization?: InterfaceServiceMaterialization,
     authorityFence?: InterfaceAuthorityWriteFence,
+    /** Recorded on a Capsule-owned Interface (TASK-0118 9.1). */
+    createdUnder?: InterfaceWriteAuthority,
   ): Promise<Interface> {
     validateCreate(request);
     const workspaceId = requireText(request.workspaceId, "workspaceId");
@@ -397,6 +405,7 @@ export class InterfaceService {
         ...(materialization
           ? { materializedFrom: interfaceMaterialization(materialization) }
           : {}),
+        ...(createdUnder && ownerRef.kind === "Capsule" ? { createdUnder } : {}),
         createdAt: now,
         updatedAt: now,
       },
@@ -1434,6 +1443,38 @@ export class InterfaceService {
   }
 
   /**
+   * The app's Capsule-owned Interfaces that wait for its owner's review
+   * (TASK-0118 9.1): the Interface, or one of its current Bindings, is not
+   * the app's own record — written only under Workspace authority (for an app
+   * that had no ownership record then) or written manually before writes
+   * were recorded. They are never the app's evidence; the owner deletes them
+   * or recreates them as the app. Read-only.
+   */
+  async listInterfacesNeedingReview(
+    workspaceId: string,
+    capsuleId: string,
+  ): Promise<readonly Interface[]> {
+    const interfaces = await this.list({
+      workspaceId: requireText(workspaceId, "workspaceId"),
+      ownerKind: "Capsule",
+      ownerId: requireText(capsuleId, "capsuleId"),
+      includeRetired: false,
+    });
+    const needingReview: Interface[] = [];
+    for (const iface of interfaces) {
+      if (!isAppOwnRecord(iface.metadata)) {
+        needingReview.push(iface);
+        continue;
+      }
+      const bindings = await this.#stores.bindings.listByInterface(iface.metadata.id);
+      if (bindings.some((binding) => binding.status.phase !== "Revoked" && !isAppOwnRecord(binding.metadata))) {
+        needingReview.push(iface);
+      }
+    }
+    return needingReview;
+  }
+
+  /**
    * The internal partition one app records its Interfaces into. It is never
    * authority; callers decide the app first.
    */
@@ -1699,12 +1740,27 @@ export class InterfaceService {
    * Revalidates opaque Accounts token evidence against canonical current Core
    * state. Hosts call this at UserInfo/introspection time; a false result never
    * reveals which lifecycle, Binding, ownership, or uniqueness fence failed.
+   *
+   * The token names its Interface owner: a Capsule-owned Interface is
+   * identified by its Capsule alone, so evidence without a Workspace is
+   * accepted for it (TASK-0118 Phase 9). A Workspace in the evidence is still
+   * compared; without one, the Interface's own internal partition is used for
+   * the Binding and resource-authorizer consistency checks and grants nothing.
    */
   async validatePrincipalOAuth2TokenEvidence(
     input: InterfacePrincipalOAuth2ActivityEvidence,
   ): Promise<boolean> {
     try {
-      const workspaceId = requireText(input.workspaceId, "workspaceId");
+      const evidenceWorkspaceId = input.workspaceId === undefined
+        ? undefined
+        : requireText(input.workspaceId, "workspaceId");
+      const evidenceCapsuleId = input.capsuleId === undefined
+        ? undefined
+        : requireText(input.capsuleId, "capsuleId");
+      // A Workspace-owned Interface has no Capsule to identify it.
+      if (evidenceWorkspaceId === undefined && evidenceCapsuleId === undefined) {
+        return false;
+      }
       const interfaceId = requireText(input.interfaceId, "interfaceId");
       const bindingId = requireText(input.bindingId, "bindingId");
       const subjectId = requireText(input.subjectId, "subjectId");
@@ -1725,8 +1781,13 @@ export class InterfaceService {
         iface.metadata.ownerRef.kind === "Capsule"
           ? iface.metadata.ownerRef.id
           : undefined;
+      // The partition only keeps the Binding and resource reservation
+      // consistent with this Interface; it is never a grant.
+      const workspaceId = iface.metadata.workspaceId;
       if (
-        iface.metadata.workspaceId !== workspaceId ||
+        (evidenceWorkspaceId !== undefined &&
+          evidenceWorkspaceId !== workspaceId) ||
+        (evidenceWorkspaceId === undefined && ownerCapsuleId === undefined) ||
         iface.status.phase !== "Resolved" ||
         iface.status.resolvedRevision !== input.interfaceResolvedRevision ||
         resolvedOAuth2Resource(iface) !== resource ||
@@ -2421,6 +2482,8 @@ export class InterfaceService {
     actor?: ActorContext,
     materialization?: InterfaceBindingServiceMaterialization,
     authorityFence?: InterfaceAuthorityWriteFence,
+    /** Recorded on a Binding of a Capsule-owned Interface (TASK-0118 9.1). */
+    createdUnder?: InterfaceWriteAuthority,
   ): Promise<InterfaceBinding> {
     validateBindingRequest(request);
     // Binding issuance is a runtime authority boundary too. Reconcile against
@@ -2462,6 +2525,7 @@ export class InterfaceService {
                 interfaceBindingMaterialization(materialization),
             }
           : {}),
+        ...(createdUnder && iface.metadata.ownerRef.kind === "Capsule" ? { createdUnder } : {}),
         createdAt: now,
         updatedAt: now,
       },

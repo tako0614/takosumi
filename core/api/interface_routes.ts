@@ -6,6 +6,7 @@ import type {
   CreateInterfaceRequest,
   Interface,
   InterfacePhase,
+  InterfaceWriteAuthority,
   IssueInterfaceTokenRequest,
   UpdateInterfaceRequest,
 } from "takosumi-contract";
@@ -13,6 +14,7 @@ import { isValidInterfacePermissionToken } from "takosumi-contract";
 import { TAKOSUMI_INTERNAL_ACTOR_HEADER } from "takosumi-contract/reference/compat";
 import { decodeActorContext } from "takosumi-contract/internal/rpc";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
+import { isRecord } from "../shared/guards.ts";
 import {
   InterfaceService,
   InterfaceServiceError,
@@ -42,15 +44,21 @@ export interface RegisterInterfaceRoutesOptions {
     readonly request: Request;
   }) => boolean | Promise<boolean>;
   /**
-   * Optional per-app decision (TASK-0118 9.1) for an account actor that is
-   * not bound to a Workspace, on a Capsule-owned Interface or a `capsuleId`
-   * listing. `true` / `false` decide; `undefined` means the app has no
+   * Optional per-app decision (TASK-0118 9.1) on a Capsule-owned Interface,
+   * a `capsuleId` listing or an Interface link: for every write by an account
+   * actor (a Workspace-bound one included), for reads by an account actor not
+   * bound to a Workspace, and for every request of a credential limited to
+   * apps. `action` is the app permission needed (`view`; `change_settings`
+   * for Interface create, update, retire and status; `change_interface_link`
+   * for Binding create and revoke and for links); `access` is its read/write
+   * class. `true` / `false` decide; `undefined` means the app has no
    * ownership row yet and the Workspace decision above applies.
    */
   readonly authorizeInterfaceApp?: (input: {
     readonly actor: ActorContext;
     readonly capsuleId: string;
     readonly access: "read" | "write";
+    readonly action: "view" | "change_settings" | "change_interface_link";
     readonly request: Request;
   }) => boolean | undefined | Promise<boolean | undefined>;
 }
@@ -75,6 +83,7 @@ export const INTERFACE_ENDPOINTS: readonly ApiEndpoint[] = [
       "permission",
       "limit",
       "cursor",
+      "needsReview",
     ],
   }),
   endpoint("GET", "/api/v1/interfaces/:id", "getInterface", {
@@ -147,9 +156,11 @@ export function registerInterfaceRoutes(
     const denied = enforceControlActor(c, auth.actor);
     if (denied) return denied;
     return respond(c, async () => {
-      const { capsule, requirement } = await options.service.getInterfaceLinkRequirement(c.req.param("id"), c.req.param("requirementKey"));
-      const scoped = await scopeInterfaceWorkspace(c, options, auth.actor, capsule.workspaceId);
+      // Decide the consumer app before reading its requirements.
+      const consumerCapsule = await options.service.getInterfaceLinkConsumer(c.req.param("id"));
+      const scoped = await scopeInterfaceLinkApp(c, options, auth.actor, { capsuleId: consumerCapsule.id, workspaceId: consumerCapsule.workspaceId }, "view");
       if (!scoped.ok) return scoped.response;
+      const { capsule, requirement } = await options.service.getInterfaceLinkRequirement(c.req.param("id"), c.req.param("requirementKey"));
       return c.json(await options.service.listInterfaceLinkCandidateView({ workspaceId: capsule.workspaceId, capsuleId: capsule.id, requirement }), 200);
     });
   });
@@ -161,15 +172,18 @@ export function registerInterfaceRoutes(
     return respond(c, async () => {
       const capsuleId = c.req.param("id");
       const requirementKey = c.req.param("requirementKey");
-      const { capsule } = await options.service.getInterfaceLinkRequirement(capsuleId, requirementKey);
-      const scoped = await scopeInterfaceWorkspace(c, options, auth.actor, capsule.workspaceId);
+      // Decide the consumer app before reading its requirements.
+      const consumerCapsule = await options.service.getInterfaceLinkConsumer(capsuleId);
+      const consumer = { capsuleId: consumerCapsule.id, workspaceId: consumerCapsule.workspaceId };
+      const scoped = await scopeInterfaceLinkApp(c, options, auth.actor, consumer, "change_interface_link");
       if (!scoped.ok) return scoped.response;
+      await options.service.getInterfaceLinkRequirement(capsuleId, requirementKey);
       const body = await readJsonObject(c.req.raw, { maxBytes: 16_384 });
       const interfaceId = string(body.interfaceId);
       if (!interfaceId) throw invalid("interfaceId is required");
       const expectedRequirementFingerprint = body.expectedRequirementFingerprint;
       if (expectedRequirementFingerprint !== undefined && (typeof expectedRequirementFingerprint !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(expectedRequirementFingerprint))) throw invalid("expectedRequirementFingerprint must be a SHA-256 digest");
-      return c.json({ link: await options.service.putCapsuleInterfaceLink({ capsuleId, requirementKey, interfaceId, expectedGeneration: expectedLinkGeneration(body.expectedGeneration), ...(expectedRequirementFingerprint ? { expectedRequirementFingerprint } : {}) }, scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, capsule.workspaceId)) }, 200);
+      return c.json({ link: await options.service.putCapsuleInterfaceLink({ capsuleId, requirementKey, interfaceId, expectedGeneration: expectedLinkGeneration(body.expectedGeneration), ...(expectedRequirementFingerprint ? { expectedRequirementFingerprint } : {}) }, scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, consumer, consumer)) }, 200);
     });
   });
   app.delete(linkPath, async (c) => {
@@ -181,18 +195,26 @@ export function registerInterfaceRoutes(
       const capsuleId = c.req.param("id");
       const requirementKey = c.req.param("requirementKey");
       const capsule = await options.service.getInterfaceLinkConsumer(capsuleId);
-      let scoped = await scopeInterfaceWorkspace(c, options, auth.actor, capsule.workspaceId);
+      const consumer = { capsuleId: capsule.id, workspaceId: capsule.workspaceId };
+      // The consumer app revokes its own links; the provider app may revoke
+      // a link that points at it.
+      let controlling = consumer;
+      let scoped = await scopeInterfaceLinkApp(c, options, auth.actor, consumer, "change_interface_link");
       let authorizedProvider: { linkId: string; providerInterfaceId: string; providerCapsuleId: string } | undefined;
       if (!scoped.ok) {
         const link = await options.service.getLatestCapsuleInterfaceLink(capsuleId, requirementKey);
         if (!link) return scoped.response;
         const provider = await options.service.get(link.providerInterfaceId);
-        scoped = await scopeInterfaceWorkspace(c, options, auth.actor, provider.metadata.workspaceId);
-        if (scoped.ok) authorizedProvider = { linkId: link.id, providerInterfaceId: link.providerInterfaceId, providerCapsuleId: link.providerCapsuleId };
+        const providerApp = { capsuleId: link.providerCapsuleId, workspaceId: provider.metadata.workspaceId };
+        scoped = await scopeInterfaceLinkApp(c, options, auth.actor, providerApp, "change_interface_link");
+        if (scoped.ok) {
+          controlling = providerApp;
+          authorizedProvider = { linkId: link.id, providerInterfaceId: link.providerInterfaceId, providerCapsuleId: link.providerCapsuleId };
+        }
       }
       if (!scoped.ok) return scoped.response;
       const body = await readJsonObject(c.req.raw, { maxBytes: 16_384 });
-      return c.json({ link: await options.service.revokeCapsuleInterfaceLink(capsuleId, requirementKey, expectedLinkGeneration(body.expectedGeneration), scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, scoped.actor?.workspaceId ?? capsule.workspaceId), authorizedProvider) }, 200);
+      return c.json({ link: await options.service.revokeCapsuleInterfaceLink(capsuleId, requirementKey, expectedLinkGeneration(body.expectedGeneration), scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, controlling, consumer), authorizedProvider) }, 200);
     });
   });
 
@@ -203,16 +225,25 @@ export function registerInterfaceRoutes(
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
       const body = await readJsonObject(c.req.raw, { maxBytes: 1_048_576 });
-      const scoped = await scopeInterfaceWorkspace(
-        c,
-        options,
-        auth.actor,
-        string(body.workspaceId),
-      );
+      const workspaceId = string(body.workspaceId);
+      const ownerRef = isRecord(body.ownerRef) ? body.ownerRef : undefined;
+      const capsuleOwnerId = ownerRef?.kind === "Capsule" ? string(ownerRef.id) : undefined;
+      // Creating a Capsule-owned Interface is a change to that app, decided
+      // per app like every other write to it; Workspace-owned Interfaces keep
+      // the Workspace decision.
+      const scoped = capsuleOwnerId
+        ? await scopeInterface(c, options, auth.actor, {
+            workspaceId: requireWorkspaceId(workspaceId),
+            ownerRef: { kind: "Capsule", id: capsuleOwnerId },
+          })
+        : await scopeInterfaceWorkspace(c, options, auth.actor, workspaceId);
       if (!scoped.ok) return scoped.response;
       const record = await options.service.create(
         body as unknown as CreateInterfaceRequest,
         scoped.actor,
+        undefined,
+        undefined,
+        scoped.authority,
       );
       return withEtag(c, record, 201);
     });
@@ -292,6 +323,11 @@ export function registerInterfaceRoutes(
         scoped = await scopeInterfaceWorkspace(c, options, auth.actor, workspaceId);
       }
       if (!scoped.ok) return scoped.response;
+      // The app's Interfaces that wait for its owner's review (TASK-0118 9.1).
+      if (truthy(c.req.query("needsReview"))) {
+        if (!capsuleId || isRuntimePrincipal(scoped.actor)) throw invalid("needsReview lists one app's Interfaces: pass capsuleId");
+        return c.json({ interfaces: await options.service.listInterfacesNeedingReview(workspaceId, capsuleId) }, 200);
+      }
       const filter = { workspaceId, ...selector };
       const interfaces = isRuntimePrincipal(scoped.actor)
         ? await options.service.listAuthorizedForPrincipal(
@@ -458,11 +494,13 @@ export function registerInterfaceRoutes(
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
       const iface = await options.service.get(c.req.param("id"));
+      // A Binding grants the app's Interface to someone: a link change.
       const scoped = await scopeInterface(
         c,
         options,
         auth.actor,
         iface.metadata,
+        "change_interface_link",
       );
       if (!scoped.ok) return scoped.response;
       const body = await readJsonObject(c.req.raw, { maxBytes: 1_048_576 });
@@ -470,6 +508,9 @@ export function registerInterfaceRoutes(
         c.req.param("id"),
         body as unknown as CreateInterfaceBindingRequest,
         scoped.actor,
+        undefined,
+        undefined,
+        scoped.authority,
       );
       return c.json(binding, 201);
     });
@@ -572,6 +613,7 @@ export function registerInterfaceRoutes(
         options,
         auth.actor,
         iface.metadata,
+        "change_interface_link",
       );
       if (!scoped.ok) return scoped.response;
       return c.json(
@@ -633,8 +675,16 @@ async function authorize(
 }
 
 type InterfaceWorkspaceAuthResult =
-  | { readonly ok: true; readonly actor?: ActorContext }
+  | {
+    readonly ok: true;
+    readonly actor?: ActorContext;
+    /** The authority that admitted the request; recorded on Capsule-owned writes. */
+    readonly authority: InterfaceWriteAuthority;
+  }
   | { readonly ok: false; readonly response: Response };
+
+/** The app action an Interface request needs on a Capsule-owned Interface. */
+type InterfaceAppAction = "view" | "change_settings" | "change_interface_link";
 
 async function scopeInterfaceWorkspace(
   c: Context,
@@ -645,7 +695,11 @@ async function scopeInterfaceWorkspace(
   if (!workspaceId) throw invalid("workspaceId is required");
   // No actor means the configured internal deploy-control bearer was used
   // without an actor header. That remains the explicit operator authority.
-  if (!actor) return { ok: true };
+  if (!actor) return { ok: true, authority: "operator" };
+  // A credential limited to apps never holds Workspace authority.
+  if (!actor.roles.includes("runtime-principal") && actor.appIds !== undefined) {
+    return { ok: false, response: workspaceForbidden(c) };
+  }
   if (isRuntimePrincipal(actor) && !actor.workspaceId) {
     // An app-bound runtime principal carries no Workspace (TASK-0118 9.1).
     // It reaches this point only for one exact Interface it already read
@@ -655,7 +709,7 @@ async function scopeInterfaceWorkspace(
     // Interface's partition is recorded here only as the request's context,
     // never as authority. Without an app it has no authority.
     if (!string(actor.capsuleId)) return { ok: false, response: workspaceForbidden(c) };
-    return { ok: true, actor: { ...actor, workspaceId } };
+    return { ok: true, actor: { ...actor, workspaceId }, authority: "workspace" };
   }
   if (actor.workspaceId && actor.workspaceId !== workspaceId) {
     return { ok: false, response: workspaceForbidden(c) };
@@ -680,6 +734,7 @@ async function scopeInterfaceWorkspace(
     ok: true,
     actor:
       actor.workspaceId === workspaceId ? actor : { ...actor, workspaceId },
+    authority: "workspace",
   };
 }
 
@@ -711,37 +766,87 @@ async function runtimeConsumer(
 }
 
 /**
- * Scope a request to one Interface's owner. An account actor without a
- * Workspace restriction is decided per app for a Capsule-owned Interface when
- * the host provides {@link RegisterInterfaceRoutesOptions.authorizeInterfaceApp};
- * otherwise (and for an app without an ownership row) the Workspace decision
- * applies unchanged.
+ * Scope a request to one Interface's owner. When the host provides
+ * {@link RegisterInterfaceRoutesOptions.authorizeInterfaceApp}, a
+ * Capsule-owned Interface is decided per app for an account actor: every
+ * write (create, update, retire and status need `change_settings`; Binding
+ * create and revoke, which grant the app's Interface to someone, need
+ * `change_interface_link`), reads by an actor without a Workspace
+ * restriction, and every request of a credential limited to apps. A
+ * Workspace-bound credential must still name the Interface's own partition,
+ * but Workspace membership alone no longer changes another person's app: in
+ * a shared legacy partition it would let a co-tenant repoint the app's
+ * Interface or bind the app's subject to one they made. Service principals,
+ * Workspace-owned Interfaces and apps without an ownership row keep the
+ * Workspace decision.
  */
 async function scopeInterface(
   c: Context,
   options: RegisterInterfaceRoutesOptions,
   actor: ActorContext | undefined,
   owner: Pick<Interface["metadata"], "workspaceId" | "ownerRef">,
+  writeAction: Exclude<InterfaceAppAction, "view"> = "change_settings",
 ): Promise<InterfaceWorkspaceAuthResult> {
-  if (
-    actor &&
-    !actor.roles.includes("runtime-principal") &&
-    !actor.workspaceId &&
-    owner.ownerRef.kind === "Capsule" &&
-    options.authorizeInterfaceApp
-  ) {
-    const decided = await options.authorizeInterfaceApp({
-      actor,
+  const access = interfaceAccess(c);
+  if (owner.ownerRef.kind === "Capsule") {
+    const decided = await decideInterfaceApp(c, options, actor, {
       capsuleId: owner.ownerRef.id,
-      access: interfaceAccess(c),
-      request: c.req.raw,
-    });
-    if (decided === true) {
-      return { ok: true, actor: { ...actor, workspaceId: owner.workspaceId } };
-    }
-    if (decided === false) return { ok: false, response: appForbidden(c) };
+      workspaceId: owner.workspaceId,
+    }, access === "read" ? "view" : writeAction);
+    if (decided) return decided;
   }
   return await scopeInterfaceWorkspace(c, options, actor, owner.workspaceId);
+}
+
+/**
+ * The per-app decision for an account actor on one app, or `undefined` when
+ * the Workspace decision applies (no host decision, a runtime or service
+ * principal, a Workspace-bound read, or an app without an ownership row).
+ */
+async function decideInterfaceApp(
+  c: Context,
+  options: RegisterInterfaceRoutesOptions,
+  actor: ActorContext | undefined,
+  app: { readonly capsuleId: string; readonly workspaceId: string },
+  action: InterfaceAppAction,
+  mode: {
+    /** Workspace-bound reads keep the Workspace decision (Interfaces); links decide every request per app. */
+    readonly workspaceBoundReads?: boolean;
+  } = {},
+): Promise<InterfaceWorkspaceAuthResult | undefined> {
+  if (
+    !appDecidedActor(options, actor) ||
+    (mode.workspaceBoundReads !== false && actor.workspaceId && action === "view" && actor.appIds === undefined)
+  ) {
+    return undefined;
+  }
+  if (actor.workspaceId && actor.workspaceId !== app.workspaceId) {
+    return { ok: false, response: workspaceForbidden(c) };
+  }
+  if (actor.appIds !== undefined && !actor.appIds.includes(app.capsuleId)) {
+    return { ok: false, response: appForbidden(c) };
+  }
+  const decided = await options.authorizeInterfaceApp!({
+    actor,
+    capsuleId: app.capsuleId,
+    access: action === "view" ? "read" : "write",
+    action,
+    request: c.req.raw,
+  });
+  if (decided === true) {
+    return {
+      ok: true,
+      actor: actor.workspaceId === app.workspaceId ? actor : { ...actor, workspaceId: app.workspaceId },
+      authority: "app",
+    };
+  }
+  if (decided === false) return { ok: false, response: appForbidden(c) };
+  return undefined;
+}
+
+function requireWorkspaceId(workspaceId: string | undefined): string {
+  if (!workspaceId) throw invalid("workspaceId is required");
+  return workspaceId;
 }
 
 /** Reads and token issuance (an invocation of a Ready binding) are read access. */
@@ -933,15 +1038,61 @@ function expectedLinkGeneration(value: unknown): number {
   return value;
 }
 
-async function interfaceLinkWriteFence(c: Context, options: RegisterInterfaceRoutesOptions, actor: ActorContext | undefined, workspaceId: string): Promise<InterfaceLinkWriteFence> {
+async function interfaceLinkWriteFence(
+  c: Context,
+  options: RegisterInterfaceRoutesOptions,
+  actor: ActorContext | undefined,
+  controlling: { readonly capsuleId: string; readonly workspaceId: string },
+  consumer: { readonly capsuleId: string; readonly workspaceId: string },
+): Promise<InterfaceLinkWriteFence> {
+  const workspaceId = controlling.workspaceId;
   const initial = await options.service.captureInterfaceLinkWriteAuthority(workspaceId);
-  return { assertCurrent: async () => {
-    const auth = await authorize(c, options);
-    if (!auth.ok || auth.actor?.roles.includes("runtime-principal") === true || auth.actor?.actorAccountId !== actor?.actorAccountId) throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
-    const scoped = await scopeInterfaceWorkspace(c, options, auth.actor, workspaceId);
-    if (!scoped.ok) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
-    const current = await options.service.captureInterfaceLinkWriteAuthority(workspaceId);
-    if (initial && (!current || current.managementEpoch !== initial.managementEpoch)) throw new InterfaceServiceError("conflict", "Workspace management authority changed");
-    return initial;
-  } };
+  return {
+    assertCurrent: async () => {
+      const auth = await authorize(c, options);
+      if (!auth.ok || auth.actor?.roles.includes("runtime-principal") === true || auth.actor?.actorAccountId !== actor?.actorAccountId) throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
+      const scoped = await scopeInterfaceLinkApp(c, options, auth.actor, controlling, "change_interface_link");
+      if (!scoped.ok) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
+      const current = await options.service.captureInterfaceLinkWriteAuthority(workspaceId);
+      if (initial && (!current || current.managementEpoch !== initial.managementEpoch)) throw new InterfaceServiceError("conflict", "Workspace management authority changed");
+      return initial;
+    },
+    // An account caller's link is approved at creation only when it may
+    // change links on the PROVIDER app too (its own app needs no approval);
+    // otherwise it waits as pending_approval, as on Accounts. The operator
+    // keeps the approval policy alone.
+    ...(appDecidedActor(options, actor)
+      ? {
+        mayApproveProvider: async (provider: { readonly capsuleId: string; readonly workspaceId: string }) =>
+          provider.capsuleId === consumer.capsuleId ||
+          (await scopeInterfaceLinkApp(c, options, actor, provider, "change_interface_link")).ok,
+      }
+      : {}),
+  };
+}
+
+/** An account actor the host decides per app (TASK-0118 9.1). */
+function appDecidedActor(
+  options: RegisterInterfaceRoutesOptions,
+  actor: ActorContext | undefined,
+): actor is ActorContext {
+  return actor !== undefined && options.authorizeInterfaceApp !== undefined &&
+    !actor.roles.includes("runtime-principal") && actor.principalKind !== "service";
+}
+
+/**
+ * An Interface link request on one app: decided per app for an account actor
+ * (`view` for candidates; `change_interface_link` for links), like the
+ * Accounts link routes; otherwise (and for an app without an ownership row)
+ * the Workspace decision.
+ */
+async function scopeInterfaceLinkApp(
+  c: Context,
+  options: RegisterInterfaceRoutesOptions,
+  actor: ActorContext | undefined,
+  app: { readonly capsuleId: string; readonly workspaceId: string },
+  action: "view" | "change_interface_link",
+): Promise<InterfaceWorkspaceAuthResult> {
+  const decided = await decideInterfaceApp(c, options, actor, app, action, { workspaceBoundReads: false });
+  return decided ?? await scopeInterfaceWorkspace(c, options, actor, app.workspaceId);
 }
