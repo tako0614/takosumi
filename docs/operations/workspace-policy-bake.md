@@ -82,7 +82,16 @@ default:
   retry after a lost acknowledgement finds the same row. Re-running after a
   successful apply plans no writes.
 
-Refusals keep runtime enforcement for that app: `capsule_uninstalled` (the
+A Workspace ceiling value that is malformed (an allowlist that is `null`, not
+an array or holds a non-string; a flag, credential list or quota of the wrong
+shape; an invalid scope boundary) is never read as "no limit": the dry-run
+lists it as `malformedKeys`, every live app of that Workspace is refused with
+`workspace_policy_invalid`, and the runtime keeps the old composition, which
+refuses on it (fail closed). Correct the Workspace policy first.
+
+Refusals keep runtime enforcement for that app: `workspace_policy_invalid`,
+`install_policy_invalid` (the InstallConfig policy cannot be composed with the
+ceiling), `capsule_uninstalled` (the
 uninstall grace period; it bakes or is destroyed later),
 `install_config_missing`, `scope_boundary_rule_limit`,
 `workspace_management_inactive`, `execution_authority_missing`.
@@ -103,7 +112,10 @@ The operator module owns the connection and returns a Control store; the tool
 never discovers credentials and runs no DDL. A D1 store must be constructed
 with `{ schemaMode: "predeployed" }`: the default `bootstrap` mode creates and
 migrates the schema on first access, so even the dry-run would write. The tool
-refuses a D1 store in bootstrap mode before reading anything.
+reads the `schemaMode` the store itself declares and refuses, before reading
+anything, any store whose value is missing or not `predeployed` (a bootstrap
+D1 store, or a wrapper that does not forward the capability). The Postgres and
+memory stores never migrate on access and declare `predeployed`.
 
 ```ts
 // /absolute/operator/workspace-policy-bake-target.ts

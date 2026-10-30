@@ -1937,6 +1937,13 @@ async function assertWorkspaceFinancialPostgresTriggers(client:SqlClient):Promis
 }
 
 export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwnershipMigrationStore {
+  /**
+   * The Postgres store never creates or migrates its schema on access (the
+   * migration runner does). Read-only operator tools require `predeployed`.
+   */
+  get schemaMode(): "predeployed" {
+    return "predeployed";
+  }
 
   async #withConnectionOwners(rows: readonly ProviderConnection[]): Promise<readonly ProviderConnection[]> {
     if (!rows.length) return rows;

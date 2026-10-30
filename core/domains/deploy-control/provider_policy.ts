@@ -157,6 +157,12 @@ export function bakeWorkspacePolicy(
 ): PolicyConfig | undefined {
   const ceiling = workspacePolicyCeiling(workspacePolicy);
   if (!ceiling) return installPolicy;
+  const malformed = malformedWorkspacePolicyKeys(ceiling);
+  if (malformed.length > 0) {
+    throw new TypeError(
+      `Workspace policy cannot be baked; malformed keys: ${malformed.join(", ")}`,
+    );
+  }
   const merged = mergePolicyConfigs(ceiling, installPolicy) ?? {};
   const baked: Record<string, unknown> = { ...(installPolicy ?? {}) };
   for (const key of WORKSPACE_POLICY_CEILING_KEYS) {
@@ -174,6 +180,94 @@ export function bakeWorkspacePolicy(
     else baked[key] = value;
   }
   return baked as PolicyConfig;
+}
+
+/**
+ * Workspace ceiling keys whose stored value is not a well-formed ceiling (an
+ * allowlist that is `null`, not an array or holds a non-string; a flag,
+ * credential or quota value of the wrong shape; an invalid scope boundary).
+ * Such a policy cannot be baked: the strictest merge of a malformed value is
+ * undefined, and treating it as absent would lift a limit the runtime
+ * composition refuses on (fail closed). It stays a runtime ceiling with the
+ * old composition and the bake tool refuses its apps.
+ */
+export function malformedWorkspacePolicyKeys(
+  policy: PolicyConfig | undefined,
+): string[] {
+  if (!isPlainObject(policy)) return [];
+  const record = policy as Record<string, unknown>;
+  return WORKSPACE_POLICY_CEILING_KEYS.filter((key) =>
+    record[key] !== undefined && !wellFormedCeilingValue(key, record[key])
+  );
+}
+
+function wellFormedCeilingValue(
+  key: (typeof WORKSPACE_POLICY_CEILING_KEYS)[number],
+  value: unknown,
+): boolean {
+  switch (key) {
+    case "allowedProviders":
+    case "allowedResourceTypes":
+    case "allowedDataSourceTypes":
+    case "allowedProvisionerTypes":
+      return isStringList(value);
+    case "destructiveChanges":
+      return hasOptionalBooleans(value, ["requireExplicitConfirmation"]);
+    case "providerLockfile":
+      return hasOptionalBooleans(value, ["requireDigest"]);
+    case "providerInstallation":
+      return hasOptionalBooleans(value, ["requireMirror"]);
+    case "providerCredentials": {
+      if (!hasOptionalBooleans(value, ["requireTemporary", "requireTtlEnforced"])) {
+        return false;
+      }
+      const credentials = value as Record<string, unknown>;
+      return [
+        "requiredProviders",
+        "allowedConnectionIds",
+        "forbiddenConnectionIds",
+        "allowedConnectionScopes",
+        "requiredCredentialCapabilities",
+      ].every((field) =>
+        credentials[field] === undefined || isStringList(credentials[field])
+      ) &&
+        (credentials.allowedCredentialRecipes === undefined ||
+          (Array.isArray(credentials.allowedCredentialRecipes) &&
+            credentials.allowedCredentialRecipes.every((recipe: unknown) =>
+              isPlainObject(recipe) &&
+              typeof (recipe as Record<string, unknown>).id === "string" &&
+              typeof (recipe as Record<string, unknown>).authMode === "string"
+            )));
+    }
+    case "scopeBoundary":
+      if (!isPlainObject(value)) return false;
+      try {
+        normalizeScopeBoundaryPolicy(value);
+        return true;
+      } catch {
+        return false;
+      }
+    case "quota":
+      return isPlainObject(value) &&
+        Object.values(value as Record<string, unknown>).every((limit) =>
+          typeof limit === "number" && Number.isFinite(limit)
+        );
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringList(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function hasOptionalBooleans(value: unknown, fields: readonly string[]): boolean {
+  return isPlainObject(value) &&
+    fields.every((field) =>
+      value[field] === undefined || typeof value[field] === "boolean"
+    );
 }
 
 /** Canonical form of one baked ceiling value (see {@link bakeWorkspacePolicy}). */
@@ -281,6 +375,9 @@ export function workspacePolicyBakedInto(
 ): boolean {
   const ceiling = workspacePolicyCeiling(workspacePolicy);
   if (!ceiling) return true;
+  // A malformed ceiling is never baked: keep the old composition, which
+  // refuses on it (fail closed), instead of reading it as no limit.
+  if (malformedWorkspacePolicyKeys(ceiling).length > 0) return false;
   return canonicalPolicyJson(bakeWorkspacePolicy(ceiling, installPolicy)) ===
     canonicalPolicyJson(installPolicy);
 }
