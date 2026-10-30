@@ -567,10 +567,13 @@ export class SourceLifecycleService {
       if (await this.#store.hasForeignSourceArchiveReference(run.archiveRef, run.sourceId)) return;
       const cleanup = this.#runner?.cleanupUnusedSourceArchive;
       if (!cleanup) throw new Error("runner source archive cleanup capability is unavailable");
+      // An app-owned Source's archive may sit under its owner's `apps/` root.
+      const ownerCapsuleId = (await this.#store.getSource(run.sourceId))?.ownerCapsuleId;
       await cleanup.call(this.#runner, {
         runId: run.id,
         workspaceId: run.workspaceId,
         sourceId: run.sourceId,
+        ...(ownerCapsuleId ? { ownerCapsuleId } : {}),
         archiveRef: run.archiveRef,
         canonicalSnapshotId: canonical.id,
       });

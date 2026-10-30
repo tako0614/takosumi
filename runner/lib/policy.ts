@@ -132,10 +132,12 @@ export function normalizeSourceSubtreePath(path: string): string {
   return normalized;
 }
 
-// The R2_SOURCE archive object key (agreed layout
-// workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
-// allocated by the host and persisted by the DO. The runner forwards it to the
-// DO; re-assert here that it is a safe, traversal-free relative key.
+// The R2_SOURCE archive object key (agreed layouts
+// workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst, and
+// apps/{capsuleId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst for an
+// app-owned Source of a Capsule with an `apps/` root) is allocated by the host
+// and persisted by the DO. The runner forwards it to the DO; re-assert here that
+// it is a safe, traversal-free relative key.
 export function assertSafeArchiveObjectKey(key: string): void {
   if (
     key.length === 0 ||
@@ -143,7 +145,7 @@ export function assertSafeArchiveObjectKey(key: string): void {
     key.includes("\0") ||
     key.includes("..") ||
     key.includes("\\") ||
-    key.startsWith("workspaces/") === false
+    (key.startsWith("workspaces/") || key.startsWith("apps/")) === false
   ) {
     throw new Error(`unsafe source archive object key: ${key}`);
   }

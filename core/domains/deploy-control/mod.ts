@@ -944,6 +944,8 @@ export interface OpenTofuRunner {
     readonly runId: string;
     readonly workspaceId: string;
     readonly sourceId: string;
+    /** The persisted Source's owner Capsule; its `apps/` prefix is in custody too. */
+    readonly ownerCapsuleId?: string;
     readonly archiveRef: string;
     readonly canonicalSnapshotId: string;
   }): Promise<void>;
@@ -951,6 +953,8 @@ export interface OpenTofuRunner {
   deleteRetiredSourceArchives?(input: {
     readonly workspaceId: string;
     readonly sourceId: string;
+    /** The persisted Source's owner Capsule; its `apps/` prefix is in custody too. */
+    readonly ownerCapsuleId?: string;
     readonly archiveRefs: readonly string[];
   }): Promise<void>;
   /**

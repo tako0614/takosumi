@@ -60,7 +60,7 @@ import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
-import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
+import type { ArtifactOwnerRoot, ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import type { AppListViewer } from "../app-ownership/list-visibility.ts";
 
 type BackupArtifactKind =
@@ -236,6 +236,7 @@ export class BackupsService {
       | "backup_service_data",
     workspaceId: string,
     backupId: string,
+    owner: ArtifactOwnerRoot | undefined,
   ): Promise<string> {
     const allocator = this.#artifactReferenceAllocator;
     if (!allocator) {
@@ -244,7 +245,7 @@ export class BackupsService {
         "backup artifact-reference allocator is not wired",
       );
     }
-    const ref = await allocator.allocate({ kind, workspaceId, backupId });
+    const ref = await allocator.allocate({ kind, workspaceId, backupId, ...(owner ? { owner } : {}) });
     if (!ref.trim()) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -252,6 +253,18 @@ export class BackupsService {
       );
     }
     return ref;
+  }
+
+  /**
+   * The Capsule a labelled backup belongs to and its persisted root (TASK-0118
+   * P9.1-f). Its artifacts go under an `apps/` root; a legacy Capsule's keep
+   * the Workspace layout of its frozen root. A Workspace export has none.
+   */
+  async #backupOwner(capsuleId: string | undefined): Promise<ArtifactOwnerRoot | undefined> {
+    const id = capsuleId?.trim();
+    if (!id) return undefined;
+    const storageRoot = await this.#store.getCapsuleStorageRoot(id);
+    return storageRoot === undefined ? undefined : { capsuleId: id, storageRoot };
   }
 
   /** Internal preparation fence for manual export routes, not a public token. */
@@ -349,6 +362,7 @@ export class BackupsService {
 
     let record: BackupRecord;
     try {
+      const owner = await this.#backupOwner(request.capsuleId);
       const bundle = await this.#collectControlBundle(
         workspaceId,
         createdAt,
@@ -359,6 +373,7 @@ export class BackupsService {
         "backup_control",
         workspaceId,
         backupId,
+        owner,
       );
       const { digest, sizeBytes } = await this.#artifactStore.put({
         ref,
@@ -370,12 +385,14 @@ export class BackupsService {
         writeAuthority,
         backupId,
         workspaceId,
+        owner,
         stateVersions: bundle.stateVersions,
       });
       const serviceData = await this.#writeServiceDataArchive({
         writeAuthority,
         backupId,
         workspaceId,
+        owner,
         capturedAt: createdAt,
         ...(scopedCapsuleId ? { capsuleId: scopedCapsuleId } : {}),
       });
@@ -383,6 +400,7 @@ export class BackupsService {
         writeAuthority,
         backupId,
         workspaceId,
+        owner,
         control: { ref, digest, sizeBytes },
         ...(stateArchive ? { stateArchive } : {}),
         ...(serviceData ? { serviceData } : {}),
@@ -680,6 +698,7 @@ export class BackupsService {
     readonly writeAuthority: BackupArtifactWriteAuthority;
     readonly backupId: string;
     readonly workspaceId: string;
+    readonly owner: ArtifactOwnerRoot | undefined;
     readonly stateVersions: readonly BundleStateVersion[];
   }): Promise<BackupArtifactPointer | undefined> {
     if (!this.#artifactStore || input.stateVersions.length === 0) {
@@ -719,6 +738,7 @@ export class BackupsService {
       "backup_state",
       input.workspaceId,
       input.backupId,
+      input.owner,
     );
     const payload = zstdCompressRaw(tarArchive(entries));
     const { digest, sizeBytes } = await this.#artifactStore.put({
@@ -734,6 +754,7 @@ export class BackupsService {
     readonly writeAuthority: BackupArtifactWriteAuthority;
     readonly backupId: string;
     readonly workspaceId: string;
+    readonly owner: ArtifactOwnerRoot | undefined;
     readonly control: BackupArtifactPointer;
     readonly stateArchive?: BackupArtifactPointer;
     readonly serviceData?: BackupArtifactPointer;
@@ -743,6 +764,7 @@ export class BackupsService {
       "backup_artifacts_manifest",
       input.workspaceId,
       input.backupId,
+      input.owner,
     );
     const artifacts = [
       { kind: "control", ...input.control },
@@ -778,6 +800,7 @@ export class BackupsService {
     readonly writeAuthority: BackupArtifactWriteAuthority;
     readonly backupId: string;
     readonly workspaceId: string;
+    readonly owner: ArtifactOwnerRoot | undefined;
     readonly capturedAt: string;
     readonly capsuleId?: string;
   }): Promise<BackupRecord["serviceData"] | undefined> {
@@ -793,6 +816,7 @@ export class BackupsService {
       "backup_service_data",
       input.workspaceId,
       input.backupId,
+      input.owner,
     );
     const payload = zstdCompressRaw(
       tarArchive([

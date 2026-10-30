@@ -14,7 +14,7 @@ import {
   type ServeHttpHandle,
 } from "./shared/runtime/index.ts";
 import { StorageMigrationRunner } from "./adapters/storage/migration-runner/mod.ts";
-import { ObjectKeyArtifactReferenceAllocator } from "./adapters/storage/artifact-references.ts";
+import { appSourceArchiveRootsFromEnv, ObjectKeyArtifactReferenceAllocator } from "./adapters/storage/artifact-references.ts";
 import {
   SecretEncryptionConfigurationError,
   selectSecretBoundaryCrypto,
@@ -98,7 +98,9 @@ export async function startTakosumiService(
   const created = await createTakosumiService({
     runtimeEnv,
     runtimeConfig,
-    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator({
+      appSourceArchiveRoots: appSourceArchiveRootsFromEnv(runtimeEnv.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS),
+    }),
     ...(sharedSqlClientHandle
       ? { sqlClient: sharedSqlClientHandle.client }
       : {}),

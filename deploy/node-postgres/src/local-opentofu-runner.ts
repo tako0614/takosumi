@@ -9,7 +9,12 @@ import {
 import { Buffer } from "node:buffer";
 import { constants as fsConstants } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { capsuleArtifactRoot, ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
+import {
+  capsuleArtifactRoot,
+  ObjectKeyArtifactReferenceAllocator,
+  sourceArchiveCustodyPrefixes,
+  sourceArchiveSnapshotSegment,
+} from "../../../core/adapters/storage/artifact-references.ts";
 import type {
   OpenTofuApplyJob,
   OpenTofuApplyResult,
@@ -640,15 +645,15 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     readonly runId: string;
     readonly workspaceId: string;
     readonly sourceId: string;
+    readonly ownerCapsuleId?: string;
     readonly archiveRef: string;
     readonly canonicalSnapshotId: string;
   }): Promise<void> {
-    const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
-    const allocatedSnapshotId = input.archiveRef.startsWith(prefix)
-      ? input.archiveRef.slice(prefix.length).split("/")[0]
-      : undefined;
+    const allocatedSnapshotId = sourceArchiveSnapshotSegment(input.archiveRef, sourceArchiveCustodyPrefixes({
+      id: input.sourceId, workspaceId: input.workspaceId,
+      ...(input.ownerCapsuleId ? { ownerCapsuleId: input.ownerCapsuleId } : {}),
+    }));
     if (!allocatedSnapshotId ||
-      input.archiveRef !== `${prefix}${allocatedSnapshotId}/source.tar.zst` ||
       allocatedSnapshotId === input.canonicalSnapshotId ||
       !this.archiveStore.delete) {
       throw new Error("source archive cleanup requires a noncanonical allocated key and delete custody");
@@ -659,17 +664,20 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   async deleteRetiredSourceArchives(input: {
     readonly workspaceId: string;
     readonly sourceId: string;
+    readonly ownerCapsuleId?: string;
     readonly archiveRefs: readonly string[];
   }): Promise<void> {
     if (!this.archiveStore.delete) throw new Error("source archive delete custody is unavailable");
     const segment = /^[A-Za-z0-9._-]+$/u;
     if (!segment.test(input.workspaceId) || !segment.test(input.sourceId)) throw new Error("invalid Source retirement identity");
-    const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
+    // The Workspace prefix, plus `apps/{owner}/…` for an app-owned Source.
+    const prefixes = sourceArchiveCustodyPrefixes({
+      id: input.sourceId, workspaceId: input.workspaceId,
+      ...(input.ownerCapsuleId ? { ownerCapsuleId: input.ownerCapsuleId } : {}),
+    });
     const refs = new Set(input.archiveRefs);
     for (const ref of refs) {
-      const suffix = ref.startsWith(prefix) ? ref.slice(prefix.length) : "";
-      const snapshotId = suffix.split("/")[0];
-      if (!snapshotId || !segment.test(snapshotId) || suffix !== `${snapshotId}/source.tar.zst`) {
+      if (!sourceArchiveSnapshotSegment(ref, prefixes)) {
         throw new Error("source archive retirement ref is outside the Source boundary");
       }
     }
@@ -3053,7 +3061,7 @@ function archivePath(root: string, key: string): string {
     key.includes("\\") ||
     key.includes("\0") ||
     key.split("/").some((segment) => segment === "..") ||
-    key.startsWith("workspaces/") === false
+    (key.startsWith("workspaces/") || key.startsWith("apps/")) === false
   ) {
     throw new Error(`unsafe source archive key: ${key}`);
   }

@@ -107,6 +107,72 @@ test("Source retirement deletes only owned R2 archives and preserves shared hist
   expect(bucket.body(archive)).toBeUndefined();
 });
 
+test("an app-owned Source's apps-prefixed archives are in its retirement and cleanup custody (TASK-0118 P9.1-f)", async () => {
+  const db = new SqliteFakeD1();
+  await db.exec(`create table sources (id text, space_id text, status text, record_json text);
+    create table capsules (id text, space_id text, source_id text, status text, record_json text);
+    create table runs (id text, space_id text, source_id text, installation_id text, type text, status text, lease_token text, run_json text);
+    create table source_snapshots (id text, source_id text, record_json text);
+    create table audit_events (id text, action text, target_type text, target_id text)`);
+  const sourceRecord = { id: "src_1", workspaceId: "spc_1", status: "disabled", autoSync: false,
+    retiringAt: "2026-10-28T00:00:00.000Z", ownerCapsuleId: "cap_1" };
+  await db.prepare("insert into sources values (?, ?, ?, ?)")
+    .bind("src_1", "spc_1", "disabled", JSON.stringify(sourceRecord)).run();
+  await db.prepare("insert into capsules (id, space_id, source_id, status, record_json) values (?, ?, ?, ?, ?)")
+    .bind("cap_1", "spc_1", "src_1", "destroyed", JSON.stringify({ id: "cap_1", workspaceId: "spc_1",
+      sourceId: "src_1", status: "destroyed" })).run();
+  const appArchive = "apps/cap_1/sources/src_1/snapshots/snap_app/source.tar.zst";
+  const legacyArchive = ARCHIVE_KEY;
+  for (const [id, archiveRef] of [["snap_app", appArchive], ["snap_1", legacyArchive]] as const) {
+    await db.prepare("insert into source_snapshots values (?, ?, ?)")
+      .bind(id, "src_1", JSON.stringify({ id, sourceId: "src_1", workspaceId: "spc_1", archiveRef })).run();
+  }
+  const bucket = new FakeR2Bucket();
+  await bucket.put(appArchive, ARCHIVE_BYTES);
+  await bucket.put(legacyArchive, ARCHIVE_BYTES);
+  const runner = runnerWithContainer(new FakeR2Bucket(), bucket, {
+    async containerFetch() { throw new Error("retirement must not start container"); },
+  }, { TAKOSUMI_CONTROL_DB: db });
+  const retire = (archiveRefs: readonly string[]) => runner.fetch(new Request("https://runner/sources/src_1/archive/retire", {
+    method: "POST", headers: { "content-type": "application/json" },
+    // The request names no owner; the persisted Source supplies it.
+    body: JSON.stringify({ workspaceId: "spc_1", sourceId: "src_1", archiveRefs }),
+  }));
+  // Another Capsule's apps prefix is outside this Source's custody.
+  expect((await retire(["apps/cap_2/sources/src_1/snapshots/snap_app/source.tar.zst"])).status).toBe(503);
+  // A foreign live reference to the apps-prefixed key still blocks deletion.
+  await db.prepare("insert into source_snapshots values (?, ?, ?)")
+    .bind("foreign", "src_other", JSON.stringify({ id: "foreign", sourceId: "src_other", workspaceId: "spc_1", archiveRef: appArchive })).run();
+  expect((await retire([appArchive, legacyArchive])).status).toBe(503);
+  expect(bucket.body(appArchive)).toBeDefined();
+  await db.prepare("delete from source_snapshots where id = ?").bind("foreign").run();
+  expect((await retire([appArchive, legacyArchive])).status).toBe(204);
+  expect(bucket.body(appArchive)).toBeUndefined();
+  expect(bucket.body(legacyArchive)).toBeUndefined();
+  // Without an owner on the Source, its apps prefix is not in custody.
+  await bucket.put(appArchive, ARCHIVE_BYTES);
+  const { ownerCapsuleId: _owner, ...unowned } = sourceRecord;
+  await db.prepare("update sources set record_json = ? where id = ?").bind(JSON.stringify(unowned), "src_1").run();
+  expect((await retire([appArchive])).status).toBe(503);
+  expect(bucket.body(appArchive)).toBeDefined();
+
+  // Cleanup of an unused apps-prefixed allocation reads the owner from the Source.
+  await db.prepare("update sources set record_json = ? where id = ?").bind(JSON.stringify(sourceRecord), "src_1").run();
+  const allocated = "apps/cap_1/sources/src_1/snapshots/snap_new/source.tar.zst";
+  const run = { id: "sync_cleanup", workspaceId: "spc_1", sourceId: "src_1", kind: "source_sync",
+    status: "succeeded", archiveRef: allocated, requestedSnapshotId: "snap_new",
+    snapshotId: "snap_app", finishedAt: "2026-06-06T00:00:10.000Z" };
+  await db.prepare("insert into runs (id, space_id, source_id, type, status, lease_token, run_json) values (?, ?, ?, ?, ?, ?, ?)")
+    .bind(run.id, "spc_1", "src_1", "source_sync", "succeeded", null, JSON.stringify(run)).run();
+  await bucket.put(allocated, ARCHIVE_BYTES, { customMetadata: { "takosumi-run-id": run.id } });
+  const cleanup = (archiveRef: string) => runner.fetch(new Request(`https://runner/runs/${run.id}/source-archive/cleanup`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId: run.id, workspaceId: "spc_1", sourceId: "src_1", archiveRef, canonicalSnapshotId: "snap_app" }),
+  }));
+  expect((await cleanup(allocated)).status).toBe(204);
+  expect(bucket.body(allocated)).toBeUndefined();
+});
+
 test("Source retirement refuses live owners, active sync and unreferenced keys", async () => {
   const db = new SqliteFakeD1();
   await db.exec(`create table sources (id text, space_id text, status text, record_json text);
@@ -199,7 +265,10 @@ async function digestOf(bytes: Uint8Array): Promise<string> {
     .join("")}`;
 }
 
-test("source_sync run promotes the runner-local source archive to R2_SOURCE", async () => {
+// Both agreed layouts: a Workspace Source, and an app-owned Source of a Capsule
+// with an `apps/` root (TASK-0118 P9.1-f).
+for (const archiveKey of [ARCHIVE_KEY, "apps/cap_1/sources/src_1/snapshots/snap_1/source.tar.zst"]) {
+test(`source_sync run promotes the runner-local source archive to R2_SOURCE (${archiveKey.split("/")[0]})`, async () => {
   const calls: string[] = [];
   const archiveDigest = await digestOf(ARCHIVE_BYTES);
   const source = new FakeR2Bucket();
@@ -222,7 +291,7 @@ test("source_sync run promotes the runner-local source archive to R2_SOURCE", as
           archiveSizeBytes: ARCHIVE_BYTES.byteLength,
           sourceArchive: {
             kind: "runner-local",
-            ref: ARCHIVE_KEY,
+            ref: archiveKey,
             digest: archiveDigest,
             contentType: "application/zstd",
             sizeBytes: ARCHIVE_BYTES.byteLength,
@@ -255,7 +324,7 @@ test("source_sync run promotes the runner-local source archive to R2_SOURCE", as
             url: "https://github.com/octocat/Hello-World.git",
             ref: "main",
           },
-          archiveRef: ARCHIVE_KEY,
+          archiveRef: archiveKey,
         },
       }),
     }),
@@ -273,12 +342,13 @@ test("source_sync run promotes the runner-local source archive to R2_SOURCE", as
   assert.equal(payload.resolvedCommit, RESOLVED_COMMIT);
   const archive = payload.sourceArchive as Record<string, unknown>;
   assert.equal(archive.kind, "object-storage");
-  assert.equal(archive.ref, ARCHIVE_KEY);
+  assert.equal(archive.ref, archiveKey);
   assert.equal(archive.digest, archiveDigest);
-  assert.deepEqual(source.body(ARCHIVE_KEY), ARCHIVE_BYTES);
+  assert.deepEqual(source.body(archiveKey), ARCHIVE_BYTES);
   // The plan/state bucket must be untouched by a source_sync run.
-  assert.equal(artifacts.body(ARCHIVE_KEY), undefined);
+  assert.equal(artifacts.body(archiveKey), undefined);
 });
+}
 
 test("source_sync rejects one-byte-oversized chunked archives without an R2 object", async () => {
   const archiveDigest = await digestOf(ARCHIVE_BYTES);

@@ -1,6 +1,6 @@
 /** Local, non-RPC allocation capture. Core remains the allocation authority;
  * none of these contexts can be obtained by supplying a Workspace UID. */
-import type { ArtifactReferenceAllocation, ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
+import { sourceArchiveCustodyPrefixes, sourceArchiveSnapshotSegment, type ArtifactReferenceAllocation, type ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import { isInstallPlanSourceReservation } from "../../core/domains/install-plans/source-reservation.ts";
 import type { BackupArtifactWriteControl } from "../../core/domains/backups/mod.ts";
 import type { Run } from "takosumi-contract/runs";
@@ -409,14 +409,11 @@ export async function assertStoredRetiredSourceArchiveDeletion(
   input: RetiredSourceArchiveAllocation,
 ): Promise<boolean> {
   if (!SEGMENT.test(input.workspaceId) || !SEGMENT.test(input.sourceId)) throw new StoredServiceUsageError();
-  const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
-  const suffix = input.archiveRef.startsWith(prefix) ? input.archiveRef.slice(prefix.length) : "";
-  const snapshotId = suffix.split("/")[0];
-  if (!snapshotId || !SEGMENT.test(snapshotId) || suffix !== `${snapshotId}/source.tar.zst`) throw new StoredServiceUsageError();
   const db = storedOwnerDatabase(database);
   const sources = await storedOwnerRows(db, "select id, space_id, status, record_json from sources where id = ? limit 2", [input.sourceId]);
   if (sources.length !== 1) throw new StoredServiceUsageError();
   const row = sources[0]!, source = storedOwnerRecord(row.record_json);
+  if (sourceArchiveSnapshotSegment(input.archiveRef, sourceCustodyPrefixes(input, source)) === undefined) throw new StoredServiceUsageError();
   if (row.id !== input.sourceId || row.space_id !== input.workspaceId || row.status !== "disabled" ||
     source.id !== input.sourceId || source.workspaceId !== input.workspaceId || source.status !== "disabled" ||
     source.autoSync !== false || typeof source.retiringAt !== "string" || !source.retiringAt) throw new StoredServiceUsageError();
@@ -466,18 +463,17 @@ export async function assertStoredRetiredSourceArchiveDeletions(
   if (!SEGMENT.test(input.workspaceId) || !SEGMENT.test(input.sourceId) ||
     input.archiveRefs.length < 1 || input.archiveRefs.length > 32 ||
     new Set(input.archiveRefs).size !== input.archiveRefs.length) throw new StoredServiceUsageError();
-  const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
-  for (const ref of input.archiveRefs) {
-    const suffix = ref.startsWith(prefix) ? ref.slice(prefix.length) : "";
-    const snapshotId = suffix.split("/")[0];
-    if (!snapshotId || !SEGMENT.test(snapshotId) || suffix !== `${snapshotId}/source.tar.zst`)
-      throw new StoredServiceUsageError();
-  }
   const db = storedOwnerDatabase(database);
   const sources = await storedOwnerRows(db,
     "select id, space_id, status, record_json from sources where id = ? limit 2", [input.sourceId]);
   if (sources.length !== 1) throw new StoredServiceUsageError();
   const row = sources[0]!, source = storedOwnerRecord(row.record_json);
+  // Every ref lies under one of this Source's own prefixes: `apps/{owner}/…`
+  // for an app-owned Source, or the Workspace one (TASK-0118 P9.1-f).
+  const prefixes = sourceCustodyPrefixes(input, source);
+  for (const ref of input.archiveRefs) {
+    if (sourceArchiveSnapshotSegment(ref, prefixes) === undefined) throw new StoredServiceUsageError();
+  }
   if (row.id !== input.sourceId || row.space_id !== input.workspaceId || row.status !== "disabled" ||
     source.id !== input.sourceId || source.workspaceId !== input.workspaceId || source.status !== "disabled" ||
     source.autoSync !== false || typeof source.retiringAt !== "string" || !source.retiringAt)
@@ -508,10 +504,25 @@ export async function assertStoredRetiredSourceArchiveDeletions(
       input.sourceId, input.workspaceId, ...refs).first<{ owned_count: number }>();
   if (Number(owned?.owned_count) !== refs.length)
     throw new StoredServiceUsageError();
-  const blocker = await db.prepare(
-    unreleasedForeignSourceArchiveQuery("substr(refs.ref, 1, length(?)) = ?"),
-  ).bind(input.sourceId, input.sourceId, prefix, prefix).first();
-  return blocker === null;
+  for (const prefix of prefixes) {
+    const blocker = await db.prepare(
+      unreleasedForeignSourceArchiveQuery("substr(refs.ref, 1, length(?)) = ?"),
+    ).bind(input.sourceId, input.sourceId, prefix, prefix).first();
+    if (blocker !== null) return false;
+  }
+  return true;
+}
+
+/** The Source's custody prefixes; the owner comes from its persisted record. */
+function sourceCustodyPrefixes(
+  input: { readonly workspaceId: string; readonly sourceId: string },
+  source: RecordValue | undefined,
+): readonly string[] {
+  return sourceArchiveCustodyPrefixes({
+    id: input.sourceId,
+    workspaceId: input.workspaceId,
+    ...(typeof source?.ownerCapsuleId === "string" ? { ownerCapsuleId: source.ownerCapsuleId } : {}),
+  });
 }
 
 /** Delete custody is derived from the terminal Run and its canonical snapshot. */
@@ -521,14 +532,19 @@ export async function assertStoredSourceArchiveCleanup(
 ): Promise<void> {
   if (![input.runId, input.workspaceId, input.sourceId, input.canonicalSnapshotId]
     .every((value) => SEGMENT.test(value))) throw new StoredServiceUsageError();
-  const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
-  const allocated = input.archiveRef.startsWith(prefix)
-    ? input.archiveRef.slice(prefix.length).split("/")[0]
-    : undefined;
-  if (!allocated || !SEGMENT.test(allocated) ||
-    input.archiveRef !== `${prefix}${allocated}/source.tar.zst` ||
-    allocated === input.canonicalSnapshotId) throw new StoredServiceUsageError();
   const db = storedOwnerDatabase(database);
+  // An app-owned Source's archive may be under `apps/{owner}/…`; that owner is
+  // read from the persisted Source, never from the request. A Workspace-layout
+  // ref needs no Source read.
+  let sourceRecord: RecordValue | undefined;
+  if (input.archiveRef.startsWith("apps/")) {
+    const sourceRows = await storedOwnerRows(db, "select id, record_json from sources where id = ? limit 2", [input.sourceId]);
+    if (sourceRows.length !== 1) throw new StoredServiceUsageError();
+    sourceRecord = storedOwnerRecord(sourceRows[0]!.record_json);
+    if (sourceRows[0]!.id !== input.sourceId || sourceRecord.id !== input.sourceId) throw new StoredServiceUsageError();
+  }
+  const allocated = sourceArchiveSnapshotSegment(input.archiveRef, sourceCustodyPrefixes(input, sourceRecord));
+  if (!allocated || allocated === input.canonicalSnapshotId) throw new StoredServiceUsageError();
   const runs = await storedOwnerRows(db,
     "select id, space_id, source_id, type, status, lease_token, run_json from runs where id = ? limit 2",
     [input.runId]);

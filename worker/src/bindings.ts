@@ -222,6 +222,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * off unless the operator deliberately sets this.
    */
   readonly TAKOSUMI_ALLOW_OPERATOR_BACKED_PROVIDER_ENVS?: string;
+  /**
+   * `enabled` allocates an app-owned Source's new archives under its Capsule's
+   * `apps/` root (TASK-0118 P9.1-f). Turn it on only once the configured Runner
+   * image accepts `apps/` archive keys; absent or `disabled` keeps the Workspace
+   * layout.
+   */
+  readonly TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS?: string;
 }
 
 /**

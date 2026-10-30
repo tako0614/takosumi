@@ -527,6 +527,13 @@ test("assertSafeArchiveObjectKey accepts the agreed layout and rejects traversal
       "workspaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst",
     ),
   ).not.toThrow();
+  // An app-owned Source of a Capsule with an `apps/` root (TASK-0118 P9.1-f).
+  expect(() =>
+    assertSafeArchiveObjectKey(
+      "apps/cap_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    ),
+  ).not.toThrow();
+  expect(() => assertSafeArchiveObjectKey("apps/../etc/passwd")).toThrow();
   expect(() => assertSafeArchiveObjectKey("/abs/key")).toThrow();
   expect(() =>
     assertSafeArchiveObjectKey("workspaces/../etc/passwd"),

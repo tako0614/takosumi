@@ -6618,7 +6618,7 @@ function assertRestoreStateRef(scope: StateScope, key: string): void {
     key.includes("..") ||
     key.includes("\0") ||
     key.includes("\\") ||
-    !key.startsWith("workspaces/") ||
+    !(key.startsWith("workspaces/") || key.startsWith("apps/")) ||
     !key.endsWith(".tfstate.enc")
   ) {
     throw new Error(`unsafe restore state object key: ${key}`);
@@ -6671,9 +6671,11 @@ function sourceSyncArchiveRef(requestPayload: unknown): string {
   return archiveRef;
 }
 
-// Re-assert the R2_SOURCE archive key (agreed layout
-// workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
-// a safe, traversal-free relative key before writing to the bucket.
+// Re-assert the R2_SOURCE archive key (agreed layouts
+// workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst, and
+// apps/{capsuleId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst for an
+// app-owned Source of a Capsule with an `apps/` root) is a safe, traversal-free
+// relative key before writing to the bucket.
 function assertSafeSourceArchiveKey(key: string): void {
   if (
     key.length === 0 ||
@@ -6681,7 +6683,7 @@ function assertSafeSourceArchiveKey(key: string): void {
     key.includes("..") ||
     key.includes("\0") ||
     key.includes("\\") ||
-    !key.startsWith("workspaces/")
+    !(key.startsWith("workspaces/") || key.startsWith("apps/"))
   ) {
     throw new Error(`unsafe source archive object key: ${key}`);
   }

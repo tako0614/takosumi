@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  appSourceArchiveRootsFromEnv,
   capsuleArtifactRoot,
   ObjectKeyArtifactReferenceAllocator,
+  sourceArchiveCustodyPrefixes,
+  sourceArchiveSnapshotSegment,
 } from "../../../../core/adapters/storage/artifact-references.ts";
 
 describe("ObjectKeyArtifactReferenceAllocator", () => {
@@ -89,6 +92,77 @@ describe("ObjectKeyArtifactReferenceAllocator", () => {
       .toBe("workspaces/ws_before/capsules/cap_1/environments/live/state-versions/00000001.tfstate.enc");
     expect(allocator.allocate({ kind: "raw_output", workspaceId: "ws_after", subject: { kind: "capsule", id: "cap_1" }, runId: "run_1", storageRoot: "workspaces/ws_before/capsules/cap_1" }))
       .toBe("workspaces/ws_before/capsules/cap_1/runs/run_1/outputs.raw.json.enc");
+  });
+});
+
+describe("Source archives and backups follow an apps root (TASK-0118 P9.1-f)", () => {
+  const enabled = new ObjectKeyArtifactReferenceAllocator({ appSourceArchiveRoots: true });
+  const disabled = new ObjectKeyArtifactReferenceAllocator();
+  const app = { capsuleId: "cap_1", storageRoot: "apps/cap_1" };
+  const legacy = { capsuleId: "cap_1", storageRoot: "workspaces/ws_before/capsules/cap_1" };
+  const archive = { kind: "source_archive" as const, workspaceId: "ws_1", sourceId: "src_1", snapshotId: "snap_1" };
+
+  test("a Source archive goes under the owner's apps root only when enabled", () => {
+    expect(enabled.allocate({ ...archive, owner: app }))
+      .toBe("apps/cap_1/sources/src_1/snapshots/snap_1/source.tar.zst");
+    // Off until the Runner image accepts `apps/` keys.
+    expect(disabled.allocate({ ...archive, owner: app }))
+      .toBe("workspaces/ws_1/sources/src_1/snapshots/snap_1/source.tar.zst");
+    // A legacy owner, or none, keeps the Workspace layout byte for byte.
+    expect(enabled.allocate({ ...archive, owner: legacy }))
+      .toBe("workspaces/ws_1/sources/src_1/snapshots/snap_1/source.tar.zst");
+    expect(enabled.allocate(archive)).toBe("workspaces/ws_1/sources/src_1/snapshots/snap_1/source.tar.zst");
+  });
+
+  test("a backup goes under the owner's apps root, or a legacy owner's frozen Workspace segment", () => {
+    for (const allocator of [enabled, disabled]) {
+      expect(allocator.allocate({ kind: "backup_control", workspaceId: "ws_1", backupId: "bkp_1", owner: app }))
+        .toBe("apps/cap_1/backups/bkp_1/control.json.zst.enc");
+      expect(allocator.allocate({ kind: "backup_service_data", workspaceId: "ws_1", backupId: "bkp_1", owner: app }))
+        .toBe("apps/cap_1/backups/bkp_1/service-data.tar.zst.enc");
+      // Not the live (moved) Workspace id of the allocation.
+      expect(allocator.allocate({ kind: "backup_state", workspaceId: "ws_after", backupId: "bkp_1", owner: legacy }))
+        .toBe("workspaces/ws_before/backups/bkp_1/state.tar.zst.enc");
+      expect(allocator.allocate({ kind: "backup_artifacts_manifest", workspaceId: "ws_1", backupId: "bkp_1" }))
+        .toBe("workspaces/ws_1/backups/bkp_1/artifacts.manifest.json");
+    }
+  });
+
+  test("an owner root that is not this Capsule's canonical root is refused", () => {
+    for (const storageRoot of ["apps/cap_2", "workspaces/ws_1/capsules/cap_2", "apps/../cap_1", "tenants/cap_1"]) {
+      expect(() => enabled.allocate({ ...archive, owner: { capsuleId: "cap_1", storageRoot } }), storageRoot)
+        .toThrow("not canonical");
+      expect(() => enabled.allocate({ kind: "backup_control", workspaceId: "ws_1", backupId: "bkp_1",
+        owner: { capsuleId: "cap_1", storageRoot } }), storageRoot).toThrow("not canonical");
+    }
+  });
+
+  test("a Source's custody covers its apps prefix and its Workspace prefix, in key order", () => {
+    expect(sourceArchiveCustodyPrefixes({ id: "src_1", workspaceId: "ws_1" }))
+      .toEqual(["workspaces/ws_1/sources/src_1/snapshots/"]);
+    const prefixes = sourceArchiveCustodyPrefixes({ id: "src_1", workspaceId: "ws_1", ownerCapsuleId: "cap_1" });
+    expect(prefixes).toEqual(["apps/cap_1/sources/src_1/snapshots/", "workspaces/ws_1/sources/src_1/snapshots/"]);
+    expect([...prefixes].sort()).toEqual(prefixes);
+    // An owner id that is not a key segment has no apps prefix.
+    expect(sourceArchiveCustodyPrefixes({ id: "src_1", workspaceId: "ws_1", ownerCapsuleId: "cap:1" }))
+      .toEqual(["workspaces/ws_1/sources/src_1/snapshots/"]);
+    expect(sourceArchiveSnapshotSegment("apps/cap_1/sources/src_1/snapshots/snap_1/source.tar.zst", prefixes)).toBe("snap_1");
+    expect(sourceArchiveSnapshotSegment("workspaces/ws_1/sources/src_1/snapshots/snap_2/source.tar.zst", prefixes)).toBe("snap_2");
+    for (const ref of [
+      "apps/cap_2/sources/src_1/snapshots/snap_1/source.tar.zst",
+      "apps/cap_1/sources/src_2/snapshots/snap_1/source.tar.zst",
+      "apps/cap_1/sources/src_1/snapshots/../source.tar.zst",
+      "apps/cap_1/sources/src_1/snapshots/snap_1/other.tar.zst",
+      "apps/cap_1/sources/src_1/snapshots/snap_1/x/source.tar.zst",
+    ]) expect(sourceArchiveSnapshotSegment(ref, prefixes), ref).toBeUndefined();
+  });
+
+  test("TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS is enabled, disabled or absent", () => {
+    expect(appSourceArchiveRootsFromEnv(undefined)).toBe(false);
+    expect(appSourceArchiveRootsFromEnv("")).toBe(false);
+    expect(appSourceArchiveRootsFromEnv("disabled")).toBe(false);
+    expect(appSourceArchiveRootsFromEnv("enabled")).toBe(true);
+    for (const value of ["true", "1", "Enabled"]) expect(() => appSourceArchiveRootsFromEnv(value), value).toThrow();
   });
 });
 

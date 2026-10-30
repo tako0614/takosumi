@@ -11,7 +11,7 @@ import {
 } from "../../core/adapters/secret-store/memory.ts";
 import { createPrivateRunFileGrantCodec } from "../../core/domains/private-run-files/grant.ts";
 import { PRIVATE_RUN_FILE_MAX_BYTES } from "../../core/api/private_run_file_routes.ts";
-import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
+import { appSourceArchiveRootsFromEnv, ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import type {
   EnqueueRun,
   OpenTofuRunnerExecutorRegistry,
@@ -206,7 +206,9 @@ export async function createWorkerServiceApp(
   // Control backups (spec §33 / §26): seal the bundle with the at-rest crypto
   // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
   const backupStorage = createBackupStoredOwnerContext(
-    new ObjectKeyArtifactReferenceAllocator(),
+    new ObjectKeyArtifactReferenceAllocator({
+      appSourceArchiveRoots: appSourceArchiveRootsFromEnv(env.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS),
+    }),
     storedServiceCompositionFromEnv(env),
     env.R2_BACKUPS,
     env.TAKOSUMI_CONTROL_DB,
