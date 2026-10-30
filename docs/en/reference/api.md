@@ -171,7 +171,17 @@ authentication and input errors, carries `Cache-Control: no-store` and
 The scope catalog marks only core `read` / `write` and allowlisted extension
 scopes explicitly declared by the same owning route through
 `selfServicePatScopes` as self-service. Takosumi hosted AI `ai.models.read`, `ai.chat`,
-and `ai.embeddings`, plus `resources:read`, require a Workspace binding.
+and `ai.embeddings`, plus `resources:read`, no longer need a Workspace binding
+(TASK-0118 9.1; the catalog reports `workspaceBinding: "optional"` for every
+scope). Such a token is either limited to apps with `appIds` (each must be an
+app the caller owns or is a member of when the token is created, and every
+app-scoped request re-checks the live role) or acts with the account's own
+authority. A legacy `workspace_id`
+binding is still accepted for now and becomes `400` in Phase 9.3. The extension
+scopes never widen to the core account APIs (`read` / `write` routes), and a
+host route that still needs a Workspace keeps refusing a token it cannot fence.
+The Dashboard key card still offers only `read` / `write` until the hosted
+routes accept app- or account-scoped keys.
 Accounts never infers self-service authority from request scopes and never
 exposes `admin` or an undeclared scope for self-service issuance.
 

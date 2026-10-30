@@ -122,7 +122,9 @@ function isScopeCatalogEntry(
     case "ai.models.read":
     case "ai.chat":
     case "ai.embeddings":
-      return value.workspaceBinding === "required";
+      // Workspace-optional since TASK-0118 9.1 (app- or account-scoped);
+      // older servers still advertise a required Workspace binding.
+      return true;
   }
 }
 
