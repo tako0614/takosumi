@@ -462,6 +462,99 @@ test("every authorized screen is listed in display order with only display data 
   expect((await h.request("/app", h.stranger)).status).toBe(403);
 });
 
+test("a screen carries its validated native clients with links filled in from its own URL", async () => {
+  const h = await fixture();
+  const interfaces = (h.core as unknown as {
+    interfaces: {
+      create(input: unknown): Promise<{ metadata: { id: string } }>;
+      createBinding(id: string, input: unknown): Promise<unknown>;
+    };
+  }).interfaces;
+  const surface = async (name: string, url: string, document: Record<string, unknown>) => {
+    const created = await interfaces.create({
+      workspaceId: WORKSPACE,
+      name,
+      ownerRef: { kind: "Capsule", id: CAPSULE },
+      spec: {
+        type: "interface.ui.surface",
+        version: "1",
+        document: { launcher: true, ...document },
+        inputs: { url: { source: "literal", value: url } },
+        access: { visibility: "workspace" },
+      },
+    });
+    await interfaces.createBinding(created.metadata.id, {
+      subjectRef: { kind: "Principal", id: OWNER },
+      permissions: ["ui.open"],
+      delivery: { type: "none" },
+    });
+    return created.metadata.id;
+  };
+  const chat = await surface("chat", "https://chat.example.test/home", {
+    display: { title: "Chat", sortOrder: 1 },
+    clients: {
+      preferred: "native",
+      ios: {
+        name: "Chat",
+        appStoreId: "1234567890",
+        open: "chat://connect?host_url={origin}&product=chat",
+        universalLink: "https://open.chat.example/connect#host_url={origin}",
+        unknownField: "ignored",
+      },
+      android: {
+        name: "Chat",
+        // No package: Android cannot pin the app, so the platform is dropped.
+        open: "chat://connect?host_url={origin}",
+      },
+      windows: { open: "chat://connect" },
+    },
+  });
+  const notes = await surface("notes", "https://notes.example.test/", {
+    display: { title: "Notes", sortOrder: 2 },
+    clients: {
+      ios: { open: "javascript:alert(document.cookie)" },
+      android: {
+        package: "com.example.notes",
+        open: "intent://open#Intent;scheme=notes;end",
+        appLink: `${ORIGIN}/oauth/authorize?next={url}`,
+      },
+    },
+  });
+
+  const app = await h.app();
+  expect(app.screens).toEqual([
+    {
+      interfaceId: chat,
+      name: "chat",
+      title: "Chat",
+      sortOrder: 1,
+      url: "https://chat.example.test/home",
+      clients: {
+        preferred: "native",
+        ios: {
+          name: "Chat",
+          appStoreId: "1234567890",
+          open: "chat://connect?host_url=https%3A%2F%2Fchat.example.test&product=chat",
+          universalLink: "https://open.chat.example/connect#host_url=https%3A%2F%2Fchat.example.test",
+          storeUrl: "https://apps.apple.com/app/id1234567890",
+        },
+      },
+    },
+    {
+      interfaceId: notes,
+      name: "notes",
+      title: "Notes",
+      sortOrder: 2,
+      url: "https://notes.example.test/",
+    },
+  ]);
+  const body = JSON.stringify(app);
+  expect(body).not.toContain("unknownField");
+  expect(body).not.toContain("javascript:");
+  expect(body).not.toContain("intent:");
+  expect(body).not.toContain("/oauth/authorize");
+});
+
 test("another account cannot read the app view or the Run list of this Workspace", async () => {
   const h = await fixture();
   await h.ledger.putPlanRun(planRun("plan_private", Date.now()));

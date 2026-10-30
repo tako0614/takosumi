@@ -8,6 +8,21 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- **Screens can declare their native phone apps:** an `interface.ui.surface`
+  `document` may now carry `clients` next to `display` (`preferred`, and per
+  platform `ios` / `android` a `name`, `appStoreId` / `package`, a custom-scheme
+  `open` template, an optional publisher-domain `universalLink` / `appLink`
+  template and an optional `storeUrl`). The shared contract parser
+  `parseInterfaceClients` checks it: templates may carry only `{origin}` and
+  `{url}`, dangerous schemes (`javascript:`, `data:`, `file:`, `intent:`,
+  `takosumi:`, system call, message, settings and store schemes, and others),
+  non-https links, userinfo, credential-named parameters, Takosumi's own origin
+  and links over 2,048 characters are refused, an invalid field or platform
+  degrades to absence, and unknown keys are ignored. `GET
+  /api/v1/capsules/{id}/app` returns the result as `screens[].clients`, with the
+  screen's origin or URL already filled in. The field is optional, so neither
+  the Interface version nor any repository manifest version changes. The
+  dashboard and Takosumi Mobile do not act on it yet (TASK-0119).
 - **A name collision no longer leaves an install retrying forever:** an install
   plan created without `mode` (the legacy Workspace route) whose app name is
   already used by a live app in the same Workspace and environment now ends

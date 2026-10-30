@@ -111,6 +111,84 @@ tile of an app whose install has not finished, or that is scheduled for uninstal
 drawn muted with a small mark (**Installing**, **Needs attention**, and so on), and opens the
 app's page.
 
+## Declare your phone app
+
+If the same product has a native phone app (distributed on the App Store or Google Play), you can
+name it in `clients`, next to `display` in the `document`. Takosumi reads it so that, on a phone,
+the screen can be handed to that app. Opening the screen on the web always remains possible,
+with or without this declaration.
+
+Today Takosumi checks the declaration and returns it in the app's screen API
+(`screens[].clients` of `GET /api/v1/capsules/{id}/app`). Handing the screen to the native app
+from the dashboard and Takosumi Mobile comes later.
+
+```json
+"document": {
+  "launcher": true,
+  "display": { "title": "Notes", "icon": "/icon.svg" },
+  "clients": {
+    "preferred": "native",
+    "ios": {
+      "name": "Notes",
+      "appStoreId": "1234567890",
+      "open": "notes://connect?host_url={origin}",
+      "universalLink": "https://open.notes.example/connect#host_url={origin}"
+    },
+    "android": {
+      "name": "Notes",
+      "package": "com.example.notes",
+      "open": "notes://connect?host_url={origin}",
+      "appLink": "https://open.notes.example/connect#host_url={origin}"
+    }
+  }
+}
+```
+
+The store id and domains are examples.
+
+| Field | What to write |
+| --- | --- |
+| `preferred` | The default on a phone: `"native"` (the native app) or `"web"`. Without it, `"native"`; it applies on each OS that declares a native app |
+| `ios.name`, `android.name` | The app name shown where people choose how to open (up to 64 characters). Without it, the screen's name (`display.title`) is used |
+| `ios.appStoreId` | The App Store id (1 to 12 digits). The install link becomes `https://apps.apple.com/app/id<ID>` |
+| `ios.bundleId` | Optional. The bundle id, in reverse-DNS form such as `com.example.notes` |
+| `android.package` | Required. The applicationId, in reverse-DNS form. On Android the link goes only to the app with this package, and the install link becomes its Google Play page |
+| `open` | A template for the app's custom-scheme link |
+| `ios.universalLink`, `android.appLink` | Optional. A template for an https link on the publisher's domain (universal link, App Link) |
+| `ios.storeUrl`, `android.storeUrl` | Optional. A different install link (TestFlight, F-Droid, and so on): https on `apps.apple.com` or `testflight.apple.com` for iOS, on `play.google.com` or `f-droid.org` for Android |
+
+- Each OS needs `open` or `universalLink` (`appLink` on Android), or both. Android also needs
+  `package`.
+- A template can contain only `{origin}` (the origin of the screen's URL) and `{url}` (the whole
+  screen URL). Both are inserted URL-encoded. That public URL is the only thing handed to the
+  app: never a token, a session, or an account id. Today's yurucommu-mobile and similar apps read
+  `connect?host_url=`, so `open` works in the form shown above.
+- Each instance has its own domain, so a native app cannot claim instance domains as universal
+  links. To use universal links or App Links, put a page on the publisher's domain that sends
+  people to the store or back to the web when the app is missing. With the instance URL after
+  `#`, it is not sent to that page's server.
+- `clients` is an optional field inside `document`, so neither the Interface version (`"1"`) nor
+  the manifest version changes. A Takosumi that does not know the field ignores it.
+
+A value that fails a check is not an error: that field is treated as absent, and an OS left with
+no way to open the app is treated as absent too. Unknown fields and operating systems (such as
+`windows`) are ignored and never returned by the API.
+
+| Field | Refused |
+| --- | --- |
+| `open` | A scheme that is not 2 to 32 characters starting with a lowercase letter (lowercase letters, digits, `+`, `.`, `-`), a blocked scheme (below), a user name or password, a query parameter whose name looks like a credential (such as `token`), a `#` fragment (on Android, Takosumi builds an `intent:` link and appends to it) |
+| `universalLink`, `appLink` | Anything but `https://` (including `http://`), a user name or password, a port other than 443, an IP address or a host without a dot, a credential-like name in the query or after `#`, Takosumi's own origin |
+| Any template | A `{...}` other than `{origin}` and `{url}` (including `{ORIGIN}` and an unmatched `{`), `{origin}` or `{url}` in the host, spaces or characters not allowed in URLs, more than 2,048 characters before or after filling in |
+| `appStoreId`, `bundleId`, `android.package` | An id that is not 1 to 12 digits, a name not in reverse-DNS form (up to 155 characters) |
+| `name` | 65 characters or more, control characters, or characters that change text direction |
+
+Schemes `open` cannot use: `http`, `https` (write those in `universalLink` or `appLink`),
+`javascript`, `vbscript`, `data`, `file`, `filesystem`, `blob`, `about`, `content`, `intent`,
+`android-app` (Takosumi builds Android links), `takosumi` (Takosumi Mobile itself), `tel`, `callto`,
+`sms`, `smsto`, `mms`, `mmsto`, `mailto`, `facetime`, `facetime-audio`, `facetime-prompt`,
+`facetime-audio-prompt`, `itms`, `itmss`, `itms-apps`, `itms-appss`, `itms-services`, `itms-beta`,
+`market`, `app-settings`, `app-prefs`, `prefs`, `shortcuts`, `ws`, `wss`, `ftp`.
+
 ## What the person adding sees
 
 1. At the end of adding, **Preparing the service** appears while Takosumi waits for the screen's

@@ -109,6 +109,82 @@ Worker やサーバーなど）のアドレスから作ります。既定値の�
 終わっていないアプリと、アンインストール予定や停止中のアプリのタイルは少し薄く表示されます。
 小さな印（**インストール中**、**要対応** など）が付き、押すとアプリのページが開きます。
 
+## スマホの専用アプリを宣言する
+
+同じ product にスマホの専用アプリ（App Store や Google Play で配布するネイティブアプリ）があるなら、
+`document` の `display` と並べて `clients` に書けます。Takosumi はこれを読み、スマホでは画面を
+専用アプリへ渡せるようにします。書かなくても、web で開くことはいつでもできます。
+
+今の Takosumi が行うのは、宣言の検査と、アプリの画面の API（`GET /api/v1/capsules/{id}/app` の
+`screens[].clients`）で返すところまでです。dashboard と Takosumi Mobile が専用アプリへ渡す動作は、
+これから入ります。
+
+```json
+"document": {
+  "launcher": true,
+  "display": { "title": "Notes", "icon": "/icon.svg" },
+  "clients": {
+    "preferred": "native",
+    "ios": {
+      "name": "Notes",
+      "appStoreId": "1234567890",
+      "open": "notes://connect?host_url={origin}",
+      "universalLink": "https://open.notes.example/connect#host_url={origin}"
+    },
+    "android": {
+      "name": "Notes",
+      "package": "com.example.notes",
+      "open": "notes://connect?host_url={origin}",
+      "appLink": "https://open.notes.example/connect#host_url={origin}"
+    }
+  }
+}
+```
+
+ストアの ID とドメインは例です。
+
+| 欄 | 書くもの |
+| --- | --- |
+| `preferred` | スマホで開くときの既定。`"native"`（専用アプリ）か `"web"`。省くと `"native"` で、専用アプリを宣言した OS で効きます |
+| `ios.name`・`android.name` | 選ぶ画面に出す専用アプリの名前（64 文字まで）。省くと画面の名前（`display.title`）を使います |
+| `ios.appStoreId` | App Store の ID（1〜12 桁の数字）。入れる先を `https://apps.apple.com/app/id<ID>` にします |
+| `ios.bundleId` | 任意。bundle id（`com.example.notes` のような逆 DNS の形） |
+| `android.package` | 必須。applicationId（逆 DNS の形）。Android ではこの package のアプリにだけ渡し、入れる先をその Google Play のページにします |
+| `open` | 専用アプリの custom scheme の link の雛形 |
+| `ios.universalLink`・`android.appLink` | 任意。配布者のドメインに置いた https の link（universal link・App Links）の雛形 |
+| `ios.storeUrl`・`android.storeUrl` | 任意。入れる先を変えるとき（TestFlight、F-Droid など）。iOS は `apps.apple.com`・`testflight.apple.com`、Android は `play.google.com`・`f-droid.org` の https だけ |
+
+- 各 OS に、`open` か `universalLink`（Android は `appLink`）の少なくとも一つが要ります。Android は
+  `package` も要ります。
+- 雛形に入れられるのは `{origin}`（画面の URL の origin）と `{url}`（画面の URL 全体）だけです。
+  どちらも URL encode して入れます。専用アプリへ渡るのはこの公開の URL だけで、token、session、
+  アカウントの ID は入りません。今の yurucommu-mobile などは `connect?host_url=` を読むので、
+  `open` はこの例の形で使えます。
+- 各 instance のドメインは利用者ごとに違うので、専用アプリが instance のドメインを universal link
+  として持つことはできません。universal link・App Links を使うなら、配布者のドメインにページを置き、
+  アプリが無いときはそこからストアと web へ案内します。instance の URL を `#` の後に置けば、
+  そのページのサーバーへは送られません。
+- `clients` は `document` の中の任意の欄なので、Interface の版（`"1"`）も manifest の版も変わりません。
+  知らない Takosumi はこの欄を無視します。
+
+検査に通らない値はエラーにならず、その欄が無かったことになります。OS で開く手段が無くなれば、
+その OS ごと無かったことになります。知らない欄と OS（`windows` など）は無視し、API にも出しません。
+
+| 欄 | 通らないもの |
+| --- | --- |
+| `open` | scheme が英小文字で始まる 2〜32 文字（英小文字・数字・`+`・`.`・`-`）でないもの、下の禁止の scheme、ユーザー名やパスワード、`token` のような認証情報らしい名前の query、`#` 以降（Android では Takosumi が `intent:` の link を組み立てて後ろに付けるため） |
+| `universalLink`・`appLink` | `https://` 以外（`http://` を含む）、ユーザー名やパスワード、443 以外の port、IP アドレスや `.` の無い host、認証情報らしい名前の query や `#` 以降の値、Takosumi 自身の origin |
+| 雛形の全体 | `{origin}`・`{url}` 以外の `{...}`（`{ORIGIN}`、対になっていない `{` も）、host の部分に置いた `{origin}`・`{url}`、空白や URL に使えない文字、値を入れる前か後で 2,048 文字を超えるもの |
+| `appStoreId`・`bundleId`・`android.package` | 1〜12 桁の数字でない ID、逆 DNS の形でない名前（155 文字まで） |
+| `name` | 65 文字以上、制御文字や文字の向きを変える文字を含むもの |
+
+`open` で使えない scheme: `http`、`https`（`universalLink`・`appLink` に書きます）、`javascript`、
+`vbscript`、`data`、`file`、`filesystem`、`blob`、`about`、`content`、`intent`、`android-app`
+（Android の link は Takosumi が組み立てます）、`takosumi`（Takosumi Mobile 自身）、`tel`、`callto`、
+`sms`、`smsto`、`mms`、`mmsto`、`mailto`、`facetime`、`facetime-audio`、`facetime-prompt`、
+`facetime-audio-prompt`、`itms`、`itmss`、`itms-apps`、`itms-appss`、`itms-services`、`itms-beta`、
+`market`、`app-settings`、`app-prefs`、`prefs`、`shortcuts`、`ws`、`wss`、`ftp`。
+
 ## 追加した人に見えるもの
 
 1. 追加の最後に「サービスを準備しています」と表示され、画面の URL が使えるようになるのを

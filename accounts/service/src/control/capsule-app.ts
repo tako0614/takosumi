@@ -42,6 +42,7 @@ import {
 import {
   hasCredentialQueryParams,
   isValidInterfaceName,
+  parseInterfaceClients,
   parseInterfaceDisplay,
   TAKOSUMI_API_VERSION,
   UI_SURFACE_INTERFACE_TYPE,
@@ -715,7 +716,8 @@ async function readScreens(
 
 /**
  * Projects one authorized launcher Interface the way the Dashboard's strict
- * consumer does, keeping only display metadata and the checked launch URL.
+ * consumer does, keeping only display metadata, the checked launch URL and the
+ * validated native clients (whose links carry nothing but that URL).
  */
 export function projectAppScreen(
   value: unknown,
@@ -773,6 +775,10 @@ export function projectAppScreen(
     surfaceUrl: url,
     ...(viewerOrigin ? { viewerOrigin } : {}),
   });
+  const clients = parseInterfaceClients(document.clients, {
+    surfaceUrl: url,
+    ...(viewerOrigin ? { viewerOrigin } : {}),
+  });
   return {
     interfaceId,
     name,
@@ -784,6 +790,7 @@ export function projectAppScreen(
     ...(display.category !== undefined ? { category: display.category } : {}),
     ...(display.sortOrder !== undefined ? { sortOrder: display.sortOrder } : {}),
     url,
+    ...(clients ? { clients } : {}),
   };
 }
 

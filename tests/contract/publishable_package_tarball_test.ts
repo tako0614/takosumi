@@ -116,7 +116,7 @@ test(
           /(?:^|\/)(?:accounts|core|deploy|lib|providers|reference)(?:\/|$)/u,
         );
         expect(path).not.toMatch(
-          /(?:index|interface-display|internal-[^/]+)\.ts$/u,
+          /(?:index|interface-display|interface-clients|internal-[^/]+)\.ts$/u,
         );
       }
 
@@ -323,6 +323,8 @@ import type { CreateInterfaceRequest } from "@takosjp/takosumi-contract/runtime-
 import type { InterfaceInputProvenance } from "@takosjp/takosumi-contract/runtime-interfaces";
 // @ts-expect-error interface display policy remains application-owned
 import * as InterfaceDisplay from "@takosjp/takosumi-contract/interface-display";
+// @ts-expect-error interface client policy remains application-owned
+import * as InterfaceClients from "@takosjp/takosumi-contract/interface-clients";
 // @ts-expect-error internal crypto is not a package export
 import * as InternalCrypto from "@takosjp/takosumi-contract/internal-crypto";
 // @ts-expect-error IP classification is not a package export

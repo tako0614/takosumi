@@ -16,6 +16,7 @@ export * from "./plan-scope.ts";
 export * from "./interfaces.ts";
 export * from "./interface-types.ts";
 export * from "./interface-display.ts";
+export * from "./interface-clients.ts";
 export * from "./sources.ts";
 export * from "./install-plans.ts";
 export * from "./installed-apps.ts";
