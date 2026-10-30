@@ -45,6 +45,10 @@ async function harness(options: {
   readonly answer?: (pusherId: string) => number;
   readonly relayOrigins?: readonly string[];
   readonly log?: (event: string, fields: Record<string, unknown>) => void;
+  /** How long one push takes on the harness clock. */
+  readonly sendTakesMs?: number;
+  /** Wraps the by-id ledger read of parked events. */
+  readonly getEvent?: (id: string, read: () => Promise<ActivityEvent | undefined>, clock: { now: number }) => Promise<ActivityEvent | undefined>;
 } = {}): Promise<Harness> {
   const ledger = new InMemoryOpenTofuControlStore();
   const accounts = new InMemoryAccountsStore();
@@ -63,12 +67,15 @@ async function harness(options: {
     const request = new Request(input, init);
     requests.push(request.clone());
     const pusherId = new URL(request.url).pathname.split("/").at(-1)!;
+    clock.now += options.sendTakesMs ?? 0;
     return new Response(null, { status: state.answers.shift() ?? options.answer?.(pusherId) ?? 201 });
   }) as typeof globalThis.fetch;
   const dispatcher = new OwnNotificationDispatcher({
     events: {
       listAfter: (input) => ledger.listActivityEventsAfter(input),
-      get: (id) => ledger.getActivityEvent(id),
+      get: (id) => options.getEvent
+        ? options.getEvent(id, () => ledger.getActivityEvent(id), clock)
+        : ledger.getActivityEvent(id),
     },
     directory,
     store: accounts as unknown as NotificationDispatchStore,
@@ -375,19 +382,109 @@ describe("own-notification dispatcher", () => {
     expect(await h.dispatcher.deliverEvent(revoked, { ownerAccountId: OWNER, actorAccountId: "tsub_operator" })).toMatchObject({ enqueued: 2, delivered: 2 });
   });
 
-  test("the immediate path stops at its deadline and leaves the rest leased for catch-up", async () => {
+  test("the immediate path leaves unsent rows due for catch-up when no whole send fits", async () => {
     const h = await harness();
     for (let index = 0; index < 3; index += 1) await h.register(OWNER, "en");
     const event = { id: "act_slow", workspaceId: "ws", action: "run.approval_required", targetType: "run", targetId: "run_9", runId: "run_9", metadata: { capsuleId: "cap_1" }, createdAt: new Date(T0).toISOString() };
-    // A deadline already reached: rows are enqueued and leased, none is sent.
+    // A deadline already reached: rows are enqueued, none is leased or sent.
     expect(await h.dispatcher.deliverEvent(event, undefined, { timeoutMs: 0 })).toEqual({ enqueued: 3, delivered: 0, retried: 0, failed: 0, removedPushers: 0, leftOver: 3 });
     expect(h.requests).toHaveLength(0);
+    // They are due at once for the catch-up run, not after a lease.
     await h.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0).toISOString(), id: "" });
-    // Before the lease ends nothing is due; after it the catch-up run sends them.
-    h.clock.now = T0 + 60_000;
-    expect(await h.dispatcher.run()).toMatchObject({ delivered: 0 });
-    h.clock.now = T0 + 2 * 60_000 + 1;
+    h.clock.now = T0 + 1_000;
     expect(await h.dispatcher.run()).toMatchObject({ delivered: 3 });
+  });
+
+  test("a send never starts unless its whole timeout fits; the rest keep their lease unattempted", async () => {
+    const h = await harness({ sendTakesMs: 11_000 });
+    for (let index = 0; index < 9; index += 1) await h.register(OWNER, "en");
+    const event = { id: "act_many", workspaceId: "ws", action: "run.approval_required", targetType: "run", targetId: "run_9", runId: "run_9", metadata: { capsuleId: "cap_1" }, createdAt: new Date(T0).toISOString() };
+    // Eight sends start together. Each push takes 11 of the 18 seconds, so
+    // once one is answered less than a send's 8-second timeout is left and
+    // the ninth row is not started (rather than started and cut short).
+    expect(await h.dispatcher.deliverEvent(event, undefined, { timeoutMs: 18_000 })).toEqual({ enqueued: 9, delivered: 8, retried: 0, failed: 0, removedPushers: 0, leftOver: 1 });
+    expect(h.requests).toHaveLength(8);
+    // The leftover row is not charged an attempt: after its lease it is due
+    // again exactly as it was enqueued.
+    const now = T0 + 3 * 60_000;
+    const leftover = await h.accounts.claimNotificationDeliveries({ now, limit: 10, leaseToken: "check", leaseExpiresAt: now + 1 });
+    expect(leftover.map((row) => [row.attempts, row.lastStatus])).toEqual([[0, undefined]]);
+  });
+
+  test("the immediate path does nothing at all while no account has a pusher", async () => {
+    const h = await harness({ directory: { appOwner: () => Promise.reject(new Error("must not be read")) } });
+    const event = { id: "act_none", workspaceId: "ws", action: "run.approval_required", targetType: "run", targetId: "run_9", runId: "run_9", metadata: { capsuleId: "cap_1" }, createdAt: new Date(T0).toISOString() };
+    expect(await h.dispatcher.deliverEvent(event)).toEqual({ enqueued: 0, delivered: 0, retried: 0, failed: 0, removedPushers: 0, leftOver: 0 });
+    expect(await h.accounts.claimNotificationDeliveries({ now: T0, limit: 10, leaseToken: "l", leaseExpiresAt: T0 + 1 })).toEqual([]);
+  });
+
+  test("a slow parked retry never holds the cursor back", async () => {
+    let slow = false;
+    const h = await harness({
+      directory: { appOwner: async (capsuleId) => { if (capsuleId === "cap_bad") throw new Error("ledger unavailable"); return OWNER; } },
+      // A by-id read that takes longer than the whole run.
+      getEvent: async (_id, read, clock) => { if (slow) clock.now += 60_000; return await read(); },
+    });
+    await h.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0 - 1).toISOString(), id: "" });
+    await h.register(OWNER, "en");
+    await h.record({ id: "act_bad", action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_bad", metadata: { capsuleId: "cap_bad" } }, T0);
+    h.clock.now = T0 + 3_600_000;
+    expect(await h.dispatcher.run()).toMatchObject({ parkedEvents: 1 });
+    slow = true;
+    await h.record({ id: "act_new", action: "capsule.auto_update_failed", targetType: "capsule", targetId: "cap_good", metadata: {} }, h.clock.now - 20 * 60_000);
+    // The ledger is read before the parked retry: the new event is enqueued and
+    // the cursor passes it although the retry then uses up the run.
+    expect(await h.dispatcher.run()).toMatchObject({ events: 1, enqueued: 1 });
+    expect(await h.accounts.getNotificationDispatchCursor()).toMatchObject({
+      id: "act_new",
+      parked: [{ eventId: "act_bad", attempts: 2 }],
+    });
+    // The next run sends what that one had no time left for.
+    slow = false;
+    expect(await h.dispatcher.run()).toMatchObject({ delivered: 1 });
+  });
+
+  test("past fifty parked events the oldest are given up, logged and counted", async () => {
+    const logs: Array<[string, Record<string, unknown>]> = [];
+    const h = await harness({
+      directory: { appOwner: () => Promise.reject(new Error("ledger unavailable")) },
+      log: (event, fields) => logs.push([event, fields]),
+    });
+    await h.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0 - 1).toISOString(), id: "" });
+    await h.register(OWNER, "en");
+    for (let index = 0; index < 52; index += 1) {
+      const id = `act_${String(index).padStart(2, "0")}`;
+      await h.record({ id, action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_bad", metadata: { capsuleId: "cap_bad" } }, T0 + index);
+    }
+    h.clock.now = T0 + 3_600_000;
+    expect(await h.dispatcher.run()).toMatchObject({ events: 52, parkedEvents: 52, skippedEvents: 2 });
+    const cursor = await h.accounts.getNotificationDispatchCursor();
+    expect(cursor?.id).toBe("act_51");
+    expect(cursor?.parked).toHaveLength(50);
+    expect(cursor?.parked?.map((entry) => entry.eventId)).not.toContain("act_00");
+    expect(cursor?.parked?.map((entry) => entry.eventId)).not.toContain("act_01");
+    expect(logs.filter(([event, fields]) => event === "own_notification_event_skipped" && fields.reason === "parking_full")
+      .map(([, fields]) => fields.eventId)).toEqual(["act_00", "act_01"]);
+  });
+
+  test("a parked event that is gone from the ledger is given up, logged and counted", async () => {
+    const gone = new Set<string>();
+    const logs: Array<[string, Record<string, unknown>]> = [];
+    const h = await harness({
+      directory: { appOwner: async (capsuleId) => { if (capsuleId === "cap_bad") throw new Error("ledger unavailable"); return OWNER; } },
+      getEvent: async (id, read) => (gone.has(id) ? undefined : await read()),
+      log: (event, fields) => logs.push([event, fields]),
+    });
+    await h.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0 - 1).toISOString(), id: "" });
+    await h.register(OWNER, "en");
+    await h.record({ id: "act_gone", action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_bad", metadata: { capsuleId: "cap_bad" } }, T0);
+    h.clock.now = T0 + 3_600_000;
+    expect(await h.dispatcher.run()).toMatchObject({ parkedEvents: 1 });
+    gone.add("act_gone");
+    h.clock.now += 3_600_000;
+    expect(await h.dispatcher.run()).toMatchObject({ skippedEvents: 1, enqueued: 0 });
+    expect((await h.accounts.getNotificationDispatchCursor())?.parked).toEqual([]);
+    expect(logs).toContainEqual(["own_notification_event_skipped", { eventId: "act_gone", reason: "event_missing" }]);
   });
 
   test("without a secret-store passphrase nothing is read or sent", async () => {

@@ -1,5 +1,8 @@
 import { runSourceMaintenanceSchedule } from "../../worker/src/source_maintenance_schedule.ts";
-import { runOwnNotificationDispatch } from "../../worker/src/own_notification_dispatch.ts";
+import {
+  attachInvocationWaitUntil,
+  runOwnNotificationDispatch,
+} from "../../worker/src/own_notification_dispatch.ts";
 // Operator-deployed Takosumi platform worker composition.
 //
 // This single worker hosts the accounts plane (bare-origin OIDC issuer +
@@ -191,6 +194,12 @@ import {
   operatorControlMcpEnabled,
   type OperatorControlMcpAuthority,
 } from "../operator-control-mcp.ts";
+
+// Immediate Takosumi Mobile notifications attach to the invocation that
+// records the Activity through the runtime's per-invocation waitUntil
+// (TASK-0119), here as in the Hosted entry. A dynamic import, because Bun
+// tests import this module and have no `cloudflare:workers`.
+void attachInvocationWaitUntil(() => import("cloudflare:workers"));
 export {
   isPlatformExtensionCatalogPath,
   isPlatformExtensionContributionsPath,

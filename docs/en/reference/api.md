@@ -303,9 +303,11 @@ owner.
   result.
 - An event whose recipients cannot be read (a transient failure) is parked: its
   id stays on the cursor while the cursor itself moves on, so later events are
-  never held back. Parked events are read again by id on later runs; one still
-  unreadable after six hours, one gone from the ledger, or the oldest once more
-  than 50 are parked is given up, logged and counted as `skippedEvents`.
+  never held back. Later runs read parked events again by id after the ledger
+  read, at most ten per run, fewest attempts first, so a slow retry never holds
+  the cursor back. One still unreadable after six hours, one gone from the
+  ledger, or the oldest once more than 50 are parked is given up, logged and
+  counted as `skippedEvents`.
   Failed drift checks do not get one notification per Run: they share the
   app-level `Topic` of drift.
 - While no account has a pusher, a run only moves the cursor to ten minutes
@@ -318,13 +320,21 @@ owner.
   context, so this event is delivered by the immediate path only.
 - Immediate path: when ActivityService stores a notified event, the delivery
   rows of that event alone are enqueued directly, leased and sent; the cursor
-  is not touched. The whole attempt stops after 20 seconds (8 seconds or less
-  per send); rows not sent by then are retried by a catch-up run once their
-  lease ends.
+  is not touched. While no account has a pusher, the attempt ends after that
+  check (one indexed read). The whole attempt stops after 20 seconds, each send
+  after 8, and a send starts only while those 8 seconds still fit, so the
+  deadline never cuts a send short and charges it as a failed attempt. Rows not
+  started keep their attempt count and are sent by a catch-up run: at once if
+  they were never leased, otherwise when their lease ends. Catch-up runs
+  likewise start a send only while its 10-second timeout fits.
   - On Cloudflare the attempt is attached to the `waitUntil` of the invocation
     recording the event, whether a request or a Durable Object fetch/alarm. The
-    platform entry passes `waitUntil` from `cloudflare:workers` once at
-    startup, and each call attaches to the invocation running at that moment.
+    entry passes `waitUntil` from `cloudflare:workers` once at startup, and
+    each call attaches to the invocation running at that moment. The Hosted
+    entry (`deploy/platform/entry-worker.ts`) imports it statically; the
+    composed worker that local-substrate and operator deployments run
+    (`deploy/platform/worker.ts`) is also imported by Bun tests and passes it
+    through a dynamic import.
     The shared service is built once per isolate and cannot carry each
     invocation's `ctx` down to ActivityService; no registry or in-flight flag
     spans invocations. The invocation returns without waiting for delivery, so

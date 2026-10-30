@@ -14,8 +14,10 @@
  * The per-invocation `waitUntil` is the runtime's own: `waitUntil` from
  * `cloudflare:workers` attaches work to whichever request or Durable Object
  * invocation is executing the caller, exactly like that invocation's
- * `ctx.waitUntil`. The platform entry passes it in once at startup, because
- * modules that Bun tests import cannot import `cloudflare:workers` themselves.
+ * `ctx.waitUntil`. The entry passes it in once at startup, because modules
+ * that Bun tests import cannot import `cloudflare:workers` themselves: the
+ * Hosted entry (`deploy/platform/entry-worker.ts`) statically, the composed
+ * platform worker (`deploy/platform/worker.ts`) through a dynamic import.
  */
 
 import type { ActivityEvent } from "takosumi-contract/activity";
@@ -51,6 +53,32 @@ let invocationWaitUntil: InvocationWaitUntil | undefined;
  */
 export function useInvocationWaitUntil(waitUntil: InvocationWaitUntil): void {
   invocationWaitUntil = waitUntil;
+}
+
+/**
+ * The same hookup for an entry that Bun tests also import and that therefore
+ * cannot import `cloudflare:workers` statically (`deploy/platform/worker.ts`,
+ * run by local-substrate and operator deployments). `load` is
+ * `() => import("cloudflare:workers")`: in workerd it resolves during startup;
+ * elsewhere it fails and the catch-up pass alone sends notifications.
+ * Resolves whether the runtime's `waitUntil` was taken.
+ */
+export async function attachInvocationWaitUntil(
+  load: () => Promise<{ readonly waitUntil?: unknown }>,
+): Promise<boolean> {
+  try {
+    const runtime = await load();
+    if (typeof runtime.waitUntil !== "function") return false;
+    useInvocationWaitUntil(runtime.waitUntil as InvocationWaitUntil);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether an entry has passed the runtime's `waitUntil` (diagnostics, tests). */
+export function invocationWaitUntilAttached(): boolean {
+  return invocationWaitUntil !== undefined;
 }
 
 /** One bounded catch-up pass with value-free logging; never throws. */

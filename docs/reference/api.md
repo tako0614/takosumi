@@ -268,9 +268,10 @@ instance は Activity の台帳（全 Workspace の `audit_events`）を `(creat
 - TTL を過ぎて送らなかった出来事は、id と種類だけを log に出し（`own_notification_event_expired`）、
   回の結果の `expiredEvents` に数えます。
 - 送る相手を読めない出来事（一時的な失敗）は cursor に「保留」として id を残し、cursor 自体は先へ
-  進めます。後ろの出来事は止まりません。保留した出来事は次の回から id で読み直し、6 時間たっても
-  読めないもの、台帳から消えたもの、保留が 50 件を超えたときの古いものは諦め、log に出して
-  `skippedEvents` に数えます。drift の検査の失敗は Run ごとに別の通知にせず、drift と同じアプリ単位の
+  進めます。後ろの出来事は止まりません。保留した出来事は、次の回から台帳を読み終えた後に、試した
+  回数の少ないものから 1 回につき 10 件まで id で読み直します。読み直しが遅くても cursor は止まりません。
+  6 時間たっても読めないもの、台帳から消えたもの、保留が 50 件を超えたときの古いものは諦め、log に
+  出して `skippedEvents` に数えます。drift の検査の失敗は Run ごとに別の通知にせず、drift と同じアプリ単位の
   `Topic` にまとめます。
 - どのアカウントにも pusher が無いあいだは、台帳を読まずに cursor を「今から 10 分前」へ進めるだけです。
   端末を登録した直後の回でも、直近 10 分の出来事は届きます。
@@ -279,11 +280,17 @@ instance は Activity の台帳（全 Workspace の `audit_events`）を `(creat
   取り消したときは送りません。cursor での読み直しではこの文脈が無いので、この出来事はすぐ送る経路
   でだけ届きます。
 - すぐ送る経路: ActivityService が出来事を保存すると、通知する出来事なら、その出来事の配送の行
-  だけを直接積み、その行だけを lease して送ります。cursor には触りません。全体で 20 秒（1 回の送信は
-  8 秒以下）で打ち切り、送り切れなかった行は lease が切れた後に catch-up の回が送り直します。
+  だけを直接積み、その行だけを lease して送ります。cursor には触りません。pusher がどこにも無いときは
+  その確認（index を一度読むだけ）で終わります。全体で 20 秒、1 回の送信は 8 秒で打ち切ります。
+  送信は、その 8 秒が残り時間に収まるときだけ始めます。期限に切られた送信を失敗した試行として数え
+  ないためで、始めなかった行は試行回数を増やさずに残り、catch-up の回が送ります（lease を取る前なら
+  すぐ、取った後なら lease が切れてから）。catch-up の回も同じく、送信の timeout（10 秒）が残り時間に
+  収まるときだけ送り始めます。
   - Cloudflare では、出来事を記録している呼び出し（request でも Durable Object の fetch／alarm でも）の
-    `waitUntil` に付けます。`cloudflare:workers` が出す `waitUntil` を platform の entry が起動時に一度だけ
-    渡し、呼ばれた時点で実行中の呼び出しに付きます。共有の service は isolate ごとに一度作られ、
+    `waitUntil` に付けます。`cloudflare:workers` が出す `waitUntil` を entry が起動時に一度だけ渡し、
+    呼ばれた時点で実行中の呼び出しに付きます。Hosted の entry（`deploy/platform/entry-worker.ts`）は
+    静的な import で、local-substrate や operator が自分で deploy する合成 worker
+    （`deploy/platform/worker.ts`）は、Bun のテストからも読まれるので動的な import で渡します。共有の service は isolate ごとに一度作られ、
     呼び出しごとの `ctx` を ActivityService まで引き回せないためで、呼び出しをまたぐ registry や
     「実行中」の flag は持ちません。呼び出しは配送を待たずに返り、Durable Object の fetch／alarm も
     止めません。付けられる呼び出しが無いときは何もせず、次の cron が送ります。
