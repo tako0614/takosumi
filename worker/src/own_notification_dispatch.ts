@@ -3,15 +3,14 @@
  * Takosumi Mobile, TASK-0119).
  *
  * Every scheduled tick runs one bounded pass. In addition, when a notified
- * Activity event is recorded inside a request or a Durable Object invocation,
- * one more bounded pass starts right away under that invocation's
+ * Activity event is recorded while a request or a Durable Object invocation
+ * runs, one more bounded pass starts right away under a live invocation's
  * `waitUntil`, so the event is sent without waiting for the next cron (the
  * OSS template's cron is hourly). The pass is the same lease-protected run:
  * delivery rows are keyed by (event, pusher), sends are leased, and the
  * cursor moves by compare-and-set, so overlapping passes never send twice.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import {
   createOwnNotificationDispatcher,
@@ -35,14 +34,29 @@ interface InvocationScope {
   readonly waitUntil: (task: Promise<unknown>) => void;
 }
 
-const invocation = new AsyncLocalStorage<InvocationScope>();
+/**
+ * The invocations of this isolate that are still running and accept
+ * `waitUntil`. The Worker bundle has no `node:async_hooks`, so instead of an
+ * async-local scope an immediate pass borrows the newest live invocation; any
+ * live invocation keeps the isolate working until the pass settles, and the
+ * one that recorded the event is live while it records.
+ */
+const liveInvocations: InvocationScope[] = [];
 
 /** Run `fn` with `waitUntil` available to immediate notification passes. */
-export function runWithOwnNotificationScope<T>(
+export async function runWithOwnNotificationScope<T>(
   waitUntil: ((task: Promise<unknown>) => void) | undefined,
-  fn: () => T,
-): T {
-  return waitUntil ? invocation.run({ waitUntil }, fn) : fn();
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!waitUntil) return await fn();
+  const scope: InvocationScope = { waitUntil };
+  liveInvocations.push(scope);
+  try {
+    return await fn();
+  } finally {
+    const index = liveInvocations.lastIndexOf(scope);
+    if (index >= 0) liveInvocations.splice(index, 1);
+  }
 }
 
 /**
@@ -119,16 +133,16 @@ function immediatePass(target: OwnNotificationDispatchTarget): Promise<void> {
 }
 
 /**
- * ActivityService observer. A notified event recorded inside an invocation
- * that provided `waitUntil` starts one bounded pass there; events recorded
- * elsewhere wait for the scheduled pass.
+ * ActivityService observer. A notified event recorded while an invocation
+ * that provided `waitUntil` is live starts one bounded pass; events recorded
+ * outside any invocation wait for the scheduled pass.
  */
 export function ownNotificationActivityObserver(
   target: () => OwnNotificationDispatchTarget | undefined,
 ): (event: ActivityEvent) => void {
   return (event) => {
     if (!planOwnNotification(event)) return;
-    const scope = invocation.getStore();
+    const scope = liveInvocations.at(-1);
     if (!scope) return;
     const resolved = target();
     if (!resolved) return;
