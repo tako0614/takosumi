@@ -364,5 +364,24 @@ for (const backend of BACKENDS) {
     expect((await fixture.route(operators, "POST", `/api/v1/install-plans/${own.id}/reconcile`)).status).toBe(403);
     // A non-delegate app token of the same user is refused too.
     expect((await fixture.route(fixture.appToken(THIRD_PARTY, USER), "GET", `/api/v1/install-plans/${own.id}`)).status).toBe(403);
+    // Only in the user's personal namespace: the same attempt in a Workspace
+    // that is no longer personal is not continued by the delegate.
+    const namespace = await fixture.core.workspaces.getWorkspace(own.workspaceId);
+    await fixture.deployStore.putWorkspace({ ...namespace, type: "organization", updatedAt: new Date().toISOString() });
+    expect((await fixture.route(token, "GET", `/api/v1/install-plans/${own.id}`)).status).toBe(403);
+  });
+
+  test(`[${backend}] an idempotency key replays only for the same delegate`, async () => {
+    const fixture = await compose(backend);
+    const first = await fixture.route(fixture.appToken(TAKOS, USER), "POST", "/api/v1/install-plans", ATTEMPT, "shared-key");
+    expect(first.status).toBe(201);
+    const plan = (await first.json()).installPlan;
+    const replay = await fixture.route(fixture.appToken(TAKOS, USER), "POST", "/api/v1/install-plans", ATTEMPT, "shared-key");
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).installPlan.id).toBe(plan.id);
+    // The same user, key and body through another delegate is a different request.
+    const other = await fixture.route(fixture.appToken(TAKOS_TWO, USER), "POST", "/api/v1/install-plans", ATTEMPT, "shared-key");
+    expect(other.status).toBe(409);
+    expect((await fixture.core.gitInstallPlans.get(plan.id))?.delegateCapsuleId).toBe(TAKOS);
   });
 }

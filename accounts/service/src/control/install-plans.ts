@@ -186,9 +186,10 @@ export async function handleWorkspaceInstallPlans(
   });
   if (existing) {
     if (
-      existing.requestDigest === requestDigest ||
-      (legacyRequestDigest !== undefined &&
-        existing.requestDigest === legacyRequestDigest)
+      (existing.delegateCapsuleId ?? undefined) === (delegateCapsuleId ?? undefined) &&
+      (existing.requestDigest === requestDigest ||
+        (legacyRequestDigest !== undefined &&
+          existing.requestDigest === legacyRequestDigest))
     ) {
       return await installPlanJson(ctx, existing);
     }
@@ -482,6 +483,7 @@ async function delegateContinuesOwnAttempt(
   try {
     const workspace = await ctx.operations.workspaces.getWorkspace(plan.workspaceId);
     return workspace.id === plan.workspaceId && workspace.ownerUserId === session.subject &&
+      workspace.type === "personal" &&
       !workspace.archivedAt;
   } catch (error) {
     if (controllerErrorCode(error) === "not_found") return false;
