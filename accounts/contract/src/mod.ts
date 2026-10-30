@@ -307,14 +307,24 @@ export interface TakosumiAccountsNotificationPusher {
   readonly failing: boolean;
 }
 
+/**
+ * Why an instance cannot send Web Push: no secret-store passphrase, no relay
+ * origin configured by the operator, or an Accounts issuer that is not https.
+ */
+export type TakosumiAccountsWebPushUnavailableReason =
+  | "secret_not_configured"
+  | "relay_not_configured"
+  | "issuer_not_https";
+
 export interface TakosumiAccountsNotificationPusherList {
   readonly pushers: readonly TakosumiAccountsNotificationPusher[];
   /**
    * The instance's VAPID public key (uncompressed P-256 point, base64url):
    * the `application_server_key` for the relay subscription. Null when the
-   * instance cannot send Web Push (no secret-store passphrase configured).
+   * instance cannot send Web Push; `web_push_unavailable_reason` says why.
    */
   readonly web_push_public_key: string | null;
+  readonly web_push_unavailable_reason: TakosumiAccountsWebPushUnavailableReason | null;
 }
 
 export interface TakosumiAccountsNotificationPusherResponse {

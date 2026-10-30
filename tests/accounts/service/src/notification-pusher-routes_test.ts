@@ -74,6 +74,7 @@ function handlerFor(store: AccountsStore, options: "configured" | "none" = "conf
           notificationPushers: {
             webPushPublicKey: async () => VAPID_PUBLIC,
             relayOrigins: [RELAY],
+            instanceOriginUsable: true,
           },
         }
       : {}),
@@ -118,7 +119,7 @@ test("register, update, list and delete a Takosumi Mobile pusher", async () => {
   const empty = await handler(call("GET", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, SESSION));
   expect(empty.status).toBe(200);
   expect(empty.headers.get("cache-control")).toBe("no-store");
-  expect(await empty.json()).toEqual({ pushers: [], web_push_public_key: VAPID_PUBLIC });
+  expect(await empty.json()).toEqual({ pushers: [], web_push_public_key: VAPID_PUBLIC, web_push_unavailable_reason: null });
 
   const body = await registration();
   const created = await handler(call("POST", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, OAUTH_MOBILE, body));
@@ -153,7 +154,7 @@ test("register, update, list and delete a Takosumi Mobile pusher", async () => {
   expect(updated.status).toBe(200);
   expect((await updated.json()).pusher).toMatchObject({ id, device_display_name: "Pixel 10", lang: "en-US" });
 
-  await store.recordNotificationPusherOutcome({ pusherId: id, at: Date.UTC(2026, 9, 30), outcome: "failed", status: 403 });
+  await store.recordNotificationPusherOutcome({ pusherId: id, endpoint: body.data.url, pushkey: body.pushkey, at: Date.UTC(2026, 9, 30), outcome: "failed", status: 403 });
   const listed = await handler(call("GET", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, OAUTH_MOBILE));
   const listedBody = await listed.json();
   expect(listedBody.pushers).toHaveLength(1);
@@ -266,21 +267,34 @@ test("an account holds at most 20 pushers", async () => {
   expect((await handler(call("POST", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, OTHER_SESSION, await registration()))).status).toBe(201);
 });
 
-test("without Web Push the list says so and registration is refused", async () => {
+test("without Web Push the list says why and registration is refused", async () => {
   const handler = handlerFor(seededStore(), "none");
   const listed = await handler(call("GET", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, SESSION));
-  expect(await listed.json()).toEqual({ pushers: [], web_push_public_key: null });
+  expect(await listed.json()).toEqual({ pushers: [], web_push_public_key: null, web_push_unavailable_reason: "secret_not_configured" });
   const refused = await handler(call("POST", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, SESSION, await registration()));
   expect(refused.status).toBe(503);
   expect((await refused.json()).error.code).toBe("web_push_unavailable");
 
-  const unkeyed = createAccountsHandler({
-    issuer: ORIGIN,
-    store: seededStore(),
-    notificationPushers: notificationPusherRouteOptionsFromEnv({}),
-  });
-  expect(await (await unkeyed(call("GET", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, SESSION))).json())
-    .toEqual({ pushers: [], web_push_public_key: null });
+  const passphrase = "fixture-only-secret-store-passphrase-0123456789";
+  const cases: Array<[Record<string, unknown>, string | undefined, string, string]> = [
+    [{}, undefined, "secret_not_configured", "web_push_unavailable"],
+    // No relay configured: there is no built-in default relay.
+    [{ TAKOSUMI_SECRET_STORE_PASSPHRASE: passphrase }, ORIGIN, "relay_not_configured", "notification_relay_not_configured"],
+    [{ TAKOSUMI_SECRET_STORE_PASSPHRASE: passphrase, TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS: "[]" }, ORIGIN, "relay_not_configured", "notification_relay_not_configured"],
+    // The VAPID subject must be the instance's https origin.
+    [{ TAKOSUMI_SECRET_STORE_PASSPHRASE: passphrase, TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS: JSON.stringify([RELAY]) }, "http://takosumi.example.test", "issuer_not_https", "notification_issuer_not_https"],
+  ];
+  for (const [env, issuer, reason, code] of cases) {
+    const configured = createAccountsHandler({
+      issuer: ORIGIN,
+      store: seededStore(),
+      notificationPushers: notificationPusherRouteOptionsFromEnv(env, issuer),
+    });
+    const list = await configured(call("GET", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, SESSION));
+    expect({ reason, body: await list.json() }).toEqual({ reason, body: { pushers: [], web_push_public_key: null, web_push_unavailable_reason: reason } });
+    const post = await configured(call("POST", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, SESSION, await registration()));
+    expect({ code, status: post.status, error: (await post.json()).error.code }).toEqual({ code, status: code === "web_push_unavailable" ? 503 : 409, error: code });
+  }
 });
 
 test("a store without pusher records answers 503, and methods are fixed per path", async () => {
@@ -312,12 +326,15 @@ test("the composition derives web_push_public_key from the secret-store passphra
   const options = notificationPusherRouteOptionsFromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: passphrase,
     TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS: JSON.stringify([RELAY]),
-  });
-  expect(options.relayOrigins).toEqual(["https://push.takosumi.com", RELAY]);
+  }, ORIGIN);
+  expect(options.relayOrigins).toEqual([RELAY]);
+  expect(options.instanceOriginUsable).toBe(true);
+  expect(notificationPusherRouteOptionsFromEnv({}, "http://localhost:8787").instanceOriginUsable).toBe(true);
+  expect(notificationPusherRouteOptionsFromEnv({}, undefined).instanceOriginUsable).toBe(false);
   expect(await options.webPushPublicKey()).toBe(
     (await deriveVapidKeyPair(new TextEncoder().encode(passphrase))).publicKeyBase64Url,
   );
   expect(() => notificationPusherRouteOptionsFromEnv({
     TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS: "https://relay.example.test",
-  })).toThrow("TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS");
+  }, ORIGIN)).toThrow("TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS");
 });

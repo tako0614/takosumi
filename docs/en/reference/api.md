@@ -237,18 +237,30 @@ pushers) that products use for their native apps.
   update of the same pusher 200.
 - Endpoint checks: https, port 443, no userinfo, at most 1,024 characters, and
   an origin on the allowlist (400 `invalid_pusher_endpoint` with
-  `details.reason`). The default allowlist is the official relay
-  `https://push.takosumi.com`; operators add origins with
-  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`. There is no MSC4174 activation step.
+  `details.reason`). The allowlist is exactly the origins the operator lists in
+  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`; there is no built-in default (the
+  official relay's production origin is undecided). With an empty list POST
+  answers 409 `notification_relay_not_configured`. The list is checked again at
+  send time: a pusher on an origin that was removed is not sent to and is
+  recorded as failing. There is no MSC4174 activation step.
 - At most 20 pushers per account; past that, 409 `notification_pusher_limit_reached`.
 - A returned pusher never includes `data.auth`. `last_success_at`,
   `last_failure_at`, `last_failure_status` (`null` for a timeout or network
   error) and `failing` (the latest outcome was a failure) show delivery health.
 - `web_push_public_key` is the public key of a pair derived with HKDF-SHA256
   (label `takosumi/web-push/vapid/v1`) from the secret-store passphrase
-  (`TAKOSUMI_SECRET_STORE_PASSPHRASE`, else `TAKOSUMI_SECRET_STORE_KEY`). Without
-  a passphrase it is `null` and POST answers 503 `web_push_unavailable`.
-  Rotating the passphrase changes the key, and Takosumi Mobile subscribes again.
+  (`TAKOSUMI_SECRET_STORE_PASSPHRASE`, else `TAKOSUMI_SECRET_STORE_KEY`). When
+  the instance cannot send it is `null` and `web_push_unavailable_reason` says
+  why: `secret_not_configured` (no passphrase; POST answers 503
+  `web_push_unavailable`), `relay_not_configured` (no relay origin; POST answers
+  409 `notification_relay_not_configured`) or `issuer_not_https` (the Accounts
+  issuer cannot be the VAPID `sub`; POST answers 409
+  `notification_issuer_not_https`; loopback http is allowed for development).
+  It is `null` when sending works. Rotating the passphrase changes the key, and
+  Takosumi Mobile subscribes again.
+- A 404/410 deletes a pusher only while it still has the endpoint and
+  `pushkey` that were sent to, so a late answer about an old subscription never
+  deletes the pusher a device re-registered.
 
 ## OpenTofu Stack API
 

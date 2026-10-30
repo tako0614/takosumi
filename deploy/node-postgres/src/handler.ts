@@ -116,7 +116,7 @@ export function parseEnv(
     appOwnershipMutationsFrozen: parseAppOwnershipMutationsFrozen(
       env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,
     ),
-    notificationPushers: notificationPusherRouteOptionsFromEnv(env),
+    notificationPushers: notificationPusherRouteOptionsFromEnv(env, issuer),
   };
 }
 

@@ -9,6 +9,10 @@
  *   (account, `app_id`, `pushkey`).
  * - DELETE `/{id}`: remove one of the account's pushers.
  *
+ * Registration needs a secret-store passphrase (the VAPID key), at least one
+ * relay origin in `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`, and an https
+ * Accounts issuer; GET reports which one is missing.
+ *
  * Any account credential with `capsules:read` (session, PAT `read`, OAuth
  * access token) may use it. A pusher receives notifications about every app
  * of the account, so a credential fenced to some apps or to a Workspace is
@@ -20,6 +24,7 @@ import {
   type TakosumiAccountsNotificationPusher,
   type TakosumiAccountsNotificationPusherList,
   type TakosumiAccountsNotificationPusherResponse,
+  type TakosumiAccountsWebPushUnavailableReason,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   checkPusherEndpoint,
@@ -30,6 +35,7 @@ import { base64UrlDecode } from "../../../core/domains/notifications/web_push/by
 import { isP256PublicPoint } from "../../../core/domains/notifications/web_push/p256.ts";
 import {
   instanceVapidKeyPair,
+  normalizeVapidSubject,
   type VapidSecretEnv,
 } from "../../../core/domains/notifications/web_push/vapid.ts";
 import { requireAccountsBearer } from "./account-session.ts";
@@ -50,29 +56,57 @@ import {
 import type { AccountsStore } from "./store.ts";
 
 export interface NotificationPusherRouteOptions {
-  /** base64url VAPID public key, or null when the instance cannot send Web Push. */
+  /** base64url VAPID public key, or null without a secret-store passphrase. */
   readonly webPushPublicKey: () => Promise<string | null>;
-  /** Push relay origins a pusher endpoint may use. */
+  /** Push relay origins a pusher endpoint may use; empty: none configured. */
   readonly relayOrigins: readonly string[];
+  /**
+   * Whether the instance origin (its Accounts issuer) can be the VAPID `sub`:
+   * https, or http on loopback for development.
+   */
+  readonly instanceOriginUsable: boolean;
 }
 
 /**
- * The composition's options from its environment: the VAPID key derived from
- * the secret-store passphrase and the relay allowlist. Throws on a malformed
- * `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`.
+ * The composition's options from its environment and Accounts issuer: the
+ * VAPID key derived from the secret-store passphrase and the relay allowlist.
+ * Throws on a malformed `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`.
  */
 export function notificationPusherRouteOptionsFromEnv(
   env: VapidSecretEnv,
+  issuer: string | undefined,
 ): NotificationPusherRouteOptions {
   const configured = env[NOTIFICATION_PUSH_RELAY_ORIGINS_ENV];
   const relayOrigins = parseNotificationPushRelayOrigins(
     typeof configured === "string" ? configured : undefined,
   );
+  let instanceOriginUsable = false;
+  try {
+    normalizeVapidSubject(issuer ?? "");
+    instanceOriginUsable = true;
+  } catch {
+    instanceOriginUsable = false;
+  }
   return {
     relayOrigins,
+    instanceOriginUsable,
     webPushPublicKey: async () =>
       (await instanceVapidKeyPair(env))?.publicKeyBase64Url ?? null,
   };
+}
+
+/** Whether this instance can send Web Push, and the key when it can. */
+async function webPushAvailability(
+  options: NotificationPusherRouteOptions | undefined,
+): Promise<
+  | { readonly publicKey: string; readonly reason: null }
+  | { readonly publicKey: null; readonly reason: TakosumiAccountsWebPushUnavailableReason }
+> {
+  const publicKey = options ? await options.webPushPublicKey() : null;
+  if (!options || !publicKey) return { publicKey: null, reason: "secret_not_configured" };
+  if (options.relayOrigins.length === 0) return { publicKey: null, reason: "relay_not_configured" };
+  if (!options.instanceOriginUsable) return { publicKey: null, reason: "issuer_not_https" };
+  return { publicKey, reason: null };
 }
 
 interface RateLimiter {
@@ -151,9 +185,11 @@ export async function handleNotificationPusherRequest(input: {
       : errorJson("not_found", "notification pusher not found", 404, input.request);
   } else if (method === "GET") {
     const records = await pushers.listNotificationPushersForSubject(subject);
+    const availability = await webPushAvailability(input.options);
     const body: TakosumiAccountsNotificationPusherList = {
       pushers: records.map(notificationPusherWire),
-      web_push_public_key: (await input.options?.webPushPublicKey()) ?? null,
+      web_push_public_key: availability.publicKey,
+      web_push_unavailable_reason: availability.reason,
     };
     response = json(body);
   } else {
@@ -206,12 +242,28 @@ async function registerNotificationPusher(input: {
   readonly pushers: NotificationPusherStore;
   readonly options: NotificationPusherRouteOptions | undefined;
 }): Promise<Response> {
-  const publicKey = await input.options?.webPushPublicKey();
-  if (!input.options || !publicKey) {
+  const availability = await webPushAvailability(input.options);
+  if (availability.reason === "secret_not_configured" || !input.options) {
     return errorJson(
       "web_push_unavailable",
       "This instance cannot send Web Push: no secret-store passphrase is configured.",
       503,
+      input.request,
+    );
+  }
+  if (availability.reason === "relay_not_configured") {
+    return errorJson(
+      "notification_relay_not_configured",
+      "The operator has not configured a push relay (TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS), so this instance accepts no notification devices.",
+      409,
+      input.request,
+    );
+  }
+  if (availability.reason === "issuer_not_https") {
+    return errorJson(
+      "notification_issuer_not_https",
+      "This instance's Accounts issuer is not an https origin, so it cannot sign Web Push.",
+      409,
       input.request,
     );
   }

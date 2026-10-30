@@ -2,26 +2,18 @@ import { expect, test } from "bun:test";
 
 import {
   checkPusherEndpoint,
-  OFFICIAL_TAKOSUMI_PUSH_RELAY_ORIGIN,
   parseNotificationPushRelayOrigins,
 } from "../../../../core/domains/notifications/pusher_endpoint.ts";
 
 const OWN_RELAY = "https://relay.example.test";
 
-test("the allowlist is the official relay plus the operator's https origins", () => {
-  expect(parseNotificationPushRelayOrigins(undefined)).toEqual([
-    OFFICIAL_TAKOSUMI_PUSH_RELAY_ORIGIN,
-  ]);
-  expect(parseNotificationPushRelayOrigins("  ")).toEqual([
-    OFFICIAL_TAKOSUMI_PUSH_RELAY_ORIGIN,
-  ]);
+test("the allowlist is exactly the operator's https origins, with no built-in relay", () => {
+  expect(parseNotificationPushRelayOrigins(undefined)).toEqual([]);
+  expect(parseNotificationPushRelayOrigins("  ")).toEqual([]);
+  expect(parseNotificationPushRelayOrigins("[]")).toEqual([]);
   expect(parseNotificationPushRelayOrigins(
     JSON.stringify([OWN_RELAY, `${OWN_RELAY}/`, "https://relay-two.example.test:443"]),
-  )).toEqual([
-    OFFICIAL_TAKOSUMI_PUSH_RELAY_ORIGIN,
-    OWN_RELAY,
-    "https://relay-two.example.test",
-  ]);
+  )).toEqual([OWN_RELAY, "https://relay-two.example.test"]);
 });
 
 test("a malformed allowlist refuses to load instead of being ignored", () => {
@@ -43,7 +35,7 @@ test("a malformed allowlist refuses to load instead of being ignored", () => {
 });
 
 test("an endpoint must be https on port 443, without userinfo, short, on an allowed origin", () => {
-  const allowed = [OFFICIAL_TAKOSUMI_PUSH_RELAY_ORIGIN, OWN_RELAY];
+  const allowed = ["https://relay-two.example.test", OWN_RELAY];
   expect(checkPusherEndpoint(`${OWN_RELAY}/push/abc`, allowed)).toEqual({
     ok: true,
     endpoint: `${OWN_RELAY}/push/abc`,
@@ -60,6 +52,7 @@ test("an endpoint must be https on port 443, without userinfo, short, on an allo
     ["https://relay.example.test/push/abc#x", "endpoint_invalid"],
     ["https://elsewhere.example.test/push/abc", "endpoint_origin_not_allowed"],
     ["https://127.0.0.1/push/abc", "endpoint_origin_not_allowed"],
+    ["https://push.takosumi.com/push/abc", "endpoint_origin_not_allowed"],
     [`${OWN_RELAY}/${"a".repeat(1024)}`, "endpoint_too_long"],
   ];
   for (const [endpoint, problem] of refused) {

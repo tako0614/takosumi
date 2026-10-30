@@ -1353,6 +1353,7 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ),
     notificationPushers: notificationPusherRouteOptionsFromEnv(
       env as unknown as Readonly<Record<string, unknown>>,
+      issuer,
     ),
   };
   const stableOidc = await parseStableOidcFlow(env);

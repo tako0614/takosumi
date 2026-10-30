@@ -1,21 +1,16 @@
 /**
  * Where a Takosumi Mobile pusher may point.
  *
- * The instance only sends to push relays on an allowlist of origins. The
- * default is the official Takosumi Mobile relay; an operator who runs their
- * own relay adds its origin. Because the destination is always one of these
- * operator-chosen origins, a registration cannot make the instance send to an
- * arbitrary URL, so no DNS resolution or private-address check is needed and
- * there is no MSC4174 activation step.
+ * The instance only sends to push relays whose origins the operator lists in
+ * `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`. There is no built-in default:
+ * the official relay's production origin is not decided yet, so until the
+ * operator names a relay the instance accepts no pusher. Because the
+ * destination is always an operator-chosen origin, a registration cannot make
+ * the instance send to an arbitrary URL, so no DNS resolution or
+ * private-address check is needed and there is no MSC4174 activation step.
  */
 
-/**
- * The official Takosumi Mobile push relay. The production relay is not yet
- * deployed (takosumi-mobile `relay/`); until it is, nothing registers here.
- */
-export const OFFICIAL_TAKOSUMI_PUSH_RELAY_ORIGIN = "https://push.takosumi.com";
-
-/** Operator extension of the allowlist: a JSON array of https origins. */
+/** The allowlist: a JSON array of https origins. Unset or empty: none. */
 export const NOTIFICATION_PUSH_RELAY_ORIGINS_ENV =
   "TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS";
 
@@ -23,14 +18,13 @@ export const MAX_PUSHER_ENDPOINT_LENGTH = 1024;
 const MAX_CONFIGURED_RELAY_ORIGINS = 16;
 
 /**
- * The allowlist: the official relay plus the operator's additions. Throws on
- * a malformed value so a typo cannot silently change where pushes may go.
+ * The allowlist, exactly as configured (empty when unset). Throws on a
+ * malformed value so a typo cannot silently change where pushes may go.
  */
 export function parseNotificationPushRelayOrigins(
   value: string | undefined,
 ): readonly string[] {
-  const origins = new Set<string>([OFFICIAL_TAKOSUMI_PUSH_RELAY_ORIGIN]);
-  if (value === undefined || value.trim() === "") return [...origins];
+  if (value === undefined || value.trim() === "") return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -40,6 +34,7 @@ export function parseNotificationPushRelayOrigins(
   if (!Array.isArray(parsed) || parsed.length > MAX_CONFIGURED_RELAY_ORIGINS) {
     throw invalidRelayOrigins();
   }
+  const origins = new Set<string>();
   for (const entry of parsed) {
     if (typeof entry !== "string") throw invalidRelayOrigins();
     const origin = exactHttpsOrigin(entry);

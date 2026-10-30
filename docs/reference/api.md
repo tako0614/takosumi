@@ -216,18 +216,25 @@ push の endpoint、`data.auth` は購読の `auth` です。product が native 
   `pushkey` は曲線上の P-256 非圧縮点、`auth` は 16 byte（どちらも padding 無しの base64url）。
   知らない欄は 400。新規は 201、同じ pusher の更新は 200 です。
 - endpoint の検査: https、port 443、userinfo 無し、1,024 文字まで、宛先の origin が許可の一覧に
-  あること（400 `invalid_pusher_endpoint`、`details.reason` に理由）。一覧の既定は公式の中継
-  `https://push.takosumi.com` で、運用者は `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS` で足せます。
-  確認の手順（MSC4174 の activation）はありません。
+  あること（400 `invalid_pusher_endpoint`、`details.reason` に理由）。一覧は運用者が
+  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS` に書いた origin だけで、組み込みの既定はありません
+  （公式の中継の本番の origin は未決）。一覧が空の instance では POST は 409
+  `notification_relay_not_configured` です。送るときにも一覧を見直し、一覧から外した origin の
+  pusher には送らず失敗として残します。確認の手順（MSC4174 の activation）はありません。
 - アカウントあたり 20 件まで。超えると 409 `notification_pusher_limit_reached`。
 - 応答の pusher は `data.auth` を返しません。`last_success_at`、`last_failure_at`、
   `last_failure_status`（timeout・network の失敗では `null`）、`failing`（最後の結果が失敗）で
   届き具合が分かります。
 - `web_push_public_key` は secret-store の passphrase（`TAKOSUMI_SECRET_STORE_PASSPHRASE`、
   無ければ `TAKOSUMI_SECRET_STORE_KEY`）から HKDF-SHA256（label `takosumi/web-push/vapid/v1`）で
-  導いた鍵の公開鍵です。passphrase が無い instance では `null` で、POST は 503
-  `web_push_unavailable` です。passphrase を回すと公開鍵が変わるので、Takosumi Mobile は購読し
-  直します。
+  導いた鍵の公開鍵です。送れない instance では `null` で、`web_push_unavailable_reason` が理由を
+  示します: `secret_not_configured`（passphrase が無い。POST は 503 `web_push_unavailable`）、
+  `relay_not_configured`（中継の origin が無い。POST は 409 `notification_relay_not_configured`）、
+  `issuer_not_https`（Accounts issuer が https でない。VAPID の `sub` にできないので POST は 409
+  `notification_issuer_not_https`。loopback の http は開発用に認めます）。送れるときは `null`
+  です。passphrase を回すと公開鍵が変わるので、Takosumi Mobile は購読し直します。
+- 404・410 で pusher を消すのは、送った先の endpoint と `pushkey` がまだ同じときだけです。端末が
+  登録し直した後に古い購読への答えが届いても、新しい pusher は消えません。
 
 ## OpenTofu Stack API
 
