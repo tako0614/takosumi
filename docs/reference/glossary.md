@@ -56,7 +56,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | destroy                | Capsule が作ったリソースを削除する操作です。計画を作ってから実行します。                                              | [実行モデル](../concepts/run-model.md)         |
 | 差分確認 (drift check) | 保存した状態と実物のずれを、読み取り専用で調べる操作です。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | drift                  | 保存した状態と実物のあいだに生まれたずれのことです。                                                                  | [状態と出力](../concepts/state-and-outputs.md) |
-| RunGroup               | Workspace 全体の更新や差分確認から作られた Run のグループです。 | [実行モデル](../concepts/run-model.md)         |
+| RunGroup               | 廃止された Workspace 全体の更新や差分確認が作った Run のグループです。新しくは作られず、残った記録だけを読めます。 | [実行モデル](../concepts/run-model.md)         |
 | Runner                 | OpenTofu を実際に動かす隔離された実行環境です。認証情報が渡るのはこの中だけです。                                     | [実行モデル](../concepts/run-model.md)         |
 | StateVersion           | デプロイ（apply）の結果として記録された状態です。失敗した apply でも記録されることがあります。上書きされず、積み重なります。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | Output                 | Capsule が外に公開する、秘密でない値です。                                                                            | [状態と出力](../concepts/state-and-outputs.md) |

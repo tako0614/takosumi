@@ -25,6 +25,10 @@ import {
   MemoryNotificationPusherRecords,
   type NotificationPusherStore,
 } from "./notification-pushers-store.ts";
+import {
+  MemoryNotificationDeliveryRecords,
+  type NotificationDeliveryStore,
+} from "./notification-deliveries-store.ts";
 export type { AccountEmailProofRecord, UpstreamLoginTransactionRecord, HostedOidcGrantRecord, IdentityMergeOperation, IdentityMergeMutation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord } from "./identity-state.ts";
 
 export interface AuthorizationCodeRecord {
@@ -313,7 +317,10 @@ export interface PrivacyRequestRecord {
 }
 
 export interface AccountsStore
-  extends HostedIdentityStore, Partial<NotificationPusherStore> {
+  extends
+    HostedIdentityStore,
+    Partial<NotificationPusherStore>,
+    Partial<NotificationDeliveryStore> {
   /**
    * Optional bounded lookup for all credential kinds sharing one opaque token.
    * Implementations must use exact indexed keys and must not select a winner.
@@ -618,6 +625,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   readonly #privacyRequests = new Map<string, PrivacyRequestRecord>();
   readonly #privacyRequestsBySubject = new Map<TakosumiSubject, Set<string>>();
   readonly #notificationPushers = new MemoryNotificationPusherRecords();
+  readonly #notificationDeliveries = new MemoryNotificationDeliveryRecords();
   readonly #authorizationCodes = new Map<string, AuthorizationCodeRecord>();
   readonly #accessTokens = new Map<string, TokenRecord>();
   readonly #refreshTokens = new Map<string, TokenRecord>();
@@ -825,11 +833,18 @@ export class InMemoryAccountsStore implements AccountsStore {
   }
 
   saveNotificationPusher(...args: Parameters<NotificationPusherStore["saveNotificationPusher"]>) { return this.#notificationPushers.saveNotificationPusher(...args); }
+  hasAnyNotificationPusher(...args: Parameters<NotificationPusherStore["hasAnyNotificationPusher"]>) { return this.#notificationPushers.hasAnyNotificationPusher(...args); }
   listNotificationPushersForSubject(...args: Parameters<NotificationPusherStore["listNotificationPushersForSubject"]>) { return this.#notificationPushers.listNotificationPushersForSubject(...args); }
   findNotificationPusher(...args: Parameters<NotificationPusherStore["findNotificationPusher"]>) { return this.#notificationPushers.findNotificationPusher(...args); }
   deleteNotificationPusher(...args: Parameters<NotificationPusherStore["deleteNotificationPusher"]>) { return this.#notificationPushers.deleteNotificationPusher(...args); }
   removeNotificationPusher(...args: Parameters<NotificationPusherStore["removeNotificationPusher"]>) { return this.#notificationPushers.removeNotificationPusher(...args); }
   recordNotificationPusherOutcome(...args: Parameters<NotificationPusherStore["recordNotificationPusherOutcome"]>) { return this.#notificationPushers.recordNotificationPusherOutcome(...args); }
+  getNotificationDispatchCursor(...args: Parameters<NotificationDeliveryStore["getNotificationDispatchCursor"]>) { return this.#notificationDeliveries.getNotificationDispatchCursor(...args); }
+  compareAndSetNotificationDispatchCursor(...args: Parameters<NotificationDeliveryStore["compareAndSetNotificationDispatchCursor"]>) { return this.#notificationDeliveries.compareAndSetNotificationDispatchCursor(...args); }
+  enqueueNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["enqueueNotificationDeliveries"]>) { return this.#notificationDeliveries.enqueueNotificationDeliveries(...args); }
+  claimNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["claimNotificationDeliveries"]>) { return this.#notificationDeliveries.claimNotificationDeliveries(...args); }
+  settleNotificationDelivery(...args: Parameters<NotificationDeliveryStore["settleNotificationDelivery"]>) { return this.#notificationDeliveries.settleNotificationDelivery(...args); }
+  pruneNotificationDeliveries(...args: Parameters<NotificationDeliveryStore["pruneNotificationDeliveries"]>) { return this.#notificationDeliveries.pruneNotificationDeliveries(...args); }
 
   savePrivacyRequest(record: PrivacyRequestRecord): void {
     const existing = this.#privacyRequests.get(record.requestId);

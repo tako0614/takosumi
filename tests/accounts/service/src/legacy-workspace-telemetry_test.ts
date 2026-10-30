@@ -157,7 +157,6 @@ test("legacy and current control routes are told apart without reading ids", () 
     ["GET", `/api/v1/provider-connections?workspaceId=${WORKSPACE_ID}&projection=release-owned`, "workspace_query", "/api/v1/provider-connections?workspaceId"],
     ["GET", `/api/v1/dashboard/overview?workspaceId=${WORKSPACE_ID}`, "workspace_query", "/api/v1/dashboard/overview?workspaceId"],
     ["POST", "/api/v1/sources", "workspace_body", "/api/v1/sources#workspaceId"],
-    ["GET", "/api/v1/dashboard/bootstrap", "workspace_projection", "/api/v1/dashboard/bootstrap?includeWorkspaces"],
     ["GET", "/api/v1/dashboard/bootstrap?includeWorkspaces=true", "workspace_projection", "/api/v1/dashboard/bootstrap?includeWorkspaces"],
   ];
   for (const [method, path, surface, route] of legacy) {
@@ -172,6 +171,9 @@ test("legacy and current control routes are told apart without reading ids", () 
     ["POST", "/api/v1/install-plans"],
     ["GET", "/api/v1/usage"],
     ["GET", "/api/v1/dashboard/bootstrap?includeWorkspaces=false"],
+    // The Workspace inventory is opt-in: the default bootstrap is not a use.
+    ["GET", "/api/v1/dashboard/bootstrap"],
+    ["GET", "/api/v1/dashboard/bootstrap?includeNotifications=true"],
     ["GET", "/api/v1/sources/src_1"],
   ];
   for (const [method, path] of current) {

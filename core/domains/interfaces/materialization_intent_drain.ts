@@ -21,7 +21,10 @@ import type {
   SettleCapsuleInterfaceMaterializationIntentOutcome,
   SettleCapsuleInterfaceMaterializationIntentResult,
 } from "../deploy-control/store.ts";
-import type { ObservabilitySink } from "../observability/mod.ts";
+import {
+  METRIC_CAPSULE_LABEL,
+  type ObservabilitySink,
+} from "../observability/mod.ts";
 import {
   InterfaceService,
   InterfaceServiceError,
@@ -785,8 +788,10 @@ export class CapsuleInterfaceMaterializationIntentDrainer {
         name: "takosumi.interface_materialization.dead_lettered",
         kind: "counter",
         value: 1,
-        workspaceId: intent.workspaceId,
-        tags: { error_code: intent.error?.code ?? "unknown" },
+        tags: {
+          error_code: intent.error?.code ?? "unknown",
+          [METRIC_CAPSULE_LABEL]: intent.capsuleId,
+        },
         observedAt: intent.deadLetteredAt ?? intent.updatedAt,
       });
     } catch (error) {

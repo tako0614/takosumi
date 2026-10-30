@@ -3886,10 +3886,12 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]>;
-  /** One bounded, atomically advanced page for the stale-auto-plan sweep. */
-  listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]>;
-  /** One bounded, atomically advanced page for the drift-check sweep. */
-  listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]>;
+  /**
+   * One bounded, atomically advanced page of live Capsules (`active` or
+   * `stale`) for the per-app scheduled sweep (stale auto-plan and drift
+   * check). Backed by the `active_capsules` cursor lane.
+   */
+  listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]>;
   /**
    * Fair oldest-attempt-first retirement outbox scan. Kept separate from
    * ordinary queued execution so archived or late-listed Workspaces cannot
@@ -4458,6 +4460,17 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     params: PageParams,
   ): Promise<Page<ActivityEvent>>;
   /**
+   * Oldest-first keyset page over the whole Activity ledger for the
+   * notification dispatcher: rows strictly after `after`, with
+   * `createdAt <= untilCreatedAt`, ordered by `(createdAt, id)` with bytewise
+   * id order (the scheduled-sweep cursor order). The SQL stores bound
+   * `createdAt >= after.createdAt` explicitly so a `(created_at, id)` index
+   * can range-scan; the ledger has no such index yet (TASK-0118 9.6).
+   */
+  listActivityEventsAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]>;
+  /**
    * Newest-first keyset page across at most 12 internal Activity partitions
    * (the frozen namespaces the caller's apps record into). The caller filters
    * the page to the apps it may view; this read grants nothing.
@@ -4624,8 +4637,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   getRunLeaseToken(runId: string): string | undefined {
     return this.#runLeases.get(runId);
   }
+  // The `workspaces` lane row still exists in both durable schemas, but no
+  // sweep reads it any more (TASK-0118 9.1); stage 9.6 deletes the row.
   readonly #scheduledSweepCursors = new Map<
-    "workspaces" | "active_capsules" | "recoverable_runs",
+    "active_capsules" | "recoverable_runs",
     { readonly cursor: ScheduledSweepCursorPosition; readonly upper: ScheduledSweepCursorPosition }
   >();
   readonly #workspaces = new Map<string, Workspace>();
@@ -6170,24 +6185,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]> {
-    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
-    const eligible = Array.from(this.#workspaces.values())
-      .filter((workspace) => !workspace.archivedAt)
-      .sort((a, b) => compareSweepPosition(
-        { createdAt: a.createdAt, id: a.id },
-        { createdAt: b.createdAt, id: b.id },
-      ));
-    return Promise.resolve(
-      this.#takeScheduledSweepPage(
-        "workspaces",
-        eligible,
-        boundedLimit,
-        (workspace) => ({ createdAt: workspace.createdAt, id: workspace.id }),
-      ),
-    );
-  }
-
   listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
     return Promise.resolve(
       pageSorted(
@@ -6891,10 +6888,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
+  listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]> {
     const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
     const eligible = Array.from(this.#capsules.values())
-      .filter((capsule) => capsule.status === "active")
+      .filter((capsule) => SCHEDULED_SWEEP_CAPSULE_STATUSES.has(capsule.status))
       .sort((a, b) => compareSweepPosition(
         { createdAt: a.createdAt, id: a.id },
         { createdAt: b.createdAt, id: b.id },
@@ -6910,7 +6907,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   #takeScheduledSweepPage<T>(
-    lane: "workspaces" | "active_capsules" | "recoverable_runs",
+    lane: "active_capsules" | "recoverable_runs",
     rows: readonly T[],
     limit: number,
     position: (row: T) => ScheduledSweepCursorPosition,
@@ -8945,6 +8942,26 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(pageSortedDesc(newestFirst, params));
   }
 
+  listActivityEventsAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]> {
+    const limit = clampActivityLedgerPageLimit(input.limit);
+    const after = input.after;
+    return Promise.resolve(
+      Array.from(this.#activityEvents.values())
+        .filter((row) =>
+          row.createdAt <= input.untilCreatedAt &&
+          (after === undefined ||
+            row.createdAt > after.createdAt ||
+            (row.createdAt === after.createdAt && bytewiseCompare(row.id, after.id) > 0))
+        )
+        .sort((a, b) =>
+          a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : bytewiseCompare(a.id, b.id)
+        )
+        .slice(0, limit),
+    );
+  }
+
   async listActivityEventsForWorkspacesPage(
     workspaceIds: readonly string[],
     params: PageParams,
@@ -9190,6 +9207,26 @@ export function clampActivityLimit(limit: number | undefined): number {
 }
 
 export const ACTIVITY_WORKSPACE_BATCH_LIMIT = 12;
+
+export interface ActivityLedgerPageInput {
+  readonly after?: { readonly createdAt: string; readonly id: string };
+  /** Inclusive upper bound on `createdAt` (ISO-8601). */
+  readonly untilCreatedAt: string;
+  readonly limit: number;
+}
+
+export const ACTIVITY_LEDGER_PAGE_MAX_LIMIT = 90;
+
+export function clampActivityLedgerPageLimit(limit: number): number {
+  return Number.isSafeInteger(limit)
+    ? Math.max(1, Math.min(ACTIVITY_LEDGER_PAGE_MAX_LIMIT, limit))
+    : ACTIVITY_LEDGER_PAGE_MAX_LIMIT;
+}
+
+/** UTF-8/bytewise order for ASCII ids, matching SQLite BINARY and PostgreSQL "C". */
+function bytewiseCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 export function boundedActivityWorkspaceIds(
   workspaceIds: readonly string[],
@@ -9749,6 +9786,20 @@ function normalizeUsageEvent(event: UsageEvent): UsageEvent {
     usdMicros,
   };
 }
+
+/**
+ * Capsule statuses the per-app scheduled sweep visits: `stale` ones may get an
+ * auto-plan, `active` ones a drift check. Every store filters the
+ * `active_capsules` cursor lane by exactly this list.
+ */
+export const SCHEDULED_SWEEP_CAPSULE_STATUS_LIST = [
+  "active",
+  "stale",
+] as const satisfies readonly Capsule["status"][];
+
+const SCHEDULED_SWEEP_CAPSULE_STATUSES: ReadonlySet<string> = new Set(
+  SCHEDULED_SWEEP_CAPSULE_STATUS_LIST,
+);
 
 function compareSweepPosition(
   left: ScheduledSweepCursorPosition,

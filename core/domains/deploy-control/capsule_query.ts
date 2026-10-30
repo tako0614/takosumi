@@ -93,9 +93,9 @@ export class CapsuleQuery {
     return { output: publicOutput(output) };
   }
 
-  async listActiveCapsules(limit: number): Promise<readonly Capsule[]> {
+  async listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]> {
     if (!Number.isFinite(limit) || limit <= 0) return [];
-    return await this.#store.listActiveCapsulesForSweep(Math.floor(limit));
+    return await this.#store.listCapsulesForScheduledSweep(Math.floor(limit));
   }
 
   async listStateVersions(

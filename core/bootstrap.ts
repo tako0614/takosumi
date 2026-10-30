@@ -1,6 +1,8 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
 import type { PublicSessionOpenApiEndpoint } from "./api/openapi.ts";
+import type { RegisterInterfaceRoutesOptions } from "./api/interface_routes.ts";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import {
   PRIVATE_RUN_FILE_HTTP_PATH,
   type PrivateRunFileRouteDependencies,
@@ -380,6 +382,11 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly publicSessionControlEndpoints?: readonly PublicSessionOpenApiEndpoint[];
+  /** Host hook after each stored Activity event (immediate notification delivery). */
+  readonly onActivityRecorded?: (
+    event: ActivityEvent,
+    context?: import("./domains/activity/mod.ts").RecordActivityContext,
+  ) => void;
   /** Optional host override for the canonical ownership resolver during rollout. */
   readonly appAccessResolver?: AppAccessResolver;
   readonly appMintLeaseStore?: AppMintLeaseStore;
@@ -540,16 +547,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
     readonly request: Request;
   }) => boolean | Promise<boolean>;
   /**
-   * Host-specific per-app decision for account actors without a Workspace
-   * restriction on Capsule-owned Interfaces (TASK-0118 9.1). `undefined`
+   * Host-specific per-app decision on Capsule-owned Interfaces and Interface
+   * links (TASK-0118 9.1); see `RegisterInterfaceRoutesOptions`. `undefined`
    * keeps the Workspace decision for an app without an ownership row.
    */
-  readonly authorizeInterfaceApp?: (input: {
-    readonly actor: ActorContext;
-    readonly capsuleId: string;
-    readonly access: "read" | "write";
-    readonly request: Request;
-  }) => boolean | undefined | Promise<boolean | undefined>;
+  readonly authorizeInterfaceApp?: RegisterInterfaceRoutesOptions["authorizeInterfaceApp"];
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
   /**
@@ -729,8 +731,8 @@ export interface TakosumiOperations {
   };
   readonly connections: ConnectionsService;
   /**
-   * RunGroups domain service (Core Specification §19 / §24): workspace_update and
-   * workspace_drift_check RunGroups over the same shared ledger + controller.
+   * Read-only RunGroups (Core Specification §19 / §24). Creating and approving
+   * RunGroups is retired (TASK-0118 9.1); only historical rows are read.
    */
   readonly runGroups: RunGroupsService;
   /** Runtime declarations shared by Capsule and OpenTofu authoring flows. */
@@ -1278,7 +1280,10 @@ export async function createTakosumiService(
   // trail. Constructed first so the controller + Capsule /
   // RunGroup services can emit through it (fire-and-forget; a failed audit write
   // never fails the action it records).
-  const activityService = new ActivityService({ store: sharedOpenTofuStore });
+  const activityService = new ActivityService({
+    store: sharedOpenTofuStore,
+    ...(options.onActivityRecorded ? { onRecorded: options.onActivityRecorded } : {}),
+  });
   let opentofuController: OpenTofuController;
   const enqueueSourceSync: EnqueueSourceSync =
     options.enqueueSourceSync ??
@@ -1466,18 +1471,12 @@ export async function createTakosumiService(
     observability: context.adapters.observability,
     metricTags,
   });
-  // RunGroups domain (Core Specification §19 / §24): workspace_update re-plans
-  // stale Capsules and workspace_drift_check groups read-only drift checks.
-  // Status is computed from member runs at read time. Constructed after the
-  // controller it drives.
+  // RunGroups (Core Specification §19 / §24) are retired (TASK-0118 9.1): no
+  // flow creates or approves one. The service only reads a row written before
+  // the retirement; status is computed from its member runs at read time.
   const runGroupsService = new RunGroupsService({
-    appOwnership: appOwnershipStore,
     store: sharedOpenTofuStore,
     controller: opentofuController,
-    actor: "system:run-group",
-    systemOwnedFlow: true,
-    appAccess,
-    activity: activityService,
   });
   // A cancelled uninstall must not leave the finalizer's unapproved teardown
   // Plan behind as an approvable destroy for the Capsule that was kept.
@@ -2168,6 +2167,14 @@ export async function createTakosumiService(
             ...(connection.kind ? { kind: connection.kind } : {}),
             scope: connection.scope,
           },
+        }, {
+          // For the notification path only (never stored): the record is
+          // deleted before the event is read, and the owner is told only when
+          // someone else revoked it (TASK-0119 own notifications).
+          ...(connection.ownerAccountId
+            ? { ownerAccountId: connection.ownerAccountId }
+            : {}),
+          ...(actorAccountId ? { actorAccountId } : {}),
         });
       }
     },

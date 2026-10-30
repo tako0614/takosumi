@@ -28,6 +28,12 @@ export interface ActorContext {
    * never read from a client field.
    */
   capsuleId?: string;
+  /**
+   * The apps a personal access token is limited to (`appIds`). Server-derived
+   * from the credential; such a credential never holds Workspace authority
+   * and reaches only these apps.
+   */
+  appIds?: string[];
 }
 
 export interface DomainEvent<TPayload extends JsonObject = JsonObject> {

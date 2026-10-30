@@ -7,9 +7,12 @@
 import { describe, expect, test } from "bun:test";
 import type { ProviderConnection } from "takosumi-contract/connections";
 import type { ActivityEvent } from "takosumi-contract/activity";
-import { decodeCursor } from "takosumi-contract/pagination";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
+import {
+  createActivityCursorSealer,
+  SEALED_ACTIVITY_CURSOR_PREFIX,
+} from "../../../../accounts/service/src/control/activity-cursor.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
@@ -18,6 +21,8 @@ import type { StoredGitInstallPlan } from "../../../../core/domains/install-plan
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const ORIGIN = "https://app.takosumi.test";
+/** Test-only passphrase (not a secret) for sealing Activity cursors. */
+const TEST_ACTIVITY_CURSOR_PASSPHRASE = "activity-cursor-test-passphrase-not-a-secret-0001";
 const WORKSPACE = "ws_replacement_reads";
 const CAPSULE = "cap_reads_mine";
 const OTHER = "cap_reads_other";
@@ -110,6 +115,7 @@ async function fixture() {
       url,
       store: accounts,
       operations,
+      activityCursorSealer: createActivityCursorSealer(TEST_ACTIVITY_CURSOR_PASSPHRASE),
     });
     expect(response).toBeDefined();
     const text = await response!.text();
@@ -290,7 +296,7 @@ describe("account-level Activity", () => {
         seen.push(...events.map((event) => String(event.metadata.index)));
         cursor = response.body.nextCursor as string | undefined;
         if (!cursor) break;
-        expect(decodeCursor(cursor), path).toBeDefined();
+        expect(cursor.startsWith(SEALED_ACTIVITY_CURSOR_PREFIX), path).toBe(true);
       }
       expect(seen, path).toEqual(expected);
     }

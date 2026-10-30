@@ -66,14 +66,14 @@ test("Workspace-free Principal Binding discovery accepts only the consumer app's
             inputs: { endpoint: { source: "literal", value: `https://${name}.example.test/mcp` } },
             access: { visibility: "private" },
           },
-        });
+        }, undefined, undefined, undefined, "app");
         created[name] = iface.metadata.id;
         if (subject && permission) {
           await service.createBinding(iface.metadata.id, {
             subjectRef: { kind: "Principal", id: subject },
             permissions: [permission],
             delivery: { type: "none" },
-          });
+          }, undefined, undefined, undefined, "app");
         }
       }
       // A co-tenant of cap_one's own partition ns_one bound cap_one's
@@ -99,8 +99,39 @@ test("Workspace-free Principal Binding discovery accepts only the consumer app's
         created[name] = iface.metadata.id;
         await service.createBinding(iface.metadata.id, {
           subjectRef: { kind: "Principal", id: "principal_app" }, permissions: ["mcp.invoke"], delivery: { type: "none" },
-        });
+        }, undefined, undefined, undefined, "app");
       }
+      // Records "owned" by cap_one that are not its own: an Interface written
+      // only under Workspace authority (before cap_one had an ownership
+      // record), the app's own Interface with a Binding written under
+      // Workspace authority, and a legacy unrecorded manual Interface.
+      for (const [name, interfaceUnder, bindingUnder] of [
+        ["pre-ownership", "workspace", "workspace"],
+        ["foreign-binding", "app", "workspace"],
+        ["unrecorded", undefined, undefined],
+      ] as const) {
+        const iface = await service.create({
+          workspaceId: "ns_one",
+          name,
+          ownerRef: { kind: "Capsule", id: "cap_one" },
+          spec: {
+            type: "mcp.server",
+            version: "2025-11-25",
+            document: {},
+            inputs: { endpoint: { source: "literal", value: `https://${name}.example.test/mcp` } },
+            access: { visibility: "private" },
+          },
+        }, undefined, undefined, undefined, interfaceUnder);
+        created[name] = iface.metadata.id;
+        expect(iface.metadata.createdUnder, `${label} ${name}`).toBe(interfaceUnder);
+        const binding = await service.createBinding(iface.metadata.id, {
+          subjectRef: { kind: "Principal", id: "principal_app" }, permissions: ["mcp.invoke"], delivery: { type: "none" },
+        }, undefined, undefined, undefined, bindingUnder);
+        expect(binding.metadata.createdUnder, `${label} ${name}`).toBe(bindingUnder);
+      }
+      // Recorded on Capsule-owned records only, and survives each store.
+      expect((await service.get(created["pre-ownership"]!)).metadata.createdUnder, label).toBe("workspace");
+      expect((await service.get(created["cotenant-workspace"]!)).metadata.createdUnder, label).toBeUndefined();
       // ns_two's owner also bound it manually: neither is evidence for
       // cap_one, which sees only Interfaces it owns (or its own links).
       const appOne = { capsuleId: "cap_one" };
@@ -129,10 +160,10 @@ test("Workspace-free Principal Binding discovery accepts only the consumer app's
           inputs: { endpoint: { source: "literal", value: "https://one-more.example.test/mcp" } },
           access: { visibility: "private" },
         },
-      });
+      }, undefined, undefined, undefined, "operator");
       await service.createBinding(extra.metadata.id, {
         subjectRef: { kind: "Principal", id: "principal_app" }, permissions: ["mcp.invoke"], delivery: { type: "none" },
-      });
+      }, undefined, undefined, undefined, "operator");
       const firstPage = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
         {}, "principal_app", "mcp.invoke", { limit: 1 }, appOne,
       );
@@ -147,7 +178,7 @@ test("Workspace-free Principal Binding discovery accepts only the consumer app's
       ).toEqual([created.one!, extra.metadata.id].sort());
       expect(secondPage.nextCursor, label).toBeUndefined();
       // By-id reads apply the same evidence restriction.
-      for (const name of ["two", "cotenant-capsule", "cotenant-workspace"]) {
+      for (const name of ["two", "cotenant-capsule", "cotenant-workspace", "pre-ownership", "foreign-binding", "unrecorded"]) {
         await expect(
           service.getAuthorizedForPrincipal(created[name]!, "principal_app", "mcp.invoke", appOne), `${label} ${name}`,
         ).rejects.toMatchObject({ code: "not_found" });
@@ -160,8 +191,12 @@ test("Workspace-free Principal Binding discovery accepts only the consumer app's
         { workspaceId: "ns_one" }, "principal_app", "mcp.invoke",
       );
       expect(partitioned.map((iface) => iface.metadata.id).sort(), label).toEqual(
-        [created.one!, extra.metadata.id, created["cotenant-capsule"]!, created["cotenant-workspace"]!].sort(),
+        [created.one!, extra.metadata.id, created["cotenant-capsule"]!, created["cotenant-workspace"]!,
+          created["pre-ownership"]!, created["foreign-binding"]!, created.unrecorded!].sort(),
       );
+      // The records that are not cap_one's own wait for its owner's review.
+      expect((await service.listInterfacesNeedingReview("ns_one", "cap_one")).map((iface) => iface.metadata.id).sort(), label)
+        .toEqual([created["pre-ownership"]!, created["foreign-binding"]!, created.unrecorded!].sort());
       const partitionedForApp = await service.listAuthorizedForPrincipal(
         { workspaceId: "ns_one" }, "principal_app", "mcp.invoke", appOne,
       );

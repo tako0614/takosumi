@@ -267,13 +267,13 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/plan-update",
-      summary: "Create a Workspace plan update Run",
+      summary: "Retired: answers 410 run_group_retired (plan each app instead)",
       auth: "account-session",
     },
     {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/drift-check",
-      summary: "Create a Workspace drift check Run",
+      summary: "Retired: answers 410 run_group_retired (drift-check each app instead)",
       auth: "account-session",
     },
     {
@@ -537,13 +537,13 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "GET",
       path: "/api/v1/run-groups/{runGroupId}",
-      summary: "Read a grouped Run",
+      summary: "Read a RunGroup written before the retirement (every member app viewable)",
       auth: "account-session",
     },
     {
       method: "POST",
       path: "/api/v1/run-groups/{runGroupId}/approve",
-      summary: "Approve a grouped Run",
+      summary: "Retired: answers 410 run_group_retired (approve each Run instead)",
       auth: "account-session",
     },
     {

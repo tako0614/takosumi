@@ -7,10 +7,11 @@ plan が対象です。ガードは互換性チェックや Run 作成より前�
 行を削除する API / CLI はありません。利用者ではなく database operator が以下の
 保守を行います。これは自動 migration ではなく、対象行を選択する一回限りの操作です。
 
-Workspace update / drift-check RunGroup は、対象に含まれる consumer の失敗を
-`graphJson.failures[capsuleId]` に `dependency_retired` として記録し、他の Capsule を
-継続します。拒否された Capsule の PlanRun は作りません。成功した Run が完了しても
-失敗記録がある group は `failed` です。保守後は新しい group / plan を作成します。
+Workspace update / drift-check RunGroup は廃止済みです (`410` `run_group_retired`)。
+廃止前の group は、対象に含まれた consumer の失敗を `graphJson.failures[capsuleId]` に
+`dependency_retired` として記録しており、読むと `failed` です。定期巡回はアプリごとに
+plan / drift check を作り、拒否された Capsule の PlanRun は作りません。保守後は
+アプリごとに新しい plan を作成します。
 予約アンインストールも `blockedReason: dependency_retired` で停止し、自動再試行しません。
 
 ## 準備

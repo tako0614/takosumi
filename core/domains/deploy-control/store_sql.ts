@@ -252,6 +252,7 @@ import type {
   RetireSourceResult,
 } from "./store.ts";
 import {
+  SCHEDULED_SWEEP_CAPSULE_STATUS_LIST,
   assertExactRunTransitionInput,
   assertDrainRunSettlementInput,
   assertSourceSyncSuccessCommit,
@@ -291,6 +292,8 @@ import {
   boundedActivityWorkspaceIds,
   capsuleInterfaceMaterializationFailureListLimit,
   clampActivityLimit,
+  clampActivityLedgerPageLimit,
+  type ActivityLedgerPageInput,
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
@@ -4693,90 +4696,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       .map(publicStoredRun);
   }
 
-  async listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]> {
-    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
-    if (boundedLimit === 0) return [];
-    return await this.#client.transaction(async (transaction) => {
-      const cursorRows = await transaction.query<{
-        generation: number | string;
-        cursor_created_at: string | null;
-        cursor_id: string | null;
-        upper_created_at: string | null;
-        upper_id: string | null;
-      }>(
-        `select generation, cursor_created_at, cursor_id, upper_created_at, upper_id
-         from takosumi_scheduled_sweep_cursors
-         where lane = 'workspaces'
-         for update`,
-      );
-      const cursorRow = cursorRows.rows[0];
-      if (!cursorRow) throw new Error("scheduled sweep cursor row is missing");
-      const db = this.#drizzleForClient(transaction);
-      const selectPage = async (
-        cursor?: { readonly createdAt: string; readonly id: string },
-        upper?: { readonly createdAt: string; readonly id: string },
-        descending = false,
-      ) => {
-        const query = db.select({
-          json: sql`${pgSchema.workspaces.spaceJson}`.as("json"),
-          sweepCreatedAt: sql`${pgSchema.workspaces.createdAt}`.as("sweep_created_at"),
-          sweepId: sql`${pgSchema.workspaces.id}`.as("sweep_id"),
-        })
-        .from(pgSchema.workspaces)
-        .where(
-          pgSweepKeysetWhere(
-            sql`COALESCE(${pgSchema.workspaces.spaceJson} ->> 'archivedAt', '') = ''`,
-            pgSchema.workspaces.createdAt,
-            pgSchema.workspaces.id,
-            cursor,
-            upper,
-          ),
-        )
-        .orderBy(
-          descending ? desc(pgSchema.workspaces.createdAt) : asc(pgSchema.workspaces.createdAt),
-          descending ? desc(pgSweepIdOrder(pgSchema.workspaces.id)) : asc(pgSweepIdOrder(pgSchema.workspaces.id)),
-        )
-        .limit(descending ? 1 : boundedLimit).toSQL();
-        const result = await transaction.query<{
-          json: unknown;
-          sweep_created_at: string;
-          sweep_id: string;
-        }>(query.sql, query.params as SqlParameters);
-        return result.rows;
-      };
-      let upper = cursorRow.upper_created_at && cursorRow.upper_id
-        ? { createdAt: cursorRow.upper_created_at, id: cursorRow.upper_id }
-        : undefined;
-      let rows = cursorRow.cursor_created_at && cursorRow.cursor_id && upper
-        ? await selectPage({
-            createdAt: cursorRow.cursor_created_at,
-            id: cursorRow.cursor_id,
-          }, upper)
-        : [];
-      if (rows.length === 0) {
-        const upperRow = (await selectPage(undefined, undefined, true))[0];
-        upper = upperRow
-          ? { createdAt: upperRow.sweep_created_at, id: upperRow.sweep_id }
-          : undefined;
-        rows = upper ? await selectPage(undefined, upper) : [];
-      }
-      const workspaces = rows.map((row) => parseRow(row) as Workspace);
-      const tail = rows.at(-1);
-      await transaction.query(
-        `update takosumi_scheduled_sweep_cursors
-         set generation = generation + 1,
-             cursor_created_at = $1,
-             cursor_id = $2,
-             upper_created_at = $3,
-             upper_id = $4
-         where lane = 'workspaces'`,
-        [tail?.sweep_created_at ?? null, tail?.sweep_id ?? null, upper?.createdAt ?? null, upper?.id ?? null],
-      );
-      return workspaces;
-    });
-  }
-
-  async listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
+  async listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]> {
     const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
     if (boundedLimit === 0) return [];
     return await this.#client.transaction(async (transaction) => {
@@ -4808,7 +4728,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         .from(pgSchema.capsules)
         .where(
           pgSweepKeysetWhere(
-            eq(pgSchema.capsules.status, "active"),
+            inArray(pgSchema.capsules.status, [...SCHEDULED_SWEEP_CAPSULE_STATUS_LIST]),
             pgSchema.capsules.createdAt,
             pgSchema.capsules.id,
             cursor,
@@ -11516,6 +11436,36 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       },
     );
     return pageFromProbe(rows, limit);
+  }
+
+  async listActivityEventsAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]> {
+    const createdAt = pgSchema.auditEvents.createdAt;
+    const id = pgSweepIdOrder(pgSchema.auditEvents.id);
+    const after = input.after;
+    return await this.#pgManyJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      {
+        // The explicit lower bound lets a created_at-leading index range-scan;
+        // the tie-break then orders equal timestamps by bytewise id.
+        where: and(
+          sql`${createdAt} <= ${input.untilCreatedAt}`,
+          after === undefined
+            ? undefined
+            : and(
+                sql`${createdAt} >= ${after.createdAt}`,
+                or(
+                  gt(createdAt, after.createdAt),
+                  and(eq(createdAt, after.createdAt), sql`${id} > ${after.id}`),
+                ),
+              ),
+        ),
+        orderBy: [asc(createdAt), asc(id)],
+        limit: clampActivityLedgerPageLimit(input.limit),
+      },
+    );
   }
 
   async listActivityEventsForWorkspacesPage(

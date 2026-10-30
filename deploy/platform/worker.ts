@@ -1,4 +1,8 @@
 import { runSourceMaintenanceSchedule } from "../../worker/src/source_maintenance_schedule.ts";
+import {
+  attachInvocationWaitUntil,
+  runOwnNotificationDispatch,
+} from "../../worker/src/own_notification_dispatch.ts";
 // Operator-deployed Takosumi platform worker composition.
 //
 // This single worker hosts the accounts plane (bare-origin OIDC issuer +
@@ -25,12 +29,14 @@ import {
 } from "../accounts-cloudflare/src/handler.ts";
 import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
+  activityCursorSealerFromEnv,
   D1AccountsStore,
   handleAuthenticatedControlRoute,
   parseAppOwnershipMutationsFrozen,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
   trustedNativeClientsFromEnv,
+  type ActivityCursorSealer,
   type ControlPlaneOperations,
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
@@ -103,8 +109,9 @@ import type {
 } from "../../core/domains/deploy-control/store.ts";
 import { recordWorkerMetric } from "../../worker/src/metrics.ts";
 import {
-  driftSweep,
-  type DriftSweepOperations,
+  type CapsuleSweepOperations,
+  type CapsuleSweepResult,
+  sweepCapsules,
 } from "../../worker/src/scheduled/drift.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
@@ -190,6 +197,13 @@ import {
   operatorControlMcpEnabled,
   type OperatorControlMcpAuthority,
 } from "../operator-control-mcp.ts";
+import { createOperatorControlMcpAuthority } from "./operator-control-mcp-authority.ts";
+
+// Immediate Takosumi Mobile notifications attach to the invocation that
+// records the Activity through the runtime's per-invocation waitUntil
+// (TASK-0119), here as in the Hosted entry. A dynamic import, because Bun
+// tests import this module and have no `cloudflare:workers`.
+void attachInvocationWaitUntil(() => import("cloudflare:workers"));
 export {
   isPlatformExtensionCatalogPath,
   isPlatformExtensionContributionsPath,
@@ -456,6 +470,9 @@ type OperatorControlMcpSessionVerifier = (
  * Optional built-in adapter route. Every MCP POST performs exact-resource
  * Interface OAuth introspection before the JSON-RPC body is read. The raw
  * bearer is neither forwarded to the public control handlers nor persisted.
+ *
+ * The token must name the MCP's own app (Capsule evidence); a Workspace it
+ * still carries is kept only as a bearer restriction (TASK-0118 P9.1-e).
  */
 export async function handlePlatformOperatorControlMcpRequest(
   request: Request,
@@ -465,7 +482,8 @@ export async function handlePlatformOperatorControlMcpRequest(
     readonly createAuthority?: (
       session: PlatformExtensionSessionContext & {
         readonly subject: string;
-        readonly workspaceId: string;
+        readonly capsuleId: string;
+        readonly workspaceId?: string;
       },
     ) => Promise<OperatorControlMcpAuthority>;
   } = {},
@@ -477,12 +495,14 @@ export async function handlePlatformOperatorControlMcpRequest(
   }
   if (request.method !== "POST") {
     return await handleOperatorControlMcpRequest(request, {
-      workspaceId: "disabled",
+      subject: "disabled",
+      capsuleId: "disabled",
       dispatchPublicControl: async () =>
         Response.json({ error: "unavailable" }, { status: 503 }),
-      installPlanWorkspaceId: async () => undefined,
-      capsuleWorkspaceId: async () => undefined,
-      runWorkspaceId: async () => undefined,
+      app: async () => undefined,
+      installPlan: async () => undefined,
+      run: async () => undefined,
+      installNamespaceId: async () => undefined,
     });
   }
   const session = await (
@@ -499,7 +519,7 @@ export async function handlePlatformOperatorControlMcpRequest(
     !session.authenticated ||
     session.authKind !== "interface-oauth-token" ||
     !subject ||
-    !workspaceId ||
+    (session.workspaceId !== undefined && !workspaceId) ||
     !capsuleId ||
     !interfaceId ||
     !interfaceBindingId ||
@@ -519,7 +539,7 @@ export async function handlePlatformOperatorControlMcpRequest(
   const exactSession = {
     ...session,
     subject,
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
     capsuleId,
     interfaceId,
     interfaceBindingId,
@@ -537,75 +557,38 @@ export async function handlePlatformOperatorControlMcpRequest(
 async function createPlatformOperatorControlMcpAuthority(
   request: Request,
   env: CloudflareWorkerEnv,
-  session: PlatformExtensionSessionContext & {
+  session: {
     readonly subject: string;
-    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly workspaceId?: string;
   },
 ): Promise<OperatorControlMcpAuthority> {
-  const operations = await controlPlaneOperationsFor(env);
-  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-    schemaMode: resolveD1AccountsSchemaMode(
-      env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+  const sunset = platformLegacyWorkspaceSunset(env);
+  return createOperatorControlMcpAuthority({
+    operations: await controlPlaneOperationsFor(env),
+    store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+      schemaMode: resolveD1AccountsSchemaMode(
+        env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+      ),
+    }),
+    session: {
+      subject: session.subject,
+      capsuleId: session.capsuleId,
+      ...(session.workspaceId ? { workspaceId: session.workspaceId } : {}),
+    },
+    requestUrl: request.url,
+    ...(env.TAKOSUMI_ACCOUNTS_ISSUER
+      ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
+      : {}),
+    ...(sunset ? { legacyWorkspaceSunset: sunset } : {}),
+    ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
+      ? { appOwnershipMutationsFrozen: true }
+      : {}),
+    trustedNativeClients: trustedNativeClientsFromEnv(
+      env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
     ),
+    ...platformActivityCursorSealerOption(env),
   });
-  return {
-    workspaceId: session.workspaceId,
-    dispatchPublicControl: async (controlRequest) => {
-      const sourceUrl = new URL(controlRequest.url);
-      const targetUrl = new URL(request.url);
-      targetUrl.pathname = sourceUrl.pathname;
-      targetUrl.search = sourceUrl.search;
-      targetUrl.hash = "";
-      const response = await handleAuthenticatedControlRoute({
-        request: new Request(targetUrl, {
-          method: controlRequest.method,
-          headers: controlRequest.headers,
-          body:
-            controlRequest.method === "GET" || controlRequest.method === "HEAD"
-              ? undefined
-              : controlRequest.body,
-        }),
-        url: targetUrl,
-        store,
-        operations,
-        subject: session.subject,
-        workspaceId: session.workspaceId,
-        entry: "operator_mcp",
-        ...platformLegacyWorkspaceSunsetOption(env),
-        ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
-          ? { appOwnershipMutationsFrozen: true }
-          : {}),
-        trustedNativeClients: trustedNativeClientsFromEnv(
-          env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
-        ),
-        ...(env.TAKOSUMI_ACCOUNTS_ISSUER
-          ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
-          : {}),
-      });
-      return response ?? Response.json({ error: "not found" }, { status: 404 });
-    },
-    installPlanWorkspaceId: async (installPlanId) => {
-      try {
-        return (await operations.gitInstallPlans.get(installPlanId))?.workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-    capsuleWorkspaceId: async (capsuleId) => {
-      try {
-        return (await operations.capsules.getCapsule(capsuleId)).workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-    runWorkspaceId: async (runId) => {
-      try {
-        return (await operations.getRun(runId)).workspaceId;
-      } catch {
-        return undefined;
-      }
-    },
-  };
 }
 
 /**
@@ -916,9 +899,10 @@ const platformWorker = {
   },
   // Scheduled cron tick. Source jobs claim persisted hourly/daily start markers
   // from the existing five-minute tick or their dedicated cron expressions.
-  // When the `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO
-  // runs the current compatibility drift sweep for Workspaces with active
-  // Capsules.
+  // When `TAKOSUMI_AUTO_PLAN_STALE_CAPSULES=1` or
+  // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` is set (both default OFF), ALSO runs the
+  // per-app sweep: one page of live Capsules, each handled on its own (stale
+  // auto-plan, drift check). No Workspace is listed.
   async scheduled(
     event: unknown,
     env: CloudflareWorkerEnv,
@@ -934,6 +918,12 @@ const platformWorker = {
     );
     await schedulePlatformSideEffect(
       runScheduledCapsuleUninstallFinalize(env),
+      context,
+    );
+    // Takosumi Mobile notifications: enqueue new Activity and send it in the
+    // same run, then retry what is due on later runs.
+    await schedulePlatformSideEffect(
+      runScheduledOwnNotificationDispatch(env),
       context,
     );
     const cron =
@@ -953,12 +943,7 @@ const platformWorker = {
       }));
     }), context);
     await runScheduledOpenTofuRunRepair(env);
-    if (autoPlanStaleCapsulesEnabled(env)) {
-      await runScheduledStaleCapsuleAutoPlan(env);
-    }
-    if (driftCheckEnabled(env)) {
-      await runScheduledDriftSweep(env);
-    }
+    await runScheduledCapsuleSweep(env);
   },
 };
 
@@ -1052,6 +1037,29 @@ export async function drainInterfaceMaterializationIntents(
     maxWorkItems: SCHEDULED_INTERFACE_MATERIALIZATION_WORK_ITEM_LIMIT,
     timeBudgetMs: SCHEDULED_INTERFACE_MATERIALIZATION_TIME_BUDGET_MS,
   });
+}
+
+/** One bounded dispatcher pass for the instance's own Web Push notifications. */
+async function runScheduledOwnNotificationDispatch(
+  env: CloudflareWorkerEnv,
+): Promise<void> {
+  try {
+    await runOwnNotificationDispatch({
+      operations: await deployControlSeam(env).operations(),
+      store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+        schemaMode: resolveD1AccountsSchemaMode(
+          env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+        ),
+      }),
+      env: env as unknown as Readonly<Record<string, unknown>>,
+      issuer: env.TAKOSUMI_ACCOUNTS_ISSUER,
+    });
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "own_notification_dispatch_failed",
+      errorName: error instanceof Error ? error.name : "unknown",
+    }));
+  }
 }
 
 async function runScheduledInterfaceMaterializationIntentDrain(
@@ -1962,6 +1970,7 @@ export async function handlePlatformSharedAuthControlRequest(
       ...platformLegacyWorkspaceSunsetOption(env),
       ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
       trustedNativeClients: trustedNativeClientsFromEnv(env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS),
+      ...platformActivityCursorSealerOption(env),
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),
       ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
@@ -2257,6 +2266,11 @@ function platformInterfaceActorContext(
     safePlatformExtensionContextId(session.capsuleId)
       ? { capsuleId: safePlatformExtensionContextId(session.capsuleId) }
       : {}),
+    // A personal access token limited to apps: Core never gives it Workspace
+    // authority and decides only those apps.
+    ...(session.authKind === "personal-access-token" && session.appIds !== undefined && !runtimePrincipal
+      ? { appIds: [...session.appIds] }
+      : {}),
     ...(session.authKind === "service-token"
       ? { principalKind: "service", serviceId: session.subject }
       : { principalKind: "account" }),
@@ -2507,6 +2521,14 @@ function platformLegacyWorkspaceSunsetOption(
   return sunset ? { legacyWorkspaceSunset: sunset } : {};
 }
 
+/** Seals Activity cursors with the secret-store passphrase, when configured. */
+function platformActivityCursorSealerOption(
+  env: CloudflareWorkerEnv,
+): { readonly activityCursorSealer?: ActivityCursorSealer } {
+  const sealer = activityCursorSealerFromEnv(env);
+  return sealer ? { activityCursorSealer: sealer } : {};
+}
+
 /**
  * Writes one coalesced counter value. Resolves false when the write failed so
  * the caller can carry the value into the next write; a composition without
@@ -2602,10 +2624,11 @@ const REQUIRED_DASHBOARD_METRICS = [
   "takosumi_api_request_duration_seconds_bucket",
   "takosumi_oidc_request_count",
 ] as const;
+// The app (`capsule_id`) is the tenant label; Workspace labels are retired
+// (TASK-0118 P9.1-g).
 const REQUIRED_DASHBOARD_LABELS = [
   "environment",
   "runner_profile_id",
-  "workspace_id",
   "capsule_id",
   "operation_kind",
   "status",
@@ -3334,6 +3357,8 @@ export interface PlatformExtensionSessionContext {
     | "run-credential";
   readonly subject?: string;
   readonly capsuleId?: string;
+  /** The apps a personal access token is limited to (introspected `app_ids`). */
+  readonly appIds?: readonly string[];
   /** Present only on a verified, short-lived Run credential. */
   readonly runId?: string;
   /** Installer provenance re-read from the canonical Capsule ledger. */
@@ -4261,6 +4286,8 @@ async function introspectPlatformExtensionToken(
         : interfaceSession;
     }
     const takosumi = platformExtensionTakosumiMetadata(record);
+    const appIds = tokenUse === "personal_access" ? platformExtensionPatAppIds(record) : undefined;
+    if (appIds === null) return { authenticated: false };
     return {
       authenticated: true,
       authKind:
@@ -4269,6 +4296,7 @@ async function introspectPlatformExtensionToken(
           : "personal-access-token",
       subject,
       ...takosumi,
+      ...(appIds !== undefined ? { appIds } : {}),
       scopes,
       ...(tokenUse === "oauth_access"
         ? platformExtensionOAuthClientId(record)
@@ -4277,6 +4305,21 @@ async function introspectPlatformExtensionToken(
   } catch {
     return { authenticated: false };
   }
+}
+
+/**
+ * The apps a personal access token is limited to (introspection `app_ids`):
+ * `undefined` when unlimited, `null` (refuse the token) when malformed. An
+ * empty list is a deny-all snapshot and stays empty.
+ */
+function platformExtensionPatAppIds(
+  record: Record<string, unknown>,
+): readonly string[] | undefined | null {
+  const raw = record.app_ids;
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > 256) return null;
+  const ids = raw.map((value) => typeof value === "string" ? safePlatformExtensionContextId(value) : undefined);
+  return ids.every((id): id is string => id !== undefined) ? ids : null;
 }
 
 /** The introspected OAuth client id, only in a bounded printable shape. */
@@ -4330,8 +4373,14 @@ function platformExtensionInterfaceOAuthSession(
     valueString(takosumi.interface_binding_id),
   );
   const interfaceResolvedRevision = takosumi.interface_resolved_revision;
+  // The Interface owner is evidence enough (TASK-0118 Phase 9): a Capsule for
+  // a Capsule-owned Interface, the Workspace only for a Workspace-owned one.
+  // A Workspace the token still carries is forwarded as compatibility
+  // context; it is never required next to a Capsule.
   if (
-    !workspaceId ||
+    (takosumi.workspace_id !== undefined && !workspaceId) ||
+    (takosumi.capsule_id !== undefined && !capsuleId) ||
+    (!workspaceId && !capsuleId) ||
     !interfaceId ||
     !interfaceBindingId ||
     typeof interfaceResolvedRevision !== "number" ||
@@ -4344,7 +4393,7 @@ function platformExtensionInterfaceOAuthSession(
     authenticated: true,
     authKind: "interface-oauth-token",
     subject,
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
     ...(capsuleId ? { capsuleId } : {}),
     audience: expectedAudience,
     interfaceId,
@@ -4742,23 +4791,31 @@ export interface OpenTofuRunRepairOperations {
 
 type RepairRunAction = "plan" | "apply" | "source_sync" | "restore";
 
-export interface StaleCapsuleAutoPlanOperations {
+/**
+ * The deploy-control facade members the per-app sweep reads. Every read is per
+ * app; nothing here lists Workspaces.
+ */
+export interface ScheduledCapsuleSweepOperations {
   readonly appOwnership?: Pick<import("../../core/domains/app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
-  readonly workspaces: {
-    listWorkspacesForSweep(limit: number): Promise<
-      readonly { readonly id: string; readonly archivedAt?: string }[]
-    >;
-  };
-  readonly capsules: {
-    listCapsules(workspaceId: string): Promise<readonly Capsule[]>;
-  };
   readonly controller: {
-    listRuns(
-      workspaceId: string,
-      options?: { readonly limit?: number },
-    ): Promise<readonly Run[]>;
+    listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]>;
   };
-  createCapsulePlan(capsuleId: string, options: { readonly actor: string }): Promise<unknown>;
+  listCapsuleRunsPage(
+    capsuleId: string,
+    options: {
+      readonly workspaceId: string;
+      readonly limit?: number;
+      readonly types?: readonly RunType[];
+    },
+  ): Promise<{ readonly runs: readonly Run[] }>;
+  createCapsulePlan(
+    capsuleId: string,
+    options: { readonly actor: string; readonly origin: { readonly kind: "update" } },
+  ): Promise<unknown>;
+  createCapsuleDriftCheck(
+    capsuleId: string,
+    options: { readonly actor: string },
+  ): Promise<unknown>;
   readonly activity?: Pick<ActivityRecorder, "record">;
 }
 
@@ -4896,14 +4953,11 @@ async function runScheduledSourceRetirement(env: DeployControlEnv): Promise<void
   }
 }
 
-const SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT = 25;
-const SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK = 100;
-
 /**
  * Operator/Cloud opt-in: turn stale Capsules into reviewable update plans.
  *
- * Core source sync only marks Capsules `stale`; it never silently applies. This
- * scheduled sweep is an operator policy layer that creates at most one pending
+ * Core source sync only marks Capsules `stale`; it never silently applies. The
+ * per-app sweep is an operator policy layer that creates at most one pending
  * plan per stale Capsule, then leaves normal Run approval/apply semantics in
  * charge.
  */
@@ -4914,105 +4968,62 @@ export function autoPlanStaleCapsulesEnabled(
   return typeof flag === "string" && flag === "1";
 }
 
-async function runScheduledStaleCapsuleAutoPlan(
-  env: DeployControlEnv,
+async function runScheduledCapsuleSweep(
+  env: CloudflareWorkerEnv & DeployControlEnv,
 ): Promise<void> {
+  const autoPlanStale = autoPlanStaleCapsulesEnabled(env);
+  const driftCheck = driftCheckEnabled(env);
+  if (!autoPlanStale && !driftCheck) return;
   const operations = await deployControlSeam(env).operations();
-  await planStaleCapsuleUpdates(operations, {
-    workspaceLimit: SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT,
-    runLookback: SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
-  });
+  await runCapsuleSweep(operations, { autoPlanStale, driftCheck });
 }
 
-export interface StaleCapsuleAutoPlanResult {
-  readonly workspacesScanned: number;
-  readonly staleCapsulesScanned: number;
-  readonly plansCreated: number;
-}
-
-export async function planStaleCapsuleUpdates(
-  operations: StaleCapsuleAutoPlanOperations,
+/**
+ * One per-app sweep tick over the deploy-control facade (TASK-0118 9.1). Each
+ * live Capsule is handled on its own: a stale one may get an update Plan, an
+ * active one a drift check. Its open plans are read per app, never per
+ * Workspace, and no RunGroup is created.
+ */
+export async function runCapsuleSweep(
+  operations: ScheduledCapsuleSweepOperations,
   options: {
-    readonly workspaceLimit?: number;
-    readonly runLookback?: number;
-  } = {},
-): Promise<StaleCapsuleAutoPlanResult> {
-  const workspaceLimit = positiveInteger(
-    options.workspaceLimit,
-    SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT,
-  );
-  const runLookback = positiveInteger(
-    options.runLookback,
-    SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
-  );
-  const workspaces = await operations.workspaces.listWorkspacesForSweep(workspaceLimit);
-  let staleCapsulesScanned = 0;
-  let plansCreated = 0;
-  for (const workspace of workspaces) {
-    let staleCapsules: readonly Capsule[];
-    try {
-      staleCapsules = (
-        await operations.capsules.listCapsules(workspace.id)
-      ).filter((capsule) => capsule.status === "stale");
-    } catch {
-      console.warn("scheduled.stale_auto_plan_capsule_list_failed");
-      continue;
-    }
-    if (staleCapsules.length === 0) continue;
-    staleCapsulesScanned += staleCapsules.length;
-    let pendingRuns: readonly Run[];
-    try {
-      pendingRuns = await operations.controller.listRuns(workspace.id, {
-        limit: runLookback,
+    readonly autoPlanStale: boolean;
+    readonly driftCheck: boolean;
+    readonly limit?: number;
+  },
+): Promise<CapsuleSweepResult> {
+  const appOwnership = operations.appOwnership;
+  const sweepOperations: CapsuleSweepOperations = {
+    listCapsulesForScheduledSweep: (limit) =>
+      operations.controller.listCapsulesForScheduledSweep(limit),
+    ...(appOwnership
+      ? { getOwnership: (capsuleId: string) => appOwnership.getOwnership(capsuleId) }
+      : {}),
+    listCapsulePlanRuns: async (capsule, limit) =>
+      (await operations.listCapsuleRunsPage(capsule.id, {
+        // The store matches the app's own Workspace column with its id; the
+        // read never widens past this one app.
+        workspaceId: capsule.workspaceId,
+        limit,
+        types: ["plan"],
+      })).runs,
+    createCapsulePlan: (capsuleId, planOptions) =>
+      operations.createCapsulePlan(capsuleId, planOptions),
+    createCapsuleDriftCheck: (capsuleId, driftOptions) =>
+      operations.createCapsuleDriftCheck(capsuleId, driftOptions),
+    recordStaleAutoPlan: async (capsule) => {
+      // The Workspace id only fills the Activity row's column (kept until 9.6).
+      await operations.activity?.record({
+        workspaceId: capsule.workspaceId,
+        actorId: "system:stale-auto-plan",
+        action: "capsule.stale_auto_plan_created",
+        targetType: "capsule",
+        targetId: capsule.id,
+        metadata: {},
       });
-    } catch {
-      console.warn("scheduled.stale_auto_plan_run_list_failed");
-      continue;
-    }
-    const pendingPlanCapsuleIds = new Set(
-      pendingRuns
-        .filter(isPendingCapsulePlan)
-        .map((run) => run.capsuleId)
-        .filter((id): id is string => typeof id === "string" && id.length > 0),
-    );
-    for (const capsule of staleCapsules) {
-      if (pendingPlanCapsuleIds.has(capsule.id)) continue;
-      try {
-        const ownership = await operations.appOwnership?.getOwnership(capsule.id);
-        if (ownership && ownership.managementState !== "active") continue;
-        await operations.createCapsulePlan(capsule.id, {
-          actor: ownership?.ownerAccountId ?? "system:stale-auto-plan",
-        });
-        pendingPlanCapsuleIds.add(capsule.id);
-        plansCreated += 1;
-        try {
-          await operations.activity?.record({ workspaceId: workspace.id,
-            actorId: "system:stale-auto-plan", action: "capsule.stale_auto_plan_created",
-            targetType: "capsule", targetId: capsule.id, metadata: {} });
-        } catch {
-          console.warn("scheduled.stale_auto_plan_activity_failed");
-        }
-      } catch {
-        // Best-effort: one bad Capsule must not abort other update plans.
-        console.warn("scheduled.stale_auto_plan_create_failed");
-      }
-    }
-  }
-  return {
-    workspacesScanned: workspaces.length,
-    staleCapsulesScanned,
-    plansCreated,
+    },
   };
-}
-
-function isPendingCapsulePlan(run: Run): boolean {
-  return (
-    run.type === "plan" &&
-    (run.status === "queued" ||
-      run.status === "running" ||
-      run.status === "waiting_approval") &&
-    typeof run.capsuleId === "string"
-  );
+  return await sweepCapsules(sweepOperations, options);
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
@@ -5358,28 +5369,12 @@ function runTimestampMs(
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-// Cap so a single cron tick never creates an unbounded number of drift checks.
-const SCHEDULED_DRIFT_SWEEP_LIMIT = 20;
-
 /**
- * Drift-check flag (spec §28; Phase 8). The scheduled drift sweep runs ONLY when
- * `TAKOSUMI_DRIFT_CHECK_ENABLED=1` (default OFF), mirroring how the platform
- * keeps the new sweep opt-in alongside the always-on source poll.
+ * Drift-check flag (spec §28; Phase 8). The per-app sweep drift-checks active
+ * Capsules ONLY when `TAKOSUMI_DRIFT_CHECK_ENABLED=1` (default OFF), mirroring
+ * how the platform keeps the sweep opt-in alongside the always-on source poll.
  */
 export function driftCheckEnabled(env: CloudflareWorkerEnv): boolean {
   const flag = env.TAKOSUMI_DRIFT_CHECK_ENABLED;
   return typeof flag === "string" && flag === "1";
-}
-
-async function runScheduledDriftSweep(env: DeployControlEnv): Promise<void> {
-  const operations = await deployControlSeam(env).operations();
-  // Adapt the two methods the sweep needs: active Capsule listing from the
-  // controller and grouped drift checks through the current compatibility service.
-  const driftOps: DriftSweepOperations = {
-    listActiveCapsules: (limit) =>
-      operations.controller.listActiveCapsules(limit),
-    createWorkspaceDriftCheck: (workspaceId, options) =>
-      operations.runGroups.createWorkspaceDriftCheck(workspaceId, options),
-  };
-  await driftSweep(driftOps, { limit: SCHEDULED_DRIFT_SWEEP_LIMIT });
 }

@@ -21,6 +21,27 @@ package for the v1 GA line.
   needs Accounts migration `047`; D1 needs no migration. The Web Push sender
   (RFC 8291/8292) and its answer rules ship with it; what is notified follows
   separately.
+- **Takosumi Mobile is notified of the instance's own events:** approval
+  waits (new Activity `run.approval_required`), failed Runs, finished
+  installs, drift, failed automatic updates, blocked uninstalls, revoked
+  connections, Interface setup dead letters, ownership transfer requests,
+  member additions and Interface link requests (new Activity
+  `interface_link.approval_requested`) are sent as Web Push to the devices
+  registered by the app owner or the account the event names (never by
+  Workspace membership). A notified event is delivered right away: its own
+  delivery rows are enqueued and sent within 20 seconds, on Cloudflare under
+  the `waitUntil` of the request or Durable Object invocation that recorded it
+  (never blocking it), on Bun + PostgreSQL in process. A catch-up dispatcher
+  reads the Activity ledger with a cursor that trails the present by a
+  ten-minute re-read window, parks events whose recipients cannot be read
+  instead of holding the cursor, logs and counts every event it drops, and
+  only moves the cursor while no device exists; Cloudflare runs it on every
+  scheduled tick, Bun + PostgreSQL every 30 seconds. Delivery rows are
+  idempotent per event and device. A revoked Connection's owner is told only
+  when someone else revoked it, through unstored context: public Activity does
+  not name the owner. PostgreSQL needs Accounts migration `048`; D1 needs no
+  migration. `run.applied` now records the Apply's `operation`. The account
+  page lists registered devices, shows failing ones and can remove them.
 - **Screens can declare their native phone apps, verified against an operator
   allowlist:** an `interface.ui.surface` `document` may now carry `clients`
   next to `display` (`preferred`, and per platform `ios` / `android` a
@@ -146,6 +167,14 @@ package for the v1 GA line.
   Upstream `clientSecretEnv` names must be explicitly mapped in an operator
   Compose override (see `deploy/node-postgres/README.md`). Runtime image copies
   exclude Cloudflare deployment files except the CLI's required D1 transport.
+- **Metrics name the app, not the Workspace:** OTLP metric data points carry
+  `takosumi.capsule_id` (from the `capsule_id` tag) and no longer carry
+  `takosumi.workspace_id`; OTLP spans no longer carry `takosumi.workspace_id`.
+  The Interface materialization dead-letter and retry counters record the app
+  as their `capsule_id` tag instead of a Workspace. The Prometheus exposition
+  still drops `capsule_id` (and any legacy `workspace_id`) from every series,
+  and the operator metrics dashboard no longer requires a `workspace_id` label.
+  Update collectors or dashboards that grouped by `takosumi.workspace_id`.
 
 ## 1.0.0 — Canonical control-plane model
 

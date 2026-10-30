@@ -185,7 +185,7 @@ import {
   redactRunDiagnostics,
   stateLockEvidence,
 } from "../projection.ts";
-import { projectApplyRun, projectPlanRun, projectSourceSyncRun } from "../projection_run.ts";
+import { planRunAwaitsApproval, projectApplyRun, projectPlanRun, projectSourceSyncRun } from "../projection_run.ts";
 import {
   canonicalProviderAddress,
   compactLayeredPolicy,
@@ -2560,7 +2560,6 @@ export class RunEngine {
       ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
       ...(compatibilityReportId ? { compatibilityReportId } : {}),
       ...(capsuleContext ? { capsuleContext } : {}),
-      ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
       ...(internal.origin ? { origin: internal.origin } : {}),
       ...(internal.refreshOnly ? { refreshOnly: true as const } : {}),
@@ -2835,13 +2834,8 @@ export class RunEngine {
   async createCapsuleDriftCheck(
     capsuleId: string,
     context: DeployControlActorContext = {},
-    internal: Pick<CreateCapsulePlanInternal, "runGroupId"> = {},
   ): Promise<PlanRunResponse> {
-    return await this.#drift.createCapsuleDriftCheck(
-      capsuleId,
-      context,
-      internal,
-    );
+    return await this.#drift.createCapsuleDriftCheck(capsuleId, context);
   }
 
   async #createCapsulePlanRun(
@@ -3247,7 +3241,6 @@ export class RunEngine {
         ...(finalizedGenericRoot
           ? { genericRootDispatch: finalizedGenericRoot }
           : {}),
-        ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
         ...(internal.driftCheck ? { driftCheck: true as const } : {}),
         ...(internal.origin ? { origin: internal.origin } : {}),
         ...(internal.autoApplyRequested
@@ -8724,6 +8717,22 @@ export class RunEngine {
         leaseToken,
       );
       if (!persisted.won) return persisted.run;
+      // The Plan now waits for an explicit approval (a destroy parks in
+      // waiting_approval; a delete/replace Plan is succeeded with
+      // requiresApproval). Recorded once, by the writer that won.
+      if (planRunAwaitsApproval(updated)) {
+        await this.#recordActivity({
+          workspaceId: updated.workspaceId,
+          action: "run.approval_required",
+          targetType: "run",
+          targetId: updated.id,
+          runId: updated.id,
+          metadata: {
+            capsuleId: updated.capsuleId,
+            operation: updated.operation,
+          },
+        });
+      }
       await this.#recordRunnerMinuteUsage({
         workspaceId: updated.workspaceId ?? updated.workspaceId,
         runId: updated.id,
@@ -11596,6 +11605,8 @@ export class RunEngine {
       runId: completed.id,
       metadata: {
         capsuleId: capsule.id,
+        // `create` marks the first Apply of an install (no prior state).
+        operation: completed.operation,
         stateVersionId: completed.stateVersionId,
         stateGeneration: input.nextStateGeneration,
         outputId: completed.outputId,

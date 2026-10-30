@@ -49,7 +49,7 @@ import {
   oidcMetricRoute,
   autoPlanStaleCapsulesEnabled,
   pollAutoSyncSources,
-  planStaleCapsuleUpdates,
+  runCapsuleSweep,
   repairStaleOpenTofuRuns,
   scheduledSourcePollBatch,
   schedulePlatformSideEffect,
@@ -495,96 +495,66 @@ test("stale Capsule auto-plan is opt-in", () => {
   ).toBe(true);
 });
 
-test("stale Capsule auto-plan creates one pending update plan per stale Capsule", async () => {
-  const planned: { capsuleId: string; actor: string }[] = [];
-  const result = await planStaleCapsuleUpdates(
+test("the per-app sweep plans each stale app from its own Runs and drift-checks active apps", async () => {
+  const planned: { capsuleId: string; actor: string; origin: unknown }[] = [];
+  const checked: { capsuleId: string; actor: string }[] = [];
+  const runReads: { capsuleId: string; workspaceId: string; types?: readonly string[] }[] = [];
+  const capsule = (id: string, workspaceId: string, status: string) => ({
+    id,
+    ownerAccountId: "owner_account",
+    workspaceId,
+    projectId: "prj_default",
+    sourceId: "src_default",
+    name: id,
+    slug: id,
+    installConfigId: "cfg",
+    environment: "production",
+    currentStateGeneration: 1,
+    status,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+  });
+  const result = await runCapsuleSweep(
     {
       appOwnership: { getOwnership: async (capsuleId) => ({ capsuleId, ownerAccountId: "owner_account",
         ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsuleId}` }) },
-      workspaces: {
-        listWorkspacesForSweep: () =>
-          Promise.resolve([
-            { id: "space_a" },
-          ]),
-      },
-      capsules: {
-        listCapsules: (workspaceId) =>
-          Promise.resolve(
-            workspaceId === "space_a"
-              ? [
-                  {
-                    id: "inst_needs_plan",
-                    ownerAccountId: "owner_account",
-                    workspaceId,
-                    projectId: "prj_default",
-                    sourceId: "src_default",
-                    name: "needs-plan",
-                    slug: "needs-plan",
-                    installConfigId: "cfg",
-                    environment: "production",
-                    currentStateGeneration: 1,
-                    status: "stale",
-                    createdAt: "2026-07-01T00:00:00.000Z",
-                    updatedAt: "2026-07-01T00:00:00.000Z",
-                  },
-                  {
-                    id: "inst_has_plan",
-                    ownerAccountId: "owner_account",
-                    workspaceId,
-                    projectId: "prj_default",
-                    sourceId: "src_default",
-                    name: "has-plan",
-                    slug: "has-plan",
-                    installConfigId: "cfg",
-                    environment: "production",
-                    currentStateGeneration: 1,
-                    status: "stale",
-                    createdAt: "2026-07-01T00:00:00.000Z",
-                    updatedAt: "2026-07-01T00:00:00.000Z",
-                  },
-                  {
-                    id: "inst_active",
-                    workspaceId,
-                    projectId: "prj_default",
-                    sourceId: "src_default",
-                    name: "active",
-                    slug: "active",
-                    installConfigId: "cfg",
-                    environment: "production",
-                    currentStateGeneration: 1,
-                    status: "active",
-                    createdAt: "2026-07-01T00:00:00.000Z",
-                    updatedAt: "2026-07-01T00:00:00.000Z",
-                  },
-                ]
-              : [],
-          ) as never,
-      },
       controller: {
-        listRuns: () =>
+        listCapsulesForScheduledSweep: () =>
           Promise.resolve([
-            runRecord({
-              id: "plan_pending",
-              type: "plan",
-              status: "waiting_approval",
-              capsuleId: "inst_has_plan",
-            }),
-          ]),
+            capsule("inst_needs_plan", "space_a", "stale"),
+            capsule("inst_has_plan", "space_b", "stale"),
+            capsule("inst_active", "space_a", "active"),
+          ] as never),
+      },
+      listCapsuleRunsPage: (capsuleId, options) => {
+        runReads.push({ capsuleId, workspaceId: options.workspaceId, ...(options.types ? { types: options.types } : {}) });
+        return Promise.resolve({
+          runs: capsuleId === "inst_has_plan"
+            ? [runRecord({ id: "plan_pending", type: "plan", status: "waiting_approval", capsuleId })]
+            : [],
+        });
       },
       createCapsulePlan: (capsuleId, options) => {
-        planned.push({ capsuleId, actor: options.actor });
+        planned.push({ capsuleId, actor: options.actor, origin: options.origin });
+        return Promise.resolve({});
+      },
+      createCapsuleDriftCheck: (capsuleId, options) => {
+        checked.push({ capsuleId, actor: options.actor });
         return Promise.resolve({});
       },
     },
-    { workspaceLimit: 10, runLookback: 50 },
+    { autoPlanStale: true, driftCheck: true, limit: 10 },
   );
 
-  expect(planned).toEqual([{ capsuleId: "inst_needs_plan", actor: "owner_account" }]);
-  expect(result).toEqual({
-    workspacesScanned: 1,
-    staleCapsulesScanned: 2,
-    plansCreated: 1,
-  });
+  expect(planned).toEqual([
+    { capsuleId: "inst_needs_plan", actor: "owner_account", origin: { kind: "update" } },
+  ]);
+  expect(checked).toEqual([{ capsuleId: "inst_active", actor: "owner_account" }]);
+  expect(runReads).toEqual([
+    { capsuleId: "inst_needs_plan", workspaceId: "space_a", types: ["plan"] },
+    { capsuleId: "inst_has_plan", workspaceId: "space_b", types: ["plan"] },
+  ]);
+  expect(result).toEqual({ scanned: 3, plansCreated: 1, driftChecksCreated: 1 });
 });
 
 test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", async () => {
@@ -1600,9 +1570,11 @@ test("platform metrics route does not capture dashboard paths", async () => {
 });
 
 test("platform metrics summary captures required metric and label coverage", () => {
+  // The app is the tenant label; a scrape without any Workspace label is
+  // complete (TASK-0118 P9.1-g).
   const summary = summarizePrometheusMetrics(
     [
-      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",workspace_id="workspace",capsule_id="cap",operation_kind="apply",status="succeeded"} 1',
+      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",capsule_id="cap",operation_kind="apply",status="succeeded"} 1',
       'custom_metric{environment="production"} 1',
     ].join("\n"),
   );
@@ -1616,6 +1588,11 @@ test("platform metrics summary captures required metric and label coverage", () 
     "takosumi_apply_duration_seconds_bucket",
   );
   expect(summary.missingRequiredLabels).toEqual([]);
+  expect(
+    summarizePrometheusMetrics(
+      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",workspace_id="workspace",operation_kind="apply",status="succeeded"} 1',
+    ).missingRequiredLabels,
+  ).toEqual(["capsule_id"]);
 });
 
 test("platform OIDC metrics exclude public metadata and cover auth flows", () => {

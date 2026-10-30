@@ -10,6 +10,7 @@ export type DeployControlErrorCode =
   | "not_found"
   | "failed_precondition"
   | "dependency_retired"
+  | "run_group_retired"
   | "resource_exhausted"
   | "method_not_allowed"
   | "not_implemented"
@@ -21,6 +22,7 @@ export type DeployControlErrorHttpStatus =
   | 403
   | 404
   | 409
+  | 410
   | 413
   | 405
   | 500
@@ -38,6 +40,7 @@ export const DEPLOY_CONTROL_ERROR_CODES = [
   "not_found",
   "failed_precondition",
   "dependency_retired",
+  "run_group_retired",
   "resource_exhausted",
   "method_not_allowed",
   "not_implemented",
@@ -56,6 +59,7 @@ export const DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE = {
   not_found: 404,
   failed_precondition: 409,
   dependency_retired: 409,
+  run_group_retired: 410,
   resource_exhausted: 413,
   method_not_allowed: 405,
   not_implemented: 501,

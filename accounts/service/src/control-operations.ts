@@ -479,15 +479,9 @@ export interface ControlPlaneOperations {
       environment: string,
     ): Promise<ProviderBindingSet | undefined>;
   };
-  // --- RunGroups (§19 / §24) ---
+  // --- RunGroups (§19 / §24): read-only; creation and approval are retired ---
   readonly runGroups: {
-    createWorkspaceUpdate(workspaceId: string, actorAccountId?: string): Promise<RunGroupWithRunsLike>;
-    createWorkspaceDriftCheck(
-      workspaceId: string,
-      options?: { readonly limit?: number; readonly actorAccountId?: string },
-    ): Promise<RunGroupWithRunsLike>;
     getRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
-    approveRunGroup(id: string, actorAccountId?: string): Promise<RunGroupWithRunsLike | undefined>;
   };
   listInterfaceMaterializationFailures(
     workspaceId: string,

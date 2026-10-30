@@ -11,6 +11,7 @@ import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_clie
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { applyAppOwnershipBackfill, planAppOwnershipBackfill, type OwnershipBackfillContext } from "../../../../core/domains/app-ownership/backfill.ts";
 import { runAppOwnershipBackfill } from "../../../../scripts/backfill-app-ownership.ts";
+import { createInMemoryInterfaceStores, InterfaceService } from "../../../../core/domains/interfaces/mod.ts";
 
 const now = "2026-10-28T00:00:00.000Z";
 const pgClients: PGliteSqlClient[] = [];
@@ -333,4 +334,21 @@ test("Postgres and D1 backfill only never-transferred app payers with idempotent
     ]);
     expect((await applyAppOwnershipBackfill(frozen, blocked.digest)).applied, label).toBe(0);
   }
+});
+
+test("the dry-run lists, for each app getting its first owner, Interfaces that are not its own records", async () => {
+  const context = fixture();
+  const stores = createInMemoryInterfaceStores();
+  let sequence = 0;
+  const interfaces = new InterfaceService({ stores, now: () => now, newId: (prefix) => `${prefix}_${++sequence}` });
+  const spec = { type: "mcp.server", version: "2025-11-25", document: {}, access: { visibility: "private" as const } };
+  // A co-tenant wrote one for cap-organization under Workspace authority; the
+  // operator wrote one for cap-personal.
+  const forged = await interfaces.create({ workspaceId: "organization", name: "forged", ownerRef: { kind: "Capsule", id: "cap-organization" }, spec }, undefined, undefined, undefined, "workspace");
+  await interfaces.create({ workspaceId: "personal", name: "own", ownerRef: { kind: "Capsule", id: "cap-personal" }, spec }, undefined, undefined, undefined, "operator");
+  const dryRun = await runAppOwnershipBackfill({ ...context, interfaces }, {}) as { mode: string; digest: string; interfacesNeedingReview?: unknown };
+  expect(dryRun.mode).toBe("dry-run");
+  expect(dryRun.interfacesNeedingReview).toEqual([{ capsuleId: "cap-organization", interfaceIds: [forged.metadata.id] }]);
+  // The review list is not part of the reviewed digest.
+  expect(dryRun.digest).toBe((await planAppOwnershipBackfill(context)).digest);
 });

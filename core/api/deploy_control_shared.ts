@@ -340,8 +340,9 @@ export interface DeployControlInternalRouteDependencies {
   /** Internal provider resolver creation plus provider connection resolution. */
   readonly connectionsService?: ConnectionsService;
   /**
-   * RunGroups domain service (Core Specification §19 / §24). When unset, the
-   * plan-update / run-group routes return 501 after successful auth.
+   * Read-only RunGroups domain service (Core Specification §19 / §24). When
+   * unset, the RunGroup read route returns 501 after successful auth. The
+   * retired plan-update / drift-check / approve routes answer 410 either way.
    */
   readonly runGroupsService?: RunGroupsService;
   /**

@@ -1,7 +1,12 @@
 import type { AccountsStore, TokenRecord } from "./store.ts";
 
 export interface InterfaceOAuthActivityEvidence {
-  readonly workspaceId: string;
+  /**
+   * Compatibility evidence (TASK-0118 Phase 9): a token of a Capsule-owned
+   * Interface is identified by `capsuleId` alone; Core still compares a
+   * Workspace when the token carries one.
+   */
+  readonly workspaceId?: string;
   readonly capsuleId?: string;
   readonly interfaceId: string;
   readonly bindingId: string;
@@ -47,10 +52,13 @@ export async function validateActiveAccessTokenRecord(input: {
   const { record } = input;
   const now = input.now ?? Date.now();
   const interfaceRuntime = record?.role === "interface-runtime";
+  // The Interface owner is named by its Capsule, or by its Workspace for a
+  // Workspace-owned Interface. Either one completes the evidence; Core then
+  // checks it against the live Interface and Binding.
   const interfaceEvidenceComplete =
     !interfaceRuntime ||
     (nonEmpty(record.audience) &&
-      nonEmpty(record.workspaceId) &&
+      (nonEmpty(record.workspaceId) || nonEmpty(record.capsuleId)) &&
       nonEmpty(record.interfaceId) &&
       nonEmpty(record.interfaceBindingId) &&
       typeof record.interfaceResolvedRevision === "number" &&
@@ -65,7 +73,7 @@ export async function validateActiveAccessTokenRecord(input: {
     try {
       interfaceEvidenceCurrent =
         (await input.interfaceOAuthActivityValidator({
-          workspaceId: record!.workspaceId!,
+          ...(nonEmpty(record!.workspaceId) ? { workspaceId: record!.workspaceId! } : {}),
           ...(record!.capsuleId ? { capsuleId: record!.capsuleId } : {}),
           interfaceId: record!.interfaceId!,
           bindingId: record!.interfaceBindingId!,

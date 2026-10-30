@@ -40,11 +40,6 @@ export interface DriftActorContext {
   readonly actor?: string;
 }
 
-/** RunGroup association threaded onto a drift-check plan run. */
-export interface DriftCheckInternal {
-  readonly runGroupId?: string;
-}
-
 /**
  * Ports the controller injects into {@link DriftService}. `createPlanRun` and
  * `recordActivity` stay owned by the controller and are passed in rather than
@@ -60,7 +55,7 @@ export interface DriftServiceDependencies {
     capsuleId: string,
     destroy: boolean,
     context: DriftActorContext,
-    internal: { readonly runGroupId?: string; readonly driftCheck?: true },
+    internal: { readonly driftCheck: true },
   ) => Promise<PlanRunResponse>;
   /** Shared Activity recorder wrapper (swallows recorder errors, logs a warning). */
   readonly recordActivity: (event: RecordActivityInput) => Promise<void>;
@@ -104,10 +99,8 @@ export class DriftService {
   async createCapsuleDriftCheck(
     capsuleId: string,
     context: DriftActorContext = {},
-    internal: DriftCheckInternal = {},
   ): Promise<PlanRunResponse> {
     return await this.#createPlanRun(capsuleId, false, context, {
-      ...internal,
       driftCheck: true,
     });
   }

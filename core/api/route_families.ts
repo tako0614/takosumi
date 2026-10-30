@@ -70,6 +70,12 @@ export interface ApiEndpointOpenApi {
   readonly query?: readonly string[];
   readonly pathParams?: readonly string[];
   /**
+   * The route is kept only to answer `410` with a typed retired error code.
+   * The operation is marked deprecated and documents `410` instead of a
+   * success response.
+   */
+  readonly retired?: true;
+  /**
    * Fully custom OpenAPI operation. When present the derived builder uses it
    * verbatim instead of synthesizing one from the fields above (used by the
    * Prometheus `/metrics` exposition endpoint which has a non-JSON response).

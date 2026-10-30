@@ -1,96 +1,221 @@
 /**
- * Drift sweep unit tests (Core Specification §28 `scheduled/drift.ts`; §19
- * drift_check; Phase 8). The sweep is best-effort + bounded and takes a narrow
- * operations stub, so these assert: a bounded fan-out (one workspace_drift_check
- * RunGroup per Workspace with active Capsules up to the limit), a failing Workspace
- * does not abort the sweep, and a non-positive limit is a no-op.
+ * Per-app scheduled sweep unit tests (Core Specification §28
+ * `scheduled/drift.ts`; §19 drift_check; TASK-0118 stage 9.1). The sweep takes
+ * a narrow operations stub, so these assert that each live app is handled on
+ * its own (stale auto-plan, drift check), that nothing groups apps by
+ * Workspace, that one failing app never aborts the page, and that the page is
+ * only reserved while a step is enabled.
  *
- * The flag-off no-op (TAKOSUMI_DRIFT_CHECK_ENABLED unset) is enforced at the
- * wiring boundary in deploy/platform/worker.ts; the sweep itself is only called
- * when enabled. A non-positive `limit` exercises the sweep's own guard here, and
- * the platform driftCheckEnabled() gate is covered in the platform worker test.
+ * The flag parsers (TAKOSUMI_AUTO_PLAN_STALE_CAPSULES /
+ * TAKOSUMI_DRIFT_CHECK_ENABLED) are covered in the platform worker test.
  */
 
 import { expect, test } from "bun:test";
+import type { Run } from "takosumi-contract/runs";
 import {
-  driftSweep,
-  type DriftSweepOperations,
+  CAPSULE_SWEEP_PAGE_LIMIT,
+  type CapsuleSweepCapsule,
+  type CapsuleSweepOperations,
+  DRIFT_CHECK_SYSTEM_ACTOR,
+  STALE_AUTO_PLAN_SYSTEM_ACTOR,
+  sweepCapsules,
 } from "../../../../worker/src/scheduled/drift.ts";
 
-function makeOps(
-  overrides: {
-    active?: readonly { id: string; workspaceId: string }[];
-    failOn?: ReadonlySet<string>;
-  } = {},
-): {
-  ops: DriftSweepOperations;
-  listCalls: number[];
-  driftCalls: { workspaceId: string; limit?: number; capsuleIds?: readonly string[] }[];
-} {
-  const listCalls: number[] = [];
-  const driftCalls: { workspaceId: string; limit?: number; capsuleIds?: readonly string[] }[] = [];
-  const ops: DriftSweepOperations = {
-    listActiveCapsules: (limit) => {
-      listCalls.push(limit);
-      const active = overrides.active ?? [
-        { id: "cap_a", workspaceId: "ws_a" },
-        { id: "cap_b", workspaceId: "ws_a" },
-      ];
-      return Promise.resolve(active.slice(0, limit));
-    },
-    createWorkspaceDriftCheck: (workspaceId, options) => {
-      driftCalls.push({ workspaceId, limit: options?.limit, capsuleIds: options?.capsuleIds });
-      if (overrides.failOn?.has(workspaceId)) {
-        return Promise.reject(new Error("nope"));
-      }
-      return Promise.resolve({ runs: (options?.capsuleIds ?? []).map((id) => ({ id })) });
-    },
-  };
-  return { ops, listCalls, driftCalls };
+interface Recorded {
+  readonly listCalls: number[];
+  readonly planRunReads: { capsuleId: string; workspaceId: string; limit: number }[];
+  readonly plans: { capsuleId: string; actor: string; origin: unknown }[];
+  readonly driftChecks: { capsuleId: string; actor: string }[];
+  readonly activity: string[];
 }
 
-test("drift sweep creates one RunGroup per Workspace, bounded by Capsule limit", async () => {
-  const { ops, listCalls, driftCalls } = makeOps({
-    active: [
-      { id: "cap_a", workspaceId: "ws_a" },
-      { id: "cap_b", workspaceId: "ws_a" },
-      { id: "cap_c", workspaceId: "ws_b" },
-    ],
-  });
-  const result = await driftSweep(ops, { limit: 2 });
-  // The limit is pushed down to the listing so the fan-out is bounded.
-  expect(listCalls).toEqual([2]);
-  expect(driftCalls).toEqual([{ workspaceId: "ws_a", limit: 2, capsuleIds: ["cap_a", "cap_b"] }]);
-  expect(result).toEqual({ scanned: 2, checked: 2 });
-});
+function makeOps(input: {
+  readonly capsules: readonly CapsuleSweepCapsule[];
+  readonly owners?: Readonly<Record<string, { ownerAccountId: string; managementState: string }>>;
+  readonly runs?: Readonly<Record<string, readonly Pick<Run, "type" | "status">[]>>;
+  readonly failOn?: ReadonlySet<string>;
+}): { ops: CapsuleSweepOperations; recorded: Recorded } {
+  const recorded: Recorded = {
+    listCalls: [],
+    planRunReads: [],
+    plans: [],
+    driftChecks: [],
+    activity: [],
+  };
+  const ops: CapsuleSweepOperations = {
+    listCapsulesForScheduledSweep: (limit) => {
+      recorded.listCalls.push(limit);
+      return Promise.resolve(input.capsules.slice(0, limit));
+    },
+    getOwnership: (capsuleId) => Promise.resolve(input.owners?.[capsuleId]),
+    listCapsulePlanRuns: (capsule, limit) => {
+      recorded.planRunReads.push({ capsuleId: capsule.id, workspaceId: capsule.workspaceId, limit });
+      return Promise.resolve(input.runs?.[capsule.id] ?? []);
+    },
+    createCapsulePlan: (capsuleId, options) => {
+      if (input.failOn?.has(capsuleId)) return Promise.reject(new Error("plan failed"));
+      recorded.plans.push({ capsuleId, actor: options.actor, origin: options.origin });
+      return Promise.resolve({});
+    },
+    createCapsuleDriftCheck: (capsuleId, options) => {
+      if (input.failOn?.has(capsuleId)) return Promise.reject(new Error("drift failed"));
+      recorded.driftChecks.push({ capsuleId, actor: options.actor });
+      return Promise.resolve({});
+    },
+    recordStaleAutoPlan: (capsule) => {
+      recorded.activity.push(capsule.id);
+      return Promise.resolve();
+    },
+  };
+  return { ops, recorded };
+}
 
-test("drift sweep uses the default limit when none is given", async () => {
-  const { ops, listCalls } = makeOps({ active: [] });
-  await driftSweep(ops);
-  expect(listCalls).toEqual([20]);
-});
+const both = { autoPlanStale: true, driftCheck: true } as const;
 
-test("drift sweep continues past a failing Workspace", async () => {
-  const { ops, driftCalls } = makeOps({
-    active: [
-      { id: "cap_a", workspaceId: "ws_a" },
-      { id: "cap_b", workspaceId: "ws_b" },
+test("each app is handled on its own, never grouped by Workspace", async () => {
+  const { ops, recorded } = makeOps({
+    capsules: [
+      { id: "cap_stale_a", workspaceId: "ws_a", status: "stale" },
+      { id: "cap_active_a", workspaceId: "ws_a", status: "active" },
+      { id: "cap_stale_b", workspaceId: "ws_b", status: "stale" },
+      { id: "cap_active_c", workspaceId: "ws_c", status: "active" },
     ],
-    failOn: new Set(["ws_a"]),
+    owners: {
+      cap_stale_a: { ownerAccountId: "acct_a", managementState: "active" },
+      cap_active_a: { ownerAccountId: "acct_a", managementState: "active" },
+      cap_stale_b: { ownerAccountId: "acct_b", managementState: "active" },
+    },
   });
-  const result = await driftSweep(ops, { limit: 20 });
-  // Both Workspaces are attempted; only the non-failing one is counted.
-  expect(driftCalls).toEqual([
-    { workspaceId: "ws_a", limit: 1, capsuleIds: ["cap_a"] },
-    { workspaceId: "ws_b", limit: 1, capsuleIds: ["cap_b"] },
+  const result = await sweepCapsules(ops, both);
+  expect(recorded.listCalls).toEqual([CAPSULE_SWEEP_PAGE_LIMIT]);
+  expect(recorded.plans).toEqual([
+    { capsuleId: "cap_stale_a", actor: "acct_a", origin: { kind: "update" } },
+    { capsuleId: "cap_stale_b", actor: "acct_b", origin: { kind: "update" } },
   ]);
-  expect(result).toEqual({ scanned: 2, checked: 1 });
+  // A legacy app without an owner row keeps a system actor.
+  expect(recorded.driftChecks).toEqual([
+    { capsuleId: "cap_active_a", actor: "acct_a" },
+    { capsuleId: "cap_active_c", actor: DRIFT_CHECK_SYSTEM_ACTOR },
+  ]);
+  // Open plans are read per app (with that app's own Workspace column only).
+  expect(recorded.planRunReads.map(({ capsuleId, workspaceId }) => [capsuleId, workspaceId]))
+    .toEqual([["cap_stale_a", "ws_a"], ["cap_stale_b", "ws_b"]]);
+  expect(recorded.activity).toEqual(["cap_stale_a", "cap_stale_b"]);
+  expect(result).toEqual({ scanned: 4, plansCreated: 2, driftChecksCreated: 2 });
 });
 
-test("drift sweep is a no-op for a non-positive limit (never lists or checks)", async () => {
-  const { ops, listCalls, driftCalls } = makeOps();
-  const result = await driftSweep(ops, { limit: 0 });
-  expect(listCalls).toEqual([]);
-  expect(driftCalls).toEqual([]);
-  expect(result).toEqual({ scanned: 0, checked: 0 });
+test("a stale app with an open update plan gets no second plan", async () => {
+  const { ops, recorded } = makeOps({
+    capsules: [
+      { id: "cap_queued", workspaceId: "ws_a", status: "stale" },
+      { id: "cap_waiting", workspaceId: "ws_a", status: "stale" },
+      { id: "cap_running", workspaceId: "ws_a", status: "stale" },
+      { id: "cap_done", workspaceId: "ws_a", status: "stale" },
+    ],
+    runs: {
+      cap_queued: [{ type: "plan", status: "queued" }],
+      cap_waiting: [{ type: "plan", status: "waiting_approval" }],
+      cap_running: [{ type: "plan", status: "running" }],
+      // Finished plans and other Run types do not block a new plan.
+      cap_done: [
+        { type: "plan", status: "succeeded" },
+        { type: "plan", status: "failed" },
+        { type: "drift_check", status: "queued" },
+      ],
+    },
+  });
+  const result = await sweepCapsules(ops, { autoPlanStale: true, driftCheck: false });
+  expect(recorded.plans).toEqual([
+    { capsuleId: "cap_done", actor: STALE_AUTO_PLAN_SYSTEM_ACTOR, origin: { kind: "update" } },
+  ]);
+  expect(result).toEqual({ scanned: 4, plansCreated: 1, driftChecksCreated: 0 });
+});
+
+test("an app whose management is not active takes no system work", async () => {
+  const { ops, recorded } = makeOps({
+    capsules: [
+      { id: "cap_stale", workspaceId: "ws_a", status: "stale" },
+      { id: "cap_active", workspaceId: "ws_a", status: "active" },
+    ],
+    owners: {
+      cap_stale: { ownerAccountId: "acct_a", managementState: "transferring" },
+      cap_active: { ownerAccountId: "acct_a", managementState: "draining" },
+    },
+  });
+  const result = await sweepCapsules(ops, both);
+  expect(recorded.plans).toEqual([]);
+  expect(recorded.driftChecks).toEqual([]);
+  expect(recorded.planRunReads).toEqual([]);
+  expect(result).toEqual({ scanned: 2, plansCreated: 0, driftChecksCreated: 0 });
+});
+
+test("each flag gates only its own step", async () => {
+  const capsules = [
+    { id: "cap_stale", workspaceId: "ws_a", status: "stale" },
+    { id: "cap_active", workspaceId: "ws_a", status: "active" },
+  ] as const;
+  const driftOnly = makeOps({ capsules });
+  await sweepCapsules(driftOnly.ops, { autoPlanStale: false, driftCheck: true });
+  expect(driftOnly.recorded.plans).toEqual([]);
+  // Drift checks only active apps: a stale app has a newer Source to plan.
+  expect(driftOnly.recorded.driftChecks.map((call) => call.capsuleId)).toEqual(["cap_active"]);
+
+  const planOnly = makeOps({ capsules });
+  await sweepCapsules(planOnly.ops, { autoPlanStale: true, driftCheck: false });
+  expect(planOnly.recorded.plans.map((call) => call.capsuleId)).toEqual(["cap_stale"]);
+  expect(planOnly.recorded.driftChecks).toEqual([]);
+});
+
+test("one failing app does not abort the rest of the page", async () => {
+  const { ops, recorded } = makeOps({
+    capsules: [
+      { id: "cap_bad_plan", workspaceId: "ws_a", status: "stale" },
+      { id: "cap_bad_drift", workspaceId: "ws_a", status: "active" },
+      { id: "cap_good_plan", workspaceId: "ws_a", status: "stale" },
+      { id: "cap_good_drift", workspaceId: "ws_a", status: "active" },
+    ],
+    failOn: new Set(["cap_bad_plan", "cap_bad_drift"]),
+  });
+  const result = await sweepCapsules(ops, both);
+  expect(recorded.plans.map((call) => call.capsuleId)).toEqual(["cap_good_plan"]);
+  expect(recorded.driftChecks.map((call) => call.capsuleId)).toEqual(["cap_good_drift"]);
+  expect(result).toEqual({ scanned: 4, plansCreated: 1, driftChecksCreated: 1 });
+});
+
+test("a failing Activity write still counts the created plan", async () => {
+  const { ops, recorded } = makeOps({
+    capsules: [{ id: "cap_stale", workspaceId: "ws_a", status: "stale" }],
+  });
+  const result = await sweepCapsules(
+    { ...ops, recordStaleAutoPlan: () => Promise.reject(new Error("activity down")) },
+    { autoPlanStale: true, driftCheck: false },
+  );
+  expect(recorded.plans.map((call) => call.capsuleId)).toEqual(["cap_stale"]);
+  expect(result.plansCreated).toBe(1);
+});
+
+test("with both flags off or a non-positive limit no page is reserved", async () => {
+  const off = makeOps({ capsules: [{ id: "cap_a", workspaceId: "ws_a", status: "active" }] });
+  expect(await sweepCapsules(off.ops, { autoPlanStale: false, driftCheck: false }))
+    .toEqual({ scanned: 0, plansCreated: 0, driftChecksCreated: 0 });
+  expect(off.recorded.listCalls).toEqual([]);
+  for (const limit of [0, -1, Number.NaN]) {
+    const empty = makeOps({ capsules: [{ id: "cap_a", workspaceId: "ws_a", status: "active" }] });
+    expect(await sweepCapsules(empty.ops, { ...both, limit }))
+      .toEqual({ scanned: 0, plansCreated: 0, driftChecksCreated: 0 });
+    expect(empty.recorded.listCalls).toEqual([]);
+  }
+});
+
+test("the given page limit is pushed down to the reservation", async () => {
+  const { ops, recorded } = makeOps({
+    capsules: [
+      { id: "cap_a", workspaceId: "ws_a", status: "active" },
+      { id: "cap_b", workspaceId: "ws_b", status: "active" },
+      { id: "cap_c", workspaceId: "ws_c", status: "active" },
+    ],
+  });
+  const result = await sweepCapsules(ops, { ...both, limit: 2 });
+  expect(recorded.listCalls).toEqual([2]);
+  expect(result).toEqual({ scanned: 2, plansCreated: 0, driftChecksCreated: 2 });
 });

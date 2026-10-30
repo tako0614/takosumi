@@ -118,6 +118,7 @@ import {
   stringValue,
 } from "../http-helpers.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
+import type { ActivityCursorSealer } from "./activity-cursor.ts";
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 
 /**
@@ -193,6 +194,11 @@ export interface ControlDispatchContext {
   readonly withinRunReadDeadline?: RunReadWaiter;
   /** Records a Workspace named in a parsed body (TASK-0118 Phase 9 telemetry). */
   readonly legacyWorkspace?: LegacyWorkspaceUseRecorder;
+  /**
+   * Seals Activity cursors under a key derived from the secret-store
+   * passphrase; Activity paging fails closed without it.
+   */
+  readonly activityCursorSealer?: ActivityCursorSealer;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

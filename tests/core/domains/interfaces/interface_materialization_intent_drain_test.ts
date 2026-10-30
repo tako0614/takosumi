@@ -1185,11 +1185,19 @@ test("a non-retryable materialization result is durable and never replayed", asy
     }),
   ).toEqual([
     expect.objectContaining({
-      workspaceId: capsule.workspaceId,
       value: 1,
-      tags: { error_code: "interface_provenance_conflict" },
+      tags: {
+        error_code: "interface_provenance_conflict",
+        capsule_id: capsule.id,
+      },
     }),
   ]);
+  // The app is the metric's tenant label; the Workspace is not recorded.
+  expect(
+    (await observability.listMetrics({
+      name: "takosumi.interface_materialization.dead_lettered",
+    }))[0],
+  ).not.toHaveProperty("workspaceId");
   expect(JSON.stringify({ activities }), "value-free activity").not.toContain(
     "runtime.example.test",
   );

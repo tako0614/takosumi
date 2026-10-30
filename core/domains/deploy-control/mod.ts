@@ -1332,13 +1332,6 @@ export interface PlanRunInternalContext {
   /** Optional generated-root dispatch for a plain Git OpenTofu Capsule. */
   readonly genericRootDispatch?: GenericRootDispatchContext;
   /**
-   * RunGroup this plan belongs to (spec §19 / §24). Stamped onto the PlanRun by
-   * the RunGroup space-update path so the §19 Run projects `runGroupId` and the
-   * group status can be computed from its member runs. Absent for standalone
-   * plans.
-   */
-  readonly runGroupId?: string;
-  /**
    * Marks this plan as a §19 `drift_check` (Phase 8). Stamped onto the PlanRun
    * so it projects `type: "drift_check"`, never parks `waiting_approval`, and is
    * rejected by `createApplyRun`.
@@ -1389,13 +1382,11 @@ export interface CreateCapsulePlanRequest {
 }
 
 /**
- * Internal options for a Capsule-driven plan created as a RunGroup member
- * (spec §19 / §24). The RunGroupsService passes the group id so the plan (and
- * its eventual apply) projects `runGroupId` onto the §19 Run. Not part of the
- * public create request.
+ * Internal options for a Capsule-driven plan. Not part of the public create
+ * request. (RunGroup membership is retired; a historical PlanRun row may still
+ * carry `runGroupId`, which reads project unchanged.)
  */
 export interface CreateCapsulePlanInternal {
-  readonly runGroupId?: string;
   /** Private management authority retained from outer configuration preparation. */
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   /**
@@ -1957,13 +1948,8 @@ export class OpenTofuController {
   createCapsuleDriftCheck(
     capsuleId: string,
     context: DeployControlActorContext = {},
-    internal: Pick<CreateCapsulePlanInternal, "runGroupId"> = {},
   ): Promise<PlanRunResponse> {
-    return this.#runEngine.createCapsuleDriftCheck(
-      capsuleId,
-      context,
-      internal,
-    );
+    return this.#runEngine.createCapsuleDriftCheck(capsuleId, context);
   }
 
   createApplyRun(
@@ -2088,15 +2074,17 @@ export class OpenTofuController {
   }
 
   /**
-   * Lists active Capsules across all Workspaces, capped at `limit` (spec §28
-   * scheduled drift sweep; Phase 8). Only active Capsules are drift-checkable
-   * (a `pending` / `disabled` / `destroyed` / `error` Capsule has no
-   * stable deployed state to compare against). The scheduled sweep iterates this
-   * bounded set and creates one drift check per Capsule. A non-positive
-   * limit returns an empty list.
+   * Reserves the next page of live Capsules (`active` or `stale`) for the
+   * per-app scheduled sweep (spec §28; TASK-0118 9.1), capped at `limit`. The
+   * sweep decides per Capsule: a `stale` one may get an auto-plan, an
+   * `active` one a drift check (a `pending` / `disabled` / `destroyed` /
+   * `error` Capsule has no stable deployed state to compare against). The page
+   * is reserved before the caller acts, so successive calls walk every live
+   * Capsule regardless of its Workspace. A non-positive limit returns an
+   * empty list.
    */
-  async listActiveCapsules(limit: number): Promise<readonly Capsule[]> {
-    return await this.#capsules.listActiveCapsules(limit);
+  async listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]> {
+    return await this.#capsules.listCapsulesForScheduledSweep(limit);
   }
 
   async listStateVersions(
