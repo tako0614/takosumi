@@ -17,6 +17,7 @@ import {
   InterfaceService,
   InterfaceServiceError,
   type InterfaceLinkWriteFence,
+  type InterfaceRuntimeConsumer,
 } from "../domains/interfaces/mod.ts";
 import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
@@ -251,11 +252,14 @@ export function registerInterfaceRoutes(
       // An app-bound runtime principal (no Workspace) discovers by its exact
       // current Principal Bindings across every internal partition.
       if (!requestedWorkspaceId && isRuntimePrincipal(auth.actor) && !auth.actor.workspaceId) {
+        const consumer = await runtimeConsumer(c, options, auth.actor);
+        if (!consumer.ok) return consumer.response;
         const page = await options.service.listAuthorizedForPrincipalAcrossPartitionsPage(
           selector,
           auth.actor.actorAccountId,
           requireRuntimePermission(c),
           {},
+          consumer.consumer!,
         );
         return c.json({ interfaces: page.items }, 200);
       }
@@ -290,11 +294,14 @@ export function registerInterfaceRoutes(
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
+      const consumer = await runtimeConsumer(c, options, auth.actor);
+      if (!consumer.ok) return consumer.response;
       const record = isRuntimePrincipal(auth.actor)
         ? await options.service.getAuthorizedForPrincipal(
             c.req.param("id"),
             auth.actor.actorAccountId,
             requireRuntimePermission(c),
+            consumer.consumer,
           )
         : await options.service.get(c.req.param("id"));
       const scoped = await scopeInterface(
@@ -318,10 +325,13 @@ export function registerInterfaceRoutes(
     return respond(c, async () => {
       const body = await readJsonObject(c.req.raw, { maxBytes: 16_384 });
       const permission = runtimePermission(body.permission);
+      const consumer = await runtimeConsumer(c, options, runtimeActor);
+      if (!consumer.ok) return consumer.response;
       const iface = await options.service.getAuthorizedForPrincipal(
         c.req.param("id"),
         runtimeActor.actorAccountId,
         permission,
+        consumer.consumer,
       );
       const scoped = await scopeInterface(
         c,
@@ -336,6 +346,7 @@ export function registerInterfaceRoutes(
         {
           workspaceId: iface.metadata.workspaceId,
           subjectId: runtimeActor.actorAccountId,
+          ...(consumer.consumer ? { consumer: consumer.consumer } : {}),
         },
         scoped.actor,
       );
@@ -453,11 +464,14 @@ export function registerInterfaceRoutes(
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
+      const consumer = await runtimeConsumer(c, options, auth.actor);
+      if (!consumer.ok) return consumer.response;
       const iface = isRuntimePrincipal(auth.actor)
         ? await options.service.getAuthorizedForPrincipal(
             c.req.param("id"),
             auth.actor.actorAccountId,
             requireRuntimePermission(c),
+            consumer.consumer,
           )
         : await options.service.get(c.req.param("id"));
       const scoped = await scopeInterface(
@@ -474,6 +488,7 @@ export function registerInterfaceRoutes(
                 c.req.param("id"),
                 scoped.actor.actorAccountId,
                 requireRuntimePermission(c),
+                consumer.consumer,
               )
             : await options.service.listBindings(c.req.param("id")),
         },
@@ -486,11 +501,14 @@ export function registerInterfaceRoutes(
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
+      const consumer = await runtimeConsumer(c, options, auth.actor);
+      if (!consumer.ok) return consumer.response;
       const iface = isRuntimePrincipal(auth.actor)
         ? await options.service.getAuthorizedForPrincipal(
             c.req.param("id"),
             auth.actor.actorAccountId,
             requireRuntimePermission(c),
+            consumer.consumer,
           )
         : await options.service.get(c.req.param("id"));
       const scoped = await scopeInterface(
@@ -506,6 +524,7 @@ export function registerInterfaceRoutes(
             c.req.param("id"),
             scoped.actor.actorAccountId,
             requireRuntimePermission(c),
+            consumer.consumer,
           )
         ).find((entry) => entry.metadata.id === c.req.param("bindingId"));
         if (!binding) {
@@ -614,8 +633,10 @@ async function scopeInterfaceWorkspace(
   if (!actor) return { ok: true };
   if (isRuntimePrincipal(actor) && !actor.workspaceId) {
     // An app-bound runtime principal carries no Workspace (TASK-0118 9.1).
-    // Every runtime path resolves its exact current Principal Binding, which
-    // is the only authority; runtime principals never reach a mutation.
+    // Every runtime path resolves its exact current Principal Binding,
+    // restricted to evidence of its own app (see runtimeConsumer); runtime
+    // principals never reach a mutation. Without an app it has no authority.
+    if (!string(actor.capsuleId)) return { ok: false, response: workspaceForbidden(c) };
     return { ok: true, actor: { ...actor, workspaceId } };
   }
   if (actor.workspaceId && actor.workspaceId !== workspaceId) {
@@ -642,6 +663,31 @@ async function scopeInterfaceWorkspace(
     actor:
       actor.workspaceId === workspaceId ? actor : { ...actor, workspaceId },
   };
+}
+
+type RuntimeConsumerResult =
+  | { readonly ok: true; readonly consumer?: InterfaceRuntimeConsumer }
+  | { readonly ok: false; readonly response: Response };
+
+/**
+ * The evidence restriction for a Workspace-free runtime principal
+ * (TASK-0118 9.1). Its pairwise subject is learnable by providers it talks
+ * to, and a provider's owner may create a Binding for any subject in their
+ * own partition, so a Binding is accepted only when it was materialized
+ * from an active Interface link of the token's own app, or lives in that
+ * app's own partition. A Workspace-bound runtime principal keeps its
+ * Workspace fence instead; other actors are not runtime principals.
+ */
+async function runtimeConsumer(
+  c: Context,
+  options: RegisterInterfaceRoutesOptions,
+  actor: ActorContext | undefined,
+): Promise<RuntimeConsumerResult> {
+  if (!isRuntimePrincipal(actor) || actor.workspaceId) return { ok: true };
+  const capsuleId = string(actor.capsuleId);
+  if (!capsuleId) return { ok: false, response: workspaceForbidden(c) };
+  const partition = (await options.service.getAppPartition(capsuleId)).workspaceId;
+  return { ok: true, consumer: { capsuleId, partition } };
 }
 
 /**

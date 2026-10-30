@@ -1,14 +1,17 @@
 /**
  * Interface discovery, bindings and token issuance without a Workspace
  * (TASK-0118 9.1). An app-bound runtime principal is authorized by its exact
- * current Principal Bindings across every internal partition; an account
- * actor without a Workspace is decided per app for Capsule-owned Interfaces.
+ * current Principal Bindings, accepted only as evidence of its own app (its
+ * own partition, or a Binding materialized from its own active link); an
+ * account actor without a Workspace is decided per app for Capsule-owned
+ * Interfaces.
  */
 import { expect, test } from "bun:test";
 import type { ActorContext } from "takosumi-contract";
 import type { Capsule } from "takosumi-contract/install-configs";
 import { createApiApp } from "../../../core/api/app.ts";
 import {
+  bindingServesRuntimeConsumer,
   createInMemoryInterfaceStores,
   InterfaceService,
 } from "../../../core/domains/interfaces/mod.ts";
@@ -67,6 +70,8 @@ async function fixture(options: {
     },
   });
   const boundA = await service.create(mcpInterface("ns_a", "bound-a", "cap_a"));
+  // ns_b belongs to another owner who learned app cap_a's pairwise subject
+  // (an introspection `sub`) and bound it manually to their own Interface.
   const boundB = await service.create(mcpInterface("ns_b", "bound-b", "cap_b"));
   const unbound = await service.create(mcpInterface("ns_a", "unbound", "cap_a"));
   const otherApp = await service.create(mcpInterface("ns_a", "other-app", "cap_a2"));
@@ -84,7 +89,9 @@ async function fixture(options: {
     delivery: { type: "none" },
   });
   const actors: Record<string, ActorContext> = {
-    "runtime-app": { actorAccountId: RUNTIME_APP, roles: ["runtime-principal"], requestId: "r1", principalKind: "account" },
+    "runtime-app": { actorAccountId: RUNTIME_APP, roles: ["runtime-principal"], requestId: "r1", principalKind: "account", capsuleId: "cap_a" },
+    "runtime-b": { actorAccountId: RUNTIME_APP, roles: ["runtime-principal"], requestId: "r4", principalKind: "account", capsuleId: "cap_b" },
+    "runtime-noapp": { actorAccountId: RUNTIME_APP, roles: ["runtime-principal"], requestId: "r5", principalKind: "account" },
     "runtime-ws": { actorAccountId: RUNTIME_APP, roles: ["runtime-principal"], requestId: "r2", principalKind: "account", workspaceId: "ns_a" },
     account: { actorAccountId: OWNER, roles: [], requestId: "r3", principalKind: "account" },
   };
@@ -116,33 +123,70 @@ async function fixture(options: {
   return { service, call, ids, issued, boundA, boundB, unbound, otherApp, workspaceOwned };
 }
 
-test("an app-bound runtime principal discovers its bound Interfaces in every partition", async () => {
+test("an app-bound runtime principal discovers only evidence of its own app", async () => {
   const h = await fixture();
   const listed = await h.call("runtime-app", "/api/v1/interfaces?type=mcp.server&permission=mcp.invoke");
   expect(listed.status).toBe(200);
-  expect(h.ids(listed.body)).toEqual([h.boundA.metadata.id, h.boundB.metadata.id].sort());
-  // capsuleId narrows to one provider app.
+  // The manual Binding another partition's owner created for this subject
+  // is not evidence for app cap_a.
+  expect(h.ids(listed.body)).toEqual([h.boundA.metadata.id]);
   const narrowed = await h.call("runtime-app", "/api/v1/interfaces?permission=mcp.invoke&capsuleId=cap_b");
-  expect(h.ids(narrowed.body)).toEqual([h.boundB.metadata.id]);
+  expect(h.ids(narrowed.body)).toEqual([]);
+  // The same subject presented by app cap_b's own token is its own partition.
+  expect(h.ids((await h.call("runtime-b", "/api/v1/interfaces?permission=mcp.invoke")).body)).toEqual([h.boundB.metadata.id]);
   // The permission is still required for runtime discovery.
   expect((await h.call("runtime-app", "/api/v1/interfaces?type=mcp.server")).status).toBe(400);
+  // A Workspace-free runtime principal without an app has no authority.
+  expect((await h.call("runtime-noapp", "/api/v1/interfaces?permission=mcp.invoke")).status).toBe(403);
+  expect((await h.call("runtime-noapp", `/api/v1/interfaces/${h.boundA.metadata.id}?permission=mcp.invoke`)).status).toBe(403);
+});
+
+test("another partition's manual Binding for the app's subject yields no read, bindings or token", async () => {
+  const h = await fixture();
+  expect((await h.call("runtime-app", `/api/v1/interfaces/${h.boundB.metadata.id}?permission=mcp.invoke`)).status).toBe(404);
+  expect((await h.call("runtime-app", `/api/v1/interfaces/${h.boundB.metadata.id}/bindings?permission=mcp.invoke`)).status).toBe(404);
+  const bindingId = (await h.service.listBindings(h.boundB.metadata.id))[0]!.metadata.id;
+  expect((await h.call("runtime-app", `/api/v1/interfaces/${h.boundB.metadata.id}/bindings/${bindingId}?permission=mcp.invoke`)).status).toBe(404);
+  const token = await h.call("runtime-app", `/api/v1/interfaces/${h.boundB.metadata.id}/token`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ permission: "mcp.invoke" }),
+  });
+  expect(token.status).toBe(404);
+  expect(h.issued).toEqual([]);
+});
+
+test("a Binding materialized from the app's own link is its evidence in any partition", () => {
+  const iface = { metadata: { workspaceId: "ns_b" } } as never;
+  const linked = { metadata: { workspaceId: "ns_b", materializedFrom: {
+    source: "capsule_required_interface", capsuleId: "cap_a", requirementKey: "mcp",
+    interfaceType: "mcp.server", interfaceVersion: "2025-11-25", linkId: "link_1",
+  } } } as never;
+  const otherConsumer = { metadata: { workspaceId: "ns_b", materializedFrom: {
+    source: "capsule_required_interface", capsuleId: "cap_b", requirementKey: "mcp",
+    interfaceType: "mcp.server", interfaceVersion: "2025-11-25", linkId: "link_2",
+  } } } as never;
+  const manual = { metadata: { workspaceId: "ns_b" } } as never;
+  const consumer = { capsuleId: "cap_a", partition: "ns_a" };
+  expect(bindingServesRuntimeConsumer(linked, iface, consumer)).toBe(true);
+  expect(bindingServesRuntimeConsumer(otherConsumer, iface, consumer)).toBe(false);
+  expect(bindingServesRuntimeConsumer(manual, iface, consumer)).toBe(false);
+  expect(bindingServesRuntimeConsumer(manual, iface, { capsuleId: "cap_b", partition: "ns_b" })).toBe(true);
 });
 
 test("an app-bound runtime principal reads, lists bindings and gets tokens only through its bindings", async () => {
   const h = await fixture();
-  expect((await h.call("runtime-app", `/api/v1/interfaces/${h.boundB.metadata.id}?permission=mcp.invoke`)).status).toBe(200);
+  expect((await h.call("runtime-app", `/api/v1/interfaces/${h.boundA.metadata.id}?permission=mcp.invoke`)).status).toBe(200);
   expect((await h.call("runtime-app", `/api/v1/interfaces/${h.unbound.metadata.id}?permission=mcp.invoke`)).status).toBe(404);
-  const bindings = await h.call("runtime-app", `/api/v1/interfaces/${h.boundB.metadata.id}/bindings?permission=mcp.invoke`);
+  const bindings = await h.call("runtime-app", `/api/v1/interfaces/${h.boundA.metadata.id}/bindings?permission=mcp.invoke`);
   expect(bindings.status).toBe(200);
   expect((bindings.body.bindings as unknown[]).length).toBe(1);
   expect((await h.call("runtime-app", `/api/v1/interfaces/${h.unbound.metadata.id}/bindings?permission=mcp.invoke`)).status).toBe(404);
-  const token = await h.call("runtime-app", `/api/v1/interfaces/${h.boundB.metadata.id}/token`, {
+  const token = await h.call("runtime-app", `/api/v1/interfaces/${h.boundA.metadata.id}/token`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ permission: "mcp.invoke" }),
   });
   expect(token.status).toBe(200);
   expect(token.body.access_token).toBe("tok_issued");
   // The token is minted for the Interface's own partition and the principal.
-  expect(h.issued).toEqual([expect.objectContaining({ workspaceId: "ns_b", subjectId: RUNTIME_APP })]);
+  expect(h.issued).toEqual([expect.objectContaining({ workspaceId: "ns_a", subjectId: RUNTIME_APP })]);
   expect((await h.call("runtime-app", `/api/v1/interfaces/${h.unbound.metadata.id}/token`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ permission: "mcp.invoke" }),
   })).status).toBe(404);

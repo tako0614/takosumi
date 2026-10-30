@@ -27,7 +27,7 @@ const OTHER = "acct_launcher_other";
 const STRANGER = "acct_launcher_stranger";
 const NOW = "2026-10-30T00:00:00.000Z";
 
-async function fixture(options: { readonly delegate?: boolean } = {}) {
+async function fixture(options: { readonly delegate?: boolean; readonly endlessAppPages?: boolean } = {}) {
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, {
     workspaceId: WORKSPACE, capsuleId: MINE, sourceId: "src_launcher", snapshotId: "snap_launcher", installConfigId: "cfg_launcher",
@@ -73,7 +73,20 @@ async function fixture(options: { readonly delegate?: boolean } = {}) {
       });
     }
   }
-  const coreOperations = core as unknown as ControlPlaneOperations;
+  const baseOperations = core as unknown as ControlPlaneOperations;
+  // An account with more apps than one account read enumerates.
+  const coreOperations = options.endlessAppPages
+    ? {
+      ...baseOperations,
+      appAccess: {
+        resolveAppAccess: (accountId: string, capsuleId: string) => core.appAccess.resolveAppAccess(accountId, capsuleId),
+        listAccessibleApps: async (accountId: string, page?: { cursor?: string; limit?: number }) => {
+          const real = page?.cursor ? { apps: [] } : await core.appAccess.listAccessibleApps(accountId, { limit: 100 });
+          return { apps: real.apps, nextCursor: `${page?.cursor ?? ""}x` };
+        },
+      },
+    } as unknown as ControlPlaneOperations
+    : baseOperations;
   // A Takos-like delegate: MINE is applied from a designated repository ref.
   const operations = options.delegate
     ? {
@@ -120,12 +133,13 @@ async function fixture(options: { readonly delegate?: boolean } = {}) {
       request: new Request(url, { headers: credential }), url, store: accounts, operations,
       ...(delegationSources ? { installedAppDelegationSources: delegationSources } : {}),
     });
-    const body = await response!.json() as { interfaces?: Interface[]; nextCursor?: string; error?: { code?: string } };
+    const body = await response!.json() as { interfaces?: Interface[]; nextCursor?: string; incomplete?: boolean; error?: { code?: string } };
     return {
       status: response!.status,
       code: body.error?.code,
       owners: (body.interfaces ?? []).map((iface) => iface.metadata.ownerRef.id).sort(),
       nextCursor: body.nextCursor,
+      incomplete: body.incomplete,
     };
   }
   return { headers, list, surfaces, core };
@@ -160,6 +174,14 @@ describe("account launcher", () => {
     expect((await h.list(h.headers.oauth(OWNER, MINE))).owners).toEqual([MINE, SHARED].sort());
     // Its own-app limit still applies to a non-designated app's token.
     expect((await h.list(h.headers.oauth(OWNER, SHARED))).owners).toEqual([SHARED]);
+  });
+
+  test("a launcher over more apps than one account read enumerates says so", async () => {
+    const h = await fixture({ endlessAppPages: true });
+    const result = await h.list(h.headers.session(OWNER));
+    expect(result.owners).toEqual([MINE, SHARED].sort());
+    expect(result.incomplete).toBe(true);
+    expect((await (await fixture()).list(h.headers.session(OWNER))).incomplete).toBeUndefined();
   });
 
   test("pages walk the apps in id order and capsuleId narrows to one app", async () => {

@@ -385,6 +385,11 @@ export async function buildComposedApp(
         ...(result.auth.workspaceId
           ? { workspaceId: result.auth.workspaceId }
           : {}),
+        // The installed app an OAuth token is bound to; Core restricts a
+        // Workspace-free runtime principal's evidence to this app.
+        ...(runtimePrincipal && result.auth.appIds?.length === 1
+          ? { capsuleId: result.auth.appIds[0] }
+          : {}),
         // The account's real Workspace role is unknown here: the authoritative
         // Workspace is resolved later by the Interface route. A role claimed
         // from the HTTP method would be a fabricated grant, so account

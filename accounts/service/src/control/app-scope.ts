@@ -60,6 +60,31 @@ function restrictedCredential(ctx: ControlDispatchContext): boolean {
     session.requireCurrentMembership === true;
 }
 
+/**
+ * Whether this credential may view one candidate app of its account scope.
+ * Unrestricted credentials (sessions, account PATs) are decided by the app
+ * role that put the app in scope; restricted ones re-run the ordinary per-app
+ * decision, which applies the token's own limits.
+ */
+export async function accountAppAllowed(
+  ctx: ControlDispatchContext,
+  capsule: Capsule,
+): Promise<boolean> {
+  if (!restrictedCredential(ctx)) return true;
+  const decision = await requireAppAccess({
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    capsule,
+    action: "view",
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
+  return decision.ok;
+}
+
 export async function resolveAccountAppScope(
   ctx: ControlDispatchContext,
   options: {
@@ -69,6 +94,12 @@ export async function resolveAccountAppScope(
      * per-app decision (which applies the delegation rules) decide each app.
      */
     readonly expandDelegate?: boolean;
+    /**
+     * Leave the per-app decision of a restricted credential to the caller
+     * (see {@link accountAppAllowed}) so a paged read decides only the apps
+     * it returns. The scope then lists candidates, not decided apps.
+     */
+    readonly deferRestrictedDecision?: boolean;
   } = {},
 ): Promise<AccountAppScopeResult> {
   const refused = accountReadCredentialRefusal(ctx);
@@ -105,22 +136,11 @@ export async function resolveAccountAppScope(
   for (const capsule of capsules) {
     if (limited.includes(capsule.id)) byId.set(capsule.id, capsule);
   }
-  if (restrictedCredential(ctx)) {
+  if (restrictedCredential(ctx) && options.deferRestrictedDecision !== true) {
     // The ordinary per-app decision applies the token's own limits (the
     // installed app's own app, a Workspace restriction, current membership).
     for (const capsule of [...byId.values()]) {
-      const decision = await requireAppAccess({
-        operations: ctx.operations,
-        store: ctx.store,
-        session: ctx.session,
-        workspaceId: capsule.workspaceId,
-        capsuleId: capsule.id,
-        capsule,
-        action: "view",
-        ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
-        ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
-      });
-      if (!decision.ok) byId.delete(capsule.id);
+      if (!(await accountAppAllowed(ctx, capsule))) byId.delete(capsule.id);
     }
   }
   return {

@@ -26,7 +26,7 @@ import {
 } from "takosumi-contract";
 import { decodeCursor, encodeCursor } from "takosumi-contract/pagination";
 import { errorJson, json, methodNotAllowed, stringValue } from "../http-helpers.ts";
-import { resolveAccountAppScope } from "./app-scope.ts";
+import { accountAppAllowed, resolveAccountAppScope } from "./app-scope.ts";
 import {
   controlPlaneUnavailable,
   parseControlPageParams,
@@ -40,6 +40,12 @@ const LAUNCHER_SURFACES_PER_APP = 50;
 const LAUNCHER_READ_CONCURRENCY = 8;
 /** Distinguishes launcher cursors from other keyset cursors. */
 const LAUNCHER_CURSOR_MARK = "ui-surfaces";
+/**
+ * Candidate apps one page may decide for a restricted credential (a
+ * delegate app's token decides each of its user's apps); the page ends
+ * early, with a cursor, when this many were examined.
+ */
+const LAUNCHER_DECISIONS_PER_PAGE_FACTOR = 4;
 
 function launchable(capsule: Capsule): boolean {
   return capsule.status === "active" || capsule.status === "stale";
@@ -79,13 +85,24 @@ export async function handleAccountUiSurfaces(
     after = cursor.id;
   }
   const limit = Math.min(page.params.limit ?? LAUNCHER_DEFAULT_APPS, LAUNCHER_MAX_APPS);
-  const resolved = await resolveAccountAppScope(ctx, { expandDelegate: true });
+  const resolved = await resolveAccountAppScope(ctx, {
+    expandDelegate: true,
+    deferRestrictedDecision: true,
+  });
   if (!resolved.ok) return resolved.response;
-  const apps = [...resolved.scope.capsules.values()]
+  const candidates = [...resolved.scope.capsules.values()]
     .filter((capsule) => launchable(capsule) && (capsuleId === undefined || capsule.id === capsuleId))
     .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
     .filter((capsule) => after === undefined || capsule.id > after);
-  const window = apps.slice(0, limit);
+  // Decide only the apps this page returns (a restricted credential re-runs
+  // the per-app decision for each), within a bounded number of decisions.
+  const window: Capsule[] = [];
+  let examined = 0;
+  const maxDecisions = limit * LAUNCHER_DECISIONS_PER_PAGE_FACTOR;
+  while (examined < candidates.length && window.length < limit && examined < maxDecisions) {
+    const capsule = candidates[examined++]!;
+    if (await accountAppAllowed(ctx, capsule)) window.push(capsule);
+  }
   const perApp: Interface[][] = window.map(() => []);
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -107,13 +124,16 @@ export async function handleAccountUiSurfaces(
   await Promise.all(
     Array.from({ length: Math.min(LAUNCHER_READ_CONCURRENCY, window.length) }, worker),
   );
-  const last = window[window.length - 1];
+  const lastExamined = examined > 0 ? candidates[examined - 1] : undefined;
   return json(
     {
       interfaces: perApp.flat(),
-      ...(apps.length > window.length && last
-        ? { nextCursor: encodeCursor({ createdAt: LAUNCHER_CURSOR_MARK, id: last.id }) }
+      ...(examined < candidates.length && lastExamined
+        ? { nextCursor: encodeCursor({ createdAt: LAUNCHER_CURSOR_MARK, id: lastExamined.id }) }
         : {}),
+      // The caller manages more apps than one account read enumerates; the
+      // launcher covers the first ones in the resolver's order.
+      ...(resolved.scope.complete ? {} : { incomplete: true }),
     },
     200,
     { "cache-control": "no-store" },

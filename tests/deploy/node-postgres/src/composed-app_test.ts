@@ -1803,11 +1803,19 @@ test("composed Interface API decides Capsule-owned Interfaces per app and lets a
   }
   const app = created.app;
   const internal = { authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}`, "content-type": "application/json" };
-  const createInterface = async (name: string, ownerRef: { kind: "Capsule" | "Workspace"; id: string }) => {
+  // Another owner's namespace; its owner learned the app's pairwise subject.
+  await opentofuControlStore.putWorkspace({
+    ...seeded.workspace, id: "ws_composed_foreign", handle: "ws-composed-foreign", ownerUserId: "tsub_foreign_owner",
+  });
+  const createInterface = async (
+    name: string,
+    ownerRef: { kind: "Capsule" | "Workspace"; id: string },
+    workspaceId: string = seeded.workspace.id,
+  ) => {
     const response = await app.fetch(new Request("http://localhost/api/v1/interfaces", {
       method: "POST", headers: internal,
       body: JSON.stringify({
-        workspaceId: seeded.workspace.id, name, ownerRef,
+        workspaceId, name, ownerRef,
         spec: { type: "mcp.server", version: "2025-11-25", document: {}, access: { visibility: "private" } },
       }),
     }));
@@ -1817,11 +1825,14 @@ test("composed Interface API decides Capsule-owned Interfaces per app and lets a
   const mine = await createInterface("mine", { kind: "Capsule", id: "cap_composed_iface" });
   const other = await createInterface("other", { kind: "Capsule", id: "cap_composed_other" });
   const workspaceOwned = await createInterface("workspace-owned", { kind: "Workspace", id: seeded.workspace.id });
-  const bind = await app.fetch(new Request(`http://localhost/api/v1/interfaces/${mine}/bindings`, {
-    method: "POST", headers: internal,
-    body: JSON.stringify({ subjectRef: { kind: "Principal", id: "pairwise_composed_runtime" }, permissions: ["mcp.invoke"], delivery: { type: "none" } }),
-  }));
-  assert.equal(bind.status, 201);
+  const foreign = await createInterface("foreign", { kind: "Workspace", id: "ws_composed_foreign" }, "ws_composed_foreign");
+  for (const interfaceId of [mine, foreign]) {
+    const bind = await app.fetch(new Request(`http://localhost/api/v1/interfaces/${interfaceId}/bindings`, {
+      method: "POST", headers: internal,
+      body: JSON.stringify({ subjectRef: { kind: "Principal", id: "pairwise_composed_runtime" }, permissions: ["mcp.invoke"], delivery: { type: "none" } }),
+    }));
+    assert.equal(bind.status, 201);
+  }
   const get = async (path: string, token: string) =>
     (await app.fetch(new Request(`http://localhost${path}`, { headers: { authorization: `Bearer ${token}` } })));
 
@@ -1843,4 +1854,7 @@ test("composed Interface API decides Capsule-owned Interfaces per app and lets a
   assert.equal(discovered.status, 200);
   assert.deepEqual((await discovered.json()).interfaces.map((entry: { metadata: { id: string } }) => entry.metadata.id), [mine]);
   assert.equal((await get(`/api/v1/interfaces/${other}?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  // The foreign namespace's manual Binding for the app's subject is no evidence.
+  assert.equal((await get(`/api/v1/interfaces/${foreign}?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  assert.equal((await get(`/api/v1/interfaces/${foreign}/bindings?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
 });

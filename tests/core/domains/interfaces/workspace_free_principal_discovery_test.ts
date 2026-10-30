@@ -1,8 +1,9 @@
 /**
  * Workspace-free Principal Binding discovery (TASK-0118 9.1) pages the same
  * way in the in-memory, Postgres (PGlite) and SQLite-D1 Interface stores: it
- * spans every internal partition, returns only Interfaces with the exact
- * current Principal Binding and permission, and honours the owner filter.
+ * returns only Interfaces with the exact current Principal Binding and
+ * permission, accepts a Binding only as evidence of the consumer app (its own
+ * partition, or materialized from its own link), and honours the owner filter.
  */
 import { expect, setDefaultTimeout, test } from "bun:test";
 import {
@@ -34,7 +35,7 @@ async function storeSets(): Promise<{ readonly sets: readonly [string, Interface
   };
 }
 
-test("Principal Binding discovery spans partitions with parity", async () => {
+test("Workspace-free Principal Binding discovery accepts only the consumer app's evidence, with parity", async () => {
   const { sets, close } = await storeSets();
   try {
     for (const [label, stores] of sets) {
@@ -73,32 +74,62 @@ test("Principal Binding discovery spans partitions with parity", async () => {
           });
         }
       }
-      const all = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
-        { type: "mcp.server" }, "principal_app", "mcp.invoke", {},
+      // ns_two's owner bound app cap_one's (learned) subject manually: not
+      // evidence for cap_one, which sees only its own partition.
+      const appOne = { capsuleId: "cap_one", partition: "ns_one" };
+      const appTwo = { capsuleId: "cap_two", partition: "ns_two" };
+      const one = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
+        { type: "mcp.server" }, "principal_app", "mcp.invoke", {}, appOne,
       );
-      expect(all.items.map((iface) => iface.metadata.id).sort(), label).toEqual([created.one!, created.two!].sort());
-      const narrowed = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
-        { ownerKind: "Capsule", ownerId: "cap_two" }, "principal_app", "mcp.invoke", {},
+      expect(one.items.map((iface) => iface.metadata.id), label).toEqual([created.one!]);
+      const crossNarrowed = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
+        { ownerKind: "Capsule", ownerId: "cap_two" }, "principal_app", "mcp.invoke", {}, appOne,
       );
-      expect(narrowed.items.map((iface) => iface.metadata.id), label).toEqual([created.two!]);
+      expect(crossNarrowed.items, label).toEqual([]);
+      const two = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
+        { ownerKind: "Capsule", ownerId: "cap_two" }, "principal_app", "mcp.invoke", {}, appTwo,
+      );
+      expect(two.items.map((iface) => iface.metadata.id), label).toEqual([created.two!]);
+      // Paging within the consumer's evidence.
+      const extra = await service.create({
+        workspaceId: "ns_one",
+        name: "one-more",
+        ownerRef: { kind: "Capsule", id: "cap_one" },
+        spec: {
+          type: "mcp.server",
+          version: "2025-11-25",
+          document: {},
+          inputs: { endpoint: { source: "literal", value: "https://one-more.example.test/mcp" } },
+          access: { visibility: "private" },
+        },
+      });
+      await service.createBinding(extra.metadata.id, {
+        subjectRef: { kind: "Principal", id: "principal_app" }, permissions: ["mcp.invoke"], delivery: { type: "none" },
+      });
       const firstPage = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
-        {}, "principal_app", "mcp.invoke", { limit: 1 },
+        {}, "principal_app", "mcp.invoke", { limit: 1 }, appOne,
       );
       expect(firstPage.items, label).toHaveLength(1);
       expect(firstPage.nextCursor, label).toBeDefined();
       const secondPage = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
-        {}, "principal_app", "mcp.invoke", { limit: 1, cursor: firstPage.nextCursor! },
+        {}, "principal_app", "mcp.invoke", { limit: 1, cursor: firstPage.nextCursor! }, appOne,
       );
       expect(
         [...firstPage.items, ...secondPage.items].map((iface) => iface.metadata.id).sort(),
         label,
-      ).toEqual([created.one!, created.two!].sort());
+      ).toEqual([created.one!, extra.metadata.id].sort());
       expect(secondPage.nextCursor, label).toBeUndefined();
+      // By-id reads apply the same evidence restriction.
+      await expect(
+        service.getAuthorizedForPrincipal(created.two!, "principal_app", "mcp.invoke", appOne), label,
+      ).rejects.toMatchObject({ code: "not_found" });
+      expect((await service.getAuthorizedForPrincipal(created.two!, "principal_app", "mcp.invoke", appTwo)).metadata.id, label)
+        .toBe(created.two!);
       // The partitioned projection is unchanged.
       const partitioned = await service.listAuthorizedForPrincipal(
         { workspaceId: "ns_one" }, "principal_app", "mcp.invoke",
       );
-      expect(partitioned.map((iface) => iface.metadata.id), label).toEqual([created.one!]);
+      expect(partitioned.map((iface) => iface.metadata.id).sort(), label).toEqual([created.one!, extra.metadata.id].sort());
     }
   } finally {
     await close();

@@ -250,8 +250,33 @@ export type InterfaceAuthorizationFilter =
   & Omit<InterfaceListFilter, "workspaceId">
   & { readonly workspaceId?: string };
 
+/**
+ * The consumer app of a Workspace-free runtime principal (TASK-0118 9.1).
+ * Its pairwise subject is learnable by providers it talks to, so a Binding
+ * counts as its evidence only when it was materialized from an active
+ * Interface link of this app, or lives in this app's own partition.
+ */
+export interface InterfaceRuntimeConsumer {
+  readonly capsuleId: string;
+  readonly partition: string;
+}
+
+export function bindingServesRuntimeConsumer(
+  binding: InterfaceBinding,
+  iface: Interface,
+  consumer: InterfaceRuntimeConsumer,
+): boolean {
+  if (iface.metadata.workspaceId === consumer.partition &&
+    binding.metadata.workspaceId === consumer.partition) return true;
+  const source = binding.metadata.materializedFrom;
+  return source?.source === "capsule_required_interface" &&
+    source.capsuleId === consumer.capsuleId;
+}
+
 export interface InterfaceAuthorizationPageInput {
   readonly filter: InterfaceAuthorizationFilter;
+  /** Required evidence shape for a Workspace-free runtime principal. */
+  readonly consumer?: InterfaceRuntimeConsumer;
   readonly subjectId: string;
   readonly permission: string;
   readonly params: PageParams;
@@ -634,7 +659,8 @@ class InMemoryInterfaceAuthorizationQuery
             iface,
             input.subjectId,
             input.permission,
-          ) && await hasActiveRequiredInterfaceLink(binding, iface, this.links, input.permission)
+          ) && await hasActiveRequiredInterfaceLink(binding, iface, this.links, input.permission) &&
+          (input.consumer === undefined || bindingServesRuntimeConsumer(binding, iface, input.consumer))
         ) {
           authorized.push(iface);
           break;

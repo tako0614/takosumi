@@ -495,6 +495,8 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
     ) {
       return { items: [] };
     }
+    // Without a partition (TASK-0118 9.1) this read is not partition-indexed;
+    // see the D1 store note on the subject-first Binding index for 9.6.
     const parameters: SqlValue[] = [];
     const clauses = ["i.phase = 'Resolved'"];
     if (input.filter.workspaceId !== undefined) {
@@ -556,6 +558,14 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
       clauses.push("i.phase <> 'Retired'");
     const subject = placeholder(input.subjectId);
     const permission = placeholder(JSON.stringify([input.permission]));
+    // A Workspace-free runtime principal's evidence: a Binding in its own
+    // app's partition, or one materialized from its own app's link (whose
+    // activity the consent clause below still requires).
+    const consumerClause = input.consumer
+      ? `and (i.workspace_id = ${placeholder(input.consumer.partition)}
+          or (b.record_json->'metadata'->'materializedFrom'->>'source' = 'capsule_required_interface'
+            and b.record_json->'metadata'->'materializedFrom'->>'capsuleId' = ${placeholder(input.consumer.capsuleId)}))`
+      : "";
     clauses.push(
       `exists (
         select 1 from ${this.#bindings} b
@@ -567,6 +577,7 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
           and b.record_json->'status'->>'observedInterfaceRevision'
               = i.resolved_revision::text
           and b.record_json->'spec'->'permissions' @> ${permission}::jsonb
+          ${consumerClause}
           and (
             coalesce(b.record_json->'metadata'->'materializedFrom'->>'source', '') <> 'capsule_required_interface'
             or exists (

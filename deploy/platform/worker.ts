@@ -1387,7 +1387,8 @@ async function handlePlatformInterfaceApiRequestInternal(
       workspaceAccess,
       timings,
       legacyWorkspace,
-      (appRequest, appEnv, capsuleId) => appPartition(appRequest, appEnv, capsuleId, context),
+      (appRequest, appEnv, capsuleId, options) =>
+        appPartition(appRequest, appEnv, capsuleId, { ...options, ...(context ? { context } : {}) }),
     );
     if (!authorized.ok) {
       return appendPlatformInterfaceServerTiming(authorized.response, timings);
@@ -1738,7 +1739,9 @@ async function platformInterfaceAppScope(
   ) {
     return undefined;
   }
-  const workspaceId = await appPartition(request, env, capsuleId);
+  const workspaceId = await appPartition(request, env, capsuleId, {
+    ...(session.sharedAccount ? { sharedAccount: true } : {}),
+  });
   return workspaceId
     ? { ok: true, workspaceId }
     : {
@@ -1758,7 +1761,11 @@ export type PlatformInterfaceAppPartition = (
   request: Request,
   env: CloudflareWorkerEnv,
   capsuleId: string,
-  context?: PlatformExecutionContext,
+  options?: {
+    readonly context?: PlatformExecutionContext;
+    /** A shared-account (Hosted) session, authenticated by the shared RP. */
+    readonly sharedAccount?: true;
+  },
 ) => Promise<string | undefined>;
 
 /**
@@ -1770,20 +1777,30 @@ async function platformExtensionSessionAppPartition(
   request: Request,
   env: CloudflareWorkerEnv,
   capsuleId: string,
-  context?: PlatformExecutionContext,
+  options: {
+    readonly context?: PlatformExecutionContext;
+    readonly sharedAccount?: true;
+  } = {},
 ): Promise<string | undefined> {
   const headers = sessionMirrorHeaders(request);
   if (!headers) return undefined;
-  try {
-    const response = await accountsWorker.fetch(
-      new Request(
-        new URL(`/api/v1/capsules/${encodeURIComponent(capsuleId)}`, request.url),
-        { method: "GET", headers },
-      ),
-      env,
-      context,
+  const capsuleRequest = (requestHeaders: Headers) =>
+    new Request(
+      new URL(`/api/v1/capsules/${encodeURIComponent(capsuleId)}`, request.url),
+      { method: "GET", headers: requestHeaders },
     );
-    if (!response.ok) return undefined;
+  try {
+    let response: Response | undefined;
+    if (options.sharedAccount) {
+      // A shared-account session is not an Accounts session cookie: ask the
+      // same shared-auth control dispatch the dashboard uses, which
+      // authenticates the shared RP identity and applies the per-app view.
+      headers.delete("authorization");
+      response = await handlePlatformSharedAuthControlRequest(capsuleRequest(headers), env);
+    } else {
+      response = await accountsWorker.fetch(capsuleRequest(headers), env, options.context);
+    }
+    if (!response?.ok) return undefined;
     const body = objectRecord(await response.json().catch(() => undefined));
     const capsule = objectRecord(body.capsule);
     return valueString(capsule.id) === capsuleId
@@ -2234,6 +2251,12 @@ function platformInterfaceActorContext(
         : ["operator"],
     requestId: crypto.randomUUID(),
     ...(workspaceId ? { workspaceId } : {}),
+    // The installed app an OAuth token is bound to (introspected); Core
+    // restricts a Workspace-free runtime principal's evidence to this app.
+    ...(session.authKind === "oauth-access-token" &&
+    safePlatformExtensionContextId(session.capsuleId)
+      ? { capsuleId: safePlatformExtensionContextId(session.capsuleId) }
+      : {}),
     ...(session.authKind === "service-token"
       ? { principalKind: "service", serviceId: session.subject }
       : { principalKind: "account" }),

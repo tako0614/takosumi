@@ -38,9 +38,11 @@ import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import { WorkspaceManagementAdmissionConflictError, type WorkspaceManagementAuthority } from "../deploy-control/store.ts";
 import type {
   InterfaceListFilter,
+  InterfaceRuntimeConsumer,
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import { bindingServesRuntimeConsumer } from "./stores.ts";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
   canonicalInterfaceOAuth2ResourceUri,
@@ -1377,7 +1379,10 @@ export class InterfaceService {
     subjectId: string,
     permission: string,
     params: PageParams,
+    consumer: InterfaceRuntimeConsumer,
   ): Promise<Page<Interface>> {
+    requireText(consumer.capsuleId, "consumer.capsuleId");
+    requireText(consumer.partition, "consumer.partition");
     if (filter.type !== undefined) validateToken(filter.type, "type");
     const normalizedSubject = requireText(subjectId, "subjectId");
     validatePermissionToken(permission, "permission");
@@ -1389,6 +1394,7 @@ export class InterfaceService {
       subjectId: normalizedSubject,
       permission: permission.trim(),
       params,
+      consumer,
     });
     return {
       ...page,
@@ -1429,6 +1435,7 @@ export class InterfaceService {
     interfaceId: string,
     subjectId: string,
     permission: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<Interface> {
     const iface = await this.reconcile(interfaceId, {
       allowSafetyRecovery: true,
@@ -1438,6 +1445,7 @@ export class InterfaceService {
       iface,
       requireText(subjectId, "subjectId"),
       permission.trim(),
+      consumer,
     );
     if (bindings.length === 0) {
       // Do not turn this endpoint into an Interface id oracle.
@@ -1450,6 +1458,7 @@ export class InterfaceService {
     interfaceId: string,
     subjectId: string,
     permission: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<readonly InterfaceBinding[]> {
     const iface = await this.reconcile(interfaceId, { allowSafetyRecovery: true });
     validatePermissionToken(permission, "permission");
@@ -1457,6 +1466,7 @@ export class InterfaceService {
       iface,
       requireText(subjectId, "subjectId"),
       permission.trim(),
+      consumer,
     );
     if (bindings.length === 0) throw new InterfaceServiceError("not_found", "Interface not found");
     return bindings;
@@ -1468,6 +1478,8 @@ export class InterfaceService {
     principal: {
       readonly workspaceId: string;
       readonly subjectId: string;
+      /** Set for a Workspace-free runtime principal (TASK-0118 9.1). */
+      readonly consumer?: InterfaceRuntimeConsumer;
     },
     actor?: ActorContext,
   ): Promise<IssueInterfaceTokenResponse> {
@@ -1490,7 +1502,7 @@ export class InterfaceService {
       throw new InterfaceServiceError("not_found", "Interface not found");
     }
     const binding = (
-      await this.#principalBindings(iface, subjectId, permission)
+      await this.#principalBindings(iface, subjectId, permission, principal.consumer)
     ).find(
       (candidate) =>
         candidate.metadata.workspaceId === workspaceId &&
@@ -1611,6 +1623,8 @@ export class InterfaceService {
       !resourceClaimStillCurrent ||
       !currentBinding ||
       !(await this.#bindingLinkActive(currentBinding, currentInterface, permission)) ||
+      (principal.consumer !== undefined &&
+        !bindingServesRuntimeConsumer(currentBinding, currentInterface, principal.consumer)) ||
       currentBinding.metadata.workspaceId !== workspaceId ||
       currentBinding.metadata.generation !== binding.metadata.generation ||
       currentBinding.status.phase !== "Ready" ||
@@ -2924,6 +2938,7 @@ export class InterfaceService {
     iface: Interface,
     subjectId: string,
     permission: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<readonly InterfaceBinding[]> {
     if (iface.status.phase !== "Resolved") return [];
     const bindings = (
@@ -2941,7 +2956,10 @@ export class InterfaceService {
     // This cache lives only for this read. The post-issuer authority check uses
     // fresh storage reads, so revocations during credential issuance still win.
     const cache = { links: new Map<string, InterfaceLink | undefined>(), capsules: new Map<string, Capsule | undefined>() };
-    for (const binding of bindings) if (await this.#bindingLinkActive(binding, iface, permission, cache)) accepted.push(binding);
+    for (const binding of bindings) {
+      if (consumer !== undefined && !bindingServesRuntimeConsumer(binding, iface, consumer)) continue;
+      if (await this.#bindingLinkActive(binding, iface, permission, cache)) accepted.push(binding);
+    }
     return accepted;
   }
 
