@@ -9,7 +9,7 @@
  * reviewed in place and applies only from the explicit "Allow and …" click.
  * `/apps/:id` is the canonical URL; older app URLs redirect there.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { type BrowserContext, expect, test, type Page } from "@playwright/test";
 import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
@@ -1424,6 +1424,373 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       await phone.scrollIntoViewIfNeeded();
       await capture(page, "app-phone-section");
+      expect(errors).toEqual([]);
+    });
+
+    registerPhoneOpenCases();
+  });
+}
+
+// --- how a screen opens on a phone (TASK-0119 step 4) --------------------------------
+
+const ANDROID_UA = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36";
+const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+const PHONE_VIEWPORT = { width: 390, height: 844 };
+const APP_ORIGIN_ENCODED = encodeURIComponent(new URL(PORTABLE_EXPECTATIONS.appUrl).origin);
+const YURUCOMMU_OPEN = `yurucommu://connect?host_url=${APP_ORIGIN_ENCODED}&product=yurucommu`;
+const OPEN_CHOICE_KEY_PREFIX = "takosumi.openChoice.v1";
+
+/** `screens[].clients` as the server returns them for a trusted app. */
+const VERIFIED_CLIENTS = {
+  preferred: "native",
+  ios: {
+    verified: true, trustedClientId: "yurucommu-mobile", target: { scheme: "yurucommu" }, name: "Yurucommu",
+    appStoreId: "1234567890", bundleId: "com.yurucommu", open: YURUCOMMU_OPEN,
+    storeUrl: "https://apps.apple.com/app/id1234567890",
+  },
+  android: {
+    verified: true, trustedClientId: "yurucommu-mobile", target: { package: "com.yurucommu", scheme: "yurucommu" },
+    name: "Yurucommu", package: "com.yurucommu", open: YURUCOMMU_OPEN,
+    storeUrl: "https://play.google.com/store/apps/details?id=com.yurucommu",
+  },
+};
+
+/** An app no operator registered: unverified, without a name. */
+const UNVERIFIED_CLIENTS = {
+  preferred: "web",
+  android: {
+    verified: false, target: { package: "com.example.notes", scheme: "notes" }, package: "com.example.notes",
+    open: `notes://open?u=${APP_ORIGIN_ENCODED}`,
+    storeUrl: "https://play.google.com/store/apps/details?id=com.example.notes",
+  },
+};
+
+/**
+ * The portable fixture's own app view of the office app, with `clients` on
+ * its launcher screen (read on every request when given as a function, so a
+ * test can change it between loads). Resolves to that screen's interface id.
+ */
+async function withScreenClients(page: Page | BrowserContext, clients: unknown): Promise<() => string> {
+  let interfaceId = "";
+  await page.route(`**/api/v1/capsules/${CAPSULE_ID}/app`, async (route) => {
+    const response = await route.fetch();
+    const body = await response.json() as { app: { screens: { interfaceId: string; clients?: unknown }[] } };
+    const screen = body.app.screens[0]!;
+    interfaceId = screen.interfaceId;
+    screen.clients = typeof clients === "function" ? (clients as () => unknown)() : clients;
+    await route.fulfill({ response, json: body });
+  });
+  return () => interfaceId;
+}
+
+/** English, the app's web page answered offline, and native links never actually followed. */
+async function preparePhone(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    localStorage.setItem("tg_lang", "en");
+    // Following an intent: or custom-scheme link would leave the test; the
+    // click still reaches the page's own handlers.
+    window.addEventListener("click", (event) => {
+      const link = (event.target as Element | null)?.closest?.("a[href]");
+      const href = link?.getAttribute("href") ?? "";
+      if (/^(intent|yurucommu|notes):/u.test(href)) event.preventDefault();
+    }, true);
+  });
+  await page.context().route(`${new URL(PORTABLE_EXPECTATIONS.appUrl).origin}/**`, (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><title>app</title>" }));
+}
+
+async function storedChoice(page: Page, interfaceId: string): Promise<unknown> {
+  return await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    return raw === null ? null : JSON.parse(raw);
+  }, `${OPEN_CHOICE_KEY_PREFIX}:${CAPSULE_ID}:${interfaceId}`);
+}
+
+function registerPhoneOpenCases() {
+  test.describe("on an Android phone", () => {
+    test.use({ userAgent: ANDROID_UA, viewport: PHONE_VIEWPORT, hasTouch: true });
+
+    test("a verified native app opens from Home and Open through an intent link pinned to its package, back to the chooser when missing", async ({ page, baseURL }) => {
+      await preparePhone(page);
+      const errors = pageErrors(page);
+      const screenId = await withScreenClients(page, VERIFIED_CLIENTS);
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const tile = page.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName });
+      const tileOpen = tile.getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in Yurucommu` });
+      await expect(tileOpen).toHaveAttribute("data-open-route", "native");
+      const fallbackPath = `/apps/${CAPSULE_ID}?open=${encodeURIComponent(screenId())}&missing=1#phone`;
+      const intent = `intent://connect?host_url=${APP_ORIGIN_ENCODED}&product=yurucommu` +
+        `#Intent;scheme=yurucommu;package=com.yurucommu;S.browser_fallback_url=${encodeURIComponent(new URL(fallbackPath, baseURL).href)};end`;
+      await expect(tileOpen).toHaveAttribute("href", intent);
+      // A link the person taps in place; the web opens in a new tab only.
+      expect(await tileOpen.getAttribute("target")).toBeNull();
+
+      // Chrome's fallback when the app is missing: the chooser, saying so.
+      await page.goto(fallbackPath, { waitUntil: "domcontentloaded" });
+      const phone = page.getByTestId("app-phone");
+      await expect(phone.getByRole("heading", { name: "Use on your phone" })).toBeVisible();
+      await expect(phone.getByTestId("app-phone-missing")).toHaveText(
+        "Yurucommu didn't open. If it isn't installed, get it from the store or open the app in your browser.",
+      );
+      // The notice stays; the URL no longer claims the app failed to open.
+      await expect(page).toHaveURL(new URL(`/apps/${CAPSULE_ID}#phone`, baseURL).href);
+      await expect(phone.getByTestId("app-phone-missing")).toBeVisible();
+      const native = phone.getByTestId("app-phone-native");
+      await expect(native).toHaveAttribute("data-verified", "true");
+      await expect(native).toContainText("Notifications: the native app receives them.");
+      await expect(native).toContainText(`Connects to: ${new URL(PORTABLE_EXPECTATIONS.appUrl).host}`);
+      await expect(native.getByRole("link", { name: "Open in Yurucommu", exact: true })).toHaveAttribute("href", intent);
+      await expect(native.getByRole("link", { name: "Get it on Google Play", exact: true }))
+        .toHaveAttribute("href", "https://play.google.com/store/apps/details?id=com.yurucommu");
+      // The design's order: native app, web, QR and sharing, remember.
+      expect(await phone.evaluate((root) =>
+        ["app-phone-native", "app-phone-web", "app-phone-share", "app-phone-remember"]
+          .map((id) => root.querySelector(`[data-testid="${id}"]`))
+          .every((node, index, nodes) => node !== null && (index === 0 || (nodes[index - 1]!.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)),
+      )).toBe(true);
+      await expect(phone.locator("details, summary, [aria-expanded]")).toHaveCount(0);
+      await expectNoHorizontalOverflow(page, "the Android chooser at 390px");
+      await phone.screenshot({ path: test.info().outputPath("app-phone-chooser-android.png") });
+
+      // Remember "Open in browser": Home and Open follow it until it is forgotten.
+      await phone.getByRole("checkbox", { name: "Remember on this device" }).check();
+      const popup = page.context().waitForEvent("page");
+      await phone.getByTestId("app-phone-web").getByRole("link", { name: "Open in browser", exact: true }).click();
+      await (await popup).close();
+      expect(await storedChoice(page, screenId())).toEqual({ choice: "web" });
+      await expect(phone.getByTestId("app-phone-remembered")).toContainText("This device remembers “Open in browser”.");
+      const headerOpen = page.getByTestId("app-primary").locator(".ap-open");
+      await expect(headerOpen).toHaveAttribute("data-open-route", "web");
+      await expect(page.getByTestId("app-open-change")).toBeVisible();
+      await phone.getByRole("button", { name: "Forget this choice", exact: true }).click();
+      expect(await storedChoice(page, screenId())).toBeNull();
+      await expect(headerOpen).toHaveAttribute("data-open-route", "native");
+      expect(errors).toEqual([]);
+    });
+
+    test("an unverified native app shows where it goes, opens only after confirming, and is never remembered", async ({ page }) => {
+      await preparePhone(page);
+      const errors = pageErrors(page);
+      const screenId = await withScreenClients(page, UNVERIFIED_CLIENTS);
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const tile = page.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName });
+      const tileOpen = tile.getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in a new tab` });
+      await expect(tileOpen).toHaveAttribute("data-open-route", "web");
+      await expect(tileOpen).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+
+      await page.goto(`/apps/${CAPSULE_ID}#phone`, { waitUntil: "domcontentloaded" });
+      const native = page.getByTestId("app-phone-native");
+      await expect(native).toHaveAttribute("data-verified", "false");
+      // A neutral label naming where it goes, never the screen's title.
+      await expect(native.getByRole("heading")).toContainText("Unverified app (com.example.notes)");
+      await expect(native.getByRole("heading")).not.toContainText(PORTABLE_EXPECTATIONS.appName);
+      const target = native.getByTestId("app-phone-target");
+      await expect(target).toContainText("Android package: com.example.notes");
+      await expect(target).toContainText("Link scheme: notes:");
+      await expect(target).toContainText("Store link goes to: play.google.com/store/apps/details?id=com.example.notes");
+      // No link reaches the app until the person confirms.
+      await expect(page.locator('a[href^="intent:"]')).toHaveCount(0);
+      await page.getByRole("checkbox", { name: "Remember on this device" }).check();
+      await native.getByRole("button", { name: "Open in unverified app (com.example.notes)", exact: true }).click();
+      const confirm = native.getByTestId("app-phone-confirm");
+      await expect(confirm).toContainText("Open the unverified app (com.example.notes)?");
+      const confirmed = confirm.getByRole("link", { name: "Open", exact: true });
+      await expect(confirmed).toBeFocused();
+      const href = await confirmed.getAttribute("href");
+      expect(href?.startsWith(`intent://open?u=${APP_ORIGIN_ENCODED}#Intent;scheme=notes;package=com.example.notes;`)).toBe(true);
+      await confirmed.click();
+      // Confirming opened it once; nothing was remembered.
+      expect(await storedChoice(page, screenId())).toBeNull();
+      await expect(page.getByTestId("app-primary").locator(".ap-open")).toHaveAttribute("data-open-route", "web");
+      await expectNoHorizontalOverflow(page, "the unverified chooser at 390px");
+      expect(errors).toEqual([]);
+    });
+  });
+
+  test.describe("on an Android phone, more", () => {
+    test.use({ userAgent: ANDROID_UA, viewport: PHONE_VIEWPORT, hasTouch: true });
+
+    test("an App Link alone still opens through an intent link pinned to the package, keeping its fragment", async ({ page, baseURL }) => {
+      await preparePhone(page);
+      const errors = pageErrors(page);
+      const appLink = `https://open.yurucommu.example/connect#host_url=${APP_ORIGIN_ENCODED}`;
+      const { open: _open, ...android } = VERIFIED_CLIENTS.android;
+      const screenId = await withScreenClients(page, {
+        preferred: "native",
+        android: { ...android, target: { package: "com.yurucommu", host: "open.yurucommu.example" }, appLink },
+      });
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const tileOpen = page.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName })
+        .getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in Yurucommu` });
+      await expect(tileOpen).toHaveAttribute("data-open-route", "native");
+      const fallback = new URL(`/apps/${CAPSULE_ID}?open=${encodeURIComponent(screenId())}&missing=1#phone`, baseURL).href;
+      await expect(tileOpen).toHaveAttribute(
+        "href",
+        `intent://open.yurucommu.example/connect#host_url=${APP_ORIGIN_ENCODED}` +
+          `#Intent;scheme=https;package=com.yurucommu;S.browser_fallback_url=${encodeURIComponent(fallback)};end`,
+      );
+      expect(errors).toEqual([]);
+    });
+
+    test("a remembered native app is ignored once the app is no longer verified, and can be forgotten", async ({ page }) => {
+      await preparePhone(page);
+      const errors = pageErrors(page);
+      let clients: unknown = VERIFIED_CLIENTS;
+      const screenId = await withScreenClients(page, () => clients);
+      await page.goto(`/apps/${CAPSULE_ID}#phone`, { waitUntil: "domcontentloaded" });
+      const phone = page.getByTestId("app-phone");
+      await phone.getByRole("checkbox", { name: "Remember on this device" }).check();
+      await phone.getByTestId("app-phone-native").getByRole("link", { name: "Open in Yurucommu", exact: true }).click();
+      expect(await storedChoice(page, screenId())).toEqual({
+        choice: "native", platform: "android", trustedClientId: "yurucommu-mobile",
+        target: { package: "com.yurucommu", scheme: "yurucommu" },
+      });
+
+      // The operator no longer trusts it: the same declaration comes back unverified.
+      clients = {
+        preferred: "web",
+        android: {
+          ...VERIFIED_CLIENTS.android, verified: false, trustedClientId: undefined, name: undefined,
+        },
+      };
+      await page.reload({ waitUntil: "domcontentloaded" });
+      const native = phone.getByTestId("app-phone-native");
+      await expect(native).toHaveAttribute("data-verified", "false");
+      await expect(page.getByTestId("app-primary").locator(".ap-open")).toHaveAttribute("data-open-route", "web");
+      await expect(phone.getByTestId("app-phone-remembered"))
+        .toContainText("The native app this device remembered no longer matches this screen, so it isn't used.");
+      await expect(page.locator('a[href^="intent:"]')).toHaveCount(0);
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await expect(page.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName })
+        .getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in a new tab` })).toHaveAttribute("data-open-route", "web");
+      await page.goto(`/apps/${CAPSULE_ID}#phone`, { waitUntil: "domcontentloaded" });
+      await page.getByTestId("app-open-change").click();
+      await phone.getByRole("button", { name: "Forget this choice", exact: true }).click();
+      expect(await storedChoice(page, screenId())).toBeNull();
+      expect(errors).toEqual([]);
+    });
+
+    test("two tabs showing the chooser do not wake each other: no probe writes after loading, and a choice reaches the other tab", async ({ context }) => {
+      await context.addInitScript(() => {
+        const record = window as unknown as { probeWrites: number };
+        record.probeWrites = 0;
+        const setItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (key: string, value: string) {
+          if (String(key) === "takosumi.openChoice.v1:probe") record.probeWrites += 1;
+          return setItem.call(this, key, value);
+        };
+      });
+      const screenId = await withScreenClients(context, VERIFIED_CLIENTS);
+      const pages: Page[] = [];
+      for (let index = 0; index < 2; index += 1) {
+        const tab = await context.newPage();
+        await preparePhone(tab);
+        await tab.goto(`/apps/${CAPSULE_ID}#phone`, { waitUntil: "domcontentloaded" });
+        await expect(tab.getByTestId("app-phone-remember")).toBeVisible();
+        pages.push(tab);
+      }
+      const probes = () => Promise.all(pages.map((tab) => tab.evaluate(() => (window as unknown as { probeWrites: number }).probeWrites)));
+      const settled = await probes();
+      expect(settled.every((count) => count <= 1)).toBe(true);
+      await pages[0]!.waitForTimeout(1500);
+      expect(await probes()).toEqual(settled);
+
+      // A real choice in one tab still reaches the other.
+      const [first, second] = pages as [Page, Page];
+      await first.getByRole("checkbox", { name: "Remember on this device" }).check();
+      await first.getByTestId("app-phone-native").getByRole("link", { name: "Open in Yurucommu", exact: true }).click();
+      expect(await storedChoice(first, screenId())).not.toBeNull();
+      await expect(second.getByTestId("app-phone-remembered")).toContainText("This device remembers “Open in Yurucommu”.");
+      await first.waitForTimeout(500);
+      expect(await probes()).toEqual(settled);
+    });
+  });
+
+  test.describe("on an iPhone", () => {
+    test.use({ userAgent: IPHONE_UA, viewport: PHONE_VIEWPORT, hasTouch: true });
+
+    test("a custom scheme opens the chooser until the person chooses and remembers the native app", async ({ page }) => {
+      await preparePhone(page);
+      const errors = pageErrors(page);
+      const screenId = await withScreenClients(page, VERIFIED_CLIENTS);
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const tile = page.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName });
+      const tileOpen = tile.getByRole("link", { name: `Choose how to open ${PORTABLE_EXPECTATIONS.appName}` });
+      await expect(tileOpen).toHaveAttribute("data-open-route", "choose");
+      await expect(tileOpen).toHaveAttribute("href", `/apps/${CAPSULE_ID}?open=${encodeURIComponent(screenId())}#phone`);
+      await tileOpen.click();
+      // The chooser opened for that screen; its query then leaves the URL.
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#phone$`, "u"));
+      const phone = page.getByTestId("app-phone");
+      await expect(phone.getByTestId("app-phone-native")).toBeInViewport();
+      await expect(phone.getByTestId("app-phone-missing")).toHaveCount(0);
+      const native = phone.getByTestId("app-phone-native");
+      await expect(native.getByRole("link", { name: "Open in Yurucommu", exact: true })).toHaveAttribute("href", YURUCOMMU_OPEN);
+      await expect(native.getByRole("link", { name: "Get it on the App Store", exact: true }))
+        .toHaveAttribute("href", "https://apps.apple.com/app/id1234567890");
+      // The header's Open goes to the same chooser while nothing is chosen.
+      const headerOpen = page.getByTestId("app-primary").locator(".ap-open");
+      await expect(headerOpen).toHaveAttribute("data-open-route", "choose");
+      await expectNoHorizontalOverflow(page, "the iPhone chooser at 390px");
+      await phone.screenshot({ path: test.info().outputPath("app-phone-chooser-iphone.png") });
+
+      await phone.getByRole("checkbox", { name: "Remember on this device" }).check();
+      await native.getByRole("link", { name: "Open in Yurucommu", exact: true }).click();
+      expect(await storedChoice(page, screenId()))
+        .toEqual({ choice: "native", platform: "ios", trustedClientId: "yurucommu-mobile", target: { scheme: "yurucommu" } });
+      await expect(phone.getByTestId("app-phone-remembered")).toContainText("This device remembers “Open in Yurucommu”.");
+      // From now on Open and the tile open the app directly.
+      await expect(headerOpen).toHaveAttribute("data-open-route", "native");
+      await expect(headerOpen.getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in Yurucommu` }))
+        .toHaveAttribute("href", YURUCOMMU_OPEN);
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await expect(page.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName })
+        .getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in Yurucommu` })).toHaveAttribute("href", YURUCOMMU_OPEN);
+      expect(errors).toEqual([]);
+    });
+
+    test("a universal link opens directly from Home and Open as a plain tapped link", async ({ page }) => {
+      await preparePhone(page);
+      const errors = pageErrors(page);
+      const universalLink = `https://open.yurucommu.example/connect#host_url=${APP_ORIGIN_ENCODED}`;
+      await withScreenClients(page, {
+        ...VERIFIED_CLIENTS,
+        ios: { ...VERIFIED_CLIENTS.ios, target: { scheme: "yurucommu", host: "open.yurucommu.example" }, universalLink },
+      });
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const tileOpen = page.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName })
+        .getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in Yurucommu` });
+      await expect(tileOpen).toHaveAttribute("data-open-route", "native");
+      await expect(tileOpen).toHaveAttribute("href", universalLink);
+      expect(await tileOpen.getAttribute("target")).toBeNull();
+      await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+      const headerOpen = page.getByTestId("app-primary").locator(".ap-open");
+      await expect(headerOpen).toHaveAttribute("data-open-route", "native");
+      await expect(headerOpen.getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in Yurucommu` }))
+        .toHaveAttribute("href", universalLink);
+      await expect(page.getByTestId("app-phone-native").getByRole("link", { name: "Open in Yurucommu", exact: true }))
+        .toHaveAttribute("href", universalLink);
+      expect(errors).toEqual([]);
+    });
+
+    test("without storage nothing is remembered and each tap uses the default", async ({ page }) => {
+      await page.addInitScript(() => {
+        const setItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (key: string, value: string) {
+          if (String(key).startsWith("takosumi.openChoice")) throw new DOMException("blocked", "SecurityError");
+          return setItem.call(this, key, value);
+        };
+      });
+      await preparePhone(page);
+      const errors = pageErrors(page);
+      await withScreenClients(page, VERIFIED_CLIENTS);
+      await page.goto(`/apps/${CAPSULE_ID}#phone`, { waitUntil: "domcontentloaded" });
+      const phone = page.getByTestId("app-phone");
+      await expect(phone.getByTestId("app-phone-no-storage"))
+        .toHaveText("This browser can't remember how to open apps, so the default is used each time.");
+      await expect(phone.getByRole("checkbox")).toHaveCount(0);
+      await phone.getByRole("link", { name: "Open in Yurucommu", exact: true }).click();
+      await expect(page.getByTestId("app-primary").locator(".ap-open")).toHaveAttribute("data-open-route", "choose");
       expect(errors).toEqual([]);
     });
   });

@@ -292,7 +292,23 @@ describe("what the page does with the server's view", () => {
       screen("/relative"),
       screen("data:text/html,x"),
       screen("http://apps.example.test/b"),
-    ])).toEqual([{ name: "A", url: "https://apps.example.test/a" }, { url: "http://apps.example.test/b" }]);
+    ])).toEqual([
+      { name: "A", url: "https://apps.example.test/a", interfaceId: "https://apps.example.test/a" },
+      { url: "http://apps.example.test/b", interfaceId: "http://apps.example.test/b" },
+    ]);
+  });
+
+  test("a screen keeps its id and the native clients it declares, for choosing how it opens", () => {
+    const clients = {
+      preferred: "native" as const,
+      android: {
+        verified: true, trustedClientId: "yurucommu-mobile", target: { package: "com.yurucommu", scheme: "yurucommu" },
+        name: "Yurucommu", package: "com.yurucommu", open: "yurucommu://connect?host_url=https%3A%2F%2Fa.example",
+        storeUrl: "https://play.google.com/store/apps/details?id=com.yurucommu",
+      },
+    };
+    expect(openableScreens([{ interfaceId: "if_a", name: "app.launcher", url: "https://a.example/", clients }]))
+      .toEqual([{ url: "https://a.example/", interfaceId: "if_a", clients }]);
   });
 
   test("a refreshed first history page keeps the older pages it still reaches", () => {

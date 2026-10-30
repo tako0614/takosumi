@@ -215,6 +215,15 @@ export function appPrimaryActionLabel(action: CapsuleAppAction): MessageKey | un
   }
 }
 
+/** One screen the page may open, with the native clients it declares. */
+export interface OpenableAppScreen {
+  readonly name?: string;
+  readonly url: string;
+  readonly interfaceId: string;
+  /** The server-verified `clients` (lib/open-routing.ts re-checks them). */
+  readonly clients?: CapsuleAppScreen["clients"];
+}
+
 /**
  * The screens the page may link to: the server already checked each launch
  * URL; the page checks it again like every other link it renders, keeping
@@ -222,10 +231,15 @@ export function appPrimaryActionLabel(action: CapsuleAppAction): MessageKey | un
  */
 export function openableScreens(
   screens: readonly CapsuleAppScreen[],
-): readonly { readonly name?: string; readonly url: string }[] {
+): readonly OpenableAppScreen[] {
   return screens
     .filter((screen) => /^https?:\/\//iu.test(screen.url) && isSafeLinkHref(screen.url))
-    .map((screen) => ({ ...(screen.title ? { name: screen.title } : {}), url: screen.url }));
+    .map((screen) => ({
+      ...(screen.title ? { name: screen.title } : {}),
+      url: screen.url,
+      interfaceId: screen.interfaceId,
+      ...(screen.clients ? { clients: screen.clients } : {}),
+    }));
 }
 
 /** The first problem that decides the primary action (an error, in order). */

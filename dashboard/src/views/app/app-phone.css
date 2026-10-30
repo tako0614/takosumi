@@ -1,5 +1,31 @@
-/* 「スマホで使う」 (AppPhoneSection): QR code beside the URL and its share
-   actions, then both phones' add-to-home-screen steps. Stacks under 640px. */
+/* 「スマホで使う」 (AppPhoneSection). On a phone it is the chooser: the native
+   app, the web with its home-screen steps, the QR code and sharing, and
+   「この端末で覚える」. On a computer: the native apps for reference, the QR
+   code beside the URL and its share actions, then both phones' steps.
+   Stacks under 640px. */
+
+.ap-phone-options { display: grid; gap: var(--tg-s-4); min-width: 0; }
+.ap-phone-option { display: grid; gap: var(--tg-s-2); align-content: start; min-width: 0; }
+.ap-phone-options > * + * { padding-top: var(--tg-s-4); border-top: 1px solid var(--tg-line); }
+.ap-phone-option-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2); margin: 0; font-size: var(--tg-fs-base); }
+.ap-phone-client-name { font-weight: 600; overflow-wrap: anywhere; }
+.ap-phone-subhead { margin: var(--tg-s-2) 0 0; font-size: var(--tg-fs-sm); }
+.ap-phone-missing { margin: 0; padding: var(--tg-s-2) var(--tg-s-3); border: 1px solid var(--tg-warn); border-radius: var(--tg-r-sm); background: var(--tg-bg-subtle); font-size: var(--tg-fs-sm); line-height: 1.6; }
+/* An unverified app's real destination: always on screen, never folded. */
+.ap-phone-unverified { display: grid; gap: var(--tg-s-2); padding: var(--tg-s-3); border: 1px solid var(--tg-warn); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); min-width: 0; }
+.ap-phone-unverified > p { margin: 0; font-size: var(--tg-fs-sm); line-height: 1.6; }
+.ap-phone-target { display: grid; gap: var(--tg-s-1); margin: 0; padding: 0; list-style: none; font-size: var(--tg-fs-sm); min-width: 0; }
+.ap-phone-target code { font-family: var(--tg-font-mono); overflow-wrap: anywhere; }
+.ap-phone-confirm { display: grid; gap: var(--tg-s-2); padding: var(--tg-s-3); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); min-width: 0; }
+.ap-phone-confirm p { margin: 0; }
+.ap-phone-native-list { display: grid; gap: var(--tg-s-3); margin: 0; padding: 0; list-style: none; }
+.ap-phone-native-list > li { display: grid; gap: var(--tg-s-2); min-width: 0; }
+.ap-phone-native-list strong { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2); overflow-wrap: anywhere; }
+.ap-phone-remember { display: grid; gap: var(--tg-s-2); min-width: 0; }
+.ap-phone-check { display: inline-flex; align-items: center; gap: var(--tg-s-2); font-weight: 600; cursor: pointer; }
+.ap-phone-check input { width: 1.125rem; height: 1.125rem; margin: 0; }
+.ap-phone-remembered { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2); margin: 0; font-size: var(--tg-fs-sm); }
+.ap-phone-remembered:empty { display: none; }
 
 .ap-phone { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--tg-s-5); min-width: 0; }
 /* Dark modules on a fixed light ground in both themes: phone cameras read

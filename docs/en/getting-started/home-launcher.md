@@ -118,9 +118,10 @@ name it in `clients`, next to `display` in the `document`. Takosumi reads it so 
 the screen can be handed to that app. Opening the screen on the web always remains possible,
 with or without this declaration.
 
-Today Takosumi checks the declaration and returns it in the app's screen API
-(`screens[].clients` of `GET /api/v1/capsules/{id}/app`). Handing the screen to the native app
-from the dashboard and Takosumi Mobile comes later.
+Takosumi checks the declaration and returns it in the app's screen API
+(`screens[].clients` of `GET /api/v1/capsules/{id}/app`). The dashboard in a phone's browser uses
+it to decide how the screen opens (see [How it opens on a phone](#how-it-opens-on-a-phone)).
+Handing the screen to the native app from Takosumi Mobile comes later.
 
 ```json
 "document": {
@@ -197,6 +198,32 @@ By default Takosumi trusts the three native apps in the TASK-0119 design:
 Operators replace this list by setting `TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS` to a JSON
 array (`[]` trusts none); see [Configuration](../reference/configuration.md).
 
+### How it opens on a phone
+
+On a computer the dashboard keeps opening the screen in a new tab. In a phone's browser, the Home
+tile and **Open** on the app's page decide in this order:
+
+1. The choice remembered on this device (made under **Use on your phone** on the app's page with
+   **Remember on this device** ticked).
+2. The declaration's `preferred: "native"`, only when that OS's native app is verified.
+3. Otherwise the web (the browser).
+
+- Android: the dashboard builds an `intent:` link pinned to the declared `package`. When the app is
+  not installed, Chrome comes back to the chooser on the app's page
+  (`/apps/{id}?open=<screen>&missing=1#phone`). A declaration cannot supply `intent:`.
+- iPhone and iPad: a `universalLink` is a plain link the person taps. With only `open` (a custom
+  scheme), Safari shows an error when the app is missing, so **Open** goes to the chooser until the
+  person picks **Open in {name}** there and remembers it. No Smart App Banner is used.
+- An unverified native app never opens from a single tap. The chooser shows its `target`
+  (package, scheme, link domain) and where its store link goes, and asks for a confirmation each
+  time. It is never remembered.
+- A remembered choice stays in that browser's `localStorage`, per app and screen, and is never sent
+  to the server. A remembered native app is bound to the verified app and destination (package,
+  scheme, link host) it was chosen for; when any of them changes it is not used and the chooser asks
+  again. Where the browser cannot store it, the default is used each time. **Change how it opens**
+  on the app's page leads to choosing again or forgetting the choice, for each screen.
+- The only value handed to the native app is the screen's URL or origin filled into the template.
+
 ### Templates and links
 
 - Each OS needs `open` or `universalLink` (`appLink` on Android), or both. Android also needs
@@ -257,7 +284,8 @@ which Takosumi Mobile uses too.
    URL.
 2. On **Service added**, **Open service** opens the screen in a new tab.
 3. **Your apps** on the home screen shows a tile with the icon and `display.title` (or the
-   service name if there is no title). Clicking it opens the screen in a new tab. Without an icon,
+   service name if there is no title). Clicking it opens the screen in a new tab (on a phone, as
+   in [How it opens on a phone](#how-it-opens-on-a-phone)). Without an icon,
    the tile shows the name's initials. **Manage** under the tile opens the app's page.
 
 If the URL cannot be confirmed within about 30 seconds, the screen says "The service was
