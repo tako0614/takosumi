@@ -593,7 +593,7 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       summary: "List the caller's own and release-owned bindable ProviderConnections, or one app's release-owned projection",
       auth: "account-session",
       queryParameters: [
-        { name: "workspaceId", in: "query", schema: { type: "string" }, description: "Legacy Workspace scope (Workspace owner only)." },
+        { name: "workspaceId", in: "query", schema: { type: "string" }, description: "Legacy Workspace-addressed list, kept for compatibility until Phase 9.3; who may use it is described in the API reference." },
         { name: "capsuleId", in: "query", schema: { type: "string" }, description: "App whose release-owned bindable connections are listed (per-app view); requires projection=release-owned." },
         { name: "projection", in: "query", schema: { type: "string", enum: ["release-owned"] } },
       ],
