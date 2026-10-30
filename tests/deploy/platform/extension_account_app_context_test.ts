@@ -320,7 +320,10 @@ test("a personal access token's app restriction survives introspection; a malfor
   // Up to the stored PAT limit is accepted; only malformed values refuse.
   const many = Array.from({ length: 10_000 }, (_, i) => `cap_${i}`);
   expect((await introspected({ app_ids: many })).appIds).toHaveLength(10_000);
-  for (const appIds of ["cap_one", [1], [""], ["cap bad"], [...many, "cap_extra"]]) {
+  // An id up to the stored length (256) is accepted, longer than other ids.
+  const long = `cap_${"a".repeat(252)}`;
+  expect((await introspected({ app_ids: [long] })).appIds).toEqual([long]);
+  for (const appIds of ["cap_one", [1], [""], ["cap bad"], [`${long}a`], [...many, "cap_extra"]]) {
     expect(await introspected({ app_ids: appIds })).toEqual({ authenticated: false });
   }
 });

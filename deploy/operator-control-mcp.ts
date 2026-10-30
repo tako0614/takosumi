@@ -213,6 +213,13 @@ export interface OperatorControlMcpAuthority {
   readonly appPartitions: (
     capsuleIds: readonly string[],
   ) => Promise<ReadonlyMap<string, string>>;
+  /**
+   * Which listed apps have an ownership record, in one batched read. An app
+   * without one has no owner the MCP can act for, so it is not listed either.
+   */
+  readonly recordedOwnership: (
+    capsuleIds: readonly string[],
+  ) => Promise<ReadonlySet<string>>;
 }
 
 /** A narrowed response the MCP refuses to return (an access decision, not a failure). */
@@ -938,25 +945,31 @@ async function requireInstallNamespace(
 /**
  * A replayed key returns the subject's plan from whichever of its own
  * namespaces holds it, which may be outside a Workspace-bound token's
- * restriction; the MCP does not return such a plan.
+ * restriction; the MCP does not return such a plan. The namespace is re-read
+ * from the internal record by the plan's id, never from the public response
+ * (which stops carrying a Workspace in Phase 9.4).
  */
 async function installPlanInsideRestriction(
   body: unknown,
   authority: OperatorControlMcpAuthority,
 ): Promise<unknown> {
   if (authority.workspaceId === undefined) return body;
-  const plan = record(record(body).installPlan);
-  if (textValue(plan.workspaceId) !== authority.workspaceId) {
+  const planId = textValue(record(record(body).installPlan).id);
+  const plan = planId ? await authority.installPlan(planId) : undefined;
+  if (!plan || plan.workspaceId !== authority.workspaceId) {
     throw new OperatorControlMcpRefusal("the install is outside the MCP token's Workspace");
   }
   return body;
 }
 
 /**
- * Keeps only the apps the MCP's owner owns, inside the token's Workspace. The
- * listing comes from the in-process public handler, whose `role` is the
- * subject's live per-app role; only a Workspace-bound token needs one batched
- * partition read.
+ * Keeps only the apps the MCP's owner owns, inside the token's Workspace, so
+ * the listing and the per-app tools agree. The listing comes from the
+ * in-process public handler, whose `role` is the subject's live per-app role;
+ * that role also covers a Workspace owner's apps without an ownership record
+ * (the rollout fallback), which the tools never act on, so the recorded ones
+ * are kept with one batched read. Only a Workspace-bound token also needs one
+ * batched partition read.
  */
 async function ownAppsOnly(
   body: unknown,
@@ -968,15 +981,20 @@ async function ownAppsOnly(
     const app = record(entry);
     return textValue(app.capsuleId) !== undefined && app.role === "owner";
   });
+  const ids = owned.map((entry: unknown) => textValue(record(entry).capsuleId)!);
   const workspaceId = authority.workspaceId;
-  const partitions = workspaceId === undefined
-    ? undefined
-    : await authority.appPartitions(owned.map((entry: unknown) => textValue(record(entry).capsuleId)!));
+  const [recorded, partitions] = await Promise.all([
+    ids.length > 0 ? authority.recordedOwnership(ids) : new Set<string>(),
+    workspaceId === undefined || ids.length === 0
+      ? undefined
+      : authority.appPartitions(ids),
+  ]);
   return {
-    apps: owned.filter((entry: unknown) =>
-      partitions === undefined ||
-      partitions.get(textValue(record(entry).capsuleId)!) === workspaceId
-    ),
+    apps: owned.filter((entry: unknown) => {
+      const capsuleId = textValue(record(entry).capsuleId)!;
+      return recorded.has(capsuleId) &&
+        (workspaceId === undefined || partitions?.get(capsuleId) === workspaceId);
+    }),
     ...(typeof page.nextCursor === "string" ? { nextCursor: page.nextCursor } : {}),
   };
 }

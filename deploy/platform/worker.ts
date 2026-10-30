@@ -505,6 +505,7 @@ export async function handlePlatformOperatorControlMcpRequest(
       run: async () => undefined,
       installNamespaceId: async () => undefined,
       appPartitions: async () => new Map(),
+      recordedOwnership: async () => new Set(),
     });
   }
   const session = await (
@@ -4583,8 +4584,19 @@ function platformExtensionPatAppIds(
   const raw = record.app_ids;
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw) || raw.length > 10_000) return null;
-  const ids = raw.map((value) => typeof value === "string" ? safePlatformExtensionContextId(value) : undefined);
+  const ids = raw.map((value) => typeof value === "string" ? safePlatformExtensionPatAppId(value) : undefined);
   return ids.every((id): id is string => id !== undefined) ? ids : null;
+}
+
+/**
+ * One PAT app id: the platform id characters, up to the stored PAT app id
+ * length (256), so a stored id longer than other context ids (128) never
+ * refuses its token. Stored ids are app ids checked at creation, which use
+ * only these characters.
+ */
+function safePlatformExtensionPatAppId(value: string): string | undefined {
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9_.:-]{1,256}$/u.test(trimmed) ? trimmed : undefined;
 }
 
 /** The introspected OAuth client id, only in a bounded printable shape. */
