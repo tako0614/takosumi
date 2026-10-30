@@ -824,6 +824,7 @@ function fakeActivationInput(
     applyRun: { id: "run_apply_1", workspaceId: "space_1" },
     capsule: {
       id: "inst_1",
+      workspaceId: "space_1",
       name: "site",
       environment: "production",
       sourceId: "src_1",

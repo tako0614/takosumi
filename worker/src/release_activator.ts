@@ -8,6 +8,7 @@ import type {
 } from "../../core/domains/deploy-control/mod.ts";
 import type { JsonValue } from "takosumi-contract/reference/compat";
 import { redactString } from "takosumi-contract/redaction";
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
 
 const RELEASE_ACTIVATOR_KIND = "takosumi.operator.release-activation@v2";
@@ -227,7 +228,11 @@ export function createRunnerReleaseActivator(
           "runtime secret files are available only to post-apply runner commands",
         );
       }
-      const workspaceId = input.applyRun.workspaceId;
+      // Release commands see this as `TAKOSUMI_WORKSPACE_ID` and in
+      // `TAKOSUMI_RELEASE_CONTEXT_JSON.workspaceId`. Apps may key durable data
+      // on it, so it is the Capsule's frozen derivation scope, not the live
+      // Workspace id of the Apply Run.
+      const workspaceId = capsuleScopeRef(input.capsule);
       const runnerCommands = input.commands.filter(isRunnerExecutableCommand);
       if (runnerCommands.length !== input.commands.length) {
         return {

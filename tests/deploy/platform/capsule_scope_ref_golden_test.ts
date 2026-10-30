@@ -20,6 +20,7 @@ import {
   capsuleScopeRef,
   capsuleWithScopeRef,
   type Capsule,
+  type CapsulePublicOriginReservation,
 } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
@@ -47,6 +48,14 @@ import {
 } from "../../../deploy/platform/platform_extension_provider_credentials.ts";
 import { mergeInstallContextVariables } from "../../../core/domains/deploy-control/validation.ts";
 import { workspaceSlugSuffix } from "../../../core/domains/capsules/repository_install_ux_compiler.ts";
+import { reAdoptionTargetInstallConfigId } from "../../../accounts/service/src/control/install-config-re-adoptions.ts";
+import { configurationTargetInstallConfigId } from "../../../accounts/service/src/control/configuration-plans.ts";
+import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
+import type { ReleaseActivationInput } from "../../../core/domains/deploy-control/mod.ts";
+import { createRunnerReleaseActivator } from "../../../worker/src/release_activator.ts";
+import { releaseBaseEnv } from "../../../runner/lib/backup.ts";
+import { capsulePublicOriginFromPlatformExtensions } from "../../../deploy/platform/platform_extension_provider_credentials.ts";
 
 const NOW = new Date("2026-08-25T12:00:00.000Z");
 const PAIRWISE_SECRET = "pairwise-secret-with-at-least-32-bytes";
@@ -103,6 +112,20 @@ const GOLDEN = {
   installContext: { app_workspace_id: "ws_golden_scope", nested: { capsule: "cap_golden" } },
   slugSuffix: "ws-gol",
   destroyNonce: "f90wSqRZogLL2Op8fwLfX70CbHhVGpUiPFDHLq0Px2o",
+} as const;
+
+/**
+ * Values pinned by the stage 9.0 follow-up, captured from the unmodified code
+ * on origin/main `fcd54776f` (where they still read the Workspace id).
+ */
+const GOLDEN_FOLLOW_UP = {
+  idempotencyKeyHash: "sha256:124f3acc0ed335f07472460d35657546d930795051d594275659afd250b55ea0",
+  reAdoptionTarget: "icfg_b7b331b358e74638",
+  configurationTarget: "icfg_7c4d0d19c1b6687f",
+  storageRoot: "workspaces/ws_golden_scope/capsules/cap_golden",
+  stateRef: "workspaces/ws_golden_scope/capsules/cap_golden/environments/production/state-versions/00000007.tfstate.enc",
+  rawOutputRef: "workspaces/ws_golden_scope/capsules/cap_golden/runs/apply_golden/outputs.raw.json.enc",
+  releaseWorkspaceId: "ws_golden_scope",
 } as const;
 
 interface Variant {
@@ -524,4 +547,193 @@ describe("capsuleScopeRef", () => {
     const frozen = { id: "cap_1", workspaceId: "ws_2", scopeRef: "ws_1" };
     expect(capsuleWithScopeRef(frozen)).toBe(frozen);
   });
+});
+
+/** A Hosted-style route that answers the public-origin question. */
+function publicOriginRoutes(): string {
+  return JSON.stringify([
+    {
+      basePath: "/extensions/hosted/marketplace",
+      handlerKey: "HOSTED",
+      authDelivery: "context",
+      workspaceContext: "query-required",
+      requiredScopes: [],
+      runCredential: { audience: "takosumi-hosted.takoform.v1", requiredScopes: ["takoform.run"] },
+      providerCredentialBroker: {
+        connectionId: "conn_takosumiHostedTakoform01",
+        recipeId: "takosumi-hosted-takoform-run",
+        providerSource: "registry.terraform.io/tako0614/takoform",
+        displayName: "Takosumi Hosted",
+        exchangePath: "/provider-credentials/takoform",
+        publicInputExchangePath: "/public-inputs/http-endpoint",
+        publicInputCapabilities: ["http_endpoint_url"],
+        envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+      },
+    },
+  ]);
+}
+
+interface PublicInputCall {
+  readonly request: {
+    readonly kind: string;
+    readonly publicInputs: {
+      readonly httpEndpointUrl: { readonly clientIdempotencyKey: string; readonly requestedSubdomain: string };
+    };
+  };
+  readonly context: { readonly workspaceId: string };
+}
+
+describe("callers keep the follow-up derived values byte-identical", () => {
+  for (const variant of VARIANTS) {
+    test(`${variant.name}: re-adoption and configuration-plan successor ids`, async () => {
+      const subject = capsule(config(V2, variant), variant);
+      const idempotencyKeyHash = await stableJsonDigest("golden-idempotency-key");
+      expect(idempotencyKeyHash).toBe(GOLDEN_FOLLOW_UP.idempotencyKeyHash);
+      const identity = {
+        scopeRef: capsuleScopeRef(subject),
+        capsuleId: subject.id,
+        actorSubject: "tsub_golden",
+        idempotencyKeyHash,
+      };
+      expect(await reAdoptionTargetInstallConfigId(identity)).toBe(GOLDEN_FOLLOW_UP.reAdoptionTarget);
+      expect(await configurationTargetInstallConfigId(identity)).toBe(GOLDEN_FOLLOW_UP.configurationTarget);
+    });
+
+    test(`${variant.name}: release commands see the frozen scope as their Workspace id`, async () => {
+      const subject = capsule(config(V2, variant), variant);
+      let job: Parameters<NonNullable<Parameters<typeof createRunnerReleaseActivator>[0]["release"]>>[0] | undefined;
+      const activator = createRunnerReleaseActivator({
+        release: async (captured) => {
+          job = captured;
+          return { status: "succeeded", runId: captured.runId, commandCount: captured.commands.length };
+        },
+      });
+      await activator!.activate({
+        planRun: { id: "plan_golden" },
+        // The Apply Run records the authority Workspace, which may have moved.
+        applyRun: { id: "apply_golden", workspaceId: variant.workspaceId },
+        capsule: subject,
+        stateVersion: { id: "sv_golden", generation: 4 },
+        output: { id: "out_golden", stateGeneration: 4, outputDigest: "sha256:outputs" },
+        sourceSnapshot: {
+          id: "snap_golden",
+          resolvedCommit: "abc123",
+          archiveRef: "workspaces/ws_golden_scope/sources/src_golden/snapshots/snap_golden/source.tar.zst",
+          archiveDigest: `sha256:${"a".repeat(64)}`,
+        },
+        nonSensitiveOutputs: {},
+        providerConfigurations: { format: "takosumi.provider-configurations@v1", providers: [] },
+        commands: [{ id: "activate", phase: "post_apply", command: ["true"] }],
+      } as unknown as ReleaseActivationInput);
+      expect(job?.workspaceId).toBe(GOLDEN_FOLLOW_UP.releaseWorkspaceId);
+      // The runner exposes the job scope exactly so (container and local runner
+      // copy it into `activation.workspaceId`).
+      const env = releaseBaseEnv(job!.runId, {
+        commands: [],
+        outputs: {},
+        providerConfigurations: job!.providerConfigurations,
+        activation: {
+          applyRunId: job!.applyRunId,
+          workspaceId: job!.workspaceId,
+          capsuleId: job!.capsuleId,
+          stateVersionId: job!.stateVersionId,
+        },
+      } as never);
+      expect(env.TAKOSUMI_WORKSPACE_ID).toBe(GOLDEN_FOLLOW_UP.releaseWorkspaceId);
+      expect(JSON.parse(env.TAKOSUMI_RELEASE_CONTEXT_JSON!).workspaceId).toBe(GOLDEN_FOLLOW_UP.releaseWorkspaceId);
+    });
+
+    test(`${variant.name}: artifact root and references`, async () => {
+      // A row without a persisted root derives the legacy root from scopeRef.
+      const { store } = await seededStore(variant, undefined);
+      const root = await store.getCapsuleStorageRoot(CAP);
+      expect(root).toBe(GOLDEN_FOLLOW_UP.storageRoot);
+      // Allocation follows the persisted root even when the allocation names
+      // the moved authority Workspace.
+      const allocator = new ObjectKeyArtifactReferenceAllocator();
+      expect(allocator.allocate({
+        kind: "state",
+        workspaceId: variant.workspaceId,
+        subject: { kind: "capsule", id: CAP },
+        environment: "production",
+        generation: 7,
+        storageRoot: root,
+      })).toBe(GOLDEN_FOLLOW_UP.stateRef);
+      expect(allocator.allocate({
+        kind: "raw_output",
+        workspaceId: variant.workspaceId,
+        subject: { kind: "capsule", id: CAP },
+        runId: "apply_golden",
+        storageRoot: root,
+      })).toBe(GOLDEN_FOLLOW_UP.rawOutputRef);
+    });
+
+    test(`${variant.name}: public-origin reserve and release through the port and retirement`, async () => {
+      const cfg = config(V2, variant);
+      const { store, request } = await seededStore(variant, cfg.runtimeBindingMaterialization, cfg.installExperience);
+      const calls: PublicInputCall[] = [];
+      const responses = [
+        {
+          kind: "takosumi.provider-public-input-reservation@v1",
+          publicInputs: { httpEndpointUrl: "https://golden.example.test", reservationRef: "tshpr_golden" },
+        },
+        { kind: "takosumi.provider-public-input-release@v1", status: "released", reservationRef: "tshpr_golden" },
+      ];
+      let held: CapsulePublicOriginReservation | undefined;
+      const port = capsulePublicOriginFromPlatformExtensions(
+        {
+          TAKOSUMI_PLATFORM_EXTENSIONS: publicOriginRoutes(),
+          TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+          HOSTED: {
+            exchangeProviderPublicInput: async (input: unknown) => {
+              calls.push(input as PublicInputCall);
+              return { status: 200, body: JSON.stringify(responses[calls.length - 1]) };
+            },
+          },
+        } as never,
+        { read: async () => held, write: async (_id, reservation) => { held = reservation; } },
+        () => NOW,
+      )!;
+      // Reserve, as Plan asks for the origin.
+      expect(await port.resolve({
+        capsule: capsule(cfg, variant),
+        installConfig: { installExperience: undefined, variableMapping: {} } as never,
+      })).toBe("https://golden.example.test");
+      // Release runs from runtime-input retirement once the Capsule is destroyed.
+      const stored = await store.getCapsule(CAP);
+      expect(stored?.scopeRef).toBe(variant.scopeRef);
+      await store.putCapsule({ ...stored!, status: "destroyed" });
+      const registered = accounts();
+      await createRuntimeInputMaterializer({
+        store,
+        crypto: new PlaceholderSecretBoundaryCrypto(),
+        clock: () => NOW,
+        oidcClient: createTakosumiRuntimeInputOidcClientSource({
+          control: {
+            getCapsule: (id) => store.getCapsule(id),
+            getInstallConfig: (id) => store.getInstallConfig(id),
+            getCapsuleExecutionAuthorityEpoch: async () => 3,
+          },
+          accounts: registered.ledger,
+          issuer: "https://app.takosumi.com",
+          pairwiseSubjectSecret: PAIRWISE_SECRET,
+          derivationKey: DERIVATION_KEY,
+          capsulePublicOrigin: port.resolve,
+          capsulePublicOriginRelease: (authority) => port.release(authority),
+        }),
+      }).retire({ workspaceId: request.workspaceId, capsuleId: CAP, installConfigId: ICFG });
+
+      expect(calls.map((call) => call.request.kind)).toEqual([
+        "takosumi.provider-public-input-reservation-request@v1",
+        "takosumi.provider-public-input-reservation-release@v1",
+      ]);
+      for (const call of calls) {
+        expect(call.request.publicInputs.httpEndpointUrl.clientIdempotencyKey).toBe(GOLDEN.publicOriginKey);
+        expect(call.request.publicInputs.httpEndpointUrl.requestedSubdomain).toBe(GOLDEN.publicOriginLabel);
+        // The host authority context is still the live Workspace (stage 9B).
+        expect(call.context.workspaceId).toBe(variant.workspaceId);
+      }
+      expect(held?.releasedAt).toBeDefined();
+    });
+  }
 });

@@ -42,6 +42,9 @@ fixture verification; it does not authorize a staging or production operation.
 | Public-origin reservation key and requested label | `deploy/platform/platform_extension_provider_credentials.ts` | key and label |
 | Install-context `workspace_id` module variable (apps build storage paths, cookie contexts and MCP keys from it) | `run_engine.ts` | merged variables |
 | `workspace_scoped_capsule_name` suffix on re-adoption | `accounts/service/src/control/install-config-re-adoptions.ts` | suffix |
+| Re-adoption and configuration-plan successor InstallConfig ids (the identity an idempotent retry finds) | `install-config-re-adoptions.ts` `reAdoptionTargetInstallConfigId`, `configuration-plans.ts` `configurationTargetInstallConfigId` | successor ids |
+| `TAKOSUMI_WORKSPACE_ID` and `TAKOSUMI_RELEASE_CONTEXT_JSON.workspaceId` of runner release commands | `worker/src/release_activator.ts` (the container and local runners copy the job's value) | release environment |
+| Legacy artifact root of a Capsule row without a persisted `storage_root` | `getCapsuleStorageRoot` in the memory, Postgres and D1 stores; `worker/src/stored-capsule-root.ts` | root and state/raw-output refs |
 
 The historical JSON key `workspaceId` stays inside every AAD, nonce and digest
 preimage; only its value source changed. Authority checks and owner fences
@@ -49,11 +52,40 @@ preimage; only its value source changed. Authority checks and owner fences
 still read the Workspace id.
 
 `tests/deploy/platform/capsule_scope_ref_golden_test.ts` pins each value as
-produced by the unmodified code on `origin/main` `2545cfefa` and derives it
-again for three Capsules: a pre-9.0 row without scopeRef, a backfilled row, and
-a row whose authority Workspace id has moved while scopeRef stays frozen. All
-three produce byte-identical values, which also proves the derivations follow
-scopeRef rather than the Workspace id.
+produced by the unmodified code (`origin/main` `2545cfefa`, and `fcd54776f` for
+the rows added by the follow-up) and derives it again for three Capsules: a
+pre-9.0 row without scopeRef, a backfilled row, and a row whose authority
+Workspace id has moved while scopeRef stays frozen. All three produce
+byte-identical values, which also proves the derivations follow scopeRef rather
+than the Workspace id.
+
+Leaf tests alone would still pass if a caller went back to the Workspace id, so
+the callers are driven too, each with a Capsule whose scopeRef differs from its
+live Workspace id:
+
+- `tests/core/domains/deploy-control/capsule_scope_ref_run_engine_test.ts`:
+  RunEngine Plan (install-context `workspace_id`, sealed AAD) and destroy Plan
+  (the baked destroy nonce). The plan context type requires the scopeRef
+  whenever it carries run-scoped input authority, so the destroy nonce has no
+  Workspace fallback.
+- `tests/accounts/service/src/capsule_scope_ref_re_adoption_test.ts`: the
+  re-adoption route (successor id, `workspace_scoped_capsule_name`) and the
+  configuration-plan route (successor id).
+- The golden test's caller block: the runner release activator, the store's
+  storage root plus allocation, and the public-origin reservation through the
+  port and its release through runtime-input retirement.
+
+## Artifact root
+
+The persisted `storage_root` is the authority for a Capsule's artifact keys:
+`apps/{cap}` for Capsules created after ownership expansion, or the legacy
+`workspaces/{ws}/capsules/{cap}` the ownership backfill froze. Core allocation
+(`capsuleArtifactRoot`, used for Apply/destroy state, raw output, restore and
+operator state recovery) returns the stored root as is and never rebuilds or
+compares its Workspace segment with a live Workspace id; it only checks that
+the root ends in this Capsule's own segment. A row without a persisted root
+(before the v77 column) derives the legacy root from scopeRef, which is the
+Workspace id it was written under. Objects never move.
 
 ## What does not read scopeRef yet
 
@@ -67,16 +99,20 @@ every Capsule's scopeRef equals its Workspace id; each must move to scopeRef
 | Repository OIDC materialization digest | Plan-to-Apply consistency digest that also binds the authority Workspace; not durable | none (recomputed per Plan) |
 | Interface and InterfaceBinding ids (`capsuleBlueprintRecordId`) | Derived from the Interface's Workspace, which is still its ownership scope | 9.1-g |
 | Private run-file scope, R2 keys and AAD | Keyed by the `workspace_id` column (part of the primary key); production has 0 rows | 9.5/9.6 |
-| Artifact storage keys and `takosumi-workspace-id` object metadata | Legacy roots are frozen in `storage_root`; new backups and sources still allocate `workspaces/...` prefixes | 9.1-f |
-| `TAKOSUMI_WORKSPACE_ID` release environment | Copied from the Apply Run record, which stores the Workspace id | 9.1 (expose scopeRef under that name until 9.7) |
-| `x-takosumi-platform-workspace-id` sent to the host (Hosted derives `tenantRef = HMAC(workspaceId)`) | It is the host's authority context, not only a key; Hosted must move to `legacy_tenant_ref` | 9B |
+| Source archive and backup object keys | Allocated as `workspaces/{ws}/sources/…` and `workspaces/{ws}/backups/…` from the Workspace id at write time; objects already written stay where they are | 9.1-f (allocate new ones under `apps/{cap}`) |
+| Runner Durable Object state prefix, `current.json` pointer and `takosumi-workspace-id` object metadata | The DO rebuilds a legacy Capsule's state prefix from the Run's Workspace id (it reads only an `apps/` root back from the stateRef) and restore requires the metadata to name the key's Workspace. Core allocation already follows `storage_root` | 9.1-f (derive the prefix from the persisted root, write `takosumi-capsule-id` and `takosumi-storage-root`) |
+| Stored-object owner resolution and storage usage (`worker/src/stored-object-owner-resolver.ts`, `worker/src/artifact-storage-usage.ts`) | Attribute an object to the Workspace that wrote it; a `current.json` pointer is matched against the root rebuilt from the StateVersion's Workspace column | 9.1-f |
+| Restore fence Durable Object name (`worker/src/container_runner.ts` `restoreRunnerObjectName`) | Built from the restore job's state-scope Workspace id; the serialized restore job carries no scopeRef. Matters only to a restore in flight while the Workspace id changes | 9.1-f/9.5 (add the scope to the job contract) |
+| Staged state-recovery handle and custody digest (`worker/src/state_recovery_artifact_store.ts`) | The handle encodes the Workspace id and is parsed back into the recovery scope that is checked against the Capsule, so it is authority, not only a key. Handles are short-lived | 9.5 |
+| Public-origin host context `workspaceId` (reserve and release) and `x-takosumi-platform-workspace-id` | Hosted derives the reservation id and the wallet `tenantRef = HMAC(workspaceId)` from it. Sending scopeRef would give a 9.1 Capsule (scopeRef = its own id) a per-app tenant, so it moves with the account billing context; the reservation key and label already read scopeRef | 9B (Hosted moves to `legacy_tenant_ref`) |
 | `tkrn:${workspaceId}:…` managed resource ids | Produced by the host; Takosumi only validates the prefix | 9.7 |
 | Install-time compile of `workspace_scoped_capsule_name` | Runs before the Capsule exists; uses the plan's Workspace id, which becomes the new Capsule's scopeRef in 9.0 | 9.1 (when new Capsules use their own id) |
 
 Stage 9.1 must also make scopeRef write-once at the store level before new
 Capsules get a scopeRef that differs from their Workspace id: today every
 writer preserves it by spreading the stored record, and a dropped value falls
-back to the same Workspace id.
+back to the same Workspace id. Until then the backfill relies on re-runs (see
+below).
 
 ## Backfill
 
@@ -85,8 +121,11 @@ every Capsule row that has none, destroyed rows included. Each write is one
 conditional UPDATE of one row: it applies only while the row still has no
 scopeRef and its column and record still name that Workspace, so a concurrent
 writer is never overwritten and a re-run is a no-op. Rows with a different
-scopeRef are reported (`diverged`) and never changed; rows whose `space_id`
-and record disagree are refused.
+scopeRef are reported (`diverged`) and never changed. Rows the conditional
+write could never apply are refused instead of planned: no Workspace id in the
+record (`record_workspace_missing`), no `space_id` (`workspace_column_missing`),
+or the two disagree (`workspace_column_mismatch`). Resolve each refused row
+before expecting the gate query to reach 0.
 
 The operator module owns the connection, as for the ownership backfill:
 
@@ -113,8 +152,15 @@ bun --no-env-file scripts/backfill-capsule-scope-ref.ts --adapter="$ADAPTER" \
 ```
 
 `--apply` re-plans and refuses if the write set differs from the reviewed
-digest, then reports `frozen`, `skipped` (rows frozen by someone else meanwhile)
-and `remaining` (expected 0). Verify with the gate query:
+digest, then reports `frozen`, `skipped` (rows frozen or moved by someone else
+meanwhile) and `remaining` (expected 0).
+
+Capsule writers replace the whole record from a copy they read earlier. A
+writer that read a row before the backfill froze it and writes after drops the
+fresh value again. Nothing derived moves (reads fall back to the same
+Workspace id), but the row shows up in `remaining` or in the gate query. Run
+the dry-run and apply again until both are 0; each pass touches only rows that
+still lack the value. Verify with the gate query:
 
 ```sql
 select count(*) from capsules where json_type(record_json, '$.scopeRef') is null; -- D1, expect 0

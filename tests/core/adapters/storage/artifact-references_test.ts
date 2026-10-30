@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import {
+  capsuleArtifactRoot,
+  ObjectKeyArtifactReferenceAllocator,
+} from "../../../../core/adapters/storage/artifact-references.ts";
 
 describe("ObjectKeyArtifactReferenceAllocator", () => {
   const allocator = new ObjectKeyArtifactReferenceAllocator();
@@ -77,5 +80,44 @@ describe("ObjectKeyArtifactReferenceAllocator", () => {
     expect(allocator.allocate({ kind: "state", workspaceId: "ws_1", subject: { kind: "resource", id: "res_1" }, environment: "live", generation: 1, storageRoot: "apps/cap_1" }))
       .toBe("workspaces/ws_1/resources/res_1/environments/live/state-versions/00000001.tfstate.enc");
     expect(() => allocator.allocate({ kind: "state", workspaceId: "ws_1", subject: { kind: "capsule", id: "cap_1" }, environment: "live", generation: 1, storageRoot: "apps/other" })).toThrow();
+  });
+
+  test("a persisted legacy root is the authority, whatever the live Workspace id", () => {
+    // Allocation names the moved authority Workspace; the root stays where the
+    // ownership backfill froze it.
+    expect(allocator.allocate({ kind: "state", workspaceId: "ws_after", subject: { kind: "capsule", id: "cap_1" }, environment: "live", generation: 1, storageRoot: "workspaces/ws_before/capsules/cap_1" }))
+      .toBe("workspaces/ws_before/capsules/cap_1/environments/live/state-versions/00000001.tfstate.enc");
+    expect(allocator.allocate({ kind: "raw_output", workspaceId: "ws_after", subject: { kind: "capsule", id: "cap_1" }, runId: "run_1", storageRoot: "workspaces/ws_before/capsules/cap_1" }))
+      .toBe("workspaces/ws_before/capsules/cap_1/runs/run_1/outputs.raw.json.enc");
+  });
+});
+
+describe("capsuleArtifactRoot", () => {
+  test("derives a missing root from the frozen scope and keeps a persisted one", () => {
+    expect(capsuleArtifactRoot("ws_frozen", "cap_1")).toBe("workspaces/ws_frozen/capsules/cap_1");
+    expect(capsuleArtifactRoot("ws/odd", "cap:1")).toBe("workspaces/ws_odd/capsules/cap_1");
+    expect(capsuleArtifactRoot("ws_frozen", "cap_1", "apps/cap_1")).toBe("apps/cap_1");
+    expect(capsuleArtifactRoot("ws_frozen", "cap_1", "workspaces/ws_frozen/capsules/cap_1"))
+      .toBe("workspaces/ws_frozen/capsules/cap_1");
+    expect(capsuleArtifactRoot("ws_frozen", "cap_1", "workspaces/ws_before/capsules/cap_1"))
+      .toBe("workspaces/ws_before/capsules/cap_1");
+  });
+
+  test("a persisted root must still be this Capsule's exact root", () => {
+    for (const root of [
+      "workspaces/ws_before/capsules/cap_2",
+      "apps/cap_2",
+      "workspaces/../capsules/cap_1",
+      "workspaces/./capsules/cap_1",
+      "workspaces//capsules/cap_1",
+      "workspaces/ws_before/capsules/cap_1/extra",
+      "workspaces/ws_before/resources/cap_1",
+      "tenants/ws_before/capsules/cap_1",
+      "",
+    ]) {
+      expect(() => capsuleArtifactRoot("ws_frozen", "cap_1", root), root).toThrow("not canonical");
+    }
+    // An `apps/` root is only valid for an id that is already a key segment.
+    expect(() => capsuleArtifactRoot("ws_frozen", "cap:1", "apps/cap_1")).toThrow("not canonical");
   });
 });

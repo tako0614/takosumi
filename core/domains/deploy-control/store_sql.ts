@@ -122,7 +122,7 @@ function pgConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
 }
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import { capsuleWithScopeRef } from "takosumi-contract/capsules";
+import { capsuleScopeRef, capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   AccountWorkspaceListParams,
   AccountWorkspacePage,
@@ -8012,11 +8012,21 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async getCapsuleStorageRoot(capsuleId: string): Promise<string | undefined> {
     const result = await this.#client.query<{
       readonly workspace_id: string;
+      readonly scope_ref: string | null;
       readonly storage_root: string | null;
-    }>(`select space_id as workspace_id, storage_root from takosumi_capsules where id=$1`, [capsuleId]);
+    }>(
+      `select space_id as workspace_id, installation_json->>'scopeRef' as scope_ref, storage_root
+         from takosumi_capsules where id=$1`,
+      [capsuleId],
+    );
     const row = result.rows[0];
     if (!row) return undefined;
-    return row.storage_root ?? `workspaces/${row.workspace_id}/capsules/${capsuleId}`;
+    // The legacy root of a row without a persisted one was written under the
+    // Capsule's frozen scope, never its live Workspace id.
+    return row.storage_root ?? `workspaces/${capsuleScopeRef({
+      workspaceId: row.workspace_id,
+      ...(row.scope_ref === null ? {} : { scopeRef: row.scope_ref }),
+    })}/capsules/${capsuleId}`;
   }
 
   async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {

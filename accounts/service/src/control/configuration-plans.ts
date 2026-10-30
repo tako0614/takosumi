@@ -4,6 +4,7 @@ import type {
   JsonValue,
 } from "takosumi-contract";
 import {
+  capsuleScopeRef,
   type CapsuleCompatibilityReportResponse,
   normalizeCompatibilityReportModulePath,
 } from "takosumi-contract/capsules";
@@ -123,7 +124,7 @@ export async function handleCapsuleConfigurationPlans(
     ...request,
   });
   const targetInstallConfigId = await configurationTargetInstallConfigId({
-    workspaceId: capsule.workspaceId,
+    scopeRef: capsuleScopeRef(capsule),
     capsuleId: capsule.id,
     actorSubject,
     idempotencyKeyHash,
@@ -1704,15 +1705,24 @@ async function installConfigIfPresent(
   }
 }
 
-async function configurationTargetInstallConfigId(input: {
-  readonly workspaceId: string;
+/**
+ * Deterministic id of the configuration-plan successor for one idempotency
+ * key. The scope slot holds the Capsule's frozen `scopeRef` under the
+ * historical `workspaceId` key, so a retry finds the same successor after
+ * Workspace is removed.
+ */
+export async function configurationTargetInstallConfigId(input: {
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly actorSubject: string;
   readonly idempotencyKeyHash: string;
 }): Promise<string> {
   const digest = await stableJsonDigest({
     kind: "capsule_configuration_plan_v1",
-    ...input,
+    workspaceId: input.scopeRef,
+    capsuleId: input.capsuleId,
+    actorSubject: input.actorSubject,
+    idempotencyKeyHash: input.idempotencyKeyHash,
   });
   return `icfg_${digestSuffix(digest)}`;
 }

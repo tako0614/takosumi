@@ -93,7 +93,7 @@ import type {
   CapsuleUninstall,
   CapsuleUninstallRestorableStatus,
 } from "takosumi-contract/capsules";
-import { capsuleWithScopeRef } from "takosumi-contract/capsules";
+import { capsuleScopeRef, capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   Source,
   SourceSnapshot,
@@ -4099,7 +4099,11 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]>;
   /** Exact persisted JSON snapshot; physical ownership metadata is read separately. */
   getCapsule(id: string): Promise<Capsule | undefined>;
-  /** Persisted artifact allocation root, with the legacy root before ownership expansion. */
+  /**
+   * Persisted artifact allocation root (`storage_root`). A row without one
+   * (before ownership expansion) returns the legacy root built from the
+   * Capsule's frozen `scopeRef`, never from its live Workspace id.
+   */
   getCapsuleStorageRoot(id: string): Promise<string | undefined>;
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]>;
   getCapsuleByName(
@@ -6787,8 +6791,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   getCapsuleStorageRoot(id: string): Promise<string | undefined> {
     const capsule = this.#capsules.get(id);
+    // Without a persisted root the legacy root is the one written under the
+    // Capsule's frozen scope, never the live Workspace id.
     return Promise.resolve(capsule ? this.#capsuleOwnership.get(id)?.storageRoot ??
-      `workspaces/${capsule.workspaceId}/capsules/${capsule.id}` : undefined);
+      `workspaces/${capsuleScopeRef(capsule)}/capsules/${capsule.id}` : undefined);
   }
 
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
