@@ -346,14 +346,22 @@ function connectionAllowed(
   return true;
 }
 
+/**
+ * A Workspace-scoped connection is offered only to the person who will own
+ * the app (TASK-0118 P9.1-d): it is its owner's connection, and binding
+ * accepts only the app owner's connections. A legacy row without an owner
+ * belongs to the owner of the Workspace it records.
+ */
 function isOfferableConnection(
   connection: ProviderConnection,
-  workspaceId: string,
+  workspace: { readonly id: string; readonly ownerUserId: string },
+  appOwnerAccountId: string,
 ): boolean {
   return isWorkspaceBindableOperatorConnection(connection) ||
     (connection.scope === "workspace" &&
       connection.status === "verified" &&
-      connection.workspaceId === workspaceId);
+      connection.workspaceId === workspace.id &&
+      (connection.ownerAccountId ?? workspace.ownerUserId) === appOwnerAccountId);
 }
 
 function sameRequirement(
@@ -381,10 +389,13 @@ export async function connectionRequirements(
   ]);
   const policy = mergedProviderPolicy(workspace.policy, facts.providerPolicy);
   const explicit = plan.options.providerBindings ?? [];
+  // The account the committed app will be owned by: the namespace's owner.
+  const appOwnerAccountId = workspace.ownerUserId;
   return facts.requirements.map((requirement) => {
     const candidates: GitInstallPlanConnectionCandidate[] = connections
       .filter((connection) =>
-        isOfferableConnection(connection, plan.workspaceId) &&
+        workspace.id === plan.workspaceId &&
+        isOfferableConnection(connection, workspace, appOwnerAccountId) &&
         sameProviderSource(requirement.provider, connection.providerSource) &&
         connectionAllowed(connection, policy)
       )

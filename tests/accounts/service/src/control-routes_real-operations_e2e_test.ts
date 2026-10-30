@@ -467,16 +467,22 @@ async function createConnectionItemFixture(suffix: string) {
   };
 }
 
+/**
+ * Drains and resumes the Workspace right after the route captured its
+ * management tuple, i.e. while the request is still authorizing. The route
+ * must keep using the captured tuple (TASK-0118 P9.1-d made the connection
+ * owner the authority, so authorization no longer reads the Workspace).
+ */
 async function drainAndResumeDuringWorkspaceAuthorization(input: {
   readonly fixture: Awaited<ReturnType<typeof createConnectionItemFixture>>;
 }): Promise<() => void> {
   const { fixture } = input;
-  const originalGetWorkspace = fixture.operations.workspaces.getWorkspace.bind(
+  const originalCapture = fixture.operations.workspaces.captureManagementAuthority.bind(
     fixture.operations.workspaces,
   );
   let interleaved = false;
-  fixture.operations.workspaces.getWorkspace = async (workspaceId) => {
-    const workspace = await originalGetWorkspace(workspaceId);
+  fixture.operations.workspaces.captureManagementAuthority = async (workspaceId) => {
+    const captured = await originalCapture(workspaceId);
     if (!interleaved && workspaceId === fixture.workspaceId) {
       interleaved = true;
       const active = await fixture.deployStore.getWorkspaceManagement(
@@ -501,10 +507,10 @@ async function drainAndResumeDuringWorkspaceAuthorization(input: {
         .run();
       expect(resumed.meta?.changes).toBe(1);
     }
-    return workspace;
+    return captured;
   };
   return () => {
-    fixture.operations.workspaces.getWorkspace = originalGetWorkspace;
+    fixture.operations.workspaces.captureManagementAuthority = originalCapture;
   };
 }
 
@@ -579,12 +585,22 @@ test("account connection item test and revoke succeed for an active Workspace", 
 test("account Connection writes reject Workspace admins before any D1 mutation batch", async () => {
   for (const operation of ["register", "test", "revoke"] as const) {
     const fixture = await createConnectionItemFixture(`actor-revocation-${operation}`);
-    if (operation === "register") await fixture.operations.revokeConnection(fixture.connectionId, undefined, null);
-    const originalConnection = await fixture.deployStore.getConnection(fixture.connectionId);
-    const originalBlob = await fixture.deployStore.getSecretBlob(fixture.connectionId);
+    await fixture.operations.revokeConnection(fixture.connectionId, undefined, null);
     const workspace = await fixture.deployStore.getWorkspace(fixture.workspaceId);
     if (!workspace) throw new Error("fixture Workspace is missing");
     await fixture.deployStore.putWorkspace({ ...workspace, ownerUserId: "namespace_owner" });
+    // The connection is the namespace owner's (TASK-0118 P9.1-d: the
+    // connection owner, not the Workspace, decides test and revoke).
+    if (operation !== "register") {
+      await fixture.operations.createConnection({
+        workspaceId: fixture.workspaceId, provider: "registry.opentofu.org/vercel/vercel",
+        credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials" },
+        scope: "workspace", displayName: "Account Connection Item", values: { VERCEL_API_TOKEN: "connection-item-token" },
+      }, { workspaceId: fixture.workspaceId, managementState: "active", managementEpoch: 1 }, null);
+      expect((await fixture.deployStore.getConnection(fixture.connectionId))?.ownerAccountId).toBe("namespace_owner");
+    }
+    const originalConnection = await fixture.deployStore.getConnection(fixture.connectionId);
+    const originalBlob = await fixture.deployStore.getSecretBlob(fixture.connectionId);
     const member = {
       id: "member_connection_actor", workspaceId: fixture.workspaceId, accountId: "user_test",
       roles: ["admin"] as const, status: "active" as const,
@@ -614,7 +630,7 @@ test("account Connection writes reject Workspace admins before any D1 mutation b
     } finally {
       fixture.database.batch = originalBatch;
     }
-    expect(batchCalls).toBe(0);
+    expect(batchCalls, operation).toBe(0);
     expect(response?.status).toBe(operation === "register" ? 403 : 404);
     expect(await response?.json()).toMatchObject({ error: {
       code: operation === "register" ? "app_owner_only" : "connection_not_found",
@@ -772,7 +788,11 @@ test("account public generic-env registration retains the original Workspace aut
   });
 });
 
-test("account OAuth registration retains the original Workspace authority across token exchange and resume", async () => {
+// TASK-0118 P9.1-d: OAuth states carry no Workspace. A legacy start that names
+// a Workspace asks for a Workspace-scoped connection, which is recorded in the
+// initiator's own namespace (never the named Workspace) under that namespace's
+// management fence as it is when the callback writes.
+test("account OAuth state carries no Workspace and a Workspace-scoped connection lands in the initiator's namespace", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const database = new SqliteFakeD1();
@@ -863,9 +883,20 @@ test("account OAuth registration retains the original Workspace authority across
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
   });
 
+  // Someone else's Workspace, named by the legacy request; never read or used.
+  const namedWorkspaceId = "ws_account_oauth_named_elsewhere";
+  await deployStore.putWorkspace({
+    id: namedWorkspaceId,
+    handle: "account-oauth-named-elsewhere",
+    displayName: "Named elsewhere",
+    type: "organization",
+    ownerUserId: "someone_else",
+    createdAt: "2026-09-10T00:00:00.000Z",
+    updatedAt: "2026-09-10T00:00:00.000Z",
+  });
   const startRequest = request("POST", "/api/v1/connections/oauth/fixture/start", {
     cookie,
-    body: { workspaceId, displayName: "Account OAuth Epoch" },
+    body: { workspaceId: namedWorkspaceId, displayName: "Account OAuth Epoch" },
   });
   const startedResponse = await handleControlRoute({
     request: startRequest.request,
@@ -876,6 +907,11 @@ test("account OAuth registration retains the original Workspace authority across
   expect(startedResponse?.status).toBe(200);
   const started = (await startedResponse?.json()) as { readonly state: string };
   expect(started.state).toContain(".");
+  const signed = JSON.parse(Buffer.from(started.state.split(".")[0]!, "base64url").toString("utf8"));
+  expect(signed.body).toMatchObject({ scope: "workspace", ownerAccountId: "user_test", subject: "user_test" });
+  expect(signed.body.workspaceId).toBeUndefined();
+  expect(signed.expectedWorkspaceManagementAuthority).toBeUndefined();
+  expect(JSON.stringify(signed)).not.toContain("ws_");
 
   const callbackRequest = request(
     "GET",
@@ -888,12 +924,13 @@ test("account OAuth registration retains the original Workspace authority across
     operations,
   });
   expect(callbackResponse?.status).toBe(303);
-  expect(callbackResponse?.headers.get("location")).toContain(
-    "connection_error=oauth_failed",
-  );
+  expect(callbackResponse?.headers.get("location")).toContain("connected=1");
   expect(exchangeCalls).toBe(1);
-  expect(await deployStore.listConnections(workspaceId)).toEqual([]);
-  expect(await deployStore.getSecretBlob(connectionId)).toBeUndefined();
+  expect(await deployStore.listConnections(namedWorkspaceId)).toEqual([]);
+  expect(await deployStore.getConnection(connectionId)).toMatchObject({
+    workspaceId, scope: "workspace", ownerAccountId: "user_test",
+  });
+  expect(await deployStore.getSecretBlob(connectionId)).toBeDefined();
   expect(await deployStore.getWorkspaceManagement(workspaceId)).toEqual({
     workspaceId,
     managementState: "active",
