@@ -136,6 +136,8 @@ export async function handleWorkspaceInstallPlans(
   ctx: ControlDispatchContext,
   workspaceId: string,
   method: string,
+  /** The delegate app whose own token creates the plan for its user (POST /install-plans only). */
+  delegateCapsuleId?: string,
 ): Promise<Response> {
   if (method === "GET") return await listOpenInstallAttempts(ctx, workspaceId);
   if (method !== "POST") return methodNotAllowed("GET, POST");
@@ -209,6 +211,7 @@ export async function handleWorkspaceInstallPlans(
       workspaceId,
       createdBy: ctx.session.subject,
       actorSubject: ctx.session.subject,
+      ...(delegateCapsuleId ? { delegateCapsuleId } : {}),
       idempotencyKeyHash,
       workspaceManagementAuthority: expectedWorkspaceManagementAuthority,
       requestDigest,
@@ -286,6 +289,7 @@ export async function handleWorkspaceInstallPlans(
     workspaceId,
     createdBy: ctx.session.subject,
     actorSubject: ctx.session.subject,
+    ...(delegateCapsuleId ? { delegateCapsuleId } : {}),
     idempotencyKeyHash,
     workspaceManagementAuthority: expectedWorkspaceManagementAuthority,
     requestDigest,
@@ -403,7 +407,11 @@ export async function handleInstallPlans(
       delegated ? { subject: ctx.session.subject } : ctx.session,
     );
     if (!namespace) return errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
-    return await handleWorkspaceInstallPlans(ctx, namespace.id, method);
+    // A delegated install records which delegate created it; the delegate
+    // reaches only apps it created this way (TASK-0118 P9.1-b).
+    return await handleWorkspaceInstallPlans(
+      ctx, namespace.id, method, delegated ? ctx.session.appIds![0] : undefined,
+    );
   }
   if (segments[0] !== "install-plans" || segments.length < 2) {
     return undefined;
@@ -454,8 +462,9 @@ export async function handleInstallPlans(
 }
 
 /**
- * A designated delegate token (Takos) and the attempt it started for its user:
- * the plan has no Capsule yet, the token's user created it and is its actor,
+ * A designated delegate token (Takos) and the attempt that same delegate
+ * started for its user: the plan has no Capsule yet, it records this token's
+ * delegate app as its creator, the token's user created it and is its actor,
  * and it lives in a Workspace that user owns (the namespace POST
  * /install-plans fills), so committing it makes an app owned by that user.
  * Anything else keeps the ordinary decision.
@@ -466,7 +475,8 @@ async function delegateContinuesOwnAttempt(
 ): Promise<boolean> {
   const session = ctx.session;
   if (!isInstalledAppToken(session) || plan.createdBy !== session.subject ||
-    plan.actorSubject !== session.subject) return false;
+    plan.actorSubject !== session.subject || session.appIds.length !== 1 ||
+    plan.delegateCapsuleId !== session.appIds[0]) return false;
   if (!(await installedAppTokenDelegates(ctx.operations, session))) return false;
   ctx.assertActive?.();
   try {
@@ -2442,6 +2452,7 @@ async function createCapsule(
       environment: plan.capsule.environment,
       sourceId: source.id,
       installingPrincipalId: plan.createdBy,
+      ...(plan.delegateCapsuleId ? { delegateCapsuleId: plan.delegateCapsuleId } : {}),
       expectedWorkspaceManagementAuthority: plan.workspaceManagementAuthority,
       installConfig,
       providerBindingSetId: deterministicInitialBindingSetId(plan.id),

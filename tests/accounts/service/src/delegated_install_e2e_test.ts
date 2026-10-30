@@ -1,10 +1,12 @@
 /**
  * TASK-0118 P9.1-b: an operator-designated delegate app (Takos) installs an
- * app for its user through the Workspace-less `POST /api/v1/install-plans`,
- * and the new app is owned by that user. Coordinator, Source, Capsule,
- * ownership and ledger operations use their production implementations on
- * each backend; only the delegate app's own deployed revision (Source, applied
- * revision, snapshot ref) is fixed, because delegation reads it.
+ * app for its OWNER through the Workspace-less `POST /api/v1/install-plans`.
+ * The new app is owned by that user and privately records which delegate
+ * installed it; the delegate reaches beyond its legacy Workspace limits only
+ * on apps it installed itself. Coordinator, Source, Capsule, ownership and
+ * ledger operations use their production implementations on each backend;
+ * only the delegate apps' own deployed revisions are fixed, because
+ * delegation reads them.
  */
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 
@@ -39,11 +41,13 @@ setDefaultTimeout(120_000);
 
 const OPERATOR = "user_takos_operator";
 const USER = "user_delegated_installer";
+const MEMBER = "user_takos_member";
 const STRANGER = "user_no_takos_role";
+/** The user's Takos (owned by USER), a second Takos of the same user, and another account's Takos. */
 const TAKOS = "cap_takos_delegate";
+const TAKOS_TWO = "cap_takos_second";
+const OTHERS_TAKOS = "cap_takos_of_operator";
 const THIRD_PARTY = "cap_third_party_app";
-const TAKOS_SOURCE = "src_takos_delegate";
-const TAKOS_SNAPSHOT = "snap_takos_delegate";
 const DELEGATE_SOURCE: InstalledAppDelegationSource = {
   url: "https://git.example.test/first-party/takos", path: ".", refs: ["refs/heads/main"],
 };
@@ -114,8 +118,9 @@ async function compose(backend: Backend) {
       interfaceStores: createD1InterfaceStores(db),
     })).operations as unknown as ControlPlaneOperations;
   }
-  // Takos lives in its operator's Workspace; the installing user is only a
-  // member of the Takos app, with no Workspace of their own yet.
+  // The Takos apps live in their operator's Workspace. USER owns two of them
+  // (and the third-party app); OPERATOR owns the third; MEMBER is only a
+  // member of USER's first Takos. USER has no Workspace of their own yet.
   const takosWorkspace = await core.workspaces.createWorkspace!({
     handle: `takos-operator-${backend}`,
     displayName: "Takos operator",
@@ -123,7 +128,8 @@ async function compose(backend: Backend) {
     ownerUserId: OPERATOR,
   });
   const at = new Date().toISOString();
-  for (const id of [TAKOS, THIRD_PARTY]) {
+  const owners = new Map([[TAKOS, USER], [TAKOS_TWO, USER], [OTHERS_TAKOS, OPERATOR], [THIRD_PARTY, USER]]);
+  for (const [id, owner] of owners) {
     const capsule: Capsule = {
       id,
       workspaceId: takosWorkspace.id,
@@ -131,9 +137,9 @@ async function compose(backend: Backend) {
       name: id.replaceAll("_", "-"),
       slug: id.replaceAll("_", "-"),
       environment: "production",
-      sourceId: id === TAKOS ? TAKOS_SOURCE : `src_${id}`,
+      sourceId: `src_${id}`,
       installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-      installingPrincipalId: OPERATOR,
+      installingPrincipalId: owner,
       currentStateGeneration: 1,
       status: "active",
       createdAt: at,
@@ -141,19 +147,19 @@ async function compose(backend: Backend) {
     };
     await deployStore.putCapsule(capsule);
     expect(await core.appOwnership!.initializeOwnershipIfMissing({
-      capsuleId: id, ownerAccountId: OPERATOR, ownershipEpoch: 0, managementState: "active",
+      capsuleId: id, ownerAccountId: owner, ownershipEpoch: 0, managementState: "active",
       managementEpoch: 0, storageRoot: `apps/${id}`,
     })).toBe(true);
-    expect(await core.appOwnership!.putMember({ capsuleId: id, accountId: USER, status: "active", createdAt: at, updatedAt: at }))
-      .toBe(true);
   }
-  // The two existing apps' deployed revisions: each has its own Source and an
-  // applied snapshot the runner resolved to `refs/heads/main`. Only Takos's
-  // Source is a designated delegate repository.
-  const deployed = new Map([
-    [TAKOS, { sourceId: TAKOS_SOURCE, snapshotId: TAKOS_SNAPSHOT, url: DELEGATE_SOURCE.url }],
-    [THIRD_PARTY, { sourceId: `src_${THIRD_PARTY}`, snapshotId: `snap_${THIRD_PARTY}`, url: "https://git.example.test/someone/app" }],
-  ]);
+  expect(await core.appOwnership!.putMember({ capsuleId: TAKOS, accountId: MEMBER, status: "active", createdAt: at, updatedAt: at }))
+    .toBe(true);
+  // Each app's deployed revision: its own Source and an applied snapshot the
+  // runner resolved to `refs/heads/main`. Only the Takos Sources are a
+  // designated delegate repository.
+  const deployed = new Map([...owners.keys()].map((id) => [id, {
+    sourceId: `src_${id}`, snapshotId: `snap_${id}`,
+    url: id === THIRD_PARTY ? "https://git.example.test/someone/app" : DELEGATE_SOURCE.url,
+  }]));
   const deployedBy = <K extends "sourceId" | "snapshotId">(key: K, value: string) =>
     [...deployed.entries()].find(([, revision]) => revision[key] === value);
   const getSource = core.getSource.bind(core);
@@ -188,7 +194,7 @@ async function compose(backend: Backend) {
 
   const accounts = new InMemoryAccountsStore();
   const now = Date.now();
-  for (const subject of [OPERATOR, USER, STRANGER]) {
+  for (const subject of [OPERATOR, USER, MEMBER, STRANGER]) {
     accounts.saveAccount({ subject, email: `${subject}@example.test`, displayName: subject, createdAt: now, updatedAt: now });
   }
   /** An installed app's own OAuth token for `subject`; `workspaceId` only when the live grant bound one. */
@@ -236,20 +242,20 @@ const ATTEMPT = {
 } as const;
 
 /** Runs a delegated attempt to its first Plan; returns the plan record. */
-async function installThroughDelegate(fixture: Fixture, token: string, key: string) {
-  const created = await fixture.route(token, "POST", "/api/v1/install-plans", ATTEMPT, key);
+async function installThroughDelegate(fixture: Fixture, token: string, key: string, name = "delegated-example") {
+  const created = await fixture.route(token, "POST", "/api/v1/install-plans", { ...ATTEMPT, capsule: { name } }, key);
   expect(created.status).toBe(201);
   // deno-lint-ignore no-explicit-any
   let plan: any = (await created.json()).installPlan;
   expect(plan).toMatchObject({ mode: "attempt", createdBy: USER });
+  expect(plan.delegateCapsuleId).toBeUndefined();
   for (let step = 0; step < 8 && plan.phase !== "awaiting_input"; step += 1) {
     const advanced = await fixture.route(token, "POST", `/api/v1/install-plans/${plan.id}/reconcile`);
     expect(advanced.status).toBe(200);
     plan = (await advanced.json()).installPlan;
   }
   expect(plan.phase).toBe("awaiting_input");
-  const read = await fixture.route(token, "GET", `/api/v1/install-plans/${plan.id}`);
-  expect(read.status).toBe(200);
+  expect((await fixture.route(token, "GET", `/api/v1/install-plans/${plan.id}`)).status).toBe(200);
   const confirmed = await fixture.route(token, "PATCH", `/api/v1/install-plans/${plan.id}`, {
     expectedGeneration: plan.generation,
     continue: true,
@@ -267,76 +273,96 @@ async function installThroughDelegate(fixture: Fixture, token: string, key: stri
 }
 
 for (const backend of BACKENDS) {
-  test(`[${backend}] a delegate token installs an app owned by its user without any Workspace route`, async () => {
+  test(`[${backend}] the delegate owner's token installs an app owned by the user, marked with that delegate, without any Workspace route`, async () => {
     const fixture = await compose(backend);
-    // The user holds no Workspace membership: the live grant bound no Workspace.
     const token = fixture.appToken(TAKOS, USER);
     const plan = await installThroughDelegate(fixture, token, "delegated-install");
+    expect((await fixture.core.gitInstallPlans.get(plan.id))?.delegateCapsuleId).toBe(TAKOS);
 
     const capsule = await fixture.core.capsules.getCapsule(plan.capsuleId);
-    expect(capsule).toMatchObject({ installingPrincipalId: USER, workspaceId: plan.workspaceId });
+    expect(capsule).toMatchObject({ installingPrincipalId: USER, workspaceId: plan.workspaceId, delegateCapsuleId: TAKOS });
     expect((await fixture.core.appOwnership!.getOwnership(capsule.id))?.ownerAccountId).toBe(USER);
-    // The retained Workspace column is the user's own namespace, not Takos's.
     expect(plan.workspaceId).not.toBe(fixture.takosWorkspace.id);
     expect((await fixture.core.workspaces.getWorkspace(plan.workspaceId)).ownerUserId).toBe(USER);
     expect(fixture.paths.every((path) => path.startsWith("/api/v1/install-plans"))).toBe(true);
 
-    // The installed app is the user's: the delegate keeps managing it under the
-    // user's owner role, while the user's namespace stays closed to the token.
+    // The delegate manages the app it installed under the user's owner role;
+    // the mark is never projected.
+    const read = await fixture.route(token, "GET", `/api/v1/capsules/${capsule.id}`);
+    expect(read.status).toBe(200);
+    expect(await read.text()).not.toContain("delegateCapsuleId");
     expect((await fixture.route(token, "GET", `/api/v1/install-plans/${plan.id}`)).status).toBe(200);
-    expect((await fixture.route(token, "GET", `/api/v1/capsules/${capsule.id}`)).status).toBe(200);
     expect((await fixture.route(token, "GET", `/api/v1/workspaces/${plan.workspaceId}/capsules`)).status).toBe(403);
   });
 
-  test(`[${backend}] a delegate token still bound to the delegate's Workspace installs for its user too`, async () => {
+  test(`[${backend}] the delegate cannot reach the user's other apps or apps another delegate installed`, async () => {
     const fixture = await compose(backend);
-    // A legacy token: the user is also a member of Takos's Workspace, so the
-    // live grant bound that Workspace. It fences only Workspace routes.
+    const token = fixture.appToken(TAKOS, USER);
+    // The user's own app that this delegate did not install.
+    expect((await fixture.route(token, "GET", `/api/v1/capsules/${THIRD_PARTY}`)).status).toBe(403);
+    expect((await fixture.route(token, "POST", `/api/v1/capsules/${THIRD_PARTY}/destroy-plan`, {})).status).toBe(403);
+    // An app the user installed through their other Takos.
+    const viaSecond = await installThroughDelegate(fixture, fixture.appToken(TAKOS_TWO, USER), "via-second", "via-second");
+    expect((await fixture.core.capsules.getCapsule(viaSecond.capsuleId)).delegateCapsuleId).toBe(TAKOS_TWO);
+    expect((await fixture.route(token, "GET", `/api/v1/capsules/${viaSecond.capsuleId}`)).status).toBe(403);
+    expect((await fixture.route(token, "GET", `/api/v1/install-plans/${viaSecond.id}`)).status).toBe(403);
+    expect((await fixture.route(fixture.appToken(TAKOS_TWO, USER), "GET", `/api/v1/capsules/${viaSecond.capsuleId}`)).status).toBe(200);
+  });
+
+  test(`[${backend}] unmarked apps keep the legacy delegate rule: Workspace restriction and membership`, async () => {
+    const fixture = await compose(backend);
+    // A token the live grant bound to the Takos Workspace, for a user who is a
+    // member of that Workspace: the legacy delegation over that Workspace.
     const joinedAt = new Date().toISOString();
     await fixture.deployStore.putWorkspaceMember({
-      id: `wsm_${backend}_user`, workspaceId: fixture.takosWorkspace.id, accountId: USER, roles: ["member"],
+      id: `wsm_${backend}_user`, workspaceId: fixture.takosWorkspace.id, accountId: USER, roles: ["admin"],
       status: "active", createdAt: joinedAt, updatedAt: joinedAt,
     });
-    const token = fixture.appToken(TAKOS, USER, fixture.takosWorkspace.id);
-    const plan = await installThroughDelegate(fixture, token, "delegated-install-bound");
+    const bound = fixture.appToken(TAKOS, USER, fixture.takosWorkspace.id);
+    expect((await fixture.route(bound, "GET", `/api/v1/capsules/${THIRD_PARTY}`)).status).toBe(200);
+    // Without that Workspace binding the same user's same app is out of reach.
+    expect((await fixture.route(fixture.appToken(TAKOS, USER), "GET", `/api/v1/capsules/${THIRD_PARTY}`)).status).toBe(403);
+    // The bound token still installs for its user, and the new app is marked.
+    const plan = await installThroughDelegate(fixture, bound, "delegated-install-bound");
     expect(plan.workspaceId).not.toBe(fixture.takosWorkspace.id);
-    expect((await fixture.core.appOwnership!.getOwnership(plan.capsuleId))?.ownerAccountId).toBe(USER);
-    expect((await fixture.route(token, "GET", `/api/v1/capsules/${plan.capsuleId}`)).status).toBe(200);
+    expect((await fixture.core.capsules.getCapsule(plan.capsuleId)).delegateCapsuleId).toBe(TAKOS);
+    expect((await fixture.route(bound, "GET", `/api/v1/capsules/${plan.capsuleId}`)).status).toBe(200);
   });
 
-  test(`[${backend}] tokens that are not a delegate for their user stay refused`, async () => {
+  test(`[${backend}] only the delegate app's owner delegates: member, stranger and non-delegate tokens get nothing`, async () => {
     const fixture = await compose(backend);
-    // An ordinary installed app's own token.
-    const thirdParty = await fixture.route(fixture.appToken(THIRD_PARTY, USER), "POST", "/api/v1/install-plans", ATTEMPT, "third-party");
-    expect(thirdParty.status).toBe(403);
-    // A designated delegate, but its user holds no role on that delegate app.
-    const stranger = await fixture.route(fixture.appToken(TAKOS, STRANGER), "POST", "/api/v1/install-plans", ATTEMPT, "stranger");
-    expect(stranger.status).toBe(403);
-    // A user removed from the delegate app loses delegation at once.
-    const token = fixture.appToken(TAKOS, USER);
-    expect(await fixture.core.appOwnership!.deleteMember(TAKOS, USER)).toBe(true);
-    const removed = await fixture.route(token, "POST", "/api/v1/install-plans", ATTEMPT, "removed");
-    expect(removed.status).toBe(403);
-    // No plan and no namespace were created for any refused request.
-    expect(await fixture.core.workspaces.listWorkspacesByOwner(USER)).toEqual([]);
+    const owned = await installThroughDelegate(fixture, fixture.appToken(TAKOS, USER), "owner-install");
+    // A member of the user's Takos (added without consent) delegates nothing.
+    const member = fixture.appToken(TAKOS, MEMBER);
+    expect((await fixture.route(member, "POST", "/api/v1/install-plans", ATTEMPT, "member")).status).toBe(403);
+    expect((await fixture.route(member, "GET", `/api/v1/capsules/${owned.capsuleId}`)).status).toBe(403);
+    expect((await fixture.route(fixture.appToken(TAKOS, STRANGER), "POST", "/api/v1/install-plans", ATTEMPT, "stranger")).status).toBe(403);
+    expect((await fixture.route(fixture.appToken(THIRD_PARTY, USER), "POST", "/api/v1/install-plans", ATTEMPT, "third-party")).status).toBe(403);
+    // No namespace was created for any refused account.
+    expect(await fixture.core.workspaces.listWorkspacesByOwner(MEMBER)).toEqual([]);
     expect(await fixture.core.workspaces.listWorkspacesByOwner(STRANGER)).toEqual([]);
   });
-}
 
-test("a delegate token cannot reach another account's capsule-less attempt", async () => {
-  const fixture = await compose("memory");
-  const plan = await (async () => {
-    const created = await fixture.route(fixture.appToken(TAKOS, USER), "POST", "/api/v1/install-plans", ATTEMPT, "own");
-    expect(created.status).toBe(201);
-    return (await created.json()).installPlan;
-  })();
-  // The operator owns Takos and may delegate through it, but the attempt is
-  // the user's: the operator's delegate token is refused.
-  const operatorToken = fixture.appToken(TAKOS, OPERATOR);
-  expect((await fixture.route(operatorToken, "GET", `/api/v1/install-plans/${plan.id}`)).status).toBe(403);
-  expect((await fixture.route(operatorToken, "PATCH", `/api/v1/install-plans/${plan.id}`, { expectedGeneration: plan.generation })).status)
-    .toBe(403);
-  expect((await fixture.route(operatorToken, "POST", `/api/v1/install-plans/${plan.id}/reconcile`)).status).toBe(403);
-  // A non-delegate app token of the same user is refused too.
-  expect((await fixture.route(fixture.appToken(THIRD_PARTY, USER), "GET", `/api/v1/install-plans/${plan.id}`)).status).toBe(403);
-});
+  test(`[${backend}] a delegate continues only attempts that same delegate created for its user`, async () => {
+    const fixture = await compose(backend);
+    const token = fixture.appToken(TAKOS, USER);
+    const start = async (credential: string, key: string) => {
+      const created = await fixture.route(credential, "POST", "/api/v1/install-plans", ATTEMPT, key);
+      expect(created.status).toBe(201);
+      return (await created.json()).installPlan;
+    };
+    const own = await start(token, "own");
+    expect((await fixture.route(token, "GET", `/api/v1/install-plans/${own.id}`)).status).toBe(200);
+    // Started through the user's other Takos: not this delegate's attempt.
+    const second = await start(fixture.appToken(TAKOS_TWO, USER), "second");
+    expect((await fixture.route(token, "GET", `/api/v1/install-plans/${second.id}`)).status).toBe(403);
+    expect((await fixture.route(token, "POST", `/api/v1/install-plans/${second.id}/reconcile`)).status).toBe(403);
+    // Another account's delegate token (it owns its own Takos) cannot reach the user's attempt.
+    const operators = fixture.appToken(OTHERS_TAKOS, OPERATOR);
+    expect((await fixture.route(operators, "GET", `/api/v1/install-plans/${own.id}`)).status).toBe(403);
+    expect((await fixture.route(operators, "PATCH", `/api/v1/install-plans/${own.id}`, { expectedGeneration: own.generation })).status).toBe(403);
+    expect((await fixture.route(operators, "POST", `/api/v1/install-plans/${own.id}/reconcile`)).status).toBe(403);
+    // A non-delegate app token of the same user is refused too.
+    expect((await fixture.route(fixture.appToken(THIRD_PARTY, USER), "GET", `/api/v1/install-plans/${own.id}`)).status).toBe(403);
+  });
+}

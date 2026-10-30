@@ -120,6 +120,8 @@ export interface CreateCapsuleInitialAuthorityRequest {
   readonly sourceId: string;
   /** Authenticated Principal that initiated this installation. */
   readonly installingPrincipalId: string;
+  /** The delegate app whose token installed this app (TASK-0118 P9.1-b); stored privately. */
+  readonly delegateCapsuleId?: string;
   /** Auto-update opt-in (see {@link Capsule.autoUpdate}). Defaults to off. */
   readonly autoUpdate?: boolean;
   readonly capsuleId: string;
@@ -371,6 +373,7 @@ export class CapsulesService {
     requireNonEmptyString(request.name, "name");
     requireNonEmptyString(request.environment, "environment");
     requireNonEmptyString(request.sourceId, "sourceId");
+    if (request.delegateCapsuleId !== undefined) requireNonEmptyString(request.delegateCapsuleId, "delegateCapsuleId");
     requireNonEmptyString(
       request.installingPrincipalId,
       "installingPrincipalId",
@@ -509,6 +512,7 @@ export class CapsulesService {
       // Frozen once, here. Every durable derivation reads it instead of the
       // Workspace id, so Workspace removal never moves a derived value.
       scopeRef: request.workspaceId,
+      ...(request.delegateCapsuleId !== undefined ? { delegateCapsuleId: request.delegateCapsuleId } : {}),
       projectId: project.id,
       name: request.name,
       slug: request.name,

@@ -171,6 +171,13 @@ export interface Capsule {
    */
   readonly scopeRef?: string;
   /**
+   * The operator-designated delegate app (Takos) whose own token installed this
+   * app for its owner (TASK-0118 P9.1-b). Written once at creation; private.
+   * A delegate token reaches an app beyond its own Workspace limits only when
+   * this names that token's app.
+   */
+  readonly delegateCapsuleId?: string;
+  /**
    * Owning Project. Capsules live under a Project; a default Project
    * (`prj_default_<workspaceId>`) is backfilled per Workspace for pre-Project
    * rows.
@@ -305,6 +312,7 @@ export function capsuleWithScopeRef<T extends Pick<Capsule, "scopeRef" | "worksp
 export type PublicCapsule = Omit<
   Capsule,
   | "scopeRef"
+  | "delegateCapsuleId"
   | "ownerAccountId"
   | "ownershipEpoch"
   | "managementState"

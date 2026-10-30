@@ -207,12 +207,14 @@ type PublicCapsuleInput = PublicCapsule &
       | "managementEpoch"
       | "storageRoot"
       | "scopeRef"
+      | "delegateCapsuleId"
     >
   >;
 
 export function publicCapsule(capsule: PublicCapsuleInput): PublicCapsule {
   const {
     scopeRef: _scopeRef,
+    delegateCapsuleId: _delegateCapsuleId,
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttempt,
     installingPrincipalId: _installingPrincipalId,
@@ -749,12 +751,16 @@ const installedAppDelegationDecisions = new WeakMap<ControlSession, Promise<bool
  * without `resolvedRef` never qualify.
  *
  * Whose token delegates (TASK-0118 P9.1-b): once the delegate app has an
- * ownership row, the token's user must currently be that app's owner or a
- * member (read live, here). The token's Workspace, which the live grant
- * derives from Workspace membership, is not an input; a token still bound to a
- * Workspace must only not name another one. Without an ownership row (rollout
- * fallback) the legacy rule stays: the token must be bound to the app's own
- * Workspace. Memoized per session object.
+ * ownership row, the token's user must currently be that app's OWNER (read
+ * live, here). Members are added without their consent, so a member's token
+ * never delegates. A token still bound to a Workspace must not name another
+ * one. Without an ownership row (rollout fallback) the legacy rule stays: the
+ * token must be bound to the app's own Workspace. Memoized per session object.
+ *
+ * Delegating does not by itself widen reach: on another app the delegate
+ * token gets the user's app role alone only for apps that same delegate
+ * installed (`Capsule.delegateCapsuleId`); every other app keeps the legacy
+ * Workspace restriction and membership intersection (see decideOwnedApp).
  */
 export function installedAppTokenDelegates(
   operations: ControlPlaneOperations,
@@ -796,10 +802,10 @@ export function installedAppTokenDelegates(
 }
 
 /**
- * The token's user may delegate through the delegate app: its live owner or
- * member role once the app has an ownership row; without one (no ownership
- * port, a pre-ownership schema, or a Capsule the backfill has not reached),
- * the token's own issuance-bound Workspace must be the app's Workspace.
+ * The token's user may delegate through the delegate app: its live owner role
+ * once the app has an ownership row; without one (no ownership port, a
+ * pre-ownership schema, or a Capsule the backfill has not reached), the
+ * token's own issuance-bound Workspace must be the app's Workspace.
  */
 async function delegateAppUserMayDelegate(
   operations: ControlPlaneOperations,
@@ -821,7 +827,7 @@ async function delegateAppUserMayDelegate(
   }
   if (!owned) return session.workspaceId !== undefined && session.workspaceId === capsuleWorkspaceId;
   const access = await operations.appAccess?.resolveAppAccess(session.subject, capsuleId);
-  return access?.capsuleId === capsuleId && (access.role === "owner" || access.role === "member");
+  return access?.capsuleId === capsuleId && access.role === "owner";
 }
 
 /**
