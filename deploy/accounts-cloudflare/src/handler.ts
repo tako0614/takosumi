@@ -35,6 +35,7 @@ import {
   resolveD1AccountsSchemaMode,
   resolveTakosumiMobileOidcClientId,
   parseInstalledAppDelegationSources,
+  parseTrustedNativeClientsEnv,
   parseWorkspaceMutationsFrozen,
   parseAppOwnershipMutationsFrozen,
 } from "@takosjp/takosumi-accounts-service";
@@ -94,6 +95,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN?: string;
   /** JSON array of `{ url, path }` repositories whose installed app may delegate. */
   readonly TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES?: string;
+  readonly TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS?: string;
   /** `frozen` | `enabled` (default): app member and ownership-transfer writes. */
   readonly TAKOSUMI_APP_OWNERSHIP_MUTATIONS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
@@ -1296,6 +1298,9 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ),
     installedAppDelegationSources: parseInstalledAppDelegationSources(
       env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
+    ),
+    trustedNativeClients: parseTrustedNativeClientsEnv(
+      env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
     ),
     ...(hostedSessionPolicy && options.identityMergeReconciler
       ? { identityMergeReconciler: options.identityMergeReconciler(env) }

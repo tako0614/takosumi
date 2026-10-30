@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 const ROOT = resolve(import.meta.dir, "../..");
 const CONTRACT = join(ROOT, "contract");
 const TSC = join(ROOT, "node_modules/.bin/tsc");
-const TARBALL_NAME = "takosjp-takosumi-contract-2.1.0.tgz";
+const TARBALL_NAME = "takosjp-takosumi-contract-2.2.0.tgz";
 
 /**
  * Derived, not listed. `files` is itself derived from `exports` by

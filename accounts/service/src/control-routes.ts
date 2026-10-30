@@ -81,6 +81,7 @@ import type {
   RequestDiagnosticPhase,
 } from "./request-phase-diagnostics.ts";
 import type { InstalledAppDelegationSource } from "./installed-app-delegation.ts";
+import type { TrustedNativeClient } from "takosumi-contract";
 
 const CONTROL_OPERATIONS_INIT_DEADLINE_MS = 5_000;
 
@@ -213,6 +214,8 @@ interface ControlRouteContext {
   readonly appOwnershipMutationsFrozen?: boolean;
   /** Operator-designated repositories whose installed app may delegate. */
   readonly installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
+  /** Operator-trusted native phone apps; the built-in list when absent. */
+  readonly trustedNativeClients?: readonly TrustedNativeClient[];
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -543,6 +546,7 @@ async function dispatchAuthenticatedControlRoute(
           ...(context.withinRunReadDeadline ? { withinRunReadDeadline: context.withinRunReadDeadline } : {}),
           ...(context.workspaceMutationsFrozen !== undefined ? { workspaceMutationsFrozen: context.workspaceMutationsFrozen } : {}),
           ...(context.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+          ...(context.trustedNativeClients ? { trustedNativeClients: context.trustedNativeClients } : {}),
           session: context.session,
         }),
       ),
@@ -721,6 +725,7 @@ interface DispatchInput {
   readonly withinRunReadDeadline?: RunReadWaiter;
   readonly workspaceMutationsFrozen?: boolean;
   readonly appOwnershipMutationsFrozen?: boolean;
+  readonly trustedNativeClients?: readonly TrustedNativeClient[];
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -749,6 +754,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       ...(input.withinRunReadDeadline ? { withinRunReadDeadline: input.withinRunReadDeadline } : {}),
       workspaceMutationsFrozen: input.workspaceMutationsFrozen !== false,
       ...(input.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+      ...(input.trustedNativeClients ? { trustedNativeClients: input.trustedNativeClients } : {}),
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

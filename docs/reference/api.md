@@ -420,9 +420,15 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 アプリは残り、他の提供元へは自動で切り替えません。秘密の値、Output の値、画面の起動 URL
 以外の Interface 入力は含みません。
 画面が `document.clients` でスマホの専用アプリを宣言していれば、`screens[].clients` に検査を通った
-ものだけが入ります（`preferred`、`ios` の `name` / `appStoreId` / `bundleId` / `open` /
-`universalLink` / `storeUrl`、`android` の `name` / `package` / `open` / `appLink` / `storeUrl`）。
-link は雛形の `{origin}` と `{url}` にその画面の URL を入れた後の値で、`storeUrl` は宣言が無ければ
+ものだけが入ります（`preferred`、`ios` の `verified` / `trustedClientId` / `target` / `name` /
+`appStoreId` / `bundleId` / `open` / `universalLink` / `storeUrl`、`android` の `verified` /
+`trustedClientId` / `target` / `name` / `package` / `open` / `appLink` / `storeUrl`）。
+`verified` は、宣言した bundle id・package と link の雛形が運用者の信頼する専用アプリ
+（`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`）と一致したときだけ true で、そのときの `name` と
+`appStoreId` は登録の値です。`target` は link の実際の行き先（`package` / `scheme` / `host`）です。
+利用側は、未検証の専用アプリを自動では開かず、`target` を見せて確かめてから開きます。
+`preferred: "native"` が効くのも検証済みのときだけです。link は雛形の `{origin}` と `{url}` に
+その画面の URL を入れた後の値で、`storeUrl` は宣言した ID に結び付いたものだけを使い、無ければ
 `appStoreId` や `package` から作ります。宣言の書き方は[ホームにアプリを出す](../getting-started/home-launcher.md#スマホの専用アプリを宣言する)
 にあります。
 補助的な読み取りに失敗した部分は `incomplete` に名前が入ります。

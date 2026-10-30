@@ -20,6 +20,7 @@ import {
   transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
+import { parseTrustedNativeClients, type TrustedNativeClient } from "../../../../contract/interface-clients.ts";
 
 const ORIGIN = "https://app.takosumi.test";
 const OWNER = "user_test";
@@ -46,6 +47,8 @@ async function fixture(options: {
   readonly overrides?: Partial<ControlPlaneOperations>;
   readonly currentStateVersionId?: string;
   readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
+  readonly trustedNativeClients?: readonly TrustedNativeClient[];
+  readonly issuer?: string;
 } = {}) {
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, {
@@ -102,6 +105,8 @@ async function fixture(options: {
       url,
       store: accounts,
       operations,
+      ...(options.trustedNativeClients ? { trustedNativeClients: options.trustedNativeClients } : {}),
+      ...(options.issuer ? { issuer: options.issuer } : {}),
     });
     expect(response).toBeDefined();
     return response!;
@@ -462,24 +467,27 @@ test("every authorized screen is listed in display order with only display data 
   expect((await h.request("/app", h.stranger)).status).toBe(403);
 });
 
-test("a screen carries its validated native clients with links filled in from its own URL", async () => {
-  const h = await fixture();
+async function createScreens(
+  h: Awaited<ReturnType<typeof fixture>>,
+  screens: readonly { readonly name: string; readonly url: string; readonly document: Record<string, unknown> }[],
+): Promise<readonly string[]> {
   const interfaces = (h.core as unknown as {
     interfaces: {
       create(input: unknown): Promise<{ metadata: { id: string } }>;
       createBinding(id: string, input: unknown): Promise<unknown>;
     };
   }).interfaces;
-  const surface = async (name: string, url: string, document: Record<string, unknown>) => {
+  const ids: string[] = [];
+  for (const screen of screens) {
     const created = await interfaces.create({
       workspaceId: WORKSPACE,
-      name,
+      name: screen.name,
       ownerRef: { kind: "Capsule", id: CAPSULE },
       spec: {
         type: "interface.ui.surface",
         version: "1",
-        document: { launcher: true, ...document },
-        inputs: { url: { source: "literal", value: url } },
+        document: { launcher: true, ...screen.document },
+        inputs: { url: { source: "literal", value: screen.url } },
         access: { visibility: "workspace" },
       },
     });
@@ -488,38 +496,66 @@ test("a screen carries its validated native clients with links filled in from it
       permissions: ["ui.open"],
       delivery: { type: "none" },
     });
-    return created.metadata.id;
-  };
-  const chat = await surface("chat", "https://chat.example.test/home", {
-    display: { title: "Chat", sortOrder: 1 },
-    clients: {
-      preferred: "native",
-      ios: {
-        name: "Chat",
-        appStoreId: "1234567890",
-        open: "chat://connect?host_url={origin}&product=chat",
-        universalLink: "https://open.chat.example/connect#host_url={origin}",
-        unknownField: "ignored",
+    ids.push(created.metadata.id);
+  }
+  return ids;
+}
+
+test("a screen carries verified first-party clients and marks every other declaration unverified with its target", async () => {
+  const h = await fixture();
+  const [chat, pay, notes] = await createScreens(h, [
+    {
+      name: "chat",
+      url: "https://chat.example.test/home",
+      document: {
+        display: { title: "Chat", sortOrder: 1 },
+        clients: {
+          preferred: "native",
+          ios: {
+            name: "Free money",
+            bundleId: "com.yurucommu",
+            appStoreId: "999",
+            open: "yurucommu://connect?host_url={origin}&product=yurucommu",
+            unknownField: "ignored",
+          },
+          android: {
+            package: "com.yurucommu",
+            // A trusted identity with attacker data in its link is not that app.
+            open: "yurucommu://connect?host_url=https%3A%2F%2Fevil.example",
+          },
+          windows: { open: "chat://connect" },
+        },
       },
-      android: {
-        name: "Chat",
-        // No package: Android cannot pin the app, so the platform is dropped.
-        open: "chat://connect?host_url={origin}",
-      },
-      windows: { open: "chat://connect" },
     },
-  });
-  const notes = await surface("notes", "https://notes.example.test/", {
-    display: { title: "Notes", sortOrder: 2 },
-    clients: {
-      ios: { open: "javascript:alert(document.cookie)" },
-      android: {
-        package: "com.example.notes",
-        open: "intent://open#Intent;scheme=notes;end",
-        appLink: `${ORIGIN}/oauth/authorize?next={url}`,
+    {
+      name: "pay",
+      url: "https://pay.example.test/",
+      document: {
+        display: { title: "Pay", sortOrder: 2 },
+        clients: {
+          android: {
+            name: "Pay",
+            package: "com.evil.pay",
+            open: "upi://pay?pa=attacker@ybl&am=5000",
+          },
+        },
       },
     },
-  });
+    {
+      name: "notes",
+      url: "https://notes.example.test/",
+      document: {
+        display: { title: "Notes", sortOrder: 3 },
+        clients: {
+          ios: { open: "javascript:alert(document.cookie)" },
+          android: {
+            package: "com.takosumi",
+            open: "notes://open",
+          },
+        },
+      },
+    },
+  ]);
 
   const app = await h.app();
   expect(app.screens).toEqual([
@@ -532,11 +568,30 @@ test("a screen carries its validated native clients with links filled in from it
       clients: {
         preferred: "native",
         ios: {
-          name: "Chat",
-          appStoreId: "1234567890",
-          open: "chat://connect?host_url=https%3A%2F%2Fchat.example.test&product=chat",
-          universalLink: "https://open.chat.example/connect#host_url=https%3A%2F%2Fchat.example.test",
-          storeUrl: "https://apps.apple.com/app/id1234567890",
+          verified: true,
+          trustedClientId: "yurucommu-mobile",
+          target: { scheme: "yurucommu" },
+          name: "Yurucommu",
+          bundleId: "com.yurucommu",
+          open: "yurucommu://connect?host_url=https%3A%2F%2Fchat.example.test&product=yurucommu",
+        },
+      },
+    },
+    {
+      interfaceId: pay,
+      name: "pay",
+      title: "Pay",
+      sortOrder: 2,
+      url: "https://pay.example.test/",
+      clients: {
+        preferred: "native",
+        android: {
+          verified: false,
+          target: { package: "com.evil.pay", scheme: "upi" },
+          name: "Pay",
+          package: "com.evil.pay",
+          open: "upi://pay?pa=attacker@ybl&am=5000",
+          storeUrl: "https://play.google.com/store/apps/details?id=com.evil.pay",
         },
       },
     },
@@ -544,15 +599,71 @@ test("a screen carries its validated native clients with links filled in from it
       interfaceId: notes,
       name: "notes",
       title: "Notes",
-      sortOrder: 2,
+      sortOrder: 3,
       url: "https://notes.example.test/",
     },
   ]);
   const body = JSON.stringify(app);
   expect(body).not.toContain("unknownField");
+  expect(body).not.toContain("Free money");
+  expect(body).not.toContain("evil.example");
   expect(body).not.toContain("javascript:");
-  expect(body).not.toContain("intent:");
-  expect(body).not.toContain("/oauth/authorize");
+});
+
+test("the operator's trusted native clients and issuer host decide verification", async () => {
+  const trustedNativeClients = parseTrustedNativeClients([
+    {
+      id: "chat-mobile",
+      name: "Chat",
+      android: {
+        package: "com.example.chat",
+        schemes: ["chat"],
+        appLinkHosts: ["open.chat.example"],
+        templates: ["chat://connect?server={origin}"],
+      },
+    },
+  ]);
+  const h = await fixture({ trustedNativeClients, issuer: "https://accounts.example.org" });
+  const [chat, yuru, issuer] = await createScreens(h, [
+    {
+      name: "chat",
+      url: "https://chat.example.test/",
+      document: {
+        display: { title: "Chat", sortOrder: 1 },
+        clients: { android: { package: "com.example.chat", open: "chat://connect?server={origin}" } },
+      },
+    },
+    {
+      name: "yuru",
+      url: "https://yuru.example.test/",
+      document: {
+        display: { title: "Yuru", sortOrder: 2 },
+        clients: { android: { package: "com.yurucommu", open: "yurucommu://connect?host_url={origin}" } },
+      },
+    },
+    {
+      name: "issuer",
+      url: "https://issuer-link.example.test/",
+      document: {
+        display: { title: "Issuer", sortOrder: 3 },
+        clients: { android: { package: "org.example.other", appLink: "https://accounts.example.org/authorize?h={origin}" } },
+      },
+    },
+  ]);
+  const app = await h.app();
+  const clients = new Map(app.screens.map((screen) => [screen.interfaceId, screen.clients]));
+  expect(clients.get(chat)?.android).toMatchObject({
+    verified: true,
+    trustedClientId: "chat-mobile",
+    name: "Chat",
+    open: "chat://connect?server=https%3A%2F%2Fchat.example.test",
+  });
+  // The operator's list replaced the built-in one.
+  expect(clients.get(yuru)?.android).toMatchObject({
+    verified: false,
+    target: { package: "com.yurucommu", scheme: "yurucommu" },
+  });
+  expect(clients.get(issuer)).toBeUndefined();
 });
 
 test("another account cannot read the app view or the Run list of this Workspace", async () => {

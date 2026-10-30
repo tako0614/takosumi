@@ -365,7 +365,7 @@ manifest version. An invalid value is treated as absent.
 | --- | --- |
 | `launcher` | When `true`, the screen appears as a home tile and on the app's page |
 | `display` | The tile's name, icon, order and so on |
-| `clients` | The native phone apps (iOS, Android): store ids, a custom-scheme link, universal links or App Links on the publisher's domain, and the phone default (`preferred`). Templates can contain only `{origin}` and `{url}` |
+| `clients` | The native phone apps (iOS, Android): bundle id or package, store ids, a custom-scheme link, universal links or App Links on the publisher's domain, and the phone default (`preferred`). Templates can contain only `{origin}` and `{url}`. Only a declaration matching a native app the operator trusts is verified |
 
 How to write them and the checks they must pass are in
 [Show your app on the home screen](../getting-started/home-launcher.md).

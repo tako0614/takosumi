@@ -309,7 +309,7 @@ manifest の版は変わりません。値が正しくなければ、その欄�
 | --- | --- |
 | `launcher` | `true` のとき、画面をホームのタイルとアプリのページに出す |
 | `display` | タイルの名前、アイコン、並び順など |
-| `clients` | スマホの専用アプリ（iOS・Android）。ストアの ID、custom scheme の link、配布者のドメインの universal link・App Links、スマホでの既定（`preferred`）。雛形には `{origin}` と `{url}` だけを入れられる |
+| `clients` | スマホの専用アプリ（iOS・Android）。bundle id・package、ストアの ID、custom scheme の link、配布者のドメインの universal link・App Links、スマホでの既定（`preferred`）。雛形には `{origin}` と `{url}` だけを入れられる。運用者が信頼する専用アプリと一致したものだけが検証済みになる |
 
 書き方と検査の規則は[ホームにアプリを出す](../getting-started/home-launcher.md)にあります。
 どの欄の名前と値も、下の「Authority と secret の境界」の検査を受けます。

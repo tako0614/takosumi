@@ -398,11 +398,18 @@ selects a replacement automatically. The view carries no secret, no Output value
 and no Interface input other than a screen's checked launch URL. Parts that a
 supporting read could not load are named in `incomplete`.
 When a screen declares native phone apps in `document.clients`, only what passes
-the checks appears in `screens[].clients`: `preferred`; `ios` with `name`,
-`appStoreId`, `bundleId`, `open`, `universalLink` and `storeUrl`; `android` with
-`name`, `package`, `open`, `appLink` and `storeUrl`. Links are the templates with
-`{origin}` and `{url}` already filled in from that screen's URL, and `storeUrl` is
-built from `appStoreId` or `package` when none is declared. How to declare them is
+the checks appears in `screens[].clients`: `preferred`; `ios` with `verified`,
+`trustedClientId`, `target`, `name`, `appStoreId`, `bundleId`, `open`,
+`universalLink` and `storeUrl`; `android` with `verified`, `trustedClientId`,
+`target`, `name`, `package`, `open`, `appLink` and `storeUrl`. `verified` is true
+only when the declared bundle id or package and the link templates match a native
+app the operator trusts (`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`); `name` and
+`appStoreId` then come from that registration. `target` is where the links really
+go (`package`, `scheme`, `host`). Consumers never open an unverified app
+automatically: they show `target` and ask first, and `preferred: "native"` applies
+only to a verified app. Links are the templates with `{origin}` and `{url}`
+already filled in from that screen's URL, and `storeUrl` is used only when it is
+tied to the declared id; otherwise it is built from `appStoreId` or `package`. How to declare them is
 in [Show your app on the home screen](../getting-started/home-launcher.md#declare-your-phone-app).
 `progress.revisionPreparing` is true only while an install or revision
 coordinator has not yet created its Plan Run (an install attempt only for a

@@ -14,7 +14,7 @@ Takosumi release commit.
 
 | Import | Public contract |
 | --- | --- |
-| `@takosjp/takosumi-contract` | The unchanged 2.0 portable runtime entrypoint from `runtime.ts`. Version 2.1 adds no new root exports. |
+| `@takosjp/takosumi-contract` | The unchanged 2.0 portable runtime entrypoint from `runtime.ts`. Versions 2.1 and 2.2 add no new root exports. |
 | `@takosjp/takosumi-contract/background-events` | Portable background-event ABI. |
 | `@takosjp/takosumi-contract/managed-runtime-connections` | Portable managed-runtime connection contract. |
 | `@takosjp/takosumi-contract/managed-relational-runtime` | Portable managed relational-runtime contract. |
@@ -23,6 +23,7 @@ Takosumi release commit.
 | `@takosjp/takosumi-contract/runtime-interfaces` | App-facing `Interface` and `InterfaceBinding` wire views, constituent types, and lexical validators. |
 | `@takosjp/takosumi-contract/notification-pushers` | Generic notification pusher registration and gateway wire contract. |
 | `@takosjp/takosumi-contract/identity-oidc` | Standard same-origin Takosumi Accounts OIDC paths for installed clients. |
+| `@takosjp/takosumi-contract/native-client-identity` | Takosumi's own native identities (Takosumi Mobile's bundle id, applicationId and scheme, Takosumi-owned domains, reserved names) that no app's native-client declaration may claim, with the matching checks. Added in 2.2. |
 
 The package uses an exact export map. There is no wildcard subpath.
 

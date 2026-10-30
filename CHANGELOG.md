@@ -8,21 +8,29 @@ package for the v1 GA line.
 
 ## Unreleased
 
-- **Screens can declare their native phone apps:** an `interface.ui.surface`
-  `document` may now carry `clients` next to `display` (`preferred`, and per
-  platform `ios` / `android` a `name`, `appStoreId` / `package`, a custom-scheme
-  `open` template, an optional publisher-domain `universalLink` / `appLink`
-  template and an optional `storeUrl`). The shared contract parser
-  `parseInterfaceClients` checks it: templates may carry only `{origin}` and
-  `{url}`, dangerous schemes (`javascript:`, `data:`, `file:`, `intent:`,
-  `takosumi:`, system call, message, settings and store schemes, and others),
-  non-https links, userinfo, credential-named parameters, Takosumi's own origin
-  and links over 2,048 characters are refused, an invalid field or platform
-  degrades to absence, and unknown keys are ignored. `GET
-  /api/v1/capsules/{id}/app` returns the result as `screens[].clients`, with the
-  screen's origin or URL already filled in. The field is optional, so neither
-  the Interface version nor any repository manifest version changes. The
-  dashboard and Takosumi Mobile do not act on it yet (TASK-0119).
+- **Screens can declare their native phone apps, verified against an operator
+  allowlist:** an `interface.ui.surface` `document` may now carry `clients`
+  next to `display` (`preferred`, and per platform `ios` / `android` a
+  `bundleId` / `package`, a custom-scheme `open` template, an optional
+  publisher-domain `universalLink` / `appLink` template, and optional `name`,
+  `appStoreId` and `storeUrl`). `GET /api/v1/capsules/{id}/app` returns the
+  result as `screens[].clients`, with the screen's origin or URL already
+  filled in. A platform is `verified` only when its bundle id or package and
+  every kept link template match an entry of
+  `TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS` (default: the Yurucommu, Yurumeet
+  and Takos apps; malformed values fail startup); its name and App Store id
+  then come from that entry. Every other declaration is returned with
+  `verified: false` and its real destination in `target`, may not use a
+  trusted client's scheme or link host, and must never be opened without
+  asking. Templates carry only `{origin}` / `{url}` (at most four), dangerous
+  schemes, non-https links, Takosumi Mobile's own `com.takosumi`,
+  Takosumi-owned domains, lookalike names and store links of another app are
+  refused, and invalid fields degrade to absence. The field is optional, so
+  neither the Interface version nor any repository manifest version changes.
+  `@takosjp/takosumi-contract` 2.2.0 (unpublished) adds the
+  `native-client-identity` subpath with Takosumi's own refused identities for
+  Takosumi Mobile. The dashboard and Takosumi Mobile do not act on `clients`
+  yet (TASK-0119).
 - **A name collision no longer leaves an install retrying forever:** an install
   plan created without `mode` (the legacy Workspace route) whose app name is
   already used by a live app in the same Workspace and environment now ends
