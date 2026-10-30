@@ -150,6 +150,30 @@ async function accountFixture(page: Page): Promise<AccountFixture> {
         },
       });
     }
+    if (path === "/api/v1/account/notification-pushers") {
+      return route.fulfill({
+        json: {
+          web_push_public_key: "BFixtureVapidPublicKey",
+          pushers: [
+            {
+              id: "npsh_fixture_pixel",
+              kind: "webpush",
+              app_id: "com.takosumi",
+              pushkey: "BFixturePushKey",
+              data: { url: "https://push.takosumi.com/push/fixture" },
+              device_display_name: "Pixel 9",
+              lang: "ja-JP",
+              created_at: "2026-10-01T00:00:00.000Z",
+              updated_at: "2026-10-01T00:00:00.000Z",
+              last_success_at: "2026-10-28T00:00:00.000Z",
+              last_failure_at: "2026-10-29T00:00:00.000Z",
+              last_failure_status: 403,
+              failing: true,
+            },
+          ],
+        },
+      });
+    }
     return route.fallback();
   };
   await page.route("**/api/v1/**", handle);
@@ -264,7 +288,7 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
-    test("アカウント has only personal profile, usage and CLI sections", async ({ page }) => {
+    test("アカウント has only personal profile, usage, CLI and notification device sections", async ({ page }) => {
       const errors = collectPageErrors(page);
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       const fixture = await accountFixture(page);
@@ -277,6 +301,7 @@ export function registerNavigationAccountCases(mode: string): void {
         "自分",
         "料金と利用量",
         "CLI・APIから使う",
+        "通知を受け取る端末",
       ]);
       await expect(tabs).not.toContainText(/メンバー|スペース|workspace/iu);
       await expect(page.getByRole("button", { name: "このブラウザからサインアウト" })).toBeVisible();
@@ -309,6 +334,16 @@ export function registerNavigationAccountCases(mode: string): void {
       await expect(page.getByRole("textbox", { name: /キーの名前/u })).toBeVisible();
       await page.getByRole("button", { name: "キャンセル" }).click();
       await shots(page, "account-cli");
+
+      await tabs.getByRole("link", { name: "通知を受け取る端末" }).click();
+      await expect(page).toHaveURL(/\/account\/devices$/u);
+      await expect(page.getByText("Pixel 9", { exact: true })).toBeVisible();
+      await expect(page.getByText("届いていません", { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "消す", exact: true }).click();
+      await expect(page.getByText("この端末には通知が届かなくなります。")).toBeVisible();
+      await page.getByRole("button", { name: "キャンセル" }).click();
+      expect(fixture.reads).toContain("/api/v1/account/notification-pushers");
+      await shots(page, "account-devices");
       expect(fixture.mutations).toEqual([]);
       expect(errors).toEqual([]);
     });
