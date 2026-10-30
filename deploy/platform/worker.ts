@@ -31,6 +31,7 @@ import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
   activityCursorSealerFromEnv,
   createNotificationPusherRateLimiter,
+  createSharedAccountMobileExchangeRateLimiter,
   D1AccountsStore,
   handleAuthenticatedControlRoute,
   handleNotificationPusherRequest,
@@ -96,9 +97,16 @@ import { privateRunFilesCompositionFor } from "../../worker/src/private_run_file
 import { PRIVATE_RUN_FILE_HTTP_PATH } from "../../core/api/private_run_file_routes.ts";
 import {
   authenticateSharedAuthRequest,
+  handleSharedAuthNativeCallbackRequest,
+  handleSharedAuthNativeExchangeRequest,
   handleSharedAuthRouteRequest,
   handleSharedAuthAccountBoundaryRequest,
   resolveSharedAuthWorkspace,
+  revokeSharedAuthNativeSession,
+  SHARED_AUTH_NATIVE_SESSION_HEADER,
+  sharedAuthNativeLane,
+  sharedAuthNativeSessionPresented,
+  sharedAuthNativeSignIn,
   sharedAuthUnavailableResponse,
   sharedAuthConfigured,
   sharedAuthRequestFailure,
@@ -704,10 +712,16 @@ const platformWorker = {
     if (internalEdgeResponse) return internalEdgeResponse;
     const sharedAuthResponse = await handleSharedAuthRouteRequest(request, env);
     if (sharedAuthResponse) return sharedAuthResponse;
+    const sharedNativeCallbackResponse = handleSharedAuthNativeCallbackRequest(request, env);
+    if (sharedNativeCallbackResponse) return sharedNativeCallbackResponse;
     const sharedAccountBoundaryResponse = await handleSharedAuthAccountBoundaryRequest(request, env);
     if (sharedAccountBoundaryResponse) return sharedAccountBoundaryResponse;
     const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(request, env);
     if (sharedSessionResponse) return sharedSessionResponse;
+    const sharedNativeExchangeResponse = await handleSharedAuthNativeExchangeRequest(request, env, {
+      limiter: sharedAccountMobileExchangeLimiter,
+    });
+    if (sharedNativeExchangeResponse) return sharedNativeExchangeResponse;
     const sharedPushersResponse = await handlePlatformSharedAuthNotificationPushersRequest(request, env);
     if (sharedPushersResponse) return sharedPushersResponse;
     const url = new URL(request.url);
@@ -1243,13 +1257,20 @@ function platformDiscoveryOptions(
   const extensionDiscovery = platformExtensionDiscovery(env);
   const operatorControlMcp = operatorControlMcpEnabled(env);
   const operator = platformOperatorCapabilities(env);
-  const mobileOidcClientId = configuredTakosumiMobileOidcClientId(env);
+  // On a shared-account host people sign in only through the private RP, so
+  // this Worker's own Accounts client is never offered to Takosumi Mobile
+  // there (its authorize route is not mounted for humans). Takosumi Mobile
+  // instead gets the RP's issuer and its client there, when configured.
+  const sharedAccount = sharedAuthConfigured(env);
+  const mobileOidcClientId = sharedAccount ? undefined : configuredTakosumiMobileOidcClientId(env);
+  const sharedAccountSignIn = sharedAccount ? sharedAuthNativeSignIn(env) : undefined;
   const storeEndpoint = normalizePublicStoreEndpoint(env.TAKOSUMI_TCS_STORE_URL);
   const oidcIssuer = env.TAKOSUMI_ACCOUNTS_ISSUER?.trim() || undefined;
   return {
     origin,
     ...(oidcIssuer ? { oidcIssuer } : {}),
     ...(mobileOidcClientId ? { mobileOidcClientId } : {}),
+    ...(sharedAccountSignIn ? { sharedAccountSignIn } : {}),
     identity: {
       external_oidc_login: accountsExternalLoginConfigured(env),
     },
@@ -1871,6 +1892,15 @@ function platformExtensionSessionCsrfFailure(
   ) {
     return undefined;
   }
+  // Takosumi Mobile's RP session arrives in its own header, never as a
+  // cookie: the gateway forwards only that header to the RP on this lane, so
+  // this identity came from it. A browser never attaches the header by itself
+  // and cannot set it cross-origin without a CORS preflight this host does
+  // not grant, so there is no ambient credential for a forged request to
+  // ride on. Browser markers (Sec-Fetch-*, a web Origin) refuse the lane.
+  if (session.sharedAccount && sharedAuthNativeSessionPresented(request)) {
+    return undefined;
+  }
   let issuerOrigin: string;
   try {
     issuerOrigin = new URL(
@@ -1900,6 +1930,17 @@ export async function handlePlatformSharedAuthSessionRequest(
       status: 404, headers: { "cache-control": "no-store" },
     });
   }
+  if (request.method === "DELETE" && sharedAuthNativeLane(request) === "accepted") {
+    // Takosumi Mobile signs out its own session at the RP; the browser logout
+    // route below stays cookie-only.
+    const revoked = await revokeSharedAuthNativeSession(request, env);
+    if (revoked.kind === "unavailable") return sharedAuthUnavailableResponse();
+    return revoked.kind === "revoked"
+      ? new Response(null, { status: 204, headers: { "cache-control": "no-store" } })
+      : Response.json({ error: "unauthenticated" }, {
+        status: 401, headers: { "cache-control": "no-store" },
+      });
+  }
   if (request.method === "DELETE") {
     const target = new URL(request.url);
     target.pathname = "/auth/oidc/logout";
@@ -1921,6 +1962,7 @@ export async function handlePlatformSharedAuthSessionRequest(
 }
 
 const sharedAccountNotificationPusherLimiter = createNotificationPusherRateLimiter();
+const sharedAccountMobileExchangeLimiter = createSharedAccountMobileExchangeRateLimiter();
 
 /**
  * The account's notification pushers on the product host of the
@@ -1928,9 +1970,9 @@ const sharedAccountNotificationPusherLimiter = createNotificationPusherRateLimit
  * mounted. The same Accounts routes and rules apply; only authentication
  * differs. As on every other shared-account control route, humans arrive
  * only through the private RP session (the account itself, never fenced to
- * apps or a Workspace). An explicit bearer or issuer-session header is
- * refused, so Takosumi Mobile, which always sends `Authorization`, gets 401
- * here until this profile has a mobile credential. Pushers live in this
+ * apps or a Workspace): the browser's cookie, or Takosumi Mobile's session of
+ * the same kind in the native session header. An explicit bearer or
+ * issuer-session header is refused with 401. Pushers live in this
  * Worker's Accounts store ({@link platformAccountsStore}), which the
  * notification dispatcher (scheduled and immediate) reads.
  *
@@ -3448,6 +3490,7 @@ const PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   "x-auth-key",
   "x-auth-user-service-key",
   "x-takosumi-account-session",
+  SHARED_AUTH_NATIVE_SESSION_HEADER,
 ] as const;
 
 const PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
