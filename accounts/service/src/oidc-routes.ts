@@ -160,6 +160,8 @@ type ResolvedOidcClient = {
   tokenEndpointAuthMethod: OidcClientAuthMethod;
   clientSecret?: string;
   clientSecretHash?: string;
+  consent?: "always";
+  displayName?: string;
 };
 
 async function resolveOidcClient(input: {
@@ -187,6 +189,12 @@ async function resolveOidcClient(input: {
         staticClient.tokenEndpointAuthMethod ??
         (staticClient.clientSecret ? "client_secret_post" : "none"),
       clientSecret: staticClient.clientSecret,
+      ...(staticClient.consent === "always"
+        ? {
+            consent: "always" as const,
+            displayName: staticClient.displayName ?? staticClient.clientId,
+          }
+        : {}),
     };
   }
   const dynamicClient = await input.store.findOidcClient(input.clientId);
@@ -640,13 +648,26 @@ async function handleAuthorizeUncached(input: {
     if (prompts.some((prompt) => !["none","login","consent"].includes(prompt)) || (prompts.includes("none") && prompts.length > 1)) return json({error:"invalid_request"},400);
     const maxAge = parameters.get("max_age");
     if (maxAge !== null && (!/^\d+$/u.test(maxAge) || !Number.isSafeInteger(Number(maxAge)))) return json({error:"invalid_request"},400);
+  } else if (client.consent === "always") {
+    const invalid = nativeConsentRequestProblem(input.url.searchParams, codeChallenge, requestedScope);
+    if (invalid) return json({ error: "invalid_request", error_description: invalid }, 400);
   } else if (input.request.method !== "GET") return json({error:"invalid_request"},400);
+  const nativeConsentPrompts = client.consent === "always"
+    ? (input.url.searchParams.get("prompt") ?? "").split(/\s+/u).filter(Boolean)
+    : [];
   const session = await requireAccountSession({
     request: input.request,
     store: input.store,
   });
+  if (!session.ok && client.consent === "always") {
+    // A POST without the session that loaded the consent page is never a sign-in.
+    if (input.request.method !== "GET") return json({ error: "invalid_request" }, 400);
+    if (nativeConsentPrompts.includes("none")) return hostedAuthorizeError(redirectUri, input.url.searchParams.get("state"), "login_required");
+  }
   if (!session.ok) return client.profile === "shared-account" && input.url.searchParams.get("prompt") === "none"
     ? hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"login_required") : authorizeSignInRedirect(input.url);
+  // Consent is never remembered for these clients, so a silent request cannot succeed.
+  if (nativeConsentPrompts.includes("none")) return hostedAuthorizeError(redirectUri, input.url.searchParams.get("state"), "consent_required");
   const sessionRecord = await input.store.findAccountSession(session.sessionId);
   let reauthenticationStartedAt: number | undefined;
   if (client.profile === "shared-account") {
@@ -730,6 +751,22 @@ async function handleAuthorizeUncached(input: {
       },
       subject.status,
     );
+  }
+
+  if (client.consent === "always") {
+    const consent = await handleNativeConsentStep({
+      issuer: input.issuer,
+      request: input.request,
+      url: input.url,
+      store: input.store,
+      client,
+      redirectUri,
+      scope,
+      codeChallenge,
+      codeChallengeMethod,
+      session,
+    });
+    if (consent) return consent;
   }
 
   const now = Date.now();
@@ -879,6 +916,10 @@ async function handleTokenUncached(input: {
       const code = params.get("code");
       if (!code)
         return oidcTokenDenial("authorization_code_missing", "invalid_grant");
+      // A consent transaction is not a code. Refuse it before consuming, so a
+      // presented transaction id can neither mint tokens nor burn the pending consent.
+      if (isNativeConsentTransaction(code))
+        return oidcTokenDenial("authorization_code_unknown_or_expired", "invalid_grant");
 
       const credentials = oidcTokenClientCredentials(input.request, params);
       const hostedCode = code.startsWith("hcode_");
@@ -1878,6 +1919,240 @@ export async function resolveSharedAccountGrantSession(input: {
     const current = await load();
     return current?.subject === record.subject && current.sid === record.sid;
   }}};
+}
+
+const NATIVE_CONSENT_TRANSACTION_PREFIX = "ncons_";
+const NATIVE_CONSENT_TTL_MS = 10 * 60 * 1000;
+const NATIVE_CONSENT_SINGLE_PARAMETERS = [
+  "response_type", "client_id", "redirect_uri", "scope", "state", "nonce",
+  "code_challenge", "code_challenge_method", "prompt", "response_mode",
+] as const;
+const NATIVE_CONSENT_REJECTED_PARAMETERS = [
+  "request", "request_uri", "claims", "resource", "audience", "workspace_id",
+] as const;
+
+/**
+ * Native consent clients use a narrow authorize request: the consent screen
+ * describes exactly the account-wide scope that will be issued, so request
+ * objects, Workspace binding, resource indicators and duplicated parameters
+ * are refused instead of silently changing what the user approved.
+ */
+function nativeConsentRequestProblem(
+  parameters: URLSearchParams,
+  codeChallenge: string,
+  requestedScope: string,
+): string | undefined {
+  if (NATIVE_CONSENT_SINGLE_PARAMETERS.some((name) => parameters.getAll(name).length > 1)) {
+    return "authorize parameters must not repeat";
+  }
+  if (NATIVE_CONSENT_REJECTED_PARAMETERS.some((name) => parameters.has(name))) {
+    return "this client accepts only the plain authorization code request";
+  }
+  const responseMode = parameters.get("response_mode");
+  if (responseMode !== null && responseMode !== "query") return "response_mode must be query";
+  const state = parameters.get("state");
+  if (!state || state.length > 512) return "state is required and must be at most 512 characters";
+  const nonce = parameters.get("nonce");
+  if (nonce !== null && (nonce.length === 0 || nonce.length > 512)) return "nonce must be at most 512 characters";
+  if (requestedScope.length > 1024) return "scope is too long";
+  // S256 of a 32-byte or longer verifier is always 43 base64url characters.
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(codeChallenge)) return "code_challenge must be an S256 challenge";
+  const prompts = (parameters.get("prompt") ?? "").split(/\s+/u).filter(Boolean);
+  if (prompts.some((prompt) => !["none", "login", "consent"].includes(prompt)) || (prompts.includes("none") && prompts.length > 1)) {
+    return "prompt is not supported";
+  }
+  return undefined;
+}
+
+/**
+ * Consent step for native public clients. GET renders the screen and records a
+ * short single-use transaction bound to this browser session and to the exact
+ * authorize request; the same-origin POST consumes it. Returns undefined when
+ * the user approved and the caller may issue the code.
+ */
+async function handleNativeConsentStep(input: {
+  issuer?: string;
+  request: Request;
+  url: URL;
+  store: AccountsStore;
+  client: ResolvedOidcClient;
+  redirectUri: string;
+  scope: string;
+  codeChallenge: string;
+  codeChallengeMethod: string;
+  session: { subject: TakosumiSubject; sessionId: string };
+}): Promise<Response | undefined> {
+  const state = input.url.searchParams.get("state");
+  const nonce = input.url.searchParams.get("nonce") ?? undefined;
+  const policyHash = await nativeConsentPolicyHash(input.url, input.scope);
+  const sessionHash = await sha256Text(`takosumi-native-consent-session:${input.session.sessionId}`);
+  if (input.request.method === "GET") {
+    const transaction = hostedOpaqueId(NATIVE_CONSENT_TRANSACTION_PREFIX);
+    await input.store.saveAuthorizationCode(transaction, {
+      clientId: input.client.clientId,
+      redirectUri: input.redirectUri,
+      scope: input.scope,
+      subject: input.session.subject,
+      takosumiSubject: input.session.subject,
+      nonce,
+      codeChallenge: input.codeChallenge,
+      codeChallengeMethod: input.codeChallengeMethod,
+      authorizationPolicyHash: policyHash,
+      authorizationSessionHash: sessionHash,
+      expiresAt: Date.now() + NATIVE_CONSENT_TTL_MS,
+    });
+    const account = await input.store.findAccount(input.session.subject);
+    return nativeConsentPage({
+      url: input.url,
+      issuer: input.issuer ?? input.url.origin,
+      request: input.request,
+      transaction,
+      client: input.client,
+      scope: input.scope,
+      redirectUri: input.redirectUri,
+      accountLabel: account?.email ?? account?.displayName,
+    });
+  }
+  if (input.request.method !== "POST") return json({ error: "invalid_request" }, 400);
+  const issuerOrigin = new URL(input.issuer ?? input.url.origin).origin;
+  if (input.request.headers.get("origin") !== issuerOrigin || input.request.headers.has("authorization")) {
+    return json({ error: "invalid_request" }, 403);
+  }
+  const form = await readFormUrlEncoded(input.request);
+  const transaction = form.get("consent_transaction");
+  const decision = form.get("decision");
+  if (
+    [...form.keys()].some((key) => key !== "consent_transaction" && key !== "decision") ||
+    form.getAll("consent_transaction").length !== 1 || form.getAll("decision").length !== 1 ||
+    (decision !== "approve" && decision !== "deny") ||
+    !transaction?.startsWith(NATIVE_CONSENT_TRANSACTION_PREFIX)
+  ) {
+    return json({ error: "invalid_request" }, 400);
+  }
+  // Single use: a replayed or stale form never reaches code issuance.
+  const record = await input.store.consumeAuthorizationCode(transaction);
+  // Re-read the session after the await so a sign-out or rotation during the
+  // consent cannot turn the retired cookie into a code.
+  const current = await requireAccountSession({ request: input.request, store: input.store });
+  if (
+    !record || record.expiresAt <= Date.now() ||
+    !current.ok || current.sessionId !== input.session.sessionId || current.subject !== input.session.subject ||
+    record.clientId !== input.client.clientId || record.redirectUri !== input.redirectUri ||
+    record.scope !== input.scope || record.subject !== input.session.subject ||
+    (record.nonce ?? undefined) !== nonce ||
+    record.codeChallenge !== input.codeChallenge || record.codeChallengeMethod !== input.codeChallengeMethod ||
+    record.authorizationPolicyHash !== policyHash || record.authorizationSessionHash !== sessionHash
+  ) {
+    return json({ error: "invalid_request" }, 400);
+  }
+  if (decision === "deny") {
+    return hostedAuthorizeError(input.redirectUri, state, "access_denied");
+  }
+  return undefined;
+}
+
+/** Binds every authorize parameter, so approving one request cannot authorize another. */
+async function nativeConsentPolicyHash(url: URL, scope: string): Promise<string> {
+  const parameters = new URLSearchParams(url.search);
+  parameters.set("scope", scope);
+  const policy = [...parameters].sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+    leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0
+  );
+  return sha256Text(JSON.stringify(["native-consent-policy@v1", url.pathname, policy]));
+}
+
+/** True for consent transactions that must never be redeemed at the token endpoint. */
+function isNativeConsentTransaction(code: string): boolean {
+  return code.startsWith(NATIVE_CONSENT_TRANSACTION_PREFIX);
+}
+
+const NATIVE_CONSENT_COPY = {
+  ja: {
+    lang: "ja",
+    title: (client: string) => `${client} にアクセスを許可しますか？`,
+    lead: (client: string, instance: string) => `${instance} のアカウントで、${client} が次のことをできるようになります。`,
+    account: "アカウント",
+    can: "できること",
+    scopes: {
+      openid: "あなたのアカウントを識別する",
+      profile: "名前とプロフィール画像を見る",
+      email: "メールアドレスを見る",
+      offline_access: "サインインしたままにする（この端末で更新を続ける）",
+      "capsules:read": "アプリ、Run、状態を見る",
+      "capsules:write": "アプリを変更し、Runを承認・取り消す",
+    } as Record<string, string>,
+    runs: "許可すると、このアプリからRunの承認と取り消しができます。",
+    warning: (client: string) => `このページを ${client} から開いていない場合は、「許可しない」を選んでください。`,
+    returnsTo: "戻り先",
+    approve: "許可する",
+    deny: "許可しない",
+  },
+  en: {
+    lang: "en",
+    title: (client: string) => `Allow ${client} to access your account?`,
+    lead: (client: string, instance: string) => `With your account on ${instance}, ${client} will be able to:`,
+    account: "Account",
+    can: "It can",
+    scopes: {
+      openid: "Identify your account",
+      profile: "See your name and profile picture",
+      email: "See your email address",
+      offline_access: "Stay signed in on this device",
+      "capsules:read": "See your apps, Runs and their state",
+      "capsules:write": "Change your apps and approve or cancel Runs",
+    } as Record<string, string>,
+    runs: "If you allow it, this app can approve and cancel Runs.",
+    warning: (client: string) => `If you did not open this page from ${client}, choose Don't allow.`,
+    returnsTo: "Returns to",
+    approve: "Allow",
+    deny: "Don't allow",
+  },
+} as const;
+
+function nativeConsentPage(input: {
+  url: URL;
+  issuer: string;
+  request: Request;
+  transaction: string;
+  client: ResolvedOidcClient;
+  scope: string;
+  redirectUri: string;
+  accountLabel?: string;
+}): Response {
+  const escape = (value: string) => value.replace(/[&<>"']/gu, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
+  const copy = /^\s*ja\b/iu.test(input.request.headers.get("accept-language") ?? "") ? NATIVE_CONSENT_COPY.ja : NATIVE_CONSENT_COPY.en;
+  const client = input.client.displayName ?? input.client.clientId;
+  const instance = new URL(input.issuer).host;
+  const scopes = [...new Set(input.scope.split(/\s+/u).filter(Boolean))];
+  const nonce = base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(16)));
+  const redirect = new URL(input.redirectUri);
+  // form-action also governs the redirect that answers the POST. A custom
+  // scheme has an opaque origin, so name it as a scheme source.
+  const redirectSource = redirect.protocol === "https:" || redirect.protocol === "http:"
+    ? redirect.origin
+    : /^[a-z][a-z0-9+.-]*:$/u.test(redirect.protocol) ? redirect.protocol : "'none'";
+  const style = "body{font:16px/1.5 system-ui,sans-serif;margin:0;background:#f6f6f4;color:#1d1d1b}main{max-width:28rem;margin:0 auto;padding:2rem 1.25rem}h1{font-size:1.35rem;line-height:1.3}dl{margin:1rem 0}dt{font-size:.8rem;color:#5c5c58}dd{margin:0 0 .6rem;word-break:break-all}ul{padding-left:1.2rem}.note{font-weight:600}.warn{background:#fff4e5;border-radius:.5rem;padding:.75rem}.actions{display:flex;gap:.75rem;margin-top:1.5rem}button{flex:1;font:inherit;padding:.8rem;border-radius:.6rem;border:1px solid #c8c8c2;background:#fff}button[value=approve]{background:#f5483d;border-color:#f5483d;color:#fff;font-weight:600}";
+  const body = `<!doctype html><html lang="${copy.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(copy.title(client))}</title><style nonce="${nonce}">${style}</style></head><body><main>` +
+    `<h1>${escape(copy.title(client))}</h1>` +
+    `<p>${escape(copy.lead(client, instance))}</p>` +
+    `<ul>${scopes.map((scope) => `<li>${escape(copy.scopes[scope] ?? scope)} <small>(${escape(scope)})</small></li>`).join("")}</ul>` +
+    (scopes.includes("capsules:write") ? `<p class="note">${escape(copy.runs)}</p>` : "") +
+    `<dl>${input.accountLabel ? `<dt>${escape(copy.account)}</dt><dd>${escape(input.accountLabel)}</dd>` : ""}<dt>${escape(copy.returnsTo)}</dt><dd>${escape(input.redirectUri)}</dd></dl>` +
+    `<p class="warn">${escape(copy.warning(client))}</p>` +
+    `<form method="post" action="${escape(input.url.pathname + input.url.search)}"><input type="hidden" name="consent_transaction" value="${escape(input.transaction)}">` +
+    `<div class="actions"><button type="submit" name="decision" value="deny">${escape(copy.deny)}</button><button type="submit" name="decision" value="approve">${escape(copy.approve)}</button></div></form>` +
+    `</main></body></html>`;
+  return new Response(body, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'self' ${redirectSource}; frame-ancestors 'none'; base-uri 'none'`,
+      "x-frame-options": "DENY",
+      // Keep the issuer Origin on the POST while hiding the URL from other origins.
+      "referrer-policy": "same-origin",
+      "content-language": copy.lang,
+    },
+  });
 }
 
 /** Bind all query extensions too, so a future authorize option cannot bypass consent custody. */

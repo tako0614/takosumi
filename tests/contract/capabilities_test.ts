@@ -52,6 +52,33 @@ test("Takosumi discovery advertises only the configured native PKCE client", () 
   assert.equal(document.endpoints.oidc_issuer, "https://app.takosumi.com");
 });
 
+test("Takosumi discovery publishes the configured Accounts issuer, not the request origin", () => {
+  const document = createTakosumiWellKnownDocument({
+    origin: "http://internal.worker:8787",
+    oidcIssuer: " https://accounts.example.test/ ",
+    mobileOidcClientId: "takosumi-mobile",
+  });
+
+  assert.equal(document.endpoints.oidc_issuer, "https://accounts.example.test");
+  assert.equal(document.apiBaseUrl, "http://internal.worker:8787/api/v1");
+  assert.throws(
+    () =>
+      createTakosumiWellKnownDocument({
+        origin: "https://app.example.test",
+        oidcIssuer: "https://user:secret@accounts.example.test",
+      }),
+    /oidcIssuer/u,
+  );
+  assert.throws(
+    () =>
+      createTakosumiWellKnownDocument({
+        origin: "https://app.example.test",
+        oidcIssuer: "takosumi://accounts",
+      }),
+    /oidcIssuer/u,
+  );
+});
+
 test("Takosumi product capabilities expose generic provider and interface support", () => {
   const capabilities = createTakosumiProductCapabilities({
     resources: { EdgeWorker: true, ObjectBucket: true },

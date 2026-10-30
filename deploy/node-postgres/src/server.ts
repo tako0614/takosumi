@@ -202,6 +202,7 @@ export async function buildComposedServer(
     config,
     store,
     productDiscovery: {
+      oidcIssuer: config.issuer,
       mobileOidcClientId: config.mobileOidcClientId,
     },
     createAccountsHandler: (controlPlaneOperations, options) =>

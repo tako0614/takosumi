@@ -120,7 +120,16 @@ field 名は大文字と小文字を区別します。ほとんどは snake_case
 ときだけ `true` です。runner の無い構成 (Bun + PostgreSQL の reference など) は
 `false` を返します。
 
-mobile client 用の OIDC client id を設定した endpoint は `oidcClientId` も返します。
+`endpoints.oidc_issuer` は、運用者が設定した Accounts の issuer
+(`TAKOSUMI_ACCOUNTS_ISSUER`) です。request の origin とは限りません。client は OIDC の
+discovery をこの issuer から読みます。
+
+`oidcClientId` は Takosumi Mobile が使う public な OIDC client の id です。どの instance でも
+既定で組み込みの `takosumi-mobile` を返します (redirect は `takosumi://oauth/callback`、
+scope は `openid profile offline_access capsules:read capsules:write`、PKCE S256 が必須)。
+この client への許可には毎回同意の画面が出ます。運用者が
+`TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` で組み込みの client を止め、
+`TAKOSUMI_MOBILE_OIDC_CLIENT_ID` も設定していない endpoint は `oidcClientId` を返しません。
 追加の endpoint family を公開する
 endpoint は `endpoints.extensions` を併せて返します。
 
