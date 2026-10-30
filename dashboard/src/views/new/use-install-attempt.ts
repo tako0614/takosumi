@@ -52,8 +52,6 @@ import { randomUuid } from "../../lib/random-uuid.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
-import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
-import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { t } from "../../i18n/index.ts";
 import {
   appNameValue,
@@ -437,8 +435,6 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const clearCaches = (workspaceId?: string) => {
     resetAppOwnershipCache();
     clearCapsuleListCache(workspaceId);
-    clearCurrentStateVersionCache(workspaceId);
-    clearDashboardOverviewCache(workspaceId);
   };
 
   const forgetInputs = () => {

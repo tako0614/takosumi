@@ -2011,6 +2011,36 @@ test("platform discovery advertises the registered Takosumi native public client
   });
 });
 
+test("platform discovery advertises the built-in Takosumi Mobile client and the configured issuer", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const discovery = await worker.fetch(
+    new Request(`http://internal.platform${TAKOSUMI_WELL_KNOWN_PATH}`),
+    { TAKOSUMI_ACCOUNTS_ISSUER: "https://operator.example" } as never,
+  );
+
+  expect(discovery.status).toBe(200);
+  const document = (await discovery.json()) as {
+    oidcClientId?: string;
+    endpoints: { oidc_issuer: string };
+  };
+  expect(document.oidcClientId).toBe("takosumi-mobile");
+  expect(document.endpoints.oidc_issuer).toBe("https://operator.example");
+
+  const disabled = await worker.fetch(
+    new Request(`https://operator.example${TAKOSUMI_WELL_KNOWN_PATH}`),
+    { TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT: "false" } as never,
+  );
+  expect(((await disabled.json()) as { oidcClientId?: string }).oidcClientId)
+    .toBeUndefined();
+
+  const hosted = await worker.fetch(
+    new Request(`https://operator.example${TAKOSUMI_WELL_KNOWN_PATH}`),
+    { TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY: "true" } as never,
+  );
+  expect(((await hosted.json()) as { oidcClientId?: string }).oidcClientId)
+    .toBeUndefined();
+});
+
 test("platform discovery publishes commercial functions only as explicit extension tokens", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const database = { prepare() {} };

@@ -40,8 +40,6 @@ import { providerConnectionDisplayName } from "../../lib/provider-connections.ts
 import { readyOrUndefined } from "../../lib/resource-read.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
-import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
-import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { InstallScreen } from "./InstallSheet.tsx";
 import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import {
@@ -228,8 +226,6 @@ function OpenAttempts(props: { readonly principalId: string }) {
       // A newer generation than the list's is read again before discarding.
       await discardInstallAttempt(plan.id, plan.generation);
       clearCapsuleListCache(plan.workspaceId);
-      clearCurrentStateVersionCache(plan.workspaceId);
-      clearDashboardOverviewCache(plan.workspaceId);
       mutate((current) => current?.filter((item) => item.installPlan.id !== plan.id));
     } catch (cause) {
       setRowError({ id: plan.id, message: installErrorMessage(cause) });
@@ -423,8 +419,6 @@ function AppInstallPage(props: { readonly principalId: string }) {
     if (completed()?.capsuleId === capsuleId) return;
     const workspaceId = plan()?.workspaceId || currentWorkspaceId() || undefined;
     clearCapsuleListCache(workspaceId);
-    clearCurrentStateVersionCache(workspaceId);
-    clearDashboardOverviewCache(workspaceId);
     attempt.finish();
     setCompleted({ capsuleId });
     if (!workspaceId) {

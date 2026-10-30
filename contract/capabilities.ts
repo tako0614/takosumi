@@ -106,6 +106,11 @@ export interface TakosumiOperatorCapabilities extends Readonly<
 
 export interface CreateTakosumiDiscoveryOptions {
   readonly origin: string;
+  /**
+   * Configured Accounts issuer (`TAKOSUMI_ACCOUNTS_ISSUER`). Published as
+   * `endpoints.oidc_issuer`; the request origin is used only when absent.
+   */
+  readonly oidcIssuer?: string;
   /** Exact public PKCE client id advertised to the standalone mobile app. */
   readonly mobileOidcClientId?: string;
   readonly resources?: Partial<TakosumiResourceCapabilities>;
@@ -141,6 +146,7 @@ export function createTakosumiWellKnownDocument(
   const mobileOidcClientId = normalizeMobileOidcClientId(
     options.mobileOidcClientId,
   );
+  const oidcIssuer = normalizeOidcIssuer(options.oidcIssuer) ?? origin;
   return {
     product: "takosumi",
     name: "Takosumi",
@@ -159,12 +165,32 @@ export function createTakosumiWellKnownDocument(
       api: `${origin}/api/v1`,
       capabilities: `${origin}/api/v1/capabilities`,
       openapi: `${origin}/openapi.json`,
-      oidc_issuer: origin,
+      oidc_issuer: oidcIssuer,
       ...(options.endpoints && Object.keys(options.endpoints).length > 0
         ? { extensions: { ...options.endpoints } }
         : {}),
     },
   };
+}
+
+function normalizeOidcIssuer(value: string | undefined): string | undefined {
+  const issuer = value?.trim();
+  if (!issuer) return undefined;
+  let url: URL;
+  try {
+    url = new URL(issuer);
+  } catch {
+    throw new TypeError("oidcIssuer must be an absolute http(s) URL");
+  }
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:") ||
+    url.username || url.password || url.search || url.hash
+  ) {
+    throw new TypeError(
+      "oidcIssuer must be an http(s) URL without credentials, query, or fragment",
+    );
+  }
+  return trimTrailingSlash(url.toString());
 }
 
 function normalizeMobileOidcClientId(

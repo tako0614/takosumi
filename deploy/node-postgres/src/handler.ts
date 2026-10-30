@@ -11,7 +11,10 @@ import type {
   UpstreamOAuthOptions,
 } from "@takosjp/takosumi-accounts-service";
 import { upstreamOAuthOptionsFromEnvironment } from "@takosjp/takosumi-accounts-service";
-import { resolveTakosumiMobileOidcClientId } from "@takosjp/takosumi-accounts-service";
+import {
+  composeTakosumiMobileOidcClients,
+  parseTakosumiMobileBuiltinClientSetting,
+} from "@takosjp/takosumi-accounts-service";
 import {
   parseAppOwnershipMutationsFrozen,
   parseInstalledAppDelegationSources,
@@ -66,17 +69,24 @@ export function parseEnv(
       env.PORT,
       8787,
     )}`;
-  const clients = parseClients(env);
+  // The built-in public `takosumi-mobile` client lets Takosumi Mobile sign in
+  // without manual registration; TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false
+  // turns it off.
+  const { clients, mobileOidcClientId } = composeTakosumiMobileOidcClients({
+    configuredClientId: optional(env, "TAKOSUMI_MOBILE_OIDC_CLIENT_ID"),
+    builtinClient: parseTakosumiMobileBuiltinClientSetting(
+      env.TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT,
+      true,
+    ),
+    clients: parseClients(env),
+  });
   return {
     bindHost: optional(env, "TAKOSUMI_ACCOUNTS_BIND_HOST") ?? "0.0.0.0",
     port: parseIntOr(env.PORT ?? env.TAKOSUMI_ACCOUNTS_PORT, 8787),
     issuer,
     databaseUrl,
     clients,
-    mobileOidcClientId: resolveTakosumiMobileOidcClientId({
-      configuredClientId: optional(env, "TAKOSUMI_MOBILE_OIDC_CLIENT_ID"),
-      clients,
-    }),
+    mobileOidcClientId,
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),

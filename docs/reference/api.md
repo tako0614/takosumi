@@ -120,7 +120,16 @@ field 名は大文字と小文字を区別します。ほとんどは snake_case
 ときだけ `true` です。runner の無い構成 (Bun + PostgreSQL の reference など) は
 `false` を返します。
 
-mobile client 用の OIDC client id を設定した endpoint は `oidcClientId` も返します。
+`endpoints.oidc_issuer` は、運用者が設定した Accounts の issuer
+(`TAKOSUMI_ACCOUNTS_ISSUER`) です。request の origin とは限りません。client は OIDC の
+discovery をこの issuer から読みます。
+
+`oidcClientId` は Takosumi Mobile が使う public な OIDC client の id です。どの instance でも
+既定で組み込みの `takosumi-mobile` を返します (redirect は `takosumi://oauth/callback`、
+scope は `openid profile offline_access capsules:read capsules:write`、PKCE S256 が必須)。
+この client への許可には毎回同意の画面が出ます。運用者が
+`TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` で組み込みの client を止め、
+`TAKOSUMI_MOBILE_OIDC_CLIENT_ID` も設定していない endpoint は `oidcClientId` を返しません。
 追加の endpoint family を公開する
 endpoint は `endpoints.extensions` を併せて返します。
 
@@ -733,6 +742,23 @@ SourceSnapshot、互換性レポート、Plan Run を順に作ります。各 mu
 lost acknowledgement を回収し、未確認の mutation は 202 と `nextAction: "reconcile"` を
 返します。`reviewable` では `nextAction: "review_run"` で停止します。rollback は引き続き
 `POST /api/v1/state-versions/{stateVersionId}/rollback-plan` が所有します。
+
+対象が適用中の版と同じ ref・path・commit で、その状態が成功した Apply によるもの
+(Capsule が `error` ではない) なら、更新はありません。provider の失敗で state だけが進んだ
+Apply や、restore・recovery で戻した状態は、同じ ref を指定すると Plan をやり直します。更新が
+ないとき、coordinator は `phase: "failed"`、`diagnostic.code: "revision_already_current"`、
+`nextAction: "none"` で終わります。commit を固定したアプリの commit を指定したときは、Source を sync せずに
+そう答えます。branch や tag は sync して commit が変わっていないときに同じ答えです。
+同じ commit でも ref が違う指定 (branch から commit への固定など) は追跡先の変更なので、
+通常どおり Plan まで進みます。アプリが所有する Source の sync は revision を作った
+アカウントを actor として申請し、その Plan Run の actor も同じです。そのアカウントへの
+拒否 (`app_access_denied` など)、Source が有効でないこと、不正な ref のように reconcile を
+繰り返しても変わらない拒否は、その理由を `diagnostic.code` にして `failed` で終わります。
+所有権の移転でアプリの管理が drain している間の拒否は一時的なので、`reason:
+"app_management_draining"` を付けて再試行できる失敗として返します。
+再試行できる失敗は 202 と `diagnostic.code: "revision_plan_reconcile_retryable"` を返し、
+どの段階か (`planCreationStage`) と所有者のエラー分類 (`controllerCode`・`reason`) を
+添えます。例外の本文は返しません。
 
 revision plan の作成や reviewable 化だけでは Capsule の追跡先は変わりません。対象 Plan を
 通常の Run API で apply して新しい `currentStateVersionId` が採用された後だけ、その

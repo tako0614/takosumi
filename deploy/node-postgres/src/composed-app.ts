@@ -466,6 +466,12 @@ export async function buildComposedApp(
   // mobile clients. Keep it on the outer composed app so the account-plane OIDC
   // `/.well-known/*` fallback and `/v1/*` identity surface cannot shadow it.
   const opentofuRunnerConfigured = hasConfiguredOpenTofuRunner(input);
+  // The document's origins follow the request's Host / X-Forwarded-* headers,
+  // so a shared cache must never serve one request's answer to another.
+  const discoveryHeaders = {
+    "cache-control": "no-store",
+    vary: "Host, X-Forwarded-Host, X-Forwarded-Proto",
+  };
   app.get(TAKOSUMI_WELL_KNOWN_PATH, (c) =>
     c.json(
       createTakosumiWellKnownDocument(
@@ -476,6 +482,8 @@ export async function buildComposedApp(
           runtimeEnv,
         ),
       ),
+      200,
+      discoveryHeaders,
     ),
   );
   app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) =>

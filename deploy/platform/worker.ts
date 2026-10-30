@@ -1152,8 +1152,10 @@ function platformDiscoveryOptions(
   const operator = platformOperatorCapabilities(env);
   const mobileOidcClientId = configuredTakosumiMobileOidcClientId(env);
   const storeEndpoint = normalizePublicStoreEndpoint(env.TAKOSUMI_TCS_STORE_URL);
+  const oidcIssuer = env.TAKOSUMI_ACCOUNTS_ISSUER?.trim() || undefined;
   return {
     origin,
+    ...(oidcIssuer ? { oidcIssuer } : {}),
     ...(mobileOidcClientId ? { mobileOidcClientId } : {}),
     identity: {
       external_oidc_login: accountsExternalLoginConfigured(env),
