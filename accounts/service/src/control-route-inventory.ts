@@ -29,6 +29,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     { method: "DELETE", path: "/api/v1/ownership-transfers/{transferId}", summary: "Cancel a pending app ownership transfer", auth: "account-session" },
     { method: "POST", path: "/api/v1/install-plans", summary: "Create an app install attempt owned by the caller", auth: "account-session" },
     { method: "GET", path: "/api/v1/usage", summary: "List usage charged to the caller", auth: "account-session" },
+    { method: "GET", path: "/api/v1/install-plans", summary: "List the caller's own open install attempts in every namespace (open=1; account credential)", auth: "account-session", queryParameters: [{ name: "open", in: "query", required: true, schema: { type: "string", enum: ["1", "true"] } }] },
+    { method: "GET", path: "/api/v1/activity", summary: "List Activity of apps the caller owns or is a member of (keyset cursor)", auth: "account-session", queryParameters: [{ name: "cursor", in: "query", schema: { type: "string" } }, { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } }] },
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/activity", summary: "List one app's Activity (view; keyset cursor)", auth: "account-session", queryParameters: [{ name: "cursor", in: "query", schema: { type: "string" } }, { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } }] },
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/backups", summary: "List backups taken of one app (view; keyset cursor)", auth: "account-session" },
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/interface-materialization-failures", summary: "List one app's value-free Interface materialization failures (view)", auth: "account-session" },
+    { method: "POST", path: "/api/v1/capsules/{capsuleId}/interface-materialization-failures/{intentId}/retries", summary: "Retry one exact Interface materialization failure of the app (update)", auth: "account-session" },
     { method: "GET", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates", summary: "List manageable providers for one app requirement", auth: "account-session" },
     { method: "PUT", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Select one provider with generation CAS", auth: "account-session" },
     { method: "DELETE", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Revoke a link as consumer or provider manager", auth: "account-session" },
@@ -378,6 +384,10 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       path: "/api/v1/capsule-configs",
       summary: "List Capsule creation configs visible to the caller",
       auth: "account-session",
+      queryParameters: [
+        { name: "workspaceId", in: "query", schema: { type: "string" }, description: "Legacy Workspace scope; cannot be combined with capsuleId." },
+        { name: "capsuleId", in: "query", schema: { type: "string" }, description: "Returns only this app's current InstallConfig after the per-app view decision." },
+      ],
     },
     {
       method: "GET",
@@ -396,6 +406,10 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       path: "/api/v1/sources",
       summary: "List Sources visible to the caller",
       auth: "account-session",
+      queryParameters: [
+        { name: "workspaceId", in: "query", schema: { type: "string" }, description: "Legacy Workspace scope; cannot be combined with capsuleId." },
+        { name: "capsuleId", in: "query", schema: { type: "string" }, description: "Returns only the Source this app is built from, after the per-app view decision." },
+      ],
     },
     {
       method: "POST",
@@ -576,7 +590,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "GET",
       path: "/api/v1/provider-connections",
-      summary: "List ProviderConnections visible to a Workspace",
+      summary: "List the caller's own and release-owned bindable ProviderConnections, or one app's release-owned projection",
       auth: "account-session",
+      queryParameters: [
+        { name: "workspaceId", in: "query", schema: { type: "string" }, description: "Legacy Workspace scope (Workspace owner only)." },
+        { name: "capsuleId", in: "query", schema: { type: "string" }, description: "App whose release-owned bindable connections are listed (per-app view); requires projection=release-owned." },
+        { name: "projection", in: "query", schema: { type: "string", enum: ["release-owned"] } },
+      ],
     },
   ] as const;
