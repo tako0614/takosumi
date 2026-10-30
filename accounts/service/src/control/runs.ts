@@ -520,6 +520,9 @@ async function requireRunGroupView(
       workspaceId,
       capsuleId,
       action: "view",
+      // Never the Workspace: an app without an ownership row is not shown,
+      // and no Workspace fallback is reported for it.
+      allowWorkspaceFallback: false,
       ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
       ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
     });

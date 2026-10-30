@@ -63,6 +63,12 @@ export interface AppAccessRequest extends AuthorizationContext {
   /** The already loaded Capsule, when the route has it. */
   readonly capsule?: Pick<Capsule, "id" | "workspaceId" | "status">;
   readonly action: AppAction;
+  /**
+   * `false` for a read that must be decided by the app's own ownership row
+   * only: an app without one is denied outright, without the Workspace
+   * decision and without reporting a Workspace fallback (nothing fell back).
+   */
+  readonly allowWorkspaceFallback?: boolean;
 }
 
 type OwnershipFence =
@@ -170,6 +176,9 @@ export async function requireAppAccess(input: AppAccessRequest): Promise<AppAuth
   }
   const fence = await readOwnershipFence(input.operations, input.capsuleId);
   input.assertActive?.();
+  if (fence.kind === "fallback" && input.allowWorkspaceFallback === false) {
+    return { ok: false, response: workspaceAccessForbidden() };
+  }
   if (fence.kind === "fallback") {
     await reportFallback(input.diagnostics, fence.reason);
     const allowed = await canAccessWorkspace({

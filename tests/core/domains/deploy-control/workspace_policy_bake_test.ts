@@ -13,7 +13,10 @@ import {
   bakeWorkspacePolicy,
   canonicalPolicyJson,
   effectiveProviderPolicy,
+  evaluateConfiguredProviderAllowlist,
+  malformedWorkspacePolicyKeys,
   mergePolicyConfigs,
+  WORKSPACE_POLICY_CEILING_KEYS,
   workspacePolicyBakedInto,
   workspacePolicyCeiling,
 } from "../../../../core/domains/deploy-control/provider_policy.ts";
@@ -266,6 +269,7 @@ test("operator bake: dry-run, digest-confirmed apply, idempotent re-run on all t
       expect.objectContaining({
         workspaceId: ws,
         ignoredKeys: ["lifecycleActions"],
+        malformedKeys: [],
         liveCapsules: 3,
       }),
     ]);
@@ -605,4 +609,116 @@ test("canonical bake of the review's probes: unsorted allowlists, empty flags, u
   // An off-ceiling list keeps its order: no rewrite only to sort it.
   expect(bakeWorkspacePolicy({ quota: { runs: 1 } }, { allowedProviders: ["p/z", "p/a"] })!.allowedProviders)
     .toEqual(["p/z", "p/a"]);
+});
+
+// --- malformed Workspace ceilings fail closed (TASK-0118 P9.1-g re-review) ---
+
+const MALFORMED_VALUES: readonly unknown[] = [null, "p/a", 7, [1], {}, [], { rules: "x" }, { runs: "3" }];
+
+function malformedWorkspace(next: () => number): PolicyConfig {
+  const policy = randomPolicy(next) as Record<string, unknown>;
+  const key = WORKSPACE_POLICY_CEILING_KEYS[Math.floor(next() * WORKSPACE_POLICY_CEILING_KEYS.length)]!;
+  // Pick a value that is malformed for this key.
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const value = MALFORMED_VALUES[Math.floor(next() * MALFORMED_VALUES.length)];
+    if (malformedWorkspacePolicyKeys({ [key]: value } as PolicyConfig).length === 1) {
+      policy[key] = value;
+      return policy as PolicyConfig;
+    }
+  }
+  policy[key] = null;
+  return policy as PolicyConfig;
+}
+
+test("a null or non-array Workspace allowlist is never baked and stays enforced as before", () => {
+  for (const value of [null, "registry.opentofu.org/a/b", 7, {}, [1]]) {
+    const workspace = { allowedProviders: value } as unknown as PolicyConfig;
+    const label = JSON.stringify(value);
+    expect(malformedWorkspacePolicyKeys(workspace), label).toEqual(["allowedProviders"]);
+    // The InstallConfig lacks the key: reading the ceiling as "no limit"
+    // would make the app unrestricted. It is unbaked instead…
+    expect(workspacePolicyBakedInto(workspace, {}), label).toBe(false);
+    expect(() => bakeWorkspacePolicy(workspace, {}), label).toThrow(TypeError);
+    // …and the runtime keeps the old composition exactly.
+    expect(effectiveProviderPolicy(workspace, {}), label).toEqual(mergePolicyConfigs(workspace, {}));
+  }
+  // The old composition refuses on a null allowlist (fail closed).
+  expect(() =>
+    evaluateConfiguredProviderAllowlist(
+      ["registry.opentofu.org/a/b"],
+      effectiveProviderPolicy({ allowedProviders: null } as unknown as PolicyConfig, {}),
+      false,
+    )
+  ).toThrow();
+});
+
+test("property: any malformed ceiling value is refused and keeps the old composition", () => {
+  const next = prng(0x5a17);
+  for (let index = 0; index < 1000; index += 1) {
+    const workspace = malformedWorkspace(next);
+    const install = randomPolicy(next);
+    const label = JSON.stringify({ index, workspace, install });
+    expect(malformedWorkspacePolicyKeys(workspace).length, label).toBeGreaterThan(0);
+    expect(workspacePolicyBakedInto(workspace, install), label).toBe(false);
+    expect(() => bakeWorkspacePolicy(workspace, install), label).toThrow(TypeError);
+    const outcome = (run: () => unknown) => {
+      try {
+        return { value: run() };
+      } catch (error) {
+        return { threw: error instanceof Error ? error.name : "unknown" };
+      }
+    };
+    expect(outcome(() => effectiveProviderPolicy(workspace, install)), label)
+      .toEqual(outcome(() => mergePolicyConfigs(workspace, install)));
+  }
+});
+
+test("the tool refuses every app of a Workspace whose ceiling is malformed", async () => {
+  for (const [label, store] of await stores()) {
+    const ws = `ws_malformed_${label}`;
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: ws,
+      capsuleId: `cap_malformed_${label}`,
+    });
+    const workspace = (await store.getWorkspace(ws))!;
+    await store.putWorkspace({
+      ...workspace,
+      policy: { allowedProviders: null, quota: { runs: 2 } } as unknown as PolicyConfig,
+    });
+    const plan = await planWorkspacePolicyBake(store);
+    expect(plan.workspaces, label).toEqual([
+      expect.objectContaining({ workspaceId: ws, malformedKeys: ["allowedProviders"], liveCapsules: 1 }),
+    ]);
+    expect(plan.writes, label).toEqual([]);
+    expect(plan.refused, label).toEqual([
+      { capsuleId: seeded.capsule.id, workspaceId: ws, reason: "workspace_policy_invalid" },
+    ]);
+    expect(plan.unbaked, label).toBe(1);
+  }
+});
+
+test("the tool reads schemaMode from the store itself and refuses when it is missing", async () => {
+  const memory = new InMemoryOpenTofuControlStore();
+  expect(memory.schemaMode).toBe("predeployed");
+  // A wrapper that forwards the methods but does not declare the capability.
+  const wrapped = {
+    listWorkspaces: () => memory.listWorkspaces(),
+    getWorkspace: (id: string) => memory.getWorkspace(id),
+    listCapsules: (id?: string) => memory.listCapsules(id),
+    getInstallConfig: (id: string) => memory.getInstallConfig(id),
+    getWorkspaceManagement: (id: string) => memory.getWorkspaceManagement(id),
+    getCapsuleExecutionAuthorityEpoch: (id: string) => memory.getCapsuleExecutionAuthorityEpoch(id),
+    createInstallConfigIfAbsent: memory.createInstallConfigIfAbsent.bind(memory),
+    rebindCapsuleInstallConfig: memory.rebindCapsuleInstallConfig.bind(memory),
+  };
+  await expect(runWorkspacePolicyBake(wrapped, {})).rejects.toThrow(/schemaMode "predeployed"/);
+  await expect(runWorkspacePolicyBake({ ...wrapped, schemaMode: "bootstrap" } as never, {}))
+    .rejects.toThrow(/schemaMode "predeployed"/);
+  expect(await runWorkspacePolicyBake({ ...wrapped, schemaMode: "predeployed" } as never, {}))
+    .toMatchObject({ mode: "dry-run", unbaked: 0 });
+  // A proxied bootstrap D1 store is refused before any statement.
+  const d1 = new RecordingD1();
+  const proxied = new Proxy(new CloudflareD1OpenTofuControlStore(d1), {});
+  await expect(runWorkspacePolicyBake(proxied, {})).rejects.toThrow(/schemaMode "predeployed"/);
+  expect(d1.statements).toEqual([]);
 });

@@ -19,20 +19,25 @@ import {
   planWorkspacePolicyBake,
   type WorkspacePolicyBakeStore,
 } from "../core/domains/deploy-control/workspace_policy_bake.ts";
-import { CloudflareD1OpenTofuControlStore } from "../worker/src/d1_opentofu_store.ts";
-
 /**
  * A D1 Control store in its default `bootstrap` mode creates and migrates the
  * schema on first access, so even the dry-run would write. The tool accepts
- * only `{ schemaMode: "predeployed" }`, which verifies the deployed schema.
+ * only a store that declares `schemaMode: "predeployed"` (a D1 store built
+ * with `{ schemaMode: "predeployed" }`; the Postgres and memory stores never
+ * migrate on access and declare it too). The capability is read from the
+ * store itself, so a wrapped or separately imported store is judged the same
+ * way; a store that does not declare it is refused.
  */
 export function assertReadOnlySchemaStore(store: WorkspacePolicyBakeStore): void {
-  if (
-    store instanceof CloudflareD1OpenTofuControlStore &&
-    store.schemaMode !== "predeployed"
-  ) {
+  let schemaMode: unknown;
+  try {
+    schemaMode = Reflect.get(store as object, "schemaMode");
+  } catch {
+    schemaMode = undefined;
+  }
+  if (schemaMode !== "predeployed") {
     throw new Error(
-      'Refusing a D1 Control store in bootstrap mode: construct it with { schemaMode: "predeployed" }',
+      'Refusing a Control store that does not declare schemaMode "predeployed" (a D1 store in bootstrap mode migrates on first access): construct it with { schemaMode: "predeployed" }',
     );
   }
 }

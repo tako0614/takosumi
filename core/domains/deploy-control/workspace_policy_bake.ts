@@ -48,6 +48,7 @@ import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import {
   bakeWorkspacePolicy,
   canonicalPolicyJson,
+  malformedWorkspacePolicyKeys,
   mergePolicyConfigs,
   SCOPE_BOUNDARY_RULE_LIMIT,
   WORKSPACE_POLICY_CEILING_KEYS,
@@ -104,6 +105,10 @@ export interface WorkspacePolicyBakeWrite {
 }
 
 export type WorkspacePolicyBakeRefusalReason =
+  /** A Workspace ceiling value is malformed (see `malformedKeys`). */
+  | "workspace_policy_invalid"
+  /** The InstallConfig policy cannot be composed with the ceiling. */
+  | "install_policy_invalid"
   | "capsule_uninstalled"
   | "install_config_missing"
   | "scope_boundary_rule_limit"
@@ -121,6 +126,12 @@ export interface WorkspacePolicyBakePlan {
      * baked (for example `lifecycleActions`). Reported for review only.
      */
     readonly ignoredKeys: readonly string[];
+    /**
+     * Ceiling keys whose stored value is malformed (for example a `null`
+     * allowlist). The policy cannot be baked; every live app in the Workspace
+     * is refused and stays enforced through the old composition.
+     */
+    readonly malformedKeys: readonly string[];
     readonly liveCapsules: number;
   }[];
   /** Live (not destroyed) apps in those Workspaces. */
@@ -186,6 +197,7 @@ export async function planWorkspacePolicyBake(
     workspaceId: string;
     workspacePolicyDigest: string;
     ignoredKeys: string[];
+    malformedKeys: string[];
     liveCapsules: number;
   }[] = [];
   const writes: WorkspacePolicyBakeWrite[] = [];
@@ -216,6 +228,7 @@ export async function planWorkspacePolicyBake(
           !(WORKSPACE_POLICY_CEILING_KEYS as readonly string[]).includes(key)
         )
         .sort(),
+      malformedKeys: malformedWorkspacePolicyKeys(ceiling),
       liveCapsules: capsules.length,
     });
     liveCapsules += capsules.length;
@@ -328,12 +341,22 @@ async function planCapsule(
 > {
   const installConfig = await store.getInstallConfig(capsule.installConfigId);
   if (!installConfig) return { reason: "install_config_missing" };
-  if (workspacePolicyBakedInto(ceiling, installConfig.policy)) return "baked";
+  // A malformed ceiling is never read as "no limit": refuse, and the runtime
+  // keeps the old composition for this app (fail closed).
+  if (malformedWorkspacePolicyKeys(ceiling).length > 0) {
+    return { reason: "workspace_policy_invalid" };
+  }
+  let bakedPolicy: PolicyConfig;
+  try {
+    if (workspacePolicyBakedInto(ceiling, installConfig.policy)) return "baked";
+    bakedPolicy = bakeWorkspacePolicy(ceiling, installConfig.policy)!;
+  } catch {
+    return { reason: "install_policy_invalid" };
+  }
   // The uninstall grace period keeps its teardown pinned to the current
   // execution authority; it stays enforced through the Workspace until the
   // finalizer destroys it or the uninstall is cancelled.
   if (capsule.status === "uninstalled") return { reason: "capsule_uninstalled" };
-  const bakedPolicy = bakeWorkspacePolicy(ceiling, installConfig.policy)!;
   if ((bakedPolicy.scopeBoundary?.rules.length ?? 0) > SCOPE_BOUNDARY_RULE_LIMIT) {
     return { reason: "scope_boundary_rule_limit" };
   }
