@@ -163,7 +163,14 @@ PAT の公開 Accounts surface は次のとおりです。これらの応答は�
 scope catalog は core の `read` / `write` と、同じ owning route が
 `selfServicePatScopes` で明示した allowlist 済み extension scope だけを
 self-service として返します。Takosumi hosted AI の `ai.models.read` / `ai.chat` /
-`ai.embeddings` と `resources:read` は Workspace binding 必須です。`admin` や
+`ai.embeddings` と `resources:read` に Workspace binding は要りません (TASK-0118 9.1。
+catalog はすべての scope で `workspaceBinding: "optional"` を返します)。これらの token は
+`appIds` でアプリに限る (作成時に呼び出し元がそのアプリの所有者かメンバーであることを確かめ、
+アプリを対象にするリクエストのたびに今の役割を確かめ直します) か、アカウント自身の権限で動きます。旧来の `workspace_id` 指定は当面
+受け付け、Phase 9.3 で `400` にします。extension scope が core のアカウント API
+(`read` / `write` の route) に広がることはなく、まだ Workspace を要る host の route は、
+範囲を確かめられない token を引き続き拒否します。dashboard の key 作成画面は、host の route が
+アプリ単位・アカウント単位の key を受け付けるまで `read` / `write` だけを出します。`admin` や
 route が明示していない scope を request scope から推測して公開しません。
 
 `GET /api/v1/account/tokens/inventory.v1` は既存 dashboard 用一覧を置き換えません。既定
