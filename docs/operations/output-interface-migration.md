@@ -102,9 +102,19 @@ bun scripts/backfill-legacy-output-interface-provenance.ts --adapter=/absolute/o
 
 adapterは `openLegacyOutputInterfaceProvenance()` で、Control store (`listCapsules`、
 `listActivityEventsForTargetPage`) とInterface store (memory・Postgres・D1の `get`・
-`compareAndSet`) を返します。対象は、Capsuleの `interface.output_convention_migrated`
+`compareAndSet`) を返します。adapterはDDLもmigrationも実行せずにstoreを開きます。
+D1では `new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" })` を使い
+ます (既定の `"bootstrap"` は最初の利用で冪等なDDLを実行することがあり、scriptは
+`bootstrap` のD1 Control storeを拒否します)。Postgresでは `new SqlOpenTofuControlStore({ client })`
+と `createSqlInterfaceStores(client)` はDDLを実行しないので、migration runnerを呼ばずに
+開きます。D1のInterface storeは `createD1InterfaceStores(db)` です。対象は、Capsuleの `interface.output_convention_migrated`
 の記録の `interfaceIds` に載り、今もそのCapsuleが同じ区画で所有し、記録も
 `materializedFrom` も無く、specのdigestが記録の `interfaceSpecDigests` にあるInterface
 だけです。移行後にspecが変わったものは、所有者の確認に残します。dry-runは読み取り
 だけで、applyはdigestが一致するときだけ、確認した行そのものを compare-and-set で書き
 ます。二度目の実行では対象がありません。書き換えるのは `metadata.createdUnder` だけです。
+
+この補完が記録するのはInterfaceだけで、Bindingには記録しません。移行したInterfaceに
+以前の手作業のBinding (記録の無いもの) が付いていれば、そのInterfaceは補完後も
+`needsReview` に出ます。また、移行時から変わっていないかはspecのdigestだけで判断します
+(名前・label・status などspec以外の変化は見ません)。

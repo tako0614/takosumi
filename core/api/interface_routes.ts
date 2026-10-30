@@ -1073,13 +1073,16 @@ async function interfaceLinkWriteFence(
     },
     // An account caller's link is approved at creation only when it may
     // change links on the PROVIDER app too (its own app needs no approval);
-    // otherwise it waits as pending_approval, as on Accounts. The operator
-    // keeps the approval policy alone.
-    ...(appDecidedActor(options, actor)
+    // otherwise it waits as pending_approval, as on Accounts. A host that
+    // cannot decide apps gives account callers no provider approval at all
+    // (never the same-Workspace policy). The operator and service principals
+    // keep the approval policy alone.
+    ...(actor !== undefined && !actor.roles.includes("runtime-principal") && actor.principalKind !== "service"
       ? {
         mayApproveProvider: async (provider: { readonly capsuleId: string; readonly workspaceId: string }) =>
           provider.capsuleId === consumer.capsuleId ||
-          (await scopeInterfaceLinkApp(c, options, actor, provider, "change_interface_link")).ok,
+          (appDecidedActor(options, actor) &&
+            (await scopeInterfaceLinkApp(c, options, actor, provider, "change_interface_link")).ok),
       }
       : {}),
   };

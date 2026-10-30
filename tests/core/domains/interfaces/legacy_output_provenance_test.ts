@@ -16,7 +16,7 @@ import {
 } from "../../../../core/domains/interfaces/mod.ts";
 import { LEGACY_OUTPUT_MIGRATION_EVIDENCE_ACTION } from "../../../../core/domains/interfaces/legacy_output_provenance.ts";
 import { runLegacyOutputInterfaceProvenance } from "../../../../scripts/backfill-legacy-output-interface-provenance.ts";
-import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
@@ -138,4 +138,24 @@ test("marks only the legacy Output migration's unchanged Interfaces, digest-conf
   } finally {
     await close();
   }
+});
+
+test("refuses a Control store that may run DDL (a D1 store in bootstrap mode)", async () => {
+  const d1 = new SqliteFakeD1();
+  const bootstrap = new CloudflareD1OpenTofuControlStore(d1);
+  expect(bootstrap.schemaMode).toBe("bootstrap");
+  expect(new CloudflareD1OpenTofuControlStore(d1, { schemaMode: "predeployed" }).schemaMode).toBe("predeployed");
+  const interfaces = createInMemoryInterfaceStores().interfaces;
+  await expect(runLegacyOutputInterfaceProvenance({ control: bootstrap, interfaces }, {})).rejects.toThrow("predeployed");
+  await expect(runLegacyOutputInterfaceProvenance({ control: bootstrap, interfaces }, { apply: true, expectedDigest: "sha256:x" }))
+    .rejects.toThrow("predeployed");
+  // A predeployed store (or one without DDL, such as Postgres) is accepted.
+  const control = new InMemoryOpenTofuControlStore();
+  const predeployed = {
+    schemaMode: "predeployed" as const,
+    listCapsules: (workspaceId?: string) => control.listCapsules(workspaceId),
+    listActivityEventsForTargetPage: (...args: Parameters<InMemoryOpenTofuControlStore["listActivityEventsForTargetPage"]>) =>
+      control.listActivityEventsForTargetPage(...args),
+  };
+  expect(await runLegacyOutputInterfaceProvenance({ control: predeployed, interfaces }, {})).toMatchObject({ mode: "dry-run", marks: [] });
 });
