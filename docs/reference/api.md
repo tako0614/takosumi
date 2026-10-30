@@ -327,7 +327,10 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 | DELETE | `/api/v1/ownership-transfers/{transferId}` | 所有者。保留中の譲渡を取消 |
 | GET, POST | `/api/v1/connections` | 本人の個人接続とoperatorのbindable接続。新規接続の所有者は本人 |
 | GET | `/api/v1/connections?capsuleId=…&projection=labels` | 所有者・メンバー本人のセッションまたは個人アクセストークン（appIds付きを含む）。このアプリに結べる接続（所有者の検証済み接続、operatorが提供するbindable接続、いまbindingされている接続）を `{ id, provider, displayName }` だけで返し、メンバーはこの中から選び直せる。値・状態・scopeなどの詳細は返さない。インストール済みアプリのOAuthトークンには、そのアプリにbinding済みの接続だけを返す。1回のリクエストで読む所有者の接続は決まった大きさの1ページまで（`owner_account_id` にはまだindexがない）で、`nextCursor` で続きを返す。選べない接続を飛ばすため、件数が `limit` 未満でも続きがあることがある。bindingと資格情報発行の検査（接続の所有者＝アプリの所有者）が最終判断 |
-| POST | `/api/v1/connections/oauth/{helperId}/start` | アカウント資格情報。workspaceId省略時は本人所有の個人接続を開始 |
+| POST | `/api/v1/connections/oauth/{helperId}/start` | アカウント資格情報 (Workspaceに束縛した資格情報は不可)。OAuthのstateにWorkspaceは入らず、callbackは署名された本人だけで判定し、できる接続は本人のもの。workspaceId省略時は個人接続。互換のためworkspaceIdを付けた要求はWorkspace scopeの接続を求める意味になり、指定したWorkspaceは読まず、本人の個人の場所に記録する。Workspaceを含む古いstateのcallbackは作らずに `oauth_failed` |
+| GET | `/api/v1/connections?workspaceId=…`、`/api/v1/provider-connections?workspaceId=…` | 互換の一覧。そのWorkspaceを記録した接続のうち本人が所有するものだけ (provider-connectionsはoperatorのbindable接続も)。Workspaceのメンバーであっても他人の接続は見えない |
+| POST | `/api/v1/connections/{connectionId}/test`・`/revoke` | 接続の所有者だけ。Workspace scopeの接続も所有者のもので、Workspaceの所有者・管理者であることは権限にならない (所有者の記録が無い古い行だけ、記録されたWorkspaceの所有者を所有者とみなす)。それ以外は存在を明かさない `404 connection_not_found` |
+| POST | `/api/v1/sources`、`PATCH /api/v1/sources/{sourceId}` の `authConnectionId` | どのアプリも所有しないSourceには本人の接続だけ。アプリのSourceにはアプリの所有者の接続だけ (Sourceサービスが判定)。Workspaceのメンバーであっても他人の資格情報は使えない |
 | GET | `/api/v1/source-ref-resolutions?url=…` | write scopeを持つアカウント資格情報。runnerを起動して公開Git sourceのstable SemVerタグを解決 |
 | POST | `/api/v1/install-plans` | アカウント資格情報。`mode: "attempt"`、workspace指定なし。本人がアプリ所有者 |
 | GET | `/api/v1/usage` | アカウント資格情報。本人が支払人の使用量だけ。アプリ単位の独立した計測は、使用期間（計測時刻の前後2時間。アプリ作成より前と記録時刻より後は含めない）が受諾済みの所有権移転で区切られた1つの所有期間に収まるときだけ、その所有者が支払人。収まらない場合や移転履歴が欠けている場合は支払人なし |
@@ -405,6 +408,30 @@ active membership を `created_asc` で返し、archived Workspace も含めま�
 省略時 100、最大 100、`cursor` は opaque token です。クエリキーは `limit` と
 `cursor` だけを受け付けます。レスポンスの `total` は cursor 適用前の全 active
 membership 行数です。Workspace-scoped credential では利用できません。
+
+### 廃止予定の Workspace route {#legacy-workspace-routes}
+
+Workspace はアプリごとの所有に置き換わり、段階を分けて撤去します (TASK-0118 Phase 9)。次の利用は廃止予定です。
+
+- `/api/v1/workspaces/*`、`/api/v1/projects/*`、`/api/v1/views/workspaces.v1`
+- `?workspaceId=` で選ぶ connections・sources・capsule-configs・provider-connections・dashboard と、本文の `workspaceId` で選ぶ接続の作成・接続の OAuth 開始・Source の作成
+- `includeWorkspaces=false` を付けない `/api/v1/dashboard/bootstrap`
+- `/api/v1/account/shared-workspaces*`、`/api/v1/billing*` (応答の印は付けません)、Workspace を選ぶ `/api/v1/interfaces*` (`?workspaceId=`、`x-takosumi-platform-workspace-id` header、本文の `workspaceId`、または Workspace に束縛された credential による暗黙の選択)、Workspace を受け取る platform extension の route、`/oauth/authorize` の `workspace_id`、`workspace_id` を付けた PAT の作成
+
+これらの応答には `Deprecation: @1793145600` (RFC 9745) と、この節を指す `Link: <…>; rel="deprecation"` が付きます。今使える後継の route があり、それが具体的な URI のときは `rel="successor-version"` の `Link` も付きます (`/api/v1/capsules/{capsuleId}/runs` のような template の後継は下の表にだけ載せ、`Link` には入れません)。運用者が撤去日を決めると `Sunset` (RFC 8594) も付きます (`TAKOSUMI_LEGACY_WORKSPACE_SUNSET`)。応答の status と本文は変わりません。client は任意で `Takosumi-Client: <名前>/<版>` を送って名乗れます。サーバーは認証された利用を、構造化ログ `legacy_workspace_route` に記録します。ID token・userinfo・introspection に互換の `takosumi.workspace_id` を入れたとき (Workspace だけに束縛された PAT を introspection したとき、または直接提示したときを含む) は `legacy_workspace_claim_emitted` を記録します。どちらにも account・Workspace・token の ID は入りません。入る識別子は登録済みの OAuth client id だけで、これはアプリの連携またはインストールを指し、人を指しません。
+
+| 廃止予定 | 後継 |
+| --- | --- |
+| `GET /api/v1/workspaces`、`GET /api/v1/workspaces/{workspaceId}/capsules`、`GET /api/v1/workspaces/{workspaceId}/installed-apps`、`GET /api/v1/views/workspaces.v1` | `GET /api/v1/apps` |
+| `POST /api/v1/workspaces/{workspaceId}/install-plans` | `POST /api/v1/install-plans` |
+| `GET /api/v1/workspaces/{workspaceId}/members` | `GET /api/v1/capsules/{capsuleId}/members` |
+| `GET /api/v1/workspaces/{workspaceId}/runs` | `GET /api/v1/capsules/{capsuleId}/runs` |
+| `GET /api/v1/workspaces/{workspaceId}/usage`、`GET /api/v1/workspaces/{workspaceId}/billing` | `GET /api/v1/usage` |
+| `POST /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | `GET /api/v1/source-ref-resolutions` |
+| `POST /api/v1/workspaces/{workspaceId}/plan-update`・`drift-check`・`backups` | `POST /api/v1/capsules/{capsuleId}/plan`・`drift-check`・`backups` |
+| `workspaceId` で選ぶ `/api/v1/connections` | `workspaceId` を付けない `/api/v1/connections` (個人の接続) |
+
+ほかの route の後継は、置き換えの API ができたものから順に足します。
 
 ### Workspace
 
@@ -1010,7 +1037,7 @@ Apply が新しい InstallConfig を認可することはありません。
 | POST     | `/api/v1/connections/{connectionId}/revoke`     | Connection を失効させる                            |
 | POST     | `/api/v1/connections/oauth/{helperId}/start`    | OAuth 補助を開始する                               |
 | GET      | `/api/v1/connections/oauth/{helperId}/callback` | OAuth 補助を完了する                               |
-| GET      | `/api/v1/provider-connections`                  | 本人とreleaseが持つbindableな ProviderConnection を一覧する。`capsuleId=&projection=release-owned` は1アプリ分、`workspaceId=` は旧Workspace所有者向け |
+| GET      | `/api/v1/provider-connections`                  | 本人とreleaseが持つbindableな ProviderConnection を一覧する。`capsuleId=&projection=release-owned` は1アプリ分。`workspaceId=` は旧互換の一覧で、そのWorkspaceを記録した本人の接続とoperatorのbindable接続だけ (Workspaceのメンバーでも他人の接続は見えない) |
 | GET      | `/api/v1/credential-recipes`                    | Credential Recipe を一覧する                       |
 
 Connection の作成は `POST /api/v1/connections` です。`/api/v1/provider-connections`

@@ -260,3 +260,43 @@ test("Postgres keeps (account, app_id, pushkey) unique and cascades account dele
     await db.close();
   }
 });
+
+test("Postgres at the limit updates a pusher that a concurrent registration inserted first", async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(`
+      create schema accounts_v1;
+      create table accounts_v1.accounts (subject text primary key);
+      insert into accounts_v1.accounts(subject) values ('${SUBJECT}');
+    `);
+    await db.exec(await Bun.file(new URL(
+      "../../../../accounts/service/migrations/047_notification_pushers.sql",
+      import.meta.url,
+    )).text());
+    const plain = new PostgresAccountsStore(new PgliteClient(db));
+    for (let index = 0; index < NOTIFICATION_PUSHERS_PER_ACCOUNT - 1; index += 1) {
+      await plain.saveNotificationPusher(await pusher({ pushkey: `other-${index}`, createdAt: 1_000 + index, updatedAt: 1_000 + index }));
+    }
+    const contested = await pusher({ pushkey: "contested", createdAt: 5_000, updatedAt: 5_000 });
+    // The other registration of the same pusher lands between this one's
+    // update (no row yet) and its limited insert (now at the limit).
+    let raced = false;
+    const racing = new PostgresAccountsStore({
+      async queryObject<T>(sql: string, args: readonly unknown[] = []) {
+        const result = await db.query<T>(sql, [...args]);
+        if (!raced && /^\s*UPDATE accounts_v1\.notification_pushers/.test(sql) && result.rows.length === 0) {
+          raced = true;
+          await plain.saveNotificationPusher({ ...contested, deviceDisplayName: "First writer" });
+        }
+        return { rows: [...result.rows] };
+      },
+    });
+    const saved = await racing.saveNotificationPusher({ ...contested, deviceDisplayName: "Second writer", updatedAt: 6_000 });
+    expect(raced).toBe(true);
+    expect(saved).toMatchObject({ status: "updated", record: { deviceDisplayName: "Second writer", createdAt: 5_000 } });
+    expect(await plain.listNotificationPushersForSubject(SUBJECT)).toHaveLength(NOTIFICATION_PUSHERS_PER_ACCOUNT);
+    expect(await racing.saveNotificationPusher(await pusher({ pushkey: "new-one" }))).toEqual({ status: "limit_reached" });
+  } finally {
+    await db.close();
+  }
+});

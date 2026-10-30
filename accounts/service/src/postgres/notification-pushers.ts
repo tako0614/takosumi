@@ -56,23 +56,25 @@ export async function saveNotificationPusher(
     `last_success_at = CASE WHEN ${alias}.endpoint = $3 AND ${alias}.auth = $4 THEN ${alias}.last_success_at END,
      last_failure_at = CASE WHEN ${alias}.endpoint = $3 AND ${alias}.auth = $4 THEN ${alias}.last_failure_at END,
      last_failure_status = CASE WHEN ${alias}.endpoint = $3 AND ${alias}.auth = $4 THEN ${alias}.last_failure_status END`;
-  const updated = await runFirst<NotificationPusherRow>(
-    client,
-    `UPDATE accounts_v1.notification_pushers AS p SET
-       ${healthKept("p")},
-       endpoint = $3, auth = $4, device_display_name = $5, lang = $6, updated_at = $7
-     WHERE p.pusher_id = $1 AND p.subject = $2
-     RETURNING ${COLUMNS}`,
-    [
-      record.pusherId,
-      record.subject,
-      record.endpoint,
-      record.auth,
-      record.deviceDisplayName,
-      record.lang,
-      toDate(record.updatedAt),
-    ],
-  );
+  const updateExisting = () =>
+    runFirst<NotificationPusherRow>(
+      client,
+      `UPDATE accounts_v1.notification_pushers AS p SET
+         ${healthKept("p")},
+         endpoint = $3, auth = $4, device_display_name = $5, lang = $6, updated_at = $7
+       WHERE p.pusher_id = $1 AND p.subject = $2
+       RETURNING ${COLUMNS}`,
+      [
+        record.pusherId,
+        record.subject,
+        record.endpoint,
+        record.auth,
+        record.deviceDisplayName,
+        record.lang,
+        toDate(record.updatedAt),
+      ],
+    );
+  const updated = await updateExisting();
   if (updated) return { status: "updated", record: fromRow(updated) };
   const row = await runFirst<NotificationPusherRow & { inserted: boolean }>(
     client,
@@ -109,7 +111,12 @@ export async function saveNotificationPusher(
     ],
   );
   if (!row) {
-    // No row: the account is at its limit, or (impossible for derived ids)
+    // A concurrent registration of this same pusher may have inserted it
+    // between the update and the limited insert (the insert then counts it
+    // and, at the limit, inserts nothing). Update it rather than refusing.
+    const raced = await updateExisting();
+    if (raced) return { status: "updated", record: fromRow(raced) };
+    // Otherwise the account is at its limit, or (impossible for derived ids)
     // the id belongs to another account.
     const owner = await runFirst<{ subject: TakosumiSubject }>(
       client,

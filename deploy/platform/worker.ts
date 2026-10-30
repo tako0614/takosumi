@@ -49,6 +49,20 @@ import {
   measureRequestPhaseOperation,
 } from "../../accounts/service/src/request-phase-diagnostics.ts";
 import type { AccountsStore } from "../../accounts/service/src/store.ts";
+import {
+  interfaceApiRouteTemplate,
+  LEGACY_WORKSPACE_ROUTE_METRIC,
+  legacyWorkspaceClientFamily,
+  legacyWorkspaceMetricTags,
+  LegacyWorkspaceRouteCounter,
+  legacyWorkspaceUseMetricTags,
+  parseLegacyWorkspaceSunset,
+  reportLegacyWorkspaceRoute,
+  withLegacyWorkspaceDeprecation,
+  type LegacyWorkspaceCredential,
+  type LegacyWorkspaceSelector,
+  type LegacyWorkspaceUse,
+} from "../../accounts/service/src/legacy-workspace-telemetry.ts";
 import type { RunStreamTiming } from "../../accounts/service/src/control/shared.ts";
 import {
   TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
@@ -557,6 +571,8 @@ async function createPlatformOperatorControlMcpAuthority(
         operations,
         subject: session.subject,
         workspaceId: session.workspaceId,
+        entry: "operator_mcp",
+        ...platformLegacyWorkspaceSunsetOption(env),
         ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
           ? { appOwnershipMutationsFrozen: true }
           : {}),
@@ -676,7 +692,7 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
     platformExtensionSelfServicePatScopesForAccounts(env),
 });
 
-export default {
+const platformWorker = {
   async fetch(
     request: Request,
     env: CloudflareWorkerEnv,
@@ -820,6 +836,9 @@ export default {
       extensionRoutes,
     );
     const browserBillingResponse = await handlePlatformBrowserBillingRequest(request, env, platformExtensionRoute);
+    // Browser billing still selects a Workspace on every request. It is a
+    // stage 9B allow-listed surface with its own closed response and console
+    // contract, so it is counted from invocation logs, not marked here.
     if (browserBillingResponse) return browserBillingResponse;
     if (platformExtensionRoute) {
       return await handlePlatformExtensionRouteRequest(
@@ -947,6 +966,51 @@ export default {
     if (driftCheckEnabled(env)) {
       await runScheduledDriftSweep(env);
     }
+  },
+};
+
+/**
+ * Per-isolate coalescing of the legacy Workspace counter: at most one Control
+ * D1 write per tag set per minute, written on the leading edge so a use can
+ * never leave its tag set at 0 (see `LegacyWorkspaceRouteCounter`).
+ */
+const platformLegacyWorkspaceRouteCounter = new LegacyWorkspaceRouteCounter();
+
+export default {
+  ...platformWorker,
+  /**
+   * Counts every response marked as a legacy Workspace use (TASK-0118 Phase 9)
+   * after it is produced, wherever in the composition it was produced. The
+   * metric is best-effort and never changes the response.
+   */
+  async fetch(
+    request: Request,
+    env: CloudflareWorkerEnv,
+    context?: PlatformExecutionContext,
+  ): Promise<Response> {
+    const response = await platformWorker.fetch(request, env, context);
+    const legacyTags = platformLegacyWorkspaceMetricTags.get(response) ??
+      legacyWorkspaceMetricTags(request, response);
+    if (legacyTags) {
+      const value = platformLegacyWorkspaceRouteCounter.add(
+        legacyTags,
+        Date.now(),
+      );
+      if (value !== undefined) {
+        await schedulePlatformSideEffect(
+          recordPlatformLegacyWorkspaceMetric(env, legacyTags, value).then(
+            (recorded) => {
+              // A failed write is retried by the next use of the tag set.
+              if (!recorded) {
+                platformLegacyWorkspaceRouteCounter.restore(legacyTags, value);
+              }
+            },
+          ),
+          context,
+        );
+      }
+    }
+    return response;
   },
 };
 
@@ -1297,12 +1361,20 @@ export async function handlePlatformInterfaceApiRequest(
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   context?: PlatformExecutionContext,
 ): Promise<Response> {
-  return await handlePlatformInterfaceApiRequestInternal(
+  const legacyWorkspace: PlatformLegacyWorkspaceObservation = {};
+  const response = await handlePlatformInterfaceApiRequestInternal(
     request,
     env,
     sessionVerifier,
     workspaceAccess,
     context,
+    legacyWorkspace,
+  );
+  return observePlatformLegacyWorkspaceUse(
+    request,
+    env,
+    response,
+    legacyWorkspace,
   );
 }
 
@@ -1313,6 +1385,7 @@ async function handlePlatformInterfaceApiRequestInternal(
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   context?: PlatformExecutionContext,
+  legacyWorkspace?: PlatformLegacyWorkspaceObservation,
 ): Promise<Response> {
   const pathname = new URL(request.url).pathname;
   const timings: ServerTimingBucket = undefined;
@@ -1340,11 +1413,22 @@ async function handlePlatformInterfaceApiRequestInternal(
       sessionVerifier,
       workspaceAccess,
       timings,
+      legacyWorkspace,
     );
     if (!authorized.ok) {
       return appendPlatformInterfaceServerTiming(authorized.response, timings);
     }
     request = authorized.request;
+  } else if (legacyWorkspace) {
+    // The operator deploy-control token selects a Workspace only explicitly.
+    const selector = await platformDeployControlWorkspaceSelector(request);
+    if (selector) {
+      markPlatformLegacyWorkspaceUse(legacyWorkspace, {
+        surface: "interface_workspace",
+        route: interfaceApiRouteTemplate(pathname),
+        selector,
+      }, { credential: "deploy-control" });
+    }
   }
   const service = await cachedDeployControlService(env);
   const response = await measureServerTiming(
@@ -1470,6 +1554,7 @@ async function platformInterfaceExternalRequest(
   sessionVerifier: PlatformExtensionSessionVerifier,
   workspaceAccess: PlatformExtensionWorkspaceAccess,
   timings?: ServerTimingBucket,
+  legacyWorkspace?: PlatformLegacyWorkspaceObservation,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -1505,6 +1590,7 @@ async function platformInterfaceExternalRequest(
     session,
     workspaceAccess,
     timings,
+    legacyWorkspace,
   );
 }
 
@@ -1515,6 +1601,7 @@ async function platformInterfaceAuthorizedRequest(
   session: PlatformExtensionSessionContext,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   timings?: ServerTimingBucket,
+  legacyWorkspace?: PlatformLegacyWorkspaceObservation,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -1523,6 +1610,16 @@ async function platformInterfaceAuthorizedRequest(
   if (sessionRoleFailure) return { ok: false, response: sessionRoleFailure };
 
   const url = new URL(request.url);
+  // The session is authenticated from here on, so a later refusal of an
+  // explicitly selected Workspace is still a use (TASK-0118 Phase 9).
+  const explicitBeforeBody = platformControlRequestWorkspace(request, url, {});
+  if (explicitBeforeBody && legacyWorkspace) {
+    markPlatformLegacyWorkspaceUse(legacyWorkspace, {
+      surface: "interface_workspace",
+      route: interfaceApiRouteTemplate(url.pathname),
+      selector: explicitBeforeBody.selector,
+    }, platformLegacyWorkspaceSessionFacts(session));
+  }
   const interfaceAccessFailure = platformInterfaceAccessFailure(request, session);
   if (interfaceAccessFailure) {
     return { ok: false, response: interfaceAccessFailure };
@@ -1533,13 +1630,18 @@ async function platformInterfaceAuthorizedRequest(
   const body = materialized.bodyText
     ? objectRecord(JSON.parse(materialized.bodyText))
     : {};
-  const requestedWorkspaceId = platformControlRequestWorkspaceId(
-    request,
-    url,
-    body,
-  );
+  const requested = platformControlRequestWorkspace(request, url, body);
+  const requestedWorkspaceId = requested?.workspaceId;
   const workspaceId =
     requestedWorkspaceId ?? safePlatformExtensionContextId(session.workspaceId);
+  if (workspaceId && legacyWorkspace) {
+    // A body or the credential's own Workspace; the first mark wins.
+    markPlatformLegacyWorkspaceUse(legacyWorkspace, {
+      surface: "interface_workspace",
+      route: interfaceApiRouteTemplate(url.pathname),
+      selector: requested?.selector ?? "session",
+    }, platformLegacyWorkspaceSessionFacts(session));
+  }
   if (!workspaceId) {
     return {
       ok: false,
@@ -1740,6 +1842,8 @@ export async function handlePlatformSharedAuthControlRequest(
       subject: identity.accountId,
       credential: "session",
       requireCurrentMembership: true,
+      entry: "shared_auth",
+      ...platformLegacyWorkspaceSunsetOption(env),
       ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
       trustedNativeClients: trustedNativeClientsFromEnv(env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS),
       ...(diagnostics ? { diagnostics } : {}),
@@ -1956,20 +2060,58 @@ function cloneRequestWithBody(
   });
 }
 
-function platformControlRequestWorkspaceId(
+/** The explicitly requested Workspace and where it came from, in precedence order. */
+function platformControlRequestWorkspace(
   request: Request,
   url: URL,
   body: Record<string, unknown>,
-): string | undefined {
-  const explicit =
-    safePlatformExtensionContextId(url.searchParams.get("workspaceId")) ??
-    safePlatformExtensionContextId(
-      request.headers.get(PLATFORM_EXTENSION_WORKSPACE_ID_HEADER),
-    ) ??
-    safePlatformExtensionContextId(valueString(body.workspaceId));
-  if (explicit) return explicit;
-
+):
+  | { readonly workspaceId: string; readonly selector: LegacyWorkspaceSelector }
+  | undefined {
+  const query = safePlatformExtensionContextId(url.searchParams.get("workspaceId"));
+  if (query) return { workspaceId: query, selector: "query" };
+  const header = safePlatformExtensionContextId(
+    request.headers.get(PLATFORM_EXTENSION_WORKSPACE_ID_HEADER),
+  );
+  if (header) return { workspaceId: header, selector: "header" };
+  const fromBody = safePlatformExtensionContextId(valueString(body.workspaceId));
+  if (fromBody) return { workspaceId: fromBody, selector: "body" };
   return undefined;
+}
+
+/** Core's own JSON body bound (`core/api/errors.ts`), reused for telemetry. */
+const PLATFORM_DEPLOY_CONTROL_TELEMETRY_BODY_MAX_BYTES = 1_048_576;
+
+/**
+ * How a deploy-control request to the Interface API names a Workspace. Core
+ * reads `?workspaceId=` and a `workspaceId` body field; the body is read from
+ * a clone so the dispatched request is unchanged. Telemetry only: a body that
+ * cannot be read or parsed is simply not counted here.
+ */
+async function platformDeployControlWorkspaceSelector(
+  request: Request,
+): Promise<LegacyWorkspaceSelector | undefined> {
+  if (new URL(request.url).searchParams.has("workspaceId")) return "query";
+  // Core refuses a body over 1 MiB by its declared length; telemetry reads
+  // only a body Core could accept and whose length is declared.
+  const declaredLength = Number(request.headers.get("content-length") ?? NaN);
+  if (
+    request.method === "GET" ||
+    request.method === "HEAD" ||
+    request.body === null ||
+    !(request.headers.get("content-type") ?? "").includes("json") ||
+    !Number.isSafeInteger(declaredLength) ||
+    declaredLength < 0 ||
+    declaredLength > PLATFORM_DEPLOY_CONTROL_TELEMETRY_BODY_MAX_BYTES
+  ) {
+    return undefined;
+  }
+  try {
+    const body = objectRecord(JSON.parse(await request.clone().text()));
+    return body.workspaceId !== undefined ? "body" : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function platformInterfaceActorContext(
@@ -2123,6 +2265,151 @@ export function withPlatformAssetCacheHeaders(
     statusText: response.statusText,
     headers,
   });
+}
+
+/**
+ * A legacy Workspace use found while serving a platform route (TASK-0118
+ * Phase 9). It is marked only after the credential is authenticated, so a 401
+ * or a 403 before authentication is never counted; the first mark wins.
+ */
+interface PlatformLegacyWorkspaceObservation {
+  use?: LegacyWorkspaceUse;
+  credential?: LegacyWorkspaceCredential;
+  workspaceBound?: boolean;
+  appBound?: boolean;
+  clientId?: string;
+}
+
+interface PlatformLegacyWorkspaceFacts {
+  readonly credential: LegacyWorkspaceCredential;
+  readonly workspaceBound?: boolean;
+  readonly appBound?: boolean;
+  readonly clientId?: string;
+}
+
+function markPlatformLegacyWorkspaceUse(
+  observation: PlatformLegacyWorkspaceObservation,
+  use: LegacyWorkspaceUse,
+  facts: PlatformLegacyWorkspaceFacts,
+): void {
+  if (observation.use) return;
+  observation.use = use;
+  observation.credential = facts.credential;
+  observation.workspaceBound = facts.workspaceBound ?? false;
+  observation.appBound = facts.appBound ?? false;
+  if (facts.clientId !== undefined) observation.clientId = facts.clientId;
+}
+
+/** The credential kind, bindings and OAuth client of an authenticated platform session. */
+function platformLegacyWorkspaceSessionFacts(
+  session: PlatformExtensionSessionContext,
+): PlatformLegacyWorkspaceFacts {
+  return {
+    credential: session.authKind ?? "unknown",
+    workspaceBound: session.workspaceId !== undefined,
+    appBound: session.capsuleId !== undefined,
+    ...(session.oauthClientId !== undefined
+      ? { clientId: session.oauthClientId }
+      : {}),
+  };
+}
+
+/**
+ * Metric tags of platform-served legacy responses, keyed by the response
+ * object the composition returns. Accounts-served responses have no entry and
+ * are tagged from their URL instead.
+ */
+const platformLegacyWorkspaceMetricTags = new WeakMap<
+  Response,
+  Record<string, string>
+>();
+
+/**
+ * Reports the legacy Workspace use observed while serving a platform route
+ * and adds the deprecation headers. Without an observation the response is
+ * returned unchanged.
+ */
+function observePlatformLegacyWorkspaceUse(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  response: Response,
+  observation: PlatformLegacyWorkspaceObservation,
+): Response {
+  const use = observation.use;
+  if (!use) return response;
+  reportLegacyWorkspaceRoute({
+    use,
+    method: request.method,
+    status: response.status,
+    entry: "platform",
+    credential: observation.credential ?? "unknown",
+    workspaceBound: observation.workspaceBound ?? false,
+    appBound: observation.appBound ?? false,
+    clientFamily: legacyWorkspaceClientFamily(request.headers),
+    ...(observation.clientId !== undefined
+      ? { clientId: observation.clientId }
+      : {}),
+  });
+  const sunset = platformLegacyWorkspaceSunset(env);
+  const marked = withLegacyWorkspaceDeprecation(
+    response,
+    use,
+    sunset ? { sunset } : {},
+  );
+  platformLegacyWorkspaceMetricTags.set(
+    marked,
+    legacyWorkspaceUseMetricTags(use, request.method, response.status),
+  );
+  return marked;
+}
+
+/**
+ * The operator `Sunset` for legacy Workspace routes. A malformed value is
+ * ignored here (the Accounts composition refuses it at startup) so a request
+ * never fails because of telemetry configuration.
+ */
+function platformLegacyWorkspaceSunset(
+  env: CloudflareWorkerEnv,
+): string | undefined {
+  try {
+    return parseLegacyWorkspaceSunset(env.TAKOSUMI_LEGACY_WORKSPACE_SUNSET);
+  } catch {
+    return undefined;
+  }
+}
+
+function platformLegacyWorkspaceSunsetOption(
+  env: CloudflareWorkerEnv,
+): { readonly legacyWorkspaceSunset?: string } {
+  const sunset = platformLegacyWorkspaceSunset(env);
+  return sunset ? { legacyWorkspaceSunset: sunset } : {};
+}
+
+/**
+ * Writes one coalesced counter value. Resolves false when the write failed so
+ * the caller can carry the value into the next write; a composition without
+ * Control D1 has no sink and resolves true (there is nothing to retry).
+ */
+async function recordPlatformLegacyWorkspaceMetric(
+  env: CloudflareWorkerEnv,
+  tags: Record<string, string>,
+  value: number,
+): Promise<boolean> {
+  if (!env.TAKOSUMI_CONTROL_DB) return true;
+  try {
+    const service = await cachedDeployControlService(env);
+    return await recordWorkerMetric({
+      observability: service.context.adapters.observability,
+      env,
+      name: LEGACY_WORKSPACE_ROUTE_METRIC,
+      kind: "counter",
+      value,
+      tags,
+    });
+  } catch {
+    // Metrics are best-effort and must never change a response.
+    return false;
+  }
 }
 
 async function recordPlatformOidcMetric(
@@ -2685,6 +2972,31 @@ export async function handlePlatformExtensionRouteRequest(
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
 ): Promise<Response> {
+  const legacyWorkspace: PlatformLegacyWorkspaceObservation = {};
+  const response = await handlePlatformExtensionRouteRequestObserved(
+    request,
+    env,
+    route,
+    sessionVerifier,
+    workspaceAccess,
+    legacyWorkspace,
+  );
+  return observePlatformLegacyWorkspaceUse(
+    request,
+    env,
+    response,
+    legacyWorkspace,
+  );
+}
+
+async function handlePlatformExtensionRouteRequestObserved(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  route: PlatformExtensionRoute,
+  sessionVerifier: PlatformExtensionSessionVerifier,
+  workspaceAccess: PlatformExtensionWorkspaceAccess,
+  legacyWorkspace: PlatformLegacyWorkspaceObservation,
+): Promise<Response> {
   const requestRoute = resolvePlatformExtensionRequestScopeRoute(request, route);
   if (!requestRoute) {
     return Response.json({ error: "not found" }, { status: 404 });
@@ -2727,6 +3039,7 @@ export async function handlePlatformExtensionRouteRequest(
       sessionVerifier,
       workspaceAccess,
       "context",
+      legacyWorkspace,
     );
     if (!authContext.ok) return authContext.response;
     const authenticatedContext = platformExtensionAuthenticatedContext(
@@ -2774,6 +3087,7 @@ export async function handlePlatformExtensionRouteRequest(
     sessionVerifier,
     workspaceAccess,
     "headers",
+    legacyWorkspace,
   );
   if (!authContext.ok) return authContext.response;
   return await handler.fetch(authContext.request);
@@ -2913,6 +3227,11 @@ export interface PlatformExtensionSessionContext {
   readonly interfaceBindingId?: string;
   readonly interfaceResolvedRevision?: number;
   readonly scopes?: readonly string[];
+  /**
+   * Registered OAuth client of an OAuth or Interface OAuth token, from
+   * introspection. Telemetry only (TASK-0118 Phase 9); never forwarded.
+   */
+  readonly oauthClientId?: string;
 }
 
 export type PlatformExtensionSessionVerifier = (
@@ -2928,6 +3247,7 @@ async function platformExtensionAuthContext(
   sessionVerifier: PlatformExtensionSessionVerifier,
   workspaceAccess: PlatformExtensionWorkspaceAccess,
   delivery: "headers" | "context" = "headers",
+  legacyWorkspace?: PlatformLegacyWorkspaceObservation,
 ): Promise<
   | {
       readonly ok: true;
@@ -3005,6 +3325,14 @@ async function platformExtensionAuthContext(
     const requestedValues = new URL(request.url).searchParams.getAll(
       "workspaceId",
     );
+    if (requestedValues.length > 0 && legacyWorkspace) {
+      // Authenticated: a refusal from here on is still a use.
+      markPlatformLegacyWorkspaceUse(legacyWorkspace, {
+        surface: "platform_extension_workspace",
+        route: `${route.basePath}/*`,
+        selector: "query",
+      }, platformLegacyWorkspaceSessionFacts(session));
+    }
     if (
       requestedValues.length === 0 &&
       route.workspaceContext === "query-required"
@@ -3054,6 +3382,15 @@ async function platformExtensionAuthContext(
     }
   }
   const sessionContext = session;
+  if (sessionContext.workspaceId && legacyWorkspace && route) {
+    // The credential's own Workspace is forwarded to the extension (header or
+    // authenticated context) even when the request names none.
+    markPlatformLegacyWorkspaceUse(legacyWorkspace, {
+      surface: "platform_extension_workspace",
+      route: `${route.basePath}/*`,
+      selector: "session",
+    }, platformLegacyWorkspaceSessionFacts(sessionContext));
+  }
   if (delivery === "headers") {
     headers.set(PLATFORM_EXTENSION_AUTHENTICATED_HEADER, "1");
     if (sessionContext.authKind) {
@@ -3789,7 +4126,7 @@ async function introspectPlatformExtensionToken(
       return { authenticated: false };
     }
     if (tokenUse === "interface_oauth") {
-      return platformExtensionInterfaceOAuthSession(
+      const interfaceSession = platformExtensionInterfaceOAuthSession(
         request,
         env,
         record,
@@ -3797,6 +4134,9 @@ async function introspectPlatformExtensionToken(
         scopes,
         route,
       );
+      return interfaceSession.authenticated
+        ? { ...interfaceSession, ...platformExtensionOAuthClientId(record) }
+        : interfaceSession;
     }
     const takosumi = platformExtensionTakosumiMetadata(record);
     return {
@@ -3808,10 +4148,23 @@ async function introspectPlatformExtensionToken(
       subject,
       ...takosumi,
       scopes,
+      ...(tokenUse === "oauth_access"
+        ? platformExtensionOAuthClientId(record)
+        : {}),
     };
   } catch {
     return { authenticated: false };
   }
+}
+
+/** The introspected OAuth client id, only in a bounded printable shape. */
+function platformExtensionOAuthClientId(
+  record: Record<string, unknown>,
+): { readonly oauthClientId?: string } {
+  const value = valueString(record.client_id);
+  return value && /^[A-Za-z0-9._:-]{1,128}$/u.test(value)
+    ? { oauthClientId: value }
+    : {};
 }
 
 function safePlatformExtensionSubject(

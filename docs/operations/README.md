@@ -63,6 +63,7 @@ Cloud 側のリポジトリで管理します。
 - [troubleshooting](./troubleshooting.md)
 - [公開 API の応答停止を調べる GET probe](./troubleshooting.md#公開-api-の応答が止まるとき)
 - [runner timing diagnostics](./runner-timing-diagnostics.md)
+- [廃止予定の Workspace の利用を数える](./legacy-workspace-telemetry.md)
 - [incident response](./incident-response.md)
 - [on-call](./oncall.md)
 - [cost monitoring](./cost-monitoring.md)

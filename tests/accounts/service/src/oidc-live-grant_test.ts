@@ -650,6 +650,26 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     code_challenge_method: "S256",
   }).toString();
 
+  // TASK-0118 Phase 9: an anonymous request is sent to sign-in and repeated
+  // afterwards, so only the signed-in request counts as a Workspace use.
+  let workspaceRequests = 0;
+  const observeWorkspaceRequest = () => {
+    workspaceRequests += 1;
+  };
+  const anonymous = await handleAuthorize({
+    request: new Request(url),
+    url,
+    flow: claimFlow,
+    clients,
+    store,
+    operations,
+    observeWorkspaceRequest,
+  });
+  expect(anonymous.status).toBeGreaterThanOrEqual(300);
+  expect(anonymous.status).toBeLessThan(400);
+  expect(new URL(anonymous.headers.get("location")!, issuer).searchParams.get("code")).toBeNull();
+  expect(workspaceRequests).toBe(0);
+
   const authorization = await handleAuthorize({
     request: new Request(url, {
       headers: { "x-takosumi-account-session": "sess_live_grant" },
@@ -659,13 +679,16 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     clients,
     store,
     operations,
+    observeWorkspaceRequest,
   });
   expect(authorization.status).toBe(302);
+  expect(workspaceRequests).toBe(1);
   const code = new URL(authorization.headers.get("location")!).searchParams.get(
     "code",
   );
   expect(code).toBeTruthy();
 
+  const claimLog = spyOn(console, "info").mockImplementation(() => {});
   const tokenResponse = await handleToken({
     issuer,
     request: new Request(`${issuer}/oauth/token`, {
@@ -706,6 +729,30 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     clients,
     operations,
   });
+  const claimEvents = claimLog.mock.calls
+    .map(([line]) => String(line))
+    .filter((line) => line.includes("legacy_workspace_claim_emitted"));
+  claimLog.mockRestore();
+  // TASK-0118 Phase 9: each emitted Workspace claim is counted, value-free.
+  expect(claimEvents.map((line) => JSON.parse(line))).toEqual([
+    {
+      event: "legacy_workspace_claim_emitted",
+      surface: "id_token",
+      clientId: compositionClientId,
+      capsuleBound: false,
+      appRole: false,
+      memberships: false,
+    },
+    {
+      event: "legacy_workspace_claim_emitted",
+      surface: "userinfo",
+      clientId: compositionClientId,
+      capsuleBound: false,
+      appRole: false,
+      memberships: true,
+    },
+  ]);
+  expect(claimEvents.join("\n")).not.toContain(workspaceId);
   expect(userInfo.status).toBe(200);
   const userInfoBody = (await userInfo.json()) as Record<string, unknown>;
   expect(userInfoBody).toMatchObject({

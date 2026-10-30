@@ -343,6 +343,9 @@ async function buildAccountsHandler(
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     workspaceMutationsFrozen,
     ...(config.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+    ...(config.legacyWorkspaceSunset
+      ? { legacyWorkspaceSunset: config.legacyWorkspaceSunset }
+      : {}),
     ...(config.installedAppDelegationSources?.length
       ? { installedAppDelegationSources: config.installedAppDelegationSources }
       : {}),

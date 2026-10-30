@@ -153,7 +153,7 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import { capsuleWithScopeRef } from "takosumi-contract/capsules";
+import { capsuleScopeRef, capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   AccountWorkspaceListParams,
   AccountWorkspacePage,
@@ -8054,7 +8054,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         .bind(capsuleId).first<{ storage_root: string | null }>();
       if (row && row.storage_root !== null) return row.storage_root;
     }
-    return `workspaces/${capsule.workspaceId}/capsules/${capsule.id}`;
+    // The legacy root of a row without a persisted one was written under the
+    // Capsule's frozen scope, never its live Workspace id.
+    return `workspaces/${capsuleScopeRef(capsule)}/capsules/${capsule.id}`;
   }
 
   async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
