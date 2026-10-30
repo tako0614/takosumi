@@ -205,11 +205,13 @@ type PublicCapsuleInput = PublicCapsule &
       | "managementState"
       | "managementEpoch"
       | "storageRoot"
+      | "scopeRef"
     >
   >;
 
 export function publicCapsule(capsule: PublicCapsuleInput): PublicCapsule {
   const {
+    scopeRef: _scopeRef,
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttempt,
     installingPrincipalId: _installingPrincipalId,

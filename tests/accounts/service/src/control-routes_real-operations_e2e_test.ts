@@ -7959,7 +7959,7 @@ test("busy old Apply cannot carry an orphan target OIDC grant across re-adoption
   );
   const clientId = "tko_re_adoption_oidc_orphan";
   const oldActivationDigest = await oidcClientActivationDigest({
-    workspaceId: capsule.workspaceId,
+    scopeRef: capsule.workspaceId,
     capsuleId: capsule.id,
     executionAuthorityEpoch: 1,
     installConfig: oldConfig,

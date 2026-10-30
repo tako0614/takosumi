@@ -153,6 +153,7 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import { capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   AccountWorkspaceListParams,
   AccountWorkspacePage,
@@ -7125,7 +7126,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const [expectedConfig, expectedCapsule, expectedBinding] =
       await Promise.all([
         stableJsonDigest(initialInstallConfig),
-        stableJsonDigest(storedCapsule),
+        stableJsonDigest(capsuleWithScopeRef(storedCapsule)),
         stableJsonDigest(binding),
       ]);
     const classifyExisting = async (): Promise<
@@ -7189,7 +7190,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
       const [configDigest, capsuleDigest, bindingDigest] = await Promise.all([
         stableJsonDigest(existingConfig),
-        stableJsonDigest(capsuleWithoutPhysicalOwnership(existingCapsule)),
+        stableJsonDigest(
+          capsuleWithScopeRef(capsuleWithoutPhysicalOwnership(existingCapsule)),
+        ),
         stableJsonDigest(existingBinding),
       ]);
       return existingCapsuleRow.epoch === 1 &&
