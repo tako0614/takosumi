@@ -1379,3 +1379,110 @@ test("a Capsule-scoped export narrows Capsule-owned rows to that Capsule", async
     }),
   ).rejects.toMatchObject({ code: "not_found" });
 });
+
+/**
+ * TASK-0118 P9.1-f review: an app's backup is scoped to that app. Two apps
+ * share one Workspace; every Workspace-wide record exists for both. The
+ * capsule-scoped export of cap_a, written under cap_a's `apps/` root, must
+ * carry nothing of cap_b, and a Workspace export labelled with a Capsule stays
+ * in the Workspace layout. (Before the fix the app routes sent no `scope`, so
+ * the "app" backup exported the whole Workspace under `apps/cap_a`.)
+ */
+test("a capsule-scoped backup of one app carries nothing of another app in its Workspace", async () => {
+  const stateRefA = "apps/cap_a/environments/production/state-versions/00000001.tfstate.enc";
+  const stateRefB = "apps/cap_b/environments/production/state-versions/00000001.tfstate.enc";
+  const { service, store, artifactStore } = makeService({
+    stateObjects: {
+      [stateRefA]: new TextEncoder().encode("SEALED-STATE-OF-A"),
+      [stateRefB]: new TextEncoder().encode("SEALED-STATE-OF-B"),
+    },
+  });
+  const ws = "ws_shared";
+  for (const app of ["a", "b"] as const) {
+    const capsuleId = `cap_${app}`;
+    await seedCapsuleModel(store, { workspaceId: ws, capsuleId, sourceId: `src_${app}`, name: app,
+      installConfigId: `cfg_${app}`, snapshotId: `snap_${app}` });
+    expect(store.setCapsuleOwnership({ capsuleId, ownerAccountId: `tsub_${app}`, ownershipEpoch: 0,
+      managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsuleId}` })).toBe(true);
+    await store.putConnection({
+      id: `conn_${app}`, workspaceId: ws, scope: "workspace", provider: "cloudflare",
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare", kind: "cloudflare_api_token",
+      displayName: `Cloudflare ${app}`, materialization: "secret", status: "verified",
+      envNames: ["CLOUDFLARE_API_TOKEN"], createdAt: TS, updatedAt: TS, verifiedAt: TS,
+    });
+    await transitionProviderBindingSetForFixture(store, {
+      id: `pbs_${app}`, workspaceId: ws, capsuleId, environment: "production",
+      bindings: [{ provider: "cloudflare", alias: "main", connectionId: `conn_${app}` }],
+      createdAt: TS, updatedAt: TS,
+    });
+    await store.putStateVersion({
+      id: `st_${app}`, workspaceId: ws, capsuleId, environment: "production", generation: 1,
+      stateRef: app === "a" ? stateRefA : stateRefB, digest: "sha256:" + "b".repeat(64),
+      createdByRunId: `apply_${app}`, createdAt: TS,
+    });
+    await store.putOutput({
+      id: `out_${app}`, workspaceId: ws, capsuleId, stateGeneration: 1,
+      rawArtifactRef: `apps/${capsuleId}/runs/apply_${app}/outputs.raw.json.enc`,
+      publicOutputs: { url: `https://${app}.example.com` }, workspaceOutputs: {},
+      outputDigest: "sha256:" + "c".repeat(64), createdAt: TS,
+    });
+    await store.putActivityEvent({ id: `act_${app}`, workspaceId: ws, action: "capsule.updated",
+      targetType: "capsule", targetId: capsuleId, metadata: {}, createdAt: TS });
+    await store.putSecurityFinding({ id: `finding_${app}`, workspaceId: ws, capsuleId, severity: "warning",
+      type: "policy", message: `finding of ${app}`, metadata: {}, createdAt: TS });
+    await store.putUsageEvent({ id: `usage_${app}`, workspaceId: ws, capsuleId, kind: "runner_minute",
+      quantity: 1, usdMicros: 30_000, ratingStatus: "rated", source: "runner",
+      idempotencyKey: `usage_${app}`, createdAt: TS });
+    await store.putBackupRecord({ id: `bkp_old_${app}`, workspaceId: ws, capsuleId,
+      ref: `apps/${capsuleId}/backups/bkp_old_${app}/control.json.zst.enc`,
+      digest: "sha256:" + "e".repeat(64), sizeBytes: 1, createdAt: "2026-06-05T00:00:00.000Z" });
+  }
+  // Workspace-level and cross-app records never belong to one app's export.
+  await store.putActivityEvent({ id: "act_workspace", workspaceId: ws, action: "workspace.updated",
+    targetType: "workspace", targetId: ws, metadata: {}, createdAt: TS });
+  await store.putActivityEvent({ id: "act_link", workspaceId: ws, action: "interface.linked",
+    targetType: "capsule", targetId: "cap_a", metadata: { consumerCapsuleId: "cap_b" }, createdAt: TS });
+  await store.putSecurityFinding({ id: "finding_workspace", workspaceId: ws, severity: "info",
+    type: "policy", message: "workspace finding", metadata: {}, createdAt: TS });
+  await store.putRunGroup({ id: "rg_1", workspaceId: ws, type: "plan_update", status: "succeeded",
+    graphJson: JSON.stringify({ capsules: ["cap_a", "cap_b"] }), createdAt: TS } as never);
+
+  // Exactly what both app routes send now.
+  const record = await service.createBackup({ workspaceId: ws, capsuleId: "cap_a", environment: "production", scope: "capsule" });
+  expect(record.ref).toBe(`apps/cap_a/backups/${record.id}/control.json.zst.enc`);
+  expect(record.stateArchive?.ref).toBe(`apps/cap_a/backups/${record.id}/state.tar.zst.enc`);
+  const bundle = await readBundle(artifactStore!, record.ref);
+  expect(bundle.scope).toEqual({ kind: "capsule", capsuleId: "cap_a" });
+  expect(bundle.workspace).toBeNull();
+  expect(bundle.capsules.map((row) => row.id)).toEqual(["cap_a"]);
+  expect(bundle.sources.map((row) => row.id)).toEqual(["src_a"]);
+  const configA = (await store.getCapsule("cap_a"))!.installConfigId;
+  const configB = (await store.getCapsule("cap_b"))!.installConfigId;
+  expect(configA).not.toBe(configB);
+  expect(bundle.installConfigs.map((row) => row.id)).toEqual([configA]);
+  expect(bundle.providerBindingSets.map((row: any) => row.id)).toEqual(["pbs_a"]);
+  expect(bundle.connections.map((row: any) => row.id)).toEqual(["conn_a"]);
+  expect(bundle.stateVersions.map((row) => row.id)).toEqual(["st_a"]);
+  expect(bundle.outputs.map((row) => row.id)).toEqual(["out_a"]);
+  expect(bundle.activity.map((row: any) => row.id)).toEqual(["act_a"]);
+  expect(bundle.securityFindings.map((row: any) => row.id)).toEqual(["finding_a"]);
+  expect(bundle.usageEvents.map((row: any) => row.id)).toEqual(["usage_a"]);
+  expect(bundle.backupRecords.map((row: any) => row.id)).toEqual(["bkp_old_a"]);
+  expect(bundle.runGroups).toEqual([]);
+  // Nothing of the other app in any artifact of the export.
+  for (const ref of [record.ref, record.stateArchive!.ref, record.artifactsManifest!.ref]) {
+    const text = new TextDecoder().decode(
+      ref.endsWith(".json") ? artifactStore!.get(ref)! : readZstdRawObject(artifactStore!, ref),
+    );
+    for (const other of ["cap_b", "src_b", configB, "conn_b", "SEALED-STATE-OF-B", "b.example.com"]) {
+      expect(text, `${ref} ${other}`).not.toContain(other);
+    }
+  }
+
+  // A Workspace export labelled with a Capsule is not that app's: it stays in
+  // the Workspace layout and carries the Workspace.
+  const labelled = await service.createBackup({ workspaceId: ws, capsuleId: "cap_a", environment: "production" });
+  expect(labelled.ref).toBe(`workspaces/${ws}/backups/${labelled.id}/control.json.zst.enc`);
+  const workspaceBundle = await readBundle(artifactStore!, labelled.ref);
+  expect(workspaceBundle.capsules.map((row) => row.id).sort()).toEqual(["cap_a", "cap_b"]);
+});

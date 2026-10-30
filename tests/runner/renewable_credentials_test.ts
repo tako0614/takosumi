@@ -34,6 +34,8 @@ test("runner health advertises the exact renewable credential transport capabili
     capabilities: [
       "takosumi.runner-credential-refresh@v1",
       PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
+      // TASK-0118 P9.1-f: the image accepts `apps/` Source archive keys.
+      "takosumi.app-source-archive-roots@v1",
     ],
     mutationCustodyMode: "cloudflare-do",
   });

@@ -95,12 +95,14 @@ export async function startTakosumiService(
     auditReplicationSink,
   );
   const sharedSqlClientHandle = await createSharedSqlClient(runtimeEnv);
+  // This entry has no Runner it could ask whether the image accepts `apps/`
+  // Source archive keys, so it never allocates them; the setting is still
+  // validated. The Worker and the Postgres reference server honor it.
+  appSourceArchiveRootsFromEnv(runtimeEnv.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS);
   const created = await createTakosumiService({
     runtimeEnv,
     runtimeConfig,
-    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator({
-      appSourceArchiveRoots: appSourceArchiveRootsFromEnv(runtimeEnv.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS),
-    }),
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     ...(sharedSqlClientHandle
       ? { sqlClient: sharedSqlClientHandle.client }
       : {}),

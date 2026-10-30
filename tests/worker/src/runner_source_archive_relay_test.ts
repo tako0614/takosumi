@@ -173,6 +173,22 @@ test("an app-owned Source's apps-prefixed archives are in its retirement and cle
   expect(bucket.body(allocated)).toBeUndefined();
 });
 
+test("the Runner capability probe reports what the image's health advertises and dispatches nothing (TASK-0118 P9.1-f)", async () => {
+  for (const capabilities of [["takosumi.app-source-archive-roots@v1"], []]) {
+    const calls: string[] = [];
+    const runner = runnerWithContainer(new FakeR2Bucket(), new FakeR2Bucket(), {
+      async containerFetch(request) {
+        calls.push(`${request.method} ${new URL(request.url).pathname}`);
+        return Response.json({ ok: true, capabilities });
+      },
+    });
+    const response = await runner.fetch(new Request("https://runner/runner-capabilities"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ capabilities });
+    expect(calls.every((call) => call === "GET /healthz")).toBe(true);
+  }
+});
+
 test("Source retirement refuses live owners, active sync and unreferenced keys", async () => {
   const db = new SqliteFakeD1();
   await db.exec(`create table sources (id text, space_id text, status text, record_json text);

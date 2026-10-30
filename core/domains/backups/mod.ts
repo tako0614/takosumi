@@ -38,6 +38,7 @@ import {
   CONTROL_BACKUP_CONTENT_TYPE,
   type ListBackupsResponse,
 } from "takosumi-contract/backups";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import type { PageParams } from "takosumi-contract/pagination";
 import type {
   Capsule,
@@ -256,9 +257,10 @@ export class BackupsService {
   }
 
   /**
-   * The Capsule a labelled backup belongs to and its persisted root (TASK-0118
-   * P9.1-f). Its artifacts go under an `apps/` root; a legacy Capsule's keep
-   * the Workspace layout of its frozen root. A Workspace export has none.
+   * The Capsule an app-scoped backup belongs to and its persisted root
+   * (TASK-0118 P9.1-f). Its artifacts go under an `apps/` root; a legacy
+   * Capsule's keep the Workspace layout of its frozen root. A Workspace export
+   * has none.
    */
   async #backupOwner(capsuleId: string | undefined): Promise<ArtifactOwnerRoot | undefined> {
     const id = capsuleId?.trim();
@@ -362,7 +364,10 @@ export class BackupsService {
 
     let record: BackupRecord;
     try {
-      const owner = await this.#backupOwner(request.capsuleId);
+      // Only an app-scoped export belongs to that app and goes under its root.
+      // A Workspace export, even one labelled with a Capsule, keeps the
+      // Workspace layout.
+      const owner = await this.#backupOwner(scopedCapsuleId);
       const bundle = await this.#collectControlBundle(
         workspaceId,
         createdAt,
@@ -547,19 +552,31 @@ export class BackupsService {
       (config) =>
         capsuleId === undefined || scopedInstallConfigIds.has(config.id),
     );
-    const connections = await this.#store.listConnections(workspaceId);
-    const runGroups = await this.#store.listRunGroups(workspaceId);
-    const activity = await this.#store.listActivityEvents(workspaceId, {
+    // An app-scoped export carries only that app's own records: every
+    // Workspace-wide list below is narrowed to it (TASK-0118 P9.1-f).
+    const inScope = <T extends { readonly capsuleId?: string }>(rows: readonly T[]): readonly T[] =>
+      capsuleId === undefined ? rows : rows.filter((row) => row.capsuleId === capsuleId);
+    const allConnections = await this.#store.listConnections(workspaceId);
+    const runGroups = capsuleId === undefined
+      ? await this.#store.listRunGroups(workspaceId)
+      : [];
+    const otherCapsuleIds = new Set(
+      allCapsules.map((capsule) => capsule.id).filter((id) => id !== capsuleId),
+    );
+    const activity = (await this.#store.listActivityEvents(workspaceId, {
       limit: this.#activityLimit,
-    });
-    const securityFindings = await this.#store.listSecurityFindings(
+    })).filter((event) =>
+      capsuleId === undefined ||
+      activityBelongsToCapsule(event, capsuleId, scopedSourceIds, otherCapsuleIds)
+    );
+    const securityFindings = inScope(await this.#store.listSecurityFindings(
       workspaceId,
       {
         limit: this.#activityLimit,
       },
-    );
-    const usageEvents = await this.#store.listUsageEvents(workspaceId);
-    const backupRecords = await this.#store.listBackupRecords(workspaceId);
+    ));
+    const usageEvents = inScope(await this.#store.listUsageEvents(workspaceId));
+    const backupRecords = inScope(await this.#store.listBackupRecords(workspaceId));
 
     // Per-Capsule fan-out: source snapshots (by Source), StateVersion metadata,
     // and Output projections.
@@ -669,6 +686,19 @@ export class BackupsService {
       }
     }
 
+    // The app's own connections: those its provider bindings or its Source use.
+    const usedConnectionIds = new Set<string>([
+      ...providerBindingSets.flatMap((profile) =>
+        ((profile as { readonly bindings?: readonly { readonly connectionId?: unknown }[] }).bindings ?? [])
+          .map((binding) => binding.connectionId)
+          .filter((id): id is string => typeof id === "string")),
+      ...sources.map((source) => source.authConnectionId)
+        .filter((id): id is string => typeof id === "string"),
+    ]);
+    const connections = capsuleId === undefined
+      ? allConnections
+      : allConnections.filter((connection) => usedConnectionIds.has(connection.id));
+
     return {
       bundleVersion: 3,
       kind: "control",
@@ -677,7 +707,8 @@ export class BackupsService {
         ? { scope: { kind: "capsule" as const, capsuleId } }
         : {}),
       capturedAt,
-      workspace: workspace ?? null,
+      // The Workspace record (name, owner, policy) is not the app's.
+      workspace: capsuleId === undefined ? workspace ?? null : null,
       sources: sources.map(stripSource),
       sourceSnapshots,
       installConfigs: [...installConfigs],
@@ -1281,6 +1312,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * replacing the N+1 per-item store reads. Items whose key is `undefined` are
  * skipped.
  */
+/**
+ * Whether an Activity event is one app's own, decided without lookups and
+ * conservatively: it names the app (or its Source) as its target or in
+ * `metadata.capsuleId`, and names no other app of the Workspace anywhere in
+ * its metadata. Workspace-level, connection and cross-app events are left out.
+ */
+function activityBelongsToCapsule(
+  event: ActivityEvent,
+  capsuleId: string,
+  sourceIds: ReadonlySet<string | undefined>,
+  otherCapsuleIds: ReadonlySet<string>,
+): boolean {
+  const own = (event.targetType === "capsule" && event.targetId === capsuleId) ||
+    (event.targetType === "source" && sourceIds.has(event.targetId)) ||
+    event.metadata?.capsuleId === capsuleId;
+  if (!own) return false;
+  if (event.targetType === "capsule" && otherCapsuleIds.has(event.targetId)) return false;
+  return !metadataStrings(event.metadata).some((value) => otherCapsuleIds.has(value));
+}
+
+function metadataStrings(value: unknown, depth = 0): string[] {
+  if (typeof value === "string") return [value];
+  if (depth > 8 || value === null || typeof value !== "object") return [];
+  return Object.values(value as Record<string, unknown>)
+    .flatMap((entry) => metadataStrings(entry, depth + 1));
+}
+
 function groupBy<T>(
   items: readonly T[],
   key: (item: T) => string | undefined,

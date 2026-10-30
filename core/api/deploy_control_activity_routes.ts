@@ -148,8 +148,10 @@ export function mountDeployControlActivityRoutes(
             const capsule = scope === "capsule"
               ? (await dependencies.controller!.getCapsule(idCheck.value)).capsule
               : undefined;
+            // An app's backup is scoped to that app: without `scope` the
+            // export would carry every app of the Workspace (TASK-0118 P9.1-f).
             const request: CreateBackupRequest = capsule
-              ? { workspaceId: capsule.workspaceId, capsuleId: capsule.id, environment: capsule.environment }
+              ? { workspaceId: capsule.workspaceId, capsuleId: capsule.id, environment: capsule.environment, scope: "capsule" }
               : { workspaceId: idCheck.value };
             const authority = await service.captureManagementAuthority(request.workspaceId)
               .then(

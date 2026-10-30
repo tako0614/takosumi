@@ -529,6 +529,8 @@ export interface ControlPlaneOperations {
       readonly createdByRunId?: string;
       readonly capsuleId?: string;
       readonly environment?: string;
+      /** `capsule` exports only that app's records; the app routes always send it. */
+      readonly scope?: "workspace" | "capsule";
       readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
     }): Promise<BackupRecord>;
     listBackups(

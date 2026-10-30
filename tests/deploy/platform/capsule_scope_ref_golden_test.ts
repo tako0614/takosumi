@@ -139,9 +139,18 @@ const GOLDEN_FOLLOW_UP = {
 } as const;
 
 /**
- * Storage keys of an existing (legacy-root) Capsule, captured from the
- * unmodified allocator on origin/main `e71daf8e6`, before stage 9.1-f let a
- * Source archive or backup follow an `apps/` root. They must not move.
+ * Storage keys of an existing (legacy-root) Capsule in Workspace
+ * `ws_golden_scope`, captured from the unmodified allocator on origin/main
+ * `e71daf8e6`, before stage 9.1-f let a Source archive or backup follow an
+ * `apps/` root. For a Capsule whose Workspace id has not moved they must not
+ * move.
+ *
+ * `backupMovedWorkspaceOnMain` is what that same allocator produced once the
+ * authority Workspace id moved (`ws_after_workspace_removal`): it keyed new
+ * backups by the live Workspace id. Stage 9.1-f deliberately changes that:
+ * a new backup of an existing Capsule follows the Workspace segment of the
+ * Capsule's frozen root instead, so it stays where the Capsule's other objects
+ * are. Only that moved-Workspace case differs from `e71daf8e6`.
  */
 const GOLDEN_STORAGE = {
   sourceArchiveRef: "workspaces/ws_golden_scope/sources/src_golden/snapshots/snap_golden/source.tar.zst",
@@ -152,6 +161,7 @@ const GOLDEN_STORAGE = {
     artifactsManifest: "workspaces/ws_golden_scope/backups/bkp_golden/artifacts.manifest.json",
     serviceData: "workspaces/ws_golden_scope/backups/bkp_golden/service-data.tar.zst.enc",
   },
+  backupMovedWorkspaceOnMain: "workspaces/ws_after_workspace_removal/backups/bkp_golden/control.json.zst.enc",
 } as const;
 
 interface Variant {
@@ -814,13 +824,19 @@ describe("callers keep the follow-up derived values byte-identical", () => {
 
 /**
  * Stage 9.1-f lets a new app's Source archives and backups follow its `apps/`
- * root. An existing Capsule keeps its persisted legacy root, so every key it
- * allocates through the real callers stays byte-identical to origin/main, with
- * the new layout switched on.
+ * root. An existing Capsule keeps its persisted legacy root: every key it
+ * allocates through the real callers stays byte-identical to origin/main for
+ * the legacy and backfilled spellings, with the new layout switched on. For a
+ * moved Workspace id, new backups intentionally follow the frozen root rather
+ * than the live Workspace id main used (see `GOLDEN_STORAGE`).
  */
-describe("storage keys of an existing Capsule stay byte-identical (9.1-f)", () => {
+describe("storage keys of an existing Capsule (9.1-f)", () => {
   for (const variant of VARIANTS) {
-    test(`${variant.name}: backups labelled with the Capsule`, async () => {
+    const moved = variant.workspaceId !== SCOPE;
+    const title = moved
+      ? "an app-scoped backup follows the frozen root, not the moved Workspace id main used"
+      : "an app-scoped backup keeps origin/main's key byte for byte";
+    test(`${variant.name}: ${title}`, async () => {
       const { store } = await seededStore(variant, undefined);
       const artifactStore = new InMemoryBackupArtifactStore();
       const backups = new BackupsService({
@@ -841,8 +857,11 @@ describe("storage keys of an existing Capsule stay byte-identical (9.1-f)", () =
         scope: "capsule",
       });
       // The backup follows the Capsule's frozen root, even when the
-      // allocation names the moved authority Workspace.
+      // allocation names the moved authority Workspace. For that moved case
+      // this is a deliberate change from origin/main, which keyed it by the
+      // live Workspace id.
       expect(backup.ref).toBe(GOLDEN_STORAGE.backup.ref);
+      if (moved) expect(backup.ref).not.toBe(GOLDEN_STORAGE.backupMovedWorkspaceOnMain);
       expect(backup.artifactsManifest?.ref).toBe(GOLDEN_STORAGE.backup.artifactsManifest);
       expect(artifactStore.get(GOLDEN_STORAGE.backup.ref)).toBeDefined();
       // The sidecars this fixture does not produce use the same owner root.

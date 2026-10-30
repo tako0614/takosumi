@@ -50,6 +50,10 @@ import {
 } from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 import {
+  APP_SOURCE_ARCHIVE_ROOTS_CAPABILITY,
+  cachedRunnerCapabilityProbe,
+} from "../../core/shared/app_source_archive_roots.ts";
+import {
   RUN_DEADLINE_AT_HEADER,
   RUN_DEADLINE_EXCEEDED_REASON,
   RUNNER_MUTATION_INDETERMINATE_CODE,
@@ -148,13 +152,35 @@ export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
 {
   readonly #activeRunsByAction = new Map<ContainerRunnerAction, number>();
+  readonly #appSourceArchiveRoots: () => Promise<boolean>;
 
   constructor(
     private readonly env: CloudflareWorkerEnv,
     private readonly options: {
       readonly observability?: WorkerMetricSink;
     } = {},
-  ) {}
+  ) {
+    this.#appSourceArchiveRoots = cachedRunnerCapabilityProbe(() => this.#probeAppSourceArchiveRoots());
+  }
+
+  /** Whether the configured Runner image accepts `apps/` Source archive keys (TASK-0118 P9.1-f). */
+  acceptsAppSourceArchiveRoots(): Promise<boolean> {
+    return this.#appSourceArchiveRoots();
+  }
+
+  async #probeAppSourceArchiveRoots(): Promise<boolean> {
+    if (!this.env.RUNNER) return false;
+    try {
+      const response = await this.env.RUNNER.get(this.env.RUNNER.idFromName("runner-capability-probe")).fetch(
+        new Request("https://opentofu-runner.internal/runner-capabilities", { method: "GET" }),
+      );
+      const payload = response.ok ? await response.json().catch(() => undefined) as unknown : undefined;
+      return isRecordValue(payload) &&
+        stringArrayFromRecord(payload, "capabilities")?.includes(APP_SOURCE_ARCHIVE_ROOTS_CAPABILITY) === true;
+    } catch {
+      return false;
+    }
+  }
 
   async assertCredentialRefreshCapability(input: {
     readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };

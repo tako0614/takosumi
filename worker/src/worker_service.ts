@@ -207,7 +207,11 @@ export async function createWorkerServiceApp(
   // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
   const backupStorage = createBackupStoredOwnerContext(
     new ObjectKeyArtifactReferenceAllocator({
-      appSourceArchiveRoots: appSourceArchiveRootsFromEnv(env.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS),
+      // Honored only once the configured Runner image advertises that it
+      // accepts `apps/` archive keys; until then the Workspace layout.
+      appSourceArchiveRoots: appSourceArchiveRootsFromEnv(env.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS)
+        ? () => opentofuRunner.acceptsAppSourceArchiveRoots()
+        : false,
     }),
     storedServiceCompositionFromEnv(env),
     env.R2_BACKUPS,

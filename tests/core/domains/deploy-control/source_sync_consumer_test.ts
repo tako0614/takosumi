@@ -1,4 +1,4 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 
 import {
   type ApplyRun,
@@ -2262,4 +2262,46 @@ test("source_sync consumer does not terminalize or publish a snapshot after losi
   expect(current?.heartbeatAt).toBe(50_000);
   expect(await store.listSourceSnapshots(source.id)).toHaveLength(0);
   expect((await store.getSource(source.id))?.lastSeenCommit).toBeUndefined();
+});
+
+/** Hides one Source, as if a retirement removed it after the sync settled. */
+class SourceHidingStore extends InMemoryOpenTofuControlStore {
+  hidden: string | undefined;
+  override getSource(id: string) {
+    return id === this.hidden ? Promise.resolve(undefined) : super.getSource(id);
+  }
+}
+
+test("unused apps/ archive cleanup ends with a log once its Source is gone (TASK-0118 P9.1-f)", async () => {
+  const store = new SourceHidingStore();
+  const { sourcesService, runner, controller } = build({ store });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1", name: "repo", url: "https://github.com/acme/repo.git", defaultRef: "main",
+  });
+  await store.putSourceSnapshot({
+    id: "snap_reused", origin: "git", workspaceId: "workspace_1", sourceId: source.id, url: source.url,
+    ref: source.defaultRef, resolvedCommit: runner.result.resolvedCommit, path: source.defaultPath,
+    archiveRef: `workspaces/workspace_1/sources/${source.id}/snapshots/snap_reused/source.tar.zst`,
+    archiveDigest: "sha256:" + "d".repeat(64), archiveSizeBytes: 2048, fetchedByRunId: "ssr_old",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+  expect(runner.cleanupCalls).toHaveLength(1);
+  // The run's unused allocation sat under its app's root, and the Source has
+  // since been removed: nothing can prove that owner prefix any more.
+  const settled = (await store.getSourceSyncRun(run.id))!;
+  await store.putSourceSyncRun({ ...settled,
+    archiveRef: `apps/cap_gone/sources/${source.id}/snapshots/${settled.requestedSnapshotId}/source.tar.zst` });
+  store.hidden = source.id;
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await controller.runQueuedSourceSync(run.id);
+    await controller.runQueuedSourceSync(run.id);
+    // Terminal: no custody call is attempted, and each redelivery just logs.
+    expect(runner.cleanupCalls).toHaveLength(1);
+    expect(warn.mock.calls.filter(([message]) => String(message).includes("its Source no longer exists"))).toHaveLength(2);
+  } finally {
+    warn.mockRestore();
+  }
 });

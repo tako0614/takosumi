@@ -2273,6 +2273,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
     const originalLease = storedServiceCompositionFromEnv(this.env) ? readStoredRunLeaseHeader(request.headers.get(STORED_RUN_LEASE_HEADER)) : undefined;
     const url = new URL(request.url);
+    if (url.pathname === "/runner-capabilities" && request.method === "GET") {
+      // Owner-free probe of what this Runner image accepts (TASK-0118 P9.1-f):
+      // a Worker allocates `apps/` Source archive keys only after its image
+      // advertised that capability. Nothing is dispatched or written.
+      await this.#ensureContainerReady(url);
+      const health = await this.#containerFetch(new Request(containerHealthUrl(url), { method: "GET" }));
+      if (!health.ok) return Response.json({ error: "runner capability probe failed" }, { status: 503 });
+      const payload = await health.json().catch(() => undefined) as unknown;
+      const capabilities = isRecord(payload) && Array.isArray(payload.capabilities)
+        ? payload.capabilities.filter((value): value is string => typeof value === "string")
+        : [];
+      return Response.json({ capabilities });
+    }
     if (url.pathname === "/capabilities" && request.method === "GET") {
       const ownerKind = url.searchParams.get("ownerKind");
       const ownerId = url.searchParams.get("ownerId")?.trim();

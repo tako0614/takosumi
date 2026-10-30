@@ -10,6 +10,10 @@ import { Buffer } from "node:buffer";
 import { constants as fsConstants } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
+  APP_SOURCE_ARCHIVE_ROOTS_CAPABILITY,
+  cachedRunnerCapabilityProbe,
+} from "../../../core/shared/app_source_archive_roots.ts";
+import {
   capsuleArtifactRoot,
   ObjectKeyArtifactReferenceAllocator,
   sourceArchiveCustodyPrefixes,
@@ -634,6 +638,7 @@ function privateRunFileRefreshUnavailable(): OpenTofuRunnerExecutionError {
 
 class LocalOpenTofuRunner implements OpenTofuRunner {
   readonly #privateRunFileSessions = new Map<string, LocalPrivateRunFileSession>();
+  readonly #appSourceArchiveRoots = cachedRunnerCapabilityProbe(() => this.#probeAppSourceArchiveRoots());
 
   constructor(
     private readonly archiveStore: SourceArchiveStore,
@@ -683,6 +688,28 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     }
     for (const ref of refs) {
       await this.archiveStore.delete(ref);
+    }
+  }
+
+  /** Whether the Runner image accepts `apps/` Source archive keys (TASK-0118 P9.1-f). */
+  acceptsAppSourceArchiveRoots(): Promise<boolean> {
+    return this.#appSourceArchiveRoots();
+  }
+
+  async #probeAppSourceArchiveRoots(): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await this.transport.fetch("/healthz", { method: "GET", signal: controller.signal });
+      if (!response.ok || !isJsonResponse(response)) return false;
+      const body = parseObject(new TextDecoder().decode(
+        await readResponseBytesWithCap(response, 4_096, "runner health"),
+      ));
+      return Array.isArray(body.capabilities) && body.capabilities.includes(APP_SOURCE_ARCHIVE_ROOTS_CAPABILITY);
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

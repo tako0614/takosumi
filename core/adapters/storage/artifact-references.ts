@@ -92,21 +92,39 @@ export interface ArtifactReferenceAllocator {
  *
  * Source archives move only with `appSourceArchiveRoots`: the Runner image
  * validates the archive key it writes, and an image built before it accepted
- * `apps/` refuses that key, so the operator turns this on once the configured
- * image accepts it (`TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS`). Backups are written
- * by the Worker itself and always follow the owner.
+ * `apps/` refuses that key. Hosts pass a probe of the configured Runner
+ * (`TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS=enabled` plus the Runner's advertised
+ * capability), so an archive moves only once the image is confirmed to accept
+ * it; until then it keeps the Workspace layout. `true` (tests) skips the
+ * probe. Backups are written by the Worker itself and always follow the owner.
  */
 export class ObjectKeyArtifactReferenceAllocator implements ArtifactReferenceAllocator {
-  readonly #appSourceArchiveRoots: boolean;
+  readonly #appSourceArchiveRoots: boolean | (() => Promise<boolean>);
 
-  constructor(options: { readonly appSourceArchiveRoots?: boolean } = {}) {
-    this.#appSourceArchiveRoots = options.appSourceArchiveRoots === true;
+  constructor(options: { readonly appSourceArchiveRoots?: boolean | (() => Promise<boolean>) } = {}) {
+    this.#appSourceArchiveRoots = options.appSourceArchiveRoots ?? false;
   }
 
-  allocate(input: ArtifactReferenceAllocation): string {
+  /** Only a Source archive may wait on the Runner probe; every other kind is synchronous. */
+  allocate(input: Exclude<ArtifactReferenceAllocation, { readonly kind: "source_archive" }>): string;
+  allocate(input: ArtifactReferenceAllocation): string | Promise<string>;
+  allocate(input: ArtifactReferenceAllocation): string | Promise<string> {
+    if (input.kind === "source_archive" && input.owner !== undefined &&
+      typeof this.#appSourceArchiveRoots === "function") {
+      const probe = this.#appSourceArchiveRoots;
+      return (async () => {
+        let accepted = false;
+        try { accepted = await probe() === true; } catch { accepted = false; }
+        return this.#allocate(input, accepted);
+      })();
+    }
+    return this.#allocate(input, this.#appSourceArchiveRoots === true);
+  }
+
+  #allocate(input: ArtifactReferenceAllocation, appSourceArchiveRoots: boolean): string {
     switch (input.kind) {
       case "source_archive": {
-        const owner = this.#appSourceArchiveRoots ? input.owner : undefined;
+        const owner = appSourceArchiveRoots ? input.owner : undefined;
         return `${sourceArchiveRoot(input.workspaceId, input.sourceId, owner)}/snapshots/${segment(
           input.snapshotId,
         )}/source.tar.zst`;

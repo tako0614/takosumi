@@ -285,7 +285,12 @@ export async function buildComposedApp(
     ...(privateRunFiles ? { privateRunFiles } : {}),
     mountInternalLedgerRoutes: true,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator({
-      appSourceArchiveRoots: appSourceArchiveRootsFromEnv(runtimeEnv.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS),
+      // Honored only once the configured Runner advertises that it accepts
+      // `apps/` archive keys; a Runner that cannot be asked keeps the
+      // Workspace layout.
+      appSourceArchiveRoots: appSourceArchiveRootsFromEnv(runtimeEnv.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS)
+        ? async () => await input.opentofuRunner?.acceptsAppSourceArchiveRoots?.() === true
+        : false,
     }),
     // The Bun/Postgres reference server explicitly installs the reference
     // provider contribution. Core has no fallback catalog or driver registry.

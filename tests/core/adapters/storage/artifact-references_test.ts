@@ -6,6 +6,7 @@ import {
   sourceArchiveCustodyPrefixes,
   sourceArchiveSnapshotSegment,
 } from "../../../../core/adapters/storage/artifact-references.ts";
+import { cachedRunnerCapabilityProbe } from "../../../../core/shared/app_source_archive_roots.ts";
 
 describe("ObjectKeyArtifactReferenceAllocator", () => {
   const allocator = new ObjectKeyArtifactReferenceAllocator();
@@ -155,6 +156,42 @@ describe("Source archives and backups follow an apps root (TASK-0118 P9.1-f)", (
       "apps/cap_1/sources/src_1/snapshots/snap_1/other.tar.zst",
       "apps/cap_1/sources/src_1/snapshots/snap_1/x/source.tar.zst",
     ]) expect(sourceArchiveSnapshotSegment(ref, prefixes), ref).toBeUndefined();
+  });
+
+  test("a Source archive moves only once the Runner probe confirms the image accepts apps/ keys", async () => {
+    const owned = { ...archive, owner: app };
+    for (const [answer, expected] of [
+      [async () => true, "apps/cap_1/sources/src_1/snapshots/snap_1/source.tar.zst"],
+      [async () => false, "workspaces/ws_1/sources/src_1/snapshots/snap_1/source.tar.zst"],
+      [async () => { throw new Error("probe failed"); }, "workspaces/ws_1/sources/src_1/snapshots/snap_1/source.tar.zst"],
+    ] as const) {
+      const probed = new ObjectKeyArtifactReferenceAllocator({ appSourceArchiveRoots: answer });
+      expect(await probed.allocate(owned)).toBe(expected);
+      // No owner, or any other kind, never waits on the probe.
+      expect(probed.allocate(archive)).toBe("workspaces/ws_1/sources/src_1/snapshots/snap_1/source.tar.zst");
+      expect(probed.allocate({ kind: "backup_control", workspaceId: "ws_1", backupId: "bkp_1", owner: app }))
+        .toBe("apps/cap_1/backups/bkp_1/control.json.zst.enc");
+    }
+  });
+
+  test("the Runner capability probe is cached when confirmed and retried after a refusal", async () => {
+    let clock = 0;
+    let answers = [false, true];
+    let calls = 0;
+    const probe = cachedRunnerCapabilityProbe(async () => { calls++; return answers.shift() ?? false; },
+      { retryMs: 1_000, now: () => clock });
+    expect(await probe()).toBe(false);
+    expect(await probe()).toBe(false);
+    expect(calls).toBe(1);
+    clock = 1_000;
+    // Concurrent callers share one probe.
+    expect(await Promise.all([probe(), probe()])).toEqual([true, true]);
+    expect(calls).toBe(2);
+    answers = [false];
+    expect(await probe()).toBe(true);
+    expect(calls).toBe(2);
+    const failing = cachedRunnerCapabilityProbe(async () => { throw new Error("unavailable"); });
+    expect(await failing()).toBe(false);
   });
 
   test("TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS is enabled, disabled or absent", () => {
