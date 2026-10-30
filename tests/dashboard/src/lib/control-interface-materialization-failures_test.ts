@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   ControlApiError,
   isInterfaceMaterializationRetryStale,
-  listInterfaceMaterializationFailures,
   retryInterfaceMaterializationFailure,
   type CapsuleInterfaceMaterializationFailure,
 } from "../../../../dashboard/src/lib/control-api.ts";
@@ -33,49 +32,6 @@ const FAILURE: CapsuleInterfaceMaterializationFailure = {
 };
 
 describe("Interface materialization failure control client", () => {
-  test("GETs the bounded value-free failure projection", async () => {
-    const calls: Array<{ readonly url: string; readonly init?: RequestInit }> =
-      [];
-    globalThis.fetch = (async (
-      input: RequestInfo | URL,
-      init?: RequestInit,
-    ) => {
-      calls.push({
-        url: typeof input === "string" ? input : String(input),
-        ...(init ? { init } : {}),
-      });
-      return new Response(JSON.stringify({ failures: [FAILURE] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
-
-    const rows = await listInterfaceMaterializationFailures("workspace 1", {
-      limit: 100,
-    });
-
-    expect(rows).toEqual([FAILURE]);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe(
-      "/api/v1/workspaces/workspace%201/interface-materialization-failures?limit=100",
-    );
-    expect(calls[0]?.init?.method ?? "GET").toBe("GET");
-  });
-
-  test("rejects a malformed 200 envelope instead of treating it as empty", async () => {
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({}), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as typeof fetch;
-
-    await expect(
-      listInterfaceMaterializationFailures("workspace_1", { limit: 100 }),
-    ).rejects.toMatchObject({
-      status: 502,
-      code: "invalid_interface_materialization_failures_response",
-    });
-  });
 
   test("POSTs exactly the observed failure/state identity", async () => {
     let captured: { readonly url: string; readonly init?: RequestInit };

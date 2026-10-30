@@ -2,7 +2,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   clearWorkspaceListCache,
   listWorkspacesCached,
-  mergeWorkspaceLists,
 } from "../../../../dashboard/src/lib/workspace-list.ts";
 import {
   listWorkspacePage,
@@ -203,15 +202,6 @@ describe("listWorkspacesCached", () => {
     expect(calls).toHaveLength(2);
   });
 
-  test("deduplicates a pinned current Workspace while appending pages", () => {
-    expect(
-      mergeWorkspaceLists(
-        [workspace("space_current"), workspace("space_recent")],
-        [workspace("space_current"), workspace("space_older")],
-      ).map((item) => item.id),
-    ).toEqual(["space_current", "space_recent", "space_older"]);
-  });
-
   test("follows a bounded cursor so the 51st switcher target remains reachable", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -250,10 +240,8 @@ describe("listWorkspacesCached", () => {
       order: "updated_desc",
       cursor: first.nextCursor,
     });
-    const merged = mergeWorkspaceLists(first.workspaces, second.workspaces);
-
-    expect(merged.some((item) => item.id === "space_51")).toBe(true);
-    expect(merged.filter((item) => item.id === "space_current")).toHaveLength(
+    expect(second.workspaces.map((item) => item.id)).toEqual(["space_51"]);
+    expect(first.workspaces.filter((item) => item.id === "space_current")).toHaveLength(
       1,
     );
     expect(calls).toEqual([

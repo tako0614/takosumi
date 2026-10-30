@@ -168,8 +168,8 @@ describe("Notifications", () => {
     expect(notificationsLibSource).toContain(
       "export async function refreshWorkspaceNotificationFeed",
     );
-    expect(notificationsLibSource).toContain("NOTIF_WORKSPACE_LIMIT = 12");
-    expect(notificationsLibSource).toContain("NOTIF_FANOUT_CONCURRENCY = 4");
+    // The browser no longer fans out per Workspace at all.
+    expect(notificationsLibSource).not.toContain("NOTIF_FANOUT_CONCURRENCY");
     expect(notificationsLibSource).not.toContain("Promise.allSettled(");
     expect(notificationsLibSource).not.toContain("tg_notif_seen_at");
   });

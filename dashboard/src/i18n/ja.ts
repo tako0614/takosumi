@@ -324,7 +324,6 @@ export const ja = {
 
   // --- workspaces (スペース in the Japanese UI) -----------------------------------
   "workspace.unnamed": "名前なし",
-  "workspace.createdOn": "{date} に作成",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",

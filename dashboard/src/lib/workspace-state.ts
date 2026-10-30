@@ -35,24 +35,6 @@ export function selectAvailableWorkspaceId(
   return workspaces[0]!.id;
 }
 
-/**
- * Resolve a route-provided Workspace id only after it is present in the
- * authenticated Workspace projection. A redirect may carry an id from a
- * different session or an inaccessible Workspace; it must never become API
- * scope merely because it appeared in the URL.
- */
-export function selectWorkspaceFromQuery(
-  requested: string,
-  current: string,
-  workspaces: readonly { id: string }[],
-): string {
-  const candidate = requested.trim();
-  if (candidate && workspaces.some((workspace) => workspace.id === candidate)) {
-    return candidate;
-  }
-  return selectAvailableWorkspaceId(current, workspaces);
-}
-
 /** Set (and persist) the current Workspace id. Pass "" to clear. */
 export function setCurrentWorkspaceId(workspaceId: string): void {
   const next = workspaceId.trim();

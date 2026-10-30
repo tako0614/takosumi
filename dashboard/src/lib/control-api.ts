@@ -468,8 +468,6 @@ export interface CapsuleInterfaceMaterializationRetryReceipt {
   readonly nextRetryAt: string;
 }
 
-export const INTERFACE_MATERIALIZATION_FAILURE_LIMIT = 100;
-
 export interface InterfaceMaterializationFailureListOptions {
   readonly limit?: number;
   readonly signal?: AbortSignal;
@@ -556,16 +554,6 @@ export interface InstallConfig {
 }
 
 type OutputAllowlistEntry = ContractInstallConfig["outputAllowlist"][string];
-
-export interface DashboardOverview {
-  readonly workspaces: readonly Workspace[];
-  readonly workspace: Workspace | null;
-  readonly capsules: readonly Capsule[];
-  readonly currentStateVersions: readonly PublicStateVersion[];
-  readonly activity: readonly ActivityEvent[];
-  readonly installConfigs: readonly InstallConfig[];
-  readonly nextCapsuleCursor?: string;
-}
 
 export type RunType =
   | "source_sync"
@@ -994,22 +982,6 @@ export async function listWorkspaces(
   ).workspaces;
 }
 
-export async function getDashboardOverview(
-  workspaceId?: string,
-  options: {
-    readonly includeWorkspaces?: boolean;
-    readonly capsuleLimit?: number;
-  } = {},
-): Promise<DashboardOverview> {
-  return await controlFetch<DashboardOverview>(
-    `${BASE}/dashboard/overview${query({
-      workspaceId,
-      includeWorkspaces: options.includeWorkspaces,
-      capsuleLimit: options.capsuleLimit,
-    })}`,
-  );
-}
-
 export async function createWorkspace(input: {
   readonly handle: string;
   readonly displayName?: string;
@@ -1033,21 +1005,6 @@ export async function getWorkspace(workspaceId: string): Promise<Workspace> {
   return body.workspace;
 }
 
-export async function updateWorkspace(
-  workspaceId: string,
-  input: {
-    readonly displayName?: string;
-    readonly policy?: PolicyConfig;
-    readonly archived?: boolean;
-  },
-): Promise<Workspace> {
-  const body = await controlFetch<WorkspaceEnvelope>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}`,
-    { method: "PATCH", body: input },
-  );
-  return body.workspace;
-}
-
 export async function getWorkspaceBilling(
   workspaceId: string,
 ): Promise<WorkspaceBilling> {
@@ -1055,32 +1012,6 @@ export async function getWorkspaceBilling(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/billing`,
   );
   return body.billing;
-}
-
-/**
- * Lists the value-free Interface materialization failures retained by the
- * selected Workspace. The endpoint is intentionally bounded; callers must
- * not infer that a page at the cap is exhaustive.
- */
-export async function listInterfaceMaterializationFailures(
-  workspaceId: string,
-  options: InterfaceMaterializationFailureListOptions = {},
-): Promise<readonly CapsuleInterfaceMaterializationFailure[]> {
-  const body = await controlFetch<unknown>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/interface-materialization-failures${query({
-      limit:
-        options.limit ?? INTERFACE_MATERIALIZATION_FAILURE_LIMIT,
-    })}`,
-    { signal: options.signal },
-  );
-  if (!isRecord(body) || !Array.isArray(body.failures)) {
-    throw new ControlApiError(
-      502,
-      "invalid_interface_materialization_failures_response",
-      "Interface materialization failures returned an invalid response.",
-    );
-  }
-  return body.failures as readonly CapsuleInterfaceMaterializationFailure[];
 }
 
 /**
@@ -1211,68 +1142,6 @@ export async function listMembers(
   return body.members ?? [];
 }
 
-/**
- * Adds (or re-activates) a member by verified account email or account subject
- * (`POST /api/v1/workspaces/:id/members`). This is not an outbound email
- * notification flow: the target must already have signed in once so the
- * account plane can resolve a verified email to a Takosumi subject.
- */
-export async function inviteMember(
-  workspaceId: string,
-  input: {
-    readonly email?: string;
-    readonly accountId?: string;
-    readonly role?: ControlWorkspaceRole;
-  },
-): Promise<PublicWorkspaceMember> {
-  const body = await controlFetch<{ member: PublicWorkspaceMember }>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members`,
-    {
-      method: "POST",
-      body: {
-        ...(input.email ? { email: input.email } : {}),
-        ...(input.accountId ? { accountId: input.accountId } : {}),
-        ...(input.role ? { role: input.role } : {}),
-      },
-    },
-  );
-  return body.member;
-}
-
-/**
- * Changes a member's role set (`PATCH /api/v1/workspaces/:id/members/:subject`).
- * Owner-only. The backend's last-owner guard rejects demoting the sole
- * remaining owner with 403, so a Workspace is never left unmanaged.
- */
-export async function setMemberRole(
-  workspaceId: string,
-  subject: string,
-  roles: ControlWorkspaceRole | readonly ControlWorkspaceRole[],
-): Promise<PublicWorkspaceMember> {
-  const body = await controlFetch<{ member: PublicWorkspaceMember }>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(subject)}`,
-    { method: "PATCH", body: { roles } },
-  );
-  return body.member;
-}
-
-/**
- * Removes a member (`DELETE /api/v1/workspaces/:id/members/:subject`).
- * Owner-only. The membership store has no hard delete, so the backend soft-
- * removes (sets `status: "suspended"`) and returns the updated projection. The
- * last-owner guard rejects removing the sole remaining owner with 403.
- */
-export async function removeMember(
-  workspaceId: string,
-  subject: string,
-): Promise<PublicWorkspaceMember> {
-  const body = await controlFetch<{ member: PublicWorkspaceMember }>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(subject)}`,
-    { method: "DELETE" },
-  );
-  return body.member;
-}
-
 // --- Capsules ---------------------------------------------------------
 
 export async function listCapsules(
@@ -1287,21 +1156,6 @@ export async function listCapsules(
   return await fetchAllPages<Capsule>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules${qs}`,
     (body) => (body.capsules as readonly Capsule[]) ?? [],
-  );
-}
-
-export async function listWorkspaceCurrentStateVersions(
-  workspaceId: string,
-  options: { readonly includeDestroyed?: boolean } = {},
-): Promise<readonly PublicStateVersion[]> {
-  const qs = query({
-    ...(options.includeDestroyed === false
-      ? { includeDestroyed: "false" }
-      : {}),
-  });
-  return await fetchAllPages<PublicStateVersion>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/current-state-versions${qs}`,
-    (body) => (body.stateVersions as readonly PublicStateVersion[]) ?? [],
   );
 }
 
@@ -1940,18 +1794,6 @@ export async function getInstallConfig(
   return body.installConfig;
 }
 
-// --- Backups ---------------------------------------------------------------
-
-export async function createWorkspaceBackup(
-  workspaceId: string,
-): Promise<BackupRecord> {
-  const body = await controlFetch<{ backup: BackupRecord }>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups`,
-    { method: "POST" },
-  );
-  return body.backup;
-}
-
 export async function createCapsuleBackup(
   capsuleId: string,
 ): Promise<BackupRecord> {
@@ -1960,15 +1802,6 @@ export async function createCapsuleBackup(
     { method: "POST" },
   );
   return body.backup;
-}
-
-export async function listWorkspaceBackups(
-  workspaceId: string,
-): Promise<readonly BackupRecord[]> {
-  return await fetchAllPages<BackupRecord>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups`,
-    (body) => (body.backups as readonly BackupRecord[]) ?? [],
-  );
 }
 
 // --- Activity --------------------------------------------------------------
@@ -3116,17 +2949,6 @@ export async function createStateVersionRollbackPlan(
 ): Promise<unknown> {
   return await controlFetch<unknown>(
     `${BASE}/state-versions/${encodeURIComponent(stateVersionId)}/rollback-plan`,
-    { method: "POST" },
-  );
-}
-
-// --- RunGroups -------------------------------------------------------------
-
-export async function createWorkspacePlanUpdate(
-  workspaceId: string,
-): Promise<RunGroupWithRuns> {
-  return await controlFetch<RunGroupWithRuns>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/plan-update`,
     { method: "POST" },
   );
 }
