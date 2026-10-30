@@ -562,7 +562,7 @@ value-free の `source.retired` を Activity に 1 件記録します。失敗�
 管理者が Workspace の route でインストールしても、所有者はその管理者で、connection の binding とSourceの
 `authConnectionId` も本人の接続だけを受け付けます (作成時に Workspace の他の所有者・管理者がアプリのメンバーに
 加わる動作は変わりません)。アプリができる前のインストール計画は作った本人のもので、本人のアカウント資格情報
-(PATの `appIds` やインストール済みアプリ自身のtokenではないもの) なら Workspace の判定なしに読み・進められます。
+(PATの `appIds` やインストール済みアプリ自身のtokenではないもの。現在のmembershipを要求する共有アカウント構成は除く) なら Workspace の判定なしに読み・進められます。アプリが記録前に作られていた場合 (応答の喪失) はアプリの判定になります。アプリができる前のSourceの `authConnectionId` も、インストールした本人の接続だけを受け付けます。
 Workspaceを指定しないインストールの idempotency は、本人の個人の場所で数えるため本人ごとです。
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request

@@ -543,8 +543,11 @@ when a Workspace admin who is not the Workspace's owner uses a Workspace route;
 provider bindings and the Source `authConnectionId` accept only that person's
 connections (creation still adds the Workspace's other owner/admin people as app
 members). Before its app exists, the install is its creator's: the creator's
-account credential (not a PAT with `appIds` or an installed app's own token) reads
-and advances it without a Workspace decision. Workspace-less install idempotency
+account credential (not a PAT with `appIds` or an installed app's own token, and not
+a shared-account composition that requires current membership) reads and advances
+it without a Workspace decision; if its app was committed before the plan recorded
+it (a lost acknowledgement), the app decides. Before the app exists, its Source's
+`authConnectionId` also accepts only the installer's connection. Workspace-less install idempotency
 is per account, because it is counted in that account's own namespace. `PATCH`
 uses `expectedGeneration` as a CAS fence, and only the confirming
 `continue: true` request carries variable values, which go straight into the

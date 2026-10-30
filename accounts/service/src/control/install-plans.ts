@@ -405,14 +405,18 @@ export async function handleInstallPlans(
   // people keep the legacy Workspace decision. Once the app exists, the
   // attempt is that app's: reading is view, answering is a settings change,
   // discarding abandons the app (owner only).
-  const auth = !plan.capsuleId && installAttemptCreatorContinues(ctx, plan)
+  // A Capsule committed before the plan recorded it (a lost acknowledgement)
+  // is already the app: it decides, never the creator path.
+  const capsuleId = plan.capsuleId ??
+    (await getCapsuleIfPresent(ctx.operations, deterministicInitialCapsuleId(plan.id)))?.id;
+  const auth = !capsuleId && installAttemptCreatorContinues(ctx, plan)
     ? { ok: true as const }
     : await requireResourceAccess({
         operations: ctx.operations,
         store: ctx.store,
         session: ctx.session,
         workspaceId: plan.workspaceId,
-        capsuleId: plan.capsuleId,
+        capsuleId,
         action: method === "GET" || method === "HEAD" ? "view"
           : method === "DELETE" ? "uninstall"
           : segments[2] === "reconcile" ? "update"
@@ -439,7 +443,9 @@ export async function handleInstallPlans(
  * The creator of a capsule-less install plan, with an account credential that
  * is not restricted to apps (no PAT `appIds`, no installed app's own token)
  * and, when bound to a Workspace, bound to the plan's. Never a Workspace
- * membership or ownership read.
+ * membership or ownership read. Compositions that require current Workspace
+ * membership (shared accounts) and callers without an Accounts credential
+ * kind (operator compositions) keep the Workspace decision.
  */
 function installAttemptCreatorContinues(
   ctx: ControlDispatchContext,
@@ -447,6 +453,7 @@ function installAttemptCreatorContinues(
 ): boolean {
   const session = ctx.session;
   return plan.createdBy === session.subject && plan.actorSubject === session.subject &&
+    session.credential !== undefined && !session.requireCurrentMembership &&
     session.appIds === undefined && bearerWorkspaceAllows(session, plan.workspaceId);
 }
 

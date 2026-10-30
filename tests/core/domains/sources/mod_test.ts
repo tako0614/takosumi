@@ -2903,10 +2903,13 @@ test("an app-owned Source accepts its owner's personal Git connection and refuse
     createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
   };
   await store.putConnection(connection);
-  const created = await service.ensureOwnedSource(ownedSourceRequest({ authConnectionId: connection.id }));
+  const created = await service.ensureOwnedSource(ownedSourceRequest({ authConnectionId: connection.id, installingAccountId: "user_1" }));
   expect(created.source.authConnectionId).toBe(connection.id);
   await store.putConnection({ ...connection, id: "conn_foreign_git", ownerAccountId: "someone_else" });
-  await expect(service.ensureOwnedSource(ownedSourceRequest({ id: "src_1122334455667788", authConnectionId: "conn_foreign_git" })))
+  await expect(service.ensureOwnedSource(ownedSourceRequest({ id: "src_1122334455667788", authConnectionId: "conn_foreign_git", installingAccountId: "user_1" })))
+    .rejects.toMatchObject({ code: "connection_not_owned_by_app_owner" });
+  // Without a known installer, no credential is lent to an app not created yet.
+  await expect(service.ensureOwnedSource(ownedSourceRequest({ id: "src_2211334455667788", authConnectionId: connection.id })))
     .rejects.toMatchObject({ code: "connection_not_owned_by_app_owner" });
 });
 

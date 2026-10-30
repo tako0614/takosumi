@@ -207,6 +207,30 @@ for (const backend of BACKENDS) {
     expect(other.status).toBe(403);
   });
 
+  test(`[${backend}] a Workspace admin cannot lend the Workspace owner's Git credential to an install before its app exists`, async () => {
+    const fixture = await compose(backend);
+    const at = new Date().toISOString();
+    for (const [id, ownerAccountId] of [["conn_owner_git", WORKSPACE_OWNER], ["conn_admin_git", ADMIN]] as const) {
+      await fixture.deployStore.putConnection({
+        id, workspaceId: fixture.workspaceId, ownerAccountId, scope: "workspace",
+        provider: "source_git_https_token", providerSource: "git", kind: "source_git_https_token",
+        materialization: "secret", status: "verified", envNames: ["GIT_HTTPS_TOKEN"], createdAt: at, updatedAt: at,
+      });
+    }
+    const created = await fixture.route(ADMIN, "POST", `/api/v1/workspaces/${fixture.workspaceId}/install-plans`, NORMAL_INSTALL("lent-credential"), "lent-credential");
+    expect(created.status).toBe(201);
+    const planId = (await created.json()).installPlan.id as string;
+    const registered = await fixture.route(ADMIN, "POST", `/api/v1/install-plans/${planId}/reconcile`);
+    const sourceId = (await registered.json()).installPlan.sourceId as string;
+    expect(sourceId).toBeString();
+    // The app is not created yet; its owner will be the admin who installs it.
+    const lent = await fixture.route(ADMIN, "PATCH", `/api/v1/sources/${sourceId}`, { authConnectionId: "conn_owner_git" });
+    expect(lent.status).toBeGreaterThanOrEqual(400);
+    expect((await fixture.operations.getSource(sourceId)).source.authConnectionId).toBeUndefined();
+    // The installer's own credential is accepted.
+    expect((await fixture.route(ADMIN, "PATCH", `/api/v1/sources/${sourceId}`, { authConnectionId: "conn_admin_git" })).status).toBe(200);
+  });
+
   test(`[${backend}] listing Workspaces never creates a personal Workspace`, async () => {
     const fixture = await compose(backend);
     const listed = await fixture.route(NEWCOMER, "GET", "/api/v1/workspaces");
