@@ -20,6 +20,7 @@ import {
   type InterfaceRuntimeConsumer,
 } from "../domains/interfaces/mod.ts";
 import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
+import { parsePageQuery } from "./page_query.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 
 export interface RegisterInterfaceRoutesOptions {
@@ -72,6 +73,8 @@ export const INTERFACE_ENDPOINTS: readonly ApiEndpoint[] = [
       "ownerId",
       "includeRetired",
       "permission",
+      "limit",
+      "cursor",
     ],
   }),
   endpoint("GET", "/api/v1/interfaces/:id", "getInterface", {
@@ -249,19 +252,30 @@ export function registerInterfaceRoutes(
         ...owner,
         includeRetired: truthy(c.req.query("includeRetired")),
       };
+      const consumer = await runtimeConsumer(c, options, auth.actor);
+      if (!consumer.ok) return consumer.response;
       // An app-bound runtime principal (no Workspace) discovers by its exact
-      // current Principal Bindings across every internal partition.
-      if (!requestedWorkspaceId && isRuntimePrincipal(auth.actor) && !auth.actor.workspaceId) {
-        const consumer = await runtimeConsumer(c, options, auth.actor);
-        if (!consumer.ok) return consumer.response;
+      // current Principal Bindings across every internal partition, always
+      // restricted to evidence of its own app. A Workspace would name no
+      // authority of its own, so it is refused rather than used as a scope;
+      // `capsuleId` only narrows to that provider app's Interfaces.
+      if (consumer.consumer) {
+        if (requestedWorkspaceId) {
+          throw invalid("workspaceId is not accepted for an app-bound runtime principal; omit it to discover by its own Bindings");
+        }
+        const params = parsePageQuery(c.req.query("limit"), c.req.query("cursor"));
+        if (!params.ok) throw invalid(params.message);
         const page = await options.service.listAuthorizedForPrincipalAcrossPartitionsPage(
           selector,
-          auth.actor.actorAccountId,
+          auth.actor!.actorAccountId,
           requireRuntimePermission(c),
-          {},
-          consumer.consumer!,
+          params.value,
+          consumer.consumer,
         );
-        return c.json({ interfaces: page.items }, 200);
+        return c.json({
+          interfaces: page.items,
+          ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+        }, 200);
       }
       let workspaceId = requestedWorkspaceId;
       let scoped: InterfaceWorkspaceAuthResult;
@@ -284,6 +298,7 @@ export function registerInterfaceRoutes(
             filter,
             scoped.actor.actorAccountId,
             requireRuntimePermission(c),
+            consumer.consumer,
           )
         : await options.service.list(filter);
       return c.json({ interfaces }, 200);
@@ -633,9 +648,12 @@ async function scopeInterfaceWorkspace(
   if (!actor) return { ok: true };
   if (isRuntimePrincipal(actor) && !actor.workspaceId) {
     // An app-bound runtime principal carries no Workspace (TASK-0118 9.1).
-    // Every runtime path resolves its exact current Principal Binding,
-    // restricted to evidence of its own app (see runtimeConsumer); runtime
-    // principals never reach a mutation. Without an app it has no authority.
+    // It reaches this point only for one exact Interface it already read
+    // through its own Principal Binding with the evidence restriction of
+    // runtimeConsumer (read, bindings, token); discovery never scopes it to
+    // a Workspace, and runtime principals never reach a mutation. The
+    // Interface's partition is recorded here only as the request's context,
+    // never as authority. Without an app it has no authority.
     if (!string(actor.capsuleId)) return { ok: false, response: workspaceForbidden(c) };
     return { ok: true, actor: { ...actor, workspaceId } };
   }
@@ -672,11 +690,13 @@ type RuntimeConsumerResult =
 /**
  * The evidence restriction for a Workspace-free runtime principal
  * (TASK-0118 9.1). Its pairwise subject is learnable by providers it talks
- * to, and a provider's owner may create a Binding for any subject in their
- * own partition, so a Binding is accepted only when it was materialized
- * from an active Interface link of the token's own app, or lives in that
- * app's own partition. A Workspace-bound runtime principal keeps its
- * Workspace fence instead; other actors are not runtime principals.
+ * to, and whoever may write Bindings in a partition (another tenant of a
+ * shared legacy partition included) may bind any subject there, so a
+ * Binding is accepted only when it was materialized from an active
+ * Interface link of the token's own app, or sits on an Interface that app
+ * owns. The app must exist (an unknown app is 404). A Workspace-bound
+ * runtime principal keeps its Workspace fence instead; other actors are not
+ * runtime principals.
  */
 async function runtimeConsumer(
   c: Context,
@@ -686,8 +706,8 @@ async function runtimeConsumer(
   if (!isRuntimePrincipal(actor) || actor.workspaceId) return { ok: true };
   const capsuleId = string(actor.capsuleId);
   if (!capsuleId) return { ok: false, response: workspaceForbidden(c) };
-  const partition = (await options.service.getAppPartition(capsuleId)).workspaceId;
-  return { ok: true, consumer: { capsuleId, partition } };
+  await options.service.getAppPartition(capsuleId);
+  return { ok: true, consumer: { capsuleId } };
 }
 
 /**

@@ -656,7 +656,7 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
               ) = i.resolved_revision
           and permission.value = ?
           ${input.consumer
-            ? `and (i.workspace_id = ?
+            ? `and ((i.owner_kind = 'Capsule' and i.owner_id = ?)
                 or (json_extract(b.record_json, '$.metadata.materializedFrom.source') = 'capsule_required_interface'
                   and json_extract(b.record_json, '$.metadata.materializedFrom.capsuleId') = ?))`
             : ""}
@@ -683,9 +683,9 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
       )`,
     );
     parameters.push(input.subjectId, input.permission);
-    // Workspace-free runtime evidence (TASK-0118 9.1): own partition, or a
-    // Binding materialized from this app's own (active) link.
-    if (input.consumer) parameters.push(input.consumer.partition, input.consumer.capsuleId);
+    // Workspace-free runtime evidence (TASK-0118 9.1): an Interface this app
+    // owns, or a Binding materialized from this app's own (active) link.
+    if (input.consumer) parameters.push(input.consumer.capsuleId, input.consumer.capsuleId);
     const cursor = decodeCursor(input.params.cursor);
     if (cursor) {
       clauses.push("(i.created_at > ? or (i.created_at = ? and i.id > ?))");

@@ -1283,11 +1283,12 @@ export class InterfaceService {
     filter: InterfaceListFilter,
     subjectId: string,
     permission: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<readonly Interface[]> {
     return (
       await this.listAuthorizedForPrincipalPage(filter, subjectId, permission, {
         ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
-      })
+      }, consumer)
     ).items;
   }
 
@@ -1301,6 +1302,7 @@ export class InterfaceService {
     subjectId: string,
     permission: string,
     params: PageParams,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<Page<Interface>> {
     return await this.#listAuthorizedPage(
       filter,
@@ -1308,6 +1310,8 @@ export class InterfaceService {
       permission,
       params,
       false,
+      undefined,
+      consumer,
     );
   }
 
@@ -1340,7 +1344,9 @@ export class InterfaceService {
     params: PageParams,
     uiSurfaceCandidates: boolean,
     capsuleId?: string,
+    consumer?: InterfaceRuntimeConsumer,
   ): Promise<Page<Interface>> {
+    if (consumer) requireText(consumer.capsuleId, "consumer.capsuleId");
     const normalizedFilter = this.#normalizeListFilter({
       ...filter,
       limit: undefined,
@@ -1357,6 +1363,7 @@ export class InterfaceService {
       params,
       ...(uiSurfaceCandidates ? { uiSurfaceCandidates: true } : {}),
       ...(normalizedCapsuleId ? { capsuleId: normalizedCapsuleId } : {}),
+      ...(consumer ? { consumer } : {}),
     });
     return {
       ...page,
@@ -1382,7 +1389,6 @@ export class InterfaceService {
     consumer: InterfaceRuntimeConsumer,
   ): Promise<Page<Interface>> {
     requireText(consumer.capsuleId, "consumer.capsuleId");
-    requireText(consumer.partition, "consumer.partition");
     if (filter.type !== undefined) validateToken(filter.type, "type");
     const normalizedSubject = requireText(subjectId, "subjectId");
     validatePermissionToken(permission, "permission");

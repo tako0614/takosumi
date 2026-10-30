@@ -252,13 +252,14 @@ export type InterfaceAuthorizationFilter =
 
 /**
  * The consumer app of a Workspace-free runtime principal (TASK-0118 9.1).
- * Its pairwise subject is learnable by providers it talks to, so a Binding
- * counts as its evidence only when it was materialized from an active
- * Interface link of this app, or lives in this app's own partition.
+ * Its pairwise subject is learnable by providers it talks to, and anyone who
+ * may write Bindings in some partition (including another tenant of a shared
+ * legacy partition) can bind that subject, so a Binding counts as its
+ * evidence only when it was materialized from an active Interface link of
+ * this app, or sits on an Interface this app itself owns.
  */
 export interface InterfaceRuntimeConsumer {
   readonly capsuleId: string;
-  readonly partition: string;
 }
 
 export function bindingServesRuntimeConsumer(
@@ -266,8 +267,8 @@ export function bindingServesRuntimeConsumer(
   iface: Interface,
   consumer: InterfaceRuntimeConsumer,
 ): boolean {
-  if (iface.metadata.workspaceId === consumer.partition &&
-    binding.metadata.workspaceId === consumer.partition) return true;
+  if (iface.metadata.ownerRef.kind === "Capsule" &&
+    iface.metadata.ownerRef.id === consumer.capsuleId) return true;
   const source = binding.metadata.materializedFrom;
   return source?.source === "capsule_required_interface" &&
     source.capsuleId === consumer.capsuleId;

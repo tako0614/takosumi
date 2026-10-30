@@ -558,11 +558,11 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
       clauses.push("i.phase <> 'Retired'");
     const subject = placeholder(input.subjectId);
     const permission = placeholder(JSON.stringify([input.permission]));
-    // A Workspace-free runtime principal's evidence: a Binding in its own
-    // app's partition, or one materialized from its own app's link (whose
-    // activity the consent clause below still requires).
+    // A Workspace-free runtime principal's evidence: a Binding on an
+    // Interface its own app owns, or one materialized from its own app's
+    // link (whose activity the consent clause below still requires).
     const consumerClause = input.consumer
-      ? `and (i.workspace_id = ${placeholder(input.consumer.partition)}
+      ? `and ((i.owner_kind = 'Capsule' and i.owner_id = ${placeholder(input.consumer.capsuleId)})
           or (b.record_json->'metadata'->'materializedFrom'->>'source' = 'capsule_required_interface'
             and b.record_json->'metadata'->'materializedFrom'->>'capsuleId' = ${placeholder(input.consumer.capsuleId)}))`
       : "";

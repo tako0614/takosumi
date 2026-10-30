@@ -78,6 +78,17 @@ test("an app-bound OAuth token discovers and requests tokens without a Workspace
     async () => ({ ...(await runtimeApp()), capsuleId: "cap_missing" }), noWorkspaceAccess,
   );
   expect(missingApp.status).toBe(404);
+  // A Workspace never widens an app-bound token's discovery.
+  const withWorkspace = await handlePlatformInterfaceApiRequest(
+    request("/api/v1/interfaces?permission=mcp.invoke&workspaceId=ws_platform_iface"), env, runtimeApp, noWorkspaceAccess,
+  );
+  expect([400, 403]).toContain(withWorkspace.status);
+  // Discovery pages like every list read.
+  const paged = await handlePlatformInterfaceApiRequest(
+    request("/api/v1/interfaces?permission=mcp.invoke&limit=1"), env, runtimeApp, noWorkspaceAccess,
+  );
+  expect(paged.status).toBe(200);
+  expect(await paged.json()).toEqual({ interfaces: [] });
   // An OAuth token bound to neither an app nor a Workspace is refused.
   const unbound = await handlePlatformInterfaceApiRequest(
     request("/api/v1/interfaces?permission=mcp.invoke"), env, runtimeUnbound, noWorkspaceAccess,

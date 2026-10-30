@@ -1857,4 +1857,27 @@ test("composed Interface API decides Capsule-owned Interfaces per app and lets a
   // The foreign namespace's manual Binding for the app's subject is no evidence.
   assert.equal((await get(`/api/v1/interfaces/${foreign}?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
   assert.equal((await get(`/api/v1/interfaces/${foreign}/bindings?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  // Naming that namespace does not lift the evidence rule; it is refused.
+  for (const workspaceId of ["ws_composed_foreign", seeded.workspace.id]) {
+    const viaWorkspace = await get(`/api/v1/interfaces?permission=mcp.invoke&workspaceId=${workspaceId}`, "takat_app_runtime");
+    assert.equal(viaWorkspace.status, 400, workspaceId);
+    assert.equal((await viaWorkspace.json()).interfaces, undefined, workspaceId);
+  }
+  // Co-tenant: the other app's owner (no role on cap_composed_iface) binds
+  // the app's subject on their own app's Interface in the shared partition.
+  const coTenantBind = await app.fetch(new Request(`http://localhost/api/v1/interfaces/${other}/bindings`, {
+    method: "POST", headers: { authorization: `Bearer sess_${workspaceOwner}`, "content-type": "application/json" },
+    body: JSON.stringify({ subjectRef: { kind: "Principal", id: "pairwise_composed_runtime" }, permissions: ["mcp.invoke"], delivery: { type: "none" } }),
+  }));
+  assert.equal(coTenantBind.status, 201);
+  const afterCoTenant = await get("/api/v1/interfaces?type=mcp.server&permission=mcp.invoke", "takat_app_runtime");
+  assert.equal(afterCoTenant.status, 200);
+  assert.deepEqual((await afterCoTenant.json()).interfaces.map((entry: { metadata: { id: string } }) => entry.metadata.id), [mine]);
+  assert.equal((await get(`/api/v1/interfaces/${other}?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  assert.equal((await get(`/api/v1/interfaces/${other}/bindings?permission=mcp.invoke`, "takat_app_runtime")).status, 404);
+  const coTenantToken = await app.fetch(new Request(`http://localhost/api/v1/interfaces/${other}/token`, {
+    method: "POST", headers: { authorization: "Bearer takat_app_runtime", "content-type": "application/json" },
+    body: JSON.stringify({ permission: "mcp.invoke" }),
+  }));
+  assert.equal(coTenantToken.status, 404);
 });

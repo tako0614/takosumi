@@ -2,8 +2,10 @@
  * Workspace-free Principal Binding discovery (TASK-0118 9.1) pages the same
  * way in the in-memory, Postgres (PGlite) and SQLite-D1 Interface stores: it
  * returns only Interfaces with the exact current Principal Binding and
- * permission, accepts a Binding only as evidence of the consumer app (its own
- * partition, or materialized from its own link), and honours the owner filter.
+ * permission, accepts a Binding only as evidence of the consumer app (on an
+ * Interface the app owns, or materialized from its own link; a co-tenant's
+ * manual Binding in the app's own partition is not evidence), and honours the
+ * owner filter.
  */
 import { expect, setDefaultTimeout, test } from "bun:test";
 import {
@@ -74,10 +76,35 @@ test("Workspace-free Principal Binding discovery accepts only the consumer app's
           });
         }
       }
-      // ns_two's owner bound app cap_one's (learned) subject manually: not
-      // evidence for cap_one, which sees only its own partition.
-      const appOne = { capsuleId: "cap_one", partition: "ns_one" };
-      const appTwo = { capsuleId: "cap_two", partition: "ns_two" };
+      // A co-tenant of cap_one's own partition ns_one bound cap_one's
+      // (learned) subject manually, on its own app's Interface and on a
+      // Workspace-owned one.
+      for (const ownerRef of [
+        { kind: "Capsule" as const, id: "cap_cotenant" },
+        { kind: "Workspace" as const, id: "ns_one" },
+      ]) {
+        const name = `cotenant-${ownerRef.kind.toLowerCase()}`;
+        const iface = await service.create({
+          workspaceId: "ns_one",
+          name,
+          ownerRef,
+          spec: {
+            type: "mcp.server",
+            version: "2025-11-25",
+            document: {},
+            inputs: { endpoint: { source: "literal", value: `https://${name}.example.test/mcp` } },
+            access: { visibility: "private" },
+          },
+        });
+        created[name] = iface.metadata.id;
+        await service.createBinding(iface.metadata.id, {
+          subjectRef: { kind: "Principal", id: "principal_app" }, permissions: ["mcp.invoke"], delivery: { type: "none" },
+        });
+      }
+      // ns_two's owner also bound it manually: neither is evidence for
+      // cap_one, which sees only Interfaces it owns (or its own links).
+      const appOne = { capsuleId: "cap_one" };
+      const appTwo = { capsuleId: "cap_two" };
       const one = await service.listAuthorizedForPrincipalAcrossPartitionsPage(
         { type: "mcp.server" }, "principal_app", "mcp.invoke", {}, appOne,
       );
@@ -120,16 +147,25 @@ test("Workspace-free Principal Binding discovery accepts only the consumer app's
       ).toEqual([created.one!, extra.metadata.id].sort());
       expect(secondPage.nextCursor, label).toBeUndefined();
       // By-id reads apply the same evidence restriction.
-      await expect(
-        service.getAuthorizedForPrincipal(created.two!, "principal_app", "mcp.invoke", appOne), label,
-      ).rejects.toMatchObject({ code: "not_found" });
+      for (const name of ["two", "cotenant-capsule", "cotenant-workspace"]) {
+        await expect(
+          service.getAuthorizedForPrincipal(created[name]!, "principal_app", "mcp.invoke", appOne), `${label} ${name}`,
+        ).rejects.toMatchObject({ code: "not_found" });
+      }
       expect((await service.getAuthorizedForPrincipal(created.two!, "principal_app", "mcp.invoke", appTwo)).metadata.id, label)
         .toBe(created.two!);
-      // The partitioned projection is unchanged.
+      // The partitioned projection keeps every Binding in the partition,
+      // and narrows to the app's evidence when given the consumer.
       const partitioned = await service.listAuthorizedForPrincipal(
         { workspaceId: "ns_one" }, "principal_app", "mcp.invoke",
       );
-      expect(partitioned.map((iface) => iface.metadata.id).sort(), label).toEqual([created.one!, extra.metadata.id].sort());
+      expect(partitioned.map((iface) => iface.metadata.id).sort(), label).toEqual(
+        [created.one!, extra.metadata.id, created["cotenant-capsule"]!, created["cotenant-workspace"]!].sort(),
+      );
+      const partitionedForApp = await service.listAuthorizedForPrincipal(
+        { workspaceId: "ns_one" }, "principal_app", "mcp.invoke", appOne,
+      );
+      expect(partitionedForApp.map((iface) => iface.metadata.id).sort(), label).toEqual([created.one!, extra.metadata.id].sort());
     }
   } finally {
     await close();
