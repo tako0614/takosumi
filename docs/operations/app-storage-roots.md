@@ -118,6 +118,12 @@ every other object keeps the Workspace it has always been attributed to.
 
 There is no production binding for either profile.
 
+**Before deploying this to an environment with a stored-service profile
+bound** (`TAKOSUMI_STORED_SERVICE_USAGE`), drain the pending intents of
+`apps/` objects: their custody context gains `capsuleId`, so an operation digest
+prepared by the previous Worker no longer matches and its intent would stay
+pending. Legacy objects' contexts are unchanged.
+
 ## Object metadata and Restore
 
 - The Runner Durable Object reads an app's `apps/{cap}` root back from the
