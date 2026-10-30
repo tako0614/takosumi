@@ -104,7 +104,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
   expect(payload).not.toHaveProperty("credentials");
 });
 
-test("webhook release activator derives workspace context from canonical applyRun workspaceId", async () => {
+test("webhook release activator sends the Capsule's frozen scope as the workspace context", async () => {
   let capturedPayload: Record<string, unknown> | undefined;
   const activator = createWebhookReleaseActivator({
     url: "https://materializer.example.test/activate",
@@ -115,15 +115,21 @@ test("webhook release activator derives workspace context from canonical applyRu
       return Response.json({ status: "succeeded" });
     },
   });
+  const input = fakeOperatorActivationInput();
 
+  // A Capsule without a stored scopeRef derives from its Workspace id.
+  await activator.activate(input);
+  expect(capturedPayload).toMatchObject({ workspaceId: "space_1" });
+
+  // The operator activator copies this into `TAKOSUMI_WORKSPACE_ID`, so it
+  // follows the frozen scope (as the runner lane does), not the Apply Run's
+  // or the snapshot's live Workspace id.
   await activator.activate({
-    ...fakeOperatorActivationInput(),
+    ...input,
     applyRun: { id: "run_apply_1", workspaceId: "space_canonical" },
+    capsule: { ...input.capsule, workspaceId: "space_canonical", scopeRef: "space_frozen" },
   } as ReleaseActivationInput);
-
-  expect(capturedPayload).toMatchObject({
-    workspaceId: "space_canonical",
-  });
+  expect(capturedPayload).toMatchObject({ workspaceId: "space_frozen" });
 });
 
 test("webhook release activator never forwards dispatch-only provider credentials", async () => {

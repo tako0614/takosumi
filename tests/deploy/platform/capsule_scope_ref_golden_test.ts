@@ -53,7 +53,12 @@ import { configurationTargetInstallConfigId } from "../../../accounts/service/sr
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import type { ReleaseActivationInput } from "../../../core/domains/deploy-control/mod.ts";
-import { createRunnerReleaseActivator } from "../../../worker/src/release_activator.ts";
+import {
+  createCompositeReleaseActivator,
+  createRunnerReleaseActivator,
+  createWebhookReleaseActivator,
+} from "../../../worker/src/release_activator.ts";
+import { parsePayload as parseOperatorReleasePayload } from "../../../scripts/operator-release-activator.ts";
 import { releaseBaseEnv } from "../../../runner/lib/backup.ts";
 import { capsulePublicOriginFromPlatformExtensions } from "../../../deploy/platform/platform_extension_provider_credentials.ts";
 
@@ -641,6 +646,54 @@ describe("callers keep the follow-up derived values byte-identical", () => {
       } as never);
       expect(env.TAKOSUMI_WORKSPACE_ID).toBe(GOLDEN_FOLLOW_UP.releaseWorkspaceId);
       expect(JSON.parse(env.TAKOSUMI_RELEASE_CONTEXT_JSON!).workspaceId).toBe(GOLDEN_FOLLOW_UP.releaseWorkspaceId);
+    });
+
+    test(`${variant.name}: runner and operator release commands of one release see the same frozen scope`, async () => {
+      const subject = capsule(config(V2, variant), variant);
+      let runnerJob: { readonly workspaceId?: string } | undefined;
+      let operatorPayload: Record<string, unknown> | undefined;
+      const activator = createCompositeReleaseActivator({
+        runner: createRunnerReleaseActivator({
+          release: async (job) => {
+            runnerJob = job;
+            return { status: "succeeded", runId: job.runId, commandCount: job.commands.length };
+          },
+        }),
+        operator: createWebhookReleaseActivator({
+          url: "https://materializer.example.test/activate",
+          token: "release-token",
+          fetcher: async (input, init) => {
+            operatorPayload = await new Request(input, init).json() as Record<string, unknown>;
+            return Response.json({ status: "succeeded", kind: "operator.release" });
+          },
+        }),
+      })!;
+      await activator.activate({
+        planRun: { id: "plan_golden" },
+        applyRun: { id: "apply_golden", workspaceId: variant.workspaceId },
+        capsule: subject,
+        stateVersion: { id: "sv_golden", generation: 4, digest: "sha256:state", createdByRunId: "apply_golden" },
+        output: { id: "out_golden", stateGeneration: 4, outputDigest: "sha256:outputs" },
+        sourceSnapshot: {
+          id: "snap_golden",
+          origin: "git",
+          resolvedCommit: "abc123",
+          path: ".",
+          archiveRef: "workspaces/ws_golden_scope/sources/src_golden/snapshots/snap_golden/source.tar.zst",
+          archiveDigest: `sha256:${"a".repeat(64)}`,
+        },
+        nonSensitiveOutputs: {},
+        providerConfigurations: { format: "takosumi.provider-configurations@v1", providers: [] },
+        commands: [
+          { id: "runner", phase: "post_apply", command: ["true"] },
+          { id: "operator", phase: "post_apply", executor: "operator", command: ["true"] },
+        ],
+      } as unknown as ReleaseActivationInput);
+      expect(runnerJob?.workspaceId).toBe(GOLDEN_FOLLOW_UP.releaseWorkspaceId);
+      expect(operatorPayload?.workspaceId).toBe(GOLDEN_FOLLOW_UP.releaseWorkspaceId);
+      // The operator activator copies the parsed value into the command's
+      // `TAKOSUMI_WORKSPACE_ID` and `TAKOSUMI_RELEASE_CONTEXT_JSON.workspaceId`.
+      expect(parseOperatorReleasePayload(operatorPayload).workspaceId).toBe(GOLDEN_FOLLOW_UP.releaseWorkspaceId);
     });
 
     test(`${variant.name}: artifact root and references`, async () => {

@@ -120,4 +120,19 @@ describe("capsuleArtifactRoot", () => {
     // An `apps/` root is only valid for an id that is already a key segment.
     expect(() => capsuleArtifactRoot("ws_frozen", "cap:1", "apps/cap_1")).toThrow("not canonical");
   });
+
+  test("no Capsule or scope segment may be empty or a dot-only path step", () => {
+    for (const capsuleId of ["..", ".", "..."]) {
+      expect(() => capsuleArtifactRoot("ws_frozen", capsuleId, `apps/${capsuleId}`), capsuleId).toThrow("not canonical");
+      expect(() => capsuleArtifactRoot("ws_frozen", capsuleId, `workspaces/ws_before/capsules/${capsuleId}`), capsuleId)
+        .toThrow("not canonical");
+      expect(() => capsuleArtifactRoot("ws_frozen", capsuleId), capsuleId).toThrow("not canonical");
+    }
+    expect(() => capsuleArtifactRoot("ws_frozen", "")).toThrow("not canonical");
+    expect(() => capsuleArtifactRoot("..", "cap_1")).toThrow("not canonical");
+    expect(() => capsuleArtifactRoot("", "cap_1")).toThrow("not canonical");
+    // Dots inside a segment are ordinary characters.
+    expect(capsuleArtifactRoot("ws.frozen", "cap.1", "apps/cap.1")).toBe("apps/cap.1");
+    expect(capsuleArtifactRoot("ws.frozen", "cap.1")).toBe("workspaces/ws.frozen/capsules/cap.1");
+  });
 });

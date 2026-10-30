@@ -273,6 +273,26 @@ test("a row without a persisted root reads its legacy root from scopeRef in ever
   }
 });
 
+test("a malformed scopeRef fails the storage root the same way in every store", async () => {
+  for (const { name, control, persistStorageRoot } of await stores()) {
+    await seedSource(control);
+    for (const [suffix, scopeRef] of [
+      ["number", 7],
+      ["boolean", true],
+      ["null", null],
+      ["empty", ""],
+      ["object", { id: WS }],
+    ] as const) {
+      const id = `cap_malformed_${suffix}`;
+      await control.putCapsule(capsule(id, { scopeRef: scopeRef as unknown as string }));
+      await expect(control.getCapsuleStorageRoot(id), `${name}:${suffix}`).rejects.toThrow("Capsule scopeRef is invalid");
+      // A persisted root does not depend on scopeRef at all.
+      await persistStorageRoot(id, `apps/${id}`);
+      expect(await control.getCapsuleStorageRoot(id), `${name}:${suffix}`).toBe(`apps/${id}`);
+    }
+  }
+});
+
 test("a persisted legacy root keeps allocating after the Workspace id moves, in every store", async () => {
   const allocator = new ObjectKeyArtifactReferenceAllocator();
   for (const { name, control, persistStorageRoot } of await stores()) {

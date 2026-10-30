@@ -43,8 +43,9 @@ fixture verification; it does not authorize a staging or production operation.
 | Install-context `workspace_id` module variable (apps build storage paths, cookie contexts and MCP keys from it) | `run_engine.ts` | merged variables |
 | `workspace_scoped_capsule_name` suffix on re-adoption | `accounts/service/src/control/install-config-re-adoptions.ts` | suffix |
 | Re-adoption and configuration-plan successor InstallConfig ids (the identity an idempotent retry finds) | `install-config-re-adoptions.ts` `reAdoptionTargetInstallConfigId`, `configuration-plans.ts` `configurationTargetInstallConfigId` | successor ids |
-| `TAKOSUMI_WORKSPACE_ID` and `TAKOSUMI_RELEASE_CONTEXT_JSON.workspaceId` of runner release commands | `worker/src/release_activator.ts` (the container and local runners copy the job's value) | release environment |
+| `TAKOSUMI_WORKSPACE_ID` and `TAKOSUMI_RELEASE_CONTEXT_JSON.workspaceId` of release commands, runner and operator alike | `worker/src/release_activator.ts`: the runner job, and the operator webhook payload's `workspaceId` that `scripts/operator-release-activator.ts` copies into both variables | release environment |
 | Legacy artifact root of a Capsule row without a persisted `storage_root` | `getCapsuleStorageRoot` in the memory, Postgres and D1 stores; `worker/src/stored-capsule-root.ts` | root and state/raw-output refs |
+| Legacy `storage_root` the ownership backfill writes | `core/domains/app-ownership/backfill.ts` | backfill plan |
 
 The historical JSON key `workspaceId` stays inside every AAD, nonce and digest
 preimage; only its value source changed. Authority checks and owner fences
@@ -85,7 +86,11 @@ operator state recovery) returns the stored root as is and never rebuilds or
 compares its Workspace segment with a live Workspace id; it only checks that
 the root ends in this Capsule's own segment. A row without a persisted root
 (before the v77 column) derives the legacy root from scopeRef, which is the
-Workspace id it was written under. Objects never move.
+Workspace id it was written under, and the ownership backfill freezes that
+same root. No root segment may be empty or a dot-only path step. The local
+runner's recovery custody check accepts exactly the canonical generation-1
+ref of the persisted root its stateRef names, instead of rebuilding the legacy
+ref from the artifact's Workspace id. Objects never move.
 
 ## What does not read scopeRef yet
 

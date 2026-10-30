@@ -365,7 +365,11 @@ function releaseActivationWebhookPayload(
   input: ReleaseActivationInput,
   options: { readonly sourceArchiveBucket?: string } = {},
 ) {
-  const workspaceId = input.applyRun.workspaceId;
+  // The operator activator hands this to release commands as
+  // `TAKOSUMI_WORKSPACE_ID` and `TAKOSUMI_RELEASE_CONTEXT_JSON.workspaceId`,
+  // exactly as the runner lane does: the Capsule's frozen scope, so operator
+  // and runner commands of one release see the same value.
+  const workspaceId = capsuleScopeRef(input.capsule);
   const sourceArchiveBucket = options.sourceArchiveBucket?.trim();
   return {
     kind: RELEASE_ACTIVATOR_KIND,

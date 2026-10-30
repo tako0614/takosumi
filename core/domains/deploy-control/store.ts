@@ -6812,12 +6812,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(this.#capsules.get(id));
   }
 
-  getCapsuleStorageRoot(id: string): Promise<string | undefined> {
+  async getCapsuleStorageRoot(id: string): Promise<string | undefined> {
     const capsule = this.#capsules.get(id);
     // Without a persisted root the legacy root is the one written under the
-    // Capsule's frozen scope, never the live Workspace id.
-    return Promise.resolve(capsule ? this.#capsuleOwnership.get(id)?.storageRoot ??
-      `workspaces/${capsuleScopeRef(capsule)}/capsules/${capsule.id}` : undefined);
+    // Capsule's frozen scope, never the live Workspace id. Async, so an
+    // invalid scopeRef rejects as it does in the durable stores.
+    return capsule ? this.#capsuleOwnership.get(id)?.storageRoot ??
+      `workspaces/${capsuleScopeRef(capsule)}/capsules/${capsule.id}` : undefined;
   }
 
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
