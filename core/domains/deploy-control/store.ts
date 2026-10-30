@@ -6724,7 +6724,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     this.#capsules.set(capsule.id, capsule);
     if (ownership) this.#capsuleOwnership.set(capsule.id, structuredClone(ownership));
     this.#providerBindingSets.set(providerBindingSet.id, providerBindingSet);
-    if (ownership) {
+    // The Workspace's owner/admin people join a new app as members only when
+    // the app's owner is the Workspace's owner. An app installed by someone
+    // else is that person's alone (TASK-0118 P9.1-c).
+    if (ownership && this.#workspaces.get(capsule.workspaceId)?.ownerUserId === ownership.ownerAccountId) {
       for (const member of this.#workspaceMembers.values()) {
         if (member.workspaceId !== capsule.workspaceId || member.accountId === ownership.ownerAccountId ||
           member.status !== "active" || !member.roles.some((role) => role === "owner" || role === "admin")) continue;

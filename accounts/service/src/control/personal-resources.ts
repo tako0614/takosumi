@@ -5,7 +5,12 @@ import type { AccountsStore } from "../store.ts";
 import type { ControlSession } from "./shared.ts";
 import { personalWorkspaceHandle } from "../control-personal-workspace.ts";
 
-/** Internal namespace retained by the compat coordinator until Phase 9. */
+/**
+ * The internal namespace that fills the retained Workspace columns of a write
+ * made without a Workspace (an install, a Workspace-scoped connection) until
+ * the columns are dropped (TASK-0118 Phase 9). It only fills columns: no
+ * authorization decision reads it, and only writes create it.
+ */
 export async function personalResourceNamespace(
   operations: ControlPlaneOperations,
   store: AccountsStore,

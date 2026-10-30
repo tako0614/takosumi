@@ -244,7 +244,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 113
+`accounts/service/src/control-route-inventory.ts`; it currently contains 114
 public route descriptors, listed below. Accounts compositions include the same routes in `/openapi.json` and publish their count as `x-takos-public-session-endpoint-count`. Core-only processes omit the unmounted Accounts routes. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -328,8 +328,16 @@ These routes (TASK-0118 Phase 9.1) replace the Workspace-addressed reads. They n
 | GET | `/api/v1/capsule-configs?capsuleId=` | `view`. The app's current InstallConfig, as `{ installConfigs }`. Cannot be combined with `workspaceId` |
 | GET | `/api/v1/provider-connections` | Account credential. The caller's own Provider Connections (Source git connections excluded) and release-owned bindable operator connections, as `{ providerConnections }`. `projection=release-owned` returns only the release-owned ones (no durable read) |
 | GET | `/api/v1/provider-connections?capsuleId=&projection=release-owned` | `view`. The release-owned bindable connections for that app. The app's connection choices are `GET /api/v1/connections?capsuleId=&projection=labels` |
+| GET | `/api/v1/ui-surfaces?cursor&limit&capsuleId` | Launcher UI surfaces (`interface.ui.surface` v1, `Resolved`) of the apps in scope that are `active` or `stale`, as `{ interfaces, nextCursor? }`. The caller's exact current Principal Binding with `ui.open` is still required. Pages walk the apps in id order (`limit` 1–50 apps, default 20); `capsuleId` narrows to one app. An installed app's own token covers its own app; an operator-designated delegate app's token (Takos) covers its user's apps under the per-app decision, decided only for the apps a page returns (a page decides at most four times `limit` apps and then continues with `nextCursor`). `incomplete: true` means the caller manages more apps than one account read enumerates (2000) |
 
 Activity events are stored per internal partition (the frozen namespace each app records into). A page is read from the partitions of the apps in scope (at most 96 per request) and filtered event by event with the attribution rule above. An event is shown only when every app it belongs to is in scope, so an Interface link event never reveals the other side to someone who cannot view that app. Events whose app cannot be determined and events that belong to no app (`workspace` and `connection` events, a Run or Source no app uses) are not shown. One request scans at most four store pages and spends one shared budget of 50 Run, Source and Interface reads across all of them; it stops before an event it could not afford to attribute, so the next page continues there instead of dropping it. A page can therefore hold fewer than `limit` events, even none, and still carry `nextCursor`. The next page continues after the last row the request examined, on the `(createdAt, id)` keyset; that row can be one the caller cannot see, so the cursor is sealed: AES-256-GCM over the keyset under a key derived with HKDF-SHA256 from the secret-store passphrase (`TAKOSUMI_SECRET_STORE_PASSPHRASE`, else `TAKOSUMI_SECRET_STORE_KEY`; label `takosumi/activity-cursor/v1`), with the version prefix `ac1.`. Clients only echo it back; a tampered or foreign cursor is `400`, and rotating the passphrase invalidates outstanding cursors. A plain keyset cursor issued before sealing is still accepted. A server without a passphrase of at least 32 bytes cannot seal and answers `503` when a page would need a cursor (or one is passed); a page that holds everything still reads. One request reads at most 96 internal partitions; when the caller's apps span more, or the caller manages more apps than one account read enumerates (2000), the response carries `incomplete: true`. Apps reach the account Activity while their owner and members can list them, so an uninstalled app's history is read through `GET /api/v1/capsules/{capsuleId}/activity` by its retained owner and members.
+
+The Interface API (`/api/v1/interfaces…`) also works without a Workspace:
+
+- An installed app's own OAuth token (bound to its app, with or without a Workspace) is a runtime principal. Without a Workspace it calls `GET /api/v1/interfaces` with no `workspaceId` (`permission` is still required; `capsuleId` narrows to one provider app; a `workspaceId` is `400`). The result holds only Interfaces with the token's exact current Principal Binding for that permission, paged by `limit` and `cursor` with `nextCursor`, and a Binding counts only as evidence of the token's own app: it was materialized from an active Interface link of that app, or it sits on an Interface that app owns. (The app's pairwise subject is visible to providers it calls, and anyone who may write Bindings in some partition, including another tenant of a shared legacy partition, can bind any subject there, so a manual Binding on an Interface the app does not own is not evidence.) `GET /api/v1/interfaces/{id}`, its `bindings` and `POST /api/v1/interfaces/{id}/token` apply the same rule: an Interface without acceptable evidence is `404`, and runtime principals never mutate. A runtime principal without a Workspace that is not bound to an app is refused. A token issued this way is minted for the Interface's own partition. A Workspace-bound runtime token keeps its Workspace fence.
+- An account session or PAT without a Workspace restriction may list one app's Interfaces with `GET /api/v1/interfaces?capsuleId=` (`view` on the app; only that app's Capsule-owned Interfaces). `workspaceId` and `capsuleId` cannot be combined, and a request with neither is `400`.
+- On the bundled Accounts host (self-host), a Capsule-owned Interface addressed by id is decided per app for an account caller without a Workspace restriction once the app has an ownership row (`view` to read, `change_settings` to change Interfaces and Bindings); an app without an ownership row keeps the Workspace decision, and Workspace-owned Interfaces keep it as well. A PAT with `appIds` reaches only its apps' Interfaces and never holds Workspace authority there.
+- On the platform Worker, a shared-account (Hosted) session's `capsuleId` listing is decided through the same shared-auth control dispatch the dashboard uses. Account callers still need a Workspace for id-addressed Interface routes until the platform extension authorization moves to apps (Phase 9.1-e).
 
 `GET /api/v1/dashboard/bootstrap` no longer includes the Workspace inventory unless `includeWorkspaces=true` is passed. With `includeNotifications=true` the feed is the newest page of `GET /api/v1/activity` (at most 60 events) under the bootstrap's optional-projection deadline; each entry carries the compact event, `capsuleId` when the event names its app, and `workspaceHandle` set to the event's internal partition id for compatibility. A host without the app-ownership read ports, or a legacy Workspace-scoped credential, still gets the Workspace feed.
 
@@ -613,7 +621,25 @@ missing connections, required settings, a name collision) and once before it
 creates the Capsule. `userAction` names the single next step (`wait`,
 `choose_module`, `provide_inputs`, `review_run`, `retry` or `none`); a
 requirement with exactly one eligible connection is selected automatically.
-Only the member who started the attempt may `PATCH` or `DELETE` it. `PATCH`
+Only the member who started the attempt may `PATCH` or `DELETE` it. The new
+app's first owner is the person who started the install (TASK-0118 P9.1-c), also
+when a Workspace admin who is not the Workspace's owner uses a Workspace route;
+provider bindings and the Source `authConnectionId` accept only that person's
+connections, and install candidates list only rows that record that person as
+owner. The Workspace's other owner/admin people join the new app as members only
+when its owner is the Workspace's owner; an admin's install is the admin's alone.
+Claiming an ownerless Source (a reviewed preflight Source or one a prior
+coordinator recorded) also requires its Git connection to be the installer's.
+Before its app exists, an install in the creator's own namespace (the
+Workspace-less route) is the creator's: the creator's account credential (not a
+PAT with `appIds` or an installed app's own token, and not a shared-account
+composition that requires current membership) reads and advances it without a
+Workspace decision. An install started through a shared Workspace's route keeps
+the Workspace decision, so someone who left that Workspace cannot finish it. Before the app exists only its creator answers (`PATCH`) or reconciles a plan; a Workspace owner or another admin may read it but never advance it. If
+the app was committed before the plan recorded it (a lost acknowledgement), the
+app decides. Workspace-less install idempotency is per account: a key also
+replays a plan the account created in another personal namespace it owns
+(archived ones included). `PATCH`
 uses `expectedGeneration` as a CAS fence, and only the confirming
 `continue: true` request carries variable values, which go straight into the
 atomic initial creation and are never stored. Once a confirming request has
@@ -973,7 +999,9 @@ Workspaces included and an exact `total` counted before cursor filtering. The
 default and hard maximum `limit` are 100; the only accepted query keys are
 `limit` and `cursor`. A Workspace-scoped session, PAT, or OAuth credential is
 rejected with 403, and the route performs no personal-Workspace bootstrap or
-other writes. The response `kind` is
+other writes. Since TASK-0118 P9.1-c `GET /api/v1/workspaces` does not create or
+repair a personal Workspace either; the internal personal namespace is created
+only by writes that need it, such as a Workspace-less install. The response `kind` is
 `takosumi.account-workspace-inventory@v1` and contains `workspaces`, `total`,
 `returned`, `limit`, `truncated`, and an optional opaque `nextCursor`.
 

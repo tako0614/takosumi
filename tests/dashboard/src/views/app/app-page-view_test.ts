@@ -151,11 +151,11 @@ describe("installed app page", () => {
     expect(run).toContain("openRunReview(step.runId, step.runType)");
     // Open shows every screen; Install again goes to the app's install page.
     expect(page).toContain('<Match when={view().primaryAction === "open" && screens().length > 0}>');
-    expect(page).toContain("<OpenAppButton surfaces={screens()}");
+    expect(page).toMatch(/<OpenAppButton\s+surfaces=\{screens\(\)\}/u);
     // Screens the server still lists stay openable as a secondary action
     // while another action is primary (an app needing attention may still
     // serve its last successful version), except while it is removed.
-    expect(page).toContain('<OpenAppButton surfaces={screens()} appName={displayName()} variant="secondary" />');
+    expect(page).toMatch(/<OpenAppButton\s+surfaces=\{screens\(\)\}\s+appName=\{displayName\(\)\}\s+variant="secondary"/u);
     const secondary = page.slice(page.indexOf("const secondaryScreens = "), page.indexOf("const showUpdate = "));
     expect(secondary).toContain('view.primaryAction !== "open" && screens().length > 0');
     expect(secondary).toContain('view.state !== "uninstalling" && view.state !== "uninstalled"');
@@ -202,8 +202,10 @@ describe("installed app page", () => {
     expect(page).toContain("const screens = () => openableScreens(app()?.screens ?? []);");
     expect(ui).toContain("const others = () => props.surfaces.slice(1)");
     expect(ui).toContain('role="menuitem"');
-    expect(ui).toContain('target="_blank"');
-    expect(ui).toContain('rel="noreferrer noopener"');
+    // Each screen opens along its route; the web (always, on a computer) in a new tab.
+    expect(ui).toContain("const routeOf = (surface: OpenableScreen) => screenOpenRoute(props.capsuleId, surface);");
+    expect(ui).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
+    expect(ui).toContain("{...openRouteAnchor(otherRoute())}");
   });
 
   test("problems are the server's, each told in words with its own next step", () => {

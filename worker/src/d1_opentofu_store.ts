@@ -7310,6 +7310,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               sql`json_extract(${schema.workspaceMembers.recordJson}, '$.workspaceId') = ${schema.workspaceMembers.workspaceId}`,
               sql`json_extract(${schema.workspaceMembers.recordJson}, '$.accountId') = ${schema.workspaceMembers.accountId}`,
               sql`exists (select 1 from json_each(${schema.workspaceMembers.recordJson}, '$.roles') where value in ('owner', 'admin'))`,
+              // Only for an app owned by the Workspace's owner (TASK-0118 P9.1-c).
+              sql`exists (select 1 from ${schema.workspaces} where ${schema.workspaces.id} = ${capsule.workspaceId} and ${schema.workspaces.ownerUserId} = ${ownership.ownerAccountId})`,
             )),
           ).onConflictDoNothing(),
         ] : []),

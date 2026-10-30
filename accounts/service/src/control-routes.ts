@@ -76,6 +76,7 @@ import {
 } from "./control/account-reads.ts";
 import { handleAccountActivity } from "./control/app-activity.ts";
 import type { ActivityCursorSealer } from "./control/activity-cursor.ts";
+import { handleAccountUiSurfaces } from "./control/app-launcher.ts";
 import { handleRevisionPlans } from "./control/revision-plans.ts";
 import { isWorkspaceMutationRoute, workspaceFrozenResponse } from "./workspace-mutations-freeze.ts";
 import {
@@ -153,6 +154,7 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   "install-plans": async (ctx, segments, method) =>
     await handleAccountInstallPlanList(ctx, segments, method) ?? await handleInstallPlans(ctx, segments, method),
   activity: handleAccountActivity,
+  "ui-surfaces": handleAccountUiSurfaces,
   "revision-plans": handleRevisionPlans,
   capsules: async (ctx, segments, method) =>
     await handleAppOwnership(ctx, segments, method) ?? await handleCapsules(ctx, segments, method),
@@ -580,7 +582,7 @@ async function dispatchAuthenticatedControlRouteForSession(
     context.session.appIds?.includes(url.searchParams.get("capsuleId") ?? "") === true;
   if (context.session.appIds !== undefined &&
     !legacyWorkspaceAppRoute && !appConnectionLabels && !appReleaseOwnedConnections &&
-    !["apps", "activity", "capsules", "runs", "state-versions", "sources", "compatibility-reports", "install-plans", "revision-plans", "capsule-configs", "ownership-transfers"].includes(segments[0] ?? "")) {
+    !["apps", "activity", "ui-surfaces", "capsules", "runs", "state-versions", "sources", "compatibility-reports", "install-plans", "revision-plans", "capsule-configs", "ownership-transfers"].includes(segments[0] ?? "")) {
     return appendServerTiming(errorJson("app_access_denied", "This credential is restricted to its apps.", 403, request), timings);
   }
 

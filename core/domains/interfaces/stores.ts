@@ -241,8 +241,43 @@ export class InMemoryInterfaceLinkStore implements InterfaceLinkStore {
   }
 }
 
+/**
+ * Filter for the Principal Binding projection. Without `workspaceId` the
+ * projection spans every internal partition (TASK-0118 9.1): the exact
+ * current Principal Binding is the only authority either way.
+ */
+export type InterfaceAuthorizationFilter =
+  & Omit<InterfaceListFilter, "workspaceId">
+  & { readonly workspaceId?: string };
+
+/**
+ * The consumer app of a Workspace-free runtime principal (TASK-0118 9.1).
+ * Its pairwise subject is learnable by providers it talks to, and anyone who
+ * may write Bindings in some partition (including another tenant of a shared
+ * legacy partition) can bind that subject, so a Binding counts as its
+ * evidence only when it was materialized from an active Interface link of
+ * this app, or sits on an Interface this app itself owns.
+ */
+export interface InterfaceRuntimeConsumer {
+  readonly capsuleId: string;
+}
+
+export function bindingServesRuntimeConsumer(
+  binding: InterfaceBinding,
+  iface: Interface,
+  consumer: InterfaceRuntimeConsumer,
+): boolean {
+  if (iface.metadata.ownerRef.kind === "Capsule" &&
+    iface.metadata.ownerRef.id === consumer.capsuleId) return true;
+  const source = binding.metadata.materializedFrom;
+  return source?.source === "capsule_required_interface" &&
+    source.capsuleId === consumer.capsuleId;
+}
+
 export interface InterfaceAuthorizationPageInput {
-  readonly filter: InterfaceListFilter;
+  readonly filter: InterfaceAuthorizationFilter;
+  /** Required evidence shape for a Workspace-free runtime principal. */
+  readonly consumer?: InterfaceRuntimeConsumer;
   readonly subjectId: string;
   readonly permission: string;
   readonly params: PageParams;
@@ -595,14 +630,17 @@ class InMemoryInterfaceAuthorizationQuery
   async listPage(
     input: InterfaceAuthorizationPageInput,
   ): Promise<Page<Interface>> {
-    const candidates = (
-      await this.interfaces.list({
-        ...input.filter,
-        phase: input.filter.phase ?? "Resolved",
-        includeRetired: false,
-        limit: undefined,
-      })
-    ).filter((iface) => {
+    const filter = {
+      ...input.filter,
+      phase: input.filter.phase ?? "Resolved",
+      includeRetired: false,
+      limit: undefined,
+    };
+    const workspaceId = filter.workspaceId;
+    const listed = workspaceId !== undefined
+      ? await this.interfaces.list({ ...filter, workspaceId })
+      : await this.#listAcrossPartitions(filter);
+    const candidates = listed.filter((iface) => {
       if (hasUnownedCapsuleOutput(iface)) return false;
       if (
         input.uiSurfaceCandidates &&
@@ -622,7 +660,8 @@ class InMemoryInterfaceAuthorizationQuery
             iface,
             input.subjectId,
             input.permission,
-          ) && await hasActiveRequiredInterfaceLink(binding, iface, this.links, input.permission)
+          ) && await hasActiveRequiredInterfaceLink(binding, iface, this.links, input.permission) &&
+          (input.consumer === undefined || bindingServesRuntimeConsumer(binding, iface, input.consumer))
         ) {
           authorized.push(iface);
           break;
@@ -638,6 +677,25 @@ class InMemoryInterfaceAuthorizationQuery
       createdAt: iface.metadata.createdAt,
       id: iface.metadata.id,
     }));
+  }
+
+  /** Every partition, through the store's own global keyset scan. */
+  async #listAcrossPartitions(
+    filter: InterfaceAuthorizationFilter,
+  ): Promise<readonly Interface[]> {
+    const rows: Interface[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.interfaces.listProjectionPage({
+        ...(cursor !== undefined ? { cursor } : {}),
+        limit: 500,
+      });
+      for (const iface of page) {
+        if (matches(iface, { ...filter, workspaceId: iface.metadata.workspaceId })) rows.push(iface);
+      }
+      if (page.length < 500) return rows;
+      cursor = page[page.length - 1]!.metadata.id;
+    }
   }
 }
 

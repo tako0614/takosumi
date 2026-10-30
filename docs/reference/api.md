@@ -225,7 +225,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 113 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
+次の 114 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
 
 ### アプリの所有と個人の接続・使用量
 
@@ -307,8 +307,16 @@ Activityは、対象のCapsule、metadataのCapsule ID (run groupの `memberCaps
 | GET | `/api/v1/capsule-configs?capsuleId=` | `view`。そのアプリの今のInstallConfigを `{ installConfigs }` で返す。`workspaceId` と同時には指定できない |
 | GET | `/api/v1/provider-connections` | アカウント資格情報。本人のProvider Connection (Source用のgit接続は除く) と、releaseが持つbindableなoperator接続を `{ providerConnections }` で返す。`projection=release-owned` はreleaseが持つものだけ (永続storeは読まない) |
 | GET | `/api/v1/provider-connections?capsuleId=&projection=release-owned` | `view`。そのアプリに結べる、releaseが持つ接続。アプリが選べる接続は `GET /api/v1/connections?capsuleId=&projection=labels` |
+| GET | `/api/v1/ui-surfaces?cursor&limit&capsuleId` | 対象のアプリのうち `active`・`stale` のもののランチャー用UI surface (`interface.ui.surface` v1、`Resolved`) を `{ interfaces, nextCursor? }` で返す。呼び出し元に `ui.open` の今有効なPrincipal Bindingが要るのは従来どおり。ページはアプリのID順 (`limit` は1ページのアプリ数で1〜50、既定20)。`capsuleId` で1アプリに絞る。インストール済みアプリ自身のトークンは自分のアプリだけ、operatorが指定した代理アプリ (Takos) のトークンは、アプリでの判定のもとで利用者のアプリを対象にする。判定はそのページで返すアプリにだけ行う (1ページで判定するのは `limit` の4倍まで、残りは `nextCursor` で続ける)。`incomplete: true` は、1回のアカウント単位の読み取りで数え切れない (2000を超える) 数のアプリを管理していることを示す |
 
 Activityは内部の区画 (各アプリが記録する、固定された名前空間) ごとに保存しています。1ページは対象のアプリの区画 (1リクエスト最大96) から読み、前の節の規則でイベントごとにアプリへ結び付けて絞ります。イベントが属するアプリが全て対象のときだけ表示するので、Interface連携のイベントが、相手のアプリを見られない人に相手を明かすことはありません。アプリを決められないイベントと、アプリに属さないイベント (`workspace`・`connection` のイベント、どのアプリも使わないRun・Source) は表示しません。1リクエストで読むstoreのページは最大4つで、Run・Source・Interfaceの読み取りは全ページ合わせて50件までです。読み取りが足りず結び付けられないイベントの手前で止め、次のページはそこから続けるので、イベントを取りこぼしません。そのため件数が `limit` 未満 (0件のこともある) でも `nextCursor` が付くことがあります。次のページは、そのリクエストが最後に調べた行の次から `(createdAt, id)` のkeysetで続けます。その行は呼び出し元が見られない行のこともあるので、cursorは封をしてから返します。secret storeのパスフレーズ (`TAKOSUMI_SECRET_STORE_PASSPHRASE`、無ければ `TAKOSUMI_SECRET_STORE_KEY`) からHKDF-SHA256 (ラベル `takosumi/activity-cursor/v1`) で導いた鍵のAES-256-GCMでkeysetを暗号化し、版の接頭辞 `ac1.` を付けます。クライアントは受け取った値をそのまま返すだけです。改ざんしたcursorや別の鍵で作ったcursorは `400` で、パスフレーズを替えると発行済みのcursorは使えなくなります。封をする前に発行した平文のkeyset cursorも受け付けます。32バイト以上のパスフレーズが無いサーバーは封ができないので、cursorが必要なページ (またはcursorを渡したリクエスト) に `503` を返します。全件が1ページに収まるときは読めます。1リクエストで読む内部区画は最大96で、呼び出し元のアプリがそれより多い区画にまたがるとき、または1回のアカウント単位の読み取りで数え切れない (2000を超える) 数のアプリを管理しているときは、`incomplete: true` を返します。アカウント単位のActivityに出るのは所有者・メンバーが一覧できるアプリなので、アンインストールしたアプリの履歴は、残っている所有記録の所有者・メンバーが `GET /api/v1/capsules/{capsuleId}/activity` で読みます。
+
+Interface API (`/api/v1/interfaces…`) もWorkspaceなしで使えます。
+
+- インストール済みアプリ自身のOAuthトークン (そのアプリに結び付いたもの。Workspaceの有無は問わない) は実行時のprincipalです。Workspaceが無い場合は、`workspaceId` を付けずに `GET /api/v1/interfaces` を呼びます (`permission` は必須。`capsuleId` で提供側の1アプリに絞れる。`workspaceId` を付けると `400`)。結果は、そのトークンにその権限の今有効なPrincipal BindingがあるInterfaceだけで、`limit` と `cursor` でページを分け、続きがあれば `nextCursor` を返します。そのBindingは、トークンのアプリ自身の根拠である場合だけ数えます。つまり、そのアプリの有効なInterface連携から作られたBindingか、そのアプリ自身が所有するInterfaceのBindingです (アプリのpairwise subjectは呼び出し先の提供者に見えます。また、ある区画にBindingを書ける人は、共有された旧来の区画のほかの利用者も含めて、そこで任意のsubjectにBindingを作れます。そのため、アプリが所有していないInterfaceの手作りのBindingは根拠になりません)。`GET /api/v1/interfaces/{id}`、その `bindings`、`POST /api/v1/interfaces/{id}/token` も同じ規則で、根拠の無いInterfaceは `404`、実行時のprincipalは変更できません。アプリに結び付いていない、Workspaceも無い実行時のprincipalは拒否します。こうして発行するトークンは、そのInterfaceの区画で発行します。Workspaceに結び付いた実行時のトークンは、従来どおりそのWorkspaceに限ります。
+- Workspaceの制限が無いアカウントのセッションやPATは、`GET /api/v1/interfaces?capsuleId=` で1アプリのInterfaceを一覧できます (そのアプリの `view`。そのアプリが所有するInterfaceだけ)。`workspaceId` と `capsuleId` は同時に指定できず、どちらも無いと `400` です。
+- 同梱のAccounts host (self-host) では、Workspaceの制限が無いアカウントの呼び出し元が、IDで指定したCapsule所有のInterfaceを扱うとき、アプリに所有記録があればアプリで判定します (読み取りは `view`、InterfaceとBindingの変更は `change_settings`)。所有記録の無いアプリと、Workspace所有のInterfaceは従来のWorkspace判定のままです。`appIds` 付きのPATはそのアプリのInterfaceだけに届き、ここでWorkspaceの権限を持つことはありません。
+- platform Workerでは、shared-account (Hosted) のセッションによる `capsuleId` の一覧も、dashboardと同じshared-authの制御経路で判定します。platform extensionの認可がアプリへ移るまで (Phase 9.1-e)、IDで指定するInterface routeにはアカウントの呼び出し元でもWorkspaceが要ります。
 
 `GET /api/v1/dashboard/bootstrap` は、`includeWorkspaces=true` を指定しない限りWorkspaceの一覧を含めません。`includeNotifications=true` の通知は、bootstrapの任意項目の期限の中で読んだ `GET /api/v1/activity` の最新ページ (最大60件) です。各項目は短くしたイベント、イベントがアプリを示すときの `capsuleId`、互換のための `workspaceHandle` (イベントの内部区画のID) を持ちます。アプリ所有の読み取りを持たないhostと、旧Workspace束縛の資格情報には、従来のWorkspaceからの通知を返します。
 
@@ -318,8 +326,9 @@ Activityは内部の区画 (各アプリが記録する、固定された名前�
 | -------- | ----------------------------- | --------------------------------------------------------- |
 | GET      | `/api/v1/views/workspaces.v1` | アカウントの active membership Workspace inventory を読む |
 
-`/api/v1/views/workspaces.v1` は、初回ログインの個人 Workspace 作成・修復を持つ
-`GET /api/v1/workspaces` とは別の読み取り専用 projection です。認証済みアカウントの
+`/api/v1/views/workspaces.v1` は `GET /api/v1/workspaces` とは別の読み取り専用 projection です
+(TASK-0118 P9.1-c 以降、`GET /api/v1/workspaces` も個人 Workspace を作成・修復しません。内部の個人の場所は
+Workspaceを指定しないインストールなど、それを必要とする書き込みだけが作ります)。認証済みアカウントの
 active membership を `created_asc` で返し、archived Workspace も含めます。`limit` は
 省略時 100、最大 100、`cursor` は opaque token です。クエリキーは `limit` と
 `cursor` だけを受け付けます。レスポンスの `total` は cursor 適用前の全 active
@@ -626,6 +635,19 @@ value-free の `source.retired` を Activity に 1 件記録します。失敗�
 | PATCH    | `/api/v1/install-plans/{installPlanId}`           | 入力待ちの試行に回答する（generation CAS）     |
 | DELETE   | `/api/v1/install-plans/{installPlanId}`           | 試行、または Capsule 記録前の plan を捨てる    |
 | POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                         |
+
+新しいアプリの最初の所有者は、インストールを始めた本人です (TASK-0118 P9.1-c)。Workspace の所有者ではない
+管理者が Workspace の route でインストールしても、所有者はその管理者で、connection の binding とSourceの
+`authConnectionId` も本人の接続だけを受け付けます。インストール候補に出る接続も、所有者として本人が記録された
+ものだけです。Workspace の他の所有者・管理者がアプリのメンバーに加わるのは、アプリの所有者が Workspace の所有者の
+ときだけで、管理者がインストールしたアプリはその管理者だけのものです。所有者のいないSource (確認済みの preflight の
+Source や以前の coordinator が記録したSource) を取り込むときも、Git接続はインストールした本人のものに限ります。
+本人の個人の場所 (Workspaceを指定しないインストール) にある、アプリができる前のインストール計画は作った本人のもので、
+本人のアカウント資格情報 (PATの `appIds` やインストール済みアプリ自身のtokenではないもの。現在のmembershipを要求する
+共有アカウント構成は除く) なら Workspace の判定なしに読み・進められます。共有 Workspace の route で始めたものは従来どおり
+Workspace の判定で、Workspace を離れた人は続けられません。アプリができる前の計画を答える (PATCH)・進める (reconcile) のは作った本人だけで、Workspace の所有者や他の管理者は読めても進められません。アプリが記録前に作られていた場合 (応答の喪失) はアプリの判定に
+なります。Workspaceを指定しないインストールの idempotency は本人ごとで、本人が持つ他の個人の場所 (アーカイブ済みを
+含む) で同じ key を使った計画もそのまま返します。
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
 は同じ record を返し、内容が異なれば 409 になります。request digest は variable の名前だけを
