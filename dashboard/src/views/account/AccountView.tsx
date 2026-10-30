@@ -8,11 +8,12 @@ import Page from "./components/auth/Page.tsx";
 import type { SessionRecord } from "./lib/session.ts";
 import ProfileSection from "./sections/ProfileSection.tsx";
 import TakosumiApiKeysCard from "./components/TakosumiApiKeysCard.tsx";
+import NotificationDevicesCard from "./components/NotificationDevicesCard.tsx";
 import BillingTab from "../workspace/tabs/BillingTab.tsx";
 import { type MessageKey, t } from "../../i18n/index.ts";
 import { PageHeader, Tabs } from "../../components/ui/index.ts";
 
-export type AccountSection = "me" | "usage" | "cli";
+export type AccountSection = "me" | "usage" | "cli" | "devices";
 
 export const ACCOUNT_SECTIONS: readonly {
   readonly id: AccountSection;
@@ -22,6 +23,7 @@ export const ACCOUNT_SECTIONS: readonly {
   { id: "me", href: "/account", labelKey: "account.section.me" },
   { id: "usage", href: "/account/usage", labelKey: "account.section.usage" },
   { id: "cli", href: "/account/cli", labelKey: "account.section.cli" },
+  { id: "devices", href: "/account/devices", labelKey: "account.section.devices" },
 ];
 
 function sectionFromParam(raw: string | undefined): AccountSection | undefined {
@@ -65,6 +67,9 @@ function Inner(props: { readonly session: SessionRecord }) {
               </Match>
               <Match when={current() === "cli"}>
                 <TakosumiApiKeysCard />
+              </Match>
+              <Match when={current() === "devices"}>
+                <NotificationDevicesCard />
               </Match>
             </Switch>
           </div>

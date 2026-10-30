@@ -236,6 +236,74 @@ push の endpoint、`data.auth` は購読の `auth` です。product が native 
 - 404・410 で pusher を消すのは、送った先の endpoint と `pushkey` がまだ同じときだけです。端末が
   登録し直した後に古い購読への答えが届いても、新しい pusher は消えません。
 
+#### 何を通知するか
+
+instance は Activity の台帳（全 Workspace の `audit_events`）を `(createdAt, id)` の順に cursor で読み、
+次の出来事を登録された端末へ送ります。送る相手はアプリ（Capsule）の持ち主と、出来事が名指しする
+アカウントで決め、Workspace のメンバーには頼りません。`system:*` が始めた Run は持ち主にだけ届きます。
+
+| 出来事（Activity） | 送る相手 | 開く画面 | TTL / Urgency |
+| --- | --- | --- | --- |
+| `run.approval_required`（plan が承認を待つ） | アプリの持ち主 | `/runs/{id}` | 86400 秒 / `high` |
+| `run.failed` | Run を始めた人とアプリの持ち主 | `/runs/{id}` | 259200 秒 / `normal` |
+| `run.applied`（`operation: "create"`、install の完了） | Run を始めた人 | `/apps/{id}` | 259200 秒 / `normal` |
+| `capsule.drift_detected`・`capsule.auto_update_failed`・`capsule.auto_update_apply_failed`・`capsule.uninstall_blocked`・`interface_materialization.dead_lettered` | アプリの持ち主 | `/apps/{id}#attention` | 259200 秒 / `normal` |
+| `connection.revoked`（持ち主以外が取り消したとき） | 接続の持ち主 | `/connections` | 259200 秒 / `normal` |
+| `app.ownership_transfer_created` | 受け手 | `/apps/{id}` | 259200 秒 / `normal` |
+| `app.member_added` | 追加された人 | `/apps/{id}` | 259200 秒 / `normal` |
+| `interface_link.approval_requested` | 提供する側のアプリの持ち主 | `/apps/{id}#links` | 86400 秒 / `high` |
+
+- 中身は Declarative Web Push の JSON（`{"web_push":8030,"notification":{title, body, navigate, lang, tag}}`）
+  で、平文で 2,048 byte 以下です。`navigate` は instance の Accounts issuer と同じ origin、文は pusher の
+  `lang` が `ja` なら日本語、それ以外は英語です。アプリの名前と Run の種類だけを入れ、エラー文・secret・
+  token・Output の値は入れません。`Topic` は secret-store の passphrase から導いた鍵の HMAC（pusher と
+  Run／アプリごと、32 文字）で、中継からは id を辿れません。
+- 出来事と pusher の組を冪等な key にした配送の行を積み、送ります。2xx は届いた、404・410 は pusher を
+  消す、timeout・408・429（`Retry-After` に従う）・5xx は 30 秒から 1 時間まで延ばして TTL まで送り直す、
+  それ以外の 3xx・4xx（403・413 を含む）は失敗として pusher に残し、送り直しません。
+- 出来事は今まで読みます。`createdAt` は行の commit より前に決まり、isolate ごとに commit の順が少し
+  前後するので、cursor は今から 10 分遅れて進め、直近 10 分はどの回でも読み直します。配送の行は冪等な
+  ので、読み直しても二度は送りません。最初の回は今の位置から始め、過去の出来事は送りません。TTL を
+  過ぎた出来事も送りません。
+- TTL を過ぎて送らなかった出来事は、id と種類だけを log に出し（`own_notification_event_expired`）、
+  回の結果の `expiredEvents` に数えます。
+- 送る相手を読めない出来事（一時的な失敗）は cursor に「保留」として id を残し、cursor 自体は先へ
+  進めます。後ろの出来事は止まりません。保留した出来事は、次の回から台帳を読み終えた後に、試した
+  回数の少ないものから 1 回につき 10 件まで id で読み直します。読み直しが遅くても cursor は止まりません。
+  6 時間たっても読めないもの、台帳から消えたもの、保留が 50 件を超えたときの古いものは諦め、log に
+  出して `skippedEvents` に数えます。drift の検査の失敗は Run ごとに別の通知にせず、drift と同じアプリ単位の
+  `Topic` にまとめます。
+- どのアカウントにも pusher が無いあいだは、台帳を読まずに cursor を「今から 10 分前」へ進めるだけです。
+  端末を登録した直後の回でも、直近 10 分の出来事は届きます。
+- `connection.revoked` の接続の持ち主は、公開される Activity には残しません。取り消す処理が、削除の
+  前に読んだ持ち主と取り消した人を、保存しない文脈として通知の hook にだけ渡します。持ち主が自分で
+  取り消したときは送りません。cursor での読み直しではこの文脈が無いので、この出来事はすぐ送る経路
+  でだけ届きます。
+- すぐ送る経路: ActivityService が出来事を保存すると、通知する出来事なら、その出来事の配送の行
+  だけを直接積み、その行だけを lease して送ります。cursor には触りません。pusher がどこにも無いときは
+  その確認（index を一度読むだけ）で終わります。全体で 20 秒、1 回の送信は 8 秒で打ち切ります。
+  送信は、その 8 秒が残り時間に収まるときだけ始めます。期限に切られた送信を失敗した試行として数え
+  ないためで、始めなかった行は試行回数を増やさずに残り、catch-up の回が送ります（lease を取る前なら
+  すぐ、取った後なら lease が切れてから）。catch-up の回も同じく、送信の timeout（10 秒）が残り時間に
+  収まるときだけ送り始めます。
+  - Cloudflare では、出来事を記録している呼び出し（request でも Durable Object の fetch／alarm でも）の
+    `waitUntil` に付けます。`cloudflare:workers` が出す `waitUntil` を entry が起動時に一度だけ渡し、
+    呼ばれた時点で実行中の呼び出しに付きます。Hosted の entry（`deploy/platform/entry-worker.ts`）は
+    静的な import で、local-substrate や operator が自分で deploy する合成 worker
+    （`deploy/platform/worker.ts`）は、Bun のテストからも読まれるので動的な import で渡します。共有の service は isolate ごとに一度作られ、
+    呼び出しごとの `ctx` を ActivityService まで引き回せないためで、呼び出しをまたぐ registry や
+    「実行中」の flag は持ちません。呼び出しは配送を待たずに返り、Durable Object の fetch／alarm も
+    止めません。付けられる呼び出しが無いときは何もせず、次の cron が送ります。
+  - Bun + PostgreSQL では、同じ処理を process の中で待たずに始めます。
+- catch-up の経路: Cloudflare では scheduled handler の各回に一度、Bun + PostgreSQL では 30 秒ごとの
+  in-process loop で、cursor に沿って読み、すぐ送る経路が逃したもの（app ownership の行のように
+  ActivityService を通らない出来事を含む）を積み、期限の来た行を送ります。
+- 台帳の読み出しは `created_at >= cursor` の下限を明示しています。`audit_events` にはまだ
+  `(created_at, id)` の index が無く、今は LIMIT 付きの走査です。index は Control の schema の
+  migration（TASK-0118 9.6）で足します。
+- 状態は Accounts の store に置きます。PostgreSQL は migration `048`（`notification_dispatch_cursors`、
+  `notification_deliveries`）、D1 は既存の document の表で、D1 の migration はありません。
+
 ## OpenTofu Stack API
 
 Stack API は通常の OpenTofu / Terraform module を Git から実行します。
@@ -627,7 +695,7 @@ providerInterfaceId, interfaceType, interfaceVersion, requestedPermissions, requ
 `decline` は `{ expectedGeneration }` で、どちらも提供側アプリの write アクセスを求め、成功時は `{ link: InterfaceLink }` を返します。
 承認した link は `approval.kind: "provider_approved"`、断った link は `declined: { declinedBy, declinedAt }` を持ちます。
 承認待ちでない link や generation の不一致は 409、提供側か利用側が稼働中でない (アンインストール予定・削除済みを含む) ときは 412 です。
-Activity には `interface_link.approved` / `interface_link.declined` を、id・権限名・type/version だけで記録します。
+Activity には、承認待ちの link を作ったときに `interface_link.approval_requested`、決めたときに `interface_link.approved` / `interface_link.declined` を、id・権限名・type/version だけで記録します。
 権限不足は 403、不正な入力は 400、generation の競合は 409、利用不可の提供元は 412 です。
 承認判断は policy port が持ち、現在の Workspace 構成では同じ Workspace の連携を即時承認します。
 

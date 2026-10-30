@@ -1,4 +1,8 @@
 import { runSourceMaintenanceSchedule } from "../../worker/src/source_maintenance_schedule.ts";
+import {
+  attachInvocationWaitUntil,
+  runOwnNotificationDispatch,
+} from "../../worker/src/own_notification_dispatch.ts";
 // Operator-deployed Takosumi platform worker composition.
 //
 // This single worker hosts the accounts plane (bare-origin OIDC issuer +
@@ -192,6 +196,12 @@ import {
   operatorControlMcpEnabled,
   type OperatorControlMcpAuthority,
 } from "../operator-control-mcp.ts";
+
+// Immediate Takosumi Mobile notifications attach to the invocation that
+// records the Activity through the runtime's per-invocation waitUntil
+// (TASK-0119), here as in the Hosted entry. A dynamic import, because Bun
+// tests import this module and have no `cloudflare:workers`.
+void attachInvocationWaitUntil(() => import("cloudflare:workers"));
 export {
   isPlatformExtensionCatalogPath,
   isPlatformExtensionContributionsPath,
@@ -939,6 +949,12 @@ const platformWorker = {
       runScheduledCapsuleUninstallFinalize(env),
       context,
     );
+    // Takosumi Mobile notifications: enqueue new Activity and send it in the
+    // same run, then retry what is due on later runs.
+    await schedulePlatformSideEffect(
+      runScheduledOwnNotificationDispatch(env),
+      context,
+    );
     const cron =
       typeof event === "object" && event !== null
         ? Reflect.get(event, "cron")
@@ -1055,6 +1071,29 @@ export async function drainInterfaceMaterializationIntents(
     maxWorkItems: SCHEDULED_INTERFACE_MATERIALIZATION_WORK_ITEM_LIMIT,
     timeBudgetMs: SCHEDULED_INTERFACE_MATERIALIZATION_TIME_BUDGET_MS,
   });
+}
+
+/** One bounded dispatcher pass for the instance's own Web Push notifications. */
+async function runScheduledOwnNotificationDispatch(
+  env: CloudflareWorkerEnv,
+): Promise<void> {
+  try {
+    await runOwnNotificationDispatch({
+      operations: await deployControlSeam(env).operations(),
+      store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+        schemaMode: resolveD1AccountsSchemaMode(
+          env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+        ),
+      }),
+      env: env as unknown as Readonly<Record<string, unknown>>,
+      issuer: env.TAKOSUMI_ACCOUNTS_ISSUER,
+    });
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "own_notification_dispatch_failed",
+      errorName: error instanceof Error ? error.name : "unknown",
+    }));
+  }
 }
 
 async function runScheduledInterfaceMaterializationIntentDrain(

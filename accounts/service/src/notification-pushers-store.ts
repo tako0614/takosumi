@@ -67,6 +67,8 @@ export interface NotificationPusherStore {
   saveNotificationPusher(
     record: NotificationPusherRecord,
   ): Promise<NotificationPusherSaveResult>;
+  /** Whether any account has a pusher (the dispatcher idles when none does). */
+  hasAnyNotificationPusher(): Promise<boolean>;
   /** The account's pushers, oldest first. */
   listNotificationPushersForSubject(
     subject: TakosumiSubject,
@@ -223,6 +225,10 @@ export class MemoryNotificationPusherRecords implements NotificationPusherStore 
     });
   }
 
+  hasAnyNotificationPusher(): Promise<boolean> {
+    return Promise.resolve(this.#records.size > 0);
+  }
+
   listNotificationPushersForSubject(
     subject: TakosumiSubject,
   ): Promise<readonly NotificationPusherRecord[]> {
@@ -348,6 +354,15 @@ export class D1NotificationPusherRecords implements NotificationPusherStore {
         : (await this.findNotificationPusher(stored.pusherId)) !== undefined;
     if (!written) return { status: "limit_reached" };
     return { status: existing ? "updated" : "created", record: stored };
+  }
+
+  async hasAnyNotificationPusher(): Promise<boolean> {
+    await this.#ready();
+    const row = await this.#db
+      .prepare("SELECT 1 AS present FROM takosumi_accounts_documents WHERE bucket = ? LIMIT 1")
+      .bind(D1_PUSHERS_BUCKET)
+      .first<{ present: number }>();
+    return row !== null && row !== undefined;
   }
 
   async listNotificationPushersForSubject(

@@ -26,6 +26,10 @@ Migration `047` adds the `notification_pushers` table for Takosumi Mobile
 pushers (the devices that receive this instance's own notifications as Web
 Push). It is a new table only; Accounts D1 stores the same records in its
 existing document and index tables and needs no D1 migration.
+Migration `048` adds `notification_dispatch_cursors` (the dispatcher's
+`(created_at, id)` position in the Activity ledger, same shape as
+`takosumi_scheduled_sweep_cursors`) and `notification_deliveries` (one row per
+event and pusher). New tables only; D1 again uses its document table.
 
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).

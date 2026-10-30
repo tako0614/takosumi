@@ -442,6 +442,14 @@ export function mountDeployControlConnectionRoutes(
               ...(connection.kind ? { kind: connection.kind } : {}),
               scope: connection.scope,
             },
+          }, {
+            // For the notification path only (never stored): the record is
+            // deleted before the event is read, and the owner is told only
+            // when someone else revoked it (TASK-0119 own notifications).
+            ...(connection.ownerAccountId
+              ? { ownerAccountId: connection.ownerAccountId }
+              : {}),
+            actorAccountId: principal.actor,
           });
         }
         return c.body(null, 204);

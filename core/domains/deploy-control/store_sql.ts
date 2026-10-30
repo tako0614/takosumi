@@ -291,6 +291,8 @@ import {
   boundedActivityWorkspaceIds,
   capsuleInterfaceMaterializationFailureListLimit,
   clampActivityLimit,
+  clampActivityLedgerPageLimit,
+  type ActivityLedgerPageInput,
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
@@ -11516,6 +11518,36 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       },
     );
     return pageFromProbe(rows, limit);
+  }
+
+  async listActivityEventsAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]> {
+    const createdAt = pgSchema.auditEvents.createdAt;
+    const id = pgSweepIdOrder(pgSchema.auditEvents.id);
+    const after = input.after;
+    return await this.#pgManyJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      {
+        // The explicit lower bound lets a created_at-leading index range-scan;
+        // the tie-break then orders equal timestamps by bytewise id.
+        where: and(
+          sql`${createdAt} <= ${input.untilCreatedAt}`,
+          after === undefined
+            ? undefined
+            : and(
+                sql`${createdAt} >= ${after.createdAt}`,
+                or(
+                  gt(createdAt, after.createdAt),
+                  and(eq(createdAt, after.createdAt), sql`${id} > ${after.id}`),
+                ),
+              ),
+        ),
+        orderBy: [asc(createdAt), asc(id)],
+        limit: clampActivityLedgerPageLimit(input.limit),
+      },
+    );
   }
 
   async listActivityEventsForWorkspacesPage(

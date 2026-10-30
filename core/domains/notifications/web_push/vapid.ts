@@ -112,11 +112,18 @@ export async function deriveVapidKeyPair(
 
 export type VapidSecretEnv = Readonly<Record<string, unknown>>;
 
-/** The configured secret-store passphrase, or undefined when there is none. */
-function vapidDerivationSecret(env: VapidSecretEnv): string | undefined {
+/**
+ * The secret-store passphrase the Web Push keys are derived from, or undefined
+ * when none of at least 32 bytes is configured.
+ */
+export function webPushDerivationSecret(env: VapidSecretEnv): string | undefined {
   for (const key of SECRET_STORE_KEY_ENV_KEYS) {
     const value = env[key];
-    if (typeof value === "string" && value.trim() !== "") return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      return utf8(value).byteLength >= MIN_SECRET_STORE_PASSPHRASE_BYTES
+        ? value
+        : undefined;
+    }
   }
   return undefined;
 }
@@ -133,13 +140,8 @@ let cachedInstanceKeys:
 export async function instanceVapidKeyPair(
   env: VapidSecretEnv,
 ): Promise<VapidKeyPair | null> {
-  const secret = vapidDerivationSecret(env);
-  if (
-    secret === undefined ||
-    utf8(secret).byteLength < MIN_SECRET_STORE_PASSPHRASE_BYTES
-  ) {
-    return null;
-  }
+  const secret = webPushDerivationSecret(env);
+  if (secret === undefined) return null;
   if (cachedInstanceKeys?.secret !== secret) {
     const promise = deriveVapidKeyPair(utf8(secret));
     cachedInstanceKeys = { secret, promise };
