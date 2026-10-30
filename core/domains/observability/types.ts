@@ -17,6 +17,17 @@ export type MetricKind = "counter" | "gauge" | "histogram";
  */
 export const METRIC_CAPSULE_LABEL = "capsule_id";
 
+/**
+ * Tags that never become a series label or an OTLP data-point attribute: a
+ * legacy Workspace and per-run ids would make cardinality unbounded. The
+ * Prometheus exposition and the OTLP exporter drop the same set.
+ */
+export const METRIC_DROPPED_TAGS: readonly string[] = [
+  "workspace_id",
+  "run_group_id",
+  "run_id",
+];
+
 export interface MetricEvent {
   readonly id: MetricEventId;
   readonly name: string;

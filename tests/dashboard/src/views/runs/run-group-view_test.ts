@@ -28,10 +28,26 @@ describe("RunGroupView", () => {
     expect(ja["runGroup.openRun"]).toBe("変更内容を開く");
     expect(en["runGroup.groupId"]).toBe("Update ID");
     expect(ja["runGroup.groupId"]).toBe("更新 ID");
-    expect(en["runGroup.approveAll"]).not.toContain("executions");
     expect(en["runGroup.members"]).not.toContain("executions");
-    expect(ja["runGroup.approveAll"]).not.toContain("実行");
     expect(ja["runGroup.members"]).not.toContain("実行");
+  });
+
+  test("grouped approval is retired: no approve button, a notice instead", () => {
+    // POST /api/v1/run-groups/:id/approve answers 410 run_group_retired
+    // (TASK-0118 P9.1-g); a button that can only fail must not be offered.
+    expect(source).not.toContain("approveRunGroup");
+    expect(source).not.toContain("runGroup.approveAll");
+    expect(source).not.toContain("useConfirmDialog");
+    expect(source).toContain('t("runGroup.approvalRetired")');
+    expect(en["runGroup.approvalRetired"].length).toBeGreaterThan(0);
+    expect(ja["runGroup.approvalRetired"]).toContain("1 つずつ");
+    expect("runGroup.approveAll" in en).toBe(false);
+    expect("runGroup.approveAll" in ja).toBe(false);
+    const controlApi = readFileSync(
+      resolve(import.meta.dir, "../../../../../dashboard/src/lib/control-api.ts"),
+      "utf8",
+    );
+    expect(controlApi).not.toContain("approveRunGroup");
   });
 
   test("keeps a running grouped update live: poll while non-terminal + manual refresh", () => {

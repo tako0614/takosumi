@@ -38,6 +38,8 @@ import { classifyDriftResourceChanges } from "./drift.ts";
 /** Actor context carried through a drift-check run creation (mirrors the controller's). */
 export interface DriftActorContext {
   readonly actor?: string;
+  /** A system flow's owner epoch (see `DeployControlActorContext`). */
+  readonly actorOwnershipEpoch?: number;
 }
 
 /**

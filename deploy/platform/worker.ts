@@ -2624,12 +2624,12 @@ const REQUIRED_DASHBOARD_METRICS = [
   "takosumi_api_request_duration_seconds_bucket",
   "takosumi_oidc_request_count",
 ] as const;
-// The app (`capsule_id`) is the tenant label; Workspace labels are retired
-// (TASK-0118 P9.1-g).
+// Only labels the protected scrape actually carries. Tenant labels are never
+// series labels: the exposition drops `capsule_id` (and any legacy
+// `workspace_id`) to keep cardinality bounded (TASK-0118 P9.1-g).
 const REQUIRED_DASHBOARD_LABELS = [
   "environment",
   "runner_profile_id",
-  "capsule_id",
   "operation_kind",
   "status",
 ] as const;
@@ -4810,11 +4810,15 @@ export interface ScheduledCapsuleSweepOperations {
   ): Promise<{ readonly runs: readonly Run[] }>;
   createCapsulePlan(
     capsuleId: string,
-    options: { readonly actor: string; readonly origin: { readonly kind: "update" } },
+    options: {
+      readonly actor: string;
+      readonly actorOwnershipEpoch?: number;
+      readonly origin: { readonly kind: "update" };
+    },
   ): Promise<unknown>;
   createCapsuleDriftCheck(
     capsuleId: string,
-    options: { readonly actor: string },
+    options: { readonly actor: string; readonly actorOwnershipEpoch?: number },
   ): Promise<unknown>;
   readonly activity?: Pick<ActivityRecorder, "record">;
 }
@@ -4999,13 +5003,13 @@ export async function runCapsuleSweep(
     ...(appOwnership
       ? { getOwnership: (capsuleId: string) => appOwnership.getOwnership(capsuleId) }
       : {}),
-    listCapsulePlanRuns: async (capsule, limit) =>
+    listCapsuleRuns: async (capsule, { types, limit }) =>
       (await operations.listCapsuleRunsPage(capsule.id, {
         // The store matches the app's own Workspace column with its id; the
         // read never widens past this one app.
         workspaceId: capsule.workspaceId,
         limit,
-        types: ["plan"],
+        types,
       })).runs,
     createCapsulePlan: (capsuleId, planOptions) =>
       operations.createCapsulePlan(capsuleId, planOptions),

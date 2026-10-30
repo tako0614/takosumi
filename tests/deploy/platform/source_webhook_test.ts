@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { renderPrometheusMetrics } from "../../../core/api/metrics_routes.ts";
 import {
   CloudflareD1OpenTofuControlStore,
 } from "../../../worker/src/d1_opentofu_store.ts";
@@ -553,6 +554,7 @@ test("the per-app sweep plans each stale app from its own Runs and drift-checks 
   expect(runReads).toEqual([
     { capsuleId: "inst_needs_plan", workspaceId: "space_a", types: ["plan"] },
     { capsuleId: "inst_has_plan", workspaceId: "space_b", types: ["plan"] },
+    { capsuleId: "inst_active", workspaceId: "space_a", types: ["drift_check"] },
   ]);
   expect(result).toEqual({ scanned: 3, plansCreated: 1, driftChecksCreated: 1 });
 });
@@ -1570,11 +1572,12 @@ test("platform metrics route does not capture dashboard paths", async () => {
 });
 
 test("platform metrics summary captures required metric and label coverage", () => {
-  // The app is the tenant label; a scrape without any Workspace label is
+  // Only labels the scrape carries are required. The exposition drops tenant
+  // labels (capsule_id, legacy workspace_id), so a scrape without them is
   // complete (TASK-0118 P9.1-g).
   const summary = summarizePrometheusMetrics(
     [
-      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",capsule_id="cap",operation_kind="apply",status="succeeded"} 1',
+      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",operation_kind="apply",status="succeeded"} 1',
       'custom_metric{environment="production"} 1',
     ].join("\n"),
   );
@@ -1590,9 +1593,34 @@ test("platform metrics summary captures required metric and label coverage", () 
   expect(summary.missingRequiredLabels).toEqual([]);
   expect(
     summarizePrometheusMetrics(
-      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",workspace_id="workspace",operation_kind="apply",status="succeeded"} 1',
+      'takosumi_deploy_operation_count{environment="production",operation_kind="apply"} 1',
     ).missingRequiredLabels,
-  ).toEqual(["capsule_id"]);
+  ).toEqual(["runner_profile_id", "status"]);
+});
+
+test("the dashboard is complete on exactly what the Prometheus exposition renders", () => {
+  // Render through the real exposition, tenant tags included, and summarize
+  // it: nothing the exposition drops may be required.
+  const rendered = renderPrometheusMetrics(
+    [{
+      id: "metric_dashboard",
+      name: "takosumi_deploy_operation_count",
+      kind: "counter",
+      value: 1,
+      tags: {
+        environment: "production",
+        runner_profile_id: "runner",
+        operation_kind: "apply",
+        status: "succeeded",
+        capsule_id: "cap",
+        workspace_id: "ws",
+      },
+      observedAt: "2026-10-30T00:00:00.000Z",
+    }],
+    new Date("2026-10-30T00:00:00.000Z"),
+  );
+  expect(rendered).not.toMatch(/capsule_id|workspace_id/);
+  expect(summarizePrometheusMetrics(rendered).missingRequiredLabels).toEqual([]);
 });
 
 test("platform OIDC metrics exclude public metadata and cover auth flows", () => {
