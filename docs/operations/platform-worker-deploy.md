@@ -849,11 +849,29 @@ The Takosumi native shell is a public PKCE client with the exact
 ]
 ```
 
-`/.well-known/takosumi` publishes the exact registered public client selected
-by `TAKOSUMI_MOBILE_OIDC_CLIENT_ID`. The selector is not a second client
-definition: it must name one entry in `TAKOSUMI_ACCOUNTS_CLIENTS`. An absent
-selector leaves `oidcClientId` absent and blocks native sign-in; an unknown or
-incompatible selected client is invalid configuration.
+You do not have to register this client yourself. Every instance includes the
+built-in public client `takosumi-mobile` with that redirect and those scopes,
+and `/.well-known/takosumi` publishes it as `oidcClientId`, so Takosumi Mobile
+can sign in to any instance. Each authorization for a Takosumi Mobile client
+shows a consent screen (client name, scopes, and that it can approve and cancel
+Runs): a custom-scheme redirect can be claimed by another app on the phone, so
+PKCE alone does not prove which app started the flow (RFC 8252 §8.6).
+
+- `TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` turns the built-in client off.
+  It defaults to on, except under the shared hosted session policy
+  (`TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY=true`), where it is off and setting
+  `true` is a configuration error: its tokens would be ordinary account-wide
+  credentials outside that profile's identity-generation, fence and global
+  logout model, and the native credential path for that profile is not settled
+  yet.
+- `TAKOSUMI_MOBILE_OIDC_CLIENT_ID` selects a client you registered in
+  `TAKOSUMI_ACCOUNTS_CLIENTS` instead, as in the example above. The selector is
+  not a second client definition: it must name one entry in
+  `TAKOSUMI_ACCOUNTS_CLIENTS`, and an unknown or incompatible selected client is
+  invalid configuration. With neither the built-in client nor a selector,
+  `oidcClientId` is absent and native sign-in is blocked.
+- `endpoints.oidc_issuer` in `/.well-known/takosumi` reports
+  `TAKOSUMI_ACCOUNTS_ISSUER`, not the request origin.
 
 A Takos native shell connecting to this Accounts issuer is a separate,
 host-specific public PKCE client, for example:
@@ -912,8 +930,10 @@ Then set the non-secret selector
 `TAKOSUMI_MOBILE_OIDC_CLIENT_ID=takosumi-mobile-operator-example`. The platform
 publishes that exact id from `/.well-known/takosumi` only after validating the
 public-client method, exact `takosumi://oauth/callback` redirect, and required
-scopes. Omitting the selector leaves mobile discovery disabled without changing
-browser dashboard sign-in.
+scopes. This is optional: without the selector the platform publishes the
+built-in `takosumi-mobile` client (unless
+`TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false`). Neither choice changes browser
+dashboard sign-in.
 
 ## Secret handling
 

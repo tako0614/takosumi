@@ -340,6 +340,14 @@ export interface OidcClientRegistration {
   allowedScopes?: readonly string[];
   clientSecret?: string;
   tokenEndpointAuthMethod?: OidcClientAuthMethod;
+  /**
+   * `always`: every authorization shows a consent screen, even when the user
+   * is already signed in. Used for native public clients whose custom-scheme
+   * redirect another app could claim (RFC 8252 §8.6).
+   */
+  consent?: "always";
+  /** Human-readable client name shown on the consent screen. */
+  displayName?: string;
 }
 
 export interface UpstreamOAuthOptions {
@@ -569,6 +577,15 @@ export function createAccountsHandler(
   const clients = new Map(
     (options.clients ?? []).map((client) => [client.clientId, client]),
   );
+  for (const client of clients.values()) {
+    if (client.consent !== undefined && (client.consent !== "always" || client.profile === "shared-account")) {
+      throw new TypeError("OIDC client consent must be \"always\" and cannot be combined with the shared-account profile");
+    }
+  }
+  // Consent-screen clients answer the authorize page with a same-origin POST.
+  const authorizeAcceptsPost =
+    options.hostedSessionPolicy === true ||
+    [...clients.values()].some((client) => client.consent === "always");
   const baseStore = options.store;
   const upstreamOAuth = options.upstreamOAuth ? {...options.upstreamOAuth, hostedSessionPolicy: options.hostedSessionPolicy ?? options.upstreamOAuth.hostedSessionPolicy} : undefined;
   const passkeys = options.passkeys ? {...options.passkeys, hostedSessionPolicy: options.hostedSessionPolicy ?? options.passkeys.hostedSessionPolicy} : undefined;
@@ -648,7 +665,7 @@ export function createAccountsHandler(
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH) {
-      if (request.method !== "GET" && !(request.method === "POST" && options.hostedSessionPolicy)) return methodNotAllowed(options.hostedSessionPolicy ? "GET, POST" : "GET");
+      if (request.method !== "GET" && !(request.method === "POST" && authorizeAcceptsPost)) return methodNotAllowed(authorizeAcceptsPost ? "GET, POST" : "GET");
       if (!options.oidcFlow) return reservedOidcEndpoint();
       const limited = authorizeLimiter.consume(request);
       if (limited) return limited;

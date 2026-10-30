@@ -33,7 +33,8 @@ import {
   createWorkspaceBillingBootstrapResolver,
   type WorkspaceBillingEnrollmentPort,
   resolveD1AccountsSchemaMode,
-  resolveTakosumiMobileOidcClientId,
+  composeTakosumiMobileOidcClients,
+  parseTakosumiMobileBuiltinClientSetting,
   parseInstalledAppDelegationSources,
   parseWorkspaceMutationsFrozen,
   parseAppOwnershipMutationsFrozen,
@@ -103,6 +104,11 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES?: string;
   /** Exact public PKCE client advertised by `/.well-known/takosumi`. */
   readonly TAKOSUMI_MOBILE_OIDC_CLIENT_ID?: string;
+  /**
+   * `true`/`false`: register the built-in public `takosumi-mobile` client.
+   * Defaults to on, except under the shared hosted session policy.
+   */
+  readonly TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_KEY_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS?: string;
@@ -1268,7 +1274,10 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     );
   }
   const issuer = issuerEnv;
-  const clients = parseConfiguredOidcClients(env);
+  // The private financial source keeps reading only operator-configured
+  // clients; the built-in native client is an Accounts sign-in concern.
+  const configuredClients = parseConfiguredOidcClients(env);
+  const { clients } = configuredOidcClientsWithTakosumiMobile(env);
   // Keep ordinary identity requests on the lightweight handler. Canonical
   // Core is resolved lazily only when an Interface OAuth token is actually
   // presented to UserInfo/introspection.
@@ -1353,7 +1362,7 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   if (sourceSlot && privateOrigin) {
     privateFinancialSourceByHandler.set(handler, privateFinancialSourceRecord({
       env, slot: sourceSlot, origin: privateOrigin, store,
-      issuer, clients,
+      issuer, clients: configuredClients,
     }));
   }
   return handler;
@@ -1691,15 +1700,58 @@ export function parseConfiguredOidcClients(
   ];
 }
 
+/**
+ * Static OIDC clients plus the Takosumi Mobile client. The built-in public
+ * `takosumi-mobile` client is on by default so any instance accepts Takosumi
+ * Mobile without manual registration. The shared hosted session policy keeps it
+ * off unless the operator enables it, because that profile has no settled
+ * control-plane credential path for native clients yet (ADR 0025/0026).
+ */
+export function configuredOidcClientsWithTakosumiMobile(
+  env: CloudflareWorkerEnv,
+): {
+  readonly clients: readonly OidcClientRegistration[] | undefined;
+  readonly mobileOidcClientId: string | undefined;
+} {
+  return composeTakosumiMobileOidcClients({
+    configuredClientId: optionalString(env.TAKOSUMI_MOBILE_OIDC_CLIENT_ID),
+    builtinClient: takosumiMobileBuiltinClientEnabled(env),
+    clients: parseConfiguredOidcClients(env),
+  });
+}
+
+/**
+ * The built-in client is on by default. Under the shared hosted session policy
+ * it stays off and cannot be turned on yet: its tokens would be ordinary
+ * account-wide credentials outside that profile's identity-generation, fence
+ * and global-logout model (ADR 0025/0026 open question).
+ */
+function takosumiMobileBuiltinClientEnabled(env: CloudflareWorkerEnv): boolean {
+  const hosted = parseHostedSessionPolicy(env);
+  const enabled = parseTakosumiMobileBuiltinClientSetting(
+    env.TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT,
+    !hosted,
+  );
+  if (hosted && enabled) {
+    throw new TypeError(
+      "TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT cannot be enabled under the shared hosted session policy",
+    );
+  }
+  return enabled;
+}
+
 export function configuredTakosumiMobileOidcClientId(
   env: CloudflareWorkerEnv,
 ): string | undefined {
-  const configuredClientId = optionalString(env.TAKOSUMI_MOBILE_OIDC_CLIENT_ID);
-  if (!configuredClientId) return undefined;
-  return resolveTakosumiMobileOidcClientId({
-    configuredClientId,
-    clients: parseConfiguredOidcClients(env),
-  });
+  // Discovery reads the operator client list only when a Takosumi Mobile
+  // client can exist, as before the built-in client.
+  if (
+    !optionalString(env.TAKOSUMI_MOBILE_OIDC_CLIENT_ID) &&
+    !takosumiMobileBuiltinClientEnabled(env)
+  ) {
+    return undefined;
+  }
+  return configuredOidcClientsWithTakosumiMobile(env).mobileOidcClientId;
 }
 
 function parseClientRecord(value: unknown, env: CloudflareWorkerEnv): OidcClientRegistration {

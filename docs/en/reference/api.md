@@ -128,6 +128,18 @@ are camelCase. `endpoints.api` is `<origin>/api/v1`, while
 when the endpoint has an OpenTofu runner configured; a composition without one,
 such as the Bun + PostgreSQL reference, returns `false`.
 
+`endpoints.oidc_issuer` is the operator-configured Accounts issuer
+(`TAKOSUMI_ACCOUNTS_ISSUER`), not necessarily the request origin. Clients read
+OIDC discovery from that issuer.
+
+`oidcClientId` is the public OIDC client Takosumi Mobile uses. Every instance
+returns the built-in `takosumi-mobile` client by default (redirect
+`takosumi://oauth/callback`, scopes `openid profile offline_access
+capsules:read capsules:write`, PKCE S256 required). Each authorization for it
+shows a consent screen. An endpoint whose operator set
+`TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` and no
+`TAKOSUMI_MOBILE_OIDC_CLIENT_ID` omits `oidcClientId`.
+
 ## Authentication
 
 API clients use a session cookie or bearer token depending on the endpoint.

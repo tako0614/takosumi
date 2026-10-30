@@ -40,9 +40,48 @@ test("node-postgres preserves a host-specific public mobile OIDC client", () => 
   const config = parseEnv({
     TAKOSUMI_ACCOUNTS_DATABASE_URL: DATABASE_URL,
     TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([mobileClient]),
+    TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT: "false",
   });
 
   expect(config.clients).toEqual([mobileClient]);
+});
+
+test("node-postgres registers and advertises the built-in Takosumi Mobile client by default", () => {
+  const config = parseEnv({ TAKOSUMI_ACCOUNTS_DATABASE_URL: DATABASE_URL });
+
+  expect(config.mobileOidcClientId).toBe("takosumi-mobile");
+  expect(config.clients).toEqual([
+    {
+      clientId: "takosumi-mobile",
+      redirectUris: ["takosumi://oauth/callback"],
+      tokenEndpointAuthMethod: "none",
+      allowedScopes: [
+        "openid",
+        "profile",
+        "offline_access",
+        "capsules:read",
+        "capsules:write",
+      ],
+      consent: "always",
+      displayName: "Takosumi Mobile",
+    },
+  ]);
+});
+
+test("node-postgres lets the operator turn the built-in Takosumi Mobile client off", () => {
+  const config = parseEnv({
+    TAKOSUMI_ACCOUNTS_DATABASE_URL: DATABASE_URL,
+    TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT: "false",
+  });
+
+  expect(config.mobileOidcClientId).toBeUndefined();
+  expect(config.clients).toBeUndefined();
+  expect(() =>
+    parseEnv({
+      TAKOSUMI_ACCOUNTS_DATABASE_URL: DATABASE_URL,
+      TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT: "off",
+    }),
+  ).toThrow("TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT must be true or false");
 });
 
 test("node-postgres resolves the Takosumi Mobile discovery client", () => {
@@ -65,6 +104,12 @@ test("node-postgres resolves the Takosumi Mobile discovery client", () => {
   });
 
   expect(config.mobileOidcClientId).toBe(mobileClient.clientId);
+  // The selected operator client also always shows the consent screen.
+  expect(config.clients).toContainEqual({
+    ...mobileClient,
+    consent: "always",
+    displayName: "Takosumi Mobile",
+  });
 });
 
 test("node-postgres stable OIDC needs only the OIDC pairwise subject secret", () => {

@@ -8,6 +8,24 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- **Takosumi Mobile can sign in to any instance:** every instance now includes
+  the built-in public OIDC client `takosumi-mobile` (redirect
+  `takosumi://oauth/callback`, scopes `openid profile offline_access
+  capsules:read capsules:write`, PKCE S256) and advertises it as
+  `oidcClientId` in `/.well-known/takosumi`, so operators no longer register a
+  client by hand. Each authorization for a Takosumi Mobile client (the built-in
+  one or one selected with `TAKOSUMI_MOBILE_OIDC_CLIENT_ID`) shows a consent
+  screen naming the client, its scopes, and that it can approve and cancel
+  Runs, because another app could claim the same custom scheme (RFC 8252
+  §8.6). `TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` turns the built-in client
+  off; under the shared hosted session policy it is off and cannot be enabled
+  yet. Consent clients refuse `prompt=login` and `max_age` (fresh
+  re-authentication is not implemented for them), and their authorize
+  redirects carry the RFC 9207 `iss` parameter.
+- **Discovery reports the configured issuer:** `endpoints.oidc_issuer` in
+  `/.well-known/takosumi` is now `TAKOSUMI_ACCOUNTS_ISSUER` instead of the
+  request origin.
+
 - **A name collision no longer leaves an install retrying forever:** an install
   plan created without `mode` (the legacy Workspace route) whose app name is
   already used by a live app in the same Workspace and environment now ends
