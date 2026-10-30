@@ -18,10 +18,11 @@
  *
  * The next page starts after the last row this request examined, on the
  * store's `(createdAt, id)` keyset. That row may be one the caller cannot
- * see, so the cursor leaves the server only sealed (see `activity-cursor.ts`):
- * the client can echo it back but cannot read or forge the keyset. A host
+ * see, so the cursor leaves the server only sealed (see `activity-cursor.ts`),
+ * bound to the read and the caller: the client can echo it back but cannot
+ * read, forge or choose a keyset, so unsealed cursors are refused. A host
  * without a secret-store passphrase cannot seal and fails closed when a page
- * needs a cursor. One request scans at most four store pages and spends one
+ * needs a cursor or one is passed. One request scans at most four store pages and spends one
  * shared budget of Run/Source/Interface reads, stopping before an event it
  * could not afford to attribute; a page can therefore hold fewer than `limit`
  * events (even none) and still carry `nextCursor`. Partitions beyond
@@ -32,12 +33,11 @@ import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Capsule } from "takosumi-contract/install-configs";
 import {
   clampPageLimit,
-  decodeCursor,
   encodeCursor,
   type PageCursor,
 } from "takosumi-contract/pagination";
 import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
-import { SEALED_ACTIVITY_CURSOR_PREFIX } from "./activity-cursor.ts";
+import { SEALED_ACTIVITY_CURSOR_PREFIX, type ActivityCursorContext } from "./activity-cursor.ts";
 import {
   activityAttributionLookupBound,
   attributeActivityEvents,
@@ -178,11 +178,11 @@ function malformedCursor(): Response {
 }
 
 /**
- * `?limit=` and `?cursor=` of an Activity read. The cursor is a sealed token
- * this server issued, or a plain keyset cursor issued before cursors were
- * sealed (its keyset is the caller's own input, so it reveals nothing).
+ * `?limit=` and `?cursor=` of an Activity read. Only a sealed token this
+ * server issued for the same read and caller is a cursor; anything else is
+ * `400` and the client starts again from the newest page.
  */
-async function readActivityPageRequest(ctx: ControlDispatchContext):
+async function readActivityPageRequest(ctx: ControlDispatchContext, context: ActivityCursorContext):
   Promise<
     | { readonly ok: true; readonly request: AppActivityPageRequest }
     | { readonly ok: false; readonly response: Response }
@@ -196,16 +196,11 @@ async function readActivityPageRequest(ctx: ControlDispatchContext):
   if (raw === null || raw === "") {
     return { ok: true, request: limit !== undefined ? { limit } : {} };
   }
-  let after: PageCursor | undefined;
-  if (raw.startsWith(SEALED_ACTIVITY_CURSOR_PREFIX)) {
-    if (!ctx.activityCursorSealer) return { ok: false, response: activityCursorUnavailable() };
-    after = await ctx.activityCursorSealer.open(raw);
-  } else {
-    after = decodeCursor(raw);
-    // Positional cursors (`#k:<count>`) were only issued by an unreleased
-    // draft of this read; they are not keysets.
-    if (after?.id.startsWith("#k:")) after = undefined;
-  }
+  // An unsealed keyset would let the caller choose a position and learn,
+  // from what follows it, where hidden rows lie.
+  if (!raw.startsWith(SEALED_ACTIVITY_CURSOR_PREFIX)) return { ok: false, response: malformedCursor() };
+  if (!ctx.activityCursorSealer) return { ok: false, response: activityCursorUnavailable() };
+  const after = await ctx.activityCursorSealer.open(raw, context);
   if (!after) return { ok: false, response: malformedCursor() };
   return { ok: true, request: { ...(limit !== undefined ? { limit } : {}), after } };
 }
@@ -213,13 +208,14 @@ async function readActivityPageRequest(ctx: ControlDispatchContext):
 /** The response body of an Activity page, with the cursor sealed. */
 async function activityPageBody(
   ctx: ControlDispatchContext,
+  context: ActivityCursorContext,
   page: AppActivityPage,
   withIncomplete: boolean,
 ): Promise<{ readonly ok: true; readonly body: Record<string, unknown> } | { readonly ok: false; readonly response: Response }> {
   let nextCursor: string | undefined;
   if (page.next !== undefined) {
     if (!ctx.activityCursorSealer) return { ok: false, response: activityCursorUnavailable() };
-    nextCursor = await ctx.activityCursorSealer.seal(page.next);
+    nextCursor = await ctx.activityCursorSealer.seal(page.next, context);
   }
   return {
     ok: true,
@@ -264,11 +260,12 @@ export async function handleAccountActivity(
 ): Promise<Response | undefined> {
   if (segments.length !== 1 || segments[0] !== "activity") return undefined;
   if (method !== "GET") return methodNotAllowed("GET");
-  const request = await readActivityPageRequest(ctx);
+  const context = { route: "activity", subject: ctx.session.subject };
+  const request = await readActivityPageRequest(ctx, context);
   if (!request.ok) return request.response;
   const result = await listAccountActivity(ctx, request.request);
   if (!result.ok) return result.response;
-  const body = await activityPageBody(ctx, result.page, true);
+  const body = await activityPageBody(ctx, context, result.page, true);
   if (!body.ok) return body.response;
   return json(body.body, 200, { "cache-control": "no-store" });
 }
@@ -284,7 +281,8 @@ export async function handleCapsuleActivity(
   method: string,
 ): Promise<Response> {
   if (method !== "GET") return methodNotAllowed("GET");
-  const request = await readActivityPageRequest(ctx);
+  const context = { route: `capsules/${capsule.id}/activity`, subject: ctx.session.subject };
+  const request = await readActivityPageRequest(ctx, context);
   if (!request.ok) return request.response;
   let others: Promise<ReadonlySet<string>> | undefined;
   const otherViewableApps = (): Promise<ReadonlySet<string>> => {
@@ -309,7 +307,7 @@ export async function handleCapsuleActivity(
     },
   });
   if (!page) return controlPlaneUnavailable();
-  const body = await activityPageBody(ctx, page, false);
+  const body = await activityPageBody(ctx, context, page, false);
   if (!body.ok) return body.response;
   return json(body.body, 200, { "cache-control": "no-store" });
 }

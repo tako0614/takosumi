@@ -1,8 +1,9 @@
 /**
  * Review follow-ups for the Workspace-free Activity reads (TASK-0118 9.1):
- * one lookup budget per request, sealed keyset cursors that never reveal an
- * event and terminate at any number of rows per timestamp, a fail-closed host
- * without a passphrase, and a graceful partition cap.
+ * one lookup budget per request, sealed keyset cursors (bound to the read
+ * and the caller; unsealed keysets refused) that never reveal an event and
+ * terminate at any number of rows per timestamp, a fail-closed host without
+ * a passphrase, and a graceful partition cap.
  */
 import { describe, expect, test } from "bun:test";
 import type { ActivityEvent } from "takosumi-contract/activity";
@@ -139,7 +140,7 @@ describe("Activity review follow-ups", () => {
     }
   });
 
-  test("cursors are sealed: they name no event and cannot be read, forged or replayed under another key", async () => {
+  test("cursors are sealed: they name no event and cannot be read, forged or replayed under another key, read or account", async () => {
     const h = await fixture();
     const hidden = new Set<string>();
     for (let index = 0; index < 30; index++) {
@@ -156,8 +157,9 @@ describe("Activity review follow-ups", () => {
         // Not a readable keyset, and no hidden id appears in the token.
         expect(decodeCursor(cursor), path).toBeUndefined();
         for (const id of hidden) expect(cursor.includes(id), path).toBe(false);
-        // Only the server can open it; the keyset may be a hidden row.
-        expect(await h.sealer!.open(cursor), path).toBeDefined();
+        // Only the server can open it, for this read and caller; the keyset
+        // may be a hidden row.
+        expect(await h.sealer!.open(cursor, { route: path.slice(1), subject: OWNER }), path).toBeDefined();
       }
       const [first] = cursors;
       // A flipped character fails authentication.
@@ -166,9 +168,17 @@ describe("Activity review follow-ups", () => {
       const tampered = await h.get(`${path}?limit=1&cursor=${encodeURIComponent(flipped)}`, h.session(OWNER));
       expect(tampered.status, path).toBe(400);
       // A token sealed under another passphrase does not open here.
-      const foreign = await createActivityCursorSealer(`${TEST_PASSPHRASE}-other`).seal({ createdAt: NOW, id: "act_any" });
+      const foreign = await createActivityCursorSealer(`${TEST_PASSPHRASE}-other`)
+        .seal({ createdAt: NOW, id: "act_any" }, { route: path.slice(1), subject: OWNER });
       expect((await h.get(`${path}?limit=1&cursor=${encodeURIComponent(foreign)}`, h.session(OWNER))).status, path).toBe(400);
+      // Another account cannot replay it.
+      expect((await h.get(`/activity?limit=1&cursor=${encodeURIComponent(first!)}`, h.session(OTHER))).status, path).toBe(400);
     }
+    // Nor can it move to another read.
+    const fromAccount = (await h.get("/activity?limit=1", h.session(OWNER))).body.nextCursor!;
+    expect((await h.get(`/capsules/${MINE}/activity?limit=1&cursor=${encodeURIComponent(fromAccount)}`, h.session(OWNER))).status).toBe(400);
+    const fromApp = (await h.get(`/capsules/${MINE}/activity?limit=1`, h.session(OWNER))).body.nextCursor!;
+    expect((await h.get(`/activity?limit=1&cursor=${encodeURIComponent(fromApp)}`, h.session(OWNER))).status).toBe(400);
   });
 
   test("events that share one timestamp page exactly once", async () => {
@@ -211,20 +221,80 @@ describe("Activity review follow-ups", () => {
     }
   });
 
-  test("a plain keyset cursor issued before sealing still continues after its row", async () => {
-    const h = await fixture();
-    for (let index = 0; index < 4; index++) {
-      await h.recordAt(`act_legacy_${index}`, `2026-10-30T01:00:0${index}.000Z`, MINE);
+  test("an unsealed keyset is refused, so a chosen position reveals nothing (review repro)", async () => {
+    // The reviewer's oracle: with plain keysets accepted, "empty page with a
+    // cursor" versus "a visible event" after a chosen (createdAt, id) let a
+    // caller binary-search a hidden event's timestamp and then its id.
+    for (const sealer of [undefined, null] as const) {
+      const h = await fixture(sealer === null ? { sealer: null } : {});
+      const secretId = "activity_capsule_initial_authority_cap_secret_42";
+      await h.recordAt("act_v0", "2026-10-30T01:00:00.000Z", MINE);
+      await h.recordAt("act_h1", "2026-10-30T01:00:01.000Z", THEIRS);
+      await h.recordAt("act_h2", "2026-10-30T01:00:02.000Z", THEIRS);
+      await h.recordAt("act_h3", "2026-10-30T01:00:03.000Z", THEIRS);
+      await h.recordAt(secretId, "2026-10-30T01:00:04.123Z", THEIRS);
+      await h.recordAt("act_v5", "2026-10-30T01:00:05.000Z", MINE);
+      const probes = [
+        { createdAt: "2026-10-30T01:00:04.124Z", id: "" },
+        { createdAt: "2026-10-30T01:00:04.123Z", id: "" },
+        { createdAt: "2026-10-30T01:00:04.123Z", id: "activity_" },
+        { createdAt: "2026-10-30T01:00:04.123Z", id: `${secretId}\u0000` },
+        { createdAt: "2026-10-30T01:00:02.000Z", id: "act_legacy" },
+      ];
+      for (const path of ["/activity", `/capsules/${MINE}/activity`]) {
+        for (const probe of probes) {
+          // Every chosen position gets the same answer, with or without a
+          // passphrase on the host.
+          const response = await h.get(`${path}?limit=1&cursor=${encodeCursor(probe)}`, h.session(OWNER));
+          expect(response.status, `${path} ${probe.createdAt} ${probe.id}`).toBe(400);
+          expect(response.body.events, path).toBeUndefined();
+          expect(response.body.nextCursor, path).toBeUndefined();
+        }
+        // Positional and garbage cursors likewise.
+        const positional = encodeCursor({ createdAt: "2026-10-30T01:00:02.000Z", id: "#k:1" });
+        expect((await h.get(`${path}?cursor=${positional}`, h.session(OWNER))).status, path).toBe(400);
+        expect((await h.get(`${path}?cursor=not-a-cursor`, h.session(OWNER))).status, path).toBe(400);
+      }
     }
-    const legacy = encodeCursor({ createdAt: "2026-10-30T01:00:02.000Z", id: "act_legacy_2" });
-    const response = await h.get(`/activity?cursor=${legacy}`, h.session(OWNER));
-    expect(response.status).toBe(200);
-    expect(response.body.events!.map((event) => event.id)).toEqual(["act_legacy_1", "act_legacy_0"]);
-    expect(response.body.nextCursor).toBeUndefined();
-    // Positional cursors were never issued by a merged release: malformed.
-    const positional = encodeCursor({ createdAt: "2026-10-30T01:00:02.000Z", id: "#k:1" });
-    expect((await h.get(`/activity?cursor=${positional}`, h.session(OWNER))).status).toBe(400);
-    expect((await h.get("/activity?cursor=not-a-cursor", h.session(OWNER))).status).toBe(400);
+  });
+
+  test("equal timestamps, hidden rows and budget stops page every visible event exactly once (review fuzz)", async () => {
+    let seed = 12345;
+    const rand = (n: number) => {
+      seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) % n;
+    };
+    for (let iteration = 0; iteration < 25; iteration++) {
+      const h = await fixture();
+      const expected: { id: string; createdAt: string }[] = [];
+      const count = rand(60);
+      for (let index = 0; index < count; index++) {
+        const createdAt = `2026-10-30T01:00:0${rand(3)}.000Z`;
+        const id = `act_f${String(iteration).padStart(2, "0")}_${String(index).padStart(3, "0")}`;
+        const kind = rand(4);
+        if (kind === 3) {
+          // A Run event: attribution spends lookups; visible when the Run is mine.
+          const runId = `run_f_${iteration}_${index}`;
+          const mine = rand(2) === 0;
+          h.runs.set(runId, { id: runId, workspaceId: WORKSPACE, capsuleId: mine ? MINE : THEIRS } as unknown as Run);
+          await h.core.activity.recordIdempotent(id, createdAt, {
+            workspaceId: WORKSPACE, action: "run.applied", targetType: "run", targetId: runId, metadata: {},
+          });
+          if (mine) expected.push({ id, createdAt });
+        } else {
+          await h.recordAt(id, createdAt, kind === 0 ? MINE : THEIRS);
+          if (kind === 0) expected.push({ id, createdAt });
+        }
+      }
+      expected.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+      const limit = 1 + rand(5);
+      for (const path of ["/activity", `/capsules/${MINE}/activity`]) {
+        const { seen } = await drain(h, path, h.session(OWNER), limit);
+        expect(seen.map((event) => event.id), `${iteration} ${path} limit=${limit}`).toEqual(expected.map((event) => event.id));
+      }
+    }
   });
 
   test("without a secret-store passphrase, paging fails closed and a single page still reads", async () => {
@@ -241,7 +311,8 @@ describe("Activity review follow-ups", () => {
       expect(paged.status, path).toBe(503);
       expect(JSON.stringify(paged.body), path).toContain("TAKOSUMI_SECRET_STORE_PASSPHRASE");
     }
-    const sealed = await createActivityCursorSealer(TEST_PASSPHRASE).seal({ createdAt: NOW, id: "act_np_1" });
+    const sealed = await createActivityCursorSealer(TEST_PASSPHRASE)
+      .seal({ createdAt: NOW, id: "act_np_1" }, { route: "activity", subject: OWNER });
     expect((await h.get(`/activity?cursor=${encodeURIComponent(sealed)}`, h.session(OWNER))).status).toBe(503);
     // The dashboard feed reads one page and needs no cursor.
     const bootstrap = await h.get("/dashboard/bootstrap?includeNotifications=true", h.session(OWNER));
