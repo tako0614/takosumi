@@ -9,7 +9,6 @@ import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
   ConnectionOAuthStartResponse,
-  ConnectionResponse,
   ConnectionScopeHints,
   CreateApplyRunRequest,
   CreateConnectionFile,
@@ -95,6 +94,9 @@ import {
   readOptionalJsonObject,
   stringValue,
 } from "../http-helpers.ts";
+import { bearerWorkspaceAllows } from "../account-session.ts";
+import { connectionOwnerAccountId, connectionOwnerFilter } from "./connection-owner.ts";
+import { personalResourceNamespace } from "./personal-resources.ts";
 import {
   type ControlDispatchContext,
   type ControlSession,
@@ -138,7 +140,6 @@ import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { MAX_PAGE_LIMIT, clampPageLimit, decodeCursor, encodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import {
-  assertWorkspaceManagementAuthorityInput,
   providerBindingSetTargetsCapsule,
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
@@ -264,17 +265,38 @@ async function listControlConnections(
     session,
   });
   if (!auth.ok) return auth.response;
-  if (session.appIds !== undefined || (await operations.workspaces.getWorkspace(workspaceId)).ownerUserId !== session.subject) {
+  if (session.appIds !== undefined) {
     return errorJson("app_owner_only", "Only the connection owner can list personal connections.", 403);
   }
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  const response = await operations.listConnections(workspaceId, page.params);
+  // A Workspace-scoped connection is its owner's (TASK-0118 P9.1-d): the
+  // caller sees only the connections it owns that record this Workspace. The
+  // store pages are read whole (bounded) and paged again over the visible
+  // rows, so a cursor never encodes someone else's connection.
+  const owned = connectionOwnerFilter(operations, session.subject);
+  const visible: ProviderConnection[] = [];
+  let cursor: string | undefined;
+  for (let reads = 0; ; reads += 1) {
+    if (reads >= LEGACY_WORKSPACE_CONNECTION_PAGE_READS) return controlPlaneUnavailable();
+    const response = await operations.listConnections(workspaceId, {
+      limit: MAX_PAGE_LIMIT, ...(cursor ? { cursor } : {}),
+    });
+    for (const connection of response.connections) {
+      if (await owned(connection)) visible.push(connection);
+    }
+    if (!response.nextCursor || response.nextCursor === cursor) break;
+    cursor = response.nextCursor;
+  }
+  const result = pageSorted(visible.sort(compareKeyset), page.params);
   return json({
-    ...response,
-    connections: response.connections.map(publicProviderConnection),
+    connections: result.items.map(publicProviderConnection),
+    ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
   });
 }
+
+/** Store pages one legacy Workspace connection list may read. */
+const LEGACY_WORKSPACE_CONNECTION_PAGE_READS = 20;
 
 async function listAppConnectionLabels(
   operations: ControlPlaneOperations,
@@ -498,8 +520,12 @@ async function createControlConnection(
   if (!personal) {
     const auth = await requireWorkspaceAccess({ operations, store, workspaceId: workspaceId!, session });
     if (!auth.ok) return auth.response;
+    // Only the account that will own the connection may create it (TASK-0118
+    // P9.1-d). The Connection vault records the Workspace's owner as the owner
+    // of a Workspace-scoped row (and seals its secret to that owner), so any
+    // other caller would be handing its credential to someone else.
     if ((await operations.workspaces.getWorkspace(workspaceId!)).ownerUserId !== session.subject) {
-      return errorJson("app_owner_only", "Only the connection owner can create personal connections.", 403);
+      return errorJson("app_owner_only", "Only the connection owner can create this connection.", 403);
     }
   }
   const requestedKind = stringValue(body.kind);
@@ -607,16 +633,18 @@ async function createControlConnection(
  * (`POST /api/v1/connections/:id/{test,revoke}`). This is the consolidated
  * surface that replaced the former account-plane `/v1/connections/:id` edge.
  *
- * The request only names the connection id, so Workspace ownership is enforced by
- * first reading the Connection (a non-secret projection — the public Connection
- * type carries no values) to learn its `workspaceId`, then checking the session
- * subject owns that Workspace. To prevent cross-tenant probing of connection ids, a
- * missing connection, an absent `workspaceId`, and a Workspace-ownership failure all
- * answer a non-disclosing `connection_not_found` (404).
+ * The request only names the connection id, so the Connection (a non-secret
+ * projection — the public Connection type carries no values) is read first and
+ * only its owner may act (TASK-0118 P9.1-d): a Workspace-scoped connection is
+ * its owner's, not its Workspace's, so neither Workspace membership nor
+ * Workspace ownership is consulted, except as the owner of a legacy row that
+ * records none. To prevent cross-tenant probing of connection ids, a missing
+ * connection and every refusal answer a non-disclosing `connection_not_found`
+ * (404).
  */
 async function connectionItemOp(
   operations: ControlPlaneOperations,
-  store: AccountsStore,
+  _store: AccountsStore,
   session: ControlSession,
   connectionId: string,
   op: "test" | "revoke",
@@ -635,7 +663,7 @@ async function connectionItemOp(
     return errorJson("connection_not_found", "connection not found", 404);
   }
   const { connection, rawConnectionId } = target;
-  if (session.appIds !== undefined || (connection.ownerAccountId !== undefined && connection.ownerAccountId !== session.subject)) {
+  if (session.appIds !== undefined) {
     return errorJson("connection_not_found", "connection not found", 404);
   }
   const workspaceId = connection.workspaceId;
@@ -666,19 +694,10 @@ async function connectionItemOp(
     if (!captured.ok) throw captured.error;
     return captured.authority;
   };
-  // Both test (re-verify) and revoke (delete the sealed blob) are write-scoped
-  // mutations; the ownership failure must not disclose the connection's
-  // existence, so a 403 from the gate is surfaced as a 404 here.
-  const auth = await requireWorkspaceAccess({
-    operations,
-    store,
-    workspaceId,
-    session,
-  });
-  if (!auth.ok) {
-    return errorJson("connection_not_found", "connection not found", 404);
-  }
-  if ((await operations.workspaces.getWorkspace(workspaceId)).ownerUserId !== session.subject) {
+  // Only the connection's owner may test or revoke it. A Workspace-bound
+  // credential also keeps its Workspace restriction.
+  if ((await connectionOwnerAccountId(operations, connection)) !== session.subject ||
+    !bearerWorkspaceAllows(session, workspaceId)) {
     return errorJson("connection_not_found", "connection not found", 404);
   }
   if (op === "test") {
@@ -741,49 +760,32 @@ async function startConnectionOAuth(
   const helper = operations.connectionOAuth?.[helperId];
   if (!helper) return connectionOAuthUnavailable();
   const body = (await readJsonObject(request)) ?? {};
+  // Legacy-route telemetry: the request still named a Workspace.
   if (body.workspaceId !== undefined) markWorkspaceBody?.();
-  const workspaceId =
-    stringValue(body.workspaceId) ??
-    stringValue(url.searchParams.get("workspaceId") ?? undefined);
-  const personal = !workspaceId;
-  if (personal && session.workspaceId !== undefined) return errorJson("app_access_denied", "An account credential is required.", 403);
-  // Capture the exact Workspace-management tuple before authorization and the
-  // provider-owned OAuth awaits. Keep refusal private until the existing
-  // Workspace access gate has produced its normal response.
-  const captured = await (async () => {
-    if (personal) return { ok: true as const, authority: undefined };
-    try {
-      return {
-        ok: true as const,
-        authority: await operations.workspaces.captureManagementAuthority(
-          workspaceId,
-        ),
-      };
-    } catch (error) {
-      return { ok: false as const, error };
-    }
-  })();
-  const managementAuthority = (): WorkspaceManagementAuthority | undefined => {
-    if (!captured.ok) throw captured.error;
-    return captured.authority;
-  };
-  if (!personal) {
-    const auth = await requireWorkspaceAccess({ operations, store, workspaceId: workspaceId!, session });
-    if (!auth.ok) return auth.response;
-    if ((await operations.workspaces.getWorkspace(workspaceId!)).ownerUserId !== session.subject) return errorJson("app_owner_only", "Only the connection owner can authorize this connection.", 403);
+  // The OAuth state never carries a Workspace (TASK-0118 P9.1-d), and the
+  // callback authorizes from the signed subject alone: the minted connection
+  // is always the initiator's own. A legacy request that still names a
+  // Workspace asks for a Workspace-scoped connection (some credential recipes
+  // need one); the Workspace it names is not read, checked or recorded, and
+  // the callback fills the retained Workspace column with the initiator's own
+  // namespace, ensured here while the session is at hand. A Workspace-bound
+  // credential cannot start either kind.
+  if (session.workspaceId !== undefined) return errorJson("app_access_denied", "An account credential is required.", 403);
+  const workspaceScoped = stringValue(body.workspaceId) !== undefined ||
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) !== undefined;
+  if (workspaceScoped && !(await personalResourceNamespace(operations, store, session))) {
+    return errorJson("feature_unavailable", "Connections are temporarily unavailable.", 503);
   }
   const started = await helper.start({
     // Bind the OAuth state to the authenticated subject so the cross-site
     // callback can authorize without depending on a session cookie.
     subject: session.subject,
-    ...(workspaceId ? { workspaceId } : {}),
-    scope: personal ? "personal" : "workspace",
+    scope: workspaceScoped ? "workspace" : "personal",
     ownerAccountId: session.subject,
     ...(connectionScopeHints(body.scopeHints) ? { scopeHints: connectionScopeHints(body.scopeHints) } : {}),
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
       : {}),
-    ...(personal ? {} : { expectedWorkspaceManagementAuthority: managementAuthority() }),
   });
   const response = json(started);
   if (helper.browserBindingRequired) {
@@ -801,7 +803,8 @@ async function startConnectionOAuth(
  * This handler therefore does NOT call `requireAccountSession`; it authorizes
  * from the authenticated subject that the cookie-gated `start` signed INTO the
  * HMAC OAuth state. It exchanges the code, registers the resulting
- * Workspace-owned `generic_env_provider` Connection, and then REDIRECTS the
+ * Connection as that subject's own (personal, or Workspace-scoped in the
+ * subject's own namespace), and then REDIRECTS the
  * browser back to the dashboard `/connections` screen with a result query
  * (never a JSON body, never the token). No new SPA route is introduced — the
  * dashboard owns `/connections` already and reads the `connected` /
@@ -853,81 +856,60 @@ export async function completeConnectionOAuth(
   if (!subject) {
     return redirectToConnections(url, { error: "oauth_failed" });
   }
-  if (!workspaceId) {
-    if (createRequest.scope !== "personal" || createRequest.ownerAccountId !== subject) {
-      return redirectToConnections(url, { error: "oauth_failed" });
-    }
-    if (!await store.findAccount(subject as TakosumiSubject)) {
-      return redirectToConnections(url, { error: "forbidden" });
-    }
+  // The state names no Workspace (TASK-0118 P9.1-d). A signed state that
+  // still names one (or a Workspace authority tuple) was started before OAuth
+  // states stopped carrying it; it is refused without minting rather than
+  // authorized from that Workspace. Its initiator starts again.
+  if (workspaceId || completed.expectedWorkspaceManagementAuthority !== undefined ||
+    (createRequest.scope !== "personal" && createRequest.scope !== "workspace") ||
+    createRequest.ownerAccountId !== subject) {
+    return redirectToConnections(url, { error: "oauth_failed" });
+  }
+  if (!await store.findAccount(subject as TakosumiSubject)) {
+    return redirectToConnections(url, { error: "forbidden" });
+  }
+  if (createRequest.scope === "workspace") {
+    // A Workspace-scoped connection is still the initiator's own: its retained
+    // Workspace column is the initiator's own namespace (ensured at start),
+    // under that namespace's current management fence.
+    let namespaceId: string;
+    let authority: WorkspaceManagementAuthority;
     try {
-      const created = await operations.createConnection({ ...createRequest, scope: "personal", ownerAccountId: subject }, undefined, subject);
-      let connectionStatus: TestConnectionResponse["status"] | undefined;
-      try {
-        connectionStatus = (await operations.testConnection(created.connection.id, undefined, subject)).status;
-      } catch {
-        connectionStatus = "pending";
-      }
-      return redirectToConnections(url, { connected: subject, connectionId: created.connection.id, connectionStatus });
+      const namespace = await personalResourceNamespace(operations, store, { subject }, false);
+      if (!namespace) return redirectToConnections(url, { error: "oauth_failed" });
+      namespaceId = namespace.id;
+      authority = await operations.workspaces.captureManagementAuthority(namespace.id);
     } catch {
       return redirectToConnections(url, { error: "oauth_failed" });
     }
-  }
-  // Re-check Workspace ownership against the SIGNED state's subject + workspaceId so a
-  // stolen or forged callback cannot mint a Connection into a Workspace the
-  // authenticated initiator does not own. This is the callback's only authz —
-  // there is no session cookie on a cross-site redirect.
-  // No bearer credential reaches this cross-site callback, so the state's
-  // subject carries no Workspace restriction of its own.
-  const auth = await requireWorkspaceAccess({
-    operations,
-    store,
-    workspaceId,
-    session: { subject, requiredAccess: "write" },
-  });
-  if (!auth.ok) return redirectToConnections(url, { error: "forbidden" });
-  if ((await operations.workspaces.getWorkspace(workspaceId)).ownerUserId !== subject) return redirectToConnections(url, { error: "forbidden" });
-  const expectedWorkspaceManagementAuthority =
-    completed.expectedWorkspaceManagementAuthority;
-  if (!expectedWorkspaceManagementAuthority) {
-    // Valid legacy states can still verify, but they did not capture the
-    // original Workspace epoch and cannot mint a new Connection.
-    return redirectToConnections(url, { error: "oauth_failed" });
+    let created: { readonly connection: { readonly id: string } };
+    try {
+      created = await operations.createConnection({
+        ...createRequest, workspaceId: namespaceId, scope: "workspace", ownerAccountId: subject,
+      }, authority, subject);
+    } catch {
+      return redirectToConnections(url, { error: "oauth_failed" });
+    }
+    let connectionStatus: TestConnectionResponse["status"] | undefined;
+    try {
+      connectionStatus = (await operations.testConnection(created.connection.id, authority, subject)).status;
+    } catch {
+      connectionStatus = "pending";
+    }
+    return redirectToConnections(url, { connected: subject, connectionId: created.connection.id, connectionStatus });
   }
   try {
-    assertWorkspaceManagementAuthorityInput(
-      expectedWorkspaceManagementAuthority,
-      workspaceId,
-    );
+    const created = await operations.createConnection({ ...createRequest, scope: "personal", ownerAccountId: subject }, undefined, subject);
+    let connectionStatus: TestConnectionResponse["status"] | undefined;
+    try {
+      connectionStatus = (await operations.testConnection(created.connection.id, undefined, subject)).status;
+    } catch {
+      connectionStatus = "pending";
+    }
+    return redirectToConnections(url, { connected: subject, connectionId: created.connection.id, connectionStatus });
   } catch {
     return redirectToConnections(url, { error: "oauth_failed" });
   }
-  let created: ConnectionResponse;
-  try {
-    // Force Workspace scope regardless of what the helper produced.
-    created = await operations.createConnection({
-      ...createRequest,
-      scope: "workspace",
-    }, expectedWorkspaceManagementAuthority, subject);
-  } catch {
-    return redirectToConnections(url, { error: "oauth_failed" });
-  }
-  let connectionStatus: TestConnectionResponse["status"] | undefined;
-  try {
-    const result = await operations.testConnection(
-      created.connection.id,
-      expectedWorkspaceManagementAuthority,
-      subject,
-    );
-    connectionStatus = result.status;
-  } catch {
-    connectionStatus = "pending";
-  }
-  return redirectToConnections(url, {
-    connected: workspaceId,
-    connectionId: created.connection.id,
-    connectionStatus,
-  });
 }
 
 function connectionOAuthUnavailable(): Response {

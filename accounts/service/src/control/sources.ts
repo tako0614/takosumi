@@ -140,6 +140,7 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { clampPageLimit, decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
+import { connectionOwnerAccountId } from "./connection-owner.ts";
 import {
   requireAppAccess,
   requireOwnerForDelegateCodeChange,
@@ -626,6 +627,16 @@ export async function handleSources(
           (body.authConnectionId ?? null) !== ((source as { authConnectionId?: string }).authConnectionId ?? null)) {
           return errorJson("app_access_denied", "An installed app cannot choose the Source's connection.", 403);
         }
+        // A Source that no app owns uses only the caller's own connection
+        // (TASK-0118 P9.1-d); an app's Source uses its owner's (the Source
+        // service enforces that). Workspace membership never lends a
+        // credential.
+        if (typeof body.authConnectionId === "string" && body.authConnectionId !== "" &&
+          body.authConnectionId !== ((source as { authConnectionId?: string }).authConnectionId ?? null) &&
+          !(source as { ownerCapsuleId?: string }).ownerCapsuleId &&
+          !(await callerOwnsConnection(operations, ctx.session, body.authConnectionId))) {
+          return notOwnSourceConnection();
+        }
         if (body.defaultRef !== undefined || body.defaultPath !== undefined) {
           const codeChange = await requireOwnerForDelegateCodeChange({
             operations, store, session: ctx.session, workspaceId,
@@ -840,6 +851,12 @@ async function createSource(
         400,
       );
     }
+    // A new Source belongs to no app yet: only the caller's own connection
+    // (TASK-0118 P9.1-d). A Workspace connection is its owner's, never its
+    // Workspace's other members'.
+    if (!(await callerOwnsConnection(operations, session, authConnectionId))) {
+      return notOwnSourceConnection();
+    }
   }
   const requestBody: CreateSourceRequest = {
     workspaceId,
@@ -860,6 +877,29 @@ async function createSource(
   return jsonStatus(
     { ...response, source: publicSource(response.source) },
     201,
+  );
+}
+
+async function callerOwnsConnection(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  connectionId: string,
+): Promise<boolean> {
+  try {
+    const connection = await operations.getConnection(connectionId);
+    return connection.id === connectionId &&
+      (await connectionOwnerAccountId(operations, connection)) === session.subject;
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") return false;
+    throw error;
+  }
+}
+
+function notOwnSourceConnection(): Response {
+  return errorJson(
+    "invalid_request",
+    "authConnectionId must be one of your own connections.",
+    400,
   );
 }
 
