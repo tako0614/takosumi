@@ -34,6 +34,7 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import { requireAccountSession } from "./account-session.ts";
+import { reportLegacyWorkspaceClaim } from "./legacy-workspace-telemetry.ts";
 import {
   decodePageCursor,
   paginateById,
@@ -121,37 +122,42 @@ const PERSONAL_ACCESS_TOKEN_SCOPE_CATALOG_METADATA: Readonly<
     },
     workspaceBinding: "optional",
   },
+  // TASK-0118 9.1: hosted-resource and AI scopes no longer need a
+  // Workspace. A token is limited to its apps (`appIds`, each a live
+  // owner/member role at creation and on every use) or acts with the
+  // account's own authority; a legacy `workspace_id` binding is still
+  // accepted until Phase 9.3.
   "resources:read": {
     label: { ja: "ホストリソースの読み取り", en: "Hosted resource read" },
     description: {
-      ja: "指定した Workspace のホストリソース一覧を読み取ります。",
-      en: "Read hosted-resource inventory for one bound Workspace.",
+      ja: "ホストリソースの一覧を読み取ります。アプリを指定すると、そのアプリに限ります。",
+      en: "Read hosted-resource inventory; limited to the listed apps when appIds is set.",
     },
-    workspaceBinding: "required",
+    workspaceBinding: "optional",
   },
   "ai.models.read": {
     label: { ja: "AIモデルの読み取り", en: "AI model read" },
     description: {
-      ja: "指定した Workspace で利用できる AI モデルを読み取ります。",
-      en: "Read AI models available to one bound Workspace.",
+      ja: "利用できる AI モデルを読み取ります。アプリを指定すると、そのアプリに限ります。",
+      en: "Read available AI models; limited to the listed apps when appIds is set.",
     },
-    workspaceBinding: "required",
+    workspaceBinding: "optional",
   },
   "ai.chat": {
     label: { ja: "AIチャット", en: "AI chat" },
     description: {
-      ja: "指定した Workspace の課金枠で AI チャットを実行します。",
-      en: "Run AI chat against the billing authority of one bound Workspace.",
+      ja: "AI チャットを実行します。アプリを指定すると、そのアプリに限ります。",
+      en: "Run AI chat; limited to the listed apps when appIds is set.",
     },
-    workspaceBinding: "required",
+    workspaceBinding: "optional",
   },
   "ai.embeddings": {
     label: { ja: "AI埋め込み", en: "AI embeddings" },
     description: {
-      ja: "指定した Workspace の課金枠で AI 埋め込みを生成します。",
-      en: "Generate AI embeddings against the billing authority of one bound Workspace.",
+      ja: "AI 埋め込みを生成します。アプリを指定すると、そのアプリに限ります。",
+      en: "Generate AI embeddings; limited to the listed apps when appIds is set.",
     },
-    workspaceBinding: "required",
+    workspaceBinding: "optional",
   },
 };
 
@@ -547,6 +553,14 @@ export async function handleCurrentPersonalAccessTokenAuthority(input: {
       input.request,
     );
   }
+  // TASK-0118 Phase 9: a Workspace-bound PAT reading its own Workspace is a
+  // claim use too, and such a PAT may never expire.
+  reportLegacyWorkspaceClaim({
+    surface: "personal_access_authority",
+    capsuleBound: false,
+    appRole: false,
+    memberships: false,
+  });
   return json(currentPersonalAccessTokenAuthorityBody(record, scopes, role));
 }
 
@@ -749,6 +763,8 @@ export async function handleCreatePersonalAccessToken(input: {
   extensionScopes?: readonly TakosumiAccountsPatScope[];
   /** Test-only override; production always uses the bounded default. */
   workspaceAuthorityTimeoutMs?: number;
+  /** Called when the body names a Workspace (TASK-0118 Phase 9 telemetry). */
+  observeWorkspaceBinding?: () => void;
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
@@ -760,6 +776,7 @@ export async function handleCreatePersonalAccessToken(input: {
   const name = stringValue(body.name)?.trim();
   const scopes = personalAccessTokenScopesValue(body.scopes);
   const workspaceId = stringValue(body.workspace_id)?.trim();
+  if (body.workspace_id !== undefined) input.observeWorkspaceBinding?.();
   const appIdsRaw = body.appIds === undefined ? body.app_ids : body.appIds;
   const appIds = appIdsRaw === undefined ? undefined : personalAccessTokenAppIdsValue(appIdsRaw);
   const now = Date.now();

@@ -356,6 +356,22 @@ instead of overwriting. Existing host lifecycle resolves the exact installing
 Principal and materializes Interfaces/Bindings. A repository cannot mint a
 grant.
 
+`document` is public JSON; the manifest version does not define its contents.
+Takosumi reads three fields of an `interface.ui.surface` `document`. All are
+optional, and adding them changes neither the Interface version (`"1"`) nor the
+manifest version. An invalid value is treated as absent.
+
+| Field | Meaning |
+| --- | --- |
+| `launcher` | When `true`, the screen appears as a home tile and on the app's page |
+| `display` | The tile's name, icon, order and so on |
+| `clients` | The native phone apps (iOS, Android): bundle id or package, store ids, a custom-scheme link, universal links or App Links on the publisher's domain, and the phone default (`preferred`). Templates can contain only `{origin}` and `{url}`. Only a declaration matching a native app the operator trusts is verified |
+
+How to write them and the checks they must pass are in
+[Show your app on the home screen](../getting-started/home-launcher.md).
+Every field name and value is also subject to the checks in
+[Authority and secret boundaries](#authority-and-secret-boundaries).
+
 ## Authority and secret boundaries
 
 The manifest contains public proposals only. It cannot contain:

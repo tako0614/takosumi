@@ -247,7 +247,7 @@ test("the nonce is deterministic and changes only with the material generation",
   // Only the material generation moves it: the profile digest and the sealed
   // material generation are both preimage parts, and `installConfigId` is not.
   const parts = {
-    workspaceId: request.workspaceId,
+    scopeRef: request.workspaceId,
     capsuleId: request.capsuleId,
     profileDigest: "sha256:profile",
     materialGeneration: "sha256:generation-a",

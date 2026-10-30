@@ -68,6 +68,13 @@ import { handleAppOwnership } from "./control/app-ownership.ts";
 import { handleSourceRefResolutions } from "./control/source-ref-resolutions.ts";
 import { handleUsage } from "./control/usage.ts";
 import { handleInstallPlans } from "./control/install-plans.ts";
+import {
+  handleAccountInstallPlanList,
+  handleAccountProviderConnections,
+  handleAppInstallConfigList,
+  handleAppSourceList,
+} from "./control/account-reads.ts";
+import { handleAccountActivity } from "./control/app-activity.ts";
 import { handleRevisionPlans } from "./control/revision-plans.ts";
 import { isWorkspaceMutationRoute, workspaceFrozenResponse } from "./workspace-mutations-freeze.ts";
 import {
@@ -81,6 +88,15 @@ import type {
   RequestDiagnosticPhase,
 } from "./request-phase-diagnostics.ts";
 import type { InstalledAppDelegationSource } from "./installed-app-delegation.ts";
+import {
+  classifyLegacyWorkspaceControlRequest,
+  legacyWorkspaceClientFamily,
+  LegacyWorkspaceUseRecorder,
+  reportLegacyWorkspaceRoute,
+  withLegacyWorkspaceDeprecation,
+  type LegacyWorkspaceEntry,
+} from "./legacy-workspace-telemetry.ts";
+import type { TrustedNativeClient } from "takosumi-contract";
 
 const CONTROL_OPERATIONS_INIT_DEADLINE_MS = 5_000;
 
@@ -131,14 +147,22 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   "source-ref-resolutions": handleSourceRefResolutions,
   workspaces: handleWorkspaces,
   projects: handleProjects,
-  "install-plans": handleInstallPlans,
+  // Workspace-free replacement reads claim only their own query shapes and
+  // fall through to the legacy handler otherwise (TASK-0118 9.1).
+  "install-plans": async (ctx, segments, method) =>
+    await handleAccountInstallPlanList(ctx, segments, method) ?? await handleInstallPlans(ctx, segments, method),
+  activity: handleAccountActivity,
   "revision-plans": handleRevisionPlans,
   capsules: async (ctx, segments, method) =>
     await handleAppOwnership(ctx, segments, method) ?? await handleCapsules(ctx, segments, method),
-  "capsule-configs": handleInstallConfigs,
+  "capsule-configs": async (ctx, segments, method) =>
+    await handleAppInstallConfigList(ctx, segments, method) ?? await handleInstallConfigs(ctx, segments, method),
   "credential-recipes": handleCredentialRecipes,
-  "provider-connections": handleProviderConnections,
-  sources: handleSources,
+  "provider-connections": async (ctx, segments, method) =>
+    await handleAccountProviderConnections(ctx, segments, method) ??
+      await handleProviderConnections(ctx, segments, method),
+  sources: async (ctx, segments, method) =>
+    await handleAppSourceList(ctx, segments, method) ?? await handleSources(ctx, segments, method),
   "compatibility-reports": handleCompatibilityReports,
   "state-versions": handleStateVersions,
   runs: handleRuns,
@@ -213,6 +237,10 @@ interface ControlRouteContext {
   readonly appOwnershipMutationsFrozen?: boolean;
   /** Operator-designated repositories whose installed app may delegate. */
   readonly installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
+  /** RFC 8594 `Sunset` for legacy Workspace routes, once stage 9.3 is scheduled. */
+  readonly legacyWorkspaceSunset?: string;
+  /** Operator-trusted native phone apps; the built-in list when absent. */
+  readonly trustedNativeClients?: readonly TrustedNativeClient[];
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -449,6 +477,8 @@ export async function handleAuthenticatedControlRoute(
     readonly workspaceId?: string;
     readonly requireCurrentMembership?: true;
     readonly reauthorizeBearer?: () => Promise<boolean>;
+    /** Which composition entry authenticated the subject (telemetry only). */
+    readonly entry?: Exclude<LegacyWorkspaceEntry, "public">;
   },
 ): Promise<Response | undefined> {
   const { request, url } = context;
@@ -472,9 +502,59 @@ export async function handleAuthenticatedControlRoute(
   );
 }
 
+/**
+ * Observes legacy Workspace use around the authenticated dispatch. The
+ * classification reads only the method, path and query; handlers may add a
+ * body-selected use. Neither changes authorization, dispatch or the response
+ * status: a legacy response only gains deprecation headers and one value-free
+ * log line.
+ */
 async function dispatchAuthenticatedControlRoute(
+  context: ControlRouteContext & {
+    readonly session: ControlSession;
+    readonly entry?: LegacyWorkspaceEntry;
+  },
+  timings: ServerTimingBucket,
+): Promise<Response> {
+  const { request, url, session } = context;
+  const legacyWorkspace = new LegacyWorkspaceUseRecorder(
+    classifyLegacyWorkspaceControlRequest(
+      request.method,
+      normalizeControlRouteSegments(url.pathname.slice(API_V1_PREFIX.length)),
+      url.searchParams,
+    ),
+  );
+  const response = await dispatchAuthenticatedControlRouteForSession(
+    context,
+    timings,
+    legacyWorkspace,
+  );
+  const use = legacyWorkspace.use;
+  if (!use) return response;
+  reportLegacyWorkspaceRoute({
+    use,
+    method: request.method,
+    status: response.status,
+    entry: context.entry ?? "public",
+    credential: session.credential ?? "unknown",
+    workspaceBound: session.workspaceId !== undefined,
+    appBound: session.appIds !== undefined,
+    clientFamily: legacyWorkspaceClientFamily(request.headers),
+    ...(session.oauthClientId !== undefined
+      ? { clientId: session.oauthClientId }
+      : {}),
+  });
+  return withLegacyWorkspaceDeprecation(response, use, {
+    ...(context.legacyWorkspaceSunset
+      ? { sunset: context.legacyWorkspaceSunset }
+      : {}),
+  });
+}
+
+async function dispatchAuthenticatedControlRouteForSession(
   context: ControlRouteContext & { readonly session: ControlSession },
   timings: ServerTimingBucket,
+  legacyWorkspace: LegacyWorkspaceUseRecorder,
 ): Promise<Response> {
   const { request, url } = context;
   context.assertActive?.();
@@ -492,9 +572,12 @@ async function dispatchAuthenticatedControlRoute(
   const appConnectionLabels = segments.length === 1 && segments[0] === "connections" &&
     request.method.toUpperCase() === "GET" && url.searchParams.get("projection") === "labels" &&
     context.session.appIds?.includes(url.searchParams.get("capsuleId") ?? "") === true;
+  const appReleaseOwnedConnections = segments.length === 1 && segments[0] === "provider-connections" &&
+    request.method.toUpperCase() === "GET" && url.searchParams.get("projection") === "release-owned" &&
+    context.session.appIds?.includes(url.searchParams.get("capsuleId") ?? "") === true;
   if (context.session.appIds !== undefined &&
-    !legacyWorkspaceAppRoute && !appConnectionLabels &&
-    !["apps", "capsules", "runs", "state-versions", "sources", "compatibility-reports", "install-plans", "revision-plans", "capsule-configs", "ownership-transfers"].includes(segments[0] ?? "")) {
+    !legacyWorkspaceAppRoute && !appConnectionLabels && !appReleaseOwnedConnections &&
+    !["apps", "activity", "capsules", "runs", "state-versions", "sources", "compatibility-reports", "install-plans", "revision-plans", "capsule-configs", "ownership-transfers"].includes(segments[0] ?? "")) {
     return appendServerTiming(errorJson("app_access_denied", "This credential is restricted to its apps.", 403, request), timings);
   }
 
@@ -543,7 +626,9 @@ async function dispatchAuthenticatedControlRoute(
           ...(context.withinRunReadDeadline ? { withinRunReadDeadline: context.withinRunReadDeadline } : {}),
           ...(context.workspaceMutationsFrozen !== undefined ? { workspaceMutationsFrozen: context.workspaceMutationsFrozen } : {}),
           ...(context.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+          ...(context.trustedNativeClients ? { trustedNativeClients: context.trustedNativeClients } : {}),
           session: context.session,
+          legacyWorkspace,
         }),
       ),
     );
@@ -630,6 +715,7 @@ export async function handleControlRoute(
       request,
       store,
       scope: requiredAccess,
+      recheck: true,
     });
     return current.ok &&
       current.auth.subject === initialAuth.subject &&
@@ -650,6 +736,9 @@ export async function handleControlRoute(
         ...(bearer.auth.appIds !== undefined ? { appIds: bearer.auth.appIds } : {}),
         ...(bearer.auth.workspaceId
           ? { workspaceId: bearer.auth.workspaceId }
+          : {}),
+        ...(bearer.auth.oauthClientId !== undefined
+          ? { oauthClientId: bearer.auth.oauthClientId }
           : {}),
         // Operator configuration: only an installed app's own token can be a
         // delegate, and code changes of a designated app are owner-only.
@@ -721,6 +810,8 @@ interface DispatchInput {
   readonly withinRunReadDeadline?: RunReadWaiter;
   readonly workspaceMutationsFrozen?: boolean;
   readonly appOwnershipMutationsFrozen?: boolean;
+  readonly legacyWorkspace?: LegacyWorkspaceUseRecorder;
+  readonly trustedNativeClients?: readonly TrustedNativeClient[];
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -749,6 +840,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       ...(input.withinRunReadDeadline ? { withinRunReadDeadline: input.withinRunReadDeadline } : {}),
       workspaceMutationsFrozen: input.workspaceMutationsFrozen !== false,
       ...(input.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+      ...(input.legacyWorkspace ? { legacyWorkspace: input.legacyWorkspace } : {}),
+      ...(input.trustedNativeClients ? { trustedNativeClients: input.trustedNativeClients } : {}),
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

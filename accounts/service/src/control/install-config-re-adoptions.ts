@@ -9,6 +9,7 @@ import type {
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
@@ -341,6 +342,7 @@ export async function handleCapsuleInstallConfigReAdoption(
     modulePath,
     capsuleName: current.name,
     workspaceId: current.workspaceId,
+    derivationScopeRef: capsuleScopeRef(current),
     reviewedVariables: reviewedUserVariables.values,
     reviewedInterfaceBlueprints: currentConfig.interfaceBlueprints,
     reviewedOutputAllowlist: currentConfig.outputAllowlist,

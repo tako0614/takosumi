@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import {
   createAccountsHandler,
@@ -105,7 +105,7 @@ test("app-bound PATs are minted only for live accessible apps and preserve their
   expect(conflicting.status).toBe(400);
 });
 
-test("resources:read PAT creation is explicit, workspace-bound, and exact", async () => {
+test("resources:read PAT creation is explicit and exact; a legacy Workspace binding still works", async () => {
   const store = seededStore();
   const handler = createAccountsHandler({
     issuer: ORIGIN,
@@ -116,14 +116,6 @@ test("resources:read PAT creation is explicit, workspace-bound, and exact", asyn
         getWorkspaceForAccount: async () => ({ id: "ws_inventory" }),
       },
     } as unknown as ControlPlaneOperations,
-  });
-
-  const missingWorkspace = await handler(
-    createRequest({ name: "Inventory", scopes: ["resources:read"] }),
-  );
-  expect(missingWorkspace.status).toBe(400);
-  expect(await missingWorkspace.json()).toMatchObject({
-    error: { code: "invalid_request" },
   });
 
   const created = await handler(
@@ -223,7 +215,7 @@ test("workspace PAT creation uses the bounded membership reader without initiali
   expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(1);
 });
 
-test("Cloud AI PAT scopes are explicit, workspace-bound, and cataloged", async () => {
+test("Cloud AI PAT scopes are explicit, legacy-Workspace-bindable, and cataloged", async () => {
   const store = seededStore();
   const aiScopes = ["ai.models.read", "ai.chat", "ai.embeddings"] as const;
   const handler = createAccountsHandler({
@@ -237,11 +229,6 @@ test("Cloud AI PAT scopes are explicit, workspace-bound, and cataloged", async (
       },
     } as unknown as ControlPlaneOperations,
   });
-
-  const missingWorkspace = await handler(
-    createRequest({ name: "AI", scopes: ["ai.chat"] }),
-  );
-  expect(missingWorkspace.status).toBe(400);
 
   const created = await handler(
     createRequest({
@@ -267,11 +254,96 @@ test("Cloud AI PAT scopes are explicit, workspace-bound, and cataloged", async (
       expect.objectContaining({
         scope,
         selfService: true,
-        workspaceBinding: "required",
+        workspaceBinding: "optional",
       }),
     );
   }
 });
+
+describe("hosted-resource and AI PATs without a Workspace (TASK-0118 9.1)", () => {
+  const scopeSets = [["resources:read"], ["ai.models.read", "ai.chat", "ai.embeddings"]] as const;
+  function appOperations(accessible: ReadonlySet<string>) {
+    return {
+      appAccess: {
+        resolveAppAccess: async (_subject: string, id: string) =>
+          accessible.has(id) ? { capsuleId: id, role: "member", ownerAccountId: "tsub_owner", ownershipEpoch: 0 } : undefined,
+      },
+      workspaces: {
+        // A Workspace read here would mean the app path still consults Workspaces.
+        getWorkspaceForAccount: async () => { throw new Error("Workspace authority must not be read"); },
+      },
+    } as unknown as ControlPlaneOperations;
+  }
+  for (const scopes of scopeSets) {
+    test(`${scopes.join(" ")} can be limited to apps the caller owns or is a member of`, async () => {
+      const store = seededStore();
+      const handler = createAccountsHandler({
+        issuer: ORIGIN, store, personalAccessTokenSelfServiceScopes: scopes,
+        controlPlaneOperations: appOperations(new Set(["cap_mine"])),
+      });
+      const created = await handler(createRequest({ name: "App key", scopes, appIds: ["cap_mine"] }));
+      expect(created.status).toBe(201);
+      const body = await created.json() as { token: string; token_record: Record<string, unknown> };
+      expect(body.token_record).toMatchObject({ scopes: [...scopes], appIds: ["cap_mine"] });
+      expect(body.token_record.workspace_id ?? null).toBeNull();
+      const bearer = await requireAccountsBearer({
+        request: new Request(`${ORIGIN}/v1/cloud/resource-instances`, { headers: { authorization: `Bearer ${body.token}` } }),
+        store,
+        scope: scopes[0],
+      });
+      expect(bearer.ok).toBe(true);
+      if (bearer.ok) {
+        expect(bearer.auth.appIds).toEqual(["cap_mine"]);
+        expect(bearer.auth.workspaceId).toBeUndefined();
+        expect(bearerAppAllows(bearer.auth, "cap_other")).toBe(false);
+      }
+
+      const denied = await handler(createRequest({ name: "Not mine", scopes, appIds: ["cap_mine", "cap_other"] }));
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toMatchObject({ error: { code: "app_access_denied" } });
+      expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(1);
+    });
+
+    test(`${scopes.join(" ")} can be issued at account scope`, async () => {
+      const store = seededStore();
+      const handler = createAccountsHandler({
+        issuer: ORIGIN, store, personalAccessTokenSelfServiceScopes: scopes,
+        controlPlaneOperations: appOperations(new Set()),
+      });
+      const created = await handler(createRequest({ name: "Account key", scopes }));
+      expect(created.status).toBe(201);
+      const body = await created.json() as { token: string; token_record: Record<string, unknown> };
+      expect(body.token_record).toMatchObject({ scopes: [...scopes] });
+      expect(body.token_record.workspace_id ?? null).toBeNull();
+      expect(body.token_record).not.toHaveProperty("appIds");
+      const bearer = await requireAccountsBearer({
+        request: new Request(`${ORIGIN}/v1/cloud/resource-instances`, { headers: { authorization: `Bearer ${body.token}` } }),
+        store,
+        scope: scopes[0],
+      });
+      expect(bearer.ok).toBe(true);
+      if (bearer.ok) {
+        expect(bearer.auth.workspaceId).toBeUndefined();
+        expect(bearer.auth.appIds).toBeUndefined();
+      }
+      // The scope never widens to the legacy account APIs.
+      expect((await requireAccountsBearer({
+        request: new Request(`${ORIGIN}/api/v1/apps`, { headers: { authorization: `Bearer ${body.token}` } }),
+        store,
+        scope: "read",
+      })).ok).toBe(false);
+    });
+  }
+
+  test("an extension scope is still not self-service unless the owning route declares it", async () => {
+    const store = seededStore();
+    const handler = createAccountsHandler({ issuer: ORIGIN, store, controlPlaneOperations: appOperations(new Set(["cap_mine"])) });
+    const response = await handler(createRequest({ name: "Undeclared", scopes: ["resources:read"], appIds: ["cap_mine"] }));
+    expect(response.status).toBe(403);
+    expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(0);
+  });
+});
+
 
 test("resources:read is not inferred from route metadata or legacy write", async () => {
   const store = seededStore();
@@ -345,41 +417,41 @@ test("self-service PAT scope catalog is authenticated, safe, and session-only", 
         scope: "resources:read",
         label: { ja: "ホストリソースの読み取り", en: "Hosted resource read" },
         description: {
-          ja: "指定した Workspace のホストリソース一覧を読み取ります。",
-          en: "Read hosted-resource inventory for one bound Workspace.",
+          ja: "ホストリソースの一覧を読み取ります。アプリを指定すると、そのアプリに限ります。",
+          en: "Read hosted-resource inventory; limited to the listed apps when appIds is set.",
         },
         selfService: true,
-        workspaceBinding: "required",
+        workspaceBinding: "optional",
       },
       {
         scope: "ai.models.read",
         label: { ja: "AIモデルの読み取り", en: "AI model read" },
         description: {
-          ja: "指定した Workspace で利用できる AI モデルを読み取ります。",
-          en: "Read AI models available to one bound Workspace.",
+          ja: "利用できる AI モデルを読み取ります。アプリを指定すると、そのアプリに限ります。",
+          en: "Read available AI models; limited to the listed apps when appIds is set.",
         },
         selfService: false,
-        workspaceBinding: "required",
+        workspaceBinding: "optional",
       },
       {
         scope: "ai.chat",
         label: { ja: "AIチャット", en: "AI chat" },
         description: {
-          ja: "指定した Workspace の課金枠で AI チャットを実行します。",
-          en: "Run AI chat against the billing authority of one bound Workspace.",
+          ja: "AI チャットを実行します。アプリを指定すると、そのアプリに限ります。",
+          en: "Run AI chat; limited to the listed apps when appIds is set.",
         },
         selfService: false,
-        workspaceBinding: "required",
+        workspaceBinding: "optional",
       },
       {
         scope: "ai.embeddings",
         label: { ja: "AI埋め込み", en: "AI embeddings" },
         description: {
-          ja: "指定した Workspace の課金枠で AI 埋め込みを生成します。",
-          en: "Generate AI embeddings against the billing authority of one bound Workspace.",
+          ja: "AI 埋め込みを生成します。アプリを指定すると、そのアプリに限ります。",
+          en: "Generate AI embeddings; limited to the listed apps when appIds is set.",
         },
         selfService: false,
-        workspaceBinding: "required",
+        workspaceBinding: "optional",
       },
     ],
   });

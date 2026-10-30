@@ -478,6 +478,7 @@ test("release sends the release kind and retires the record only when confirmed"
   );
   await port!.release({
     workspaceId: "workspace_abcdef123456",
+    scopeRef: "workspace_abcdef123456",
     capsuleId: "cap_yurucommu",
   });
   const sent = calls[0] as {
@@ -514,6 +515,7 @@ test("release sends the release kind and retires the record only when confirmed"
       keptLedger,
     )!.release({
       workspaceId: "workspace_abcdef123456",
+      scopeRef: "workspace_abcdef123456",
       capsuleId: "cap_yurucommu",
     });
   } finally {

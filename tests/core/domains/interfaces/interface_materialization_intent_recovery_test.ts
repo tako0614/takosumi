@@ -1336,6 +1336,61 @@ test("dead-letter visibility is value-free and retry is digest plus Capsule-stat
   }
 });
 
+test("per-app dead-letter listing and retry stay inside the addressed app across stores", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_app_dlq_${label}`,
+      capsuleId: `capsule_intent_app_dlq_${label}`,
+    });
+    const intent = await commitApplyIntent(store, seeded.capsule, `app_dlq_${label}`);
+    const leaseToken = `lease_intent_app_dlq_${label}`;
+    await store.claimCapsuleInterfaceMaterializationIntent({
+      leaseToken,
+      claimedAt: RESTORE_AT,
+      leaseExpiresAt: "2026-08-29T11:11:00.000Z",
+    });
+    await store.settleCapsuleInterfaceMaterializationIntent({
+      id: intent.id,
+      leaseToken,
+      expectedNextItemIndex: 0,
+      settledAt: RESTORE_AT,
+      outcome: {
+        kind: "dead-letter",
+        code: "interface_provenance_conflict",
+        detailDigest: `sha256:${"9".repeat(64)}`,
+      },
+    });
+    const service = new CapsuleInterfaceMaterializationFailureService({
+      store,
+      now: () => RESTORE_AT,
+    });
+    const [failure] = await service.listForCapsule(seeded.capsule.id);
+    expect(failure, label).toMatchObject({
+      id: intent.id,
+      capsuleId: seeded.capsule.id,
+      stateGeneration: intent.stateGeneration,
+    });
+    // The Workspace list and the per-app list project the same failure.
+    expect(await service.list(seeded.capsule.workspaceId), label).toEqual([failure!]);
+    expect(await service.listForCapsule("capsule_someone_else"), label).toEqual([]);
+    const input = {
+      failureDigest: failure!.failureDigest,
+      stateVersionId: intent.stateVersionId,
+      stateGeneration: intent.stateGeneration,
+    };
+    // A failure of another app does not exist through this app.
+    await expect(
+      service.retryForCapsule("capsule_someone_else", intent.id, input),
+      `${label}:other app`,
+    ).rejects.toMatchObject({ code: "not_found" });
+    expect(
+      await service.retryForCapsule(seeded.capsule.id, intent.id, input),
+      label,
+    ).toMatchObject({ id: intent.id, capsuleId: seeded.capsule.id, status: "pending" });
+    expect(await service.listForCapsule(seeded.capsule.id), label).toEqual([]);
+  }
+});
+
 test("dead-letter forward retry cannot revive an intent after Capsule state advances", async () => {
   for (const [label, store] of await stores()) {
     const seeded = await seedCapsuleModel(store, {

@@ -61,7 +61,7 @@
  * The nonce is deliberately NOT random per Run. A provider derives its
  * apply-idempotency identity from the nonce, and that identity forces resource
  * replacement, so a per-Run nonce would propose a replacement on every plan.
- * The nonce here is a pure function of (workspace, Capsule, profile digest,
+ * The nonce here is a pure function of (scope, Capsule, profile digest,
  * material generation, provider instance): it changes when the material
  * generation changes and at no other time. The material generation is a digest
  * of the sealed ciphertext, so re-sealing — the only way the values can move —
@@ -74,6 +74,7 @@
  * provider-side replacement of resources whose content never changed.
  */
 
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 import type {
   InstallConfigRuntimeBindingMaterialization,
   RuntimeGeneratedSecretBinding,
@@ -233,7 +234,8 @@ export class RuntimeInputBundle {
  */
 export type RuntimeInputValueSource = (input: {
   readonly profileContract: string;
-  readonly workspaceId: string;
+  /** The Capsule's frozen derivation scope (`capsuleScopeRef`). */
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly installConfigId: string;
   readonly binding: string;
@@ -273,7 +275,14 @@ export function runtimeInputDerivedValueSource(
  */
 export interface RuntimeInputOidcRequest {
   readonly profileContract: string;
+  /** Capsule authority; checked against the current Capsule. */
   readonly workspaceId: string;
+  /**
+   * The Capsule's frozen derivation scope (`capsuleScopeRef`). Every derived
+   * value (client id, activation digest, public-origin key) reads this, never
+   * `workspaceId`.
+   */
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly installConfigId: string;
   readonly bindings: RuntimeOidcClientBindings;
@@ -310,12 +319,17 @@ export interface RuntimeInputOidcClientSource {
    * a failed teardown leaves a host-side orphan a later destroy can still
    * remove, and can never be a reason to fail a terminal destroy.
    */
-  retire?(input: RuntimeInputAuthority): Promise<void>;
+  retire?(input: RuntimeInputAuthority & { readonly scopeRef: string }): Promise<void>;
 }
 
+/**
+ * HMAC preimage of one generated secret. The scope slot holds the Capsule's
+ * frozen `scopeRef`, which for every Capsule created before stage 9.0 is the
+ * Workspace id this slot always held, so no derived value moves.
+ */
 function generatedSecretDerivationParts(request: {
   readonly profileContract: string;
-  readonly workspaceId: string;
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly installConfigId: string;
   readonly binding: string;
@@ -323,14 +337,14 @@ function generatedSecretDerivationParts(request: {
   return request.profileContract === PROFILE_CONTRACT_V1
     ? [
         RUNTIME_BINDING_AUTHORITY_CONTRACT,
-        request.workspaceId,
+        request.scopeRef,
         request.capsuleId,
         request.installConfigId,
         request.binding,
       ]
     : [
         GENERATED_SECRET_DERIVATION_V2,
-        request.workspaceId,
+        request.scopeRef,
         request.capsuleId,
         request.binding,
       ];
@@ -419,10 +433,12 @@ export function createRuntimeInputMaterializer(input: {
   const oidcRequest = (
     declaration: RuntimeInputDeclaration,
     authority: RuntimeInputAuthority,
+    scopeRef: string,
     bindings: RuntimeOidcClientBindings,
   ): RuntimeInputOidcRequest => ({
     profileContract: declaration.contract,
     workspaceId: authority.workspaceId,
+    scopeRef,
     capsuleId: authority.capsuleId,
     installConfigId: authority.installConfigId,
     bindings,
@@ -461,13 +477,14 @@ export function createRuntimeInputMaterializer(input: {
   const derivedGeneration = async (
     declaration: RuntimeInputDeclaration,
     authority: RuntimeInputAuthority,
+    scopeRef: string,
   ): Promise<string> => {
     const preimage = stableStringify({
       domain: `${NONCE_DOMAIN}#derived-generation`,
       parts: declaration.generatedSecrets.map((entry) =>
         generatedSecretDerivationParts({
           profileContract: declaration.contract,
-          workspaceId: authority.workspaceId,
+          scopeRef,
           capsuleId: authority.capsuleId,
           installConfigId: authority.installConfigId,
           binding: entry.binding,
@@ -495,6 +512,7 @@ export function createRuntimeInputMaterializer(input: {
     readonly previous: StoredSecretBlob;
     readonly declaration: RuntimeInputDeclaration;
     readonly authority: RuntimeInputAuthority;
+    readonly scopeRef: string;
     readonly ownerRef: string;
     readonly partition: SecretPartition;
     readonly aad: string;
@@ -502,6 +520,7 @@ export function createRuntimeInputMaterializer(input: {
     const previous = await openPreviousGeneration({
       blob: next.previous,
       ownerRef: next.ownerRef,
+      scopeRef: next.scopeRef,
       capsuleId: next.authority.capsuleId,
       partition: next.partition,
       crypto: input.crypto,
@@ -564,9 +583,12 @@ export function createRuntimeInputMaterializer(input: {
     )) as `sha256:${string}`;
     const ownerRef = runtimeInputOwnerRef(request.capsuleId);
     const partition = runtimeInputPartition(request.capsuleId);
+    // The owner fence below stays on the row's Workspace column (authority);
+    // only the sealed material's AAD reads the Capsule's frozen scope.
+    const scopeRef = current.scopeRef;
     const aad = runtimeInputAad({
       ownerRef,
-      workspaceId: request.workspaceId,
+      scopeRef,
       capsuleId: request.capsuleId,
       profileDigest,
     });
@@ -588,6 +610,7 @@ export function createRuntimeInputMaterializer(input: {
           previous: blob,
           declaration: current.declaration,
           authority: request,
+          scopeRef,
           ownerRef,
           partition,
           aad,
@@ -597,6 +620,7 @@ export function createRuntimeInputMaterializer(input: {
       const content = await generateRuntimeInputValues(
         current.declaration,
         request,
+        scopeRef,
         input.values,
       );
       const sealed = await input.crypto.seal(
@@ -654,7 +678,12 @@ export function createRuntimeInputMaterializer(input: {
       const oidcGeneration = declaration.oidcClient
         ? exactOidcGeneration(
             await oidcSource().generation(
-              oidcRequest(declaration, request, declaration.oidcClient),
+              oidcRequest(
+                declaration,
+                request,
+                current.scopeRef,
+                declaration.oidcClient,
+              ),
             ),
           )
         : undefined;
@@ -664,12 +693,12 @@ export function createRuntimeInputMaterializer(input: {
         declaration.generatedSecrets.length === 0
           ? NO_GENERATED_SECRET_GENERATION
           : input.values
-            ? await derivedGeneration(declaration, request)
+            ? await derivedGeneration(declaration, request, current.scopeRef)
             : await materialGenerationDigest(
                 (await sealedMaterial(request)).blob,
               );
       return await runtimeInputNonce({
-        workspaceId: request.workspaceId,
+        scopeRef: current.scopeRef,
         capsuleId: request.capsuleId,
         profileDigest: (await stableJsonDigest(
           declaration,
@@ -705,11 +734,16 @@ export function createRuntimeInputMaterializer(input: {
             await generateRuntimeInputValues(
               declaration,
               request,
+              current.scopeRef,
               input.values,
             ),
             declaration,
           );
-          base = await derivedGeneration(declaration, request);
+          base = await derivedGeneration(
+            declaration,
+            request,
+            current.scopeRef,
+          );
         } else {
           const material = await sealedMaterial(request);
           let content: string;
@@ -733,7 +767,12 @@ export function createRuntimeInputMaterializer(input: {
       let oidcValues: Readonly<Record<string, string>> = {};
       if (declaration.oidcClient) {
         const minted = await oidcSource().materialize(
-          oidcRequest(declaration, request, declaration.oidcClient),
+          oidcRequest(
+            declaration,
+            request,
+            current.scopeRef,
+            declaration.oidcClient,
+          ),
         );
         oidcGeneration = exactOidcGeneration(minted.generation);
         oidcValues = exactOidcValues(minted.values, declaration.oidcClient);
@@ -746,7 +785,7 @@ export function createRuntimeInputMaterializer(input: {
         contract: RUNNER_CONTRACT,
         profileDigest,
         nonce: await runtimeInputNonce({
-          workspaceId: request.workspaceId,
+          scopeRef: current.scopeRef,
           capsuleId: request.capsuleId,
           profileDigest,
           materialGeneration: await foldedMaterialGeneration(
@@ -787,6 +826,7 @@ export function createRuntimeInputMaterializer(input: {
       // Apply.
       await input.oidcClient?.retire?.({
         workspaceId: request.workspaceId,
+        scopeRef: capsuleScopeRef(capsule),
         capsuleId: request.capsuleId,
         installConfigId: request.installConfigId,
       });
@@ -872,6 +912,8 @@ async function currentProfile(
   }
   return {
     capsule,
+    /** Frozen derivation scope; the authority checks above stay on Workspace. */
+    scopeRef: capsuleScopeRef(capsule),
     declaration: exactRuntimeInputProfile(config.runtimeBindingMaterialization),
   };
 }
@@ -986,12 +1028,14 @@ function exactRuntimeInputOidcClient(
 }
 
 /**
- * Deterministic per (workspace, Capsule, profile, material generation, provider
+ * Deterministic per (scope, Capsule, profile, material generation, provider
  * instance). 32 digest bytes render as 43 unpadded base64url characters, inside
- * the 22..128 range a provider accepts and well above its 16-byte floor.
+ * the 22..128 range a provider accepts and well above its 16-byte floor. The
+ * scope is the Capsule's frozen `scopeRef`, hashed under the historical
+ * `workspaceId` key so no nonce moves.
  */
 export async function runtimeInputNonce(input: {
-  readonly workspaceId: string;
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly profileDigest: string;
   /** Digest of the sealed ciphertext: it moves if and only if values move. */
@@ -1000,7 +1044,7 @@ export async function runtimeInputNonce(input: {
 }): Promise<string> {
   const preimage = stableStringify({
     domain: NONCE_DOMAIN,
-    workspaceId: input.workspaceId,
+    workspaceId: input.scopeRef,
     capsuleId: input.capsuleId,
     profileDigest: input.profileDigest,
     materialGeneration: input.materialGeneration,
@@ -1093,6 +1137,7 @@ function exactProviderInstance(value: string): string {
 async function generateRuntimeInputValues(
   declaration: RuntimeInputDeclaration,
   authority: RuntimeInputAuthority,
+  scopeRef: string,
   source: RuntimeInputValueSource | undefined,
 ): Promise<string> {
   const values: Record<string, string> = {};
@@ -1100,7 +1145,7 @@ async function generateRuntimeInputValues(
     if (source) {
       const value = await source({
         profileContract: declaration.contract,
-        workspaceId: authority.workspaceId,
+        scopeRef,
         capsuleId: authority.capsuleId,
         installConfigId: authority.installConfigId,
         binding: entry.binding,
@@ -1470,6 +1515,7 @@ export class RuntimeInputPreviousGenerationError extends TypeError {
 async function openPreviousGeneration(input: {
   readonly blob: StoredSecretBlob;
   readonly ownerRef: string;
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly partition: SecretPartition;
   readonly crypto: SecretBoundaryCrypto;
@@ -1523,13 +1569,17 @@ async function openPreviousGeneration(input: {
 
 /**
  * The stored AAD must be exactly what {@link runtimeInputAad} writes for this
- * owner reference and Capsule, under the row's own Workspace. Re-serializing
- * and comparing bytes, rather than checking parsed fields, rejects duplicated
- * or extra keys, another contract, and any non-canonical spelling.
+ * owner reference and Capsule, under the Capsule's frozen `scopeRef` (the
+ * value every generation of this Capsule was sealed under: its Workspace id
+ * for Capsules created before stage 9.0). The caller has already passed the
+ * owner fence on the row's Workspace column. Re-serializing and comparing
+ * bytes, rather than checking parsed fields, rejects duplicated or extra keys,
+ * another contract, and any non-canonical spelling.
  */
 function previousGenerationAadNamesOwner(input: {
   readonly blob: StoredSecretBlob;
   readonly ownerRef: string;
+  readonly scopeRef: string;
   readonly capsuleId: string;
 }): boolean {
   let parsed: unknown;
@@ -1540,7 +1590,6 @@ function previousGenerationAadNamesOwner(input: {
   }
   if (
     !isRecord(parsed) ||
-    typeof input.blob.workspaceId !== "string" ||
     typeof parsed.profileDigest !== "string" ||
     !/^sha256:[0-9a-f]{64}$/u.test(parsed.profileDigest)
   ) {
@@ -1549,7 +1598,7 @@ function previousGenerationAadNamesOwner(input: {
   return (
     runtimeInputAad({
       ownerRef: input.ownerRef,
-      workspaceId: input.blob.workspaceId,
+      scopeRef: input.scopeRef,
       capsuleId: input.capsuleId,
       profileDigest: parsed.profileDigest,
     }) === input.blob.aad
@@ -1778,16 +1827,22 @@ function runtimeInputBlob(input: {
   };
 }
 
+/**
+ * AAD of a sealed runtime-input generation. The `workspaceId` key is
+ * historical: it holds the Capsule's frozen `scopeRef`, which equals the
+ * Workspace id for every Capsule created before stage 9.0, so stored rows
+ * keep opening byte for byte.
+ */
 function runtimeInputAad(input: {
   readonly ownerRef: string;
-  readonly workspaceId: string;
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly profileDigest: string;
 }): string {
   return stableStringify({
     contract: BLOB_CONTRACT,
     ownerRef: input.ownerRef,
-    workspaceId: input.workspaceId,
+    workspaceId: input.scopeRef,
     capsuleId: input.capsuleId,
     profileDigest: input.profileDigest,
   });

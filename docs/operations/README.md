@@ -44,6 +44,7 @@ Cloud 側のリポジトリで管理します。
 - [Resource state の取り込み](./resource-state-adoption.md)
 - [Output / Interface migration](./output-interface-migration.md)
 - [廃止済み Dependency のデータ保守](./retired-dependency-maintenance.md)
+- [Capsule の scopeRef（派生の元の凍結）と backfill](./capsule-scope-ref-backfill.md)
 - [FormRef migration](./exact-formref-migration.md)
 
 ### Security
@@ -62,6 +63,7 @@ Cloud 側のリポジトリで管理します。
 - [troubleshooting](./troubleshooting.md)
 - [公開 API の応答停止を調べる GET probe](./troubleshooting.md#公開-api-の応答が止まるとき)
 - [runner timing diagnostics](./runner-timing-diagnostics.md)
+- [廃止予定の Workspace の利用を数える](./legacy-workspace-telemetry.md)
 - [incident response](./incident-response.md)
 - [on-call](./oncall.md)
 - [cost monitoring](./cost-monitoring.md)

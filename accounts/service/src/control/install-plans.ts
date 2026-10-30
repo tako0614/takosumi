@@ -460,10 +460,13 @@ function installAttemptCreatorContinues(
 /**
  * GET /api/v1/workspaces/:id/install-plans?open=1 — the caller's open
  * attempts, and install plans that are not attempts and have no Capsule yet.
+ * Without a Workspace (GET /api/v1/install-plans?open=1) the listing is the
+ * caller's own attempts in every internal namespace; an attempt is its
+ * creator's work, so no Workspace or app decision widens or narrows it.
  */
-async function listOpenInstallAttempts(
+export async function listOpenInstallAttempts(
   ctx: ControlDispatchContext,
-  workspaceId: string,
+  workspaceId: string | undefined,
 ): Promise<Response> {
   const open = ctx.url.searchParams.get("open");
   if (open !== "1" && open !== "true") {
@@ -477,7 +480,7 @@ async function listOpenInstallAttempts(
   // The store applies the open filter (including never-applied Capsules)
   // before its limit. A read-only listing never settles anything.
   const candidates = await ctx.operations.gitInstallPlans.listOpenAttempts({
-    workspaceId,
+    ...(workspaceId === undefined ? {} : { workspaceId }),
     actorSubject: ctx.session.subject,
     limit: GIT_INSTALL_ATTEMPT_LIST_LIMIT,
   });

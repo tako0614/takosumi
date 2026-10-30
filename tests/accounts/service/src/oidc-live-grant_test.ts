@@ -152,7 +152,7 @@ async function liveGrantFixture() {
   store.saveOidcClient({
     ...client,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId,
+      scopeRef: workspaceId,
       capsuleId,
       executionAuthorityEpoch: state.executionAuthorityEpoch,
       installConfig: installConfig as InstallConfig,
@@ -225,7 +225,7 @@ test("a nonmember can sign in to an installed app without management or Workspac
   store.saveOidcClient({
     ...store.findOidcClient(clientId)!,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId, capsuleId, executionAuthorityEpoch: 1,
+      scopeRef: workspaceId, capsuleId, executionAuthorityEpoch: 1,
       installConfig: installConfig as InstallConfig,
     }),
   });
@@ -380,7 +380,7 @@ test("repository-materialized OIDC keeps its live grant without a static client 
   store.saveOidcClient({
     ...current,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId,
+      scopeRef: workspaceId,
       capsuleId,
       executionAuthorityEpoch: 1,
       installConfig: generic,
@@ -460,7 +460,7 @@ test("authorize materializes required Interfaces for the exact pairwise Principa
   store.saveOidcClient({
     ...currentClient,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId,
+      scopeRef: workspaceId,
       capsuleId,
       executionAuthorityEpoch: 1,
       installConfig: installConfig as InstallConfig,
@@ -500,7 +500,7 @@ test("app member outside the Workspace still materializes required Interfaces", 
   store.saveOidcClient({
     ...store.findOidcClient(clientId)!,
     activationDigest: await oidcClientActivationDigest({
-      workspaceId, capsuleId, executionAuthorityEpoch: 1,
+      scopeRef: workspaceId, capsuleId, executionAuthorityEpoch: 1,
       installConfig: installConfig as InstallConfig,
     }),
   });
@@ -650,6 +650,26 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     code_challenge_method: "S256",
   }).toString();
 
+  // TASK-0118 Phase 9: an anonymous request is sent to sign-in and repeated
+  // afterwards, so only the signed-in request counts as a Workspace use.
+  let workspaceRequests = 0;
+  const observeWorkspaceRequest = () => {
+    workspaceRequests += 1;
+  };
+  const anonymous = await handleAuthorize({
+    request: new Request(url),
+    url,
+    flow: claimFlow,
+    clients,
+    store,
+    operations,
+    observeWorkspaceRequest,
+  });
+  expect(anonymous.status).toBeGreaterThanOrEqual(300);
+  expect(anonymous.status).toBeLessThan(400);
+  expect(new URL(anonymous.headers.get("location")!, issuer).searchParams.get("code")).toBeNull();
+  expect(workspaceRequests).toBe(0);
+
   const authorization = await handleAuthorize({
     request: new Request(url, {
       headers: { "x-takosumi-account-session": "sess_live_grant" },
@@ -659,13 +679,16 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     clients,
     store,
     operations,
+    observeWorkspaceRequest,
   });
   expect(authorization.status).toBe(302);
+  expect(workspaceRequests).toBe(1);
   const code = new URL(authorization.headers.get("location")!).searchParams.get(
     "code",
   );
   expect(code).toBeTruthy();
 
+  const claimLog = spyOn(console, "info").mockImplementation(() => {});
   const tokenResponse = await handleToken({
     issuer,
     request: new Request(`${issuer}/oauth/token`, {
@@ -706,6 +729,30 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     clients,
     operations,
   });
+  const claimEvents = claimLog.mock.calls
+    .map(([line]) => String(line))
+    .filter((line) => line.includes("legacy_workspace_claim_emitted"));
+  claimLog.mockRestore();
+  // TASK-0118 Phase 9: each emitted Workspace claim is counted, value-free.
+  expect(claimEvents.map((line) => JSON.parse(line))).toEqual([
+    {
+      event: "legacy_workspace_claim_emitted",
+      surface: "id_token",
+      clientId: compositionClientId,
+      capsuleBound: false,
+      appRole: false,
+      memberships: false,
+    },
+    {
+      event: "legacy_workspace_claim_emitted",
+      surface: "userinfo",
+      clientId: compositionClientId,
+      capsuleBound: false,
+      appRole: false,
+      memberships: true,
+    },
+  ]);
+  expect(claimEvents.join("\n")).not.toContain(workspaceId);
   expect(userInfo.status).toBe(200);
   const userInfoBody = (await userInfo.json()) as Record<string, unknown>;
   expect(userInfoBody).toMatchObject({
@@ -876,7 +923,7 @@ test("required Interface domain unavailability permits sign-in while infrastruct
     const { store, operations, installConfig } = await liveGrantFixture();
     installConfig.requiredInterfaces = [{ key: "ai", interface: { type: "takosumi.ai.gateway", version: "1" }, permissions: ["ai.chat"], delivery: { type: "oauth2" } }];
     const currentClient = store.findOidcClient(clientId)!;
-    store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
+    store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ scopeRef: workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
     operations.interfaces!.ensureCapsuleRequiredInterfaces = async () => { throw failure; };
     const response = await handleAuthorize({ ...authorizeRequest(), flow, clients: new Map(), store, operations });
     expect(response.status).toBe(status);
@@ -909,7 +956,7 @@ test("v75 D1 without interface_links permits OIDC sign-in and Capsule retirement
   const { store, operations, installConfig } = await liveGrantFixture();
   installConfig.requiredInterfaces = [requiredInterface];
   const currentClient = store.findOidcClient(clientId)!;
-  store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
+  store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ scopeRef: workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
   operations.interfaces!.ensureCapsuleRequiredInterfaces = service.ensureCapsuleRequiredInterfaces.bind(service);
   const response = await handleAuthorize({ ...authorizeRequest(), flow, clients: new Map(), store, operations });
   expect(response.status).toBe(302);

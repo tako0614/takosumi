@@ -23,6 +23,7 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import { legacyWorkspaceBodyUse } from "../legacy-workspace-telemetry.ts";
 import type {
   Source,
   CreateSourceRequest,
@@ -159,6 +160,7 @@ export async function handleConnections(
         operations,
         store,
         ctx.session,
+        () => ctx.legacyWorkspace?.mark(legacyWorkspaceBodyUse(method, segments)),
       );
     }
     return methodNotAllowed("GET, POST");
@@ -204,6 +206,7 @@ export async function handleConnections(
         ctx.session,
         url,
         decodeURIComponent(segments[2] ?? ""),
+        () => ctx.legacyWorkspace?.mark(legacyWorkspaceBodyUse(method, segments)),
       );
     }
   }
@@ -459,10 +462,12 @@ async function createControlConnection(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   session: ControlSession,
+  markWorkspaceBody?: () => void,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const personal = body.workspaceId === undefined;
+  if (!personal) markWorkspaceBody?.();
   if (session.appIds !== undefined || (personal && session.workspaceId !== undefined)) {
     return errorJson("app_access_denied", "An account credential is required.", 403);
   }
@@ -730,11 +735,13 @@ async function startConnectionOAuth(
   session: ControlSession,
   url: URL,
   helperId: string,
+  markWorkspaceBody?: () => void,
 ): Promise<Response> {
   if (session.appIds !== undefined) return errorJson("app_access_denied", "An account credential is required.", 403);
   const helper = operations.connectionOAuth?.[helperId];
   if (!helper) return connectionOAuthUnavailable();
   const body = (await readJsonObject(request)) ?? {};
+  if (body.workspaceId !== undefined) markWorkspaceBody?.();
   const workspaceId =
     stringValue(body.workspaceId) ??
     stringValue(url.searchParams.get("workspaceId") ?? undefined);

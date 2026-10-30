@@ -7,8 +7,9 @@
  * assertion guards that boundary; this checker guards packed completeness.
  *
  * The package is still CURATED on purpose: host-internal contracts
- * (`index.ts`, `internal-*.ts`, `interface-display.ts`, `reference/`) are
- * deliberately not public entrypoints. Curation and derivation are compatible —
+ * (`index.ts`, `internal-*.ts`, `interface-display.ts`, `interface-clients.ts`,
+ * `reference/`) are deliberately not public entrypoints. Curation and
+ * derivation are compatible —
  * the curated thing is `exports`, and `files` is exactly what those exports need:
  * every export target plus everything it transitively imports.
  *
