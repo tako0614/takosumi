@@ -140,6 +140,17 @@ export function createOperatorControlMcpAuthority(
       }
       return partitions;
     },
+    recordedOwnership: async (capsuleIds) => {
+      const ids = [...new Set(capsuleIds)];
+      const store = operations.appOwnership;
+      if (ids.length === 0 || !store) return new Set<string>();
+      if (store.listOwnedCapsuleIds) return await store.listOwnedCapsuleIds(ids);
+      const recorded = new Set<string>();
+      for (const id of ids) {
+        if ((await store.getOwnership(id))?.capsuleId === id) recorded.add(id);
+      }
+      return recorded;
+    },
     installNamespaceId: async () => {
       try {
         // Never creates the namespace: this is a read for the restriction only.

@@ -53,6 +53,8 @@ const OTHERS_APP_HERE = "cap_others_app_here";
 const OTHERS_APP = "cap_others_app";
 /** An MCP app now owned by OTHER (as after a transfer). */
 const TRANSFERRED_MCP_APP = "cap_transferred_mcp";
+/** OWNER's app in OWNER's namespace with no ownership record (rollout fallback). */
+const UNRECORDED_APP = "cap_unrecorded";
 const BACKENDS = ["memory", "postgres", "d1"] as const;
 type Backend = (typeof BACKENDS)[number];
 
@@ -159,6 +161,14 @@ async function compose(backend: Backend) {
       managementEpoch: 0, storageRoot: `apps/${id}`,
     })).toBe(true);
   }
+  // The rollout fallback lists this one with an owner role for OWNER (the
+  // Workspace's owner), but there is no ownership record to act on.
+  await deployStore.putCapsule({
+    id: UNRECORDED_APP, workspaceId: ownerNamespace.id, projectId: defaultProjectId(ownerNamespace.id),
+    name: "cap-unrecorded", slug: "cap-unrecorded", environment: "production", sourceId: `src_${UNRECORDED_APP}`,
+    installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID, installingPrincipalId: OWNER,
+    currentStateGeneration: 1, status: "active", createdAt: at, updatedAt: at,
+  });
   for (const capsuleId of [OTHERS_APP_HERE, OTHERS_APP, TRANSFERRED_MCP_APP]) {
     expect(await operations.appOwnership!.putMember({
       capsuleId, accountId: OWNER, status: "active", createdAt: at, updatedAt: at,
@@ -324,5 +334,15 @@ for (const backend of BACKENDS) {
     expect((await fixture.tool("takosumi_install_plan_get", { installPlanId: planId })).status).toBe(403);
     expect((await fixture.tool("takosumi_install_plan_reconcile", { installPlanId: planId })).status).toBe(403);
     expect(fixture.dispatched).toHaveLength(before);
+  });
+
+  test(`[${backend}] apps without an ownership record are neither listed nor acted on`, async () => {
+    const fixture = await compose(backend);
+    const listed = await fixture.tool("takosumi_capsules_list", {});
+    expect(listed.status).toBe(200);
+    expect(appIds(listed.body)).not.toContain(UNRECORDED_APP);
+    expect(appIds(listed.body)).toEqual([MCP_APP, OWN_APP].sort());
+    expect((await fixture.tool("takosumi_capsule_plan", { capsuleId: UNRECORDED_APP })).status).toBe(403);
+    expect((await fixture.tool("takosumi_capsule_destroy_plan", { capsuleId: UNRECORDED_APP })).status).toBe(403);
   });
 }
