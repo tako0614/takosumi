@@ -209,7 +209,8 @@ test("extension context carries only the live common membership, and rejects vie
   } as CloudflareWorkerEnv;
   const route = { basePath: "/extensions/hosted", handlerKey: "HOSTED_EXTENSION", authDelivery: "context" as const, workspaceContext: "query-required" as const };
   const read = await handlePlatformExtensionRouteRequest(request(), env, route);
-  expect(await read.json()).toEqual({ authKind: "session", subject: "tsub_canonical", workspaceId: "ws_live", workspaceRole: "viewer" });
+  // The shared account is also named as the account (TASK-0118 P9.1-e).
+  expect(await read.json()).toEqual({ authKind: "session", subject: "tsub_canonical", accountId: "tsub_canonical", workspaceId: "ws_live", workspaceRole: "viewer" });
   expect((await handlePlatformExtensionRouteRequest(request(undefined, { method: "POST", headers: { cookie, origin } }), env, route)).status).toBe(403);
   role = "admin";
   expect((await handlePlatformExtensionRouteRequest(request(undefined, { method: "POST", headers: { cookie, origin } }), env, route)).status).toBe(200);

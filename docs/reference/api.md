@@ -427,6 +427,12 @@ Interface API (`/api/v1/interfaces…`) もWorkspaceなしで使えます。
 - 同梱のAccounts host (self-host) では、Workspaceの制限が無いアカウントの呼び出し元が、IDで指定したCapsule所有のInterfaceを扱うとき、アプリに所有記録があればアプリで判定します (読み取りは `view`、InterfaceとBindingの変更は `change_settings`)。所有記録の無いアプリと、Workspace所有のInterfaceは従来のWorkspace判定のままです。`appIds` 付きのPATはそのアプリのInterfaceだけに届き、ここでWorkspaceの権限を持つことはありません。
 - platform Workerでは、shared-account (Hosted) のセッションによる `capsuleId` の一覧も、dashboardと同じshared-authの制御経路で判定します。platform extensionの認可がアプリへ移るまで (Phase 9.1-e)、IDで指定するInterface routeにはアカウントの呼び出し元でもWorkspaceが要ります。
 
+platform extension の route も、アカウントとアプリで判定します (TASK-0118 Phase 9.1-e)。
+
+- route が `appContext` (`query-required` か `query-optional`) を宣言すると、`?capsuleId=` で1つのアプリを指定できます。platform は呼び出し元のそのアプリでの今の役割 (所有者かメンバー) を確かめてから渡し、handler は `x-takosumi-platform-capsule-id` と `x-takosumi-platform-app-role` (typed context では `capsuleId` と `appRole`) を受け取ります。アカウントのセッションとPATだけが役割を得ます。`appIds` 付きのPATはそのアプリだけを指定でき、Workspaceに束縛された資格情報はそのWorkspaceのアプリだけに届きます。1つのアプリに結び付いた資格情報 (インストール済みアプリ自身のトークン、代理アプリのトークン、Interface OAuthトークン、Run credential) は自分のアプリだけを指定でき、役割は付きません。operatorのservice token と、アプリに結び付かないOAuthトークンはアプリを指定できません。shared-account (Hosted) のセッションは、dashboardと同じshared-authのアプリの判定も通る必要があります。
+- アカウントのセッションとPATでは、認証したアカウントを `x-takosumi-platform-account-id` (typed context では `accountId`) で渡します。OAuthトークン (subjectがpairwiseのことがある)、Interface、Run、operatorの資格情報には付きません。
+- `workspaceContext` と `x-takosumi-platform-workspace-id` は、Hostedが課金の相手を選ぶための互換として 9B まで残します。セッションやPATが `?workspaceId=` で指定できるのは、そのアカウントが所有するWorkspaceだけで、渡す役割は `owner` です。Workspaceのメンバーであることは、もう指定の根拠になりません。判定は platform の中で行い、`/api/v1/workspaces/{id}` などの旧routeは呼びません。`appIds` 付きのPATと、`read` (か `admin`) のscopeを持たないPATはWorkspaceを指定できません (従来のAccountsの判定と同じ)。shared-account (Hosted) のセッションは、従来どおりshared-authの判定です。Workspaceを受け取る利用は引き続き `legacy_workspace_route` に記録します。
+
 `GET /api/v1/dashboard/bootstrap` は、`includeWorkspaces=true` を指定しない限りWorkspaceの一覧を含めません。`includeNotifications=true` の通知は、bootstrapの任意項目の期限の中で読んだ `GET /api/v1/activity` の最新ページ (最大60件) です。各項目は短くしたイベント、イベントがアプリを示すときの `capsuleId`、互換のための `workspaceHandle` (イベントの内部区画のID) を持ちます。アプリ所有の読み取りを持たないhostと、旧Workspace束縛の資格情報には、従来のWorkspaceからの通知を返します。
 
 ### Account views
