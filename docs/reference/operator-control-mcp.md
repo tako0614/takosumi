@@ -99,8 +99,10 @@ permission を確認します。token は MCP 自身のアプリ（Interface を
 
 Interface token に Workspace が残っているあいだ（TASK-0118 の Phase 9.4 まで）は、
 その Workspace を先に適用する制限として扱います。対象のアプリもその Workspace に
-ある必要があり、新しいアプリがその外に入る install は断ります。Workspace が何かを
-許可することはありません。
+ある必要があり、新しいアプリがその外に入る install は断ります。同じ
+idempotencyKey の再送が利用者の別の場所にある install を返すときも、それは返し
+ません。Workspace が何かを許可することはありません。plan が記録する前にアプリが
+作られていた install は、公開 handler と同じくそのアプリで判定します。
 
 install-plan tool は公開 `/api/v1` の bounded request だけを転送します。variable 値、
 credential、provider token、任意の control-plane path は受け付けません。Git credential
