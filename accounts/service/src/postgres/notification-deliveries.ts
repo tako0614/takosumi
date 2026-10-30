@@ -79,9 +79,9 @@ export async function compareAndSetNotificationDispatchCursor(
 export async function enqueueNotificationDeliveries(
   client: PostgresQueryClient,
   records: readonly NotificationDeliveryRecord[],
-): Promise<void> {
-  if (records.length === 0) return;
-  await runRows(
+): Promise<number> {
+  if (records.length === 0) return 0;
+  const inserted = await runRows<{ delivery_id: string }>(
     client,
     `INSERT INTO accounts_v1.notification_deliveries
        (delivery_id, event_id, pusher_id, subject, payload, urgency, topic,
@@ -92,7 +92,8 @@ export async function enqueueNotificationDeliveries(
        delivery_id text, event_id text, pusher_id text, subject text, payload text,
        urgency text, topic text, enqueued_at timestamptz, expires_at timestamptz,
        attempts integer, next_attempt_at timestamptz, state text)
-     ON CONFLICT DO NOTHING`,
+     ON CONFLICT DO NOTHING
+     RETURNING delivery_id`,
     [JSON.stringify(records.map((record) => ({
       delivery_id: record.deliveryId,
       event_id: record.eventId,
@@ -108,6 +109,7 @@ export async function enqueueNotificationDeliveries(
       state: record.state,
     })))],
   );
+  return inserted.length;
 }
 
 export async function claimNotificationDeliveries(

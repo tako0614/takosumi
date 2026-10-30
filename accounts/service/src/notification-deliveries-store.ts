@@ -92,14 +92,16 @@ export class MemoryNotificationDeliveryRecords implements NotificationDeliverySt
 
   enqueueNotificationDeliveries(
     records: readonly NotificationDeliveryRecord[],
-  ): Promise<void> {
+  ): Promise<number> {
+    let added = 0;
     for (const record of records) {
       const pair = `${record.eventId}\n${record.pusherId}`;
       if (this.#deliveries.has(record.deliveryId) || this.#byEventPusher.has(pair)) continue;
       this.#deliveries.set(record.deliveryId, structuredClone(record));
       this.#byEventPusher.add(pair);
+      added += 1;
     }
-    return Promise.resolve();
+    return Promise.resolve(added);
   }
 
   claimNotificationDeliveries(input: {
@@ -153,12 +155,21 @@ export class MemoryNotificationDeliveryRecords implements NotificationDeliverySt
 const D1_CURSOR_BUCKET = "notification_dispatch_cursors";
 const D1_CURSOR_KEY = "activity";
 const D1_DELIVERIES_BUCKET = "notification_deliveries";
-const D1_ENQUEUE_CHUNK = 50;
-const NUMBER = (path: string) => `CAST(json_extract(document, '${path}') AS INTEGER)`;
+/**
+ * Present only while a row is pending. Its sort key is when the row may be
+ * claimed next: `nextAttemptAt`, or the lease expiry while leased.
+ */
+const D1_DUE_INDEX = "notification_deliveries_due";
+/** Every row, sorted by `expiresAt`, for pruning. */
+const D1_EXPIRY_INDEX = "notification_deliveries_expiry";
+const D1_INDEX_KEY = "all";
+const D1_ENQUEUE_CHUNK = 30;
 
 /**
- * Cloudflare D1 adapter over the Accounts document table: two new buckets
- * and no schema change. Every claim, settle and prune is one statement.
+ * Cloudflare D1 adapter over the Accounts document and index tables, with no
+ * schema change. Claims and pruning go through the generic index table's
+ * `(index_name, index_key, sort_key)` lookup index, so they read only due or
+ * expired rows, never every delivered row.
  */
 export class D1NotificationDeliveryRecords implements NotificationDeliveryStore {
   readonly #db: D1Database;
@@ -202,7 +213,8 @@ export class D1NotificationDeliveryRecords implements NotificationDeliveryStore 
     });
     const result = await this.#db
       .prepare(
-        `UPDATE takosumi_accounts_documents SET document = ?, updated_at = ? WHERE bucket = ? AND key = ? AND ${NUMBER("$.generation")} = ?`,
+        "UPDATE takosumi_accounts_documents SET document = ?, updated_at = ? WHERE bucket = ? AND key = ? " +
+          "AND CAST(json_extract(document, '$.generation') AS INTEGER) = ?",
       )
       .bind(document, now, D1_CURSOR_BUCKET, D1_CURSOR_KEY, input.expectedGeneration)
       .run();
@@ -211,23 +223,48 @@ export class D1NotificationDeliveryRecords implements NotificationDeliveryStore 
 
   async enqueueNotificationDeliveries(
     records: readonly NotificationDeliveryRecord[],
-  ): Promise<void> {
-    if (records.length === 0) return;
+  ): Promise<number> {
+    if (records.length === 0) return 0;
     await this.#ready();
     const now = Date.now();
+    let added = 0;
     for (let index = 0; index < records.length; index += D1_ENQUEUE_CHUNK) {
       const chunk = records.slice(index, index + D1_ENQUEUE_CHUNK);
-      const results = await this.#db.batch(chunk.map((record) =>
+      // Per row: the document if new; the due entry only while the stored row
+      // is pending (a settled duplicate must not become due again); the
+      // expiry entry always (idempotent).
+      const statements = chunk.flatMap((record) => [
         this.#db
           .prepare(
             "INSERT OR IGNORE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)",
           )
-          .bind(D1_DELIVERIES_BUCKET, record.deliveryId, JSON.stringify(record), now)
-      ));
-      if (results.length !== chunk.length || results.some((result) => !result.success)) {
+          .bind(D1_DELIVERIES_BUCKET, record.deliveryId, JSON.stringify(record), now),
+        this.#db
+          .prepare(
+            "INSERT OR IGNORE INTO takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) " +
+              "SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM takosumi_accounts_documents " +
+              "WHERE bucket = ? AND key = ? AND json_extract(document, '$.state') = 'pending' " +
+              "AND json_extract(document, '$.attempts') = 0 AND json_extract(document, '$.leaseToken') IS NULL)",
+          )
+          .bind(
+            D1_DUE_INDEX, D1_INDEX_KEY, D1_DELIVERIES_BUCKET, record.deliveryId, record.nextAttemptAt,
+            D1_DELIVERIES_BUCKET, record.deliveryId,
+          ),
+        this.#db
+          .prepare(
+            "INSERT OR IGNORE INTO takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) VALUES (?, ?, ?, ?, ?)",
+          )
+          .bind(D1_EXPIRY_INDEX, D1_INDEX_KEY, D1_DELIVERIES_BUCKET, record.deliveryId, record.expiresAt),
+      ]);
+      const results = await this.#db.batch(statements);
+      if (results.length !== statements.length || results.some((result) => !result.success)) {
         throw new Error("D1 Accounts notification delivery enqueue failed");
       }
+      for (let row = 0; row < chunk.length; row += 1) {
+        added += (changeCount(results[row * 3]!) ?? 0) > 0 ? 1 : 0;
+      }
     }
+    return added;
   }
 
   async claimNotificationDeliveries(input: {
@@ -237,27 +274,43 @@ export class D1NotificationDeliveryRecords implements NotificationDeliveryStore 
     readonly leaseExpiresAt: number;
   }): Promise<readonly NotificationDeliveryRecord[]> {
     await this.#ready();
-    const rows = await this.#db
+    const due =
+      "SELECT document_key FROM takosumi_accounts_indexes WHERE index_name = ? AND index_key = ? AND sort_key <= ? " +
+      "ORDER BY sort_key, document_key LIMIT ?";
+    const dueParams = [D1_DUE_INDEX, D1_INDEX_KEY, input.now, input.limit] as const;
+    // One transaction: lease the due documents, then push their due entries to
+    // the lease expiry. Both statements select the same due set because the
+    // first one does not change the index table.
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          "UPDATE takosumi_accounts_documents SET document = json_set(document, '$.leaseToken', ?, '$.leaseExpiresAt', ?), updated_at = ? " +
+            `WHERE bucket = ? AND key IN (${due})`,
+        )
+        .bind(input.leaseToken, input.leaseExpiresAt, input.now, D1_DELIVERIES_BUCKET, ...dueParams),
+      this.#db
+        .prepare(
+          "UPDATE takosumi_accounts_indexes SET sort_key = ? WHERE index_name = ? AND index_key = ? AND bucket = ? " +
+            `AND document_key IN (${due})`,
+        )
+        .bind(input.leaseExpiresAt, D1_DUE_INDEX, D1_INDEX_KEY, D1_DELIVERIES_BUCKET, ...dueParams),
+    ]);
+    if (results.length !== 2 || results.some((result) => !result.success)) {
+      throw new Error("D1 Accounts notification delivery claim failed");
+    }
+    if ((changeCount(results[0]!) ?? 1) === 0) return [];
+    // Read back exactly this lease: due entries now sorted at the lease
+    // expiry, whose documents carry this lease token.
+    const leased = await this.#db
       .prepare(
-        "UPDATE takosumi_accounts_documents SET document = json_set(document, '$.leaseToken', ?, '$.leaseExpiresAt', ?), updated_at = ? " +
-          "WHERE bucket = ? AND key IN (SELECT key FROM takosumi_accounts_documents WHERE bucket = ? " +
-          "AND json_extract(document, '$.state') = 'pending' " +
-          `AND ${NUMBER("$.nextAttemptAt")} <= ? ` +
-          `AND (json_extract(document, '$.leaseExpiresAt') IS NULL OR ${NUMBER("$.leaseExpiresAt")} <= ?) ` +
-          `ORDER BY ${NUMBER("$.nextAttemptAt")}, key LIMIT ?) RETURNING document`,
+        "SELECT d.document AS document FROM takosumi_accounts_indexes i " +
+          "JOIN takosumi_accounts_documents d ON d.bucket = i.bucket AND d.key = i.document_key " +
+          "WHERE i.index_name = ? AND i.index_key = ? AND i.sort_key = ? AND i.bucket = ? " +
+          "AND json_extract(d.document, '$.leaseToken') = ?",
       )
-      .bind(
-        input.leaseToken,
-        input.leaseExpiresAt,
-        input.now,
-        D1_DELIVERIES_BUCKET,
-        D1_DELIVERIES_BUCKET,
-        input.now,
-        input.now,
-        input.limit,
-      )
+      .bind(D1_DUE_INDEX, D1_INDEX_KEY, input.leaseExpiresAt, D1_DELIVERIES_BUCKET, input.leaseToken)
       .all<{ document: string }>();
-    return (rows.results ?? [])
+    return (leased.results ?? [])
       .map((row) => JSON.parse(row.document) as NotificationDeliveryRecord)
       .sort(byDue);
   }
@@ -277,14 +330,45 @@ export class D1NotificationDeliveryRecords implements NotificationDeliveryStore 
     const withStatus = status !== undefined
       ? { sql: `${set.sql}, '$.lastStatus', ?)`, params: [...set.params, status], remove: "" }
       : { sql: `${set.sql})`, params: set.params, remove: ", '$.lastStatus'" };
-    const result = await this.#db
-      .prepare(
-        `UPDATE takosumi_accounts_documents SET document = json_remove(${withStatus.sql}, '$.leaseToken', '$.leaseExpiresAt'${withStatus.remove}), updated_at = ? ` +
-          "WHERE bucket = ? AND key = ? AND json_extract(document, '$.leaseToken') = ?",
-      )
-      .bind(...withStatus.params, input.at, D1_DELIVERIES_BUCKET, input.deliveryId, input.leaseToken)
-      .run();
-    return (changeCount(result) ?? 0) > 0;
+    // The index change applies only when this lease holder's document write
+    // did: afterwards the document carries no lease and this attempt count.
+    const settledHere =
+      "EXISTS (SELECT 1 FROM takosumi_accounts_documents WHERE bucket = ? AND key = ? " +
+      "AND json_extract(document, '$.leaseToken') IS NULL AND json_extract(document, '$.attempts') = ? " +
+      (settlement.kind === "retry"
+        ? "AND json_extract(document, '$.state') = 'pending')"
+        : "AND json_extract(document, '$.state') = 'settled')");
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `UPDATE takosumi_accounts_documents SET document = json_remove(${withStatus.sql}, '$.leaseToken', '$.leaseExpiresAt'${withStatus.remove}), updated_at = ? ` +
+            "WHERE bucket = ? AND key = ? AND json_extract(document, '$.leaseToken') = ?",
+        )
+        .bind(...withStatus.params, input.at, D1_DELIVERIES_BUCKET, input.deliveryId, input.leaseToken),
+      settlement.kind === "retry"
+        ? this.#db
+          .prepare(
+            "UPDATE takosumi_accounts_indexes SET sort_key = ? WHERE index_name = ? AND index_key = ? AND bucket = ? AND document_key = ? " +
+              `AND ${settledHere}`,
+          )
+          .bind(
+            settlement.nextAttemptAt, D1_DUE_INDEX, D1_INDEX_KEY, D1_DELIVERIES_BUCKET, input.deliveryId,
+            D1_DELIVERIES_BUCKET, input.deliveryId, settlement.attempts,
+          )
+        : this.#db
+          .prepare(
+            "DELETE FROM takosumi_accounts_indexes WHERE index_name = ? AND index_key = ? AND bucket = ? AND document_key = ? " +
+              `AND ${settledHere}`,
+          )
+          .bind(
+            D1_DUE_INDEX, D1_INDEX_KEY, D1_DELIVERIES_BUCKET, input.deliveryId,
+            D1_DELIVERIES_BUCKET, input.deliveryId, settlement.attempts,
+          ),
+    ]);
+    if (results.length !== 2 || results.some((result) => !result.success)) {
+      throw new Error("D1 Accounts notification delivery settle failed");
+    }
+    return (changeCount(results[0]!) ?? 0) > 0;
   }
 
   async pruneNotificationDeliveries(input: {
@@ -292,15 +376,31 @@ export class D1NotificationDeliveryRecords implements NotificationDeliveryStore 
     readonly limit: number;
   }): Promise<number> {
     await this.#ready();
-    const result = await this.#db
-      .prepare(
-        "DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key IN (" +
-          `SELECT key FROM takosumi_accounts_documents WHERE bucket = ? AND ${NUMBER("$.expiresAt")} < ? ` +
-          `ORDER BY ${NUMBER("$.expiresAt")}, key LIMIT ?)`,
-      )
-      .bind(D1_DELIVERIES_BUCKET, D1_DELIVERIES_BUCKET, input.expiredBefore, input.limit)
-      .run();
-    return changeCount(result) ?? 0;
+    const expired =
+      "SELECT document_key FROM takosumi_accounts_indexes WHERE index_name = ? AND index_key = ? AND sort_key < ? " +
+      "ORDER BY sort_key, document_key LIMIT ?";
+    const params = [D1_EXPIRY_INDEX, D1_INDEX_KEY, input.expiredBefore, input.limit] as const;
+    // The expiry entries are deleted last, so all three statements select the
+    // same expired set.
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `DELETE FROM takosumi_accounts_indexes WHERE index_name = ? AND bucket = ? AND document_key IN (${expired})`,
+        )
+        .bind(D1_DUE_INDEX, D1_DELIVERIES_BUCKET, ...params),
+      this.#db
+        .prepare(`DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key IN (${expired})`)
+        .bind(D1_DELIVERIES_BUCKET, ...params),
+      this.#db
+        .prepare(
+          `DELETE FROM takosumi_accounts_indexes WHERE index_name = ? AND bucket = ? AND document_key IN (${expired})`,
+        )
+        .bind(D1_EXPIRY_INDEX, D1_DELIVERIES_BUCKET, ...params),
+    ]);
+    if (results.length !== 3 || results.some((result) => !result.success)) {
+      throw new Error("D1 Accounts notification delivery prune failed");
+    }
+    return changeCount(results[1]!) ?? 0;
   }
 }
 

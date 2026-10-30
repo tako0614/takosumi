@@ -109,6 +109,139 @@ Worker やサーバーなど）のアドレスから作ります。既定値の�
 終わっていないアプリと、アンインストール予定や停止中のアプリのタイルは少し薄く表示されます。
 小さな印（**インストール中**、**要対応** など）が付き、押すとアプリのページが開きます。
 
+## スマホの専用アプリを宣言する
+
+同じ product にスマホの専用アプリ（App Store や Google Play で配布するネイティブアプリ）があるなら、
+`document` の `display` と並べて `clients` に書けます。Takosumi はこれを読み、スマホでは画面を
+専用アプリへ渡せるようにします。書かなくても、web で開くことはいつでもできます。
+
+今の Takosumi が行うのは、宣言の検査と、アプリの画面の API（`GET /api/v1/capsules/{id}/app` の
+`screens[].clients`）で返すところまでです。dashboard と Takosumi Mobile が専用アプリへ渡す動作は、
+これから入ります。
+
+```json
+"document": {
+  "launcher": true,
+  "display": { "title": "Yurucommu", "icon": "/icon.svg" },
+  "clients": {
+    "preferred": "native",
+    "ios": {
+      "bundleId": "com.yurucommu",
+      "open": "yurucommu://connect?host_url={origin}&product=yurucommu"
+    },
+    "android": {
+      "package": "com.yurucommu",
+      "open": "yurucommu://connect?host_url={origin}&product=yurucommu"
+    }
+  }
+}
+```
+
+| 欄 | 書くもの |
+| --- | --- |
+| `preferred` | スマホで開くときの既定。`"native"`（専用アプリ）か `"web"`。省くと `"native"`。ただし API が `"native"` を返すのは、どれかの OS の専用アプリが検証済み（下）のときだけで、それ以外は `"web"` を返します。効くのも、検証済みの専用アプリがある OS だけです |
+| `ios.bundleId` | bundle id（`com.example.notes` のような逆 DNS の形）。検証には必須 |
+| `android.package` | 必須。applicationId（逆 DNS の形）。Android ではこの package のアプリにだけ渡します |
+| `open` | 専用アプリの custom scheme の link の雛形 |
+| `ios.universalLink`・`android.appLink` | 任意。配布者のドメインに置いた https の link（universal link・App Links）の雛形 |
+| `ios.name`・`android.name` | 任意。未検証のときに選ぶ画面に出す名前（64 文字まで。アクセントを外す（NFKD）と ASCII になる名前か、英字を含まない日本語の名前）。検証済みなら、運用している人が登録した名前を使います |
+| `ios.appStoreId` | 任意。App Store の ID（1〜12 桁の数字）。検証済みなら、登録された ID を使います |
+| `ios.storeUrl`・`android.storeUrl` | 任意。入れる先の link。宣言した ID に結び付いたものだけ使えます（下） |
+
+### 検証済みと未検証
+
+どのアプリも、どんな宣言でも書けます。宣言だけでは、それが本当にその product の専用アプリかは
+分かりません。そこで Takosumi は、運用している人が信頼すると登録した専用アプリ（下の
+`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`）と照らします。
+
+- **検証済み**（`verified: true`）: 宣言した `bundleId`（Android は `package`）が登録と一致し、
+  link の雛形も登録された雛形のどれかと一致するもの。名前、App Store の ID は登録の値を使い、宣言の
+  値は使いません。一致しない link は捨てます。登録された `bundleId`・`package` を名乗りながら、
+  一致する link が一つも無い宣言は、その OS ごと捨てます。
+- **未検証**（`verified: false`）: それ以外の宣言。実際の行き先（Android の package、custom scheme、
+  link の host）を `target` に入れて返します。登録された専用アプリが持つ scheme と host、その host の
+  下の host（`evil.open.example.com` など）は使えません。名前は、Takosumi や登録された専用アプリに
+  似せたもの（大文字小文字、全角、`0` と `o` のような似た文字の違いを含む）を捨てます。日本語の名前は、
+  カタカナをひらがなに、小さいかなを大きいかなにそろえ、空白・中黒・長音記号を除いて比べ、登録された
+  名前と同じか、それを含むか、その一部（2 文字以上）なら捨てます（`ゆるこみゅ` が登録されていれば
+  `ユルコミュ`・`ゆるこみゅ公式` も捨てます）。`たこすみ`・`タコスミ` も Takosumi の名前として捨てます。
+  さらに、アクセントを外す（NFKD）と ASCII になる名前でも、英字を含まない日本語の名前でもないもの
+  （キリル文字・ギリシャ文字・チェロキー文字などのほかの文字、`ß`・`Ø`・`Ł`・`Æ` のように分解できない
+  文字、`©` などの記号、小さな大文字、絵文字、英字とかな・漢字の混在）と、一つの文字にまとまらない
+  結合文字（文字に重ねる線、重ねたアクセントなど。かなの濁点・半濁点はまとまるので使えます）を
+  含む名前を捨てます。
+
+dashboard と Takosumi Mobile は、検証済みの専用アプリだけを尋ねずに開き、`preferred: "native"` も
+検証済みのときだけ効かせます。未検証の専用アプリは自動では開かず、開く前に `target` を見せて確かめます。
+未検証の専用アプリに `name` が無いときは「未確認のアプリ」のような中立の表示と `target` を出し、
+画面の `display.title` は使いません（title は登録された名前に似ていないかを確かめていないため）。
+
+雛形の比較では、scheme と host の大文字小文字と既定の port（`:443`）だけをそろえ、ほかは文字どおりに
+比べます。登録された雛形には、必ず `{origin}` が入っています。
+
+標準では、TASK-0119 の設計にある三つの専用アプリを信頼します。
+
+| id | 名前 | bundle id・package | 雛形（iOS・Android 共通） |
+| --- | --- | --- | --- |
+| `yurucommu-mobile` | Yurucommu | `com.yurucommu` | `yurucommu://connect?host_url={origin}`、`yurucommu://connect?host_url={origin}&product=yurucommu` |
+| `yurumeet-mobile` | Yurumeet | `com.yurumeet` | `yurume://connect?host_url={origin}`、`yurume://connect?host_url={origin}&product=yurumeet` |
+| `takos-mobile` | Takos | `jp.takos.mobile` | `takos://connect?host_url={origin}`、`takos://connect?host_url={origin}&product=takos` |
+
+運用している人は、`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS` に JSON の配列を設定して、この一覧を
+置き換えられます（`[]` なら、どれも信頼しません）。書き方は
+[設定](../reference/configuration.md)にあります。
+
+### 雛形と link
+
+- 各 OS に、`open` か `universalLink`（Android は `appLink`）の少なくとも一つが要ります。Android は
+  `package` も要ります。
+- 雛形に入れられるのは `{origin}`（画面の URL の origin）と `{url}`（画面の URL 全体）だけで、
+  合わせて 4 個までです。どちらも URL encode して入れます。専用アプリへ渡るのはこの公開の URL だけで、
+  token、session、アカウントの ID は入りません。今の yurucommu-mobile などは `connect?host_url=` を
+  読むので、`open` はこの例の形で使えます。
+- 各 instance のドメインは利用者ごとに違うので、専用アプリが instance のドメインを universal link
+  として持つことはできません。universal link・App Links を使うなら、配布者のドメインにページを置き、
+  アプリが無いときはそこからストアと web へ案内します。instance の URL を `#` の後に置けば、
+  そのページのサーバーへは送られません。
+- `storeUrl` は、iOS は `appStoreId` の App Store のページ（`apps.apple.com` の `id<appStoreId>`）、
+  Android は `package` の Google Play（`details?id=<package>`）か F-Droid（`/packages/<package>/`）の
+  ページだけです。TestFlight の `join` の link は、登録で `testFlight: true` にした検証済みの専用アプリ
+  だけが使えます。無ければ、`appStoreId` か `package` から作ります。
+- `clients` は `document` の中の任意の欄なので、Interface の版（`"1"`）も manifest の版も変わりません。
+  知らない Takosumi はこの欄を無視します。
+
+### 通らない値
+
+検査に通らない値はエラーにならず、その欄が無かったことになります。OS で開く手段が無くなれば、
+その OS ごと無かったことになります。知らない欄と OS（`windows` など）は無視し、API にも出しません。
+宣言に `verified` や `trustedClientId` を書いても、無視します。
+
+| 欄 | 通らないもの |
+| --- | --- |
+| `open` | scheme が英小文字で始まる 2〜32 文字（英小文字・数字・`+`・`.`・`-`）でないもの、下の禁止の scheme、ユーザー名やパスワード、`token` のような認証情報らしい名前の query、`#` 以降（Android では Takosumi が `intent:` の link を組み立てて後ろに付けるため） |
+| `universalLink`・`appLink` | `https://` 以外（`http://` を含む）、ユーザー名やパスワード、443 以外の port、IP アドレスや `.` の無い host、認証情報らしい名前の query や `#` 以降の値、Takosumi のドメイン（`takosumi.com` とその下、その Takosumi の dashboard と issuer の host）、未検証のときは登録された専用アプリの host とその下 |
+| 雛形の全体 | `{origin}`・`{url}` 以外の `{...}`（`{ORIGIN}`、対になっていない `{` も）、5 個以上の placeholder、host の部分に置いた `{origin}`・`{url}`、空白や URL に使えない文字、値を入れる前か後で 2,048 文字を超えるもの |
+| `bundleId`・`android.package` | 逆 DNS の形でないもの（155 文字まで）、Takosumi Mobile 自身の `com.takosumi` とその下（この場合は OS ごと捨てます） |
+| `appStoreId` | 1〜12 桁の数字でないもの |
+| `storeUrl` | 宣言した ID と違うアプリのページ、上の決まったドメイン以外 |
+| `name` | 65 文字以上、制御文字・書式文字（文字の向きを変える文字、幅の無い文字など）・行や段落の区切り、Takosumi や登録された専用アプリに似せた名前（かなでも）、NFKD で ASCII にならず英字を含まない日本語でもない名前、まとまらない結合文字を含む名前（上） |
+
+`open` で使えない scheme: `http`、`https`（`universalLink`・`appLink` に書きます）、`javascript`、
+`vbscript`、`data`、`file`、`filesystem`、`blob`、`about`、`content`、`intent`、`android-app`
+（Android の link は Takosumi が組み立てます）、`takosumi`（Takosumi Mobile 自身）、`tel`、`callto`、
+`sms`、`smsto`、`mms`、`mmsto`、`mailto`、`facetime`、`facetime-audio`、`facetime-prompt`、
+`facetime-audio-prompt`、`itms`、`itmss`、`itms-apps`、`itms-appss`、`itms-services`、`itms-beta`、
+`market`、`app-settings`、`app-prefs`、`prefs`、`shortcuts`、`x-web-search`、`ws`、`wss`、`ftp`、
+任意の web ページを開くブラウザのアプリ（`x-safari-http`、`x-safari-https`、`googlechrome`、
+`googlechromes`、`googlechrome-x-callback`、`firefox`、`firefox-focus`、`focus`、`microsoft-edge`、
+`microsoft-edge-http`、`microsoft-edge-https`、`opera`、`opera-http`、`opera-https`、`touch-http`、
+`touch-https`、`brave`、`duckduckgo`、`ddgquicklink`、`samsunginternet`、`yandexbrowser-open-url`、
+`firefox-klar`、`onionhttp`、`onionhttps`）。
+この一覧は最悪の scheme を落とすだけで、信頼は上の登録で決まります。
+
+Takosumi 自身の識別子（Takosumi Mobile の bundle id・package・scheme、Takosumi のドメイン、予約した名前）は、
+公開の package の `@takosjp/takosumi-contract/native-client-identity` にあり、Takosumi Mobile も同じ値を使います。
+
 ## 追加した人に見えるもの
 
 1. 追加の最後に「サービスを準備しています」と表示され、画面の URL が使えるようになるのを

@@ -120,6 +120,7 @@ export class PostgresAccountsStore implements AccountsStore {
   unlinkCanonicalUpstreamIdentity(input: UnlinkUpstreamIdentityInput): Promise<boolean> { return this.#hosted.unlinkCanonicalUpstreamIdentity(input); }
 
   saveNotificationPusher(...args: Parameters<NotificationPusherStore["saveNotificationPusher"]>) { return notificationPushers.saveNotificationPusher(this.#client, ...args); }
+  hasAnyNotificationPusher(...args: Parameters<NotificationPusherStore["hasAnyNotificationPusher"]>) { return notificationPushers.hasAnyNotificationPusher(this.#client, ...args); }
   listNotificationPushersForSubject(...args: Parameters<NotificationPusherStore["listNotificationPushersForSubject"]>) { return notificationPushers.listNotificationPushersForSubject(this.#client, ...args); }
   findNotificationPusher(...args: Parameters<NotificationPusherStore["findNotificationPusher"]>) { return notificationPushers.findNotificationPusher(this.#client, ...args); }
   deleteNotificationPusher(...args: Parameters<NotificationPusherStore["deleteNotificationPusher"]>) { return notificationPushers.deleteNotificationPusher(this.#client, ...args); }

@@ -42,8 +42,14 @@ export type NotificationPusherSaveResult =
     }
   | { readonly status: "limit_reached" };
 
-export interface NotificationPusherOutcome {
+/** A pusher as it was sent to: effects apply only while it is unchanged. */
+export interface NotificationPusherIdentity {
   readonly pusherId: string;
+  readonly endpoint: string;
+  readonly pushkey: string;
+}
+
+export interface NotificationPusherOutcome extends NotificationPusherIdentity {
   readonly at: number;
   readonly outcome: "delivered" | "failed";
   /** For a failure: the HTTP status, or absent for a timeout/network error. */
@@ -61,6 +67,8 @@ export interface NotificationPusherStore {
   saveNotificationPusher(
     record: NotificationPusherRecord,
   ): Promise<NotificationPusherSaveResult>;
+  /** Whether any account has a pusher (the dispatcher idles when none does). */
+  hasAnyNotificationPusher(): Promise<boolean>;
   /** The account's pushers, oldest first. */
   listNotificationPushersForSubject(
     subject: TakosumiSubject,
@@ -73,8 +81,12 @@ export interface NotificationPusherStore {
     readonly subject: TakosumiSubject;
     readonly pusherId: string;
   }): Promise<boolean>;
-  /** Delete a pusher whose subscription the relay reported gone (404/410). */
-  removeNotificationPusher(pusherId: string): Promise<void>;
+  /**
+   * Delete a pusher whose subscription the relay reported gone (404/410),
+   * only if it still has the endpoint and key that were sent to.
+   */
+  removeNotificationPusher(pusher: NotificationPusherIdentity): Promise<void>;
+  /** Record a send result, only if the pusher still has that endpoint and key. */
   recordNotificationPusherOutcome(
     input: NotificationPusherOutcome,
   ): Promise<void>;
@@ -166,6 +178,15 @@ function healthOf(
   };
 }
 
+function sameNotificationPusher(
+  record: NotificationPusherRecord | undefined,
+  pusher: NotificationPusherIdentity,
+): boolean {
+  return record !== undefined &&
+    record.endpoint === pusher.endpoint &&
+    record.pushkey === pusher.pushkey;
+}
+
 function byCreation(
   left: NotificationPusherRecord,
   right: NotificationPusherRecord,
@@ -204,6 +225,10 @@ export class MemoryNotificationPusherRecords implements NotificationPusherStore 
     });
   }
 
+  hasAnyNotificationPusher(): Promise<boolean> {
+    return Promise.resolve(this.#records.size > 0);
+  }
+
   listNotificationPushersForSubject(
     subject: TakosumiSubject,
   ): Promise<readonly NotificationPusherRecord[]> {
@@ -234,8 +259,10 @@ export class MemoryNotificationPusherRecords implements NotificationPusherStore 
     return Promise.resolve(true);
   }
 
-  removeNotificationPusher(pusherId: string): Promise<void> {
-    this.#records.delete(pusherId);
+  removeNotificationPusher(pusher: NotificationPusherIdentity): Promise<void> {
+    if (sameNotificationPusher(this.#records.get(pusher.pusherId), pusher)) {
+      this.#records.delete(pusher.pusherId);
+    }
     return Promise.resolve();
   }
 
@@ -243,7 +270,7 @@ export class MemoryNotificationPusherRecords implements NotificationPusherStore 
     input: NotificationPusherOutcome,
   ): Promise<void> {
     const record = this.#records.get(input.pusherId);
-    if (record) {
+    if (record && sameNotificationPusher(record, input)) {
       this.#records.set(
         input.pusherId,
         applyNotificationPusherOutcome(record, input),
@@ -329,6 +356,15 @@ export class D1NotificationPusherRecords implements NotificationPusherStore {
     return { status: existing ? "updated" : "created", record: stored };
   }
 
+  async hasAnyNotificationPusher(): Promise<boolean> {
+    await this.#ready();
+    const row = await this.#db
+      .prepare("SELECT 1 AS present FROM takosumi_accounts_documents WHERE bucket = ? LIMIT 1")
+      .bind(D1_PUSHERS_BUCKET)
+      .first<{ present: number }>();
+    return row !== null && row !== undefined;
+  }
+
   async listNotificationPushersForSubject(
     subject: TakosumiSubject,
   ): Promise<readonly NotificationPusherRecord[]> {
@@ -382,19 +418,21 @@ export class D1NotificationPusherRecords implements NotificationPusherStore {
     return (changeCount(results[0]!) ?? 0) > 0;
   }
 
-  async removeNotificationPusher(pusherId: string): Promise<void> {
+  async removeNotificationPusher(pusher: NotificationPusherIdentity): Promise<void> {
     await this.#ready();
     const results = await this.#db.batch([
       this.#db
         .prepare(
-          "DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key = ?",
+          "DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key = ? " +
+            "AND json_extract(document, '$.endpoint') = ? AND json_extract(document, '$.pushkey') = ?",
         )
-        .bind(D1_PUSHERS_BUCKET, pusherId),
+        .bind(D1_PUSHERS_BUCKET, pusher.pusherId, pusher.endpoint, pusher.pushkey),
       this.#db
         .prepare(
-          "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ?",
+          "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ? " +
+            "AND NOT EXISTS (SELECT 1 FROM takosumi_accounts_documents WHERE bucket = ? AND key = ?)",
         )
-        .bind(D1_PUSHERS_BUCKET, pusherId),
+        .bind(D1_PUSHERS_BUCKET, pusher.pusherId, D1_PUSHERS_BUCKET, pusher.pusherId),
     ]);
     if (results.length !== 2 || results.some((result) => !result.success)) {
       throw new Error("D1 Accounts notification pusher delete failed");
@@ -405,24 +443,27 @@ export class D1NotificationPusherRecords implements NotificationPusherStore {
     input: NotificationPusherOutcome,
   ): Promise<void> {
     await this.#ready();
+    const same =
+      " WHERE bucket = ? AND key = ? AND json_extract(document, '$.endpoint') = ? AND json_extract(document, '$.pushkey') = ?";
+    const where = [D1_PUSHERS_BUCKET, input.pusherId, input.endpoint, input.pushkey] as const;
     const statement =
       input.outcome === "delivered"
         ? this.#db
             .prepare(
-              "UPDATE takosumi_accounts_documents SET document = json_set(document, '$.lastSuccessAt', ?) WHERE bucket = ? AND key = ?",
+              `UPDATE takosumi_accounts_documents SET document = json_set(document, '$.lastSuccessAt', ?)${same}`,
             )
-            .bind(input.at, D1_PUSHERS_BUCKET, input.pusherId)
+            .bind(input.at, ...where)
         : input.status === undefined
           ? this.#db
               .prepare(
-                "UPDATE takosumi_accounts_documents SET document = json_remove(json_set(document, '$.lastFailureAt', ?), '$.lastFailureStatus') WHERE bucket = ? AND key = ?",
+                `UPDATE takosumi_accounts_documents SET document = json_remove(json_set(document, '$.lastFailureAt', ?), '$.lastFailureStatus')${same}`,
               )
-              .bind(input.at, D1_PUSHERS_BUCKET, input.pusherId)
+              .bind(input.at, ...where)
           : this.#db
               .prepare(
-                "UPDATE takosumi_accounts_documents SET document = json_set(document, '$.lastFailureAt', ?, '$.lastFailureStatus', ?) WHERE bucket = ? AND key = ?",
+                `UPDATE takosumi_accounts_documents SET document = json_set(document, '$.lastFailureAt', ?, '$.lastFailureStatus', ?)${same}`,
               )
-              .bind(input.at, input.status, D1_PUSHERS_BUCKET, input.pusherId);
+              .bind(input.at, input.status, ...where);
     await statement.run();
   }
 }

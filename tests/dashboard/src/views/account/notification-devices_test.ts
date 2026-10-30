@@ -35,7 +35,12 @@ describe("notification devices", () => {
     expect(card).toContain('t("account.devices.removeConsequence")');
     expect(card).toContain("void remove(pusher.id)");
     expect(card).toContain('t("account.devices.failingHelp")');
-    expect(card).toContain("web_push_public_key === null");
+    expect(card).toContain("web_push_unavailable_reason");
+    for (const key of ["account.devices.unavailable.secret", "account.devices.unavailable.relay", "account.devices.unavailable.issuer"] as const) {
+      expect(card).toContain(`"${key}"`);
+      expect(ja[key]).toBeTruthy();
+      expect(en[key]).toBeTruthy();
+    }
     // Device secrets never reach the dashboard: only display fields are read.
     expect(card).not.toContain(".auth");
     expect(card).not.toContain("pushkey");

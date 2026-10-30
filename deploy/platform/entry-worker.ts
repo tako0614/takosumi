@@ -14,6 +14,7 @@ import {
   OpenTofuRunOwnerObject,
 } from "./takoserver_hosted_worker.ts";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { runWithOwnNotificationScope } from "../../worker/src/own_notification_dispatch.ts";
 import {
   createCloudflareTakosumiRuntimeBindingMaterializer,
   type RuntimeBindingMaterializerInput,
@@ -156,8 +157,13 @@ export default {
     context?: PlatformExecutionContext,
   ): Promise<Response> {
     const composed = composeTakoserverHostedWorkerEnv(env);
+    // A notified Activity event recorded by this request is sent right after
+    // the response under waitUntil (TASK-0119 own notifications).
     return withPlatformWorkerVersion(
-      await platformWorker.fetch(request, composed, context),
+      await runWithOwnNotificationScope(
+        context ? (task) => context.waitUntil(task) : undefined,
+        () => platformWorker.fetch(request, composed, context),
+      ),
       env.TAKOSUMI_VERSION_METADATA,
     );
   },
@@ -166,10 +172,13 @@ export default {
     env: VersionedPlatformEnv,
     context?: PlatformExecutionContext,
   ): Promise<void> {
-    return platformWorker.scheduled(
-      event,
-      composeTakoserverHostedWorkerEnv(env),
-      context,
+    return runWithOwnNotificationScope(
+      context ? (task) => context.waitUntil(task) : undefined,
+      () => platformWorker.scheduled(
+        event,
+        composeTakoserverHostedWorkerEnv(env),
+        context,
+      ),
     );
   },
 };

@@ -441,6 +441,11 @@ export function mountDeployControlConnectionRoutes(
                 : {}),
               ...(connection.kind ? { kind: connection.kind } : {}),
               scope: connection.scope,
+              // Captured before the record is deleted, so a notification can
+              // still reach the owner (TASK-0119 own notifications).
+              ...(connection.ownerAccountId
+                ? { ownerAccountId: connection.ownerAccountId }
+                : {}),
             },
           });
         }

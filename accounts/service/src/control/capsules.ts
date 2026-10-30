@@ -144,6 +144,11 @@ import {
 import { handleCapsuleConfigurationPlans } from "./configuration-plans.ts";
 import { handleCapsuleInterfaceLinks } from "./interface-links.ts";
 import { handleCapsuleApp, handleCapsuleRuns } from "./capsule-app.ts";
+import { handleCapsuleActivity } from "./app-activity.ts";
+import {
+  handleCapsuleBackupList,
+  handleCapsuleInterfaceMaterializationFailures,
+} from "./capsule-reads.ts";
 import { requireAppAccess, requireOwnerForDelegateCodeChange } from "./app-authorization.ts";
 import type { AppAction } from "takosumi-contract/app-access";
 import {
@@ -404,7 +409,8 @@ export async function handleCapsules(
       );
     }
     if (leaf === "backups" && segments.length === 3) {
-      if (method !== "POST") return methodNotAllowed("POST");
+      if (method === "GET") return await handleCapsuleBackupList(ctx, capsule);
+      if (method !== "POST") return methodNotAllowed("GET, POST");
       const backup = await operations.backups.createBackup({
         workspaceId: capsule.workspaceId,
         capsuleId: capsule.id,
@@ -415,6 +421,13 @@ export async function handleCapsules(
     }
     if (leaf === "app" && segments.length === 3) {
       return await handleCapsuleApp(ctx, capsule, method);
+    }
+    if (leaf === "activity" && segments.length === 3) {
+      return await handleCapsuleActivity(ctx, capsule, method);
+    }
+    if (leaf === "interface-materialization-failures") {
+      const response = await handleCapsuleInterfaceMaterializationFailures(ctx, capsule, segments, method);
+      if (response) return response;
     }
     if (leaf === "runs" && segments.length === 3) {
       return await handleCapsuleRuns(ctx, capsule, method);
@@ -478,6 +491,7 @@ async function capsuleRouteAppAction(
     case "plan":
     case "revision-plans":
     case "drift-check":
+    case "interface-materialization-failures":
       return "update";
     case "install-config-re-adoptions":
     case "backups":

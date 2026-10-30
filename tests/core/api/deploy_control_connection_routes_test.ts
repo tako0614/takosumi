@@ -1,5 +1,6 @@
 // takos-secret-scan: synthetic — connection fixtures carry a stub PRIVATE KEY block.
 import { expect, test } from "bun:test";
+import { planOwnNotification } from "../../../core/domains/notifications/own_notifications.ts";
 
 import { createApiApp } from "../../../core/api/app.ts";
 import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
@@ -1355,8 +1356,22 @@ test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async 
     recipeId: "cloudflare",
     recipeAuthMode: "api_token",
     scope: "workspace",
+    // Captured before deletion so the owner can still be notified.
+    ownerAccountId: connection.ownerAccountId,
   });
+  expect(connection.ownerAccountId).toBe("fixture-route-owner");
   expect(JSON.stringify(events)).not.toContain("cf-secret-token");
+  // The record itself is gone, so the notification plan takes the owner from
+  // the stored event rather than from a Connection lookup.
+  const read = await app.request(`/internal/v1/connections/${connection.id}`, {
+    headers: { authorization: "Bearer scoped-token" },
+  });
+  expect(read.status).toBe(404);
+  expect(planOwnNotification(revokedEvent)).toMatchObject({
+    kind: "connection.revoked",
+    recipients: [{ kind: "account", accountId: "fixture-route-owner" }],
+    navigatePath: "/connections",
+  });
 });
 
 test("connection id with an unsupported shape is rejected (400)", async () => {

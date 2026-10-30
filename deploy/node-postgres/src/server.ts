@@ -29,7 +29,11 @@ import {
 } from "./handler.ts";
 import { buildComposedApp } from "./composed-app.ts";
 import { startCapsuleUninstallFinalizer } from "./capsule-uninstall-finalizer.ts";
-import { startOwnNotificationDispatcher } from "./own-notification-dispatcher.ts";
+import {
+  type OwnNotificationDispatcherLoop,
+  startOwnNotificationDispatcher,
+} from "./own-notification-dispatcher.ts";
+import { planOwnNotification } from "../../../core/domains/notifications/own_notifications.ts";
 import { startSourceRetirementSweeper } from "./source-retirement-sweeper.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
 import { isSecretKey, redactString } from "takosumi-contract/redaction";
@@ -199,9 +203,15 @@ export async function buildComposedServer(
     );
   }
 
+  // A notified Activity event wakes the dispatcher loop instead of waiting
+  // for its interval (TASK-0119 own notifications).
+  let ownNotifications: OwnNotificationDispatcherLoop | undefined;
   const { app, operations } = await buildComposedApp({
     config,
     store,
+    onActivityRecorded: (event) => {
+      if (ownNotifications && planOwnNotification(event)) void ownNotifications.tick();
+    },
     productDiscovery: {
       oidcIssuer: config.issuer,
       mobileOidcClientId: config.mobileOidcClientId,
@@ -275,7 +285,7 @@ export async function buildComposedServer(
   });
 
   startCapsuleUninstallFinalizer({ operations, log: structuredLog });
-  startOwnNotificationDispatcher({
+  ownNotifications = startOwnNotificationDispatcher({
     operations,
     store,
     env,
@@ -335,6 +345,9 @@ async function buildAccountsHandler(
     ...(config.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
     ...(config.installedAppDelegationSources?.length
       ? { installedAppDelegationSources: config.installedAppDelegationSources }
+      : {}),
+    ...(config.trustedNativeClients
+      ? { trustedNativeClients: config.trustedNativeClients }
       : {}),
     ...(config.privacyOperationsToken
       ? { privacyOperationsToken: config.privacyOperationsToken }

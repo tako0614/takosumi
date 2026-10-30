@@ -74,6 +74,12 @@ export interface RepoOwnedInstallConfigAdoptionInput {
   readonly modulePath: string | undefined;
   readonly capsuleName: string;
   readonly workspaceId: string;
+  /**
+   * Frozen derivation scope for compiled names (`workspace_scoped_capsule_name`).
+   * An existing Capsule passes its `capsuleScopeRef`; a new install omits it
+   * and derives from `workspaceId`, which becomes the new Capsule's scopeRef.
+   */
+  readonly derivationScopeRef?: string;
   readonly reviewedVariables?: Readonly<Record<string, JsonValue>>;
   /**
    * Explicit service-side declarations reviewed in the authenticated Capsule
@@ -341,7 +347,7 @@ export async function adoptRepoOwnedInstallConfig(
     modulePath,
     compatibilityReport,
     capsuleName: input.capsuleName,
-    workspaceId: input.workspaceId,
+    workspaceId: input.derivationScopeRef ?? input.workspaceId,
     ...(input.reviewedVariables
       ? { reviewedVariables: input.reviewedVariables }
       : {}),

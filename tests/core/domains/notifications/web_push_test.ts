@@ -351,25 +351,39 @@ describe("sending to a relay", () => {
     expect(never.requests).toHaveLength(0);
   });
 
-  test("applies each answer to the pusher: delete on 404/410, failure on 403/413, nothing on 5xx", async () => {
+  test("applies each answer to the pusher it was sent to: delete on 404/410, failure on 403/413, nothing on 5xx", async () => {
     const { vapid, agent } = await fixture();
     const now = Date.UTC(2026, 9, 30);
     const calls: string[] = [];
+    const who = (pusher: { pusherId: string; endpoint: string; pushkey: string }) =>
+      `${pusher.pusherId}@${pusher.endpoint}#${pusher.pushkey.slice(0, 4)}`;
     const pushers: WebPushPusherHealthPort = {
-      removePusher: (id) => { calls.push(`remove:${id}`); return Promise.resolve(); },
-      recordPusherDelivered: (id, at) => { calls.push(`ok:${id}:${at}`); return Promise.resolve(); },
-      recordPusherFailed: (id, at, status) => { calls.push(`fail:${id}:${at}:${status}`); return Promise.resolve(); },
+      removePusher: (pusher) => { calls.push(`remove:${who(pusher)}`); return Promise.resolve(); },
+      recordPusherDelivered: (pusher, at) => { calls.push(`ok:${who(pusher)}:${at}`); return Promise.resolve(); },
+      recordPusherFailed: (pusher, at, status) => { calls.push(`fail:${who(pusher)}:${at}:${status}`); return Promise.resolve(); },
     };
-    const deliver = async (status: number, attempts = 0, expiresAt = now + 86_400_000) => {
+    const pushkey = base64UrlEncode(agent.p256dh);
+    const target = { pusherId: "npsh_x", endpoint: ENDPOINT, pushkey, p256dh: agent.p256dh, auth: agent.auth };
+    const id = who(target);
+    const requests: Request[] = [];
+    const deliver = async (
+      status: number,
+      attempts = 0,
+      expiresAt = now + 86_400_000,
+      allowedOrigins: readonly string[] = [RELAY],
+    ) => {
       const fake = relay(() => new Response(null, { status }));
-      return await deliverWebPushToPusher({
-        target: { pusherId: "npsh_x", endpoint: ENDPOINT, p256dh: agent.p256dh, auth: agent.auth },
+      const decision = await deliverWebPushToPusher({
+        target,
         message: { payload: "x", ttlSeconds: 86_400 },
         context: { vapid, subject: INSTANCE, fetch: fake.fetch, now: () => now },
         pushers,
         retry: { attempts, expiresAt },
+        allowedOrigins,
         schedule: webPushRetrySchedule(() => 0),
       });
+      requests.push(...fake.requests);
+      return decision;
     };
     expect(await deliver(201)).toEqual({ kind: "delivered", status: 201 });
     expect(await deliver(410)).toEqual({ kind: "pusher_removed", status: 410 });
@@ -378,13 +392,19 @@ describe("sending to a relay", () => {
     expect(await deliver(413)).toMatchObject({ kind: "failed", status: 413 });
     expect(await deliver(503)).toMatchObject({ kind: "retry", attemptsMade: 1, at: now + 30_000 });
     expect(await deliver(503, 3, now + 1_000)).toMatchObject({ kind: "expired", status: 503 });
+    expect(requests).toHaveLength(7);
+    // An origin the operator removed from the allowlist is no longer sent to.
+    expect(await deliver(201, 0, now + 86_400_000, ["https://other-relay.example.test"]))
+      .toEqual({ kind: "failed", status: null, reason: "endpoint_origin_not_allowed" });
+    expect(requests).toHaveLength(7);
     expect(calls).toEqual([
-      `ok:npsh_x:${now}`,
-      "remove:npsh_x",
-      "remove:npsh_x",
-      `fail:npsh_x:${now}:403`,
-      `fail:npsh_x:${now}:413`,
-      `fail:npsh_x:${now}:503`,
+      `ok:${id}:${now}`,
+      `remove:${id}`,
+      `remove:${id}`,
+      `fail:${id}:${now}:403`,
+      `fail:${id}:${now}:413`,
+      `fail:${id}:${now}:503`,
+      `fail:${id}:${now}:null`,
     ]);
   });
 });

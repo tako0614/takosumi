@@ -1,5 +1,5 @@
 import { runSourceMaintenanceSchedule } from "../../worker/src/source_maintenance_schedule.ts";
-import { createOwnNotificationDispatcher } from "../../core/domains/notifications/compose.ts";
+import { runOwnNotificationDispatch } from "../../worker/src/own_notification_dispatch.ts";
 // Operator-deployed Takosumi platform worker composition.
 //
 // This single worker hosts the accounts plane (bare-origin OIDC issuer +
@@ -31,6 +31,7 @@ import {
   parseAppOwnershipMutationsFrozen,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
+  trustedNativeClientsFromEnv,
   type ControlPlaneOperations,
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
@@ -559,6 +560,9 @@ async function createPlatformOperatorControlMcpAuthority(
         ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
           ? { appOwnershipMutationsFrozen: true }
           : {}),
+        trustedNativeClients: trustedNativeClientsFromEnv(
+          env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
+        ),
         ...(env.TAKOSUMI_ACCOUNTS_ISSUER
           ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
           : {}),
@@ -993,12 +997,12 @@ export async function drainInterfaceMaterializationIntents(
   });
 }
 
-/** One bounded dispatcher run for the instance's own Web Push notifications. */
+/** One bounded dispatcher pass for the instance's own Web Push notifications. */
 async function runScheduledOwnNotificationDispatch(
   env: CloudflareWorkerEnv,
 ): Promise<void> {
   try {
-    const dispatcher = createOwnNotificationDispatcher({
+    await runOwnNotificationDispatch({
       operations: await deployControlSeam(env).operations(),
       store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
         schemaMode: resolveD1AccountsSchemaMode(
@@ -1007,14 +1011,7 @@ async function runScheduledOwnNotificationDispatch(
       }),
       env: env as unknown as Readonly<Record<string, unknown>>,
       issuer: env.TAKOSUMI_ACCOUNTS_ISSUER,
-      log: (event, fields) => console.warn(JSON.stringify({ event, ...fields })),
     });
-    if (!dispatcher) return;
-    const result = await dispatcher.run();
-    if (result.events > 0 || result.enqueued > 0 || result.delivered > 0 ||
-      result.retried > 0 || result.failed > 0 || result.removedPushers > 0) {
-      console.log(JSON.stringify({ event: "own_notification_dispatch", ...result }));
-    }
   } catch (error) {
     console.warn(JSON.stringify({
       event: "own_notification_dispatch_failed",
@@ -1744,6 +1741,7 @@ export async function handlePlatformSharedAuthControlRequest(
       credential: "session",
       requireCurrentMembership: true,
       ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
+      trustedNativeClients: trustedNativeClientsFromEnv(env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS),
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),
       ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),

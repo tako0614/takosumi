@@ -104,9 +104,9 @@ for (const storeCase of STORES) {
         const first = await delivery("act_1", "npsh_a");
         const second = await delivery("act_1", "npsh_b", { nextAttemptAt: T0 + 5_000, urgency: "high" });
         const later = await delivery("act_2", "npsh_a", { nextAttemptAt: T0 + 60_000 });
-        await store.enqueueNotificationDeliveries([first, second, later]);
+        expect(await store.enqueueNotificationDeliveries([first, second, later])).toBe(3);
         // The same (event, pusher) again changes nothing, even with new content.
-        await store.enqueueNotificationDeliveries([{ ...first, payload: "{}", attempts: 9 }]);
+        expect(await store.enqueueNotificationDeliveries([{ ...first, payload: "{}", attempts: 9 }])).toBe(0);
 
         const claimed = await store.claimNotificationDeliveries({ now: T0 + 5_000, limit: 10, leaseToken: "lease_1", leaseExpiresAt: T0 + 125_000 });
         expect(claimed).toEqual([
@@ -136,6 +136,11 @@ for (const storeCase of STORES) {
           deliveryId: second.deliveryId, leaseToken: "lease_4", at: T0 + 61_000,
           settlement: { kind: "settled", attempts: 2, outcome: "expired" },
         })).toBe(true);
+        // Re-reading the event enqueues the settled rows again: nothing
+        // becomes due a second time.
+        expect(await store.enqueueNotificationDeliveries([first, second])).toBe(0);
+        expect((await store.claimNotificationDeliveries({ now: T0 + 59_000, limit: 10, leaseToken: "lease_x", leaseExpiresAt: T0 + 59_500 })))
+          .toEqual([]);
         // An expired lease is reclaimed by another runner.
         const reclaimed = await store.claimNotificationDeliveries({ now: T0 + 60_000, limit: 10, leaseToken: "lease_5", leaseExpiresAt: T0 + 61_000 });
         expect(reclaimed.map((row) => row.deliveryId)).toEqual([later.deliveryId]);
@@ -156,7 +161,7 @@ for (const storeCase of STORES) {
       try {
         const old = await delivery("act_old", "npsh_a", { expiresAt: T0 - 1, state: "settled", outcome: "delivered", settledAt: T0 - 100 });
         const fresh = await delivery("act_new", "npsh_a");
-        await store.enqueueNotificationDeliveries([old, fresh]);
+        expect(await store.enqueueNotificationDeliveries([old, fresh])).toBe(2);
         expect(await store.pruneNotificationDeliveries({ expiredBefore: T0, limit: 10 })).toBe(1);
         expect(await store.pruneNotificationDeliveries({ expiredBefore: T0, limit: 10 })).toBe(0);
         const claimed = await store.claimNotificationDeliveries({ now: T0, limit: 10, leaseToken: "l", leaseExpiresAt: T0 + 1 });

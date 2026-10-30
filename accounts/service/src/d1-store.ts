@@ -662,6 +662,7 @@ export class D1AccountsStore implements AccountsStore {
   unlinkCanonicalUpstreamIdentity(input: UnlinkUpstreamIdentityInput): Promise<boolean> { return this.#hosted.unlinkCanonicalUpstreamIdentity(input); }
 
   saveNotificationPusher(...args: Parameters<NotificationPusherStore["saveNotificationPusher"]>) { return this.#notificationPushers.saveNotificationPusher(...args); }
+  hasAnyNotificationPusher(...args: Parameters<NotificationPusherStore["hasAnyNotificationPusher"]>) { return this.#notificationPushers.hasAnyNotificationPusher(...args); }
   listNotificationPushersForSubject(...args: Parameters<NotificationPusherStore["listNotificationPushersForSubject"]>) { return this.#notificationPushers.listNotificationPushersForSubject(...args); }
   findNotificationPusher(...args: Parameters<NotificationPusherStore["findNotificationPusher"]>) { return this.#notificationPushers.findNotificationPusher(...args); }
   deleteNotificationPusher(...args: Parameters<NotificationPusherStore["deleteNotificationPusher"]>) { return this.#notificationPushers.deleteNotificationPusher(...args); }

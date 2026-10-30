@@ -12,10 +12,12 @@ package for the v1 GA line.
   `GET/POST/DELETE /api/v1/account/notification-pushers` stores Takosumi Mobile
   `webpush` pushers (MSC4174 field layout) in the Accounts store, one per
   account, `app_id` and `pushkey`, at most 20 per account. Endpoints must be
-  https on port 443 on an allowed push relay origin (the official relay, plus
-  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`). `web_push_public_key` is a VAPID
-  key derived from the secret-store passphrase, so no new secret is needed;
-  without a passphrase it is `null` and registration answers 503. PostgreSQL
+  https on port 443 on a push relay origin the operator lists in
+  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS` (no built-in default; unset means
+  no device can register, 409 `notification_relay_not_configured`).
+  `web_push_public_key` is a VAPID key derived from the secret-store
+  passphrase, so no new secret is needed; when the instance cannot send it is
+  `null` and `web_push_unavailable_reason` says why. PostgreSQL
   needs Accounts migration `047`; D1 needs no migration. The Web Push sender
   (RFC 8291/8292) and its answer rules ship with it; what is notified follows
   separately.
@@ -26,12 +28,48 @@ package for the v1 GA line.
   member additions and Interface link requests (new Activity
   `interface_link.approval_requested`) are sent as Web Push to the devices
   registered by the app owner or the account the event names (never by
-  Workspace membership). A dispatcher reads the Activity ledger with a cursor,
-  starts at the present, and keeps one idempotent delivery row per event and
-  device; Cloudflare runs it on every scheduled tick, Bun + PostgreSQL every
-  30 seconds. PostgreSQL needs Accounts migration `048`; D1 needs no
+  Workspace membership). A dispatcher reads the Activity ledger with a cursor
+  that trails the present by a ten-minute re-read window, starts at the
+  present, idles while no device exists, and keeps one idempotent delivery row
+  per event and device; Cloudflare runs it on every scheduled tick and right
+  after a notified event in the same request or Durable Object invocation,
+  Bun + PostgreSQL every 30 seconds and on each notified event.
+  `connection.revoked` now records the Connection's owner. PostgreSQL needs
+  Accounts migration `048`; D1 needs no
   migration. `run.applied` now records the Apply's `operation`. The account
   page lists registered devices, shows failing ones and can remove them.
+- **Screens can declare their native phone apps, verified against an operator
+  allowlist:** an `interface.ui.surface` `document` may now carry `clients`
+  next to `display` (`preferred`, and per platform `ios` / `android` a
+  `bundleId` / `package`, a custom-scheme `open` template, an optional
+  publisher-domain `universalLink` / `appLink` template, and optional `name`,
+  `appStoreId` and `storeUrl`). `GET /api/v1/capsules/{id}/app` returns the
+  result as `screens[].clients`, with the screen's origin or URL already
+  filled in. A platform is `verified` only when its bundle id or package and
+  every kept link template match an entry of
+  `TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS` (default: the Yurucommu, Yurumeet
+  and Takos apps; a malformed value verifies nothing but keeps those three
+  apps' names, schemes and link hosts reserved, is logged once per isolate
+  with only the broken entry index and field, and Accounts, OIDC and the
+  control API keep serving); its name and App Store id then come from that
+  entry. Every other
+  declaration is returned with `verified: false` and its real destination in
+  `target`, may not use a trusted client's scheme, link host or a host below
+  it, is never labelled with the screen title, and must never be opened
+  without asking; `preferred` is `"native"` only when some platform is
+  verified. Templates carry only `{origin}` / `{url}` (at most four);
+  dangerous and browser-launching schemes, non-https links, Takosumi Mobile's
+  own `com.takosumi`, Takosumi-owned domains, lookalike names (Latin
+  lookalikes, Japanese names compared by kana including `たこすみ` /
+  `タコスミ`, and any name that is neither ASCII after NFKD nor Japanese
+  without Latin letters, or keeps uncomposed combining marks) and store
+  links of another app are refused, and invalid fields degrade to absence. The field is
+  optional, so neither the Interface version nor any repository manifest
+  version changes.
+  `@takosjp/takosumi-contract` 2.2.0 (unpublished) adds the
+  `native-client-identity` subpath with Takosumi's own refused identities for
+  Takosumi Mobile. The dashboard and Takosumi Mobile do not act on `clients`
+  yet (TASK-0119).
 - **Takosumi Mobile can sign in to any instance:** every instance now includes
   the built-in public OIDC client `takosumi-mobile` (redirect
   `takosumi://oauth/callback`, scopes `openid profile offline_access
@@ -49,7 +87,6 @@ package for the v1 GA line.
 - **Discovery reports the configured issuer:** `endpoints.oidc_issuer` in
   `/.well-known/takosumi` is now `TAKOSUMI_ACCOUNTS_ISSUER` instead of the
   request origin.
-
 - **A name collision no longer leaves an install retrying forever:** an install
   plan created without `mode` (the legacy Workspace route) whose app name is
   already used by a live app in the same Workspace and environment now ends

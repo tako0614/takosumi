@@ -52,8 +52,17 @@ test("each notified kind has its recipients, link, TTL and urgency", () => {
     expect(planOwnNotification(event({ action, targetType: "capsule", targetId: "cap_9", metadata: {} })))
       .toMatchObject({ recipients: [{ kind: "app_owner", capsuleId: "cap_9" }], navigatePath: "/apps/cap_9#attention" });
   }
-  expect(planOwnNotification(event({ action: "connection.revoked", targetType: "connection", targetId: "conn_1" })))
-    .toMatchObject({ recipients: [{ kind: "connection_owner", connectionId: "conn_1" }], navigatePath: "/connections" });
+  // The Connection record is deleted before the event is read: its owner
+  // travels in the event, and without it nobody is notified.
+  expect(planOwnNotification(event({ action: "connection.revoked", targetType: "connection", targetId: "conn_1", metadata: { ownerAccountId: "tsub_owner" } })))
+    .toMatchObject({ recipients: [{ kind: "account", accountId: "tsub_owner" }], navigatePath: "/connections" });
+  expect(planOwnNotification(event({ action: "connection.revoked", targetType: "connection", targetId: "conn_1" }))).toBeUndefined();
+  // Drift collapses per app: a drift check that fails as a new Run each time
+  // shares the app's Topic with drift itself.
+  expect(planOwnNotification(event({ action: "run.failed", runId: "run_a", metadata: { capsuleId: "cap_1", phase: "drift_check" } }))?.group).toBe("drift:cap_1");
+  expect(planOwnNotification(event({ action: "run.failed", runId: "run_b", metadata: { capsuleId: "cap_1", phase: "drift_check" } }))?.group).toBe("drift:cap_1");
+  expect(planOwnNotification(event({ action: "capsule.drift_detected", targetType: "capsule", targetId: "cap_1" }))?.group).toBe("drift:cap_1");
+  expect(planOwnNotification(event({ action: "run.failed", runId: "run_c", metadata: { capsuleId: "cap_1", phase: "apply" } }))?.group).toBe("run:run_c");
   expect(planOwnNotification(event({ action: "interface_link.approval_requested", targetType: "interface_link", targetId: "ifl_1", metadata: { providerCapsuleId: "cap_p", consumerCapsuleId: "cap_c" } })))
     .toMatchObject({ recipients: [{ kind: "app_owner", capsuleId: "cap_p" }], consumerCapsuleId: "cap_c", navigatePath: "/apps/cap_p#links", ttlSeconds: 86_400, urgency: "high" });
   for (const action of ["run.plan_created", "run.approved", "interface_link.approved", "capsule.created", "scheduled.source_poll.started"]) {

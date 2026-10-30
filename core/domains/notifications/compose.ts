@@ -3,8 +3,9 @@
  * operations, an Accounts store and the operator environment.
  *
  * The recipient directory reads the app owner from app ownership (never
- * Workspace membership), the account that started a Run, a Connection's owner
- * and the app name for the text.
+ * Workspace membership), the account that started a Run and the app name for
+ * the text. Accounts named by an event itself (a member, a transfer
+ * recipient, a revoked Connection's owner) need no lookup.
  */
 
 import type { NotificationDispatchStore } from "./dispatch_store.ts";
@@ -13,6 +14,10 @@ import {
   type NotificationRecipientDirectory,
   OwnNotificationDispatcher,
 } from "./dispatcher.ts";
+import {
+  NOTIFICATION_PUSH_RELAY_ORIGINS_ENV,
+  parseNotificationPushRelayOrigins,
+} from "./pusher_endpoint.ts";
 import { instanceWebPushTopicKey } from "./web_push/topic.ts";
 import { instanceVapidKeyPair, type VapidSecretEnv } from "./web_push/vapid.ts";
 
@@ -26,10 +31,11 @@ export interface DirectoryOperations {
   readonly capsules: {
     getCapsule(capsuleId: string): Promise<{ readonly name: string }>;
   };
-  readonly connections: {
-    getProviderConnection(connectionId: string): Promise<{ readonly ownerAccountId?: string }>;
-  };
 }
+
+export type OwnNotificationOperations = DirectoryOperations & {
+  readonly activity: NotificationEventSource;
+};
 
 export function notificationRecipientDirectory(
   operations: DirectoryOperations,
@@ -39,10 +45,6 @@ export function notificationRecipientDirectory(
       (await operations.appOwnership.getOwnership(capsuleId))?.ownerAccountId ?? undefined,
     runStartedBy: (runId) =>
       orUndefinedWhenMissing(async () => (await operations.controller.getRun(runId)).createdBy),
-    connectionOwner: (connectionId) =>
-      orUndefinedWhenMissing(async () =>
-        (await operations.connections.getProviderConnection(connectionId)).ownerAccountId
-      ),
     appName: (capsuleId) =>
       orUndefinedWhenMissing(async () => (await operations.capsules.getCapsule(capsuleId)).name),
   };
@@ -68,6 +70,7 @@ const DISPATCH_STORE_METHODS = [
   "claimNotificationDeliveries",
   "settleNotificationDelivery",
   "pruneNotificationDeliveries",
+  "hasAnyNotificationPusher",
   "listNotificationPushersForSubject",
   "findNotificationPusher",
   "removeNotificationPusher",
@@ -76,10 +79,11 @@ const DISPATCH_STORE_METHODS = [
 
 /**
  * The dispatcher, or undefined when the store does not keep pushers and
- * deliveries or the issuer is not a usable origin.
+ * deliveries, the issuer is not a usable origin, or the relay allowlist is
+ * malformed.
  */
 export function createOwnNotificationDispatcher(input: {
-  readonly operations: DirectoryOperations & { readonly activity: NotificationEventSource };
+  readonly operations: OwnNotificationOperations;
   readonly store: Partial<NotificationDispatchStore>;
   readonly env: VapidSecretEnv;
   /** The instance's public origin (its Accounts issuer). */
@@ -98,6 +102,15 @@ export function createOwnNotificationDispatcher(input: {
     return undefined;
   }
   if (instanceOrigin === "null") return undefined;
+  let relayOrigins: readonly string[];
+  try {
+    const configured = input.env[NOTIFICATION_PUSH_RELAY_ORIGINS_ENV];
+    relayOrigins = parseNotificationPushRelayOrigins(
+      typeof configured === "string" ? configured : undefined,
+    );
+  } catch {
+    return undefined;
+  }
   return new OwnNotificationDispatcher({
     events: input.operations.activity,
     directory: notificationRecipientDirectory(input.operations),
@@ -105,6 +118,7 @@ export function createOwnNotificationDispatcher(input: {
     vapid: () => instanceVapidKeyPair(input.env),
     topicKey: () => instanceWebPushTopicKey(input.env),
     instanceOrigin,
+    relayOrigins,
     ...(input.fetch ? { fetch: input.fetch } : {}),
     ...(input.log ? { log: input.log } : {}),
   });

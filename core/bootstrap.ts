@@ -1,6 +1,7 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
 import type { PublicSessionOpenApiEndpoint } from "./api/openapi.ts";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import {
   PRIVATE_RUN_FILE_HTTP_PATH,
   type PrivateRunFileRouteDependencies,
@@ -380,6 +381,8 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly publicSessionControlEndpoints?: readonly PublicSessionOpenApiEndpoint[];
+  /** Host hook after each stored Activity event (immediate notification pass). */
+  readonly onActivityRecorded?: (event: ActivityEvent) => void;
   /** Optional host override for the canonical ownership resolver during rollout. */
   readonly appAccessResolver?: AppAccessResolver;
   readonly appMintLeaseStore?: AppMintLeaseStore;
@@ -745,6 +748,17 @@ export interface TakosumiOperations {
   ): Promise<readonly CapsuleInterfaceMaterializationFailure[]>;
   retryInterfaceMaterializationFailure(
     workspaceId: string,
+    intentId: string,
+    input: RetryCapsuleInterfaceMaterializationFailureInput,
+  ): Promise<CapsuleInterfaceMaterializationRetryReceipt>;
+  /** One app's dead-lettered Interface materializations (no Workspace). */
+  listCapsuleInterfaceMaterializationFailures(
+    capsuleId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly CapsuleInterfaceMaterializationFailure[]>;
+  /** Retries one failure that belongs to `capsuleId` (no Workspace). */
+  retryCapsuleInterfaceMaterializationFailure(
+    capsuleId: string,
     intentId: string,
     input: RetryCapsuleInterfaceMaterializationFailureInput,
   ): Promise<CapsuleInterfaceMaterializationRetryReceipt>;
@@ -1256,7 +1270,10 @@ export async function createTakosumiService(
   // trail. Constructed first so the controller + Capsule /
   // RunGroup services can emit through it (fire-and-forget; a failed audit write
   // never fails the action it records).
-  const activityService = new ActivityService({ store: sharedOpenTofuStore });
+  const activityService = new ActivityService({
+    store: sharedOpenTofuStore,
+    ...(options.onActivityRecorded ? { onRecorded: options.onActivityRecorded } : {}),
+  });
   let opentofuController: OpenTofuController;
   const enqueueSourceSync: EnqueueSourceSync =
     options.enqueueSourceSync ??
@@ -1975,6 +1992,14 @@ export async function createTakosumiService(
         intentId,
         input,
       ),
+    listCapsuleInterfaceMaterializationFailures: (capsuleId, options) =>
+      interfaceMaterializationFailureService.listForCapsule(capsuleId, options),
+    retryCapsuleInterfaceMaterializationFailure: (capsuleId, intentId, input) =>
+      interfaceMaterializationFailureService.retryForCapsule(
+        capsuleId,
+        intentId,
+        input,
+      ),
     activity: activityService,
     getWorkspaceBilling: (workspaceId) =>
       opentofuController.getWorkspaceBilling(workspaceId),
@@ -2134,6 +2159,11 @@ export async function createTakosumiService(
               : {}),
             ...(connection.kind ? { kind: connection.kind } : {}),
             scope: connection.scope,
+            // Captured before the record is deleted, so a notification can
+            // still reach the owner (TASK-0119 own notifications).
+            ...(connection.ownerAccountId
+              ? { ownerAccountId: connection.ownerAccountId }
+              : {}),
           },
         });
       }

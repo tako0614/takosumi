@@ -171,7 +171,17 @@ authentication and input errors, carries `Cache-Control: no-store` and
 The scope catalog marks only core `read` / `write` and allowlisted extension
 scopes explicitly declared by the same owning route through
 `selfServicePatScopes` as self-service. Takosumi hosted AI `ai.models.read`, `ai.chat`,
-and `ai.embeddings`, plus `resources:read`, require a Workspace binding.
+and `ai.embeddings`, plus `resources:read`, no longer need a Workspace binding
+(TASK-0118 9.1; the catalog reports `workspaceBinding: "optional"` for every
+scope). Such a token is either limited to apps with `appIds` (each must be an
+app the caller owns or is a member of when the token is created, and every
+app-scoped request re-checks the live role) or acts with the account's own
+authority. A legacy `workspace_id`
+binding is still accepted for now and becomes `400` in Phase 9.3. The extension
+scopes never widen to the core account APIs (`read` / `write` routes), and a
+host route that still needs a Workspace keeps refusing a token it cannot fence.
+The Dashboard key card still offers only `read` / `write` until the hosted
+routes accept app- or account-scoped keys.
 Accounts never infers self-service authority from request scopes and never
 exposes `admin` or an undeclared scope for self-service issuance.
 
@@ -227,18 +237,30 @@ pushers) that products use for their native apps.
   update of the same pusher 200.
 - Endpoint checks: https, port 443, no userinfo, at most 1,024 characters, and
   an origin on the allowlist (400 `invalid_pusher_endpoint` with
-  `details.reason`). The default allowlist is the official relay
-  `https://push.takosumi.com`; operators add origins with
-  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`. There is no MSC4174 activation step.
+  `details.reason`). The allowlist is exactly the origins the operator lists in
+  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`; there is no built-in default (the
+  official relay's production origin is undecided). With an empty list POST
+  answers 409 `notification_relay_not_configured`. The list is checked again at
+  send time: a pusher on an origin that was removed is not sent to and is
+  recorded as failing. There is no MSC4174 activation step.
 - At most 20 pushers per account; past that, 409 `notification_pusher_limit_reached`.
 - A returned pusher never includes `data.auth`. `last_success_at`,
   `last_failure_at`, `last_failure_status` (`null` for a timeout or network
   error) and `failing` (the latest outcome was a failure) show delivery health.
 - `web_push_public_key` is the public key of a pair derived with HKDF-SHA256
   (label `takosumi/web-push/vapid/v1`) from the secret-store passphrase
-  (`TAKOSUMI_SECRET_STORE_PASSPHRASE`, else `TAKOSUMI_SECRET_STORE_KEY`). Without
-  a passphrase it is `null` and POST answers 503 `web_push_unavailable`.
-  Rotating the passphrase changes the key, and Takosumi Mobile subscribes again.
+  (`TAKOSUMI_SECRET_STORE_PASSPHRASE`, else `TAKOSUMI_SECRET_STORE_KEY`). When
+  the instance cannot send it is `null` and `web_push_unavailable_reason` says
+  why: `secret_not_configured` (no passphrase; POST answers 503
+  `web_push_unavailable`), `relay_not_configured` (no relay origin; POST answers
+  409 `notification_relay_not_configured`) or `issuer_not_https` (the Accounts
+  issuer cannot be the VAPID `sub`; POST answers 409
+  `notification_issuer_not_https`; loopback http is allowed for development).
+  It is `null` when sending works. Rotating the passphrase changes the key, and
+  Takosumi Mobile subscribes again.
+- A 404/410 deletes a pusher only while it still has the endpoint and
+  `pushkey` that were sent to, so a late answer about an old subscription never
+  deletes the pusher a device re-registered.
 
 #### What is notified
 
@@ -254,7 +276,7 @@ owner.
 | `run.failed` | who started the Run, and the app owner | `/runs/{id}` | 259200 s / `normal` |
 | `run.applied` with `operation: "create"` (install finished) | who started the Run | `/apps/{id}` | 259200 s / `normal` |
 | `capsule.drift_detected`, `capsule.auto_update_failed`, `capsule.auto_update_apply_failed`, `capsule.uninstall_blocked`, `interface_materialization.dead_lettered` | app owner | `/apps/{id}#attention` | 259200 s / `normal` |
-| `connection.revoked` | connection owner | `/connections` | 259200 s / `normal` |
+| `connection.revoked` | connection owner (the `ownerAccountId` recorded in the event at revocation) | `/connections` | 259200 s / `normal` |
 | `app.ownership_transfer_created` | recipient | `/apps/{id}` | 259200 s / `normal` |
 | `app.member_added` | added member | `/apps/{id}` | 259200 s / `normal` |
 | `interface_link.approval_requested` | providing app's owner | `/apps/{id}#links` | 86400 s / `high` |
@@ -271,12 +293,26 @@ owner.
   404/410 delete the pusher; timeout, 408, 429 (honouring `Retry-After`) and 5xx
   are retried from 30 seconds growing to 1 hour until the TTL; other 3xx/4xx
   (403 and 413 included) are recorded as a failure of the pusher and not retried.
-- `createdAt` is minted before the row commits, so events younger than 60
-  seconds wait for the next run. The first run starts at the present and never
-  sends history; events past their TTL are never sent.
-- On Cloudflare every scheduled run (under `waitUntil`) sends new events right
-  after enqueueing them and retries the rest on later runs, so latency follows
-  the cron interval. Bun + PostgreSQL runs an in-process loop every 30 seconds.
+- Events are read up to now. `createdAt` is minted before the row commits and
+  isolates can commit slightly out of order, so the cursor trails the present
+  by ten minutes and the last ten minutes are read again on every run; delivery
+  rows are idempotent, so nothing is sent twice. The first run starts at the
+  present and never sends history; events past their TTL are never sent.
+- An event whose recipients cannot be read (a transient failure) holds the
+  cursor while later events still go out; it is given up after six hours.
+  Failed drift checks do not get one notification per Run: they share the
+  app-level `Topic` of drift.
+- While no account has a pusher, a run only moves the cursor to the present
+  without reading the ledger.
+- On Cloudflare a pass runs on every scheduled tick, and once more right away,
+  under `waitUntil`, in the request or Durable Object invocation that recorded
+  a notified event (one at a time; sends are leased). Events written without
+  ActivityService, such as app ownership rows, go out on the next cron.
+  Bun + PostgreSQL runs an in-process loop every 30 seconds and also when a
+  notified event is recorded.
+- The ledger read bounds `created_at >= cursor` explicitly. `audit_events` has
+  no `(created_at, id)` index yet, so the read is a scan bounded by `LIMIT`; the
+  index comes with a Control schema migration (TASK-0118 9.6).
 - State lives in the Accounts store: PostgreSQL migration `048`
   (`notification_dispatch_cursors`, `notification_deliveries`); D1 uses the
   existing document table and needs no D1 migration.
@@ -314,7 +350,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 107
+`accounts/service/src/control-route-inventory.ts`; it currently contains 113
 public route descriptors, listed below. Accounts compositions include the same routes in `/openapi.json` and publish their count as `x-takos-public-session-endpoint-count`. Core-only processes omit the unmounted Accounts routes. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -375,9 +411,30 @@ Workspace-level routes (lists, Workspace settings, Workspace creation, unowned p
 
 The cursor-paged lists (`capsules`, `current-state-versions`, `runs`, `backups`, `usage`, `/dashboard/overview`, `/sources?workspaceId=`) select only visible rows in the store query (memory, Postgres, D1). However many hidden rows come first, pages fill with visible rows and paging reaches the end. `nextCursor` is the store's cursor for a visible row; ids and timestamps of hidden rows never appear in it. A row belongs to these apps: a Run to its Capsule (an older apply row without one: its plan's Capsule), else to its Source's apps; a Source to its owner app, or, while ownerless, to every live app built from it; a backup to its Capsule, or, when it names none, to every live app; a usage event to its Capsule, else to its Run's apps. A usage event whose Run is gone is hidden while the Workspace has an app with an ownership row. A row is hidden when any app it belongs to is hidden. A target without the ownership schema (before D1 v77 / Postgres v123) does not filter. A host that wires an ownership store but does not provide these filtered reads answers these lists with `503` instead of an unfiltered list.
 
-Activity is attributed to apps by its Capsule target, Capsule ids in metadata (every `memberCapsuleIds` entry of a run group), an Interface's owner app (`ownerId`), a binding's Capsule subject (`subjectId`) and the provider app of the Interface a binding or token names, its Source (the apps built from it, or its owner app), and, when nothing else names an app, its Run (`runId`, a Run target, `metadata.runId`/`planRunId`/`applyRunId`). A backup that names no app is Workspace-wide and belongs to every live app. While the Workspace has apps with an ownership row, events whose app cannot be determined (a missing Run or Interface, a Capsule id this Workspace does not have, a lookup past the cap, no attribution) are omitted even when another reference resolves; `workspace` and `connection` events and events known to belong to no app (a Run or Source no app uses, a removed Source) keep the Workspace decision. `/dashboard/bootstrap?includeNotifications=true` uses the same rule. Reads: the Workspace's Capsule list and one batch ownership read first; with no owned app (every app on v75) nothing more is read. Otherwise Run, Source and Interface reads are deduplicated, run in parallel and capped at 50 per request. Workspace bulk actions (`plan-update`, `drift-check`, Workspace backup, Interface materialization retries) require the Workspace decision and, in addition, that the action is allowed on every app in the Workspace that has an ownership row.
+Activity is attributed to apps by its Capsule target, Capsule ids in metadata (every `memberCapsuleIds` entry of a run group), an Interface's owner app (`ownerId`), a binding's Capsule subject (`subjectId`) and the provider app of the Interface a binding or token names, its Source (the apps built from it, or its owner app), and, when nothing else names an app, its Run (`runId`, a Run target, `metadata.runId`/`planRunId`/`applyRunId`). A backup that names no app is Workspace-wide and belongs to every live app. While the Workspace has apps with an ownership row, events whose app cannot be determined (a missing Run or Interface, a Capsule id this Workspace does not have, a lookup past the cap, no attribution) are omitted even when another reference resolves; `workspace` and `connection` events and events known to belong to no app (a Run or Source no app uses, a removed Source) keep the Workspace decision. `/dashboard/bootstrap?includeNotifications=true` is built from the caller's apps instead (see the next section). Reads: the Workspace's Capsule list and one batch ownership read first; with no owned app (every app on v75) nothing more is read. Otherwise Run, Source and Interface reads are deduplicated, run in parallel and capped at 50 per request. Workspace bulk actions (`plan-update`, `drift-check`, Workspace backup, Interface materialization retries) require the Workspace decision and, in addition, that the action is allowed on every app in the Workspace that has an ownership row.
 
 **During the rollout.** An app whose ownership row is not usable yet is decided by the legacy Workspace rule for that request: when the composition has no ownership store, when the schema predates D1 v77 / Postgres v123, or when the backfill has not written the app's owner yet. From the moment an ownership row exists, that app is decided per app only. Each fallback is reported as the id-free structured log `app_authorization_workspace_fallback` (`reason` is `ownership_store_unavailable`, `ownership_schema_unavailable` or `capsule_not_backfilled`), aggregated per isolate at most once every five minutes. Each decision reads the ownership row once, and the role resolution reads it again when a row exists. The ownership store's existing schema check is reused; on a pre-v77 D1 its "no schema" result is trusted for 60 seconds, so decisions do not probe on every request.
+
+### App reads without a Workspace
+
+These routes (TASK-0118 Phase 9.1) replace the Workspace-addressed reads. They never read Workspace membership: an app-addressed route uses the per-app decision above (`view` for reads, `update` for a retry), and an account route covers exactly the apps the caller owns or is a member of. Credential limits still apply first: a PAT's `appIds` narrows the apps, an installed app's own OAuth token covers only its own app (and keeps the per-app decision's other limits), and a legacy Workspace-scoped PAT without `appIds` cannot use an account route (`403 app_access_denied`). The Workspace-addressed routes remain as compatibility surfaces.
+
+| Method | Path | Permission and result |
+| --- | --- | --- |
+| GET | `/api/v1/install-plans?open=1` | Account credential (session, or a PAT without `workspaceId`/`appIds`). The caller's own open install attempts and unfinished non-attempt installs in every internal namespace, newest first, at most 20, as `{ installPlans: [...] }` (same shape as the Workspace route). Attempts are their creator's work: an app member does not see the owner's attempts. `open=1` (or `true`) is required |
+| GET | `/api/v1/activity?cursor&limit` | Activity of the apps the caller owns or is a member of, newest first (`limit` 1–100, default 50), as `{ events, nextCursor? }` |
+| GET | `/api/v1/capsules/{capsuleId}/activity?cursor&limit` | `view` on the app. That app's Activity in the same shape |
+| GET | `/api/v1/capsules/{capsuleId}/backups?cursor&limit` | `view`. Backups taken of this app (`capsuleId` recorded on the backup), newest first. Workspace-wide backups name no app and are not listed |
+| GET | `/api/v1/capsules/{capsuleId}/interface-materialization-failures?limit` | `view`. The app's value-free dead-lettered Interface materializations (`limit` 1–100), as `{ failures }` |
+| POST | `/api/v1/capsules/{capsuleId}/interface-materialization-failures/{intentId}/retries` | `update`. Same body and digest/state CAS as the Workspace route; a failure of another app is `404` |
+| GET | `/api/v1/sources?capsuleId=` | `view`. The Source the app is built from, as `{ sources }` (an ownerless pre-claim Source also needs `view` on every app built from it). Cannot be combined with `workspaceId` |
+| GET | `/api/v1/capsule-configs?capsuleId=` | `view`. The app's current InstallConfig, as `{ installConfigs }`. Cannot be combined with `workspaceId` |
+| GET | `/api/v1/provider-connections` | Account credential. The caller's own Provider Connections (Source git connections excluded) and release-owned bindable operator connections, as `{ providerConnections }`. `projection=release-owned` returns only the release-owned ones (no durable read) |
+| GET | `/api/v1/provider-connections?capsuleId=&projection=release-owned` | `view`. The release-owned bindable connections for that app. The app's connection choices are `GET /api/v1/connections?capsuleId=&projection=labels` |
+
+Activity events are stored per internal partition (the frozen namespace each app records into). A page is read from the partitions of the apps in scope (at most 96 per request) and filtered event by event with the attribution rule above. An event is shown only when every app it belongs to is in scope, so an Interface link event never reveals the other side to someone who cannot view that app. Events whose app cannot be determined and events that belong to no app (`workspace` and `connection` events, a Run or Source no app uses) are not shown. One request scans at most four store pages: a page can hold fewer than `limit` events, even none, and still carry `nextCursor`. The cursor is the store's opaque `(createdAt, id)` cursor. Apps reach the account Activity while their owner and members can list them, so an uninstalled app's history is read through `GET /api/v1/capsules/{capsuleId}/activity` by its retained owner and members.
+
+`GET /api/v1/dashboard/bootstrap` no longer includes the Workspace inventory unless `includeWorkspaces=true` is passed. With `includeNotifications=true` the feed is the newest page of `GET /api/v1/activity` (at most 60 events) under the bootstrap's optional-projection deadline; each entry carries the compact event, `capsuleId` when the event names its app, and `workspaceHandle` set to the event's internal partition id for compatibility. A host without the app-ownership read ports, or a legacy Workspace-scoped credential, still gets the Workspace feed.
 
 ### Account views
 
@@ -454,12 +511,13 @@ data and settings.
 | GET | `/api/v1/capsules/{capsuleId}/state-versions` | List Capsule StateVersions |
 | GET | `/api/v1/capsules/{capsuleId}/provider-bindings` | Read Capsule ProviderBinding selections |
 | GET | `/api/v1/workspaces/{workspaceId}/current-state-versions` | List current StateVersions for Workspace Capsules |
-| GET | `/api/v1/capsule-configs` | List Capsule creation configs visible to the caller |
+| GET | `/api/v1/capsule-configs` | List Capsule creation configs visible to the caller (`capsuleId=` returns the app's own; see App reads without a Workspace) |
 | GET | `/api/v1/capsule-configs/{capsuleConfigId}` | Read a Capsule creation config |
 | POST | `/api/v1/capsules/{capsuleId}/plan` | Create a Capsule plan Run |
 | POST | `/api/v1/capsules/{capsuleId}/configuration-plans` | Adopt a new desired configuration and provider binding in one step, and return an OpenTofu Plan for review only |
 | POST | `/api/v1/capsules/{capsuleId}/destroy-plan` | Create a Capsule destroy plan Run |
 | POST | `/api/v1/capsules/{capsuleId}/drift-check` | Create a Capsule drift check Run |
+| GET | `/api/v1/capsules/{capsuleId}/backups` | List backups taken of the app |
 | POST | `/api/v1/capsules/{capsuleId}/backups` | Create a Capsule Backup |
 
 `GET /api/v1/capsules/{capsuleId}/app` returns one view of an installed app.
@@ -489,6 +547,23 @@ affected by removal. Removing a provider leaves consumer apps in place and never
 selects a replacement automatically. The view carries no secret, no Output value
 and no Interface input other than a screen's checked launch URL. Parts that a
 supporting read could not load are named in `incomplete`.
+When a screen declares native phone apps in `document.clients`, only what passes
+the checks appears in `screens[].clients`: `preferred`; `ios` with `verified`,
+`trustedClientId`, `target`, `name`, `appStoreId`, `bundleId`, `open`,
+`universalLink` and `storeUrl`; `android` with `verified`, `trustedClientId`,
+`target`, `name`, `package`, `open`, `appLink` and `storeUrl`. `verified` is true
+only when the declared bundle id or package and the link templates match a native
+app the operator trusts (`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`); `name` and
+`appStoreId` then come from that registration. `target` is where the links really
+go (`package`, `scheme`, `host`). Consumers never open an unverified app
+automatically: they show `target` and ask first, and label an unverified app
+without `name` neutrally (such as "Unverified app"), never with the screen's
+`title`. `preferred` is `"native"` only when at least one OS has a verified app
+and the declaration does not say `"web"`, and `"web"` otherwise; `"native"`
+applies only to a verified app. Links are the templates with `{origin}` and
+`{url}` already filled in from that screen's URL, and `storeUrl` is used only when it is
+tied to the declared id; otherwise it is built from `appStoreId` or `package`. How to declare them is
+in [Show your app on the home screen](../getting-started/home-launcher.md#declare-your-phone-app).
 `progress.revisionPreparing` is true only while an install or revision
 coordinator has not yet created its Plan Run (an install attempt only for a
 never-applied app, and not once it has stalled). `progress.installPlanId` names
@@ -577,7 +652,7 @@ verification.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/sources` | List Sources visible to the caller |
+| GET | `/api/v1/sources` | List Sources visible to the caller (`workspaceId=`, or `capsuleId=` for the app's Source) |
 | POST | `/api/v1/sources` | Create a Source |
 | GET | `/api/v1/sources/{sourceId}` | Read a Source |
 | PATCH | `/api/v1/sources/{sourceId}` | Update Source metadata |
@@ -777,7 +852,7 @@ change again instead of the Source's default ref.
 | POST | `/api/v1/connections/{connectionId}/revoke` | Revoke a Connection |
 | POST | `/api/v1/connections/oauth/{helperId}/start` | Start an installed credential OAuth helper |
 | GET | `/api/v1/connections/oauth/{helperId}/callback` | Complete an installed credential OAuth helper |
-| GET | `/api/v1/provider-connections` | List ProviderConnections visible to a Workspace |
+| GET | `/api/v1/provider-connections` | List the caller's own and release-owned bindable ProviderConnections; `capsuleId=&projection=release-owned` for one app; `workspaceId=` is the legacy Workspace-owner list |
 | GET | `/api/v1/credential-recipes` | List optional guided Credential Recipes |
 
 ### Dashboard projections

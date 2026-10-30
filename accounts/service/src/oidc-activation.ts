@@ -9,15 +9,19 @@ export const OIDC_ACTIVATION_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
  * Value-free authority fence shared by Apply registration and live grant.
  * It binds the current immutable InstallConfig declaration to the Capsule's
  * execution epoch without persisting any module variable or secret value.
+ *
+ * `scopeRef` is the Capsule's frozen derivation scope (`capsuleScopeRef`). It
+ * is hashed under the historical `workspaceId` key, so a digest stored before
+ * stage 9.0 still matches byte for byte.
  */
 export async function oidcClientActivationDigest(input: {
-  readonly workspaceId: string;
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly executionAuthorityEpoch: number;
   readonly installConfig: InstallConfig;
 }): Promise<string> {
   if (
-    !input.workspaceId ||
+    !input.scopeRef ||
     !input.capsuleId ||
     !Number.isSafeInteger(input.executionAuthorityEpoch) ||
     input.executionAuthorityEpoch < 1
@@ -36,7 +40,7 @@ export async function oidcClientActivationDigest(input: {
   ]);
   return await stableJsonDigest({
     contract: "takosumi.accounts-oidc-activation/v1",
-    workspaceId: input.workspaceId,
+    workspaceId: input.scopeRef,
     capsuleId: input.capsuleId,
     executionAuthorityEpoch: input.executionAuthorityEpoch,
     installConfigDigest,

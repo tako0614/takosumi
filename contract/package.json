@@ -1,6 +1,6 @@
 {
   "name": "@takosjp/takosumi-contract",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Public provider-neutral runtime contracts for Takosumi hosts and portable applications.",
   "license": "MIT",
   "type": "module",
@@ -17,6 +17,7 @@
     "interface-types.ts",
     "managed-relational-runtime.ts",
     "managed-runtime-connections.ts",
+    "native-client-identity.ts",
     "notification-pushers.ts",
     "runtime-interfaces.ts",
     "runtime.ts",
@@ -31,7 +32,8 @@
     "./interface-types": "./interface-types.ts",
     "./runtime-interfaces": "./runtime-interfaces.ts",
     "./notification-pushers": "./notification-pushers.ts",
-    "./identity-oidc": "./identity-oidc.ts"
+    "./identity-oidc": "./identity-oidc.ts",
+    "./native-client-identity": "./native-client-identity.ts"
   },
   "publishConfig": {
     "access": "public"

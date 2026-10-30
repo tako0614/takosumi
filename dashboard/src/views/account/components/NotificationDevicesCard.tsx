@@ -19,7 +19,7 @@ import {
 import RelativeTime from "./RelativeTime.tsx";
 import { fetchFailedMessage, friendlyError } from "../../../lib/error-copy.ts";
 import { latestOrUndefined } from "../../../lib/resource-read.ts";
-import { formatDate, t } from "../../../i18n/index.ts";
+import { formatDate, type MessageKey, t } from "../../../i18n/index.ts";
 import {
   deleteNotificationPusher,
   listNotificationPushers,
@@ -49,9 +49,17 @@ export default function NotificationDevicesCard() {
 
   const rows = (): readonly TakosumiAccountsNotificationPusher[] =>
     latestOrUndefined(list)?.pushers ?? [];
-  const unavailable = () => {
-    const current = latestOrUndefined(list);
-    return current !== undefined && current.web_push_public_key === null;
+  const unavailable = (): MessageKey | undefined => {
+    switch (latestOrUndefined(list)?.web_push_unavailable_reason) {
+      case "secret_not_configured":
+        return "account.devices.unavailable.secret";
+      case "relay_not_configured":
+        return "account.devices.unavailable.relay";
+      case "issuer_not_https":
+        return "account.devices.unavailable.issuer";
+      default:
+        return undefined;
+    }
   };
 
   return (
@@ -69,7 +77,7 @@ export default function NotificationDevicesCard() {
         <CardSection>
           <p class="acct-help">{t("account.devices.help")}</p>
           <Show when={unavailable()}>
-            <p class="acct-help">{t("account.devices.unavailable")}</p>
+            {(key) => <p class="acct-help">{t(key())}</p>}
           </Show>
         </CardSection>
         <Show when={error()}>

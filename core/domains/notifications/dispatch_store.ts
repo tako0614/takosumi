@@ -5,6 +5,9 @@
  * (memory, Postgres, D1), so the Control ledger gains no table.
  */
 
+import { base64UrlEncode } from "./web_push/bytes.ts";
+import type { WebPushPusherIdentity } from "./web_push/delivery.ts";
+
 /**
  * The dispatcher's position in the Activity ledger, ordered by
  * `(createdAt, id)` like `takosumi_scheduled_sweep_cursors`. `generation`
@@ -82,10 +85,13 @@ export interface NotificationDispatchStore {
     readonly createdAt: string;
     readonly id: string;
   }): Promise<boolean>;
-  /** Insert rows whose delivery id is new; existing ids are left unchanged. */
+  /**
+   * Insert rows whose delivery id is new; existing ids are left unchanged.
+   * Returns how many rows were new.
+   */
   enqueueNotificationDeliveries(
     records: readonly NotificationDeliveryRecord[],
-  ): Promise<void>;
+  ): Promise<number>;
   /**
    * Lease up to `limit` pending rows due at `now` whose lease is free or
    * expired, oldest due first, and return them as leased.
@@ -108,15 +114,18 @@ export interface NotificationDispatchStore {
     readonly expiredBefore: number;
     readonly limit: number;
   }): Promise<number>;
+  /** Whether any account has a pusher; the dispatcher idles when none does. */
+  hasAnyNotificationPusher(): Promise<boolean>;
   listNotificationPushersForSubject(
     subject: string,
   ): Promise<readonly NotificationDispatchPusher[]>;
   findNotificationPusher(
     pusherId: string,
   ): Promise<NotificationDispatchPusher | undefined>;
-  removeNotificationPusher(pusherId: string): Promise<void>;
-  recordNotificationPusherOutcome(input: {
-    readonly pusherId: string;
+  /** Only while the pusher still has the endpoint and key that were sent to. */
+  removeNotificationPusher(pusher: WebPushPusherIdentity): Promise<void>;
+  /** Only while the pusher still has the endpoint and key that were sent to. */
+  recordNotificationPusherOutcome(input: WebPushPusherIdentity & {
     readonly at: number;
     readonly outcome: "delivered" | "failed";
     readonly status?: number;
@@ -136,7 +145,5 @@ export async function notificationDeliveryId(
       ),
     ),
   );
-  let binary = "";
-  for (const byte of digest.subarray(0, 24)) binary += String.fromCharCode(byte);
-  return `ndlv_${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+  return `ndlv_${base64UrlEncode(digest.subarray(0, 24))}`;
 }

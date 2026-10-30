@@ -159,14 +159,15 @@ for (const storeCase of STORES) {
       try {
         const record = await pusher({ pushkey: "key-health" });
         await store.saveNotificationPusher(record);
-        await store.recordNotificationPusherOutcome({ pusherId: record.pusherId, at: 3_000, outcome: "delivered" });
-        await store.recordNotificationPusherOutcome({ pusherId: record.pusherId, at: 4_000, outcome: "failed", status: 403 });
+        const sent = { pusherId: record.pusherId, endpoint: record.endpoint, pushkey: record.pushkey };
+        await store.recordNotificationPusherOutcome({ ...sent, at: 3_000, outcome: "delivered" });
+        await store.recordNotificationPusherOutcome({ ...sent, at: 4_000, outcome: "failed", status: 403 });
         expect(await store.findNotificationPusher(record.pusherId)).toMatchObject({
           lastSuccessAt: 3_000,
           lastFailureAt: 4_000,
           lastFailureStatus: 403,
         });
-        await store.recordNotificationPusherOutcome({ pusherId: record.pusherId, at: 5_000, outcome: "failed" });
+        await store.recordNotificationPusherOutcome({ ...sent, at: 5_000, outcome: "failed" });
         const timedOut = await store.findNotificationPusher(record.pusherId);
         expect(timedOut).toMatchObject({ lastSuccessAt: 3_000, lastFailureAt: 5_000 });
         expect(timedOut?.lastFailureStatus).toBeUndefined();
@@ -182,14 +183,19 @@ for (const storeCase of STORES) {
         expect(moved).toMatchObject({ endpoint: `${ENDPOINT}-new`, createdAt: 1_000, updatedAt: 7_000 });
         expect(moved?.lastSuccessAt).toBeUndefined();
         expect(moved?.lastFailureAt).toBeUndefined();
+        // A late answer about the old endpoint does not touch the re-registered pusher.
+        await store.recordNotificationPusherOutcome({ ...sent, at: 8_000, outcome: "failed", status: 403 });
+        expect((await store.findNotificationPusher(record.pusherId))?.lastFailureAt).toBeUndefined();
+        await store.removeNotificationPusher(sent);
+        expect(await store.findNotificationPusher(record.pusherId)).toMatchObject({ endpoint: `${ENDPOINT}-new` });
         // Outcomes for a pusher that is gone are ignored.
-        await store.recordNotificationPusherOutcome({ pusherId: "npsh_missing", at: 1, outcome: "delivered" });
+        await store.recordNotificationPusherOutcome({ pusherId: "npsh_missing", endpoint: ENDPOINT, pushkey: "x", at: 1, outcome: "delivered" });
       } finally {
         await close();
       }
     });
 
-    test("delete only the account's own pusher; the dispatcher may remove any", async () => {
+    test("delete only the account's own pusher; the dispatcher removes only the subscription it sent to", async () => {
       const { store, close } = await storeCase.open();
       try {
         const mine = await pusher({ pushkey: "key-mine" });
@@ -201,7 +207,9 @@ for (const storeCase of STORES) {
         expect(await store.deleteNotificationPusher({ subject: SUBJECT, pusherId: mine.pusherId })).toBe(true);
         expect(await store.deleteNotificationPusher({ subject: SUBJECT, pusherId: mine.pusherId })).toBe(false);
         expect(await store.listNotificationPushersForSubject(SUBJECT)).toEqual([]);
-        await store.removeNotificationPusher(theirs.pusherId);
+        await store.removeNotificationPusher({ pusherId: theirs.pusherId, endpoint: theirs.endpoint, pushkey: "another-key" });
+        expect(await store.findNotificationPusher(theirs.pusherId)).toEqual(theirs);
+        await store.removeNotificationPusher({ pusherId: theirs.pusherId, endpoint: theirs.endpoint, pushkey: theirs.pushkey });
         expect(await store.findNotificationPusher(theirs.pusherId)).toBeUndefined();
         expect(await store.listNotificationPushersForSubject(OTHER)).toEqual([]);
       } finally {

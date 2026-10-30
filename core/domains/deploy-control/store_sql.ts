@@ -122,6 +122,7 @@ function pgConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
 }
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import { capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   AccountWorkspaceListParams,
   AccountWorkspacePage,
@@ -7262,14 +7263,16 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             publicStoredInstallConfig(parseJson(configRows[0].json) as InstallConfig),
           ),
           stableJsonDigest(
-            capsuleWithoutOwnership(normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule)),
+            capsuleWithScopeRef(
+              capsuleWithoutOwnership(normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule)),
+            ),
           ),
           stableJsonDigest(parseJson(bindingRow.json)),
         ]);
         const [expectedConfig, expectedCapsule, expectedBinding] =
           await Promise.all([
             stableJsonDigest(installConfig),
-            stableJsonDigest(capsule),
+            stableJsonDigest(capsuleWithScopeRef(capsule)),
             stableJsonDigest(binding),
           ]);
         return capsuleRows[0].epoch === 1 &&
@@ -11046,6 +11049,38 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     return intents;
   }
 
+  async listDeadLetteredCapsuleInterfaceMaterializationIntentsForCapsule(
+    capsuleId: string,
+    limit?: number,
+  ): Promise<readonly CapsuleInterfaceMaterializationIntent[]> {
+    if (typeof capsuleId !== "string" || capsuleId.trim() === "") {
+      throw new TypeError("capsuleId is required");
+    }
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.capsuleInterfaceMaterializationIntents)
+      .where(
+        and(
+          eq(
+            pgSchema.capsuleInterfaceMaterializationIntents.capsuleId,
+            capsuleId,
+          ),
+          eq(
+            pgSchema.capsuleInterfaceMaterializationIntents.status,
+            "dead_letter",
+          ),
+        ),
+      )
+      .orderBy(
+        desc(pgSchema.capsuleInterfaceMaterializationIntents.deadLetteredAt),
+        desc(pgSchema.capsuleInterfaceMaterializationIntents.id),
+      )
+      .limit(capsuleInterfaceMaterializationFailureListLimit(limit));
+    const intents = rows.map(capsuleInterfaceMaterializationIntentFromPgRow);
+    await Promise.all(intents.map(validateCapsuleInterfaceMaterializationIntent));
+    return intents;
+  }
+
   async claimCapsuleInterfaceMaterializationIntent(
     input: ClaimCapsuleInterfaceMaterializationIntentInput,
   ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
@@ -11469,19 +11504,51 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       pgSchema.auditEvents,
       pgSchema.auditEvents.eventJson,
       {
+        // The explicit lower bound lets a created_at-leading index range-scan;
+        // the tie-break then orders equal timestamps by bytewise id.
         where: and(
           sql`${createdAt} <= ${input.untilCreatedAt}`,
           after === undefined
             ? undefined
-            : or(
-                gt(createdAt, after.createdAt),
-                and(eq(createdAt, after.createdAt), sql`${id} > ${after.id}`),
+            : and(
+                sql`${createdAt} >= ${after.createdAt}`,
+                or(
+                  gt(createdAt, after.createdAt),
+                  and(eq(createdAt, after.createdAt), sql`${id} > ${after.id}`),
+                ),
               ),
         ),
         orderBy: [asc(createdAt), asc(id)],
         limit: clampActivityLedgerPageLimit(input.limit),
       },
     );
+  }
+
+  async listActivityEventsForWorkspacesPage(
+    workspaceIds: readonly string[],
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    const ids = boundedActivityWorkspaceIds(workspaceIds);
+    if (ids.length === 0) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      {
+        where: pgKeysetWhereDesc(
+          inArray(pgSchema.auditEvents.workspaceId, ids),
+          pgSchema.auditEvents.createdAt,
+          pgSchema.auditEvents.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          desc(pgSchema.auditEvents.createdAt),
+          desc(pgSchema.auditEvents.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   // --- credential_mint_events (spec invariant 17) ---------------------------
@@ -11842,6 +11909,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         limit: limit + 1,
       },
     ));
+    return pageFromProbe(rows, limit);
+  }
+
+  async listBackupRecordsPageForCapsule(
+    capsuleId: string,
+    params: PageParams,
+  ): Promise<Page<BackupRecord>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<BackupRecord>(
+      pgSchema.backups,
+      pgSchema.backups.backupJson,
+      {
+        where: pgKeysetWhereDesc(
+          eq(pgSchema.backups.capsuleId, capsuleId),
+          pgSchema.backups.createdAt,
+          pgSchema.backups.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [desc(pgSchema.backups.createdAt), desc(pgSchema.backups.id)],
+        limit: limit + 1,
+      },
+    );
     return pageFromProbe(rows, limit);
   }
 

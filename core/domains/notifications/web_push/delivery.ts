@@ -10,9 +10,12 @@
  * - 3xx and every other 4xx (403 and 413 included): recorded as a failure of
  *   the pusher, never retried and never deleted, so a fault in the instance's
  *   own signing cannot erase every device at once.
+ * - An endpoint whose relay origin is no longer allowed is not sent to and is
+ *   recorded as a failure.
  */
 
 import { RetrySchedule } from "../../../shared/lifecycle/schedule.ts";
+import { checkPusherEndpoint } from "../pusher_endpoint.ts";
 import {
   sendWebPush,
   type WebPushMessage,
@@ -111,26 +114,40 @@ export function decideWebPushDelivery(
   }
 }
 
+/**
+ * The pusher exactly as it was sent to. Effects apply only while the stored
+ * pusher still has this endpoint and key, so an answer about an old
+ * subscription never touches a pusher the device has since re-registered.
+ */
+export interface WebPushPusherIdentity {
+  readonly pusherId: string;
+  readonly endpoint: string;
+  /** base64url `p256dh`. */
+  readonly pushkey: string;
+}
+
 /** Where the effect of a decision on the pusher itself is written. */
 export interface WebPushPusherHealthPort {
   /** The subscription is gone (404 / 410). */
-  removePusher(pusherId: string): Promise<void>;
-  recordPusherDelivered(pusherId: string, at: number): Promise<void>;
+  removePusher(pusher: WebPushPusherIdentity): Promise<void>;
+  recordPusherDelivered(pusher: WebPushPusherIdentity, at: number): Promise<void>;
   /** A permanent failure, or retries that ran out with the TTL. */
   recordPusherFailed(
-    pusherId: string,
+    pusher: WebPushPusherIdentity,
     at: number,
     status: number | null,
   ): Promise<void>;
 }
 
-export interface WebPushPusherTarget extends WebPushTarget {
-  readonly pusherId: string;
-}
+export interface WebPushPusherTarget extends WebPushTarget, WebPushPusherIdentity {}
 
 /**
  * Send one message to one pusher, apply the result to the pusher, and return
  * the decision so the caller can keep (or drop) its own delivery record.
+ *
+ * `allowedOrigins` is the relay allowlist as configured now: a pusher whose
+ * endpoint is no longer on it is not sent to and is recorded as failing, so an
+ * origin the operator removed stops receiving immediately.
  */
 export async function deliverWebPushToPusher(input: {
   readonly target: WebPushPusherTarget;
@@ -138,29 +155,41 @@ export async function deliverWebPushToPusher(input: {
   readonly context: WebPushSendContext;
   readonly pushers: WebPushPusherHealthPort;
   readonly retry: Omit<WebPushRetryState, "now">;
+  readonly allowedOrigins: readonly string[];
   readonly schedule?: RetrySchedule;
 }): Promise<WebPushDeliveryDecision> {
+  const identity: WebPushPusherIdentity = {
+    pusherId: input.target.pusherId,
+    endpoint: input.target.endpoint,
+    pushkey: input.target.pushkey,
+  };
+  const now = () => (input.context.now ?? Date.now)();
+  if (!checkPusherEndpoint(input.target.endpoint, input.allowedOrigins).ok) {
+    const decision: WebPushDeliveryDecision = {
+      kind: "failed",
+      status: null,
+      reason: "endpoint_origin_not_allowed",
+    };
+    await input.pushers.recordPusherFailed(identity, now(), null);
+    return decision;
+  }
   const outcome = await sendWebPush(input.target, input.message, input.context);
-  const now = (input.context.now ?? Date.now)();
+  const at = now();
   const decision = decideWebPushDelivery(
     outcome,
-    { ...input.retry, now },
+    { ...input.retry, now: at },
     input.schedule,
   );
   switch (decision.kind) {
     case "delivered":
-      await input.pushers.recordPusherDelivered(input.target.pusherId, now);
+      await input.pushers.recordPusherDelivered(identity, at);
       break;
     case "pusher_removed":
-      await input.pushers.removePusher(input.target.pusherId);
+      await input.pushers.removePusher(identity);
       break;
     case "failed":
     case "expired":
-      await input.pushers.recordPusherFailed(
-        input.target.pusherId,
-        now,
-        decision.status,
-      );
+      await input.pushers.recordPusherFailed(identity, at, decision.status);
       break;
     case "retry":
       break;

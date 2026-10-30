@@ -31,7 +31,6 @@ export type OwnNotificationKind =
 export type OwnNotificationRecipient =
   | { readonly kind: "app_owner"; readonly capsuleId: string }
   | { readonly kind: "run_starter"; readonly runId: string }
-  | { readonly kind: "connection_owner"; readonly connectionId: string }
   | { readonly kind: "account"; readonly accountId: string };
 
 export interface OwnNotificationPlan {
@@ -88,8 +87,9 @@ export function planOwnNotification(
         group: `run:${runId}`,
         ...optional("runOperation", field(event, "operation")),
       };
-    case "run.failed":
+    case "run.failed": {
       if (!runId) return undefined;
+      const phase = field(event, "phase");
       return {
         ...base,
         kind,
@@ -101,10 +101,13 @@ export function planOwnNotification(
         navigatePath: `/runs/${encodeURIComponent(runId)}`,
         ttlSeconds: DEFAULT_TTL_SECONDS,
         urgency: "normal",
-        group: `run:${runId}`,
+        // Periodic drift checks fail as a new Run each time: collapse them
+        // per app, like drift itself, instead of one notification per Run.
+        group: phase === "drift_check" && capsuleId ? `drift:${capsuleId}` : `run:${runId}`,
         ...optional("runOperation", field(event, "operation")),
-        ...optional("runPhase", field(event, "phase")),
+        ...optional("runPhase", phase),
       };
+    }
     case "run.applied":
       // Only the first Apply of an install (operation `create`).
       if (!runId || !capsuleId || field(event, "operation") !== "create") {
@@ -120,16 +123,21 @@ export function planOwnNotification(
         urgency: "normal",
         group: `installed:${capsuleId}`,
       };
-    case "connection.revoked":
+    case "connection.revoked": {
+      // The Connection record is gone by the time the event is read, so the
+      // owner is taken from the event itself.
+      const owner = field(event, "ownerAccountId");
+      if (!owner) return undefined;
       return {
         ...base,
         kind,
-        recipients: [{ kind: "connection_owner", connectionId: event.targetId }],
+        recipients: [{ kind: "account", accountId: owner }],
         navigatePath: "/connections",
         ttlSeconds: DEFAULT_TTL_SECONDS,
         urgency: "normal",
         group: `connection:${event.targetId}`,
       };
+    }
     case "app.ownership_transfer_created": {
       const recipient = field(event, "recipientAccountId");
       if (!recipient || !capsuleId) return undefined;
@@ -183,7 +191,7 @@ export function planOwnNotification(
         navigatePath: `${appPath(capsuleId)}#attention`,
         ttlSeconds: DEFAULT_TTL_SECONDS,
         urgency: "normal",
-        group: `${kind}:${capsuleId}`,
+        group: kind === "capsule.drift_detected" ? `drift:${capsuleId}` : `${kind}:${capsuleId}`,
       };
   }
 }

@@ -896,8 +896,15 @@ describe("review round 3: shared Sources, cursors and Activity", () => {
       ((await get(h, `/dashboard/bootstrap?includeNotifications=true&workspaceId=${WORKSPACE}`, credential)).notifications as { event: { action: string } }[] ?? [])
         .map((entry) => entry.event.action).sort(),
     ];
-    for (const list of await actions(h.headers.session(WORKSPACE_ADMIN))) expect(list).toEqual(workspaceLevel);
-    for (const list of await actions(h.headers.session(DUAL))) expect(list).toEqual([...appScoped, ...workspaceLevel].sort());
+    // The Workspace list keeps the Workspace decision for Workspace-level
+    // events. Bootstrap notifications are built from the caller's apps
+    // (TASK-0118 9.1): only app-scoped events of apps the caller manages.
+    const [adminList, adminNotifications] = await actions(h.headers.session(WORKSPACE_ADMIN));
+    expect(adminList).toEqual(workspaceLevel);
+    expect(adminNotifications).toEqual([]);
+    const [dualList, dualNotifications] = await actions(h.headers.session(DUAL));
+    expect(dualList).toEqual([...appScoped, ...workspaceLevel].sort());
+    expect(dualNotifications).toEqual([...appScoped].sort());
   }, 180_000);
 
   test("Activity reads nothing more without owned apps and caps Run lookups with them", async () => {

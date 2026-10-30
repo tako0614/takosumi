@@ -4,6 +4,7 @@
  * platform cron. The Cloudflare host runs the same dispatcher from its
  * scheduled handler.
  *
+ * The server also ticks it right after a notified Activity event is stored.
  * Ticks never overlap within a process. Several processes may tick against the
  * same database: the Activity cursor moves by compare-and-set, delivery rows
  * are keyed by (event, pusher), and sends are leased with FOR UPDATE SKIP
@@ -16,7 +17,7 @@ import type { buildComposedApp } from "./composed-app.ts";
 
 type DispatcherOperations = Pick<
   Awaited<ReturnType<typeof buildComposedApp>>["operations"],
-  "activity" | "appOwnership" | "controller" | "capsules" | "connections"
+  "activity" | "appOwnership" | "controller" | "capsules"
 >;
 
 /** New events are sent within about this long after the settle window. */

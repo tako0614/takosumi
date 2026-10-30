@@ -10,6 +10,7 @@ import {
   assertCompletionGeneration,
   assertGitInstallPlanDrainFailureInput,
   assertImmutableScope,
+  assertListOpenGitInstallAttemptsScope,
   assertTransitionGitInstallPlanInput,
   gitInstallPlanForDrainFailure,
   gitInstallPlanManagementAuthority,
@@ -597,14 +598,22 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
   async listOpenAttempts(
     input: ListOpenGitInstallAttemptsInput,
   ): Promise<readonly StoredGitInstallPlan[]> {
+    assertListOpenGitInstallAttemptsScope(input);
     const limit = Math.max(1, Math.min(200, Math.trunc(input.limit)));
-    const params: (string | number)[] = [input.workspaceId];
-    if (input.actorSubject !== undefined) params.push(input.actorSubject);
+    const params: (string | number)[] = [];
+    const scope: string[] = [];
+    if (input.workspaceId !== undefined) {
+      params.push(input.workspaceId);
+      scope.push(`workspace_id = $${params.length}`);
+    }
+    if (input.actorSubject !== undefined) {
+      params.push(input.actorSubject);
+      scope.push(`actor_subject = $${params.length}`);
+    }
     params.push(limit);
     const result = await this.#client.query<GitInstallPlanRow>(
       `select * from ${TABLE}
-        where workspace_id = $1
-          ${input.actorSubject === undefined ? "" : "and actor_subject = $2"}
+        where ${scope.join(" and ")}
           and phase not in ('failed', 'discarded')
           and coalesce(record_json ->> 'operation', 'install') = 'install'
           and (

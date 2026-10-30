@@ -154,13 +154,14 @@ async function accountFixture(page: Page): Promise<AccountFixture> {
       return route.fulfill({
         json: {
           web_push_public_key: "BFixtureVapidPublicKey",
+          web_push_unavailable_reason: null,
           pushers: [
             {
               id: "npsh_fixture_pixel",
               kind: "webpush",
               app_id: "com.takosumi",
               pushkey: "BFixturePushKey",
-              data: { url: "https://push.takosumi.com/push/fixture" },
+              data: { url: "https://relay.example.test/push/fixture" },
               device_display_name: "Pixel 9",
               lang: "ja-JP",
               created_at: "2026-10-01T00:00:00.000Z",

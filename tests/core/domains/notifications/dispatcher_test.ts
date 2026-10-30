@@ -6,7 +6,7 @@ import { notificationPusherId } from "../../../../accounts/service/src/notificat
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { NotificationDispatchStore } from "../../../../core/domains/notifications/dispatch_store.ts";
 import {
-  NOTIFICATION_SETTLE_WINDOW_MS,
+  NOTIFICATION_REREAD_WINDOW_MS,
   type NotificationRecipientDirectory,
   OwnNotificationDispatcher,
 } from "../../../../core/domains/notifications/dispatcher.ts";
@@ -43,6 +43,7 @@ async function harness(options: {
   readonly directory?: Partial<NotificationRecipientDirectory>;
   /** The relay's answer for one push; 201 by default. */
   readonly answer?: (pusherId: string) => number;
+  readonly relayOrigins?: readonly string[];
 } = {}): Promise<Harness> {
   const ledger = new InMemoryOpenTofuControlStore();
   const accounts = new InMemoryAccountsStore();
@@ -54,7 +55,6 @@ async function harness(options: {
   const directory: NotificationRecipientDirectory = {
     appOwner: async () => OWNER,
     runStartedBy: async () => STARTER,
-    connectionOwner: async () => OWNER,
     appName: async (capsuleId) => (capsuleId === "cap_consumer" ? "Consumer" : "yurucommu"),
     ...options.directory,
   };
@@ -71,6 +71,7 @@ async function harness(options: {
     vapid: async () => vapid,
     topicKey: async () => topicKey,
     instanceOrigin: ORIGIN,
+    relayOrigins: options.relayOrigins ?? [RELAY],
     fetch,
     now: () => clock.now,
     random: () => 0,
@@ -122,24 +123,21 @@ async function decrypt(request: Request, agent: TestUserAgent) {
 }
 
 describe("own-notification dispatcher", () => {
-  test("starts at the present, then sends a new approval wait to the owner's device in the same run", async () => {
+  test("starts at the present, sends a new approval wait in the next pass, and re-reads without resending", async () => {
     const h = await harness();
     const { agent } = await h.register(OWNER, "ja-JP");
     await h.record({ id: "act_history", action: "run.approval_required", metadata: { capsuleId: "cap_1" } }, T0 - 600_000);
     // The first run only places the cursor; history is never sent.
-    expect(await h.dispatcher.run()).toMatchObject({ enabled: true, events: 0, enqueued: 0 });
+    expect(await h.dispatcher.run()).toMatchObject({ enabled: true, idle: false, events: 0, enqueued: 0 });
     expect(await h.accounts.getNotificationDispatchCursor()).toEqual({
       generation: 0,
-      createdAt: new Date(T0 - NOTIFICATION_SETTLE_WINDOW_MS).toISOString(),
+      createdAt: new Date(T0).toISOString(),
       id: "",
     });
 
-    h.clock.now = T0 + 10_000;
-    await h.record({ id: "act_wait", action: "run.approval_required", runId: "run_42", targetId: "run_42", metadata: { capsuleId: "cap_1", operation: "update" } }, T0);
-    // Still inside the settle window: left for a later run.
-    expect(await h.dispatcher.run()).toMatchObject({ events: 0, enqueued: 0, delivered: 0 });
-
-    h.clock.now = T0 + NOTIFICATION_SETTLE_WINDOW_MS + 1;
+    // An event recorded a moment ago is read at once (no settle delay).
+    h.clock.now = T0 + 2_000;
+    await h.record({ id: "act_wait", action: "run.approval_required", runId: "run_42", targetId: "run_42", metadata: { capsuleId: "cap_1", operation: "update" } }, T0 + 1_000);
     expect(await h.dispatcher.run()).toMatchObject({ events: 1, enqueued: 1, delivered: 1 });
     expect(h.requests).toHaveLength(1);
     const [request] = h.requests;
@@ -163,19 +161,49 @@ describe("own-notification dispatcher", () => {
     const pusher = (await h.accounts.listNotificationPushersForSubject(OWNER))[0]!;
     expect(pusher.lastSuccessAt).toBe(h.clock.now);
 
-    // Running again sends nothing new, and a replayed cursor enqueues nothing twice.
-    expect(await h.dispatcher.run()).toMatchObject({ events: 0, enqueued: 0, delivered: 0 });
-    const cursor = (await h.accounts.getNotificationDispatchCursor())!;
-    await h.accounts.compareAndSetNotificationDispatchCursor({
-      expectedGeneration: cursor.generation,
-      createdAt: new Date(T0 - 1).toISOString(),
-      id: "",
-    });
-    expect(await h.dispatcher.run()).toMatchObject({ events: 1, delivered: 0 });
+    // Inside the re-read window the event is read again but adds no row and
+    // is not resent; the cursor stays behind it.
+    h.clock.now = T0 + 60_000;
+    expect(await h.dispatcher.run()).toMatchObject({ events: 1, enqueued: 0, delivered: 0 });
+    expect((await h.accounts.getNotificationDispatchCursor())?.createdAt).toBe(new Date(T0).toISOString());
+    // Once older than the window, the cursor passes it and it is not read again.
+    h.clock.now = T0 + NOTIFICATION_REREAD_WINDOW_MS + 5_000;
+    expect(await h.dispatcher.run()).toMatchObject({ events: 1, enqueued: 0 });
+    expect(await h.accounts.getNotificationDispatchCursor()).toMatchObject({ createdAt: new Date(T0 + 1_000).toISOString(), id: "act_wait" });
+    expect(await h.dispatcher.run()).toMatchObject({ events: 0, enqueued: 0 });
     expect(h.requests).toHaveLength(1);
   });
 
-  test("410 removes the pusher, 5xx retries on the schedule, 403 marks it failing", async () => {
+  test("an event committed late within the window is still sent", async () => {
+    const h = await harness();
+    await h.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0).toISOString(), id: "" });
+    await h.register(OWNER, "en");
+    h.clock.now = T0 + 10_000;
+    await h.record({ id: "act_b", action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_1", metadata: { capsuleId: "cap_1" } }, T0 + 9_000);
+    expect(await h.dispatcher.run()).toMatchObject({ enqueued: 1, delivered: 1 });
+    // A row whose createdAt is earlier but which committed after that run.
+    await h.record({ id: "act_a", action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_2", metadata: { capsuleId: "cap_2" } }, T0 + 5_000);
+    h.clock.now = T0 + 20_000;
+    expect(await h.dispatcher.run()).toMatchObject({ enqueued: 1, delivered: 1 });
+    expect(h.requests).toHaveLength(2);
+  });
+
+  test("an instance without any pusher only moves the cursor", async () => {
+    const h = await harness();
+    await h.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0 - 3_600_000).toISOString(), id: "" });
+    await h.record({ id: "act_old", action: "run.approval_required", runId: "run_1", targetId: "run_1", metadata: { capsuleId: "cap_1" } }, T0 - 60_000);
+    h.clock.now = T0;
+    expect(await h.dispatcher.run()).toEqual({
+      enabled: true, idle: true, events: 0, enqueued: 0, delivered: 0, retried: 0, failed: 0, removedPushers: 0, skippedEvents: 0,
+    });
+    expect((await h.accounts.getNotificationDispatchCursor())?.createdAt).toBe(new Date(T0).toISOString());
+    // A device registered later does not receive what happened before it.
+    await h.register(OWNER, "en");
+    h.clock.now = T0 + 1_000;
+    expect(await h.dispatcher.run()).toMatchObject({ idle: false, events: 0, enqueued: 0 });
+  });
+
+  test("410 removes the pusher, 5xx retries on the schedule, 403 marks it failing, a removed relay origin stops receiving", async () => {
     const byEndpoint = new Map<string, number>();
     const h = await harness({ answer: (pusherId) => byEndpoint.get(pusherId) ?? 201 });
     await h.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0 - 1).toISOString(), id: "" });
@@ -183,7 +211,7 @@ describe("own-notification dispatcher", () => {
     const flaky = await h.register(OWNER, "en-US");
     const broken = await h.register(OWNER, "en-US");
     await h.record({ id: "act_drift", action: "capsule.drift_detected", targetType: "capsule", targetId: "cap_1", metadata: { capsuleId: "cap_1" } }, T0);
-    h.clock.now = T0 + NOTIFICATION_SETTLE_WINDOW_MS;
+    h.clock.now = T0 + 1_000;
     byEndpoint.set(gone.pusherId, 410).set(flaky.pusherId, 503).set(broken.pusherId, 403);
     expect(await h.dispatcher.run()).toMatchObject({ events: 1, enqueued: 3, delivered: 0, removedPushers: 1, retried: 1, failed: 1 });
     const pushers = await h.accounts.listNotificationPushersForSubject(OWNER);
@@ -201,6 +229,16 @@ describe("own-notification dispatcher", () => {
     expect(h.requests.filter((request) => request.url.endsWith(flaky.pusherId))).toHaveLength(2);
     expect(h.requests.filter((request) => request.url.endsWith(broken.pusherId))).toHaveLength(1);
     expect((await h.accounts.findNotificationPusher(flaky.pusherId))?.lastSuccessAt).toBe(h.clock.now);
+
+    // The operator removes the relay origin: the pusher is no longer sent to.
+    const moved = await harness({ relayOrigins: ["https://other-relay.example.test"] });
+    await moved.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0 - 1).toISOString(), id: "" });
+    const stranded = await moved.register(OWNER, "en");
+    await moved.record({ id: "act_x", action: "capsule.drift_detected", targetType: "capsule", targetId: "cap_1", metadata: { capsuleId: "cap_1" } }, T0);
+    moved.clock.now = T0 + 1_000;
+    expect(await moved.dispatcher.run()).toMatchObject({ enqueued: 1, delivered: 0, failed: 1 });
+    expect(moved.requests).toHaveLength(0);
+    expect((await moved.accounts.findNotificationPusher(stranded.pusherId))?.lastFailureAt).toBe(moved.clock.now);
   });
 
   test("resolves recipients from the app owner and named accounts, never system actors", async () => {
@@ -209,6 +247,7 @@ describe("own-notification dispatcher", () => {
     const owner = await h.register(OWNER, "en-US");
     const member = await h.register("tsub_member", "ja");
     const recipient = await h.register("tsub_recipient", "en");
+    const connectionOwner = await h.register("tsub_conn_owner", "en");
     await h.record({ id: "act_1", action: "run.failed", runId: "run_manual", targetId: "run_manual", metadata: { capsuleId: "cap_1", phase: "apply" } }, T0);
     await h.record({ id: "act_2", action: "run.failed", runId: "run_auto", targetId: "run_auto", metadata: { capsuleId: "cap_1", phase: "plan" } }, T0 + 1);
     // App ownership rows carry the accounts at the top level, without metadata.
@@ -224,11 +263,13 @@ describe("own-notification dispatcher", () => {
     await h.record({ id: "act_6", action: "run.applied", runId: "run_install", targetId: "run_install", metadata: { capsuleId: "cap_1", operation: "create" } }, T0 + 5);
     await h.record({ id: "act_7", action: "run.applied", runId: "run_update", targetId: "run_update", metadata: { capsuleId: "cap_1", operation: "update" } }, T0 + 6);
     await h.record({ id: "act_8", action: "run.plan_created", metadata: { capsuleId: "cap_1" } }, T0 + 7);
-    h.clock.now = T0 + NOTIFICATION_SETTLE_WINDOW_MS + 10;
+    // The Connection is deleted by now; its owner comes from the event.
+    await h.record({ id: "act_9", action: "connection.revoked", targetType: "connection", targetId: "conn_gone", metadata: { provider: "x", ownerAccountId: "tsub_conn_owner" } }, T0 + 8);
+    h.clock.now = T0 + 1_000;
     const result = await h.dispatcher.run();
     // act_1: starter == owner, one row. act_2: owner only. act_3: member.
-    // act_4: recipient. act_5: owner. act_6: installer (owner). act_7, act_8: none.
-    expect(result).toMatchObject({ events: 8, enqueued: 6, delivered: 6 });
+    // act_4: recipient. act_5: owner. act_6: installer (owner). act_7, act_8: none. act_9: connection owner.
+    expect(result).toMatchObject({ events: 9, enqueued: 7, delivered: 7 });
     const bodies = async (target: { readonly pusherId: string; readonly agent: TestUserAgent }) =>
       await Promise.all(h.requests.filter((request) => request.url.endsWith(target.pusherId)).map((request) => decrypt(request.clone(), target.agent)));
     expect((await bodies(owner)).map((body) => body.notification.body).sort()).toEqual([
@@ -243,24 +284,32 @@ describe("own-notification dispatcher", () => {
     expect((await bodies(recipient)).map((body) => body.notification.body)).toEqual([
       "You are asked to become the owner of yurucommu",
     ]);
+    expect((await bodies(connectionOwner)).map((body) => [body.notification.body, body.notification.navigate])).toEqual([
+      ["A connection was revoked", `${ORIGIN}/connections`],
+    ]);
   });
 
-  test("an event whose recipients cannot be read is retried, then skipped once old", async () => {
+  test("an event whose recipients cannot be read holds the cursor, does not hold later events, and is dropped only after six hours", async () => {
     let failing = true;
-    const h = await harness({ directory: { appOwner: async () => { if (failing) throw new Error("ledger unavailable"); return OWNER; } } });
+    const h = await harness({ directory: { appOwner: async (capsuleId) => { if (failing && capsuleId === "cap_bad") throw new Error("ledger unavailable"); return OWNER; } } });
     await h.accounts.compareAndSetNotificationDispatchCursor({ expectedGeneration: undefined, createdAt: new Date(T0 - 1).toISOString(), id: "" });
     await h.register(OWNER, "en");
-    await h.record({ id: "act_a", action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_1", metadata: { capsuleId: "cap_1" } }, T0);
-    await h.record({ id: "act_b", action: "capsule.auto_update_failed", targetType: "capsule", targetId: "cap_1", metadata: {} }, T0 + 1);
-    h.clock.now = T0 + NOTIFICATION_SETTLE_WINDOW_MS + 5;
-    expect(await h.dispatcher.run()).toMatchObject({ events: 0, enqueued: 0, skippedEvents: 0 });
+    await h.record({ id: "act_a", action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_bad", metadata: { capsuleId: "cap_bad" } }, T0);
+    await h.record({ id: "act_b", action: "capsule.auto_update_failed", targetType: "capsule", targetId: "cap_good", metadata: {} }, T0 + 1);
+    // Hourly cron: an hour later the failing event is still retried, the later one went out.
+    h.clock.now = T0 + 3_600_000;
+    expect(await h.dispatcher.run()).toMatchObject({ events: 2, enqueued: 1, delivered: 1, skippedEvents: 0 });
+    expect((await h.accounts.getNotificationDispatchCursor())?.createdAt).toBe(new Date(T0 - 1).toISOString());
     failing = false;
-    expect(await h.dispatcher.run()).toMatchObject({ events: 2, enqueued: 2, delivered: 2 });
+    h.clock.now += 3_600_000;
+    expect(await h.dispatcher.run()).toMatchObject({ events: 2, enqueued: 1, delivered: 1 });
+    expect(await h.accounts.getNotificationDispatchCursor()).toMatchObject({ id: "act_b" });
 
     failing = true;
-    await h.record({ id: "act_c", action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_1", metadata: { capsuleId: "cap_1" } }, T0 + 2);
-    h.clock.now = T0 + 20 * 60_000;
+    await h.record({ id: "act_c", action: "capsule.uninstall_blocked", targetType: "capsule", targetId: "cap_bad", metadata: { capsuleId: "cap_bad" } }, T0 + 2);
+    h.clock.now = T0 + 6 * 3_600_000 + 1_000;
     expect(await h.dispatcher.run()).toMatchObject({ events: 1, enqueued: 0, skippedEvents: 1 });
+    expect(await h.accounts.getNotificationDispatchCursor()).toMatchObject({ id: "act_c" });
   });
 
   test("an event past its TTL is never sent", async () => {
@@ -280,20 +329,23 @@ describe("own-notification dispatcher", () => {
       appOwnership: { getOwnership: async () => ({ ownerAccountId: OWNER }) },
       controller: { getRun: async () => ({ createdBy: OWNER }) },
       capsules: { getCapsule: async () => ({ name: "app" }) },
-      connections: { getProviderConnection: async () => ({ ownerAccountId: OWNER }) },
     };
     const disabled = createOwnNotificationDispatcher({ operations, store: accounts, env: {}, issuer: ORIGIN });
     expect(await disabled!.run()).toMatchObject({ enabled: false });
     expect(await accounts.getNotificationDispatchCursor()).toBeUndefined();
     expect(createOwnNotificationDispatcher({ operations, store: {}, env: {}, issuer: ORIGIN })).toBeUndefined();
     expect(createOwnNotificationDispatcher({ operations, store: accounts, env: {}, issuer: "not a url" })).toBeUndefined();
+    expect(createOwnNotificationDispatcher({
+      operations, store: accounts, env: { TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS: "not json" }, issuer: ORIGIN,
+    })).toBeUndefined();
     const enabled = createOwnNotificationDispatcher({
       operations,
       store: accounts,
-      env: { TAKOSUMI_SECRET_STORE_PASSPHRASE: PASSPHRASE },
+      env: { TAKOSUMI_SECRET_STORE_PASSPHRASE: PASSPHRASE, TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS: JSON.stringify([RELAY]) },
       issuer: `${ORIGIN}/`,
     });
-    expect(await enabled!.run()).toMatchObject({ enabled: true });
+    // No pusher anywhere: idle, and the cursor is placed at the present.
+    expect(await enabled!.run()).toMatchObject({ enabled: true, idle: true });
     expect(await accounts.getNotificationDispatchCursor()).toMatchObject({ generation: 0 });
   });
 });

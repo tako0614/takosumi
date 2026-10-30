@@ -36,6 +36,7 @@ import {
   composeTakosumiMobileOidcClients,
   parseTakosumiMobileBuiltinClientSetting,
   parseInstalledAppDelegationSources,
+  trustedNativeClientsFromEnv,
   parseWorkspaceMutationsFrozen,
   parseAppOwnershipMutationsFrozen,
   notificationPusherRouteOptionsFromEnv,
@@ -96,6 +97,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN?: string;
   /** JSON array of `{ url, path }` repositories whose installed app may delegate. */
   readonly TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES?: string;
+  /** JSON array of trusted native phone apps; malformed trusts none (logged once). */
+  readonly TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS?: string;
   /** `frozen` | `enabled` (default): app member and ownership-transfer writes. */
   readonly TAKOSUMI_APP_OWNERSHIP_MUTATIONS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
@@ -1307,6 +1310,9 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     installedAppDelegationSources: parseInstalledAppDelegationSources(
       env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
     ),
+    trustedNativeClients: trustedNativeClientsFromEnv(
+      env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
+    ),
     ...(hostedSessionPolicy && options.identityMergeReconciler
       ? { identityMergeReconciler: options.identityMergeReconciler(env) }
       : {}),
@@ -1347,6 +1353,7 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ),
     notificationPushers: notificationPusherRouteOptionsFromEnv(
       env as unknown as Readonly<Record<string, unknown>>,
+      issuer,
     ),
   };
   const stableOidc = await parseStableOidcFlow(env);
