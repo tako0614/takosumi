@@ -124,8 +124,10 @@ describe("use on your phone", () => {
     // The confirmed link remembers nothing; only rememberableChoice decides what is kept.
     expect(section.slice(link - 400, link + 200)).not.toContain("keep(");
     expect(section).toContain("const value = rememberableChoice(choice, client(), platform);");
-    // Its label is the checked name or a neutral one, never the screen's title or app name.
-    expect(section).toContain('return client.name ?? t("app.phone.unverifiedName");');
+    // Its label is the checked name or a neutral one naming its destination,
+    // never the screen's title or app name.
+    expect(section).toContain('return client.name ?? t("app.phone.unverifiedName", { target: clientTargetLabel(client) });');
+    expect(section).toContain('return client.name ?? t("app.phone.unverifiedNameStandalone", { target: clientTargetLabel(client) });');
   });
 
   test("Open and the Home tile open the way this device chose, and a computer keeps the new tab", () => {
@@ -133,9 +135,13 @@ describe("use on your phone", () => {
     expect(appUi).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
     expect(home).toContain("screenOpenRoute(props.app.inst.id, surface)");
     expect(home).toContain("{...openRouteAnchor(route())}");
-    // 「開き方を変える」 next to Open leads to the chooser.
+    // 「開き方を変える」 next to Open leads to the chooser of every screen
+    // that has a native app here or a remembered choice.
     expect(page).toContain('data-testid="app-open-change"');
-    expect(page).toContain('{t("app.open.change")}');
+    expect(page).toContain("<For each={openChoiceChangeable()}>");
+    expect(page).toContain('t("app.open.changeFor", { name: screen.name || t("app.open.screenN", { n: index + 1 }) })');
+    // The fallback's `open`/`missing` leave the URL once the notice is on screen.
+    expect(page).toContain('navigate(appPageHref(capsuleId(), "phone"), { replace: true, scroll: false })');
   });
 
   test("no Smart App Banner: one page cannot name every app's native app", () => {
@@ -181,8 +187,14 @@ describe("use on your phone", () => {
     expect(ja["app.phone.webOpen"]).toBe("ブラウザで開く");
     expect(ja["app.phone.remember"]).toBe("この端末で覚える");
     expect(ja["app.open.change"]).toBe("開き方を変える");
-    expect(ja["app.phone.unverifiedName"]).toBe("未確認のアプリ");
-    expect(en["app.phone.unverifiedName"]).toBe("Unverified app");
+    expect(ja["app.phone.unverifiedName"]).toBe("未確認のアプリ（{target}）");
+    expect(en["app.phone.unverifiedName"]).toBe("unverified app ({target})");
+    expect(en["app.phone.unverifiedNameStandalone"]).toBe("Unverified app ({target})");
+    // Sentences that would start with the label have their own wording.
+    expect(en["app.phone.missingUnverified"]).toStartWith("The unverified app ({target})");
+    expect(en["app.phone.confirmTitleUnverified"]).toBe("Open the unverified app ({target})?");
+    expect(ja["app.phone.targetScheme"]).toBe("リンクのscheme:");
+    expect(en["app.phone.targetScheme"]).toBe("Link scheme:");
     // Where notifications go is said for each way of opening.
     expect(ja["app.phone.nativeNotify"]).toContain("専用アプリ");
     expect(ja["app.phone.webNotify"]).toContain("ホーム画面に追加したときだけ");

@@ -218,8 +218,10 @@ tile and **Open** on the app's page decide in this order:
   (package, scheme, link domain) and where its store link goes, and asks for a confirmation each
   time. It is never remembered.
 - A remembered choice stays in that browser's `localStorage`, per app and screen, and is never sent
-  to the server. Where the browser cannot store it, the default is used each time. **Change how it
-  opens** on the app's page leads to choosing again or forgetting the choice.
+  to the server. A remembered native app is bound to the verified app and destination (package,
+  scheme, link host) it was chosen for; when any of them changes it is not used and the chooser asks
+  again. Where the browser cannot store it, the default is used each time. **Change how it opens**
+  on the app's page leads to choosing again or forgetting the choice, for each screen.
 - The only value handed to the native app is the screen's URL or origin filled into the template.
 
 ### Templates and links

@@ -291,8 +291,10 @@ export function chosenNativeHref(client: PhoneClient, fallbackUrl: string | unde
 
 /**
  * A remembered choice for one app's screen on this device. "native" is bound
- * to the verified trusted client it was chosen for, so a declaration that
- * later names another app (or loses its verification) is asked about again.
+ * to the verified trusted client it was chosen for and to where its link went
+ * then (Android package, scheme, link host), so a declaration that later names
+ * another app, loses its verification, or now opens somewhere else (an
+ * operator changed the trusted entry) is asked about again.
  */
 export type RememberedOpenChoice =
   | { readonly choice: "web" }
@@ -300,6 +302,7 @@ export type RememberedOpenChoice =
     readonly choice: "native";
     readonly platform: PhonePlatform;
     readonly trustedClientId: string;
+    readonly target: PhoneClientTarget;
   };
 
 /** The browser storage a choice is kept in (`localStorage`); injected in tests. */
@@ -310,6 +313,18 @@ export interface OpenChoiceStorage {
 }
 
 const STORAGE_PREFIX = "takosumi.openChoice.v1";
+/** The key `openChoiceStorageWorks` writes and removes; never a choice. */
+const PROBE_KEY = `${STORAGE_PREFIX}:probe`;
+
+/**
+ * Whether a `storage` event (another tab's write) can change a remembered
+ * choice: a cleared storage (`key === null`) or a choice key. The probe key
+ * and every other key are ignored, so tabs never wake each other for writes
+ * that remember nothing.
+ */
+export function isOpenChoiceStorageKey(key: string | null): boolean {
+  return key === null || (key.startsWith(`${STORAGE_PREFIX}:`) && key !== PROBE_KEY);
+}
 
 /**
  * The storage key of one app's screen. `localStorage` is per origin, so the
@@ -333,7 +348,46 @@ export function rememberableChoice(
   if (platform === "desktop") return undefined;
   if (choice === "web") return { choice: "web" };
   if (!client || client.platform !== platform || !client.verified || !client.trustedClientId) return undefined;
-  return { choice: "native", platform, trustedClientId: client.trustedClientId };
+  return { choice: "native", platform, trustedClientId: client.trustedClientId, target: client.target };
+}
+
+/**
+ * Whether a remembered "native" choice still names `client`: the same
+ * platform, the same verified trusted client, and the same destination.
+ */
+export function rememberedNativeMatches(
+  remembered: RememberedOpenChoice | undefined,
+  client: PhoneClient | undefined,
+): boolean {
+  return remembered?.choice === "native" &&
+    client !== undefined &&
+    client.verified &&
+    remembered.platform === client.platform &&
+    remembered.trustedClientId === client.trustedClientId &&
+    remembered.target.package === client.target.package &&
+    remembered.target.scheme === client.target.scheme &&
+    remembered.target.host === client.target.host;
+}
+
+/** A remembered destination: only the known fields, each well formed, at least one. */
+function rememberedTarget(value: unknown, platform: PhonePlatform): PhoneClientTarget | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "package" && key !== "scheme" && key !== "host")) {
+    return undefined;
+  }
+  const { package: packageName, scheme, host } = value;
+  if (packageName !== undefined && (typeof packageName !== "string" || !ANDROID_PACKAGE_PATTERN.test(packageName))) {
+    return undefined;
+  }
+  if (scheme !== undefined && (typeof scheme !== "string" || !SCHEME_PATTERN.test(scheme))) return undefined;
+  if (host !== undefined && (typeof host !== "string" || !HOST_PATTERN.test(host))) return undefined;
+  if (scheme === undefined && host === undefined) return undefined;
+  // Android links are always pinned to a package; iOS has none.
+  if ((platform === "android") !== (packageName !== undefined)) return undefined;
+  return {
+    ...(packageName !== undefined ? { package: packageName } : {}),
+    ...(scheme !== undefined ? { scheme } : {}),
+    ...(host !== undefined ? { host } : {}),
+  };
 }
 
 /** The remembered choice, or undefined when none is kept or storage fails. */
@@ -349,7 +403,7 @@ export function readOpenChoice(
   } catch {
     return undefined;
   }
-  if (raw === null || raw.length > 512) return undefined;
+  if (raw === null || raw.length > 1024) return undefined;
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -364,7 +418,9 @@ export function readOpenChoice(
     typeof value.trustedClientId === "string" &&
     TRUSTED_CLIENT_ID_PATTERN.test(value.trustedClientId)
   ) {
-    return { choice: "native", platform: value.platform, trustedClientId: value.trustedClientId };
+    const target = rememberedTarget(value.target, value.platform);
+    if (!target) return undefined;
+    return { choice: "native", platform: value.platform, trustedClientId: value.trustedClientId, target };
   }
   return undefined;
 }
@@ -403,10 +459,9 @@ export function forgetOpenChoice(
 /** Whether `storage` accepts a write now (a probe written and removed). */
 export function openChoiceStorageWorks(storage: OpenChoiceStorage | undefined): boolean {
   if (!storage) return false;
-  const probe = `${STORAGE_PREFIX}:probe`;
   try {
-    storage.setItem(probe, "1");
-    storage.removeItem(probe);
+    storage.setItem(PROBE_KEY, "1");
+    storage.removeItem(PROBE_KEY);
     return true;
   } catch {
     return false;
@@ -486,10 +541,7 @@ export function resolveOpenRoute(input: OpenRouteInput): OpenRoute {
   // An unverified client is never a default and never remembered; the
   // chooser asks before opening it.
   if (!client.verified) return web;
-  const rememberedNative = remembered?.choice === "native" &&
-    remembered.platform === input.platform &&
-    remembered.trustedClientId === client.trustedClientId;
-  if (rememberedNative) {
+  if (rememberedNativeMatches(remembered, client)) {
     const href = chosenNativeHref(client, input.fallbackUrl);
     return href ? { kind: "native", href, client } : choose;
   }
@@ -502,6 +554,14 @@ export function resolveOpenRoute(input: OpenRouteInput): OpenRoute {
   // a custom scheme alone waits until the person chose it in the chooser.
   const href = iosNativeHref(client, false);
   return href ? { kind: "native", href, client } : choose;
+}
+
+/**
+ * The destination that names an unverified client without a checked name:
+ * its Android package, else its link host, else its scheme.
+ */
+export function clientTargetLabel(client: PhoneClient): string {
+  return client.target.package ?? client.target.host ?? `${client.target.scheme ?? ""}:`;
 }
 
 /** The store a store link goes to, for its label. */

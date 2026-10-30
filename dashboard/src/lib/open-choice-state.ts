@@ -6,12 +6,18 @@
  *
  * Without storage (private mode, blocked site data) nothing is remembered and
  * every tap uses the default again; nothing here throws.
+ *
+ * Nothing here writes to storage while rendering: whether storage works is
+ * probed once per page, and only another tab's write of a choice (or a
+ * cleared storage) wakes this tab. Otherwise two open tabs would wake each
+ * other forever with their probe writes.
  */
 import { createSignal } from "solid-js";
 import {
   appOpenChooserPath,
   detectOpenPlatform,
   forgetOpenChoice,
+  isOpenChoiceStorageKey,
   type OpenChoiceStorage,
   type OpenPlatform,
   type OpenRoute,
@@ -26,8 +32,10 @@ const [revision, setRevision] = createSignal(0);
 const bump = () => setRevision((value) => value + 1);
 
 if (typeof window !== "undefined") {
-  // Another tab remembered or forgot a choice.
-  window.addEventListener("storage", bump);
+  // Another tab remembered or forgot a choice; any other key is not ours.
+  window.addEventListener("storage", (event) => {
+    if (isOpenChoiceStorageKey(event.key)) bump();
+  });
 }
 
 function storage(): OpenChoiceStorage | undefined {
@@ -74,10 +82,12 @@ export function forgetRememberedOpenChoice(capsuleId: string, interfaceId: strin
   return done;
 }
 
-/** Whether this browser can remember a choice at all (reactive). */
+let storageWorks: boolean | undefined;
+
+/** Whether this browser can remember a choice at all, probed once per page. */
 export function openChoiceStorageAvailable(): boolean {
-  revision();
-  return openChoiceStorageWorks(storage());
+  if (storageWorks === undefined) storageWorks = openChoiceStorageWorks(storage());
+  return storageWorks;
 }
 
 /** Android's `S.browser_fallback_url`: this screen's chooser, marked as "did not open". */

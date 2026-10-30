@@ -45,10 +45,12 @@ import {
 } from "../../lib/phone-use.ts";
 import {
   chosenNativeHref,
+  clientTargetLabel,
   declaredPhoneClients,
   type PhoneClient,
   phoneClient,
   rememberableChoice,
+  rememberedNativeMatches,
   storeDestination,
   storeKind,
 } from "../../lib/open-routing.ts";
@@ -112,9 +114,31 @@ export default function AppPhoneSection(props: {
   );
 }
 
-/** The label of a native client: its checked name, else a neutral one (never the screen's title). */
+/**
+ * The label of a native client inside a sentence ("Open in …"): its checked
+ * name, else a neutral one naming where it goes (never the screen's title).
+ */
 function clientLabel(client: PhoneClient): string {
-  return client.name ?? t("app.phone.unverifiedName");
+  return client.name ?? t("app.phone.unverifiedName", { target: clientTargetLabel(client) });
+}
+
+/** The same label standing on its own (a heading, a list item). */
+function clientTitle(client: PhoneClient): string {
+  return client.name ?? t("app.phone.unverifiedNameStandalone", { target: clientTargetLabel(client) });
+}
+
+/** "{name} didn't open" for a named client, else a sentence of its own for an unnamed one. */
+function missingNotice(client: PhoneClient): string {
+  return client.name
+    ? t("app.phone.missing", { name: client.name })
+    : t("app.phone.missingUnverified", { target: clientTargetLabel(client) });
+}
+
+/** "Open {name}?" for a named client, else a sentence of its own for an unnamed one. */
+function confirmTitle(client: PhoneClient): string {
+  return client.name
+    ? t("app.phone.confirmTitle", { name: client.name })
+    : t("app.phone.confirmTitleUnverified", { target: clientTargetLabel(client) });
 }
 
 function PhoneSection(props: {
@@ -143,13 +167,8 @@ function PhoneSection(props: {
   };
   const remembered = () =>
     props.identity ? rememberedOpenChoice(props.identity.capsuleId, props.identity.interfaceId) : undefined;
-  /** "native" counts only for the verified client it was chosen for. */
-  const rememberedNativeHere = () => {
-    const choice = remembered();
-    const value = client();
-    return choice?.choice === "native" && value?.verified === true &&
-      choice.platform === value.platform && choice.trustedClientId === value.trustedClientId;
-  };
+  /** "native" counts only for the verified client and destination it was chosen for. */
+  const rememberedNativeHere = () => rememberedNativeMatches(remembered(), client());
   const [remember, setRemember] = createSignal(false);
   const [rememberFailed, setRememberFailed] = createSignal(false);
   const [confirming, setConfirming] = createSignal(false);
@@ -322,14 +341,14 @@ function PhoneSection(props: {
               <h3 class="ap-phone-option-title">
                 <Smartphone size={18} aria-hidden="true" />
                 <span>{t("app.phone.nativeTitle")}</span>
-                <span class="ap-phone-client-name">{clientLabel(value())}</span>
+                <span class="ap-phone-client-name">{clientTitle(value())}</span>
                 <Badge tone={value().verified ? "ok" : "warn"}>
                   {value().verified ? t("app.phone.verifiedBadge") : t("app.phone.unverifiedBadge")}
                 </Badge>
               </h3>
               <Show when={props.missing}>
                 <p class="ap-phone-missing" role="status" data-testid="app-phone-missing">
-                  {t("app.phone.missing", { name: clientLabel(value()) })}
+                  {missingNotice(value())}
                 </p>
               </Show>
               <p class="ap-muted">{t("app.phone.nativeNotify")}</p>
@@ -376,7 +395,7 @@ function PhoneSection(props: {
               <Show when={!value().verified && confirming() ? nativeHref() : undefined}>
                 {(href) => (
                   <div class="ap-phone-confirm" role="group" aria-labelledby="app-phone-confirm-title" data-testid="app-phone-confirm">
-                    <p id="app-phone-confirm-title"><strong>{t("app.phone.confirmTitle", { name: clientLabel(value()) })}</strong></p>
+                    <p id="app-phone-confirm-title"><strong>{confirmTitle(value())}</strong></p>
                     <p class="ap-muted">{t("app.phone.confirmBody", { host: connectHost() })}</p>
                     <div class="ap-row-actions">
                       <a
@@ -412,7 +431,7 @@ function PhoneSection(props: {
                 {(value) => (
                   <li data-platform={value.platform} data-verified={value.verified ? "true" : "false"}>
                     <strong>
-                      {t(PLATFORM_LABEL[value.platform])}: {clientLabel(value)}
+                      {t(PLATFORM_LABEL[value.platform])}: {clientTitle(value)}
                       <Badge tone={value.verified ? "ok" : "warn"}>
                         {value.verified ? t("app.phone.verifiedBadge") : t("app.phone.unverifiedBadge")}
                       </Badge>

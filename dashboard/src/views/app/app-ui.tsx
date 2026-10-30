@@ -13,7 +13,7 @@ import { ChevronDown, ExternalLink, Smartphone } from "lucide-solid";
 import { Button } from "../../components/ui/index.ts";
 import { formatDateTime, relativeTime, t } from "../../i18n/index.ts";
 import { type OpenRouteScreen, screenOpenRoute } from "../../lib/open-choice-state.ts";
-import type { OpenRoute } from "../../lib/open-routing.ts";
+import { clientTargetLabel, type OpenRoute } from "../../lib/open-routing.ts";
 
 /** Relative time ("5分前"), with the exact date and time on hover. */
 export function RelativeTime(props: { readonly iso: string }): JSX.Element {
@@ -86,7 +86,11 @@ export function openRouteAria(route: OpenRoute, name: string): string {
     case "web":
       return t("app.open.aria", { name });
     case "native":
-      return t("app.open.ariaNative", { name, app: route.client.name ?? t("app.phone.unverifiedName") });
+      // A native route is always a verified client, which always has a name.
+      return t("app.open.ariaNative", {
+        name,
+        app: route.client.name ?? t("app.phone.unverifiedName", { target: clientTargetLabel(route.client) }),
+      });
     case "choose":
       return t("app.open.ariaChoose", { name });
   }

@@ -9,10 +9,12 @@ import {
   androidIntentUrl,
   appOpenChooserPath,
   chosenNativeHref,
+  clientTargetLabel,
   declaredPhoneClients,
   detectOpenPlatform,
   forgetOpenChoice,
   iosNativeHref,
+  isOpenChoiceStorageKey,
   type OpenChoiceStorage,
   openChoiceStorageKey,
   openChoiceStorageWorks,
@@ -21,6 +23,7 @@ import {
   phoneClient,
   readOpenChoice,
   rememberableChoice,
+  rememberedNativeMatches,
   resolveOpenRoute,
   storeDestination,
   storeKind,
@@ -67,6 +70,15 @@ function unverifiedAndroid(name?: string) {
     },
   };
 }
+
+/** What remembering the verified app stores on each phone. */
+const ANDROID_NATIVE = {
+  choice: "native", platform: "android", trustedClientId: "yurucommu-mobile",
+  target: { package: "com.yurucommu", scheme: "yurucommu" },
+} as const;
+const IOS_NATIVE = {
+  choice: "native", platform: "ios", trustedClientId: "yurucommu-mobile", target: { scheme: "yurucommu" },
+} as const;
 
 function route(input: Partial<OpenRouteInput> & Pick<OpenRouteInput, "platform">) {
   return resolveOpenRoute({ url: SCREEN, chooserHref: CHOOSER, fallbackUrl: FALLBACK, ...input });
@@ -246,7 +258,7 @@ describe("how one tap opens a screen", () => {
     expect(route({ platform: "desktop", clients: verifiedClients() })).toEqual({ kind: "web", href: SCREEN });
     expect(route({
       platform: "desktop", clients: verifiedClients(),
-      remembered: { choice: "native", platform: "android", trustedClientId: "yurucommu-mobile" },
+      remembered: ANDROID_NATIVE,
     })).toEqual({ kind: "web", href: SCREEN });
   });
 
@@ -284,7 +296,7 @@ describe("how one tap opens a screen", () => {
     });
     expect(route({
       platform: "ios", clients: verifiedClients(),
-      remembered: { choice: "native", platform: "ios", trustedClientId: "yurucommu-mobile" },
+      remembered: IOS_NATIVE,
     })).toMatchObject({ kind: "native", href: OPEN });
   });
 
@@ -293,24 +305,49 @@ describe("how one tap opens a screen", () => {
       .toEqual({ kind: "web", href: SCREEN });
     expect(route({
       platform: "android", clients: verifiedClients("web"),
-      remembered: { choice: "native", platform: "android", trustedClientId: "yurucommu-mobile" },
+      remembered: ANDROID_NATIVE,
     }).kind).toBe("native");
   });
 
   test("a remembered native app counts only for the same verified app on the same platform", () => {
-    const otherApp = { choice: "native", platform: "android", trustedClientId: "takos-mobile" } as const;
+    const otherApp = { ...ANDROID_NATIVE, trustedClientId: "takos-mobile" } as const;
     expect(route({ platform: "android", clients: verifiedClients("web"), remembered: otherApp }))
       .toEqual({ kind: "web", href: SCREEN });
-    const otherPlatform = { choice: "native", platform: "ios", trustedClientId: "yurucommu-mobile" } as const;
+    const otherPlatform = { ...ANDROID_NATIVE, platform: "ios" } as const;
     expect(route({ platform: "android", clients: verifiedClients("web"), remembered: otherPlatform }))
       .toEqual({ kind: "web", href: SCREEN });
+  });
+
+  test("a remembered native app is asked about again once the trusted entry opens somewhere else", () => {
+    // The operator moved the trusted app to another package or scheme: same id, new destination.
+    const moved = {
+      ...verifiedClients("web"),
+      android: {
+        ...verifiedClients().android, package: "com.yurucommu.next", target: { package: "com.yurucommu.next", scheme: "yurucommu" },
+      },
+    };
+    expect(route({ platform: "android", clients: moved, remembered: ANDROID_NATIVE })).toEqual({ kind: "web", href: SCREEN });
+    const newScheme = {
+      ...verifiedClients("web"),
+      ios: { ...verifiedClients().ios, open: `yurucommu2://connect?host_url=${ORIGIN_ENCODED}` },
+    };
+    expect(route({ platform: "ios", clients: newScheme, remembered: IOS_NATIVE })).toEqual({ kind: "web", href: SCREEN });
+    // A universal link added to the entry changes where it goes too.
+    const withHost = {
+      ...verifiedClients("web"),
+      ios: { ...verifiedClients().ios, universalLink: "https://open.yurucommu.example/connect#host_url=x" },
+    };
+    expect(route({ platform: "ios", clients: withHost, remembered: IOS_NATIVE })).toEqual({ kind: "web", href: SCREEN });
+    expect(rememberedNativeMatches(IOS_NATIVE, phoneClient(verifiedClients(), "ios"))).toBe(true);
+    expect(rememberedNativeMatches(IOS_NATIVE, phoneClient(withHost, "ios"))).toBe(false);
+    expect(rememberedNativeMatches({ choice: "web" }, phoneClient(verifiedClients(), "ios"))).toBe(false);
   });
 
   test("an unverified app is never opened by a tap: not by default, not from a remembered choice", () => {
     expect(route({ platform: "android", clients: unverifiedAndroid() })).toEqual({ kind: "web", href: SCREEN });
     expect(route({
       platform: "android", clients: unverifiedAndroid(),
-      remembered: { choice: "native", platform: "android", trustedClientId: "yurucommu-mobile" },
+      remembered: ANDROID_NATIVE,
     })).toEqual({ kind: "web", href: SCREEN });
     // ... and it can never be remembered in the first place.
     const client = phoneClient(unverifiedAndroid("Notes"), "android");
@@ -325,7 +362,7 @@ describe("what this device remembers", () => {
     expect(openChoiceStorageKey("cap_a", "if_a")).toBe("takosumi.openChoice.v1:cap_a:if_a");
     expect(openChoiceStorageKey("cap a", "if:b")).toBe("takosumi.openChoice.v1:cap%20a:if%3Ab");
     const native = rememberableChoice("native", phoneClient(verifiedClients(), "android"), "android")!;
-    expect(native).toEqual({ choice: "native", platform: "android", trustedClientId: "yurucommu-mobile" });
+    expect(native).toEqual(ANDROID_NATIVE);
     expect(writeOpenChoice(storage, "cap_a", "if_a", native)).toBe(true);
     expect(writeOpenChoice(storage, "cap_a", "if_b", { choice: "web" })).toBe(true);
     expect(readOpenChoice(storage, "cap_a", "if_a")).toEqual(native);
@@ -336,6 +373,14 @@ describe("what this device remembers", () => {
     expect(openChoiceStorageWorks(storage)).toBe(true);
     // The probe leaves nothing behind.
     expect([...storage.map.keys()]).toEqual([openChoiceStorageKey("cap_a", "if_b")]);
+  });
+
+  test("another tab's write wakes this tab only for a choice or a cleared storage, never for the probe", () => {
+    expect(isOpenChoiceStorageKey(null)).toBe(true);
+    expect(isOpenChoiceStorageKey(openChoiceStorageKey("cap_a", "if_a"))).toBe(true);
+    expect(isOpenChoiceStorageKey("takosumi.openChoice.v1:probe")).toBe(false);
+    expect(isOpenChoiceStorageKey("tg_lang")).toBe(false);
+    expect(isOpenChoiceStorageKey("takosumi.openChoice.v10:cap_a:if_a")).toBe(false);
   });
 
   test("a computer remembers nothing; the web can always be remembered on a phone", () => {
@@ -354,8 +399,15 @@ describe("what this device remembers", () => {
       JSON.stringify({ choice: "inside" }),
       JSON.stringify({ choice: "native", platform: "android" }),
       JSON.stringify({ choice: "native", platform: "windows", trustedClientId: "x" }),
-      JSON.stringify({ choice: "native", platform: "ios", trustedClientId: "Not An Id" }),
-      JSON.stringify({ choice: "web", pad: "x".repeat(600) }),
+      JSON.stringify({ choice: "native", platform: "ios", trustedClientId: "Not An Id", target: { scheme: "x" } }),
+      // A native choice is bound to where it went; without that it is not one.
+      JSON.stringify({ choice: "native", platform: "android", trustedClientId: "yurucommu-mobile" }),
+      JSON.stringify({ ...ANDROID_NATIVE, target: {} }),
+      JSON.stringify({ ...ANDROID_NATIVE, target: { scheme: "yurucommu" } }),
+      JSON.stringify({ ...IOS_NATIVE, target: { package: "com.yurucommu", scheme: "yurucommu" } }),
+      JSON.stringify({ ...ANDROID_NATIVE, target: { ...ANDROID_NATIVE.target, extra: "x" } }),
+      JSON.stringify({ ...ANDROID_NATIVE, target: { package: "com.yurucommu", scheme: "Bad Scheme" } }),
+      JSON.stringify({ choice: "web", pad: "x".repeat(1100) }),
     ]) {
       storage.map.set(key, raw);
       expect({ raw, read: readOpenChoice(storage, "cap_a", "if_a") }).toEqual({ raw, read: undefined });
@@ -390,6 +442,13 @@ describe("the chooser on the app page", () => {
     expect(parseOpenChooserQuery("")).toEqual({ missing: false });
     expect(parseOpenChooserQuery("?open=%3Cscript%3E")).toEqual({ missing: false });
     expect(parseOpenChooserQuery(`?open=${"a".repeat(129)}`)).toEqual({ missing: false });
+  });
+
+  test("an unnamed unverified app is named by its package, else its link host, else its scheme", () => {
+    expect(clientTargetLabel(phoneClient(unverifiedAndroid(), "android")!)).toBe("com.example.notes");
+    const host = phoneClient({ ios: { verified: false, target: {}, universalLink: "https://notes.example/o#u=x", open: "notes://o" } }, "ios")!;
+    expect(clientTargetLabel(host)).toBe("notes.example");
+    expect(clientTargetLabel(phoneClient({ ios: { verified: false, target: {}, open: "notes://o" } }, "ios")!)).toBe("notes:");
   });
 
   test("store links are labelled by their store and shown by host and path before following them", () => {

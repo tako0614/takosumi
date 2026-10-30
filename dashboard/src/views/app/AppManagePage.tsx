@@ -27,6 +27,7 @@ import {
   createMemo,
   createResource,
   createSignal,
+  For,
   Match,
   on,
   onCleanup,
@@ -102,7 +103,7 @@ import {
   settledValue,
   stateVersionLabels,
 } from "../../lib/app-page.ts";
-import { APP_PAGE_SECTIONS, installAttemptHref, reinstallHref, type AppPageSection } from "../../lib/app-links.ts";
+import { APP_PAGE_SECTIONS, appPageHref, installAttemptHref, reinstallHref, type AppPageSection } from "../../lib/app-links.ts";
 import { listAppHostedResources } from "../../lib/app-hosted-resources.ts";
 import {
   defaultRetryPlanApi,
@@ -943,6 +944,19 @@ export default function AppManagePage(props: {
   // --- how a screen opens on this phone (TASK-0119) -------------------------------
   /** The screen the chooser is for: the one the URL or Open named, else the primary. */
   const [chooserScreenId, setChooserScreenId] = createSignal(props.openChooser?.interfaceId);
+  /**
+   * The screen Android's fallback came back for (`&missing=1`), read once:
+   * the URL drops `open` and `missing` as soon as the notice is on screen, so
+   * a reload or a shared link does not claim the app failed to open again.
+   */
+  const missingScreenId = props.openChooser?.missing ? props.openChooser.interfaceId : undefined;
+  let chooserQueryCleared = false;
+  createEffect(() => {
+    if (chooserQueryCleared || !app()) return;
+    if (props.openChooser?.interfaceId === undefined && !props.openChooser?.missing) return;
+    chooserQueryCleared = true;
+    queueMicrotask(() => navigate(appPageHref(capsuleId(), "phone"), { replace: true, scroll: false }));
+  });
   const chooserScreen = () => {
     const list = screens();
     const wanted = chooserScreenId();
@@ -956,13 +970,27 @@ export default function AppManagePage(props: {
       document.querySelector<HTMLElement>("#phone a[href], #phone button:not([disabled])")?.focus({ preventScroll: true });
     });
   };
-  /** 「開き方を変える」: on a phone, when the primary screen has a native app or a remembered choice. */
+  /**
+   * 「開き方を変える」: on a phone, every screen that has a native app for this
+   * phone or a choice this device remembered, with its name when there are
+   * several screens.
+   */
   const openChoiceChangeable = () => {
     const platform = currentOpenPlatform();
-    const screen = screens()[0];
-    if (platform === "desktop" || !screen) return false;
-    return phoneClient(screen.clients, platform) !== undefined ||
-      rememberedOpenChoice(capsuleId(), screen.interfaceId) !== undefined;
+    if (platform === "desktop") return [];
+    const list = screens();
+    return list
+      .map((screen, index) => ({ screen, index }))
+      .filter(({ screen }) =>
+        phoneClient(screen.clients, platform) !== undefined ||
+        rememberedOpenChoice(capsuleId(), screen.interfaceId) !== undefined
+      )
+      .map(({ screen, index }) => ({
+        interfaceId: screen.interfaceId,
+        label: list.length > 1
+          ? t("app.open.changeFor", { name: screen.name || t("app.open.screenN", { n: index + 1 }) })
+          : t("app.open.change"),
+      }));
   };
   /** What installing again pre-fills: the repository, last ref and paths. */
   const reinstallInput = (view: CapsuleAppView, inst: Capsule) => {
@@ -1115,19 +1143,23 @@ export default function AppManagePage(props: {
                       onChoose={showChooser}
                     />
                   </Show>
-                  <Show when={(view().primaryAction === "open" || secondaryScreens(view())) && openChoiceChangeable()}>
-                    <a
-                      class="ap-open-change"
-                      href="#phone"
-                      data-testid="app-open-change"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        const screen = screens()[0];
-                        if (screen) showChooser(screen.interfaceId);
-                      }}
-                    >
-                      {t("app.open.change")}
-                    </a>
+                  <Show when={view().primaryAction === "open" || secondaryScreens(view())}>
+                    <For each={openChoiceChangeable()}>
+                      {(item) => (
+                        <a
+                          class="ap-open-change"
+                          href="#phone"
+                          data-testid="app-open-change"
+                          data-interface-id={item.interfaceId}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            showChooser(item.interfaceId);
+                          }}
+                        >
+                          {item.label}
+                        </a>
+                      )}
+                    </For>
                   </Show>
                   <Show when={appViewIncomplete(view(), "screens")}>
                     <Button
@@ -1225,7 +1257,7 @@ export default function AppManagePage(props: {
                     capsuleId={capsuleId()}
                     interfaceId={screen().interfaceId}
                     clients={screen().clients}
-                    missing={props.openChooser?.missing === true && props.openChooser.interfaceId === screen().interfaceId}
+                    missing={missingScreenId !== undefined && missingScreenId === screen().interfaceId}
                   />
                 )}
               </Show>
