@@ -970,7 +970,9 @@ test("Git install plan fails closed when host policy requires an invalid manifes
 });
 
 for (const connectionOwner of [WORKSPACE.ownerUserId, ADMIN_SUBJECT]) {
-  test(`legacy install by an admin validates bindings against the Workspace owner: ${connectionOwner}`, async () => {
+  // TASK-0118 P9.1-c: the admin who installs owns the app, so bindings are
+  // checked against the admin's connections, not the Workspace owner's.
+  test(`legacy install by an admin validates bindings against the installer: ${connectionOwner}`, async () => {
     const provider = "registry.opentofu.org/hashicorp/aws";
     const connection = {
       ...providerConnection(provider, "conn_legacyowner01"),
@@ -995,7 +997,7 @@ for (const connectionOwner of [WORKSPACE.ownerUserId, ADMIN_SUBJECT]) {
     const result = await reconcile();
     expect(result.status).toBe(200);
     const plan = (await result.json()).installPlan;
-    if (connectionOwner === WORKSPACE.ownerUserId) {
+    if (connectionOwner === ADMIN_SUBJECT) {
       expect(plan.phase).toBe("planning");
       expect(fixture.counts.capsule).toBe(1);
       expect(fixture.capsules[0]?.installingPrincipalId).toBe(ADMIN_SUBJECT);
@@ -1886,6 +1888,27 @@ test("workspace-less install keeps the requester's canonical personal owner for 
   expect(fixture.getProviderBindingSet(capsule.id, "production")?.bindings).toEqual([
     { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_cloudflare01" },
   ]);
+});
+
+test("install attempts offer only the installer's Workspace connections (TASK-0118 P9.1-c)", async () => {
+  const adminsConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_admin"), ownerAccountId: ADMIN_SUBJECT };
+  const legacyConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_legacy") } as ProviderConnection & { ownerAccountId?: string };
+  delete legacyConnection.ownerAccountId;
+  const fixture = attemptFixture({
+    providerConnections: [providerConnection(CLOUDFLARE, "conn_cloudflare01"), adminsConnection, legacyConnection],
+  });
+  // The Workspace owner installs: its own connection and the legacy row (the
+  // Workspace owner's) are offered, the admin's is not.
+  const ownerPlan = await startAttempt(fixture);
+  const ownerPaused = await reconcileUntilIdle(fixture, ownerPlan);
+  expect(ownerPaused.userAction.connections[0].candidates.map((candidate: { id: string }) => candidate.id))
+    .toEqual(["conn_cloudflare01", "conn_cloudflare_legacy"]);
+  // A Workspace admin installs: the app will be the admin's, so only the
+  // admin's own connection is offered.
+  const adminPlan = await startAttempt(fixture, attemptBody({ capsuleName: "admins" }), "attempt-admin", ADMIN_SUBJECT);
+  const adminPaused = await reconcileUntilIdle(fixture, adminPlan, ADMIN_SUBJECT);
+  expect(adminPaused.userAction.connections[0].candidates.map((candidate: { id: string }) => candidate.id))
+    .toEqual(["conn_cloudflare_admin"]);
 });
 
 test("install attempt pauses once for the whole sheet, auto-selects the only connection, and continues with transient values", async () => {

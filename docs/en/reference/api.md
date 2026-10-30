@@ -537,7 +537,15 @@ missing connections, required settings, a name collision) and once before it
 creates the Capsule. `userAction` names the single next step (`wait`,
 `choose_module`, `provide_inputs`, `review_run`, `retry` or `none`); a
 requirement with exactly one eligible connection is selected automatically.
-Only the member who started the attempt may `PATCH` or `DELETE` it. `PATCH`
+Only the member who started the attempt may `PATCH` or `DELETE` it. The new
+app's first owner is the person who started the install (TASK-0118 P9.1-c), also
+when a Workspace admin who is not the Workspace's owner uses a Workspace route;
+provider bindings and the Source `authConnectionId` accept only that person's
+connections (creation still adds the Workspace's other owner/admin people as app
+members). Before its app exists, the install is its creator's: the creator's
+account credential (not a PAT with `appIds` or an installed app's own token) reads
+and advances it without a Workspace decision. Workspace-less install idempotency
+is per account, because it is counted in that account's own namespace. `PATCH`
 uses `expectedGeneration` as a CAS fence, and only the confirming
 `continue: true` request carries variable values, which go straight into the
 atomic initial creation and are never stored. Once a confirming request has
@@ -897,7 +905,9 @@ Workspaces included and an exact `total` counted before cursor filtering. The
 default and hard maximum `limit` are 100; the only accepted query keys are
 `limit` and `cursor`. A Workspace-scoped session, PAT, or OAuth credential is
 rejected with 403, and the route performs no personal-Workspace bootstrap or
-other writes. The response `kind` is
+other writes. Since TASK-0118 P9.1-c `GET /api/v1/workspaces` does not create or
+repair a personal Workspace either; the internal personal namespace is created
+only by writes that need it, such as a Workspace-less install. The response `kind` is
 `takosumi.account-workspace-inventory@v1` and contains `workspaces`, `total`,
 `returned`, `limit`, `truncated`, and an optional opaque `nextCursor`.
 

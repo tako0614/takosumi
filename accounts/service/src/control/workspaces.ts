@@ -96,7 +96,6 @@ import {
   readJsonObject,
   readOptionalJsonObject,
   stringValue,
-  takosumiSubjectValue,
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
@@ -141,7 +140,6 @@ import {
 } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
-import { maybeEnsurePersonalWorkspaceForSubject } from "../control-personal-workspace.ts";
 import { workspaceFrozenResponse } from "../workspace-mutations-freeze.ts";
 import { handleWorkspaceInstallPlans } from "./install-plans.ts";
 import { handleWorkspaceInstalledApps } from "./installed-apps.ts";
@@ -683,59 +681,22 @@ async function listWorkspacePage(
     }))) return undefined;
     return selected;
   };
-  const [initialPage, selected] = await Promise.all([
+  // Reading the list never creates, adopts or repairs a Workspace (TASK-0118
+  // P9.1-c): the internal personal namespace is filled only by writes that
+  // need it (an install, a Workspace-scoped connection) and is not listed
+  // unless it is in the caller's membership page like any other Workspace.
+  const [page, selected] = await Promise.all([
     listPage(),
     lookupSelected(),
   ]);
-  let page = initialPage;
-  const subject = isFirstPage
-    ? takosumiSubjectValue(session.subject)
-    : undefined;
-  const hasOwnedPersonalWorkspace =
-    subject !== undefined &&
-    page.items.some(
-      (workspace) =>
-        workspace.type === "personal" &&
-        workspace.ownerUserId === session.subject,
-    );
-  let personalWorkspace: Workspace | undefined;
-  if (subject !== undefined && !session.requireCurrentMembership) {
-    // The bounded membership page is the only route preflight. Always invoke
-    // the canonical ensure so an already-visible personal Workspace still gets
-    // its owner membership and default Project repaired. The helper keeps that
-    // repair best-effort so other accessible Workspaces remain visible.
-    personalWorkspace = await maybeEnsurePersonalWorkspaceForSubject({
-      subject,
-      store,
-      operations,
-    });
-    if (!hasOwnedPersonalWorkspace) {
-      try {
-        page = await listPage();
-      } catch {
-        // The initial bounded page is already usable. A best-effort bootstrap
-        // refresh must not discard it when control storage becomes unavailable.
-        page = initialPage;
-        personalWorkspace = undefined;
-      }
-    }
-  }
   const pinSelected =
     selected !== undefined &&
     (includeArchived || !isArchivedWorkspace(selected)) &&
     !page.items.some((workspace) => workspace.id === selected.id);
-  const selectedItems =
+  const workspaces =
     pinSelected && selected !== undefined
       ? [selected, ...page.items]
       : page.items;
-  // A stopped bootstrap may observe its namespace without repairing a
-  // missing member row. Keep that first-page observation visible, without
-  // inventing membership or changing the membership-page total/cursor.
-  const workspaces = personalWorkspace &&
-    (includeArchived || !isArchivedWorkspace(personalWorkspace)) &&
-    !selectedItems.some((workspace) => workspace.id === personalWorkspace.id)
-    ? [personalWorkspace, ...selectedItems]
-    : selectedItems;
   return json({
     workspaces,
     ...(page.total === undefined ? {} : { total: page.total }),

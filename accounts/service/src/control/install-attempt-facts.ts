@@ -346,14 +346,22 @@ function connectionAllowed(
   return true;
 }
 
+/**
+ * A Workspace-scoped connection is offered only to the person who will own
+ * the app: its installer (TASK-0118 P9.1-c). Binding accepts only the app
+ * owner's connections, so anything else would be a dead end. A legacy row
+ * without an owner belongs to the owner of the Workspace it records.
+ */
 function isOfferableConnection(
   connection: ProviderConnection,
-  workspaceId: string,
+  workspace: { readonly id: string; readonly ownerUserId: string },
+  appOwnerAccountId: string,
 ): boolean {
   return isWorkspaceBindableOperatorConnection(connection) ||
     (connection.scope === "workspace" &&
       connection.status === "verified" &&
-      connection.workspaceId === workspaceId);
+      connection.workspaceId === workspace.id &&
+      (connection.ownerAccountId ?? workspace.ownerUserId) === appOwnerAccountId);
 }
 
 function sameRequirement(
@@ -371,7 +379,7 @@ function sameRequirement(
 /** Live connection rows for an `inputs` pause. */
 export async function connectionRequirements(
   operations: ControlPlaneOperations,
-  plan: Pick<StoredGitInstallPlan, "workspaceId" | "options" | "attemptFacts">,
+  plan: Pick<StoredGitInstallPlan, "workspaceId" | "createdBy" | "options" | "attemptFacts">,
 ): Promise<readonly GitInstallPlanConnectionRequirement[]> {
   const facts = plan.attemptFacts?.inputs;
   if (!facts || facts.requirements.length === 0) return [];
@@ -384,7 +392,8 @@ export async function connectionRequirements(
   return facts.requirements.map((requirement) => {
     const candidates: GitInstallPlanConnectionCandidate[] = connections
       .filter((connection) =>
-        isOfferableConnection(connection, plan.workspaceId) &&
+        workspace.id === plan.workspaceId &&
+        isOfferableConnection(connection, workspace, plan.createdBy) &&
         sameProviderSource(requirement.provider, connection.providerSource) &&
         connectionAllowed(connection, policy)
       )

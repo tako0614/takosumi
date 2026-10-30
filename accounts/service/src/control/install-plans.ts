@@ -82,6 +82,7 @@ import { evaluateSourceUrl } from "../../../../core/domains/sources/url-policy.t
 import type { InstallPlanCompatibilityCheckRequest } from "../../../../core/domains/sources/mod.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import { personalResourceNamespace } from "./personal-resources.ts";
+import { bearerWorkspaceAllows } from "../account-session.ts";
 import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
 import {
   errorJson,
@@ -398,22 +399,27 @@ export async function handleInstallPlans(
   if (!plan || plan.operation === "revision") {
     return errorJson("not_found", "Install plan not found.", 404);
   }
-  // Before its Capsule exists an install attempt is Workspace work. Once the
-  // app exists, the attempt is that app's: reading is view, answering is a
-  // settings change, discarding abandons the app (owner only).
-  const auth = await requireResourceAccess({
-    operations: ctx.operations,
-    store: ctx.store,
-    session: ctx.session,
-    workspaceId: plan.workspaceId,
-    capsuleId: plan.capsuleId,
-    action: method === "GET" || method === "HEAD" ? "view"
-      : method === "DELETE" ? "uninstall"
-      : segments[2] === "reconcile" ? "update"
-      : "change_settings",
-    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
-    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
-  });
+  // Before its Capsule exists an install attempt is its creator's: the app it
+  // becomes will be the creator's (TASK-0118 P9.1-c), so the creator's own
+  // account credential continues it without any Workspace decision. Other
+  // people keep the legacy Workspace decision. Once the app exists, the
+  // attempt is that app's: reading is view, answering is a settings change,
+  // discarding abandons the app (owner only).
+  const auth = !plan.capsuleId && installAttemptCreatorContinues(ctx, plan)
+    ? { ok: true as const }
+    : await requireResourceAccess({
+        operations: ctx.operations,
+        store: ctx.store,
+        session: ctx.session,
+        workspaceId: plan.workspaceId,
+        capsuleId: plan.capsuleId,
+        action: method === "GET" || method === "HEAD" ? "view"
+          : method === "DELETE" ? "uninstall"
+          : segments[2] === "reconcile" ? "update"
+          : "change_settings",
+        ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+        ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+      });
   if (!auth.ok) return auth.response;
 
   if (segments.length === 2) {
@@ -427,6 +433,21 @@ export async function handleInstallPlans(
     return await reconcileInstallPlan(ctx, plan);
   }
   return undefined;
+}
+
+/**
+ * The creator of a capsule-less install plan, with an account credential that
+ * is not restricted to apps (no PAT `appIds`, no installed app's own token)
+ * and, when bound to a Workspace, bound to the plan's. Never a Workspace
+ * membership or ownership read.
+ */
+function installAttemptCreatorContinues(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): boolean {
+  const session = ctx.session;
+  return plan.createdBy === session.subject && plan.actorSubject === session.subject &&
+    session.appIds === undefined && bearerWorkspaceAllows(session, plan.workspaceId);
 }
 
 /**
@@ -1720,6 +1741,8 @@ async function advanceSource(
       ...(plan.source.authConnectionId
         ? { authConnectionId: plan.source.authConnectionId }
         : {}),
+      // The app's first owner: its Source may use only that person's connection.
+      installingAccountId: plan.createdBy,
       createdAt: plan.createdAt,
     }, plan.workspaceManagementAuthority);
     assertInstallSourceMatchesPlan(created.source, plan, sourceId);
@@ -2321,10 +2344,11 @@ async function createCapsule(
   }
   const requestedBindings = requestedProviderBindings(plan);
   const capsuleId = deterministicInitialCapsuleId(plan.id);
-  // Match the owner that initial authority commits. The workspace-less route
-  // already resolves an owner-bound personal namespace for the requester;
-  // legacy Workspace routes may be called by a different Workspace admin.
-  let currentOwner = (await operations.workspaces.getWorkspace(plan.workspaceId)).ownerUserId;
+  // Match the owner that initial authority commits: the person who started
+  // the install (TASK-0118 P9.1-c), also when a legacy Workspace route was
+  // called by a Workspace admin who is not the Workspace's owner. Bindings
+  // accept only that person's connections.
+  let currentOwner = plan.createdBy;
   try {
     const existingCapsule = await operations.capsules.getCapsule(capsuleId);
     currentOwner = (await capsuleOwnerAuthority(operations, existingCapsule))
@@ -2389,6 +2413,8 @@ async function createCapsule(
       environment: plan.capsule.environment,
       sourceId: source.id,
       installingPrincipalId: plan.createdBy,
+      // The person who started the install owns the app (TASK-0118 P9.1-c).
+      ownerAccountId: plan.createdBy,
       expectedWorkspaceManagementAuthority: plan.workspaceManagementAuthority,
       installConfig,
       providerBindingSetId: deterministicInitialBindingSetId(plan.id),

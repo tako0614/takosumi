@@ -2909,3 +2909,45 @@ test("an app-owned Source accepts its owner's personal Git connection and refuse
   await expect(service.ensureOwnedSource(ownedSourceRequest({ id: "src_1122334455667788", authConnectionId: "conn_foreign_git" })))
     .rejects.toMatchObject({ code: "connection_not_owned_by_app_owner" });
 });
+
+test("a Source for an app not created yet takes only its installer's connection (TASK-0118 P9.1-c)", async () => {
+  const { store, service } = makeService();
+  const base: ProviderConnection = {
+    id: "conn_workspace_owner_git", workspaceId: "workspace_1", ownerAccountId: "user_1", scope: "workspace",
+    provider: "source_git_https_token", providerSource: "git", kind: "source_git_https_token",
+    materialization: "secret", status: "verified", envNames: ["GIT_HTTPS_TOKEN"],
+    createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putConnection(base);
+  await store.putConnection({ ...base, id: "conn_installer_workspace_git", ownerAccountId: "installer_2" });
+  await store.putConnection({ ...base, id: "conn_installer_personal_git", workspaceId: undefined, scope: "personal", ownerAccountId: "installer_2" });
+  // The Workspace owner's credential recording this Workspace is not the
+  // installer's: refused before the Source exists.
+  await expect(service.ensureOwnedSource(ownedSourceRequest({
+    authConnectionId: base.id, installingAccountId: "installer_2",
+  }))).rejects.toMatchObject({ code: "connection_not_owned_by_app_owner" });
+  expect(await store.getSource("src_0011223344556677")).toBeUndefined();
+  // The installer's own Workspace-scoped and personal connections are accepted.
+  const workspaceScoped = await service.ensureOwnedSource(ownedSourceRequest({
+    authConnectionId: "conn_installer_workspace_git", installingAccountId: "installer_2",
+  }));
+  expect(workspaceScoped.source.authConnectionId).toBe("conn_installer_workspace_git");
+  const personal = await service.ensureOwnedSource(ownedSourceRequest({
+    id: "src_1122334455667788", ownerCapsuleId: "cap_1122334455667788", createdByInstallPlanId: "gip_1122334455667788",
+    authConnectionId: "conn_installer_personal_git", installingAccountId: "installer_2",
+  }));
+  expect(personal.source.authConnectionId).toBe("conn_installer_personal_git");
+  // A legacy Workspace row without a recorded owner is the Workspace owner's.
+  const legacy = { ...base, id: "conn_legacy_workspace_git" } as ProviderConnection & { ownerAccountId?: string };
+  delete legacy.ownerAccountId;
+  await store.putConnection(legacy);
+  await expect(service.ensureOwnedSource(ownedSourceRequest({
+    id: "src_2233445566778899", ownerCapsuleId: "cap_2233445566778899", createdByInstallPlanId: "gip_2233445566778899",
+    authConnectionId: legacy.id, installingAccountId: "installer_2",
+  }))).rejects.toMatchObject({ code: "connection_not_owned_by_app_owner" });
+  const ownersLegacy = await service.ensureOwnedSource(ownedSourceRequest({
+    id: "src_3344556677889900", ownerCapsuleId: "cap_3344556677889900", createdByInstallPlanId: "gip_3344556677889900",
+    authConnectionId: legacy.id, installingAccountId: "user_1",
+  }));
+  expect(ownersLegacy.source.authConnectionId).toBe(legacy.id);
+});
