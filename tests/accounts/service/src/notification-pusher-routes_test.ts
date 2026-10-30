@@ -7,7 +7,9 @@ import {
 import {
   type AccountsStore,
   createAccountsHandler,
+  handleNotificationPusherRequest,
   InMemoryAccountsStore,
+  type NotificationPusherAuthenticator,
   notificationPusherRouteOptionsFromEnv,
 } from "../../../../accounts/service/src/mod.ts";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
@@ -337,4 +339,29 @@ test("the composition derives web_push_public_key from the secret-store passphra
   expect(() => notificationPusherRouteOptionsFromEnv({
     TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS: "https://relay.example.test",
   }, ORIGIN)).toThrow("TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS");
+});
+
+test("a host's own authenticator replaces the Accounts credentials and keeps the account-wide rule", async () => {
+  const store = seededStore();
+  const options = { webPushPublicKey: async () => VAPID_PUBLIC, relayOrigins: [RELAY], instanceOriginUsable: true };
+  const limiter = { consume: () => undefined };
+  const route = (request: Request, authenticate: NotificationPusherAuthenticator) =>
+    handleNotificationPusherRequest({ request, url: new URL(request.url), store, options, limiter, authenticate });
+  // No Accounts credential at all: the host vouched for the account.
+  const asAccount: NotificationPusherAuthenticator = async () => ({ ok: true, subject: SUBJECT });
+  const created = await route(call("POST", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, undefined, await registration()), asAccount);
+  expect(created?.status).toBe(201);
+  expect(await store.listNotificationPushersForSubject(SUBJECT)).toHaveLength(1);
+  // A credential fenced to apps or a Workspace is still refused.
+  for (const fence of [{ appIds: ["cap_one"] }, { workspaceId: "ws_one" }]) {
+    const fenced = await route(call("GET", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, undefined),
+      async () => ({ ok: true, subject: SUBJECT, ...fence }));
+    expect(fenced?.status).toBe(403);
+  }
+  // The host's refusal is returned as is; an Accounts session does not override it.
+  const refused = await route(call("GET", TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH, SESSION),
+    async () => ({ ok: false, response: Response.json({ error: "unauthenticated" }, { status: 401 }) }));
+  expect(refused?.status).toBe(401);
+  // Paths outside the routes are not claimed.
+  expect(await route(call("GET", "/api/v1/account/tokens", SESSION), asAccount)).toBeUndefined();
 });

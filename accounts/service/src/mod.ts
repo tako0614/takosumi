@@ -96,6 +96,7 @@ import {
 } from "./privacy-routes.ts";
 import {
   handleNotificationPusherRequest,
+  type NotificationPusherRateLimiter,
   type NotificationPusherRouteOptions,
 } from "./notification-pusher-routes.ts";
 import {
@@ -195,6 +196,10 @@ export * from "./passkey.ts";
 export * from "./identity.ts";
 export * from "./mobile-oidc-client.ts";
 export {
+  handleNotificationPusherRequest,
+  type NotificationPusherAuthentication,
+  type NotificationPusherAuthenticator,
+  type NotificationPusherRateLimiter,
   notificationPusherRouteOptionsFromEnv,
   type NotificationPusherRouteOptions,
 } from "./notification-pusher-routes.ts";
@@ -695,7 +700,7 @@ export function createAccountsHandler(
   const authorizeLimiter = createInMemoryRateLimiter(60);
   const tokenLimiter = createInMemoryRateLimiter(120);
   const accountTokensLimiter = createInMemoryRateLimiter(10);
-  const notificationPushersLimiter = createInMemoryRateLimiter(30);
+  const notificationPushersLimiter = createNotificationPusherRateLimiter();
   // A complete dual-proof/context flow includes reads, two explicit legs and
   // provider rotations. Keep its bounded budget separate from token issuance.
   const identityFlowLimiter = createInMemoryRateLimiter(40);
@@ -1431,6 +1436,14 @@ interface InMemoryRateLimiter {
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_TRACKED_CLIENTS = 4096;
+
+/**
+ * The per-source limiter on notification-pusher writes (30 per minute), for
+ * the Accounts handler and any host that mounts the same routes.
+ */
+export function createNotificationPusherRateLimiter(): NotificationPusherRateLimiter {
+  return createInMemoryRateLimiter(30);
+}
 
 /**
  * Create a simple in-isolate per-IP sliding-window rate limiter.

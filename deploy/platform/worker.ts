@@ -30,8 +30,11 @@ import {
 import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
   activityCursorSealerFromEnv,
+  createNotificationPusherRateLimiter,
   D1AccountsStore,
   handleAuthenticatedControlRoute,
+  handleNotificationPusherRequest,
+  notificationPusherRouteOptionsFromEnv,
   parseAppOwnershipMutationsFrozen,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
@@ -69,8 +72,11 @@ import {
   type LegacyWorkspaceUse,
 } from "../../accounts/service/src/legacy-workspace-telemetry.ts";
 import type { RunStreamTiming } from "../../accounts/service/src/control/shared.ts";
+import { errorJson as accountsErrorJson } from "../../accounts/service/src/http-helpers.ts";
+import type { OwnNotificationOperations } from "../../core/domains/notifications/compose.ts";
 import {
   TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
+  TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH,
   type TakosumiAccountsPatScope,
 } from "@takosjp/takosumi-accounts-contract";
 import {
@@ -702,6 +708,8 @@ const platformWorker = {
     if (sharedAccountBoundaryResponse) return sharedAccountBoundaryResponse;
     const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(request, env);
     if (sharedSessionResponse) return sharedSessionResponse;
+    const sharedPushersResponse = await handlePlatformSharedAuthNotificationPushersRequest(request, env);
+    if (sharedPushersResponse) return sharedPushersResponse;
     const url = new URL(request.url);
     const destroyRecoveryResponse =
       await handlePlatformDestroyRecoveryRequest(request, url, env);
@@ -1051,19 +1059,21 @@ export async function drainInterfaceMaterializationIntents(
 }
 
 /** One bounded dispatcher pass for the instance's own Web Push notifications. */
-async function runScheduledOwnNotificationDispatch(
+export async function runScheduledOwnNotificationDispatch(
   env: CloudflareWorkerEnv,
+  dependencies: {
+    /** Test hooks; the deploy-control operations and global fetch otherwise. */
+    readonly operations?: () => Promise<OwnNotificationOperations>;
+    readonly fetch?: typeof fetch;
+  } = {},
 ): Promise<void> {
   try {
     await runOwnNotificationDispatch({
-      operations: await deployControlSeam(env).operations(),
-      store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-        schemaMode: resolveD1AccountsSchemaMode(
-          env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
-        ),
-      }),
+      operations: await (dependencies.operations ?? (() => deployControlSeam(env).operations()))(),
+      store: platformAccountsStore(env),
       env: env as unknown as Readonly<Record<string, unknown>>,
       issuer: env.TAKOSUMI_ACCOUNTS_ISSUER,
+      ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
     });
   } catch (error) {
     console.warn(JSON.stringify({
@@ -1910,6 +1920,104 @@ export async function handlePlatformSharedAuthSessionRequest(
     : { session: null }, { headers: { "cache-control": "no-store" } });
 }
 
+const sharedAccountNotificationPusherLimiter = createNotificationPusherRateLimiter();
+
+/**
+ * The account's notification pushers on the product host of the
+ * shared-account profile, where the issuer's other account routes are not
+ * mounted. The same Accounts routes and rules apply; only authentication
+ * differs. As on every other shared-account control route, humans arrive
+ * only through the private RP session (the account itself, never fenced to
+ * apps or a Workspace). An explicit bearer or issuer-session header is
+ * refused, so Takosumi Mobile, which always sends `Authorization`, gets 401
+ * here until this profile has a mobile credential. Pushers live in this
+ * Worker's Accounts store ({@link platformAccountsStore}), which the
+ * notification dispatcher (scheduled and immediate) reads.
+ *
+ * In this profile it owns the whole path prefix: any other path below it is
+ * 404 here, so the product host never lets Accounts evaluate an issuer
+ * credential for it.
+ */
+export async function handlePlatformSharedAuthNotificationPushersRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  dependencies: { readonly store?: AccountsStore } = {},
+): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  if (!sharedAuthConfigured(env) || !underNotificationPushersPrefix(url.pathname)) return undefined;
+  const ingressFailure = sharedAuthRequestFailure(request, env);
+  if (ingressFailure) return ingressFailure;
+  const noStore = { "cache-control": "no-store" };
+  const notFound = () => accountsErrorJson("not_found", "not found", 404, request, noStore);
+  if (url.origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) return notFound();
+  let options;
+  try {
+    options = notificationPusherRouteOptionsFromEnv(
+      env as unknown as Readonly<Record<string, unknown>>,
+      env.TAKOSUMI_ACCOUNTS_ISSUER,
+    );
+  } catch {
+    // A malformed relay allowlist; the Accounts handler fails closed the same way.
+    return accountsErrorJson(
+      "notification_pushers_unavailable",
+      "This instance cannot serve notification pushers.",
+      503,
+      request,
+      noStore,
+    );
+  }
+  const response = await handleNotificationPusherRequest({
+    request,
+    url,
+    store: dependencies.store ?? platformAccountsStore(env),
+    options,
+    limiter: sharedAccountNotificationPusherLimiter,
+    authenticate: async (authenticating) => {
+      const refused = (code: string, message: string, status: number) => ({
+        ok: false as const,
+        response: accountsErrorJson(code, message, status, authenticating, noStore),
+      });
+      if (authenticating.headers.has("authorization") ||
+        authenticating.headers.has("x-takosumi-account-session")) {
+        return refused("unauthenticated", "This host accepts the shared account session only.", 401);
+      }
+      const identity = await authenticateSharedAuthRequest(authenticating, env);
+      if (identity?.kind === "unavailable") {
+        return refused("authentication_unavailable", "authentication unavailable", 503);
+      }
+      if (identity?.kind !== "authenticated" || !/^tsub_[A-Za-z0-9_-]+$/u.test(identity.accountId)) {
+        return refused("unauthenticated", "sign in required", 401);
+      }
+      const csrfFailure = platformExtensionSessionCsrfFailure(authenticating, env, {
+        authenticated: true, authKind: "session", sharedAccount: true,
+      });
+      if (csrfFailure) {
+        return csrfFailure.status === 403
+          ? refused("csrf_failed", "The request must come from this site.", 403)
+          : refused("csrf_check_unavailable", "csrf check unavailable", 503);
+      }
+      return { ok: true, subject: identity.accountId as `tsub_${string}` };
+    },
+  });
+  // Not a route (a trailing slash, more segments): closed, never handed on.
+  return response ?? notFound();
+}
+
+function underNotificationPushersPrefix(pathname: string): boolean {
+  return pathname === TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH ||
+    pathname.startsWith(`${TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH}/`);
+}
+
+/**
+ * This Worker's Accounts store: the shared-account control routes, the
+ * notification pushers and the scheduled notification dispatch all use it.
+ */
+export function platformAccountsStore(env: CloudflareWorkerEnv): AccountsStore {
+  return new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+    schemaMode: resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE),
+  });
+}
+
 /**
  * Shared-profile browser authentication is verified by the private RP, then
  * existing Control handlers read the canonical Workspace/member authority and
@@ -1970,9 +2078,7 @@ export async function handlePlatformSharedAuthControlRequest(
     const response = await handleAuthenticatedControlRoute({
       request: authenticatedRequest,
       url,
-      store: dependencies.store ?? new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-        schemaMode: resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE),
-      }),
+      store: dependencies.store ?? platformAccountsStore(env),
       resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
       subject: identity.accountId,
       credential: "session",

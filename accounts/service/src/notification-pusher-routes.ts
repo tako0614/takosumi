@@ -16,7 +16,8 @@
  * Any account credential with `capsules:read` (session, PAT `read`, OAuth
  * access token) may use it. A pusher receives notifications about every app
  * of the account, so a credential fenced to some apps or to a Workspace is
- * refused.
+ * refused. A host that authenticates accounts another way (the shared-account
+ * profile's product host) passes its own `authenticate`.
  */
 
 import {
@@ -54,6 +55,37 @@ import {
   type NotificationPusherStore,
 } from "./notification-pushers-store.ts";
 import type { AccountsStore } from "./store.ts";
+import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+
+/** Who may use the pusher routes, as the host authenticated the request. */
+export type NotificationPusherAuthentication =
+  | {
+    readonly ok: true;
+    readonly subject: TakosumiSubject;
+    /** Set when the credential is fenced to some apps (refused here). */
+    readonly appIds?: readonly string[];
+    /** Set when the credential is fenced to one Workspace (refused here). */
+    readonly workspaceId?: string;
+  }
+  | { readonly ok: false; readonly response: Response };
+
+export type NotificationPusherAuthenticator = (
+  request: Request,
+  store: AccountsStore,
+) => Promise<NotificationPusherAuthentication>;
+
+/** The Accounts credentials: session, PAT or OAuth access token with `read`. */
+export const accountsNotificationPusherAuthenticator: NotificationPusherAuthenticator =
+  async (request, store) => {
+    const auth = await requireAccountsBearer({ request, store, scope: "read" });
+    if (!auth.ok) return auth;
+    return {
+      ok: true,
+      subject: auth.auth.subject,
+      ...(auth.auth.appIds !== undefined ? { appIds: auth.auth.appIds } : {}),
+      ...(auth.auth.workspaceId !== undefined ? { workspaceId: auth.auth.workspaceId } : {}),
+    };
+  };
 
 export interface NotificationPusherRouteOptions {
   /** base64url VAPID public key, or null without a secret-store passphrase. */
@@ -109,9 +141,11 @@ async function webPushAvailability(
   return { publicKey, reason: null };
 }
 
-interface RateLimiter {
+export interface NotificationPusherRateLimiter {
   consume(request: Request): Response | undefined;
 }
+
+type RateLimiter = NotificationPusherRateLimiter;
 
 const APP_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const LANG_PATTERN = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8}){0,7}$/;
@@ -134,6 +168,8 @@ export async function handleNotificationPusherRequest(input: {
   readonly store: AccountsStore;
   readonly options: NotificationPusherRouteOptions | undefined;
   readonly limiter: RateLimiter;
+  /** Accounts credentials when omitted. */
+  readonly authenticate?: NotificationPusherAuthenticator;
 }): Promise<Response | undefined> {
   const route = matchNotificationPusherRoute(input.url.pathname);
   if (!route) return undefined;
@@ -149,13 +185,12 @@ export async function handleNotificationPusherRequest(input: {
     const limited = input.limiter.consume(input.request);
     if (limited) return limited;
   }
-  const auth = await requireAccountsBearer({
-    request: input.request,
-    store: input.store,
-    scope: "read",
-  });
+  const auth = await (input.authenticate ?? accountsNotificationPusherAuthenticator)(
+    input.request,
+    input.store,
+  );
   if (!auth.ok) return auth.response;
-  if (auth.auth.appIds !== undefined || auth.auth.workspaceId !== undefined) {
+  if (auth.appIds !== undefined || auth.workspaceId !== undefined) {
     return errorJson(
       "account_wide_credential_required",
       "Notification pushers need a credential that is not limited to some apps or a Workspace.",
@@ -172,7 +207,7 @@ export async function handleNotificationPusherRequest(input: {
       input.request,
     );
   }
-  const subject = auth.auth.subject;
+  const subject = auth.subject;
   let response: Response;
   if (route.kind === "item") {
     const deleted = NOTIFICATION_PUSHER_ID_PATTERN.test(route.pusherId) &&

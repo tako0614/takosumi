@@ -231,6 +231,29 @@ pushers) that products use for their native apps.
   with `capsules:read`. A credential limited to some apps or to a Workspace gets
   403 `account_wide_credential_required`. Cookie-session writes must be
   same-origin, as for every account API. Responses carry `Cache-Control: no-store`.
+- In the shared-account profile (Hosted, `TAKOSUMI_SHARED_AUTH_PROFILE=shared-account`),
+  the product host (`TAKOSUMI_SHARED_AUTH_ORIGIN`, the discovery `apiBaseUrl`)
+  serves this API, although it mounts none of the issuer's other account
+  routes.
+  - Authentication is the private RP session (cookie) only, as on every other
+    shared-account control route. That is the account itself, never fenced to
+    apps or a Workspace.
+  - A request carrying `Authorization` (PAT, OAuth) or
+    `x-takosumi-account-session` gets 401
+    (`{"error":{"code":"unauthenticated",...}}`); in this profile humans arrive
+    only through the RP.
+  - Writes must come from the product origin; otherwise they get 403
+    `csrf_failed`.
+  - Pushers live in that Worker's Accounts store, which the notification
+    dispatcher (cron and immediate path) reads.
+  - Alternate URLs (workers.dev, previews) answer 404, and so does any path
+    below the prefix other than the collection and one item (a trailing `/`,
+    more segments). Issuer credentials are never evaluated for them.
+  - **Takosumi Mobile cannot register on this host yet.** It always sends
+    `Authorization` and therefore gets 401. How a device obtains a credential
+    for the management API in this profile is undecided (takos-control
+    `docs/platform/takosumi-app-clients.md`, open points). Only the host's
+    dashboard (the RP session) can use these routes today.
 - POST body: `{"kind":"webpush","app_id":"com.takosumi","pushkey":"<p256dh>","data":{"url":"<endpoint>","auth":"<auth>"},"device_display_name":"Pixel 9","lang":"ja-JP"}`.
   `pushkey` is an uncompressed P-256 point on the curve and `auth` is 16 bytes,
   both unpadded base64url. Unknown fields are 400. A new pusher answers 201, an

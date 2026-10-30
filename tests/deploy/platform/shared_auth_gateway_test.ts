@@ -91,6 +91,17 @@ test("local account management is absent on every opted-in product alias; separa
   expect(signIn?.headers.get("location")).toBe(origin + "/auth/oidc/login");
   expect(await handleSharedAuthAccountBoundaryRequest(request("/oauth/token"), env)).toBeUndefined();
   expect(await handleSharedAuthAccountBoundaryRequest(request("/api/v1/account/session/me"), env)).toBeUndefined();
+  // Takosumi Mobile pushers are served on the product host by the platform's
+  // own RP-authenticated handler; alternate URLs still find nothing.
+  for (const path of ["/api/v1/account/notification-pushers", "/api/v1/account/notification-pushers/npsh_x"]) {
+    expect(await handleSharedAuthAccountBoundaryRequest(request(path), env)).toBeUndefined();
+    expect((await handleSharedAuthAccountBoundaryRequest(new Request("https://alias.staging.example.test" + path), env))?.status).toBe(404);
+  }
+  // Only those two shapes: nothing else under the prefix passes.
+  for (const path of ["/api/v1/account/notification-pushers/", "/api/v1/account/notification-pushers/npsh_x/",
+    "/api/v1/account/notification-pushers/npsh_x/extra", "/api/v1/account/notification-pushersx"]) {
+    expect((await handleSharedAuthAccountBoundaryRequest(request(path), env))?.status, path).toBe(404);
+  }
   expect(await handleSharedAuthAccountBoundaryRequest(request("/sign-in"), {})).toBeUndefined();
 });
 
