@@ -262,6 +262,96 @@ pushers) that products use for their native apps.
   `pushkey` that were sent to, so a late answer about an old subscription never
   deletes the pusher a device re-registered.
 
+#### What is notified
+
+The instance reads the Activity ledger (`audit_events` of every Workspace) with
+a `(createdAt, id)` cursor and sends these events to registered devices.
+Recipients come from the app (Capsule) owner and the accounts an event names,
+never from Workspace membership. A Run started by `system:*` reaches only the
+owner.
+
+| Activity | Recipients | Opens | TTL / Urgency |
+| --- | --- | --- | --- |
+| `run.approval_required` (a plan waits for approval) | app owner | `/runs/{id}` | 86400 s / `high` |
+| `run.failed` | who started the Run, and the app owner | `/runs/{id}` | 259200 s / `normal` |
+| `run.applied` with `operation: "create"` (install finished) | who started the Run | `/apps/{id}` | 259200 s / `normal` |
+| `capsule.drift_detected`, `capsule.auto_update_failed`, `capsule.auto_update_apply_failed`, `capsule.uninstall_blocked`, `interface_materialization.dead_lettered` | app owner | `/apps/{id}#attention` | 259200 s / `normal` |
+| `connection.revoked` (revoked by someone other than the owner) | connection owner | `/connections` | 259200 s / `normal` |
+| `app.ownership_transfer_created` | recipient | `/apps/{id}` | 259200 s / `normal` |
+| `app.member_added` | added member | `/apps/{id}` | 259200 s / `normal` |
+| `interface_link.approval_requested` | providing app's owner | `/apps/{id}#links` | 86400 s / `high` |
+
+- The content is Declarative Web Push JSON
+  (`{"web_push":8030,"notification":{title, body, navigate, lang, tag}}`), at most
+  2,048 bytes of plaintext. `navigate` stays on the origin of the instance's
+  Accounts issuer; text is Japanese for a pusher `lang` of `ja` and English
+  otherwise. It carries the app name and the kind of Run only: no error text,
+  secret, token or Output value. `Topic` is an HMAC (per pusher and Run/app, 32
+  characters) under a key derived from the secret-store passphrase, so the relay
+  cannot map it back to ids.
+- One delivery row per (event, pusher), keyed idempotently. 2xx is delivered;
+  404/410 delete the pusher; timeout, 408, 429 (honouring `Retry-After`) and 5xx
+  are retried from 30 seconds growing to 1 hour until the TTL; other 3xx/4xx
+  (403 and 413 included) are recorded as a failure of the pusher and not retried.
+- Events are read up to now. `createdAt` is minted before the row commits and
+  isolates can commit slightly out of order, so the cursor trails the present
+  by ten minutes and the last ten minutes are read again on every run; delivery
+  rows are idempotent, so nothing is sent twice. The first run starts at the
+  present and never sends history; events past their TTL are never sent.
+- An event dropped for being past its TTL is logged with its id and kind only
+  (`own_notification_event_expired`) and counted as `expiredEvents` in the run
+  result.
+- An event whose recipients cannot be read (a transient failure) is parked: its
+  id stays on the cursor while the cursor itself moves on, so later events are
+  never held back. Later runs read parked events again by id after the ledger
+  read, at most ten per run, fewest attempts first, so a slow retry never holds
+  the cursor back. One still unreadable after six hours, one gone from the
+  ledger, or the oldest once more than 50 are parked is given up, logged and
+  counted as `skippedEvents`.
+  Failed drift checks do not get one notification per Run: they share the
+  app-level `Topic` of drift.
+- While no account has a pusher, a run only moves the cursor to ten minutes
+  before now without reading the ledger, so a device registered just now still
+  receives the last ten minutes.
+- The owner of a revoked Connection is never stored in public Activity. The
+  revocation reads the owner before deleting the record and hands the owner and
+  the revoking account to the notification hook as unstored context; nothing is
+  sent when owners revoke their own Connection. Cursor re-reads have no such
+  context, so this event is delivered by the immediate path only.
+- Immediate path: when ActivityService stores a notified event, the delivery
+  rows of that event alone are enqueued directly, leased and sent; the cursor
+  is not touched. While no account has a pusher, the attempt ends after that
+  check (one indexed read). The whole attempt stops after 20 seconds, each send
+  after 8, and a send starts only while those 8 seconds still fit, so the
+  deadline never cuts a send short and charges it as a failed attempt. Rows not
+  started keep their attempt count and are sent by a catch-up run: at once if
+  they were never leased, otherwise when their lease ends. Catch-up runs
+  likewise start a send only while its 10-second timeout fits.
+  - On Cloudflare the attempt is attached to the `waitUntil` of the invocation
+    recording the event, whether a request or a Durable Object fetch/alarm. The
+    entry passes `waitUntil` from `cloudflare:workers` once at startup, and
+    each call attaches to the invocation running at that moment. The Hosted
+    entry (`deploy/platform/entry-worker.ts`) imports it statically; the
+    composed worker that local-substrate and operator deployments run
+    (`deploy/platform/worker.ts`) is also imported by Bun tests and passes it
+    through a dynamic import.
+    The shared service is built once per isolate and cannot carry each
+    invocation's `ctx` down to ActivityService; no registry or in-flight flag
+    spans invocations. The invocation returns without waiting for delivery, so
+    a Durable Object's fetch/alarm is never held up. With no invocation to
+    attach to, nothing starts and the next cron sends the event.
+  - Bun + PostgreSQL starts the same attempt in process without awaiting it.
+- Catch-up path: on Cloudflare once per scheduled tick, on Bun + PostgreSQL in
+  an in-process loop every 30 seconds, a run reads along the cursor, enqueues
+  what the immediate path missed (including events written without
+  ActivityService, such as app ownership rows) and sends due rows.
+- The ledger read bounds `created_at >= cursor` explicitly. `audit_events` has
+  no `(created_at, id)` index yet, so the read is a scan bounded by `LIMIT`; the
+  index comes with a Control schema migration (TASK-0118 9.6).
+- State lives in the Accounts store: PostgreSQL migration `048`
+  (`notification_dispatch_cursors`, `notification_deliveries`); D1 uses the
+  existing document table and needs no D1 migration.
+
 ## OpenTofu Stack API
 
 The Stack API runs ordinary OpenTofu / Terraform modules from Git. Existing
@@ -623,7 +713,7 @@ which is value-free (names, permission names and timestamps only). `requestedByD
 and `decline` takes `{ expectedGeneration }`; both require provider write access and return `{ link: InterfaceLink }`.
 An approved link carries `approval.kind: "provider_approved"`; a declined link carries `declined: { declinedBy, declinedAt }`.
 A link that is no longer pending or a generation mismatch is 409; a provider or consumer that is not live (including scheduled for uninstall or removed) is 412.
-Activity records `interface_link.approved` / `interface_link.declined` with ids, permission names and type/version only.
+Activity records `interface_link.approval_requested` when a pending link is created and `interface_link.approved` / `interface_link.declined` when it is decided, with ids, permission names and type/version only.
 
 GET requires consumer read access; PUT requires consumer write access; DELETE also permits
 provider write access. Insufficient access returns 403, invalid input 400, a generation conflict 409,

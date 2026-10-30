@@ -2,6 +2,7 @@ import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
 import type { PublicSessionOpenApiEndpoint } from "./api/openapi.ts";
 import type { RegisterInterfaceRoutesOptions } from "./api/interface_routes.ts";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import {
   PRIVATE_RUN_FILE_HTTP_PATH,
   type PrivateRunFileRouteDependencies,
@@ -381,6 +382,11 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly publicSessionControlEndpoints?: readonly PublicSessionOpenApiEndpoint[];
+  /** Host hook after each stored Activity event (immediate notification delivery). */
+  readonly onActivityRecorded?: (
+    event: ActivityEvent,
+    context?: import("./domains/activity/mod.ts").RecordActivityContext,
+  ) => void;
   /** Optional host override for the canonical ownership resolver during rollout. */
   readonly appAccessResolver?: AppAccessResolver;
   readonly appMintLeaseStore?: AppMintLeaseStore;
@@ -1274,7 +1280,10 @@ export async function createTakosumiService(
   // trail. Constructed first so the controller + Capsule /
   // RunGroup services can emit through it (fire-and-forget; a failed audit write
   // never fails the action it records).
-  const activityService = new ActivityService({ store: sharedOpenTofuStore });
+  const activityService = new ActivityService({
+    store: sharedOpenTofuStore,
+    ...(options.onActivityRecorded ? { onRecorded: options.onActivityRecorded } : {}),
+  });
   let opentofuController: OpenTofuController;
   const enqueueSourceSync: EnqueueSourceSync =
     options.enqueueSourceSync ??
@@ -2164,6 +2173,14 @@ export async function createTakosumiService(
             ...(connection.kind ? { kind: connection.kind } : {}),
             scope: connection.scope,
           },
+        }, {
+          // For the notification path only (never stored): the record is
+          // deleted before the event is read, and the owner is told only when
+          // someone else revoked it (TASK-0119 own notifications).
+          ...(connection.ownerAccountId
+            ? { ownerAccountId: connection.ownerAccountId }
+            : {}),
+          ...(actorAccountId ? { actorAccountId } : {}),
         });
       }
     },

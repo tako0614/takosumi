@@ -54,6 +54,7 @@ import {
 import { CloudflareD1ObservabilitySink } from "./d1_observability.ts";
 import { createD1InterfaceStores } from "../../core/domains/interfaces/d1_stores.ts";
 import { D1AppOwnershipStore } from "../../core/domains/app-ownership/store.ts";
+import { ownNotificationActivityObserver } from "./own_notification_dispatch.ts";
 import {
   TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
   type TakosumiOperatorCapabilities,
@@ -381,7 +382,23 @@ export async function createWorkerServiceApp(
         })
       : undefined;
   const appOwnershipStore = new D1AppOwnershipStore(env.TAKOSUMI_CONTROL_DB, opentofuControlStore);
-  return await createTakosumiService({
+  // Late-bound: the observer runs only after the service below exists.
+  let ownNotificationOperations: Awaited<ReturnType<typeof createTakosumiService>>["operations"] | undefined;
+  const service = await createTakosumiService({
+    ...(accountsStore
+      ? {
+          onActivityRecorded: ownNotificationActivityObserver(() =>
+            ownNotificationOperations
+              ? {
+                  operations: ownNotificationOperations,
+                  store: accountsStore,
+                  env: env as unknown as Readonly<Record<string, unknown>>,
+                  issuer: env.TAKOSUMI_ACCOUNTS_ISSUER,
+                }
+              : undefined
+          ),
+        }
+      : {}),
     role,
     accountResourceReader: d1AccountResourceReader(env.TAKOSUMI_CONTROL_DB),
     appAuthorizationFactory: (access) => new D1AppAuthorizationStore(env.TAKOSUMI_CONTROL_DB, access),
@@ -480,6 +497,8 @@ export async function createWorkerServiceApp(
     ...(backupArtifactStore ? { serviceDataBackupRunner: opentofuRunner } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
   });
+  ownNotificationOperations = service.operations;
+  return service;
 }
 
 function workerPrivateRunFilesFromOptions(

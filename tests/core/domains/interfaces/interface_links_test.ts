@@ -691,6 +691,13 @@ function activityLog() {
 
 const providerOwner = { actorAccountId: "provider_owner", roles: [], requestId: "decide" };
 
+test("a link that needs no provider approval asks nobody", async () => {
+  const log = activityLog();
+  const f = await fixture({ activity: log.recorder });
+  expect((await f.link()).state).toBe("active");
+  expect(log.events.filter((event) => event.action === "interface_link.approval_requested")).toEqual([]);
+});
+
 test("the provider approves a pending link; grants follow on the next sign-in and tokens work", async () => {
   const log = activityLog();
   const f = await fixture({ pending: true, activity: log.recorder });
@@ -713,7 +720,13 @@ test("the provider approves a pending link; grants follow on the next sign-in an
   expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
 
   const decided = log.events.filter((event) => event.action.startsWith("interface_link."));
-  expect(decided).toEqual([{ action: "interface_link.approved", actorId: "provider_owner", targetId: pending.id, metadata: {
+  // Creating the pending link asks the provider app's owner (TASK-0119 own
+  // notifications); the decision is recorded separately.
+  expect(decided).toEqual([{ action: "interface_link.approval_requested", targetId: pending.id, metadata: {
+    interfaceLinkId: pending.id, generation: pending.generation, consumerCapsuleId: "consumer", providerCapsuleId: "provider_a",
+    providerInterfaceId: f.providers[0]!.metadata.id, requirementKey: "tools", interfaceType: "mcp.server", interfaceVersion: "1",
+    requestedPermissions: ["mcp.read", "mcp.write"],
+  } }, { action: "interface_link.approved", actorId: "provider_owner", targetId: pending.id, metadata: {
     interfaceLinkId: pending.id, generation: approved.generation, consumerCapsuleId: "consumer", providerCapsuleId: "provider_a",
     providerInterfaceId: f.providers[0]!.metadata.id, requirementKey: "tools", interfaceType: "mcp.server", interfaceVersion: "1",
     requestedPermissions: ["mcp.read", "mcp.write"], approvedPermissions: ["mcp.read", "mcp.write"],
@@ -754,7 +767,7 @@ test("a decline is terminal for that request; the consumer may select again and 
   await f.ensure("alice");
   expect(await f.service.listBindings(f.providers[0]!.metadata.id)).toHaveLength(0);
   await expect(f.service.approveInterfaceLink({ providerCapsuleId: "provider_a", linkId: pending.id, expectedGeneration: declined.generation }, providerOwner)).rejects.toMatchObject({ code: "conflict" });
-  expect(log.events.filter((event) => event.action.startsWith("interface_link.")).map((event) => [event.action, event.metadata?.approvedPermissions])).toEqual([["interface_link.declined", undefined]]);
+  expect(log.events.filter((event) => event.action.startsWith("interface_link.")).map((event) => [event.action, event.metadata?.approvedPermissions])).toEqual([["interface_link.approval_requested", undefined], ["interface_link.declined", undefined]]);
 
   const again = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: declined.generation });
   expect(again).toMatchObject({ state: "pending_approval", generation: declined.generation + 1 });

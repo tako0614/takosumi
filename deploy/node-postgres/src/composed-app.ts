@@ -19,6 +19,7 @@
  *    that the Takosumi service deploy control routes do not claim.
  */
 import type { AccountsHandler } from "@takosjp/takosumi-accounts-service";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import { PUBLIC_SESSION_CONTROL_ENDPOINTS } from "../../../accounts/service/src/control-route-inventory.ts";
 import {
   issueInterfaceOAuthAccessToken,
@@ -104,6 +105,11 @@ export interface ComposedAppInput {
   ) => AccountsHandler | Promise<AccountsHandler>;
   /** Defaults to true; mirrors the Accounts workspace mutation rollback flag. */
   readonly workspaceMutationsFrozen?: boolean;
+  /** Called after each stored Activity event (immediate notification tick). */
+  readonly onActivityRecorded?: (
+    event: ActivityEvent,
+    context?: import("../../../core/domains/activity/mod.ts").RecordActivityContext,
+  ) => void;
   /**
    * Optional runtime env forwarded into the embedded Takosumi service. The
    * composer ensures an internal deploy-control bearer exists for the service's
@@ -265,6 +271,7 @@ export async function buildComposedApp(
   const interfaceBearers = new WeakMap<Request, { readonly appIds?: readonly string[] }>();
   const created = await createTakosumiService({
     runtimeEnv,
+    ...(input.onActivityRecorded ? { onActivityRecorded: input.onActivityRecorded } : {}),
     publicSessionControlEndpoints: PUBLIC_SESSION_CONTROL_ENDPOINTS,
     workspaceMutationsFrozen,
     validateUninstallRequester: (requester, workspaceId) =>

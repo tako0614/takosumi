@@ -25,15 +25,34 @@ import {
   boundedActivityWorkspaceIds,
   clampActivityLimit,
 } from "../deploy-control/store.ts";
-import type { OpenTofuControlStore } from "../deploy-control/store.ts";
+import type {
+  ActivityLedgerPageInput,
+  OpenTofuControlStore,
+} from "../deploy-control/store.ts";
 import { log } from "../../shared/log.ts";
 import { redactRecord } from "../../shared/redaction.ts";
 
 /** The {@link ActivityEvent} fields a caller supplies; id + createdAt are minted. */
 export type RecordActivityInput = Omit<ActivityEvent, "id" | "createdAt">;
 
+/**
+ * Context handed only to the host's recorded hook (the notification path).
+ * It is never stored with the event, so it never reaches Activity responses.
+ */
+export interface RecordActivityContext {
+  /** The owner of the recorded target when the event alone cannot name it. */
+  readonly ownerAccountId?: string;
+  /** The account that acted, when the stored `actorId` is not an account. */
+  readonly actorAccountId?: string;
+}
+
 export interface ActivityServiceDependencies {
   readonly store: OpenTofuControlStore;
+  /**
+   * Called after an event is stored. It must not throw or block; the host
+   * uses it to start the immediate delivery of a notified event (TASK-0119).
+   */
+  readonly onRecorded?: (event: ActivityEvent, context?: RecordActivityContext) => void;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
 }
@@ -45,7 +64,10 @@ export interface ActivityServiceDependencies {
  * Activity binding simply records nothing.
  */
 export interface ActivityRecorder {
-  record(event: RecordActivityInput): Promise<ActivityEvent | undefined>;
+  record(
+    event: RecordActivityInput,
+    context?: RecordActivityContext,
+  ): Promise<ActivityEvent | undefined>;
 }
 
 /** Read seam for one entity's filtered, newest-first Activity history. */
@@ -79,12 +101,16 @@ export const NOOP_ACTIVITY_RECORDER: ActivityRecorder = {
 
 export class ActivityService implements ActivityLedger {
   readonly #store: OpenTofuControlStore;
+  readonly #onRecorded:
+    | ((event: ActivityEvent, context?: RecordActivityContext) => void)
+    | undefined;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
   #lastTimestampMs = 0;
 
   constructor(deps: ActivityServiceDependencies) {
     this.#store = deps.store;
+    this.#onRecorded = deps.onRecorded;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
   }
@@ -94,7 +120,10 @@ export class ActivityService implements ActivityLedger {
    * createdAt, persists, and swallows any store error (warn-only) so the
    * caller's action is never failed by an audit write.
    */
-  async record(event: RecordActivityInput): Promise<ActivityEvent | undefined> {
+  async record(
+    event: RecordActivityInput,
+    context?: RecordActivityContext,
+  ): Promise<ActivityEvent | undefined> {
     const createdAt = this.#nextCreatedAt();
     const full: ActivityEvent = {
       ...event,
@@ -103,8 +132,9 @@ export class ActivityService implements ActivityLedger {
       createdAt,
     };
     Object.defineProperty(full, "toJSON", { value: undefined });
+    let stored: ActivityEvent;
     try {
-      return await this.#store.putActivityEvent(full);
+      stored = await this.#store.putActivityEvent(full);
     } catch (error) {
       log.warn("service.activity.record_failed", {
         action: event.action,
@@ -112,6 +142,16 @@ export class ActivityService implements ActivityLedger {
         error,
       });
       return undefined;
+    }
+    this.#notifyRecorded(stored, context);
+    return stored;
+  }
+
+  #notifyRecorded(event: ActivityEvent, context?: RecordActivityContext): void {
+    try {
+      this.#onRecorded?.(event, context);
+    } catch (error) {
+      log.warn("service.activity.observer_failed", { action: event.action, error });
     }
   }
 
@@ -180,6 +220,21 @@ export class ActivityService implements ActivityLedger {
     return await this.#store.listActivityEventsForWorkspaces(ids, {
       limit: clampActivityLimit(limit),
     });
+  }
+
+  /** One stored event by id, for the notification dispatcher's parked events. */
+  async get(id: string): Promise<ActivityEvent | undefined> {
+    return await this.#store.getActivityEvent(id);
+  }
+
+  /**
+   * Oldest-first page of the whole ledger, every Workspace included, for the
+   * notification dispatcher's `(createdAt, id)` cursor. Not an API surface.
+   */
+  async listAfter(
+    input: ActivityLedgerPageInput,
+  ): Promise<readonly ActivityEvent[]> {
+    return await this.#store.listActivityEventsAfter(input);
   }
 
   /**
