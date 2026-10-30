@@ -1,17 +1,11 @@
 /**
- * Lazy personal-Workspace bootstrap (spec §4: "初回ログイン時に個人 Workspace を自動
- * 作成する") owned by the canonical Workspace list route.
- *
- * Identity reads such as `GET /api/v1/account/session/me` must remain read-only.
- * The Workspace list route already owns the deploy-control facade, so it can
- * await the domain's idempotent ensure before returning the first page. This
- * keeps every D1 operation inside the guarded request lifetime and avoids a
- * repeated create-and-collision write path on every authentication probe.
+ * Personal-Workspace bootstrap helpers. Since TASK-0118 P9.1-c no read route
+ * (the Workspace list included) creates or repairs a personal Workspace; the
+ * internal personal namespace is filled only by writes that need it.
  */
 
 import type { ControlPlaneOperations } from "./control-routes.ts";
-import type { AccountsStore, TakosumiAccountRecord } from "./store.ts";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import type { TakosumiAccountRecord } from "./store.ts";
 import type { Workspace } from "takosumi-contract/workspaces";
 
 /**
@@ -19,7 +13,7 @@ import type { Workspace } from "takosumi-contract/workspaces";
  * canonical account before entering this seam. Fresh creation and initial
  * owner membership share the Workspace domain's durable owner claim. Existing
  * namespaces require current owner membership and are never repaired here.
- * Unlike the dashboard's best-effort list hook below, failures propagate.
+ * Failures propagate.
  */
 export async function ensurePersonalWorkspaceForAccount(input: {
   readonly account: TakosumiAccountRecord;
@@ -40,39 +34,6 @@ export async function ensurePersonalWorkspaceForAccount(input: {
     throw new Error("Personal Workspace bootstrap returned a different owner.");
   }
   return workspace;
-}
-
-/**
- * Derives a preferred handle from the authenticated account and awaits the
- * deploy-control domain's idempotent ensure. The preferred handle is only
- * presentation input: durable bootstrap identity is owner-scoped, existing
- * owned personal Workspaces are eligible for deterministic adoption, and a
- * subject fallback plus a fresh domain-generated candidate handle foreign
- * claims. The returned promise never rejects so a best-effort bootstrap cannot
- * hide other accessible Workspaces.
- */
-export async function maybeEnsurePersonalWorkspaceForSubject(input: {
-  readonly subject: TakosumiSubject;
-  readonly store: AccountsStore;
-  readonly operations?: ControlPlaneOperations;
-}): Promise<Workspace | undefined> {
-  try {
-    const operations = input.operations;
-    if (!operations?.workspaces.ensurePersonalWorkspace) return;
-    const account = await input.store.findAccount(input.subject);
-    const handle = personalWorkspaceHandle({
-      subject: input.subject,
-      email: account?.email,
-      displayName: account?.displayName,
-    });
-    const workspace = await operations.workspaces.ensurePersonalWorkspace(input.subject, handle);
-    // A bootstrap result is only a read fallback for this exact personal
-    // namespace; an unrelated composition result grants no list visibility.
-    return workspace.type === "personal" && workspace.ownerUserId === input.subject
-      ? workspace : undefined;
-  } catch {
-    // Never let personal-Workspace bootstrap hide other accessible Workspaces.
-  }
 }
 
 /**

@@ -613,7 +613,25 @@ missing connections, required settings, a name collision) and once before it
 creates the Capsule. `userAction` names the single next step (`wait`,
 `choose_module`, `provide_inputs`, `review_run`, `retry` or `none`); a
 requirement with exactly one eligible connection is selected automatically.
-Only the member who started the attempt may `PATCH` or `DELETE` it. `PATCH`
+Only the member who started the attempt may `PATCH` or `DELETE` it. The new
+app's first owner is the person who started the install (TASK-0118 P9.1-c), also
+when a Workspace admin who is not the Workspace's owner uses a Workspace route;
+provider bindings and the Source `authConnectionId` accept only that person's
+connections, and install candidates list only rows that record that person as
+owner. The Workspace's other owner/admin people join the new app as members only
+when its owner is the Workspace's owner; an admin's install is the admin's alone.
+Claiming an ownerless Source (a reviewed preflight Source or one a prior
+coordinator recorded) also requires its Git connection to be the installer's.
+Before its app exists, an install in the creator's own namespace (the
+Workspace-less route) is the creator's: the creator's account credential (not a
+PAT with `appIds` or an installed app's own token, and not a shared-account
+composition that requires current membership) reads and advances it without a
+Workspace decision. An install started through a shared Workspace's route keeps
+the Workspace decision, so someone who left that Workspace cannot finish it. Before the app exists only its creator answers (`PATCH`) or reconciles a plan; a Workspace owner or another admin may read it but never advance it. If
+the app was committed before the plan recorded it (a lost acknowledgement), the
+app decides. Workspace-less install idempotency is per account: a key also
+replays a plan the account created in another personal namespace it owns
+(archived ones included). `PATCH`
 uses `expectedGeneration` as a CAS fence, and only the confirming
 `continue: true` request carries variable values, which go straight into the
 atomic initial creation and are never stored. Once a confirming request has
@@ -973,7 +991,9 @@ Workspaces included and an exact `total` counted before cursor filtering. The
 default and hard maximum `limit` are 100; the only accepted query keys are
 `limit` and `cursor`. A Workspace-scoped session, PAT, or OAuth credential is
 rejected with 403, and the route performs no personal-Workspace bootstrap or
-other writes. The response `kind` is
+other writes. Since TASK-0118 P9.1-c `GET /api/v1/workspaces` does not create or
+repair a personal Workspace either; the internal personal namespace is created
+only by writes that need it, such as a Workspace-less install. The response `kind` is
 `takosumi.account-workspace-inventory@v1` and contains `workspaces`, `total`,
 `returned`, `limit`, `truncated`, and an optional opaque `nextCursor`.
 
