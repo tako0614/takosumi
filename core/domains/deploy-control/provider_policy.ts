@@ -134,15 +134,22 @@ export function workspacePolicyCeiling(
  * strictest merge (TASK-0118 data policy: "Workspace.policy is baked into each
  * app's InstallConfig policy as the strictest composition").
  *
- * Each ceiling key takes the value {@link mergePolicyConfigs} enforces today
- * (allowlists intersect, `require*` flags OR, required lists union, quotas take
- * the minimum, both scope-boundary rule sets stay enforceable) with two
- * changes that make the result idempotent and no weaker than the runtime
- * composition: `destructiveChanges` requires confirmation when either layer
- * does (the runtime let the InstallConfig layer override the Workspace), and
- * duplicate scope-boundary rules are dropped. Keys the Workspace layer never
- * contributes (`lifecycleActions`, `repositoryInstallUx`, unknown keys) keep
- * the InstallConfig value. `bake(ws, bake(ws, p))` equals `bake(ws, p)`.
+ * Only the keys the Workspace sets are rewritten. Each takes the value
+ * {@link mergePolicyConfigs} enforces today (allowlists intersect, `require*`
+ * flags OR, required and forbidden lists union, quotas take the minimum, both
+ * scope-boundary rule sets stay enforceable), with two changes that keep the
+ * result no weaker than the runtime composition: `destructiveChanges` requires
+ * confirmation when either layer does (the runtime let the InstallConfig layer
+ * override the Workspace), and duplicate scope-boundary rules are dropped.
+ *
+ * Every rewritten value is written in canonical form (sets as sorted,
+ * duplicate-free arrays; flags as explicit booleans; no `undefined` members),
+ * so `bake(ws, bake(ws, p))` equals `bake(ws, p)` for any input order. An
+ * unnecessary second rebind would reset the app's OIDC activation and discard
+ * its pending Plans. Keys the Workspace does not set, and keys it never
+ * contributes (`lifecycleActions`, `repositoryInstallUx`, unknown keys), keep
+ * the InstallConfig value verbatim, so baking never rewrites an app only to
+ * reorder a list the Workspace does not constrain.
  */
 export function bakeWorkspacePolicy(
   workspacePolicy: PolicyConfig | undefined,
@@ -153,18 +160,112 @@ export function bakeWorkspacePolicy(
   const merged = mergePolicyConfigs(ceiling, installPolicy) ?? {};
   const baked: Record<string, unknown> = { ...(installPolicy ?? {}) };
   for (const key of WORKSPACE_POLICY_CEILING_KEYS) {
-    const value = key === "destructiveChanges"
-      ? strictestDestructiveChanges(
-          ceiling.destructiveChanges,
-          installPolicy?.destructiveChanges,
-        )
-      : key === "scopeBoundary"
-        ? withoutDuplicateScopeRules(merged.scopeBoundary)
-        : merged[key];
+    if (ceiling[key] === undefined) continue;
+    const value = canonicalCeilingValue(
+      key,
+      key === "destructiveChanges"
+        ? strictestDestructiveChanges(
+            ceiling.destructiveChanges,
+            installPolicy?.destructiveChanges,
+          )
+        : merged[key],
+    );
     if (value === undefined) delete baked[key];
     else baked[key] = value;
   }
   return baked as PolicyConfig;
+}
+
+/** Canonical form of one baked ceiling value (see {@link bakeWorkspacePolicy}). */
+function canonicalCeilingValue(
+  key: (typeof WORKSPACE_POLICY_CEILING_KEYS)[number],
+  value: unknown,
+): unknown {
+  if (value === undefined || value === null) return undefined;
+  switch (key) {
+    case "allowedProviders":
+    case "allowedResourceTypes":
+    case "allowedDataSourceTypes":
+    case "allowedProvisionerTypes":
+      return sortedSet(value as readonly string[]);
+    case "destructiveChanges": {
+      const policy = value as NonNullable<PolicyConfig["destructiveChanges"]>;
+      return {
+        requireExplicitConfirmation: policy.requireExplicitConfirmation === true,
+      };
+    }
+    case "providerLockfile":
+      return {
+        requireDigest:
+          (value as NonNullable<PolicyConfig["providerLockfile"]>)
+            .requireDigest === true,
+      };
+    case "providerInstallation":
+      return {
+        requireMirror:
+          (value as NonNullable<PolicyConfig["providerInstallation"]>)
+            .requireMirror === true,
+      };
+    case "providerCredentials":
+      return canonicalProviderCredentials(
+        value as NonNullable<PolicyConfig["providerCredentials"]>,
+      );
+    case "scopeBoundary":
+      return withoutDuplicateScopeRules(
+        value as NonNullable<PolicyConfig["scopeBoundary"]>,
+      );
+    case "quota":
+      return Object.fromEntries(
+        Object.entries(value as Readonly<Record<string, number>>)
+          .filter(([, limit]) => limit !== undefined)
+          .sort(([left], [right]) => left.localeCompare(right)),
+      );
+  }
+}
+
+function canonicalProviderCredentials(
+  policy: NonNullable<PolicyConfig["providerCredentials"]>,
+): NonNullable<PolicyConfig["providerCredentials"]> {
+  const recipes = policy.allowedCredentialRecipes === undefined
+    ? undefined
+    : Array.from(
+        new Map(
+          policy.allowedCredentialRecipes.map((recipe) => [
+            credentialRecipeKey(recipe),
+            { id: recipe.id, authMode: recipe.authMode },
+          ]),
+        ).values(),
+      ).sort(compareCredentialRecipes);
+  const requiredProviders = sortedSet(policy.requiredProviders ?? []);
+  const forbiddenConnectionIds = sortedSet(policy.forbiddenConnectionIds ?? []);
+  return {
+    ...(requiredProviders.length > 0 ? { requiredProviders } : {}),
+    ...(policy.allowedConnectionIds !== undefined
+      ? { allowedConnectionIds: sortedSet(policy.allowedConnectionIds) }
+      : {}),
+    ...(forbiddenConnectionIds.length > 0 ? { forbiddenConnectionIds } : {}),
+    ...(policy.allowedConnectionScopes !== undefined
+      ? {
+          allowedConnectionScopes: sortedSet(
+            policy.allowedConnectionScopes,
+          ) as readonly ConnectionScopeKind[],
+        }
+      : {}),
+    ...(recipes !== undefined ? { allowedCredentialRecipes: recipes } : {}),
+    ...(policy.requiredCredentialCapabilities !== undefined
+      ? {
+          requiredCredentialCapabilities: sortedSet(
+            policy.requiredCredentialCapabilities,
+          ),
+        }
+      : {}),
+    requireTemporary: policy.requireTemporary === true,
+    requireTtlEnforced: policy.requireTtlEnforced === true,
+  };
+}
+
+function sortedSet(values: readonly string[]): string[] {
+  return Array.from(new Set(values)).sort();
 }
 
 /**
@@ -235,7 +336,7 @@ function withoutDuplicateScopeRules(
     seen.add(key);
     return true;
   });
-  return { ...policy, rules };
+  return { ...(policy.mode !== undefined ? { mode: policy.mode } : {}), rules };
 }
 
 export function evaluateConfiguredProviderAllowlist(

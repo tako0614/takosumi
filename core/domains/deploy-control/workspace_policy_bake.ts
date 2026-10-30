@@ -140,15 +140,40 @@ export interface WorkspacePolicyBakePlan {
   readonly digest: string;
 }
 
+export type WorkspacePolicyBakeSkipReason =
+  | "busy"
+  | "conflict"
+  | "not_found"
+  | "management_inactive"
+  | "error";
+
+export interface WorkspacePolicyBakeSkip {
+  readonly capsuleId: string;
+  readonly reason: WorkspacePolicyBakeSkipReason;
+  /** Error class name when `reason` is `error` (never the message). */
+  readonly errorName?: string;
+  /**
+   * A successor InstallConfig this write inserted (or found from an earlier
+   * attempt) that the app was not moved to. It is unattached and inert; a
+   * re-run finds and reuses it while the reviewed write is unchanged.
+   */
+  readonly orphanInstallConfigId?: string;
+}
+
 export interface WorkspacePolicyBakeResult {
   readonly baked: readonly string[];
-  /** Reviewed writes the CAS did not apply; run the dry-run again. */
-  readonly skipped: readonly {
-    readonly capsuleId: string;
-    readonly reason: "busy" | "conflict" | "not_found" | "management_inactive";
-  }[];
-  /** `unbaked` of a fresh dry-run after the writes. */
-  readonly remaining: number;
+  /**
+   * Reviewed writes that were not applied (CAS loss, an active Run, or a store
+   * error for that app). Every write is attempted; run the dry-run again.
+   */
+  readonly skipped: readonly WorkspacePolicyBakeSkip[];
+  /** Successor ids inserted but left unattached (also listed per skip). */
+  readonly orphanInstallConfigIds: readonly string[];
+  /**
+   * `unbaked` of a fresh dry-run after the writes, or `null` when that
+   * re-plan failed (the result is still returned).
+   */
+  readonly remaining: number | null;
 }
 
 /** Read-only inventory. Never writes. */
@@ -243,14 +268,52 @@ export async function applyWorkspacePolicyBake(
   }
   const now = (options.now ?? (() => new Date()))().toISOString();
   const baked: string[] = [];
-  const skipped: WorkspacePolicyBakeResult["skipped"][number][] = [];
+  const skipped: WorkspacePolicyBakeSkip[] = [];
   for (const write of plan.writes) {
-    const outcome = await applyWrite(store, write, now);
-    if (outcome === "baked") baked.push(write.capsuleId);
-    else skipped.push({ capsuleId: write.capsuleId, reason: outcome });
+    const progress: WriteProgress = {};
+    let outcome: "baked" | Omit<WorkspacePolicyBakeSkip, "capsuleId" | "orphanInstallConfigId">;
+    try {
+      const status = await applyWrite(store, write, now, progress);
+      outcome = status === "baked" ? status : { reason: status };
+    } catch (error) {
+      // One app's store failure must not hide the others or the summary.
+      outcome = {
+        reason: "error",
+        errorName: error instanceof Error ? error.name : "unknown",
+      };
+    }
+    if (outcome === "baked") {
+      baked.push(write.capsuleId);
+      continue;
+    }
+    skipped.push({
+      capsuleId: write.capsuleId,
+      ...outcome,
+      ...(progress.successorId !== undefined
+        ? { orphanInstallConfigId: progress.successorId }
+        : {}),
+    });
   }
-  const after = await planWorkspacePolicyBake(store);
-  return { baked, skipped, remaining: after.unbaked };
+  let remaining: number | null = null;
+  try {
+    remaining = (await planWorkspacePolicyBake(store)).unbaked;
+  } catch {
+    // Report what was applied even when the re-plan cannot read the store.
+  }
+  return {
+    baked,
+    skipped,
+    orphanInstallConfigIds: skipped.flatMap((skip) =>
+      skip.orphanInstallConfigId === undefined ? [] : [skip.orphanInstallConfigId]
+    ),
+    remaining,
+  };
+}
+
+/** What a write did before it stopped, for the orphan report. */
+interface WriteProgress {
+  /** The successor row exists (inserted now or by an earlier attempt). */
+  successorId?: string;
 }
 
 async function planCapsule(
@@ -320,7 +383,8 @@ async function applyWrite(
   store: WorkspacePolicyBakeStore,
   write: WorkspacePolicyBakeWrite,
   now: string,
-): Promise<"baked" | WorkspacePolicyBakeResult["skipped"][number]["reason"]> {
+  progress: WriteProgress,
+): Promise<"baked" | Exclude<WorkspacePolicyBakeSkipReason, "error">> {
   const current = await store.getInstallConfig(write.installConfigId);
   if (!current || await stableJsonDigest(current) !== write.installConfigDigest) {
     return "conflict";
@@ -352,10 +416,12 @@ async function applyWrite(
   };
   try {
     const created = await store.createInstallConfigIfAbsent(successor, authority);
-    const target = created
-      ? await store.getInstallConfig(successor.id)
-      : await store.getInstallConfig(write.targetInstallConfigId);
-    if (!target || !sameSuccessor(target, successor)) return "conflict";
+    const target = await store.getInstallConfig(successor.id);
+    if (!target || !sameSuccessor(target, successor)) {
+      if (created) progress.successorId = successor.id;
+      return "conflict";
+    }
+    progress.successorId = successor.id;
     const result = await store.rebindCapsuleInstallConfig({
       capsuleId: write.capsuleId,
       targetInstallConfigId: target.id,
@@ -372,6 +438,7 @@ async function applyWrite(
       updatedAt: now,
     });
     if (result.status === "updated" || result.status === "replayed") {
+      delete progress.successorId;
       return "baked";
     }
     return result.status;

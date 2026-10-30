@@ -25,9 +25,9 @@ run engine, compatibility context). It replaces the plain
   unbaked again and the stricter ceiling applies).
 
 The install sheet's connection pre-filter
-(`accounts/service/src/control/install-attempt-facts.ts`) still intersects with
-the Workspace policy; a new install is never baked, so its runtime enforcement
-also still applies.
+(`accounts/service/src/control/install-attempt-facts.ts`, `connectionRequirements`)
+still intersects with the Workspace policy; a new install is never baked, so its
+runtime enforcement also still applies. It is on the stage 9.5 inventory below.
 
 Only the keys the Workspace layer ever enforced are a ceiling
 (`WORKSPACE_POLICY_CEILING_KEYS`): the four allowlists, `destructiveChanges`,
@@ -52,7 +52,15 @@ enforceable. Two differences make the result idempotent and never weaker:
   would exceed the persisted limit of 64 is refused
   (`scope_boundary_rule_limit`) and stays enforced through the Workspace.
 
-Non-ceiling InstallConfig keys are kept as they are.
+Every rewritten key is written in canonical form: sets as sorted,
+duplicate-free arrays (allowlists, connection ids and scopes, credential
+recipes and capabilities, required and forbidden lists), flags as explicit
+booleans, and no `undefined` members. Baking the result again changes nothing
+whatever order the inputs had, so a second run never rebinds an app again
+(which would reset its OIDC activation and discard its pending Plans). Keys the
+Workspace does not set, and non-ceiling keys, keep the InstallConfig value
+verbatim: baking never rewrites an app only to reorder a list the Workspace
+does not constrain.
 
 ## The tool
 
@@ -92,7 +100,10 @@ operator credential cannot plan or apply another account's app).
 ### Running it
 
 The operator module owns the connection and returns a Control store; the tool
-never discovers credentials and runs no DDL:
+never discovers credentials and runs no DDL. A D1 store must be constructed
+with `{ schemaMode: "predeployed" }`: the default `bootstrap` mode creates and
+migrates the schema on first access, so even the dry-run would write. The tool
+refuses a D1 store in bootstrap mode before reading anything.
 
 ```ts
 // /absolute/operator/workspace-policy-bake-target.ts
@@ -101,12 +112,15 @@ import { CloudflareD1OpenTofuControlStore } from "<repo>/worker/src/d1_opentofu_
 
 export async function openWorkspacePolicyBake() {
   const db = new CloudflareD1RestTransport({ accountId, databaseId, apiToken });
-  return { store: new CloudflareD1OpenTofuControlStore(db) };
+  return {
+    store: new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" }),
+  };
 }
 ```
 
-Postgres uses `new SqlOpenTofuControlStore({ client })`. For a rehearsal,
-point the D1 store at a local SQLite copy of an export.
+Postgres uses `new SqlOpenTofuControlStore({ client })` (it never migrates on
+its own). For a rehearsal, point the predeployed D1 store at a local SQLite
+copy of an export.
 
 ```bash
 bun --no-env-file scripts/bake-workspace-policies.ts --adapter="$ADAPTER" --dry-run
@@ -116,9 +130,13 @@ bun --no-env-file scripts/bake-workspace-policies.ts --adapter="$ADAPTER" \
   --apply --plan-digest=sha256:<reviewed digest>
 ```
 
-`--apply` reports `baked`, `skipped` (the CAS did not apply: `busy`,
-`conflict`, `not_found`, `management_inactive`) and `remaining` (the fresh
-dry-run's `unbaked`). Run the dry-run and apply again for skipped apps.
+`--apply` attempts every reviewed write and always prints its summary:
+`baked`, `skipped` (`busy`, `conflict`, `not_found`, `management_inactive`, or
+`error` with the error class name when the store failed for that app),
+`orphanInstallConfigIds` (successor rows a write inserted but did not attach;
+inert, and reused by a re-run of the same reviewed write) and `remaining` (the
+fresh dry-run's `unbaked`, or `null` if that re-plan failed). Run the dry-run
+and apply again for skipped apps.
 
 ## Gate
 
@@ -127,6 +145,14 @@ ceiling already contains it, so no runtime decision depends on the Workspace
 policy. Keep runtime enforcement until it reports 0; stage 9.5 removes the
 Workspace read only then. A Workspace policy written later (the Workspace
 `PATCH` route is not frozen) makes the count non-zero again.
+
+Stage 9.5 inventory of the remaining Workspace-policy reads:
+
+| Read | Where |
+| --- | --- |
+| Runtime ceiling (connections, run engine, compatibility context) | `effectiveProviderPolicy` callers in `core/domains/connections/mod.ts`, `core/domains/deploy-control/run-engine/run_engine.ts`, `core/domains/sources/mod.ts` |
+| Install sheet connection pre-filter | `accounts/service/src/control/install-attempt-facts.ts` `connectionRequirements` (`mergedProviderPolicy(workspace.policy, …)`) |
+| Workspace policy writes and projection | `PATCH /api/v1/workspaces/:id` (`accounts/service/src/control/workspaces.ts`), the internal Workspace route, `account-workspace-views.ts` |
 
 Production at planning time (2026-10-30): one Workspace has a policy object
 (Q-P1). Running the tool against staging or production is a data change and
