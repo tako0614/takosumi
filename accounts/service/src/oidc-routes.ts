@@ -662,12 +662,12 @@ async function handleAuthorizeUncached(input: {
   if (!session.ok && client.consent === "always") {
     // A POST without the session that loaded the consent page is never a sign-in.
     if (input.request.method !== "GET") return json({ error: "invalid_request" }, 400);
-    if (nativeConsentPrompts.includes("none")) return hostedAuthorizeError(redirectUri, input.url.searchParams.get("state"), "login_required");
+    if (nativeConsentPrompts.includes("none")) return nativeAuthorizeError(redirectUri, input.url.searchParams.get("state"), "login_required", input.issuer ?? input.url.origin);
   }
   if (!session.ok) return client.profile === "shared-account" && input.url.searchParams.get("prompt") === "none"
     ? hostedAuthorizeError(redirectUri,input.url.searchParams.get("state"),"login_required") : authorizeSignInRedirect(input.url);
   // Consent is never remembered for these clients, so a silent request cannot succeed.
-  if (nativeConsentPrompts.includes("none")) return hostedAuthorizeError(redirectUri, input.url.searchParams.get("state"), "consent_required");
+  if (nativeConsentPrompts.includes("none")) return nativeAuthorizeError(redirectUri, input.url.searchParams.get("state"), "consent_required", input.issuer ?? input.url.origin);
   const sessionRecord = await input.store.findAccountSession(session.sessionId);
   let reauthenticationStartedAt: number | undefined;
   if (client.profile === "shared-account") {
@@ -843,6 +843,9 @@ async function handleAuthorizeUncached(input: {
   redirect.searchParams.set("code", code);
   const state = input.url.searchParams.get("state");
   if (state) redirect.searchParams.set("state", state);
+  // RFC 9207: native consent clients learn which issuer answered, so a code
+  // from one issuer cannot be redeemed in a flow started with another.
+  if (client.consent === "always") redirect.searchParams.set("iss", input.issuer ?? input.url.origin);
   return Response.redirect(redirect, 302);
 }
 
@@ -2051,7 +2054,7 @@ async function handleNativeConsentStep(input: {
     return json({ error: "invalid_request" }, 400);
   }
   if (decision === "deny") {
-    return hostedAuthorizeError(input.redirectUri, state, "access_denied");
+    return nativeAuthorizeError(input.redirectUri, state, "access_denied", input.issuer ?? input.url.origin);
   }
   return undefined;
 }
@@ -2064,6 +2067,14 @@ async function nativeConsentPolicyHash(url: URL, scope: string): Promise<string>
     leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0
   );
   return sha256Text(JSON.stringify(["native-consent-policy@v1", url.pathname, policy]));
+}
+
+function nativeAuthorizeError(redirectUri: string, state: string | null, error: string, issuer: string): Response {
+  const url = new URL(redirectUri);
+  url.searchParams.set("error", error);
+  if (state) url.searchParams.set("state", state);
+  url.searchParams.set("iss", issuer);
+  return Response.redirect(url, 302);
 }
 
 /** True for consent transactions that must never be redeemed at the token endpoint. */

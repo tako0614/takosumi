@@ -20,7 +20,8 @@ package for the v1 GA line.
   §8.6). `TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` turns the built-in client
   off; under the shared hosted session policy it is off and cannot be enabled
   yet. Consent clients refuse `prompt=login` and `max_age` (fresh
-  re-authentication is not implemented for them).
+  re-authentication is not implemented for them), and their authorize
+  redirects carry the RFC 9207 `iss` parameter.
 - **Discovery reports the configured issuer:** `endpoints.oidc_issuer` in
   `/.well-known/takosumi` is now `TAKOSUMI_ACCOUNTS_ISSUER` instead of the
   request origin.

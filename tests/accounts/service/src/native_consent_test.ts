@@ -167,6 +167,8 @@ test("approving the consent issues a code that only the PKCE verifier can redeem
   const callback = new URL(approved.headers.get("location")!);
   expect(`${callback.protocol}//${callback.host}${callback.pathname}`).toBe(REDIRECT);
   expect(callback.searchParams.get("state")).toBe("state-123");
+  // RFC 9207: the response names its issuer.
+  expect(callback.searchParams.get("iss")).toBe(ISSUER);
   const code = callback.searchParams.get("code")!;
   expect(code).toBeTruthy();
 
@@ -298,6 +300,7 @@ test("denying the consent returns access_denied to the app without a code", asyn
   const callback = new URL(denied.headers.get("location")!);
   expect(callback.searchParams.get("error")).toBe("access_denied");
   expect(callback.searchParams.get("state")).toBe("state-123");
+  expect(callback.searchParams.get("iss")).toBe(ISSUER);
   expect(callback.searchParams.has("code")).toBe(false);
 });
 
@@ -402,6 +405,7 @@ test("silent and widened native authorization requests are refused", async () =>
   );
   expect(silent.status).toBe(302);
   expect(new URL(silent.headers.get("location")!).searchParams.get("error")).toBe("consent_required");
+  expect(new URL(silent.headers.get("location")!).searchParams.get("iss")).toBe(ISSUER);
 
   const silentSignedOut = await handler(
     new Request(authorizeUrl(challenge, { prompt: "none" })),
@@ -472,6 +476,8 @@ test("ordinary static clients keep issuing codes on GET and still refuse POST", 
   const direct = await handler(new Request(url, { headers: { cookie: cookie() } }));
   expect(direct.status).toBe(302);
   expect(new URL(direct.headers.get("location")!).searchParams.get("code")).toBeTruthy();
+  // Ordinary clients' redirects are unchanged.
+  expect(new URL(direct.headers.get("location")!).searchParams.has("iss")).toBe(false);
 
   const post = await submitConsent(handler, url, {
     consent_transaction: "ncons_x",
