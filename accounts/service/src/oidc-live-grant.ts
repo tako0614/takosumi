@@ -7,6 +7,7 @@ import type {
 } from "./control-operations.ts";
 import type { AccountsStore } from "./store.ts";
 import type { AppRole } from "../../../contract/app-access.ts";
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 import { oidcClientActivationDigest } from "./oidc-activation.ts";
 import { accountsOidcModuleVariableProfile } from "../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
 
@@ -180,7 +181,7 @@ export async function validateOidcLiveGrant(input: {
   let activationDigest: string;
   try {
     activationDigest = await oidcClientActivationDigest({
-      workspaceId: capsule.workspaceId,
+      scopeRef: capsuleScopeRef(capsule),
       capsuleId: capsule.id,
       executionAuthorityEpoch,
       installConfig,

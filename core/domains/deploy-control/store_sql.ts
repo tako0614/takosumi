@@ -122,6 +122,7 @@ function pgConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
 }
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import { capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   AccountWorkspaceListParams,
   AccountWorkspacePage,
@@ -7260,14 +7261,16 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             publicStoredInstallConfig(parseJson(configRows[0].json) as InstallConfig),
           ),
           stableJsonDigest(
-            capsuleWithoutOwnership(normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule)),
+            capsuleWithScopeRef(
+              capsuleWithoutOwnership(normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule)),
+            ),
           ),
           stableJsonDigest(parseJson(bindingRow.json)),
         ]);
         const [expectedConfig, expectedCapsule, expectedBinding] =
           await Promise.all([
             stableJsonDigest(installConfig),
-            stableJsonDigest(capsule),
+            stableJsonDigest(capsuleWithScopeRef(capsule)),
             stableJsonDigest(binding),
           ]);
         return capsuleRows[0].epoch === 1 &&
