@@ -19,6 +19,19 @@ package for the v1 GA line.
   needs Accounts migration `047`; D1 needs no migration. The Web Push sender
   (RFC 8291/8292) and its answer rules ship with it; what is notified follows
   separately.
+- **Takosumi Mobile is notified of the instance's own events:** approval
+  waits (new Activity `run.approval_required`), failed Runs, finished
+  installs, drift, failed automatic updates, blocked uninstalls, revoked
+  connections, Interface setup dead letters, ownership transfer requests,
+  member additions and Interface link requests (new Activity
+  `interface_link.approval_requested`) are sent as Web Push to the devices
+  registered by the app owner or the account the event names (never by
+  Workspace membership). A dispatcher reads the Activity ledger with a cursor,
+  starts at the present, and keeps one idempotent delivery row per event and
+  device; Cloudflare runs it on every scheduled tick, Bun + PostgreSQL every
+  30 seconds. PostgreSQL needs Accounts migration `048`; D1 needs no
+  migration. `run.applied` now records the Apply's `operation`. The account
+  page lists registered devices, shows failing ones and can remove them.
 - **Takosumi Mobile can sign in to any instance:** every instance now includes
   the built-in public OIDC client `takosumi-mobile` (redirect
   `takosumi://oauth/callback`, scopes `openid profile offline_access
