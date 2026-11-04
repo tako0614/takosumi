@@ -233,4 +233,6 @@ test("self-host composed backup exports during uninstall grace and the due final
     await client.close();
     await rm(root, { recursive: true, force: true });
   }
-});
+// This composes a real PGlite ledger and exports encrypted archives twice;
+// it checks backup/teardown ordering and permissions, not sub-five-second latency.
+}, 30_000);
