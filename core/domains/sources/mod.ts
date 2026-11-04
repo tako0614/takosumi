@@ -695,14 +695,13 @@ export class SourcesService {
     // Its own prefixes: `apps/{owner}/…` for an app-owned Source, then the
     // Workspace one (TASK-0118 P9.1-f).
     const scopes = sourceArchiveCustodyPrefixes(source);
-    let blocker: "outside_scope" | "foreign_reference" | undefined;
     for (const scope of scopes) {
-      blocker ??= await this.#store.sourceRetirementArchiveBlocker(sourceId, scope);
-    }
-    if (blocker === "foreign_reference") {
-      throw new OpenTofuControllerError("failed_precondition",
-        `Source ${sourceId} shares an archive with another live Source`,
-        { reason: "source_archive_shared_by_another_source" });
+      const blocker = await this.#store.sourceRetirementArchiveBlocker(sourceId, scope);
+      if (blocker === "foreign_reference") {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${sourceId} shares an archive with another live Source`,
+          { reason: "source_archive_shared_by_another_source" });
+      }
     }
     // Drain bounded pages for at most 1,024 archives or five seconds between
     // pages. Persist only after idempotent deletion, preserving crash retries.

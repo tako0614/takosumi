@@ -499,6 +499,46 @@ test("foreign reuse in a later archive page blocks every physical deletion", asy
   }
 }, 30_000);
 
+test("retirement checks the next custody prefix after an outside_scope response", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      const ownerCapsuleId = "cap_prefix_blocker";
+      await seed(store, ownerCapsuleId);
+      await store.putCapsule({ id: ownerCapsuleId, workspaceId: WS,
+        projectId: "project_retirement", sourceId: SRC, installConfigId: "config_retirement",
+        name: "Retirement", slug: "retirement", environment: "production", status: "destroyed",
+        currentStateGeneration: 0, createdAt: NOW, updatedAt: NOW });
+      await store.putSource({ ...(await store.getSource(SRC))!, id: "source_foreign",
+        ownerCapsuleId: undefined, name: "Live foreign Source", status: "active", autoSync: true });
+      await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+        id: "snapshot_foreign", sourceId: "source_foreign", fetchedByRunId: "sync_foreign" });
+      const appPrefix = `apps/${ownerCapsuleId}/sources/${SRC}/snapshots/`;
+      const workspacePrefix = `workspaces/${WS}/sources/${SRC}/snapshots/`;
+      const original = store.sourceRetirementArchiveBlocker.bind(store);
+      expect(await original(SRC, workspacePrefix), name).toBe("foreign_reference");
+      const inspected: string[] = [];
+      store.sourceRetirementArchiveBlocker = async (sourceId, prefix) => {
+        inspected.push(prefix);
+        return prefix === appPrefix ? "outside_scope" : await original(sourceId, prefix);
+      };
+      const deleted: string[] = [];
+      const service = new SourcesService({ store, now: () => new Date(NOW),
+        deleteRetiredSourceArchives: async ({ archiveRefs }) => { deleted.push(...archiveRefs); } });
+      await expect(service.retireOwnedSource(SRC, "destroyed"), name).rejects.toMatchObject({
+        details: { reason: "source_archive_shared_by_another_source" },
+      });
+      expect(inspected, name).toEqual([appPrefix, workspacePrefix]);
+      expect(deleted, name).toEqual([]);
+      expect(await store.getSource(SRC), name).toMatchObject({ status: "disabled", retiringAt: NOW });
+      expect(await store.getSourceSnapshot("snapshot_foreign"), name).toMatchObject({ archiveRef: ref });
+      expect(await store.listActivityEvents(WS), name).toEqual([]);
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
+
 test("D1 release refuses incoherent destroyed Capsule, mismatched ref identity, and missing owner", async () => {
   const db = new SqliteFakeD1();
   const store = new CloudflareD1OpenTofuControlStore(db);
