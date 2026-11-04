@@ -2,9 +2,9 @@
  * Sign-in (upstream OAuth) + OAuth callback — rebuilt from the legacy
  * AccountMiscViews port, i18n-ed.
  *
- * Which providers are clickable is resolved at runtime from
- * `GET /api/v1/auth/providers` (operator config) and fails closed, so a button
- * whose backend would answer 503 is never enabled. The permanently-disabled
+ * A shared-account RP exposes one server-owned login action. Only explicit
+ * route absence uses `GET /api/v1/auth/providers` (operator config); unknown
+ * health fails closed. The permanently-disabled
  * passkey placeholder of the old screen is intentionally NOT carried over:
  * the dashboard ships no WebAuthn client yet, and a control that can never
  * work reads as broken. It returns together with the client.
@@ -14,6 +14,7 @@ import {
   createResource,
   createSignal,
   type JSX,
+  onCleanup,
   onMount,
   Show,
 } from "solid-js";
@@ -21,6 +22,7 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import { LogIn, Monitor, Moon, Sun } from "lucide-solid";
 import type { TakosumiAccountsAuthProvider } from "@takosjp/takosumi-accounts-contract";
 import { installReturnContext } from "../../lib/install-return-context.ts";
+import { probeInitialSharedAuthSession } from "../../lib/shared-auth-session-preflight.ts";
 import {
   loadPlatformContributions,
   platformContributionsForSlot,
@@ -73,18 +75,32 @@ export function SignInPanel() {
   >([]);
   const [providersLoaded, setProvidersLoaded] = createSignal(false);
   const [providersLoadFailed, setProvidersLoadFailed] = createSignal(false);
+  const [sharedAuth, setSharedAuth] = createSignal(false);
+  let providerCheck = 0;
+  onCleanup(() => { providerCheck += 1; });
 
   const loadProviders = () => {
+    const check = ++providerCheck;
     setProvidersLoaded(false);
     setProvidersLoadFailed(false);
     setProviders([]);
-    void rpc.auth
-      .listProviders()
-      .then((res) => {
-        setProviders(res.providers.filter(isDashboardOAuthProvider));
+    setSharedAuth(false);
+    void probeInitialSharedAuthSession()
+      .then(async ({ route }) => {
+        if (check !== providerCheck) return;
+        if (route === "present") {
+          // Presence selects the login entrypoint; it grants no session or
+          // permission. Only the visitor's explicit action starts the RP.
+          setSharedAuth(true);
+        } else {
+          const res = await rpc.auth.listProviders();
+          if (check !== providerCheck) return;
+          setProviders(res.providers.filter(isDashboardOAuthProvider));
+        }
         setProvidersLoaded(true);
       })
       .catch(() => {
+        if (check !== providerCheck) return;
         // Availability unreadable → every method stays disabled with the
         // retry hint instead of a button that would 503.
         setProvidersLoadFailed(true);
@@ -99,7 +115,7 @@ export function SignInPanel() {
   const enabledProviders = (): readonly TakosumiAccountsAuthProvider[] =>
     providers().filter((provider) => provider.enabled);
   const hasEnabledProvider = (): boolean =>
-    providers().some((provider) => provider.enabled);
+    sharedAuth() || providers().some((provider) => provider.enabled);
   const providerSubText = (p: Provider): string | undefined => {
     if (!providersLoaded()) return t("auth.providerChecking");
     if (providersLoadFailed()) return t("auth.providerRetryNeeded");
@@ -123,6 +139,12 @@ export function SignInPanel() {
   };
 
   const returnParam = () => params.return || params.return_to;
+  const sharedSignInHref = () => {
+    const destination = returnParam();
+    return destination
+      ? `/auth/oidc/login?${new URLSearchParams({ return: destination })}`
+      : "/auth/oidc/login";
+  };
   const pendingInstall = () => installReturnContext(returnParam());
   const pendingInstallDetails = () => {
     const ctx = pendingInstall();
@@ -174,6 +196,30 @@ export function SignInPanel() {
         </div>
       </Show>
       <div class="sign-in-buttons">
+        <Show when={sharedAuth()}>
+          {/* A non-empty target opts out of the router's SPA interception. */}
+          <a href={sharedSignInHref()} target="_self" class="sign-in-btn">
+            <span class="sign-in-icon">
+              <LogIn size={20} aria-hidden="true" />
+            </span>
+            <span class="sign-in-text">
+              <span class="sign-in-label">{t("auth.signIn")}</span>
+            </span>
+            <svg
+              class="sign-in-arrow"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </a>
+        </Show>
         {providers().map((p) => (
           <button
             type="button"

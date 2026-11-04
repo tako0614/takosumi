@@ -36,6 +36,7 @@ import { registerAppSharingCases } from "./app_sharing_case.ts";
 import { registerInstallReopenCases } from "./install_reopen_case.ts";
 import { registerRunDetailCases } from "./run_detail_case.ts";
 import { registerSessionIdentityCases } from "./session_identity_case.ts";
+import { registerSharedSignInCases } from "./shared_sign_in_case.ts";
 
 type Expectations = {
   readonly appName: string;
@@ -54,6 +55,7 @@ registerNavigationAccountCases(mode);
 registerAppSharingCases(mode);
 registerRunDetailCases(mode);
 registerSessionIdentityCases(mode);
+registerSharedSignInCases(mode);
 
 const expectedWorkerVersionId =
   mode === "live" || mode === "public-live"
