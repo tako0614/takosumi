@@ -3096,6 +3096,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return jsonResponse(
       {
         ...payload,
+        // The host adapter prefers these fields over sourceArchive. Bind both
+        // representations to the object we validated and persisted.
+        archiveRef,
+        archiveDigest: digest,
+        archiveSizeBytes: stored.size,
         sourceArchive: {
           kind: "object-storage",
           ref: archiveRef,

@@ -14,6 +14,7 @@ import {
   OpenTofuRunnerObject,
 } from "../../../worker/src/durable/OpenTofuRunnerObject.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { CloudflareContainerOpenTofuRunner } from "../../../worker/src/container_runner.ts";
 
 const ARCHIVE_BYTES = new Uint8Array([
   0x28, 0xb5, 0x2f, 0xfd, 0x01, 0x02, 0x03,
@@ -284,7 +285,8 @@ async function digestOf(bytes: Uint8Array): Promise<string> {
 // Both agreed layouts: a Workspace Source, and an app-owned Source of a Capsule
 // with an `apps/` root (TASK-0118 P9.1-f).
 for (const archiveKey of [ARCHIVE_KEY, "apps/cap_1/sources/src_1/snapshots/snap_1/source.tar.zst"]) {
-test(`source_sync run promotes the runner-local source archive to R2_SOURCE (${archiveKey.split("/")[0]})`, async () => {
+for (const metadata of ["matching", "conflicting-digest", "conflicting-size", "conflicting-ref", "omitted"] as const) {
+test(`source_sync promotes verified archive metadata when runner fields are ${metadata} (${archiveKey.split("/")[0]})`, async () => {
   const calls: string[] = [];
   const archiveDigest = await digestOf(ARCHIVE_BYTES);
   const source = new FakeR2Bucket();
@@ -303,8 +305,12 @@ test(`source_sync run promotes the runner-local source archive to R2_SOURCE (${a
           status: "succeeded",
           exitCode: 0,
           resolvedCommit: RESOLVED_COMMIT,
-          archiveDigest,
-          archiveSizeBytes: ARCHIVE_BYTES.byteLength,
+          repositoryModules: { status: "ready", scopePath: ".", modules: [] },
+          ...(metadata === "omitted" ? {} : {
+            archiveDigest: metadata === "conflicting-digest" ? `sha256:${"f".repeat(64)}` : archiveDigest,
+            archiveSizeBytes: metadata === "conflicting-size" ? 999 : ARCHIVE_BYTES.byteLength,
+            archiveRef: metadata === "conflicting-ref" ? "workspaces/spc_1/sources/src_1/snapshots/other/source.tar.zst" : archiveKey,
+          }),
           sourceArchive: {
             kind: "runner-local",
             ref: archiveKey,
@@ -326,27 +332,25 @@ test(`source_sync run promotes the runner-local source archive to R2_SOURCE (${a
     },
   });
 
-  const response = await runner.fetch(
-    new Request("https://runner/runs/sync_1", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "takosumi.opentofu-run@v1",
-        action: "source_sync",
-        runId: "sync_1",
-        request: {
-          action: "source_sync",
-          source: {
-            url: "https://github.com/octocat/Hello-World.git",
-            ref: "main",
-          },
-          archiveRef: archiveKey,
-        },
-      }),
-    }),
-  );
+  let response: Response | undefined;
+  const adapter = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: name => name,
+      get: () => ({ fetch: async request => {
+        response = await runner.fetch(request);
+        return response.clone();
+      } }),
+    },
+  } as CloudflareWorkerEnv);
+  const result = await adapter.sourceSync({
+    runId: "sync_1", workspaceId: "spc_1", sourceId: "src_1", archiveRef: archiveKey,
+    source: { url: "https://github.com/octocat/Hello-World.git", ref: "main", path: "." },
+  });
+  assert.equal(result.archiveDigest, archiveDigest);
+  assert.equal(result.archiveSizeBytes, ARCHIVE_BYTES.byteLength);
+  assert.equal(result.archiveRef, archiveKey);
 
-  assert.equal(response.status, 200);
+  assert.equal(response!.status, 200);
   // The DO dispatches the run, then pulls and persists the archive. No state
   // routes are exercised for a source_sync run.
   assert.deepEqual(calls, [
@@ -354,16 +358,18 @@ test(`source_sync run promotes the runner-local source archive to R2_SOURCE (${a
     "POST /runs/sync_1",
     "GET /runs/sync_1/artifacts/source-archive",
   ]);
-  const payload = (await response.json()) as Record<string, unknown>;
+  const payload = (await response!.json()) as Record<string, unknown>;
   assert.equal(payload.resolvedCommit, RESOLVED_COMMIT);
   const archive = payload.sourceArchive as Record<string, unknown>;
   assert.equal(archive.kind, "object-storage");
   assert.equal(archive.ref, archiveKey);
   assert.equal(archive.digest, archiveDigest);
+  assert.equal(archive.sizeBytes, ARCHIVE_BYTES.byteLength);
   assert.deepEqual(source.body(archiveKey), ARCHIVE_BYTES);
   // The plan/state bucket must be untouched by a source_sync run.
   assert.equal(artifacts.body(archiveKey), undefined);
 });
+}
 }
 
 test("source_sync rejects one-byte-oversized chunked archives without an R2 object", async () => {
