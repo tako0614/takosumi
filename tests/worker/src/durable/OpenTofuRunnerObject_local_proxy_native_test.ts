@@ -64,3 +64,63 @@ test("local Runner proxy works in a native DO without enabling Cloudflare Contai
     await rm(directory, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("local Runner proxy delivers native alarms to the Restore collector", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-local-restore-alarm-"));
+  let runtime: Miniflare | undefined;
+  try {
+    const source = resolve(import.meta.dir, "../../../../worker/src/durable/OpenTofuRunnerObject.ts");
+    const entry = join(directory, "entry.ts");
+    await writeFile(entry, `
+      import { LocalSubstrateOpenTofuRunnerProxyObject } from ${JSON.stringify(source)};
+      const CURSOR = "runner-restore-stage-collector-cursor@v1";
+      export class RestoreAlarmFixture extends LocalSubstrateOpenTofuRunnerProxyObject {
+        constructor(ctx, env) { super(ctx, env); this.storage = ctx.storage; }
+        async fetch(request) {
+          if (request.method === "POST") {
+            await this.storage.put(CURSOR, "runner-restore-stage@v1:apps/native_alarm:finished");
+            await this.storage.setAlarm(Date.now());
+          }
+          return Response.json({ cursor: await this.storage.get(CURSOR) ?? null });
+        }
+      }
+      export default {
+        async fetch(request, env) {
+          return await env.LOCAL.get(env.LOCAL.idFromName("restore-alarm-regression")).fetch(request);
+        }
+      };
+    `);
+    const bundle = await Bun.build({
+      entrypoints: [entry], target: "browser", format: "esm", external: ["cloudflare:workers"],
+    });
+    if (!bundle.success || bundle.outputs.length !== 1) {
+      throw new Error(bundle.logs.map(String).join("\n") || "native Restore alarm fixture bundle failed");
+    }
+    runtime = new Miniflare({
+      modules: [{ type: "ESModule", path: "entry.mjs", contents: await bundle.outputs[0]!.text() }],
+      compatibilityDate: "2026-04-15", compatibilityFlags: ["nodejs_compat"],
+      durableObjects: { LOCAL: { className: "RestoreAlarmFixture", useSQLite: true } },
+      bindings: {
+        LOCAL_SUBSTRATE_TEST_BED: "1",
+        TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL: "http://127.0.0.1:18080/",
+      },
+      outboundService: () => { throw new Error("native Restore alarm fixture forbids Worker egress"); },
+    });
+    await runtime.ready;
+    const seeded = await runtime.dispatchFetch("http://proxy.test/", { method: "POST" });
+    expect(seeded.status).toBe(200);
+    const deadline = Date.now() + 5_000;
+    let cursor: unknown;
+    do {
+      const response = await runtime.dispatchFetch("http://proxy.test/");
+      expect(response.status).toBe(200);
+      cursor = (await response.json() as { cursor: unknown }).cursor;
+      if (cursor === null) break;
+      await Bun.sleep(50);
+    } while (Date.now() < deadline);
+    expect(cursor).toBeNull();
+  } finally {
+    await runtime?.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 30_000);
