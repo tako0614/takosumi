@@ -340,7 +340,10 @@ test("workspace-less install uses only canonical personal bootstrap during the f
     ensurePersonalWorkspace: async (subject: string) => { expect(subject).toBe("owner"); creates++; return personal; },
     createWorkspace: async () => { throw new Error("General Workspace creation stays frozen"); },
   } } as unknown as ControlPlaneOperations;
-  const ctx = context("install-plans", operations, "owner", "POST", { mode: "attempt" });
+  // A valid body reaches bootstrap; the missing idempotency header stops plan creation.
+  const ctx = context("install-plans", operations, "owner", "POST", {
+    mode: "attempt", source: { url: "https://github.com/example/app.git" },
+  });
   const response = await handleInstallPlans({ ...ctx, workspaceMutationsFrozen: true }, ["install-plans"], "POST");
   expect(response?.status).toBe(400);
   expect(await response?.json()).toMatchObject({ error: { code: "idempotency_key_required" } });

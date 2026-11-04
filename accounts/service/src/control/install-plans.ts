@@ -200,12 +200,31 @@ export async function handleWorkspaceInstallPlans(
     if (existing) break;
   }
   if (existing) {
-    if (
-      (existing.delegateCapsuleId ?? undefined) === (delegateCapsuleId ?? undefined) &&
-      (existing.requestDigest === requestDigest ||
-        (legacyRequestDigest !== undefined &&
-          existing.requestDigest === legacyRequestDigest))
-    ) {
+    const sameDelegate =
+      (existing.delegateCapsuleId ?? undefined) === (delegateCapsuleId ?? undefined);
+    let sameRequest = existing.requestDigest === requestDigest ||
+      (legacyRequestDigest !== undefined && existing.requestDigest === legacyRequestDigest);
+    if (sameDelegate && !sameRequest) {
+      const source = attempt?.source ?? parsed!.source;
+      const storedPath = modulePathValue(existing.source.path);
+      if (existing.source.path !== source.path && storedPath !== undefined &&
+        (storedPath === "" ? "." : storedPath) === source.path) {
+        // Reconstruct the safely equivalent stored spelling for immutable request identity.
+        const previousPlan = parsed
+          ? { ...parsed, source: { ...parsed.source, path: existing.source.path } }
+          : undefined;
+        const previousAttempt = attempt
+          ? { ...attempt, source: { ...attempt.source, path: existing.source.path } }
+          : undefined;
+        const [pathDigest, previousValuesDigest] = await Promise.all([
+          stableJsonDigest(previousAttempt ?? requestDigestInput(previousPlan!)),
+          variables ? stableJsonDigest(previousPlan) : Promise.resolve(undefined),
+        ]);
+        sameRequest = existing.requestDigest === pathDigest ||
+          (previousValuesDigest !== undefined && existing.requestDigest === previousValuesDigest);
+      }
+    }
+    if (sameDelegate && sameRequest) {
       return await installPlanJson(ctx, existing);
     }
     return errorJson(
@@ -416,9 +435,11 @@ export async function handleInstallPlans(
     const body = await readJsonObject(ctx.request.clone());
     if (!body || body.workspaceId !== undefined ||
       (body.mode !== undefined && body.mode !== "attempt") ||
-      // A plain plan is validated before its namespace is resolved, so a
-      // malformed request never creates one.
-      (body.mode === undefined && !parseCreateRequest(body))) {
+      // Both bodies are validated before namespace resolution, so invalid
+      // input fields never create one.
+      (body.mode === undefined
+        ? !parseCreateRequest(body)
+        : !parseCreateAttemptRequest(body))) {
       return errorJson("invalid_request", "A workspace-less install request is required.", 400, ctx.request);
     }
     // The freeze permits only A's canonical owner-bound personal bootstrap.

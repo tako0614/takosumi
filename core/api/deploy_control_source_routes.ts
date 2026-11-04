@@ -459,22 +459,23 @@ export function mountDeployControlSourceRoutes(
 function modulePathValue(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") return undefined;
-  const raw = value.trim();
+  const raw = value.trim().replace(/\\/gu, "/");
   if (!raw) return undefined;
   if (isAbsolute(raw) || raw.includes("\0") || /^[A-Za-z]:[\\/]/u.test(raw)) {
     return undefined;
   }
   const normalized = normalize(raw)
     .replace(/\\/gu, "/")
-    .replace(/^\.\/+/u, "")
-    .replace(/\/+$/u, "");
+    .replace(/^\.\/+/u, "");
   if (!normalized || normalized === ".") return "";
   if (
+    isAbsolute(normalized) ||
+    /^[A-Za-z]:[\\/]/u.test(normalized) ||
     normalized === ".." ||
     normalized.startsWith("../") ||
     normalized.includes("/../")
   ) {
     return undefined;
   }
-  return normalized;
+  return normalized.replace(/\/+$/u, "");
 }
