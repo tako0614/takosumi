@@ -8,21 +8,30 @@ records around that execution. It is not a replacement for cloud APIs.
 
 | Name          | In plain language                                                                  | In the dashboard                                  |
 | ------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
-| **Workspace** | a container that separates a person's purposes, resources, and security; sharing is added when needed | Your workspaces                                   |
-| **Project**   | a way to group services and infrastructure within a Workspace                     | not shown                                         |
+| **Capsule**   | an app running one module, managed by its owner and any members                   | **Apps**                                          |
 | **Source**    | a registered Git repository and module location                                   | Source                                            |
-| **Capsule**   | one deployable module created from a Source                                       | a service, listed under **Workloads**             |
 | **Run**       | one plan, apply, destroy, or other execution                                      | an entry in **Deploy history** (Review, Deploy, …) |
 | **Interface** | a declaration of the connection a deployment provides                            | exposed connections (advanced); one with a screen is an app on Home |
+| **Workspace** | an internal namespace and a retained compatibility context for old APIs and stored data | no selection needed for normal app management |
+| **Project**   | a grouping inside an existing Workspace                                           | not shown                                         |
 
-A Workspace is not team- or permission-first. It is a purpose-specific work,
-resource, and authorization boundary such as Personal, Work, Experiments, or
-Client. Add membership and sharing only when needed. The display name is the
-primary identity people see; `handle` is a stable, globally unique technical
-identifier for API and CLI use. First-party dashboard flows generate it at
-creation and show `@handle` in places such as Workspace settings. Concrete
-execution environments such as `production` and `preview` belong to Capsules;
-Environment is not another name for Workspace.
+The management unit is an app (a Capsule). Its owner and members can view it,
+change settings, update, and roll back. Only the owner can uninstall, transfer
+ownership, or manage members; members may leave. People who only use the app
+follow its own URL and access rules and do not need a management role.
+
+For an app with ownership records, its role grants management access without
+Workspace membership. Owning the Workspace alone does not grant access to
+another person's app. Token scopes and app restrictions still apply. On old
+schemas or during ownership backfill, some entrypoints retain the legacy
+Workspace decision. Shared-account compositions that require current
+membership also require both the app role and the Workspace decision.
+See [App management permissions](../reference/api.md#app-management-permissions).
+
+Workspace IDs and handles remain in compatibility APIs and existing stored
+data. Normal app installation and management do not require creating or
+selecting a Workspace first. Concrete execution environments such as
+`production` and `preview` belong to Capsules.
 
 State, outputs, logs, and audit records are results of Runs. Provider API keys
 and similar credentials are stored separately as **Connections** (**Connected

@@ -13,7 +13,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | ------------------ | ------------------------------------ | ---------------------------------------------------- |
 | サービス           | Store の掲載項目（listing。追加後は Capsule） | ストアで選んで追加するもので、追加後も同じ名前です。 |
 | ワークロード       | Capsule の一覧                       | 追加したサービスが並ぶ画面です。                     |
-| アプリ             | ホームに出す宣言（launcher）をした、画面を持つ Interface | サービス自身の画面で、ホームから開けます（[ホームにアプリを出す](../getting-started/home-launcher.md)）。 |
+| アプリ             | 管理する単位は Capsule。開く画面は launcher を宣言した Interface | 所有者・メンバーが管理します。画面はホームから開けます（[ホームにアプリを出す](../getting-started/home-launcher.md)）。 |
 | 接続済みアカウント | ProviderConnection / ProviderBinding | 保存した認証情報と、その割り当てです。               |
 | 変更内容           | plan                                 | デプロイする前に確認する変更の一覧です。             |
 | 変更内容の検証 ID  | planDigest                           | 確認した計画とデプロイする計画が同じだと確かめる値です。 |
@@ -30,12 +30,13 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | Takosumi                         | Git に置いた OpenTofu / Terraform の module を、変更の確認・承認・デプロイの順に実行して履歴を残す control plane です。           | [Takosumi とは](../index.md)                   |
 | OpenTofu                         | インフラをコードで定義して適用するオープンソースのツールです。Terraform と互換があります。                              | [Takosumi とは](../index.md)                   |
-| Workspace                        | Personal、Work、Experiments、Client など目的ごとの個人の用途・リソース・セキュリティ境界です。メンバーシップと共有は必要なときに追加し、メンバー、権限、接続、履歴もこの境界で分かれます。 | [全体像](../concepts/index.md)                 |
-| Handle                           | Workspace の安定したグローバル一意の公開 API 識別子です。`@handle` と書きます。API / CLI から指定できますが、必須の利用者選択ではありません。標準ダッシュボードは作成時に自動生成し、Workspace の設定画面などで表示します。 | [全体像](../concepts/index.md)                 |
+| Workspace                        | 内部の名前空間と旧 API・保存データの互換の単位です。所有記録のあるアプリの管理権限は、そのアプリの所有者・メンバーで決まり、Workspace のメンバーであることでは決まりません。 | [全体像](../concepts/index.md)                 |
+| Handle                           | Workspace の安定したグローバル一意の識別子で、互換 API / CLI では `@handle` と書きます。通常のアプリ管理では利用者の選択を求めません。 | [全体像](../concepts/index.md)                 |
 | Project                          | Workspace の中を整理するための区分です。                                                                                                                                                | [全体像](../concepts/index.md)                 |
 | Source                           | どのリポジトリの、どのディレクトリを、どの ref で追うかという登録です。                                                                                                                 | [Source と Capsule](../concepts/sources.md)    |
 | SourceSnapshot                   | Source が ref を解決した結果の commit です。実行されるのはいつもこちらです。                                                                                                            | [Source と Capsule](../concepts/sources.md)    |
 | Capsule                          | デプロイされたひとまとまりです。OpenTofu の root module 1 つ分が動き、`production` や `preview` のような具体的な実行環境も Capsule が持ちます。                                              | [Source と Capsule](../concepts/sources.md)    |
+| AppAccess                        | 1 つの Capsule に対する現在の管理の役割です。所有者 (`owner`) とメンバー (`member`) があり、操作と資格情報の制限も適用されます。アプリを使うだけの人には不要です。 | [アプリ管理の権限](./api.md#アプリ管理の権限) |
 | Environment                      | Capsule が持つ具体的な実行環境です（`production`、`preview` など）。Workspace の別名ではありません。                                                                                      | [Source と Capsule](../concepts/sources.md)    |
 | stale                            | デプロイ済みの Capsule が追いかけている Source に新しい commit が来た状態です。画面では **更新があります** と表示されます。 | [Source と Capsule](../concepts/sources.md)    |
 | Stack flow                       | 自分で書いた module を Git から実行する経路です。                                                                       | [全体像](../concepts/index.md)                 |

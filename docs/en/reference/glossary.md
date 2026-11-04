@@ -13,7 +13,7 @@ docs use a different name, read it back through this table.
 | ---------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
 | Service                | Store listing; Capsule once added    | What you pick in the Store and add; it keeps the name once added.      |
 | Workloads              | The list of Capsules                 | The page that lists the services you added.                            |
-| App                    | An Interface that has a screen and is declared for Home (a launcher) | A service's own screen, opened from Home ([Show your app on the home screen](../getting-started/home-launcher.md)). |
+| App                    | A Capsule for management; an Interface with a launcher for its screen | Managed by its owner and members; its screen opens from Home ([Show your app on the home screen](../getting-started/home-launcher.md)). |
 | Connected accounts     | ProviderConnection / ProviderBinding | Stored credentials, and where they are assigned.                       |
 | Changes                | plan                                 | The list of changes you review before anything is deployed.            |
 | Change verification ID | planDigest                           | The value that proves the plan you reviewed is the plan being applied. |
@@ -30,12 +30,13 @@ docs use a different name, read it back through this table.
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Takosumi             | A control plane that runs OpenTofu / Terraform modules kept in Git through plan, review, and apply, and keeps the history. |
 | OpenTofu             | An open-source tool that defines infrastructure as code and applies it. Compatible with Terraform.                         |
-| Workspace            | A container that separates one person's purposes, resources, and security, such as Personal, Work, Experiments, or Client. Optional membership and sharing extend it; members, permissions, connections, and history remain separated by it. |
-| Handle               | A stable, globally unique public API identifier for a Workspace, written as `@handle`. API and CLI callers may supply it; first-party dashboard flows generate it at creation and show it in places such as Workspace settings. |
+| Workspace            | An internal namespace and a compatibility context for old APIs and stored data. An app with ownership records is managed by its owner and members, independently of Workspace membership. |
+| Handle               | A stable, globally unique Workspace identifier, written as `@handle` in compatibility APIs and CLI paths. Normal app management does not ask users to choose one. |
 | Project              | A division used to organize the inside of a Workspace.                                                                                                          |
 | Source               | A registration of which repository, which directory, and which ref to follow.                                                                                   |
 | SourceSnapshot       | The commit a Source resolved its ref to. This is always what gets executed.                                                                                     |
 | Capsule              | One deployed unit. It runs a single OpenTofu root module and owns concrete execution environments such as `production` and `preview`.                           |
+| AppAccess            | An account's current `owner` or `member` management role for one Capsule, subject to action and credential restrictions. People who only use the app do not need it. See [App management permissions](./api.md#app-management-permissions). |
 | Environment          | A concrete execution lane owned by a Capsule, such as `production` or `preview`; it is not another name for Workspace.                                         |
 | stale                | The state of a deployed Capsule whose tracked Source has a newer commit. Shown as **Update available**. |
 | Stack flow           | The path that runs a module you wrote yourself from Git.                                                                   |

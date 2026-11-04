@@ -1,6 +1,6 @@
 # Takosumi Core Spec
 
-Last updated: 2026-09-11
+Last updated: 2026-11-04
 
 This document is the present Takosumi OSS contract. It supersedes historical
 planning notes such as [`final-plan.md`](./final-plan.md); those notes cannot
@@ -60,9 +60,10 @@ capacity is not an OSS Core responsibility.
 
 | Concept                          | Meaning                                                                                                                                   |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Workspace                        | Personal purpose, resource, and security boundary for sources, secrets, state, Runs, and audit; optional membership and sharing extend it |
+| Workspace                        | Retained internal namespace and compatibility context; its membership is not management authority for an app with ownership records       |
 | Project                          | A service or infrastructure grouping                                                                                                      |
-| Capsule                          | One OpenTofu/Terraform module execution unit, with concrete environments such as `production` and `preview`                               |
+| Capsule                          | One app and OpenTofu/Terraform module execution unit, with its own owner/members and concrete environments such as `production` and `preview` |
+| AppAccess                        | The account's current owner/member management role for one Capsule, subject to the operation and credential restrictions                   |
 | Source                           | Git URL/ref/commit and optional captured repository subtree                                                                               |
 | Adopted Source revision          | SourceSnapshot ref/path/commit derived from a Capsule's current StateVersion apply provenance; never a mutable Capsule or Source field    |
 | GitInstallPlan / GitRevisionPlan | Durable idempotent coordinator evidence that stops at one reviewable Plan Run                                                             |
@@ -76,14 +77,42 @@ capacity is not an OSS Core responsibility.
 | InterfaceBinding                 | Authorization of an Interface to an invocation principal                                                                                  |
 | AuditEvent                       | Actor/action/target/result evidence                                                                                                       |
 
-A Workspace is not a team-first container or an alias for a deployment
-environment. It is a personal context for a purpose such as Personal, Work,
-Experiments, or Client, and membership/sharing are optional advanced
-composition around that context. `displayName` is the primary human-facing
-identity. `handle` is a stable, globally unique public API identifier that API
-and CLI callers may supply; it is not a required user choice. First-party
-dashboard flows generate handles and surface `@handle` only for disambiguation
-or advanced details. Concrete environments remain Capsule-scoped.
+### App management and Workspace compatibility
+
+The normal management unit is an app (a Capsule). An app's owner may add
+members who can view it, change settings, update, roll back, select eligible
+Connections, and manage Interface links. Uninstall, ownership transfer, and
+member management are owner-only actions; a member may leave the app.
+People who only use the app follow its own URL and access rules and do not
+need a Takosumi management role.
+
+For app-scoped public API decisions, once an app has a persisted ownership
+record, its current owner/member role is the management authority. Workspace
+membership neither grants nor is required for that access. Credential scopes,
+PAT app/Workspace restrictions, installed-app token restrictions, and the
+operation's other guards still apply; a role does not bypass them. A
+shared-account composition that requires current membership retains the
+intersection of the app role and its Workspace decision. The
+[public API reference](../reference/api.md#アプリ管理の権限) defines the actions,
+credential intersections, and ownership-change refusals.
+
+While expansion/backfill is incomplete, routes that permit compatibility
+fallback retain the existing Workspace decision when the ownership port is
+absent, the schema predates D1 v77 / Postgres v123, or the app has no ownership
+record. App-only reads can refuse without fallback. Other ownership-read
+failures are not permission to fall back. The
+[ownership rollout](../operations/app-ownership-backfill.md) is a separate
+operator procedure; source availability does not prove that a target has
+completed it.
+
+Workspace remains an internal namespace and a context for legacy routes,
+shared-account/billing compatibility, and retained Core management fences.
+Its `handle` remains a stable, globally unique identifier for those APIs.
+Normal app management does not require choosing a Workspace or creating its
+membership. Concrete environments remain Capsule-scoped. Existing storage
+roots and the frozen `scopeRef` used by credential derivation and encryption
+retain their recorded values; app ownership does not move stored objects or
+rename cryptographic scope. See [app storage roots](../operations/app-storage-roots.md).
 
 StateVersion storage and locking are part of the canonical Run lifecycle; they
 are not a separate Resource/Form ledger.
@@ -236,6 +265,9 @@ to the recorded previous status while the request is `scheduled`, or while it
 is `destroying` but blocked with no destroy reaching the provider; a cancel
 also cancels the finalizer's still-unapproved teardown Plan.
 
+The public uninstall route first applies the app-management decision above.
+The retained Core finalizer additionally uses the Workspace and requester
+checks below; app-scoped API access does not remove those internal gates.
 The scheduled finalizer is the only automatic destroy approval. It reads due,
 unblocked requests in Workspaces that accept management work. Each request pins
 the authenticated Accounts subject and, for PAT/OAuth callers, a nonsecret
@@ -386,8 +418,14 @@ recovery, mounts a route, or repairs an existing environment by itself.
 
 ## Capsule InstallConfig re-adoption
 
-An authenticated Workspace owner or operator (the write-capable owner/admin
-membership) may request the explicit re-adoption operation:
+An authenticated app owner or member with `change_settings` authority and the
+required credential scope may request the explicit re-adoption operation.
+An app without ownership records retains the legacy Workspace owner/admin
+decision on this compatibility path. For an operator-designated delegate app,
+changing its deployed code or adopted configuration is owner-only: re-adoption
+requires the app owner, or the Workspace namespace owner while ownership
+records are absent. Workspace admin membership alone is insufficient for that
+delegate-app exception.
 
 ```http
 POST /api/v1/capsules/{capsuleId}/install-config-re-adoptions
