@@ -188,6 +188,7 @@ export const ALLOWED_KEYS: Record<
     "defaultRef",
     "defaultPath",
     "authConnectionId",
+    "autoSync",
   ]),
   sourcePatch: new Set([
     "name",
@@ -195,6 +196,7 @@ export const ALLOWED_KEYS: Record<
     "defaultPath",
     "authConnectionId",
     "status",
+    "autoSync",
   ]),
   sourceCompatibilityCheck: new Set([
     "sourceSnapshotId",

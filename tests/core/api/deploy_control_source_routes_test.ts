@@ -215,6 +215,27 @@ test("POST /internal/v1/sources rejects an unknown field (400)", async () => {
   expect((await response.json()).error.code).toBe("invalid_argument");
 });
 
+test.each([true, false])(
+  "POST /internal/v1/sources persists autoSync=%s",
+  async (autoSync) => {
+    const { app, store } = await makeAppWithStore();
+    const created = await app.request("/internal/v1/sources", {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({
+        workspaceId: "ws_001",
+        name: "r",
+        url: "https://github.com/acme/repo.git",
+        autoSync,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const { source } = await created.json();
+    expect(source.autoSync).toBe(autoSync);
+    expect((await store.getSource(source.id))?.autoSync).toBe(autoSync);
+  },
+);
+
 test("POST /internal/v1/sources enforces workspace scope (403)", async () => {
   const app = await makeApp();
   const response = await app.request("/internal/v1/sources", {
@@ -861,6 +882,40 @@ test("PATCH /internal/v1/sources updates fields", async () => {
   const body = await patched.json();
   expect(body.source.status).toBe("disabled");
   expect(body.source.defaultRef).toBe("release");
+});
+
+test("PATCH /internal/v1/sources persists autoSync changes and rejects unknown fields", async () => {
+  const { app, store } = await makeAppWithStore();
+  const created = await app.request("/internal/v1/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      workspaceId: "ws_001",
+      name: "r",
+      url: "https://github.com/acme/repo.git",
+    }),
+  });
+  expect(created.status).toBe(201);
+  const { source } = await created.json();
+  expect(source.autoSync).toBe(false);
+  for (const autoSync of [true, false]) {
+    const patched = await app.request(`/internal/v1/sources/${source.id}`, {
+      method: "PATCH",
+      headers: HEADERS,
+      body: JSON.stringify({ autoSync }),
+    });
+    expect(patched.status).toBe(200);
+    expect((await patched.json()).source.autoSync).toBe(autoSync);
+    expect((await store.getSource(source.id))?.autoSync).toBe(autoSync);
+  }
+  const rejected = await app.request(`/internal/v1/sources/${source.id}`, {
+    method: "PATCH",
+    headers: HEADERS,
+    body: JSON.stringify({ autoSync: true, sneaky: 1 }),
+  });
+  expect(rejected.status).toBe(400);
+  expect((await rejected.json()).error.message).toBe("unknown_field: sneaky");
+  expect((await store.getSource(source.id))?.autoSync).toBe(false);
 });
 
 test("source id with an unsupported shape is rejected (400)", async () => {
