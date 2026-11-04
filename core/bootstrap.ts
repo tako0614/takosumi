@@ -1410,6 +1410,7 @@ export async function createTakosumiService(
     },
     uninstallGraceDays: uninstallGrace.days,
     validateUninstallRequesterAt: options.validateUninstallRequesterAt,
+    appOwnership: appOwnershipStore,
     retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
   });
   opentofuController = new OpenTofuController({

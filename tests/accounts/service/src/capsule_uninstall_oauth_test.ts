@@ -62,7 +62,7 @@ for (const credential of ["oauth", "session", "pat"] as const) {
       expect(body).toMatchObject({ capsule: { status: "uninstalled", uninstall: { phase: "scheduled" } }, graceDays: 7 });
       expect(body.capsule.uninstall).not.toHaveProperty("requester");
       expect((await store.getCapsule(seeded.capsule.id))?.uninstall?.requester).toEqual({
-        subject, ...(credential === "pat" ? { grant: { kind: "personal-access-token", tokenId: "fixture-pat" } } : {}),
+        subject, managementAuthority: "workspace", ...(credential === "pat" ? { grant: { kind: "personal-access-token", tokenId: "fixture-pat" } } : {}),
       });
     }
   });

@@ -265,16 +265,34 @@ to the recorded previous status while the request is `scheduled`, or while it
 is `destroying` but blocked with no destroy reaching the provider; a cancel
 also cancels the finalizer's still-unapproved teardown Plan.
 
-The public uninstall route first applies the app-management decision above.
-The retained Core finalizer additionally uses the Workspace and requester
-checks below; app-scoped API access does not remove those internal gates.
+The public uninstall route first applies the app-management decision above
+and captures that decision in private requester provenance. A new app-authorized
+reservation pins the app ownership epoch and requires its requester to remain
+the current app owner with active app management. A shared-account reservation
+that requires current membership additionally requires a current active
+Workspace owner/admin membership; namespace ownership does not replace that
+membership. The Workspace management fence remains independent of caller roles.
+Before parking the app, the captured management decision is rechecked inside
+ordered lifecycle admission, after any awaited PAT deadline validation. A
+stale owner/epoch cannot create a reservation or its Activity event.
+The reservation CAS also compares the app owner, ownership epoch, and active
+management in the same write; the shared-account mode additionally requires
+its current membership in that write. A transfer or membership loss after the
+read therefore cannot commit a stale reservation. This new-admission guard
+does not prevent recording finalizer refusals or cancelling an existing intent.
 The scheduled finalizer is the only automatic destroy approval. It reads due,
 unblocked requests in Workspaces that accept management work. Each request pins
 the authenticated Accounts subject and, for PAT/OAuth callers, a nonsecret
 reference to the scheduling grant. Browser session lifetime is not the lifetime
 of the user's scheduling intent. Before export/Plan, approval, Apply admission
-and provider dispatch, current Workspace namespace-owner or active owner/admin
-authority and the Accounts account/grant are re-read. Delegated grants must
+and provider dispatch, the captured management authority and the Accounts
+account/grant are re-read. Accounts validation precedes the current management
+reads, so authority revoked during that await is refused. New app-authorized
+reservations never fall back to Workspace roles if ownership reads fail, the
+row disappears, or the owner/epoch changes. Requests without management
+provenance, or explicitly recorded as Workspace-authorized, retain the existing
+Workspace namespace-owner or active owner/admin decision. Replaying a reservation
+does not change its original requester, authority, or epoch. Delegated grants must
 still have the exact subject, Workspace restriction, write scope and valid
 lifetime, and must not be revoked. Legacy requests without a requester, missing
 authorization ports and unavailable authority fail closed. A refusal records
@@ -285,7 +303,9 @@ If a pre-destroy lifecycle action already ran, retain its evidence and require
 authorized forward repair; that action does not authorize a new provider destroy
 after requester revocation. Requester/grant references
 are excluded from public Capsule reads. No DDL/backfill is needed for the
-additive JSON fields or existing indexed credential keys. The finalizer advances each
+additive JSON fields or existing indexed credential keys. New authority modes
+require a compatible reader; see the [uninstall authority transition](../operations/app-uninstall-authority.md)
+before rollout or runtime rollback. The finalizer advances each
 through revision-fenced steps on the Capsule row: one Capsule-scoped export through the backups lane whose outcome
 (`exported`, `failed`, or `skipped`) is recorded and never blocks teardown. The
 export attempt is claimed before artifacts are created. A claim without a

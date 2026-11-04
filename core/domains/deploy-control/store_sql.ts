@@ -298,6 +298,7 @@ import {
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
   capsuleLifecycleMutationPatch,
+  capsuleUninstallAdmissionAuthority,
   assertCapsuleAbandonmentInput,
   capsuleAbandonmentTerminalMatches,
   capsuleAbandonmentTerminalCapsule,
@@ -8311,6 +8312,26 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     const claimNotAlreadyApplied = input.mutation.kind === "auto-update-claim"
       ? sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdateAttemptSourceSnapshotId' IS DISTINCT FROM ${input.mutation.sourceSnapshotId}`
       : sql`true`;
+    const appAuthority = capsuleUninstallAdmissionAuthority(input);
+    const appManagementAuthority = appAuthority === undefined ? sql`true` : and(
+      eq(pgSchema.capsules.ownerAccountId, appAuthority.ownerAccountId),
+      eq(pgSchema.capsules.ownershipEpoch, appAuthority.ownershipEpoch),
+      eq(pgSchema.capsules.managementState, "active"),
+      appAuthority.requireCurrentMembership ? exists(
+        this.#db.select({ one: sql`1` }).from(pgSchema.workspaceMembers).where(and(
+          eq(pgSchema.workspaceMembers.workspaceId, pgSchema.capsules.workspaceId),
+          eq(pgSchema.workspaceMembers.accountId, appAuthority.ownerAccountId),
+          eq(pgSchema.workspaceMembers.status, "active"),
+          sql`${pgSchema.workspaceMembers.memberJson} ->> 'accountId' = ${pgSchema.workspaceMembers.accountId}`,
+          sql`${pgSchema.workspaceMembers.memberJson} ->> 'workspaceId' = ${pgSchema.workspaceMembers.workspaceId}`,
+          sql`${pgSchema.workspaceMembers.memberJson} ->> 'status' = 'active'`,
+          or(
+            sql`(${pgSchema.workspaceMembers.memberJson}::jsonb -> 'roles') @> '["owner"]'::jsonb`,
+            sql`(${pgSchema.workspaceMembers.memberJson}::jsonb -> 'roles') @> '["admin"]'::jsonb`,
+          ),
+        )),
+      ) : sql`true`,
+    );
     const update = async (
       db: PgRemoteDatabase<typeof pgSchema>,
       expectedWorkspaceId?: string,
@@ -8346,6 +8367,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                 ? ne(pgSchema.capsules.status, "destroyed")
                 : sql`true`,
             expectedUninstall,
+            appManagementAuthority,
             expectedAutoUpdate,
             expectedAutoUpdateAttempt,
             expectedCompatibilityReport,

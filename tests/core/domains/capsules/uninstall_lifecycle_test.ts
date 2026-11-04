@@ -5,6 +5,7 @@
  */
 
 import { expect, test } from "bun:test";
+import { Miniflare } from "miniflare";
 import type {
   OpenTofuApplyJob,
   OpenTofuDestroyJob,
@@ -26,6 +27,7 @@ import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { workerdD1Database, workerdD1Module } from "../../../helpers/deploy-control/workerd_d1.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import {
@@ -54,6 +56,7 @@ import {
 } from "../../../../core/domains/capsules/uninstall_finalize.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import {
+  scheduledUninstallAuthorizationFailure,
   UNINSTALL_AUTHORIZATION_REASONS,
   UNINSTALL_PAT_EXPIRY_MARGIN_MS,
 } from "../../../../core/domains/capsules/uninstall_authorization.ts";
@@ -260,6 +263,7 @@ async function appliedCapsule(
   });
   const capsules = new CapsulesService({
     store,
+    appOwnership,
     activity,
     newId,
     now: () => new Date(clock.ms),
@@ -402,6 +406,69 @@ const durableStores: readonly [
   ],
 ];
 
+async function openNativeUninstallStore() {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [workerdD1Module("app-uninstall-authority.mjs")],
+    d1Databases: { CONTROL: "app-uninstall-authority" },
+  });
+  const database = workerdD1Database(runtime);
+  const store = new CloudflareD1OpenTofuControlStore(database);
+  return { store, appOwnership: new D1AppOwnershipStore(database, store), close: () => runtime.dispose() };
+}
+
+const appAuthorityStores: typeof durableStores = [...durableStores, ["native-d1", openNativeUninstallStore]];
+for (const [label, open] of appAuthorityStores) {
+  for (const loss of ["owner", "shared_membership"] as const) {
+    test(`${label}: ${loss} loss after the authority read cannot commit an uninstall`, async () => {
+      const { store, appOwnership, close } = await open();
+      try {
+        const h = await appliedCapsule({ store, appOwnership });
+        const ownership = (await appOwnership.getOwnership(h.capsuleId))!;
+        const member = {
+          id: "wsm_atomic_uninstall", workspaceId: "ws_uninstall001", accountId: "user_test",
+          roles: ["owner" as const], status: "active" as const,
+          createdAt: new Date(START).toISOString(), updatedAt: new Date(START).toISOString(),
+        };
+        if (loss === "shared_membership") await store.putWorkspaceMember(member);
+        const originalUpdate = store.updateCapsuleLifecycle.bind(store);
+        let raced = false;
+        store.updateCapsuleLifecycle = async (input) => {
+          if (!raced && input.mutation.kind === "uninstall" && input.mutation.status === "uninstalled") {
+            raced = true;
+            if (loss === "owner") expect(await appOwnership.putOwnership({
+              ...ownership, ownerAccountId: "new_app_owner", ownershipEpoch: ownership.ownershipEpoch + 1,
+            }, ownership.ownershipEpoch)).toBe(true);
+            else await store.putWorkspaceMember({ ...member, status: "suspended" });
+          }
+          return await originalUpdate(input);
+        };
+        await expect(h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+          requester: { subject: "user_test", managementAuthority: loss === "owner" ? "app" : "app-and-workspace",
+            appOwnershipEpoch: ownership.ownershipEpoch },
+        })).rejects.toMatchObject({ details: { reason: "capsule_lifecycle_busy" } });
+        expect(raced).toBe(true);
+        expect((await store.getCapsule(h.capsuleId))?.status).toBe("active");
+        expect((await store.getCapsule(h.capsuleId))?.uninstall).toBeUndefined();
+        expect(await activityActions(h)).not.toContain("capsule.uninstall_scheduled");
+      } finally { await close(); }
+    }, label === "native-d1" ? 30_000 : 5_000);
+  }
+  test(`${label}: an app owner outside Workspace membership can finish a scheduled uninstall`, async () => {
+    const { store, appOwnership, close } = await open();
+    try {
+      const h = await appliedCapsule({ store, appOwnership });
+      const workspace = (await store.getWorkspace("ws_uninstall001"))!;
+      await store.putWorkspace({ ...workspace, ownerUserId: "another_namespace_owner" });
+      expect(await store.getWorkspaceMember(workspace.id, "user_test")).toBeUndefined();
+      expect((await appOwnership.getOwnership(h.capsuleId))?.ownerAccountId).toBe("user_test");
+      await scheduledUninstallRunsToCompletion(h);
+    } finally {
+      await close();
+    }
+  }, label === "native-d1" ? 30_000 : 5_000);
+}
+
 for (const [label, open] of durableStores) {
   test(`${label}: a scheduled uninstall survives the grace period, then exports and destroys`, async () => {
     const { store, appOwnership, close } = await open();
@@ -455,6 +522,24 @@ for (const [label, open] of durableStores) {
   });
 }
 
+test("native-d1: app authority with required current membership completes teardown", async () => {
+  const { store, appOwnership, close } = await openNativeUninstallStore();
+  try {
+    const h = await appliedCapsule({ store, appOwnership });
+    const ownership = (await appOwnership.getOwnership(h.capsuleId))!;
+    await store.putWorkspaceMember({ id: "wsm_native_shared", workspaceId: "ws_uninstall001",
+      accountId: "user_test", roles: ["owner"], status: "active",
+      createdAt: new Date(START).toISOString(), updatedAt: new Date(START).toISOString() });
+    await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+      requester: { subject: "user_test", managementAuthority: "app-and-workspace", appOwnershipEpoch: ownership.ownershipEpoch },
+    });
+    await jumpToDue(h);
+    expect(await h.finalize()).toMatchObject({ destroysStarted: 1, blocked: 0 });
+    expect((await store.getCapsule(h.capsuleId))?.status).toBe("destroyed");
+    expect(h.destroyJobs).toHaveLength(1);
+  } finally { await close(); }
+}, 30_000);
+
 test("ownerless legacy scheduled uninstall keeps the system Run actor through teardown", async () => {
   const h = await appliedCapsule({ ownerless: true });
   const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
@@ -487,9 +572,12 @@ test("ownerless legacy scheduled uninstall keeps the system Run actor through te
 });
 
 async function scheduledUninstallRunsToCompletion(h: Harness): Promise<void> {
+  const ownership = (await h.appOwnership.getOwnership(h.capsuleId))!;
   const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
     actor: "user_test",
-    requester: { subject: "user_test" },
+    requester: {
+      subject: "user_test", managementAuthority: "app", appOwnershipEpoch: ownership.ownershipEpoch,
+    },
   });
   expect(scheduled.status).toBe("uninstalled");
   expect(scheduled.uninstall).toMatchObject({
@@ -584,6 +672,136 @@ async function scheduledUninstallRunsToCompletion(h: Harness): Promise<void> {
   // A destroyed Capsule is no longer due; later ticks do nothing.
   expect(await h.finalize()).toMatchObject({ scanned: 0 });
   expect(h.destroyJobs).toHaveLength(1);
+}
+
+for (const loss of ["owner", "epoch", "frozen", "missing_port", "missing_row", "read_error", "during_grant"] as const) {
+  test(`app-authorized uninstall refuses ${loss} before export or teardown`, async () => {
+    const h = await appliedCapsule();
+    const ownership = (await h.appOwnership.getOwnership(h.capsuleId))!;
+    await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+      requester: { subject: "user_test", managementAuthority: "app", appOwnershipEpoch: ownership.ownershipEpoch },
+    });
+    const changeOwner = async () => {
+      expect(await h.appOwnership.putOwnership({
+        ...ownership, ownershipEpoch: ownership.ownershipEpoch + 1,
+        ...(loss === "owner" ? { ownerAccountId: "another_owner" } : {}),
+      }, ownership.ownershipEpoch)).toBe(true);
+    };
+    if (loss === "owner" || loss === "epoch") await changeOwner();
+    if (loss === "frozen") expect(await h.appOwnership.putOwnership({
+      ...ownership, managementState: "frozen", managementEpoch: ownership.managementEpoch + 1,
+    }, ownership.ownershipEpoch)).toBe(true);
+    if (loss === "during_grant") h.authorization.validate = async () => {
+      await changeOwner();
+      return true;
+    };
+    const overrides = loss === "missing_port" ? { appOwnership: undefined }
+      : loss === "missing_row" ? { appOwnership: { getOwnership: async () => undefined } }
+      : loss === "read_error" ? { appOwnership: { getOwnership: async () => { throw new Error("fixture unavailable"); } } }
+      : {};
+    await jumpToDue(h);
+    expect(await h.finalize(overrides)).toMatchObject({ blocked: 1, exportsRecorded: 0, destroyPlansCreated: 0, destroysStarted: 0 });
+    expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.blockedReason).toBe(
+      loss === "missing_port" || loss === "read_error"
+        ? UNINSTALL_AUTHORIZATION_REASONS.unavailable : UNINSTALL_AUTHORIZATION_REASONS.denied,
+    );
+    expect(h.destroyJobs).toHaveLength(0);
+  });
+}
+
+test("a changed app epoch before lifecycle admission cannot park the app for an old requester", async () => {
+  const h = await appliedCapsule();
+  const ownership = (await h.appOwnership.getOwnership(h.capsuleId))!;
+  h.capsules.setCapsuleLifecycleAdmission(async (_input, work) => {
+    expect(await h.appOwnership.putOwnership({
+      ...ownership, ownerAccountId: "new_app_owner", ownershipEpoch: ownership.ownershipEpoch + 1,
+    }, ownership.ownershipEpoch)).toBe(true);
+    return await work();
+  });
+  await expect(h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+    requester: { subject: "user_test", managementAuthority: "app", appOwnershipEpoch: ownership.ownershipEpoch },
+  })).rejects.toMatchObject({ details: { reason: UNINSTALL_AUTHORIZATION_REASONS.denied } });
+  expect((await h.store.getCapsule(h.capsuleId))?.status).toBe("active");
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall).toBeUndefined();
+  expect(await activityActions(h)).not.toContain("capsule.uninstall_scheduled");
+});
+
+for (const membership of ["missing", "active", "revoked_during_grant"] as const) {
+  test(`shared-account uninstall retains ${membership} current Workspace membership`, async () => {
+    const h = await appliedCapsule();
+    const ownership = (await h.appOwnership.getOwnership(h.capsuleId))!;
+    const member = {
+      id: "wsm_shared_uninstall", workspaceId: "ws_uninstall001", accountId: "user_test",
+      roles: ["owner" as const], status: "active" as const,
+      createdAt: new Date(START).toISOString(), updatedAt: new Date(START).toISOString(),
+    };
+    if (membership !== "missing") await h.store.putWorkspaceMember(member);
+    const scheduling = h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+      requester: { subject: "user_test", managementAuthority: "app-and-workspace", appOwnershipEpoch: ownership.ownershipEpoch },
+    });
+    if (membership === "missing") {
+      await expect(scheduling).rejects.toMatchObject({ details: { reason: UNINSTALL_AUTHORIZATION_REASONS.denied } });
+      expect((await h.store.getCapsule(h.capsuleId))?.status).toBe("active");
+      expect((await h.store.getCapsule(h.capsuleId))?.uninstall).toBeUndefined();
+      return;
+    }
+    await scheduling;
+    if (membership === "revoked_during_grant") h.authorization.validate = async () => {
+      await h.store.putWorkspaceMember({ ...member, status: "suspended" });
+      return true;
+    };
+    await jumpToDue(h);
+    expect(await h.finalize()).toMatchObject(membership === "active"
+      ? { destroysStarted: 1, blocked: 0 }
+      : { blocked: 1, exportsRecorded: 0, destroysStarted: 0 });
+    expect(h.destroyJobs).toHaveLength(membership === "active" ? 1 : 0);
+  });
+}
+
+test("unknown private uninstall authority never falls back to the Workspace owner", async () => {
+  const h = await appliedCapsule();
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
+  for (const authority of ["future-authority", null, 7, {}]) {
+    const requester = { subject: "user_test", managementAuthority: authority } as unknown as
+      import("takosumi-contract/capsules").CapsuleUninstallRequester;
+    expect(await scheduledUninstallAuthorizationFailure(h.store, {
+      ...scheduled, uninstall: { ...scheduled.uninstall!, requester },
+    }, h.authorization.validate, h.appOwnership)).toBe(UNINSTALL_AUTHORIZATION_REASONS.unavailable);
+  }
+  for (const epoch of [undefined, -1, 0.5, "0", null, Number.NaN]) {
+    const requester = { subject: "user_test", managementAuthority: "app", appOwnershipEpoch: epoch } as unknown as
+      import("takosumi-contract/capsules").CapsuleUninstallRequester;
+    expect(await scheduledUninstallAuthorizationFailure(h.store, {
+      ...scheduled, uninstall: { ...scheduled.uninstall!, requester },
+    }, h.authorization.validate, h.appOwnership)).toBe(UNINSTALL_AUTHORIZATION_REASONS.unavailable);
+  }
+});
+
+for (const loss of ["epoch", "grant"] as const) {
+  test(`app-authorized teardown refuses ${loss} loss after queue admission`, async () => {
+    const h = await appliedCapsule({ queueDestroy: true });
+    const ownership = (await h.appOwnership.getOwnership(h.capsuleId))!;
+    await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+      requester: { subject: "user_test", managementAuthority: "app", appOwnershipEpoch: ownership.ownershipEpoch },
+    });
+    await jumpToDue(h);
+    expect(await h.finalize()).toMatchObject({ destroysStarted: 1 });
+    expect(h.queuedDestroys).toHaveLength(1);
+    if (loss === "epoch") expect(await h.appOwnership.putOwnership({
+      ...ownership, ownershipEpoch: ownership.ownershipEpoch + 1,
+    }, ownership.ownershipEpoch)).toBe(true);
+    else h.authorization.validate = async () => false;
+    await h.controller.dispatchQueuedRun(h.queuedDestroys[0]!);
+    await h.controller.dispatchQueuedRun(h.queuedDestroys[0]!);
+    expect(h.destroyJobs).toHaveLength(0);
+    // An epoch change loses the existing atomic running claim, so that Run
+    // stays queued. Grant loss after a winning claim records a failed Run.
+    expect((await h.store.getApplyRun(h.queuedDestroys[0]!.runId))?.status).toBe(loss === "epoch" ? "queued" : "failed");
+    expect(await h.finalize()).toMatchObject(loss === "epoch"
+      ? { waiting: 1, blocked: 0, destroysStarted: 0 }
+      : { blocked: 1, destroysStarted: 0 });
+    expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.requester?.appOwnershipEpoch).toBe(ownership.ownershipEpoch);
+  });
 }
 
 test("a failed export is recorded and the teardown still proceeds", async () => {

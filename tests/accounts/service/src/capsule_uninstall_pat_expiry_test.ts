@@ -213,7 +213,7 @@ test("session requester schedules without consulting the PAT deadline validator"
 
   expect(response?.status).toBe(202);
   expect((await state.controlStore.getCapsule(state.seeded.capsule.id))?.uninstall?.requester)
-    .toEqual({ subject: state.subject });
+    .toEqual({ subject: state.subject, managementAuthority: "workspace" });
 });
 
 test("Core admission fails closed for missing, false, and throwing deadline checks without leaking errors", async () => {

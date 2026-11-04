@@ -4105,7 +4105,7 @@ test(`Capsule ${deletion} schedules grace with the session actor and captured au
       id: "cap_1",
       options: {
         actor: "tsub_owner",
-        requester: { subject: "tsub_owner" },
+        requester: { subject: "tsub_owner", managementAuthority: "workspace" },
         expectedWorkspaceManagementAuthority: {
           workspaceId: workspace.id,
           managementState: "active",
