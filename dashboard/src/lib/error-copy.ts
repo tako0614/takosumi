@@ -168,6 +168,7 @@ const CODE_MESSAGES: Readonly<Record<string, MessageKey>> = {
   // Raised by the dashboard itself with an English sentence and a 4xx
   // status, which friendlyError would otherwise pass straight to the screen.
   source_sync_required: "controlError.sourceSyncPending",
+  source_sync_failed: "runError.sourceSyncFailed",
   install_plan_failed: "controlError.planFailed",
   revision_plan_failed: "controlError.planFailed",
 };
