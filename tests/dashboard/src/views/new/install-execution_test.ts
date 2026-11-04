@@ -80,7 +80,7 @@ test("waiting approval exposes technical run details before approval", () => {
 
 test("readiness read failures stay retryable without swallowing auth or cancellation", () => {
   expect(source).toContain(
-    "readers.listActivity(workspaceId, 100, { signal: retry.signal })",
+    "readers.listCapsuleActivity(capsuleId, 100, { signal: retry.signal })",
   );
   expect(source).not.toContain("listActivity(workspaceId, 100).catch(() => [])");
   expect(source).toContain('kind: "read-failed"');
@@ -144,13 +144,13 @@ test("readInstallReadiness forwards one cancellation signal to both readers", as
   let activitySignal: AbortSignal | undefined;
 
   const readiness = await readInstallReadiness(
-    JSON.stringify(["workspace_1", "capsule_1", "run_apply_1"]),
+    JSON.stringify(["capsule_1", "run_apply_1"]),
     {
       listStateVersions: async (_capsuleId, options) => {
         stateVersionsSignal = options?.signal;
         return [];
       },
-      listActivity: async (_workspaceId, _limit, options) => {
+      listCapsuleActivity: async (_capsuleId, _limit, options) => {
         activitySignal = options?.signal;
         return [];
       },
@@ -161,6 +161,42 @@ test("readInstallReadiness forwards one cancellation signal to both readers", as
   expect(readiness).toBe("settling");
   expect(stateVersionsSignal).toBe(controller.signal);
   expect(activitySignal).toBe(controller.signal);
+});
+
+test("install readiness reads the app's sparse Activity without requiring Workspace membership", async () => {
+  const realFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path.includes("/state-versions")) {
+      return Response.json({ stateVersions: [{
+        id: "sv_shared", capsuleId: "cap_shared", createdByRunId: "apply_shared",
+      }] });
+    }
+    if (path.startsWith("/api/v1/capsules/cap_shared/activity")) {
+      return Response.json(path.includes("cursor=") ? { events: [{
+        id: "act_pending", workspaceId: "ws_internal", action: "release_activation.pending",
+        metadata: { capsuleId: "cap_shared", stateVersionId: "sv_shared" },
+        createdAt: "2026-11-04T00:00:00Z",
+      }] } : { events: [], nextCursor: "hidden_rows" });
+    }
+    return Response.json({ error: "forbidden" }, { status: 403 });
+  }) as typeof fetch;
+  try {
+    expect(await readInstallReadiness(
+      JSON.stringify(["cap_shared", "apply_shared"]),
+      undefined,
+      { attempts: 1 },
+    )).toBe("activation_pending");
+    expect(calls.filter((path) => path.includes("/activity"))).toEqual([
+      "/api/v1/capsules/cap_shared/activity?limit=100",
+      "/api/v1/capsules/cap_shared/activity?limit=100&cursor=hidden_rows",
+    ]);
+    expect(calls.some((path) => path.includes("/workspaces/"))).toBe(false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("boundedRead propagates AbortError without retrying or delaying", async () => {

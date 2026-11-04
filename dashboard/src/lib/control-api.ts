@@ -1841,6 +1841,7 @@ export async function listActivity(
 export async function listCapsuleActivity(
   capsuleId: string,
   limit = 100,
+  opts: { readonly signal?: AbortSignal } = {},
 ): Promise<readonly ActivityEvent[]> {
   const events: ActivityEvent[] = [];
   const cursors = new Set<string>();
@@ -1852,7 +1853,7 @@ export async function listCapsuleActivity(
       events?: readonly ActivityEvent[];
       nextCursor?: unknown;
       incomplete?: boolean;
-    }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/activity${query({ limit, cursor })}`);
+    }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/activity${query({ limit, cursor })}`, { signal: opts.signal });
     if (!body || !Array.isArray(body.events) || body.incomplete === true) break;
     events.push(...body.events.slice(0, limit - events.length));
     if (events.length === limit || body.nextCursor === undefined) return events;

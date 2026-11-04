@@ -82,6 +82,30 @@ test("a malformed Activity response remains unreadable instead of empty", async 
   await expect(listCapsuleActivity("cap_shared", 100)).rejects.toMatchObject({ status: 502 });
 });
 
+test("app Activity carries cancellation through sparse pages and stops before the next read", async () => {
+  const controller = new AbortController();
+  const signals: (AbortSignal | null | undefined)[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    signals.push(init?.signal);
+    return Response.json(signals.length === 1
+      ? { events: [], nextCursor: "hidden_rows" }
+      : { events: [] });
+  }) as typeof fetch;
+  await listCapsuleActivity("cap_shared", 100, { signal: controller.signal });
+  expect(signals).toEqual([controller.signal, controller.signal]);
+
+  const aborted = new AbortController();
+  const reason = new DOMException("App changed", "AbortError");
+  let reads = 0;
+  globalThis.fetch = (async () => {
+    reads++;
+    aborted.abort(reason);
+    return Response.json({ events: [], nextCursor: "unused" });
+  }) as typeof fetch;
+  await expect(listCapsuleActivity("cap_shared", 100, { signal: aborted.signal })).rejects.toMatchObject({ name: "AbortError" });
+  expect(reads).toBe(1);
+});
+
 test("app Activity follows sparse pages before deciding release activation", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {

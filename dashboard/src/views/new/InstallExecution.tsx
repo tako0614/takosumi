@@ -16,7 +16,7 @@ import {
   getRunLogs,
   planCapsule,
   extractRunId,
-  listActivity,
+  listCapsuleActivity,
   listStateVersions,
   openRunStream,
   type Run,
@@ -169,11 +169,11 @@ export interface InstallReadinessReaders {
     capsuleId: string,
     opts?: { readonly signal?: AbortSignal },
   ) => ReturnType<typeof listStateVersions>;
-  readonly listActivity: (
-    workspaceId: string,
+  readonly listCapsuleActivity: (
+    capsuleId: string,
     limit?: number,
     opts?: { readonly signal?: AbortSignal },
-  ) => ReturnType<typeof listActivity>;
+  ) => ReturnType<typeof listCapsuleActivity>;
 }
 
 type InstallReadinessResult =
@@ -194,7 +194,7 @@ function throwReadAbort(signal: AbortSignal): never {
 
 const defaultReadinessReaders: InstallReadinessReaders = {
   listStateVersions,
-  listActivity,
+  listCapsuleActivity,
 };
 
 /**
@@ -242,20 +242,19 @@ export async function readInstallReadiness(
   const parsed = JSON.parse(key) as unknown;
   if (
     !Array.isArray(parsed) ||
-    parsed.length !== 3 ||
+    parsed.length !== 2 ||
     !parsed.every((value) => typeof value === "string" && value.length > 0)
   ) {
     throw new Error("Install readiness key is invalid");
   }
-  const [workspaceId, capsuleId, applyRunId] = parsed as [
-    string,
+  const [capsuleId, applyRunId] = parsed as [
     string,
     string,
   ];
   return await boundedRead(async () => {
     const [versions, activity] = await Promise.all([
       readers.listStateVersions(capsuleId, { signal: retry.signal }),
-      readers.listActivity(workspaceId, 100, { signal: retry.signal }),
+      readers.listCapsuleActivity(capsuleId, 100, { signal: retry.signal }),
     ]);
     return stateVersionReadinessAfterApply(
       versions.find((version) => version.createdByRunId === applyRunId),
@@ -370,7 +369,7 @@ export default function InstallExecution(props: Props) {
   const readinessKey = () => {
     const latest = runLatest();
     return latest?.type === "apply" && latest.status === "succeeded"
-      ? JSON.stringify([latest.workspaceId, props.capsuleId, latest.id])
+      ? JSON.stringify([props.capsuleId, latest.id])
       : null;
   };
   let activeReadinessController: AbortController | undefined;

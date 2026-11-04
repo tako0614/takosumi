@@ -873,6 +873,40 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
+  test("install readiness uses app Activity when Workspace reads are forbidden", async ({ page }) => {
+    test.skip(mode !== "portable", "controlled app readiness fixture only");
+    const errors = pageErrors(page);
+    const activityReads: string[] = [];
+    const fixture = await startReadinessBrowserFixture(page, async (route) =>
+      route.fulfill({ json: { stateVersions: [{
+        id: "sv_provider_apply_e2e", capsuleId: "cap_provider_destination_e2e",
+        createdByRunId: "run_provider_apply_e2e",
+      }] } }),
+      async (route) => {
+        const url = new URL(route.request().url());
+        activityReads.push(`${url.pathname}${url.search}`);
+        if (url.pathname.startsWith("/api/v1/workspaces/")) {
+          return route.fulfill({ status: 403, json: { error: "forbidden" } });
+        }
+        return route.fulfill({ json: url.searchParams.has("cursor") ? { events: [{
+          id: "act_pending", workspaceId: "ws_alpha", action: "release_activation.pending",
+          metadata: { capsuleId: "cap_provider_destination_e2e", stateVersionId: "sv_provider_apply_e2e" },
+          createdAt: "2026-11-04T00:00:00Z",
+        }] } : { events: [], nextCursor: "hidden_rows" } });
+      },
+    );
+    await fixture.startApply();
+    await expect(page.getByText("Waiting for the app's launch link to become available.")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+    expect(activityReads.slice(0, 2)).toEqual([
+      "/api/v1/capsules/cap_provider_destination_e2e/activity?limit=100",
+      "/api/v1/capsules/cap_provider_destination_e2e/activity?limit=100&cursor=hidden_rows",
+    ]);
+    expect(activityReads.some((path) => path.startsWith("/api/v1/workspaces/"))).toBe(false);
+    expect(fixture.applyPosts).toHaveLength(1);
+    await assertNoPageErrors(errors);
+  });
+
   test("readiness requests abort on navigation without stale failure or Open", async ({ page }) => {
     test.skip(mode !== "portable", "synthetic readiness cancellation is portable-only");
     const errors = pageErrors(page);
@@ -897,7 +931,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         const path = new URL(request.url()).pathname;
         if (
           path === "/api/v1/capsules/cap_provider_destination_e2e/state-versions" ||
-          path === "/api/v1/workspaces/ws_alpha/activity"
+          path === "/api/v1/capsules/cap_provider_destination_e2e/activity"
         ) {
           failedReadErrors.set(path, request.failure()?.errorText);
           if (failedReadErrors.size === 2) resolve();
@@ -917,7 +951,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect([...failedReadErrors.keys()].sort()).toEqual(
       [
         "/api/v1/capsules/cap_provider_destination_e2e/state-versions",
-        "/api/v1/workspaces/ws_alpha/activity",
+        "/api/v1/capsules/cap_provider_destination_e2e/activity",
       ].sort(),
     );
     for (const failure of failedReadErrors.values()) {
@@ -1144,7 +1178,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(openService).toBeVisible({ timeout: 15_000 });
     await expect(openService).toHaveAttribute("href", "https://service.example.test/fixture");
     expect(requests).toContain(`GET ${mutationOrigin}/api/v1/capsules/cap_provider_destination_e2e/state-versions`);
-    expect(requests).toContain(`GET ${mutationOrigin}/api/v1/workspaces/ws_alpha/activity?limit=100`);
+    expect(requests).toContain(`GET ${mutationOrigin}/api/v1/capsules/cap_provider_destination_e2e/activity?limit=100`);
     expect(requests.filter((entry) => entry === `POST ${mutationOrigin}/api/v1/runs/run_provider_plan_e2e/apply`)).toHaveLength(1);
 
     const popupPromise = page.waitForEvent("popup");
