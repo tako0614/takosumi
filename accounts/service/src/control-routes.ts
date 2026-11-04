@@ -495,6 +495,12 @@ export async function handleAuthenticatedControlRoute(
       session: {
         subject: context.subject,
         ...(context.credential ? { credential: context.credential } : {}),
+        // Only an explicitly authenticated browser session supplies Accounts
+        // requester provenance. A trusted subject alone (e.g. an internal
+        // token composition) must still fail the scheduled-uninstall guard.
+        ...(context.credential === "session"
+          ? { uninstallRequester: { subject: context.subject } }
+          : {}),
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         requiredAccess: controlRouteRequiredScope(request),
         ...(context.requireCurrentMembership ? { requireCurrentMembership: true } : {}),
