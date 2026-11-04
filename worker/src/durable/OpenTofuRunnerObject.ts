@@ -5110,6 +5110,10 @@ export class LocalSubstrateOpenTofuRunnerProxyObject {
   fetch(request: Request): Promise<Response> {
     return this.#delegate.fetch(request);
   }
+
+  alarm(alarmProps?: unknown): Promise<void> {
+    return this.#delegate.alarm(alarmProps);
+  }
 }
 
 export function localOpenTofuRunnerProxyUrl(
