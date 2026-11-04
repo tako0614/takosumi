@@ -114,8 +114,10 @@ plan に digest があれば、apply は `tofu init` の後の lockfile の SHA-
 `autoApplyRequested` として Run に記録します。それでも、削除を含む変更、承認ポリシー、
 料金や policy の gate がある plan は自動で apply されず、確認画面で停止します。
 
-dashboard の **更新する** も、安全に完了した plan を apply まで続けます。これは押した画面が
-行う操作で、Run に `autoApplyRequested` は記録されません。
+dashboard のアプリページでは、**版** の **更新**（または **新しい版を確認**）は plan を作り、
+変更内容を表示します。内容を確かめて **許可して更新** を押すまで apply は始まりません。
+必要な承認や削除・作り直しの確認も省略しません。この手動操作は、Run の
+`autoApplyRequested` を使う自動更新とは別です。
 
 つまり、**自動更新を有効にしていない限り、検出が apply を起動することはありません。**
 
@@ -152,15 +154,22 @@ StateVersion と状態も確認してから対応してください。結果が�
 
 ## 履歴
 
+一つのアプリの実行と操作履歴は、その Capsule を指定して読みます。
+
 ```bash
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/runs" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/runs" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/activity" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/activity" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-操作履歴は Workspace に属します。
+見られるアプリ全体の履歴は `GET /api/v1/runs` と `GET /api/v1/activity` で読みます。
+アプリの所有・共有と資格情報の制限で対象を絞ります。どちらもページの `nextCursor` を次の
+requestの `cursor` に渡して続きを読みます。Activityは空のページにも `nextCursor` があるため、
+空かどうかだけで読み終わりを判断しません。
+Workspaceを指定する旧routeは互換用です。保存上の内部namespaceを選び直す必要はありません。
+資格情報ごとの制限や不完全な一覧の扱いは[API reference](../reference/api.md#workspaceを使わないアプリの読み取り)を参照してください。
 
 ## 関連
 

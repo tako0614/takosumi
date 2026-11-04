@@ -160,7 +160,7 @@ export interface ControlSession {
    * may mutate.
    */
   readonly requiredAccess?: Exclude<AccountsBearerRequiredScope, "admin">;
-  /** Revalidate the exact request bearer at stream checkpoints. Installed by
+  /** Revalidate the exact request bearer before a sensitive commit or at stream checkpoints. Installed by
    * the ordinary account credential dispatcher. */
   readonly reauthorizeBearer?: () => Promise<boolean>;
 }
