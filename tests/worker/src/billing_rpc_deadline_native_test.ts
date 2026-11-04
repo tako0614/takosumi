@@ -86,7 +86,13 @@ const HOST = `
       ).bind(ctx.runId, ctx.applyRunId, ctx.capturedUsdMicros).run();
       if (committed.meta.changes === 1) {
         const lateAck = (async () => {
-          await delay(${BILLING_RPC_DEADLINE_MS + 2_000});
+          // Release only after the test observes the caller's timeout and
+          // exact-ref replay. D1 latency must not decide when this ACK appears.
+          while (!(await this.env.LEDGER.prepare(
+            "select ack_released from settlements where run_id = ? and apply_id = ?"
+          ).bind(ctx.runId, ctx.applyRunId).first())?.ack_released) {
+            await delay(100);
+          }
           await this.env.LEDGER.prepare("update settlements set late_ack = 1 where run_id = ? and apply_id = ?")
             .bind(ctx.runId, ctx.applyRunId).run();
         })();
@@ -101,12 +107,17 @@ const HOST = `
     if (new URL(request.url).pathname === "/init") {
       await env.LEDGER.batch([
         env.LEDGER.prepare("create table attempts(method text not null, context text not null)"),
-        env.LEDGER.prepare("create table settlements(run_id text, apply_id text, amount integer, late_ack integer default 0, primary key(run_id, apply_id))"),
+        env.LEDGER.prepare("create table settlements(run_id text, apply_id text, amount integer, late_ack integer default 0, ack_released integer default 0, primary key(run_id, apply_id))"),
       ]);
+    }
+    if (new URL(request.url).pathname === "/release-ack" && request.method === "POST") {
+      await env.LEDGER.prepare(
+        "update settlements set ack_released = 1 where run_id = ? and apply_id = ?"
+      ).bind("plan_exact", "apply_exact").run();
     }
     return Response.json({
       attempts: (await env.LEDGER.prepare("select method, context from attempts order by rowid").all()).results,
-      settlements: (await env.LEDGER.prepare("select * from settlements").all()).results,
+      settlements: (await env.LEDGER.prepare("select run_id, apply_id, amount, late_ack from settlements").all()).results,
     });
   } };
 `;
@@ -171,7 +182,8 @@ test("workerd bounds every billing port and reconciles a late capture ACK with o
     );
     expect(captures).toHaveLength(2);
     expect(captures[0].context).toBe(captures[1].context);
-    expect(receipts.settlements).toHaveLength(1);
+    expect(receipts.settlements).toEqual([{ run_id: "plan_exact", apply_id: "apply_exact", amount: 37, late_ack: 0 }]);
+    expect((await host.fetch("https://host.test/release-ack", { method: "POST" })).status).toBe(200);
     const lateAckDeadline = performance.now() + 5_000;
     while (receipts.settlements[0]?.late_ack !== 1 && performance.now() < lateAckDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
