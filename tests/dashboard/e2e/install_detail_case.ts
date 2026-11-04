@@ -190,7 +190,8 @@ async function detailFixture(
     if (path.endsWith("/stream") && [planId, applyId, "run_retry_fixture_"].some((id) => path.includes(id))) return route.fulfill({ contentType: "text/event-stream", body: "" });
     if (path.endsWith("/logs") && [planId, applyId, "run_retry_fixture_"].some((id) => path.includes(id))) return route.fulfill({ json: { diagnostics: [{ severity: "info", message: "Installing fixture resources" }], auditEvents: [] } });
     if (path === `/api/v1/capsules/${capId}/state-versions`) return route.fulfill({ json: { stateVersions: applyStatus === "succeeded" ? [{ id: "sv_inline", capsuleId: capId, workspaceId: "ws_alpha", generation: 1, createdByRunId: applyId, createdAt: now }] : [] } });
-    if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces") {
+    if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces" ||
+        (path === "/api/v1/ui-surfaces" && url.searchParams.get("capsuleId") === capId)) {
       const surface = JSON.parse(JSON.stringify(PORTABLE_UI_SURFACES.ws_alpha[0]));
       surface.metadata.ownerRef.id = capId; surface.metadata.id = "if_inline";
       surface.spec.inputs.url.capsuleId = capId; surface.status.resolvedInputs.url = "https://apps.example.test/inline-app";
@@ -557,6 +558,14 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     test("two decisions: Install, then Allow and install; the install finishes on the same screen", async ({ page, context }) => {
       const f = await detailFixture(page, base);
       const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+      const launcherReads: string[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (url.pathname.endsWith("/ui-surfaces")) launcherReads.push(url.pathname + url.search);
+      });
+      // The installer need not have membership in the app's internal partition.
+      await page.route("**/api/v1/workspaces/*/ui-surfaces**", (route) =>
+        route.fulfill({ status: 403, json: { error: "forbidden" } }));
       await page.goto(sourceUrl);
       // Decision 1.
       await page.getByRole("button", { name: "Install", exact: true }).click();
@@ -587,6 +596,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(complete.getByRole("heading", { name: "Installed", exact: true })).toBeVisible({ timeout: 20_000 });
       const open = complete.getByRole("link", { name: "Open", exact: true });
       await expect(open).toHaveAttribute("href", "https://apps.example.test/inline-app");
+      expect(launcherReads).toContain(`/api/v1/ui-surfaces?capsuleId=${capId}`);
+      expect(launcherReads.some((path) => path.startsWith("/api/v1/workspaces/"))).toBe(false);
       await expect(complete.getByRole("link", { name: "Manage app", exact: true })).toHaveAttribute("href", `/apps/${capId}`);
       // The same screen can go to a phone, outside the completion's live region.
       const phone = page.getByTestId("app-phone");

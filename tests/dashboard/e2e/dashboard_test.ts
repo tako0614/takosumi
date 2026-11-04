@@ -1054,7 +1054,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           observedAt: "2026-08-01T00:00:00.000Z",
         } } });
       }
-      if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces") {
+      if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces" || path === "/api/v1/ui-surfaces") {
         return route.fulfill({ json: { interfaces: [{
           apiVersion: "takosumi.dev/v1alpha1", kind: "Interface",
           metadata: {

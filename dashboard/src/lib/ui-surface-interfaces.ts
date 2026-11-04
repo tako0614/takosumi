@@ -110,7 +110,8 @@ export async function listAuthorizedUiSurfaces(
   if (normalizedCapsuleId !== undefined) {
     params.set("capsuleId", normalizedCapsuleId);
   }
-  const basePath = `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces`;
+  const legacyPath = `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces`;
+  let basePath = normalizedCapsuleId ? "/api/v1/ui-surfaces" : legacyPath;
   const interfaces: unknown[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
@@ -118,7 +119,18 @@ export async function listAuthorizedUiSurfaces(
     const pageParams = new URLSearchParams(params);
     if (cursor !== undefined) pageParams.set("cursor", cursor);
     const query = pageParams.size > 0 ? `?${pageParams.toString()}` : "";
-    const body = await fetchJson(`${basePath}${query}`, options);
+    let body: unknown;
+    try {
+      body = await fetchJson(`${basePath}${query}`, options);
+    } catch (error) {
+      // Only an absent initial route selects an older host's projection.
+      // Denial, unavailability, empty results and failed later pages never
+      // replace the app decision with Workspace membership.
+      if (page !== 0 || basePath === legacyPath ||
+          !(error instanceof UiSurfaceResponseError) || error.status !== 404) throw error;
+      basePath = legacyPath;
+      body = await fetchJson(`${basePath}${query}`, options);
+    }
     if (!isRecord(body) || !Array.isArray(body.interfaces)) {
       throw new Error("UI surface list response is invalid");
     }
@@ -292,6 +304,13 @@ function compareAuthorizedUiSurfaces(
   return displayOrder || left.interfaceId.localeCompare(right.interfaceId);
 }
 
+class UiSurfaceResponseError extends Error {
+  constructor(readonly status: number) {
+    super(`Interface API request failed (${status})`);
+    this.name = "UiSurfaceResponseError";
+  }
+}
+
 async function fetchJson(
   path: string,
   options: UiSurfaceReadOptions,
@@ -307,7 +326,7 @@ async function fetchJson(
     signal: options.signal,
   });
   if (!response.ok) {
-    throw new Error(`Interface API request failed (${response.status})`);
+    throw new UiSurfaceResponseError(response.status);
   }
   return await response.json();
 }

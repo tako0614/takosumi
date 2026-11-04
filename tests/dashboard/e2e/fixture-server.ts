@@ -165,6 +165,14 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
     return json({ error: "intentional_fixture_failure" }, 404);
   }
   if (path === "/api/v1/workspaces") return json(workspacesResponse());
+  if (path === "/api/v1/ui-surfaces") {
+    const capsuleId = url.searchParams.get("capsuleId");
+    const apps = new Set(PORTABLE_APPS.map((app) => app.capsuleId));
+    return json({ interfaces: Object.values(PORTABLE_UI_SURFACES).flat().filter((surface) =>
+      apps.has(surface.metadata.ownerRef.id) &&
+      (capsuleId === null || surface.metadata.ownerRef.id === capsuleId)
+    ) });
+  }
 
   const workspaceMatch = path.match(/^\/api\/v1\/workspaces\/([^/]+)(?:\/(.*))?$/u);
   if (workspaceMatch) {

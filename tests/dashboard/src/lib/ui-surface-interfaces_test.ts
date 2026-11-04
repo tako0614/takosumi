@@ -336,7 +336,7 @@ describe("dashboard UI-surface Interface consumer", () => {
     const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
       const path = String(input);
       calls.push(path);
-      if (path.startsWith("/api/v1/workspaces/ws_1/ui-surfaces")) {
+      if (path.startsWith("/api/v1/ui-surfaces?capsuleId=")) {
         return Response.json({ interfaces: [uiInterface()] });
       }
       return Response.json({ error: "unexpected request" }, { status: 500 });
@@ -361,7 +361,7 @@ describe("dashboard UI-surface Interface consumer", () => {
       },
     ]);
     expect(calls).toEqual([
-      "/api/v1/workspaces/ws_1/ui-surfaces?capsuleId=cap_1",
+      "/api/v1/ui-surfaces?capsuleId=cap_1",
     ]);
 
     calls.length = 0;
@@ -372,6 +372,70 @@ describe("dashboard UI-surface Interface consumer", () => {
       }),
     ).resolves.toEqual([]);
     expect(calls).toHaveLength(1);
+  });
+
+  test("an old host uses its Workspace launcher only when the app route is absent", async () => {
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+      const path = String(input);
+      calls.push(path);
+      if (path === "/api/v1/ui-surfaces?capsuleId=cap_1") {
+        return Response.json({ error: "not_found" }, { status: 404 });
+      }
+      return Response.json({ interfaces: [uiInterface()] });
+    };
+    expect((await listAuthorizedUiSurfaces("ws_1", { capsuleId: "cap_1", fetch: fetcher }))[0]?.url)
+      .toBe("https://office.example.test/app");
+    expect(calls).toEqual([
+      "/api/v1/ui-surfaces?capsuleId=cap_1",
+      "/api/v1/workspaces/ws_1/ui-surfaces?capsuleId=cap_1",
+    ]);
+  });
+
+  test("app launcher denial and failure never read the legacy Workspace projection", async () => {
+    for (const status of [401, 403, 503]) {
+      const calls: string[] = [];
+      const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+        const path = String(input);
+        calls.push(path);
+        if (path.startsWith("/api/v1/ui-surfaces?")) {
+          return Response.json({ error: "refused" }, { status });
+        }
+        return Response.json({ interfaces: [uiInterface()] });
+      };
+      await expect(listAuthorizedUiSurfaces("ws_1", { capsuleId: "cap_1", fetch: fetcher }))
+        .rejects.toThrow(`Interface API request failed (${status})`);
+      expect(calls).toEqual(["/api/v1/ui-surfaces?capsuleId=cap_1"]);
+    }
+  });
+
+  test("an empty authorized app launcher never falls back to Workspace membership", async () => {
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+      const path = String(input);
+      calls.push(path);
+      return Response.json({ interfaces: path.startsWith("/api/v1/ui-surfaces?") ? [] : [uiInterface()] });
+    };
+    expect(await listAuthorizedUiSurfaces("ws_1", { capsuleId: "cap_1", fetch: fetcher })).toEqual([]);
+    expect(calls).toEqual(["/api/v1/ui-surfaces?capsuleId=cap_1"]);
+  });
+
+  test("app launcher pagination stays on its app API and cannot switch authority halfway", async () => {
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+      const path = String(input);
+      calls.push(path);
+      if (path === "/api/v1/ui-surfaces?capsuleId=cap_1") {
+        return Response.json({ interfaces: [uiInterface()], nextCursor: "page_2" });
+      }
+      return Response.json({ error: "not_found" }, { status: 404 });
+    };
+    await expect(listAuthorizedUiSurfaces("ws_1", { capsuleId: "cap_1", fetch: fetcher }))
+      .rejects.toThrow("Interface API request failed (404)");
+    expect(calls).toEqual([
+      "/api/v1/ui-surfaces?capsuleId=cap_1",
+      "/api/v1/ui-surfaces?capsuleId=cap_1&cursor=page_2",
+    ]);
   });
 
   test("follows every pagination cursor instead of truncating the launcher list", async () => {
