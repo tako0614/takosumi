@@ -290,12 +290,13 @@ async function readLine(stream: ReadableStream<Uint8Array>): Promise<string> {
   return line;
 }
 
-if (!serverChild && !fixtureChild) test.skipIf(
+if (!serverChild && !fixtureChild) for (const slowWriter of [false, true]) test.skipIf(
   process.platform !== "linux" ||
     (process.arch !== "x64" && process.arch !== "arm64"),
-)("HTTP Runner A is drained before Runner B adopts the same root lease", async () => {
+)(`HTTP Runner A is drained before Runner B adopts the same root lease${slowWriter ? " with a delayed writer" : ""}`, async () => {
   const root = await mkdtemp(join(tmpdir(), "takosumi-root-http-supervisor-"));
   await chmod(root, 0o700);
+  if (slowWriter) await writeFile(join(root, "slow-writer"), "yes", { mode: 0o600 });
   const port = await reservePort();
   const child = Bun.spawn(
     [process.execPath, "--no-env-file", import.meta.path, "http-supervisor-fixture", root, String(port)],
@@ -540,10 +541,11 @@ async function runHttpSupervisorFixture(root: string, port: number): Promise<voi
     if (!supervisor.signalRunner("SIGKILL")) throw new Error();
     stage = "confirm-drain-retry";
     await Bun.sleep(150);
-    const writerCountBefore = await readFile(join(root, "writer-count"), "utf8");
-    await Bun.sleep(60);
-    const writerCountAfter = await readFile(join(root, "writer-count"), "utf8");
-    expect(writerCountAfter).not.toBe(writerCountBefore);
+    // Ask the surviving writer to acknowledge work after the first drain
+    // deadline. Its scheduling/IO latency need not fit a 60ms heartbeat window.
+    await writeFile(join(root, "writer-progress-request"), "yes", { mode: 0o600 });
+    await waitForFile(root, "writer-progress-observed");
+    expect(await readFile(join(root, "writer-progress-observed"), "utf8")).toBe("yes");
     const runnerStillWaiting = await Promise.race([
       first.then(() => false, () => false),
       Bun.sleep(0).then(() => true),
@@ -700,7 +702,7 @@ async function expectRejectedEntrypoint(
 }
 
 function spawnDetachedWriter(root: string): void {
-  const script = 'printf yes > "$1/writer-started"; i=0; while [ ! -e "$1/release-writer" ] && [ "$i" -lt 500 ]; do printf "%s" "$i" > "$1/writer-count"; i=$((i+1)); sleep 0.02; done; printf yes > "$1/writer-finished"';
+  const script = 'printf yes > "$1/writer-started"; i=0; while [ ! -e "$1/release-writer" ] && [ "$i" -lt 500 ]; do printf "%s" "$i" > "$1/writer-count"; i=$((i+1)); if [ -e "$1/writer-progress-request" ] && [ ! -e "$1/writer-progress-observed" ]; then printf yes > "$1/writer-progress-next"; mv "$1/writer-progress-next" "$1/writer-progress-observed"; fi; if [ -e "$1/slow-writer" ]; then sleep 0.5; else sleep 0.02; fi; done; printf yes > "$1/writer-finished"';
   Bun.spawn(["/usr/bin/setsid", "/bin/sh", "-c", script, "writer", root], {
     stdin: "ignore",
     stdout: "ignore",
