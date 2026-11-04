@@ -189,6 +189,7 @@ async function detailFixture(
     if (path === `/api/v1/runs/${applyId}`) return route.fulfill({ json: { run: apply() } });
     if (path.endsWith("/stream") && [planId, applyId, "run_retry_fixture_"].some((id) => path.includes(id))) return route.fulfill({ contentType: "text/event-stream", body: "" });
     if (path.endsWith("/logs") && [planId, applyId, "run_retry_fixture_"].some((id) => path.includes(id))) return route.fulfill({ json: { diagnostics: [{ severity: "info", message: "Installing fixture resources" }], auditEvents: [] } });
+    if (path === `/api/v1/capsules/${capId}/activity`) return route.fulfill({ json: { events: [] } });
     if (path === `/api/v1/capsules/${capId}/state-versions`) return route.fulfill({ json: { stateVersions: applyStatus === "succeeded" ? [{ id: "sv_inline", capsuleId: capId, workspaceId: "ws_alpha", generation: 1, createdByRunId: applyId, createdAt: now }] : [] } });
     if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces" ||
         (path === "/api/v1/ui-surfaces" && url.searchParams.get("capsuleId") === capId)) {
@@ -559,9 +560,11 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const f = await detailFixture(page, base);
       const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
       const launcherReads: string[] = [];
+      const activityReads: string[] = [];
       page.on("request", (request) => {
         const url = new URL(request.url());
         if (url.pathname.endsWith("/ui-surfaces")) launcherReads.push(url.pathname + url.search);
+        if (url.pathname.endsWith("/activity")) activityReads.push(url.pathname + url.search);
       });
       // The installer need not have membership in the app's internal partition.
       await page.route("**/api/v1/workspaces/*/ui-surfaces**", (route) =>
@@ -596,6 +599,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(complete.getByRole("heading", { name: "Installed", exact: true })).toBeVisible({ timeout: 20_000 });
       const open = complete.getByRole("link", { name: "Open", exact: true });
       await expect(open).toHaveAttribute("href", "https://apps.example.test/inline-app");
+      expect(activityReads).toContain(`/api/v1/capsules/${capId}/activity?limit=100`);
+      expect(activityReads.some((path) => path.startsWith("/api/v1/workspaces/"))).toBe(false);
       expect(launcherReads).toContain(`/api/v1/ui-surfaces?capsuleId=${capId}`);
       expect(launcherReads.some((path) => path.startsWith("/api/v1/workspaces/"))).toBe(false);
       await expect(complete.getByRole("link", { name: "Manage app", exact: true })).toHaveAttribute("href", `/apps/${capId}`);
