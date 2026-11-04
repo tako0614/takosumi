@@ -353,6 +353,12 @@ destroyed replays return the terminal Capsule. Invalid or duplicate `immediate`
 parameters are rejected. The internal Core token seam has no authenticated
 account/grant requester, so default applied DELETE fails before scheduling with
 `capsule_uninstall_requester_unavailable`; callers use the Accounts public API.
+The in-process authenticated Accounts composition may supply an explicit
+`credential: "session"` after browser-session authentication. That session binds
+the uninstall requester to its authenticated subject, including for the shared RP;
+HTTP fields and a trusted subject without that credential cannot supply it.
+Shared-account current membership and the later Accounts account/grant validation
+remain independent requirements; this provenance does not replace either check.
 Public Workspace access refusals and internal Workspace-scope refusals do not
 write target Workspace Activity, so an unauthorized caller cannot fill another
 Workspace's Activity by repeatedly addressing its Capsule ID. Internal
