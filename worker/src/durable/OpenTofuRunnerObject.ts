@@ -700,7 +700,11 @@ type RunnerRestoreClaimResult =
   | { readonly kind: "claimed"; readonly claim: RunnerRestoreClaim }
   | { readonly kind: "replay"; readonly ack: RunnerRestoreCommittedAck };
 
-export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
+// The local proxy shares the relay implementation without constructing the
+// Cloudflare SDK Container, whose constructor requires ctx.container.
+const createOpenTofuRunnerObjectClass = (
+  ContainerBase: typeof LocalContainerRuntime,
+) => class OpenTofuRunnerObject extends ContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
   requiredPorts = [8080];
   sleepAfter = "30s";
@@ -5074,13 +5078,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ? configured.trim()
       : DEFAULT_PLAN_ARTIFACT_BUCKET;
   }
-}
+};
+
+export const OpenTofuRunnerObject = createOpenTofuRunnerObjectClass(
+  OpenTofuRunnerContainerBase,
+);
+export type OpenTofuRunnerObject = InstanceType<typeof OpenTofuRunnerObject>;
+const LocalProxyRunnerObject = createOpenTofuRunnerObjectClass(LocalContainerRuntime);
 
 /**
  * Miniflare must not bind the Container-derived class directly: it interprets
  * that binding as a Cloudflare Container and rejects it before the local proxy
- * can run. This plain Durable Object delegates to the same artifact-relay class
- * and exists only for the local-substrate wrapper.
+ * can run. This plain Durable Object uses the same relay implementation with
+ * the local base and exists only for the local-substrate wrapper.
  */
 export class LocalSubstrateOpenTofuRunnerProxyObject {
   readonly #delegate: OpenTofuRunnerObject;
@@ -5094,7 +5104,7 @@ export class LocalSubstrateOpenTofuRunnerProxyObject {
         "LocalSubstrateOpenTofuRunnerProxyObject is local-substrate-only",
       );
     }
-    this.#delegate = new OpenTofuRunnerObject(ctx, env);
+    this.#delegate = new LocalProxyRunnerObject(ctx, env);
   }
 
   fetch(request: Request): Promise<Response> {
