@@ -153,15 +153,19 @@ function isExplicitUnauthenticatedSession(data: unknown): boolean {
 
 interface SessionRefreshOptions {
   /**
-   * The authenticated shell always needs the Workspace switcher. Asking the
-   * dashboard bootstrap for both records lets that first render share one
-   * request with `listWorkspacesCached()` instead of serially fetching a
-   * session-only bootstrap and then the Workspace bootstrap.
+   * Legacy Workspace screens may request their list alongside the session.
+   * The app-owned shell does not depend on that listing.
    */
   readonly includeWorkspaces?: boolean;
   /** Only the first guarded shell read waits for the existing RP health path. */
   readonly initialSharedAuthPreflight?: boolean;
 }
+
+/** The guarded shell's first session read (AuthGuard). */
+export const initialSessionOptions: SessionRefreshOptions = {
+  includeWorkspaces: false,
+  initialSharedAuthPreflight: true,
+};
 
 async function fetchSessionMe(
   options: SessionRefreshOptions = {},
@@ -182,7 +186,7 @@ async function fetchSessionMe(
     const sharedAuthRoute = initialHealth?.route ??
       (isKnownSharedAuthRoutePresent() ? "present" : "absent");
     // The health result grants nothing. Canonical bootstrap must still
-    // authenticate the Cookie and authorize the Workspace list.
+    // authenticate the Cookie (and authorize any explicitly requested list).
     const data = options.includeWorkspaces
       ? await fetchDashboardWorkspaceBootstrap({
         initialHealthTicket: initialHealth?.ticket,
@@ -192,7 +196,7 @@ async function fetchSessionMe(
       });
     if (!data) {
       // A present Hosted RP never falls back to a second account-session
-      // projection when canonical Workspace bootstrap denied the request.
+      // projection when canonical bootstrap denied the request.
       return sharedAuthRoute === "present"
         ? null
         : await fetchAccountSessionMe();

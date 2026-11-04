@@ -1306,6 +1306,25 @@ test.describe("Takosumi dashboard browser surface", () => {
   }) => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
+    const legacyReads: string[] = [];
+    if (mode === "portable") {
+      await page.route("**/api/v1/**", async (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname === "/api/v1/dashboard/bootstrap" &&
+            url.searchParams.get("includeWorkspaces") === "false") {
+          const response = await route.fetch();
+          const { session } = await response.json();
+          return route.fulfill({ response, json: { session } });
+        }
+        if (url.pathname.startsWith("/api/v1/workspaces") ||
+            (url.pathname === "/api/v1/dashboard/bootstrap" &&
+             url.searchParams.get("includeWorkspaces") !== "false")) {
+          legacyReads.push(url.pathname + url.search);
+          return route.fulfill({ status: 503, json: { error: "workspace_listing_unavailable" } });
+        }
+        return route.continue();
+      });
+    }
     const ordinaryPreflight = mode === "portable"
       ? page.waitForResponse((response) => {
           const url = new URL(response.url());
@@ -1330,10 +1349,12 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect(await response.json()).toEqual({ error: "not_found" });
     }
     await expect((await bootstrap).status()).toBe(200);
+    expect(new URL((await bootstrap).url()).searchParams.get("includeWorkspaces")).toBe("false");
     const home = page.getByTestId("home-apps");
     await expect(home.getByTestId("home-app").filter({ hasText: expectations.appName }).first()).toBeVisible();
     await expect(home.getByTestId("home-app").filter({ hasText: "Beta Office" }).first()).toBeVisible();
     await expect(page.locator('[data-testid="workspace-switcher"]')).toHaveCount(0);
+    expect(legacyReads).toEqual([]);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });

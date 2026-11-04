@@ -11,7 +11,7 @@ const source = readFileSync(
 
 describe("AuthGuard session failure boundary", () => {
   test("the synchronous first read and mount share the initial preflight request", () => {
-    expect(source).toContain("initialSharedAuthPreflight: true");
+    expect(source).toContain("  initialSessionOptions,");
     expect(source).toContain("const cached = readSessionState(initialSessionOptions)");
     const mountBranch = source.slice(
       source.indexOf("onMount(() =>"),
