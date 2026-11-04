@@ -200,12 +200,31 @@ export async function handleWorkspaceInstallPlans(
     if (existing) break;
   }
   if (existing) {
-    if (
-      (existing.delegateCapsuleId ?? undefined) === (delegateCapsuleId ?? undefined) &&
-      (existing.requestDigest === requestDigest ||
-        (legacyRequestDigest !== undefined &&
-          existing.requestDigest === legacyRequestDigest))
-    ) {
+    const sameDelegate =
+      (existing.delegateCapsuleId ?? undefined) === (delegateCapsuleId ?? undefined);
+    let sameRequest = existing.requestDigest === requestDigest ||
+      (legacyRequestDigest !== undefined && existing.requestDigest === legacyRequestDigest);
+    if (sameDelegate && !sameRequest) {
+      const source = attempt?.source ?? parsed!.source;
+      const storedPath = modulePathValue(existing.source.path);
+      if (existing.source.path !== source.path && storedPath !== undefined &&
+        (storedPath === "" ? "." : storedPath) === source.path) {
+        // Reconstruct the safely equivalent stored spelling for immutable request identity.
+        const previousPlan = parsed
+          ? { ...parsed, source: { ...parsed.source, path: existing.source.path } }
+          : undefined;
+        const previousAttempt = attempt
+          ? { ...attempt, source: { ...attempt.source, path: existing.source.path } }
+          : undefined;
+        const [pathDigest, previousValuesDigest] = await Promise.all([
+          stableJsonDigest(previousAttempt ?? requestDigestInput(previousPlan!)),
+          variables ? stableJsonDigest(previousPlan) : Promise.resolve(undefined),
+        ]);
+        sameRequest = existing.requestDigest === pathDigest ||
+          (previousValuesDigest !== undefined && existing.requestDigest === previousValuesDigest);
+      }
+    }
+    if (sameDelegate && sameRequest) {
       return await installPlanJson(ctx, existing);
     }
     return errorJson(

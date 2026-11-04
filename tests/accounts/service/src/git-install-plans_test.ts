@@ -623,6 +623,55 @@ test("Git install plan rejects variable values and secret-shaped Git URLs", asyn
   expect(await fixture.planStore.get("missing")).toBeUndefined();
 });
 
+test.each(["plan", "attempt"] as const)(
+  "Git install replays an old relative Source spelling in %s mode",
+  async (mode) => {
+    const fixture = installFixture();
+    const endpoint = "/api/v1/workspaces/ws_install/install-plans";
+    const seed = await fixture.request(endpoint, "POST", {
+      ...createBody({ sourcePath: "deploy/app" }),
+      ...(mode === "attempt" ? { mode: "attempt" } : {}),
+    }, { "idempotency-key": "canonical-seed" });
+    expect(seed.status).toBe(201);
+    const seedId = (await seed.json()).installPlan.id as string;
+    const canonical = (await fixture.planStore.get(seedId))!;
+    const input = {
+      ...(mode === "attempt" ? { mode: "attempt" } : {}),
+      source: canonical.source, capsule: canonical.capsule, options: canonical.options,
+    };
+    expect(canonical.requestDigest).toBe(await stableJsonDigest(input));
+    const key = "historical-relative-spelling";
+    const source = { ...canonical.source, path: "./deploy/app" };
+    const historical = {
+      ...canonical, id: "gip_ffeeddccbbaa9988", source,
+      idempotencyKeyHash: await stableJsonDigest(key),
+      requestDigest: await stableJsonDigest({ ...input, source }),
+    };
+    expect((await fixture.planStore.create(historical, canonical.workspaceManagementAuthority)).status).toBe("created");
+    const before = await fixture.planStore.get(historical.id);
+    await fixture.beginDrain();
+    const body = {
+      ...createBody({ sourcePath: ".\\.\\deploy\\app" }),
+      ...(mode === "attempt" ? { mode: "attempt" } : {}),
+    };
+    const replay = await fixture.request(endpoint, "POST", body, { "idempotency-key": key });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).installPlan.id).toBe(historical.id);
+    const changed = await fixture.request(endpoint, "POST", {
+      ...body, source: { ...body.source, ref: "different" },
+    }, { "idempotency-key": key });
+    expect(changed.status).toBe(409);
+    const unsafe = await fixture.request(endpoint, "POST", {
+      ...body, source: { ...body.source, path: "\\etc" },
+    }, { "idempotency-key": key });
+    expect(unsafe.status).toBe(400);
+    expect(await fixture.planStore.get(historical.id)).toEqual(before);
+    expect(fixture.sources).toEqual([]);
+    expect(fixture.syncRuns.size).toBe(0);
+    expect(fixture.capsules).toEqual([]);
+  },
+);
+
 test("Git install plan keeps Source subtree and exact module selection distinct", async () => {
   const rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[] = [
     {
