@@ -45,7 +45,8 @@ test("OIDC install experience uses only explicit module variable mappings", () =
 });
 
 test("module paths normalize separators before enforcing a relative root", () => {
-  for (const path of ["\\etc", "\\\\server\\share", "\\", "/etc", "C:\\etc", "..\\etc"]) {
+  for (const path of ["\\etc", "\\\\server\\share", "\\", "/etc", "C:\\etc", "..\\etc",
+    ".\\C:\\etc", ".\\C:\\", ".\\.\\C:\\etc", ".\\.\\..", "dir/../C:/etc", "dir\\..\\C:\\etc"]) {
     expect(modulePathValue(path), path).toBeUndefined();
   }
   for (const [path, expected] of [
@@ -55,6 +56,25 @@ test("module paths normalize separators before enforcing a relative root", () =>
   ]) {
     expect(modulePathValue(path), path).toBe(expected);
   }
+});
+
+test("module paths remain canonical when the host path implementation is win32", async () => {
+  const moduleUrl = new URL("../../../../accounts/service/src/control/parse.ts", import.meta.url).href;
+  const script = [
+    'import { mock } from "bun:test";',
+    'const path = await import("node:path");',
+    'mock.module("node:path", () => ({ ...path, normalize: path.win32.normalize, isAbsolute: path.win32.isAbsolute }));',
+    "const { modulePathValue } = await import(" + JSON.stringify(moduleUrl) + ");",
+    'console.log(JSON.stringify(["deploy/app", "deploy/../../etc", "./C:/etc", "./C:/"].map(path => modulePathValue(path) ?? null)));',
+  ].join("\n");
+  const child = Bun.spawn([process.execPath, "--eval", script], {
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]);
+  expect(exitCode, stderr).toBe(0);
+  expect(JSON.parse(stdout)).toEqual(["deploy/app", null, null, null]);
 });
 
 test("sourceBuild API parsing uses the canonical repository path contract", () => {

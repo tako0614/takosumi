@@ -2079,18 +2079,18 @@ function safeRequestedSourcePath(
   if (!path || path.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(path)) {
     return undefined;
   }
-  const normalized = path
-    .replace(/^\.\/+/, "")
-    .replace(/\/+$/g, "");
+  // Preserve replay spelling while exposing every leading ./ to the root check.
+  const relative = path.replace(/^(?:\.\/+)+/u, "");
   if (
-    path.startsWith("/") ||
-    /^[A-Za-z]:[\\/]/u.test(path) ||
-    normalized === ".." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../")
+    relative.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/u.test(relative) ||
+    relative === ".." ||
+    relative.startsWith("../") ||
+    relative.includes("/../")
   ) {
     return undefined;
   }
+  const normalized = path.replace(/^\.\/+/u, "").replace(/\/+$/u, "");
   return normalized && normalized !== "." ? normalized : ".";
 }
 

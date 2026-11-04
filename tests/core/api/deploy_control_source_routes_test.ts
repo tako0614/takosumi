@@ -463,7 +463,8 @@ test("source compatibility rejects absolute backslash paths before creating a Ru
   };
   await store.putSourceSnapshot(snapshot);
   const endpoint = "/internal/v1/sources/" + source.id + "/compatibility-check";
-  for (const modulePath of ["\\etc", "\\\\server\\share", "\\"]) {
+  for (const modulePath of ["\\etc", "\\\\server\\share", "\\", ".\\C:\\etc",
+    ".\\C:\\", ".\\.\\C:\\etc", ".\\.\\..", "dir/../C:/etc", "dir\\..\\C:\\etc"]) {
     const response = await app.request(endpoint, {
       method: "POST", headers: HEADERS,
       body: JSON.stringify({ sourceSnapshotId: snapshot.id, modulePath }),

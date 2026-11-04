@@ -441,13 +441,15 @@ function ownedSourceRequest(overrides: Partial<EnsureOwnedSourceRequest> = {}): 
 }
 
 test("ensureOwnedSource rejects absolute backslash paths without storing a Source", async () => {
-  for (const path of ["\\etc", "\\\\server\\share", "\\"]) {
+  for (const path of ["\\etc", "\\\\server\\share", "\\", ".\\C:\\etc",
+    ".\\C:\\", ".\\.\\C:\\etc", ".\\.\\..", "dir/../C:/etc", "dir\\..\\C:\\etc"]) {
     const { store, service } = makeService();
     const request = ownedSourceRequest({ path });
     await expect(service.ensureOwnedSource(request)).rejects.toMatchObject({ code: "invalid_argument" });
     expect(await store.getSource(request.id), path).toBeUndefined();
   }
-  for (const [path, expected] of [["deploy\\app", "deploy/app"], [".\\", "."]]) {
+  for (const [path, expected] of [["deploy\\app", "deploy/app"], [".\\", "."],
+    ["././deploy/app", "./deploy/app"], [".\\.\\deploy\\app", "./deploy/app"]]) {
     const { service } = makeService();
     expect((await service.ensureOwnedSource(ownedSourceRequest({ path }))).source.defaultPath).toBe(expected);
   }

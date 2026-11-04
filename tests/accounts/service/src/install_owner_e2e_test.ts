@@ -162,7 +162,8 @@ for (const backend of BACKENDS) {
   for (const mode of ["plan", "attempt"] as const) {
     test("[" + backend + "] install rejects absolute backslash paths without creating a namespace in " + mode + " mode", async () => {
       const fixture = await compose(backend);
-      for (const [index, path] of ["\\etc", "\\\\server\\share", "\\"].entries()) {
+      for (const [index, path] of ["\\etc", "\\\\server\\share", "\\", ".\\C:\\etc",
+        ".\\C:\\", ".\\.\\C:\\etc", ".\\.\\..", "dir/../C:/etc", "dir\\..\\C:\\etc"].entries()) {
         const response = await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", {
           source: { name: "example", url: "https://github.com/takos/example.git", ref: "main", path },
           capsule: { name: "path-check", environment: "production" },

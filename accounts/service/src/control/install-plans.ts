@@ -416,8 +416,8 @@ export async function handleInstallPlans(
     const body = await readJsonObject(ctx.request.clone());
     if (!body || body.workspaceId !== undefined ||
       (body.mode !== undefined && body.mode !== "attempt") ||
-      // Both request shapes are validated before namespace resolution, so a
-      // malformed attempt or plain plan never creates one.
+      // Both bodies are validated before namespace resolution, so invalid
+      // input fields never create one.
       (body.mode === undefined
         ? !parseCreateRequest(body)
         : !parseCreateAttemptRequest(body))) {
