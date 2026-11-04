@@ -95,10 +95,12 @@ import {
   uninstallGraceMs,
 } from "./uninstall.ts";
 import {
+  scheduledUninstallManagementFailure,
   UNINSTALL_PAT_EXPIRY_MARGIN_MS,
   type UninstallRequesterAtValidator,
 } from "./uninstall_authorization.ts";
 import type { AppListViewer } from "../app-ownership/list-visibility.ts";
+import type { AppOwnershipStore } from "../app-ownership/store.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -282,6 +284,7 @@ export interface CapsulesServiceDependencies {
   readonly uninstallGraceDays?: number;
   /** Accounts-owned exact-grant check at a new reservation's deadline. */
   readonly validateUninstallRequesterAt?: UninstallRequesterAtValidator;
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   /** Best-effort post-commit cleanup for the Capsule's owned Source. */
   readonly retireOwnedSource?: (sourceId: string, reason: string) => Promise<unknown>;
 }
@@ -304,6 +307,7 @@ export class CapsulesService {
   readonly #revokeCapsuleInterfaceLinks?: (workspaceId: string, capsuleId: string) => Promise<void>;
   readonly #uninstallGraceDays: number;
   readonly #validateUninstallRequesterAt?: UninstallRequesterAtValidator;
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #retireOwnedSource?: (sourceId: string, reason: string) => Promise<unknown>;
   #capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
   #uninstallCancellationCleanup?: (planRunId: string) => Promise<void>;
@@ -320,6 +324,7 @@ export class CapsulesService {
     this.#uninstallGraceDays =
       deps.uninstallGraceDays ?? DEFAULT_UNINSTALL_GRACE_DAYS;
     this.#validateUninstallRequesterAt = deps.validateUninstallRequesterAt;
+    this.#appOwnership = deps.appOwnership;
     this.#retireOwnedSource = deps.retireOwnedSource;
     // Fail at composition, not at the first uninstall request.
     uninstallGraceMs(this.#uninstallGraceDays);
@@ -998,6 +1003,14 @@ export class CapsulesService {
             { reason: CAPSULE_UNINSTALL_REASONS.patDeadlineUnverified },
           );
         }
+      }
+      if (requester?.managementAuthority === "app" || requester?.managementAuthority === "app-and-workspace") {
+        const reason = await scheduledUninstallManagementFailure(
+          this.#store, { ...current, uninstall }, this.#appOwnership,
+        );
+        if (reason) throw new OpenTofuControllerError(
+          "failed_precondition", "Uninstall management authority changed before admission.", { reason },
+        );
       }
       const updated = await this.#updateCapsuleLifecycle(prepared, {
         kind: "uninstall",

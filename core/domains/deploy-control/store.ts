@@ -2015,6 +2015,24 @@ export type UpdateCapsuleLifecycleResult =
   | { readonly kind: "conflict"; readonly current: Capsule }
   | { readonly kind: "not-found" };
 
+/** New reservations fence app authority; progress/cancellation must still record a refusal. */
+export function capsuleUninstallAdmissionAuthority(input: UpdateCapsuleLifecycleCommand): {
+  readonly ownerAccountId: string;
+  readonly ownershipEpoch: number;
+  readonly requireCurrentMembership: boolean;
+} | undefined {
+  if (input.mutation.kind !== "uninstall" || input.mutation.status !== "uninstalled" ||
+    input.expected.status === "uninstalled") return undefined;
+  const requester = input.mutation.uninstall.requester;
+  if (requester?.managementAuthority !== "app" && requester?.managementAuthority !== "app-and-workspace") return undefined;
+  const epoch = requester.appOwnershipEpoch;
+  if (!requester.subject?.trim() || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0) {
+    throw new TypeError("App uninstall authority is invalid");
+  }
+  return { ownerAccountId: requester.subject, ownershipEpoch: epoch,
+    requireCurrentMembership: requester.managementAuthority === "app-and-workspace" };
+}
+
 export function capsuleLifecycleExpected(
   capsule: Capsule,
   executionAuthorityEpoch: number,
@@ -2183,7 +2201,14 @@ export function assertCapsuleUninstallMutation(
     (uninstall.authorizationRejectedAt !== undefined &&
       !Number.isFinite(Date.parse(uninstall.authorizationRejectedAt))) ||
     (uninstall.requester !== undefined &&
-      (typeof uninstall.requester.subject !== "string" || !uninstall.requester.subject.trim()))
+      (typeof uninstall.requester.subject !== "string" || !uninstall.requester.subject.trim() ||
+        (uninstall.requester.managementAuthority !== undefined &&
+          !["workspace", "app", "app-and-workspace"].includes(uninstall.requester.managementAuthority)) ||
+        (uninstall.requester.appOwnershipEpoch !== undefined &&
+          (!Number.isSafeInteger(uninstall.requester.appOwnershipEpoch) || uninstall.requester.appOwnershipEpoch < 0)) ||
+        ((uninstall.requester.managementAuthority === "app" ||
+          uninstall.requester.managementAuthority === "app-and-workspace") &&
+          uninstall.requester.appOwnershipEpoch === undefined)))
   ) {
     throw new TypeError("uninstall record is invalid");
   }
@@ -7117,6 +7142,22 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         expectedAuthority.managementEpoch !== management.managementEpoch
       ) {
         return Promise.resolve({ kind: "conflict", current });
+      }
+    }
+    const appAuthority = capsuleUninstallAdmissionAuthority(input);
+    if (appAuthority) {
+      const ownership = this.#capsuleOwnership.get(current.id);
+      if (!ownership || ownership.ownerAccountId !== appAuthority.ownerAccountId ||
+        ownership.ownershipEpoch !== appAuthority.ownershipEpoch || ownership.managementState !== "active") {
+        return Promise.resolve({ kind: "conflict", current });
+      }
+      if (appAuthority.requireCurrentMembership) {
+        const workspace = this.#workspaces.get(current.workspaceId);
+        if (!workspace || !workspaceAccountAuthorityAllowed({
+          actorAccountId: appAuthority.ownerAccountId, expectedWorkspace: workspace,
+          expectedActor: this.#workspaceMembers.get(workspaceMemberKey(current.workspaceId, appAuthority.ownerAccountId)),
+          requireCurrentMembership: true,
+        })) return Promise.resolve({ kind: "conflict", current });
       }
     }
     if (

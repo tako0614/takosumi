@@ -5,6 +5,7 @@ import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-co
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
+import { handleCapsules } from "../../../../accounts/service/src/control/capsules.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -41,7 +42,15 @@ async function fixture() {
     expect(response).toBeDefined();
     return response!;
   }
-  return { ledger, accounts, core, effects, request, seeded };
+  async function sharedRequest() {
+    const url = new URL(`https://app.example.test/api/v1/capsules/${seeded.capsule.id}`);
+    return (await handleCapsules({
+      request: new Request(url, { method: "DELETE" }), url, store: accounts, operations,
+      session: { subject: "user_test", credential: "session", requiredAccess: "write",
+        requireCurrentMembership: true, uninstallRequester: { subject: "user_test" } },
+    }, ["capsules", seeded.capsule.id], "DELETE"))!;
+  }
+  return { ledger, accounts, core, effects, request, sharedRequest, seeded };
 }
 
 test("public DELETE reserves seven days, replay preserves reservation, cancel restores, no destroy Plan", async () => {
@@ -53,7 +62,7 @@ test("public DELETE reserves seven days, replay preserves reservation, cancel re
   expect(body.graceDays).toBe(7);
   expect(body.capsule.status).toBe("uninstalled");
   expect(body.capsule.uninstall.requester).toBeUndefined();
-  expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall?.requester).toEqual({ subject: "user_test" });
+  expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall?.requester).toEqual({ subject: "user_test", managementAuthority: "workspace" });
   expect(Date.parse(body.capsule.uninstall.scheduledDestroyAt) - Date.parse(body.capsule.uninstall.requestedAt)).toBe(604800000);
   const retries = await Promise.all([h.request("DELETE"), h.request("DELETE", "?immediate=false")]);
   for (const response of retries) {
@@ -84,10 +93,37 @@ test("public DELETE explicit grace persists requester privately", async () => {
   expect(response.status).toBe(202);
   const body = await response.json();
   expect(body.capsule.uninstall.requester).toBeUndefined();
-  expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall?.requester).toEqual({ subject: "user_test" });
+  expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall?.requester).toEqual({ subject: "user_test", managementAuthority: "workspace" });
   expect(h.effects.immediatePlans).toBe(0);
   expect(await h.ledger.listRunsByWorkspace(h.seeded.workspace.id)).toHaveLength(0);
 });
+
+for (const shared of [false, true]) {
+  test(`public uninstall captures ${shared ? "shared-account" : "app"} management authority privately`, async () => {
+    const h = await fixture();
+    expect(await h.core.appOwnership.putOwnership({
+      capsuleId: h.seeded.capsule.id, ownerAccountId: "user_test", ownershipEpoch: 0,
+      managementState: "active", managementEpoch: 0, storageRoot: `apps/${h.seeded.capsule.id}`,
+    }, 0)).toBe(true);
+    if (shared) {
+      expect((await h.sharedRequest()).status).toBe(403);
+      const now = new Date().toISOString();
+      await h.ledger.putWorkspaceMember({ id: "wsm_shared424", workspaceId: h.seeded.workspace.id,
+        accountId: "user_test", roles: ["owner"], status: "active", createdAt: now, updatedAt: now });
+    } else {
+      await h.ledger.putWorkspace({ ...h.seeded.workspace, ownerUserId: "another_namespace_owner" });
+    }
+    const response = shared ? await h.sharedRequest() : await h.request("DELETE");
+    expect(response.status).toBe(202);
+    expect((await response.json()).capsule.uninstall.requester).toBeUndefined();
+    const requester = (await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall?.requester;
+    expect(requester).toEqual({ subject: "user_test", managementAuthority: shared ? "app-and-workspace" : "app", appOwnershipEpoch: 0 });
+    // A later ordinary-session replay must retain the first reservation's
+    // shared-account restriction, epoch, and exact requester.
+    expect((await h.request("DELETE")).status).toBe(202);
+    expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall?.requester).toEqual(requester);
+  });
+}
 
 test("public immediate DELETE requires exact explicit opt-in; invalid/duplicate values do nothing", async () => {
   const h = await fixture();

@@ -96,6 +96,10 @@ export interface CapsulePreDestroyExport {
 /** Internal scheduling provenance. Never expose grant references in public reads. */
 export interface CapsuleUninstallRequester {
   readonly subject: string;
+  /** Server-captured management decision; absent retains the legacy Workspace decision. */
+  readonly managementAuthority?: "workspace" | "app" | "app-and-workspace";
+  /** Required for app authority so an old reservation cannot adopt a later owner epoch. */
+  readonly appOwnershipEpoch?: number;
   readonly grant?:
     | { readonly kind: "personal-access-token"; readonly tokenId: string }
     | { readonly kind: "oauth-access-token"; readonly tokenHash: string };

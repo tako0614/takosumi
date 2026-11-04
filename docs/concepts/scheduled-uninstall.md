@@ -13,7 +13,7 @@ API では `POST /api/v1/capsules/{capsuleId}/uninstall` が、デプロイ済�
 ## 取り消す
 
 dashboard の **削除を取り消す**、または API の
-`POST /api/v1/capsules/{capsuleId}/cancel-uninstall`（現在の Workspace の owner または admin）で
+`POST /api/v1/capsules/{capsuleId}/cancel-uninstall`（現在のアプリ所有者。所有記録のないアプリは従来の Workspace 判定）で
 取り消せます。取り消せるのは次の場合だけで、2 つ目は期限を過ぎて止まった予約です。
 
 - `uninstall.phase` が `scheduled` で、削除の処理（teardown）が実行中でも完了済みでもない
@@ -28,12 +28,16 @@ dashboard の **削除を取り消す**、または API の
 
 予約には、操作した Accounts のアカウントと、予約に使った認証の参照が内部に記録されます。
 削除の処理は、データの書き出しと destroy の Plan を作る前、そのあとの承認・デプロイ（apply）・
-provider への dispatch の前に、そのつど Workspace の現在の管理権限と Accounts の認証状態を
-確かめ直します。処理は期限より遅れることがあるため、予約に使う認証は次のように選びます。
+provider への dispatch の前に、そのつど管理権限と Accounts の認証状態を確かめ直します。
+所有記録のあるアプリの新しい予約は、予約時の所有者が現在も同じ所有権の世代の所有者であることを
+必要とし、Workspace のメンバーであることは求めません。共有アカウント構成が現在の membership を
+要求する場合は、アプリの所有者と現在の Workspace owner/admin membership の両方が必要です。
+管理権限の方式を記録していない古い予約と、所有記録の移行前の予約は従来の Workspace 判定を保ち、
+再送だけでは新方式へ移りません。処理は期限より遅れることがあるため、予約に使う認証は次のように選びます。
 
 | 認証 | 予約 | 期限のあとの確認 |
 | --- | --- | --- |
-| ブラウザーのセッション | できます | アカウントの意図として扱うため、セッションの期限切れや更新だけでは止まりません。アカウントと Workspace の権限は期限にも確かめます |
+| ブラウザーのセッション | できます | アカウントの意図として扱うため、セッションの期限切れや更新だけでは止まりません。アカウントと予約に記録した管理権限は期限にも確かめます |
 | PAT | 期限（`scheduledDestroyAt`）の 6 時間後以降まで有効なもの、または無期限のものだけ | 予約に使った**同じ PAT** が、確かめるたびに有効で、`write` scope と Workspace の制限を満たす必要があります |
 | OAuth | できません | — |
 
@@ -57,14 +61,14 @@ OAuth について: access token の既定の有効期間は 5 分で、既定�
 
 ## 期限に確認できなかったとき
 
-期限に認証または Workspace の権限を確かめられなかった予約は、状態を **削除予定**
+期限に認証または記録した管理権限を確かめられなかった予約は、状態を **削除予定**
 （`uninstalled`）のまま止め、`uninstall.blockedReason` と `uninstall.authorizationRejectedAt` を
 記録します。
 
 | `uninstall.blockedReason` | 理由 |
 | --- | --- |
 | `uninstall_requester_missing` | 依頼者の記録がない古い予約です |
-| `uninstall_requester_denied` | 予約に使った認証が期限切れや失効などで使えないか、アカウントの Workspace 権限で許されなくなりました |
+| `uninstall_requester_denied` | 予約に使った認証が使えないか、アプリ所有者・所有権の世代や、必要な Workspace 権限が変わりました |
 | `uninstall_authorization_unavailable` | 認証や権限を確かめる仕組みが使えないか、確かめる途中で失敗しました |
 
 この拒否は、通常はデータの書き出し、destroy の Plan、provider の操作より前に記録されます。
@@ -99,7 +103,7 @@ OAuth について: access token の既定の有効期間は 5 分で、既定�
 ## 止まった予約を直す
 
 1. 上の「取り消す」の条件を満たしていることを確かめます。
-2. 現在の Workspace の owner または admin が `cancel-uninstall` を呼びます。
+2. 現在のアプリ所有者が `cancel-uninstall` を呼びます（所有記録のないアプリは従来の Workspace 判定）。
 3. ブラウザーのセッション、または provider への dispatch まで有効であり続ける PAT で、
    `POST /api/v1/capsules/{capsuleId}/uninstall` をもう一度呼びます。
 

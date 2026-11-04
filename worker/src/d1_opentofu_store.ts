@@ -301,6 +301,7 @@ import {
   clampRunListLimit,
   capsuleLifecycleMutationAlreadyApplied,
   capsuleLifecycleMutationPatch,
+  capsuleUninstallAdmissionAuthority,
   assertCapsuleApplyRunAdmissionFenceInput,
   capsuleApplyRunAdmissionFenceMatchesRun,
   capsuleAbandonmentTerminalMatches,
@@ -8414,6 +8415,25 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                   ),
                 ),
             );
+    const appAuthority = capsuleUninstallAdmissionAuthority(input);
+    const appManagementAuthority = appAuthority === undefined ? sql`true` : and(
+      eq(schema.capsules.ownerAccountId, appAuthority.ownerAccountId),
+      eq(schema.capsules.ownershipEpoch, appAuthority.ownershipEpoch),
+      eq(schema.capsules.managementState, "active"),
+      appAuthority.requireCurrentMembership ? exists(
+        this.#orm.select({ one: sql`1` }).from(schema.workspaceMembers).where(and(
+          eq(schema.workspaceMembers.workspaceId, schema.capsules.workspaceId),
+          eq(schema.workspaceMembers.accountId, appAuthority.ownerAccountId),
+          eq(schema.workspaceMembers.status, "active"),
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.accountId') = ${schema.workspaceMembers.accountId}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.workspaceId') = ${schema.workspaceMembers.workspaceId}`,
+          sql`json_extract(${schema.workspaceMembers.recordJson}, '$.status') = 'active'`,
+          sql`json_type(${schema.workspaceMembers.recordJson}, '$.roles') = 'array'`,
+          sql`exists (select 1 from json_each(${schema.workspaceMembers.recordJson}, '$.roles')
+            where json_each.type = 'text' and json_each.value in ('owner', 'admin'))`,
+        )),
+      ) : sql`true`,
+    );
     const result = await this.#orm
       .update(schema.capsules)
       .set({
@@ -8429,6 +8449,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             input.expected.executionAuthorityEpoch,
           ),
           expectedUninstall,
+          appManagementAuthority,
           input.expected.currentStateVersionId === undefined
             ? isNull(schema.capsules.currentStateVersionId)
             : eq(

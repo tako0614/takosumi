@@ -306,7 +306,16 @@ export async function handleCapsules(
       }
       const updated = await schedule.call(operations.capsules, capsule.id, {
         actor: ctx.session.subject,
-        requester: ctx.session.uninstallRequester,
+        requester: {
+          subject: ctx.session.uninstallRequester.subject,
+          ...(ctx.session.uninstallRequester.grant
+            ? { grant: ctx.session.uninstallRequester.grant }
+            : {}),
+          managementAuthority: auth.authority === "app"
+            ? ctx.session.requireCurrentMembership ? "app-and-workspace" : "app"
+            : "workspace",
+          ...(auth.authority === "app" ? { appOwnershipEpoch: auth.access.ownershipEpoch } : {}),
+        },
         expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
       return jsonStatus(

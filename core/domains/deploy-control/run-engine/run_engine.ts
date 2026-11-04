@@ -12520,7 +12520,7 @@ export class RunEngine {
 
   async #requireScheduledUninstallAuthorization(capsule: Capsule): Promise<void> {
     const reason = await scheduledUninstallAuthorizationFailure(
-      this.#store, capsule, this.#validateUninstallRequester,
+      this.#store, capsule, this.#validateUninstallRequester, this.#appOwnership,
     );
     if (reason !== undefined) {
       throw new OpenTofuControllerError(

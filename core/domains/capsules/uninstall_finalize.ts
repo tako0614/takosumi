@@ -833,7 +833,7 @@ async function blockUnauthorizedRequester(
   uninstall: CapsuleUninstall,
 ): Promise<boolean> {
   const reason = await scheduledUninstallAuthorizationFailure(
-    deps.store, capsule, deps.validateUninstallRequester,
+    deps.store, capsule, deps.validateUninstallRequester, deps.appOwnership,
   );
   if (reason === undefined) return false;
   await block(deps, capsule, uninstall, reason);

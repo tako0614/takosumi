@@ -15,8 +15,8 @@ changing its deadline or requester.
 ## Cancelling
 
 **Cancel deletion** in the dashboard, or
-`POST /api/v1/capsules/{capsuleId}/cancel-uninstall` from the current Workspace owner or
-admin, cancels the request. Cancellation is possible only in these cases; the second is a
+`POST /api/v1/capsules/{capsuleId}/cancel-uninstall` from the current app owner
+(the legacy Workspace decision for an app without ownership records), cancels the request. Cancellation is possible only in these cases; the second is a
 request that stopped after the deadline:
 
 - `uninstall.phase` is `scheduled`, and teardown is neither in flight nor complete; or
@@ -31,13 +31,18 @@ cancel; inspect its outcome and use authorized forward repair.
 
 The request privately records the Accounts subject and a reference to the credential used
 to schedule it. Before exporting data and creating the destroy Plan, and again before
-approval, apply, and provider dispatch, the deletion rechecks current Workspace management
-authority and Accounts authorization. Because this can run after the deadline, choose the
-credential as follows.
+approval, apply, and provider dispatch, the deletion rechecks management authority
+and Accounts authorization. A new reservation for an app with ownership records
+requires its requester to remain the current owner at the same ownership epoch;
+Workspace membership is not required. A shared-account composition that requires
+current membership additionally requires active Workspace owner/admin membership.
+Old requests without management provenance, and requests made before ownership
+backfill, keep the legacy Workspace decision. Replaying them does not change that
+decision. Because this can run after the deadline, choose the credential as follows.
 
 | Credential | Can schedule | Checks after the deadline |
 | --- | --- | --- |
-| Browser session | Yes | It represents the account's intent, so session expiry or rotation alone does not stop the request. The account and its Workspace authority are still checked at the deadline |
+| Browser session | Yes | It represents the account's intent, so session expiry or rotation alone does not stop the request. The account and the recorded management authority are still checked at the deadline |
 | PAT | Only one valid until at least six hours after the deadline (`scheduledDestroyAt`), or one that does not expire | The **same PAT** used to schedule must be active, have `write` scope, and satisfy any Workspace restriction at every recheck |
 | OAuth | No | — |
 
@@ -63,14 +68,14 @@ their recorded grant expires.
 
 ## When the deadline check fails
 
-If authorization or Workspace authority cannot be confirmed at the deadline, the service
+If authorization or the recorded management authority cannot be confirmed at the deadline, the service
 stays **Scheduled for deletion** (`uninstalled`), and the request stops with
 `uninstall.blockedReason` and `uninstall.authorizationRejectedAt`.
 
 | `uninstall.blockedReason` | Reason |
 | --- | --- |
 | `uninstall_requester_missing` | A legacy request with no recorded requester |
-| `uninstall_requester_denied` | The credential used to schedule is expired, revoked, or otherwise no longer valid, or the account's Workspace authority no longer allows it |
+| `uninstall_requester_denied` | The credential is no longer valid, or the app owner, ownership epoch, or required Workspace authority changed |
 | `uninstall_authorization_unavailable` | Authorization could not be checked: the check is not available, or it failed |
 
 The refusal is normally recorded before export, destroy Plan creation, or provider work.
@@ -107,7 +112,7 @@ again from Settings.
 ## Repairing a blocked request
 
 1. Confirm that one of the cases under "Cancelling" applies.
-2. The current Workspace owner or admin calls `cancel-uninstall`.
+2. The current app owner calls `cancel-uninstall` (the legacy Workspace decision for an app without ownership records).
 3. Schedule again with `POST /api/v1/capsules/{capsuleId}/uninstall`, using a browser
    session or a PAT that will remain valid through provider dispatch.
 
