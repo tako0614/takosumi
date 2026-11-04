@@ -216,18 +216,13 @@ export async function handleRuns(
     // who created them (`createdBy`, which is also the token's user), not the
     // credential or client, so "a Run this app created" cannot be told apart
     // from the user's own Runs: cancel is refused for such tokens entirely.
-    if (operate && (leaf === "approve" || leaf === "apply" || leaf === "cancel") &&
-      isInstalledAppToken(ctx.session) &&
-      !(await installedAppTokenDelegates(operations, ctx.session))) {
-      return errorJson(
-        "app_access_denied",
-        "Approving, applying or cancelling a Run requires an account session, a personal access token or a designated delegate app.",
-        403,
-      );
+    if (operate && (leaf === "approve" || leaf === "apply" || leaf === "cancel")) {
+      const refused = await runMutationCredentialRefusal(ctx);
+      if (refused) return refused;
     }
     if (leaf === "approve" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await approveRun(request, operations, runId, ctx.session);
+      return await approveRun(ctx, runId);
     }
     if (leaf === "apply" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -531,13 +526,39 @@ async function requireRunGroupView(
   return { ok: true };
 }
 
-async function approveRun(
-  request: Request,
-  operations: ControlPlaneOperations,
-  runId: string,
-  session: ControlSession,
-): Promise<Response> {
+async function runMutationCredentialRefusal(ctx: ControlDispatchContext): Promise<Response | undefined> {
+  if (isInstalledAppToken(ctx.session) && !(await installedAppTokenDelegates(ctx.operations, ctx.session))) {
+    return errorJson(
+      "app_access_denied",
+      "Approving, applying or cancelling a Run requires an account session, a personal access token or a designated delegate app.",
+      403,
+    );
+  }
+  return undefined;
+}
+
+async function approveRun(ctx: ControlDispatchContext, runId: string): Promise<Response> {
+  const { request, operations, session, store } = ctx;
   const body = await readJsonObject(request.clone()).catch(() => null);
+  // Reading a caller-controlled body can outlive the original credential or
+  // app role. Re-read both before admitting a new approval, using the same
+  // app/legacy/shared-account intersections as the initial route decision.
+  ctx.assertActive?.();
+  if (session.reauthorizeBearer && !(await session.reauthorizeBearer())) {
+    return errorJson("forbidden", "Run approval credentials are no longer valid.", 403);
+  }
+  const current = await operations.getRun(runId);
+  const auth = await requireResourceAccess({
+    operations, store, workspaceId: current.workspaceId,
+    capsuleIds: await runCapsuleIds(operations, current),
+    action: runAppAction(current, "operate"), session,
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
+  if (!auth.ok) return auth.response;
+  const refused = await runMutationCredentialRefusal(ctx);
+  if (refused) return refused;
+  ctx.assertActive?.();
   const reason = body ? stringValue(body.reason) : undefined;
   const run = await operations.approveRun(runId, {
     approvedBy: session.subject,

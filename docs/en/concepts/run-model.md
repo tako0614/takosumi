@@ -125,8 +125,10 @@ snapshot, Takosumi creates one update plan and records `autoApplyRequested` on t
 from plan to apply if the plan finishes cleanly. A plan with deletions, an approval policy, a
 billing check, or another policy gate still stops for review.
 
-The dashboard's **Update** also continues a cleanly finished plan to apply. That is done by the
-screen you pressed it on; the Run does not record `autoApplyRequested`.
+On the dashboard app page, **Update** (or **Check for updates**) under **Version** creates a plan
+and shows the changes. Apply starts only after you review them and press **Allow and update**.
+Required approval and the confirmation for deletes or replacements still apply. This manual
+action is separate from automatic updates that use `autoApplyRequested` on the Run.
 
 In short, **unless automatic updates are on, detection never starts an apply.**
 
@@ -166,15 +168,23 @@ is unclear, inspect provider-side state; do not repeat apply until you know what
 
 ## History
 
+Read one app's runs and activity by naming its Capsule.
+
 ```bash
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/runs" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/runs" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/activity" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/activity" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-The activity record belongs to the Workspace.
+Use `GET /api/v1/runs` and `GET /api/v1/activity` for history across the apps you can view.
+App ownership or sharing and credential restrictions determine the results. Pass a page's
+`nextCursor` as the next request's `cursor` to continue. An Activity page can be empty and still
+have a `nextCursor`, so an empty page does not mean the history has ended.
+Workspace-scoped routes remain for compatibility; there is no need to choose the internal
+storage namespace again. See the [API reference](../reference/api.md#app-reads-without-a-workspace)
+for credential restrictions and incomplete results.
 
 ## Related
 

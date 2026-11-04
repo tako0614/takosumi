@@ -1,101 +1,94 @@
 # Update, restore, or delete a service
 
-Open a service you added from **Workloads** in the dashboard. Its page has three tabs:
-**Overview**, **Updates**, and **Settings**. This page walks through what you do after adding,
-using the names on those screens.
+Open an app you added from the dashboard. The same page contains **Version**, **Settings**,
+**History**, and **Uninstall** for the owner.
 
-Scheduling or cancelling a deletion and turning automatic updates on or off take effect as soon
-as you press them. Everything else first creates a review of the changes (a plan) that shows how
-many resources will be created, changed, and deleted, and you then deploy it (apply). Creating
-the review alone changes nothing.
+Updating, changing settings, and going back to an earlier version first create a plan.
+Check what will be created, changed, or deleted and the estimated cost. Nothing is applied to
+your cloud until you press **Allow and update** or **Allow and apply**. Reopening the page does
+not give consent. Scheduling or cancelling an uninstall and switching automatic updates on or
+off take effect through their own actions.
 
 ## Update to a new version
 
-When Takosumi finds a new commit on the branch the service tracks (on Cloudflare, through the hourly
-check or the Source webhook; the standard Bun and PostgreSQL build has neither), its status becomes
-**Update available** and **Update** appears at the top of its page. A service added with a
-commit never shows **Update available** because of Git changes. A service added with a tag does
-not either, unless the tag is moved to another commit. Switch either one to a new version with
-**Change version** below. **Update available** means a newer commit was found on the tracked
-Source ref.
+Press **Update** under **Version**. If no newer version has been detected, **Check for updates**
+reads the latest content of the tracked branch or tag. Both stop at a review of the changes.
+Check them, then press **Allow and update** to begin applying.
 
-- **Update** creates the review. If the change needs no approval, does not delete or replace an
-  existing resource, and is not stopped by a policy or billing check, it continues to the
-  deploy on its own. Otherwise it stops on the run screen.
-- To look first, press **Review changes** under **Update service** on the **Updates** tab.
-  Check the run screen, then press **Deploy**.
+Changes with deletes or replacements have an extra confirmation checkbox. Plans that need
+approval also require **Approve this change**. A plan held by approval, policy, or billing
+conditions cannot be applied.
 
-A change that deletes or replaces an existing resource needs approval. On the run screen, press
-**Approve this change** first; **Run destructive changes anyway** then appears in place of
-**Deploy**. Press each only after checking what it does.
+The Cloudflare build detects new Git commits through the hourly check or Source webhook.
+The standard Bun and PostgreSQL build has neither the periodic check nor the webhook.
+An app pinned to a commit does not acquire newer commits; a tag stays unchanged unless it is
+moved to another commit. To switch to a different branch, tag, or commit, enter it in
+**Tag, branch, or commit** under **Choose a version** and press **Review**. This also waits for
+your permission before applying.
 
-To switch to another branch, tag, or commit, open **Change version** under **Source version** on
-the **Updates** tab, enter it in **Git ref**, and press **Review this version**. This creates a
-review in the same way.
-
-To change the settings you entered or the connected accounts, edit them under **Settings** and
-**Connected accounts** on the **Settings** tab and press **Review changes**. Nothing is applied
-on the settings screen itself.
+To change settings or connections, edit the values or **Connections it uses** under **Settings**
+and press **Review**. The app keeps using its current settings until you review the changes and
+press **Allow and apply**.
 
 ### Update automatically
 
-Open **Automatic updates** on the **Settings** tab and press **Turn on automatic updates**. Each
-time Takosumi finds a new commit, it creates one update review. Only a change with no deletes or
-replacements, no approval or policy gate, and a known list of resource changes is deployed on its
-own. Anything else stops on the run screen and is not deployed until someone checks it. If an
-automatic update stops or fails, it is not retried for the same commit. It is off by default
-([Sources and Capsules](../concepts/sources.md)).
+Under **Version**, turn on **Update automatically when a newer version is found** in
+**Automatic updates**. Takosumi creates one update plan for each new commit it detects.
+Only a change with no deletes or replacements, no approval, policy, or billing gate, and a
+known list of resource changes is applied automatically. Other changes wait for someone to
+review them. A stopped or failed automatic update is not retried for the same commit.
+Automatic updates are off by default ([Sources and Capsules](../concepts/sources.md)).
+The manual **Update** button is separate from this setting.
 
 ## When something fails
 
-When a review (plan) or a deploy (apply) fails, the run screen says "… failed." When there is
-something to show, **Diagnostics** below it lists the errors and warnings, and whether a
-connection needs checking.
+The app page shows problems under **Needs attention**. Open **See reason and logs**, or
+**Details** under **History**, to inspect the Run's result, reason, and logs.
 
-1. Fix what **Diagnostics** points to: the **Connected accounts** on the **Settings** tab for a
-   connection problem, or the Git repository for a module problem.
-2. Press **Review changes again** on the run screen to create a new review.
+1. For a connection problem, fix **Connections it uses** under **Settings**; for a module problem,
+   fix the Git repository.
+2. **Review again** creates a new plan to check before allowing it. If the action says
+   **Review the installed version again**, it plans the installed version with the current
+   settings instead of retrying the failed change.
 
-Earlier runs are listed newest first under **Deploy history** in the user menu, which opens
-from your initial at the top right. If the server itself does not respond or cannot reach the
-runner, the people who run it should see [Troubleshooting](../self-host/troubleshooting.md).
+If the apply response is lost, the page says the result could not be confirmed. Do not repeat
+apply: read the Run result and current state through **History** first. Even a failed Run can
+leave cloud changes or a new StateVersion. See [Run model](../concepts/run-model.md#when-a-run-fails).
+If the server itself does not respond or cannot reach the runner, the people who run it should
+also see [Troubleshooting](../self-host/troubleshooting.md).
 
 ## Go back to an earlier version (roll back)
 
-Open **Update history** on the **Updates** tab. It lists each deployed version with its time and
-marks the one in use as **Current**. Open **Restore a previous version** on an earlier entry and
-press **Restore this state** to create a review that takes the service back to that version's
-source (its commit). Nothing goes back until you check that review and deploy it.
+**Go back to a previous version** under **Version** lists earlier applied versions. Press
+**Go back to this version** on the one you want to create a plan using its source commit.
+It takes effect only after you review it and press **Allow and apply**.
 
 Before you restore:
 
-- The result is added to the history as a new version. The history is never erased, so you can
-  undo the restore later.
-- The source and the state that Takosumi manages go back. The contents of resources, such as
-  database records or stored files, do not.
-- Settings and connections do not go back. The review uses the current settings and connections.
-- The target commit must still exist in the repository; otherwise the review fails.
+- The result is added as a new StateVersion. History is never rewound or erased.
+- This applies changes using the earlier version's source. It does not restore database rows
+  or stored files. Deletes or replacements in the plan can lose the data inside resources.
+- Settings and connections do not go back. The plan uses the current settings and connections.
+- The target commit must still exist in the repository; otherwise the plan fails.
 
 See [State and outputs](../concepts/state-and-outputs.md) for details.
 
 ## Delete
 
-Open **Delete this service** on the **Settings** tab. There are two ways, and both delete the
-resources this service created in the cloud, along with the data inside them. If other services
-use this one, the services that would be affected are shown here.
+The owner can remove the app under **Uninstall**. If other apps use it, the affected links
+are shown. Uninstall removes the resources this app created in the cloud and can lose the
+data inside them.
 
-- **Schedule deletion** — **Schedule deletion** marks the service **Scheduled for deletion** at
-  once. For a grace period (7 days by default in the OSS build; the people who run Takosumi can
-  change it) the service and its data stay, and billing continues. **Cancel deletion** undoes it
-  until then. When the period ends, Takosumi tries to export the data and then deletes the
-  service. A failed export does not stop the deletion. It does stop when Takosumi cannot continue
-  safely: for example, the authority of the person who scheduled it cannot be confirmed at the
-  deadline, an export attempt was interrupted and its result cannot be confirmed, or the
-  deletion review or apply failed or was refused. The page then tells you to cancel or delete
-  now ([Scheduled deletion](../concepts/scheduled-uninstall.md)).
-- **Delete now** — **Review deletion** creates a review of the deletion. No data is exported. On
-  the run screen, press **Approve this change**, confirm "Run this deletion?", then press **Run
-  destructive changes anyway**. The service is deleted at once and cannot be restored.
+- **With a grace period:** press **Uninstall** and confirm the dialog to schedule it. The OSS
+  default is 7 days; the people who run Takosumi can change it. The app and data stay and billing
+  continues during that period. **Cancel uninstall** cancels it. At the deadline, Takosumi tries
+  to export the data before deleting. An export failure alone does not stop deletion, but it
+  stops if the scheduler's authority, an unknown export result, or the deletion plan or apply
+  cannot be confirmed safe ([Scheduled deletion](../concepts/scheduled-uninstall.md)).
+- **To remove it immediately:** **Uninstall now** opens a deletion plan. No data is exported.
+  Complete any required approval and confirmation checkbox, then press **Allow and uninstall**
+  to begin deletion. This action appears when there is no grace period or the app is already
+  scheduled for uninstall. It cannot be undone.
 
-For a service that was never deployed, the card is named **Delete this service**. After **Review
-deletion**, confirming "Delete this service?" removes it right there.
+For an app that has never been applied, confirming **Uninstall** removes it right away.
+If you do not know whether it created cloud resources, check the Run result and current state first.
