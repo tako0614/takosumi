@@ -62,6 +62,14 @@ describe("friendlyError for dashboard-raised 4xx errors", () => {
         ),
         "controlError.sourceSyncPending",
       ],
+      [
+        new ControlApiError(
+          409,
+          "source_sync_failed",
+          "The canonical revision Source sync failed.",
+        ),
+        "runError.sourceSyncFailed",
+      ],
       // A plan diagnostic carries its code, not a reason.
       [
         new ControlApiError(409, "slot_limit_reached", "Slot limit reached."),
