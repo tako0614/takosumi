@@ -50,7 +50,9 @@ if (Bun.env.TAKOSUMI_TEST_PRIVATE_RUN_ROOT_CHILD !== "1") {
       if (safeToRemove) await rm(root, { recursive: true, force: true });
       else console.error(`private local runner fixture retained after uncertain child result: ${root}`);
     }
-  });
+  // The child has its own 30s deadline; allow it to settle and run the cleanup
+  // instead of Bun's default 5s timeout abandoning the awaited child result.
+  }, 40_000);
 } else {
 const { handleRunnerRequestWithDependencies } = await import("../../../runner/entrypoint.ts");
 const { RUN_ROOT } = await import("../../../runner/lib/constants.ts");
