@@ -2075,12 +2075,11 @@ function boundedRequestedGitRef(value: string | undefined): string | undefined {
 function safeRequestedSourcePath(
   value: string | undefined,
 ): string | undefined {
-  const path = nonEmpty(value);
+  const path = nonEmpty(value)?.replace(/\\/gu, "/");
   if (!path || path.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(path)) {
     return undefined;
   }
   const normalized = path
-    .replace(/\\/g, "/")
     .replace(/^\.\/+/, "")
     .replace(/\/+$/g, "");
   if (

@@ -416,9 +416,11 @@ export async function handleInstallPlans(
     const body = await readJsonObject(ctx.request.clone());
     if (!body || body.workspaceId !== undefined ||
       (body.mode !== undefined && body.mode !== "attempt") ||
-      // A plain plan is validated before its namespace is resolved, so a
-      // malformed request never creates one.
-      (body.mode === undefined && !parseCreateRequest(body))) {
+      // Both request shapes are validated before namespace resolution, so a
+      // malformed attempt or plain plan never creates one.
+      (body.mode === undefined
+        ? !parseCreateRequest(body)
+        : !parseCreateAttemptRequest(body))) {
       return errorJson("invalid_request", "A workspace-less install request is required.", 400, ctx.request);
     }
     // The freeze permits only A's canonical owner-bound personal bootstrap.

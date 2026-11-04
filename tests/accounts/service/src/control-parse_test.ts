@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   installExperienceValue,
   installConfigStoreValue,
+  modulePathValue,
   sourceBuildValue,
   variablePresentationValue,
 } from "../../../../accounts/service/src/control/parse.ts";
@@ -41,6 +42,19 @@ test("OIDC install experience uses only explicit module variable mappings", () =
       projections: [{ kind: "oidc_client", variables: {} }],
     }),
   ).toBeUndefined();
+});
+
+test("module paths normalize separators before enforcing a relative root", () => {
+  for (const path of ["\\etc", "\\\\server\\share", "\\", "/etc", "C:\\etc", "..\\etc"]) {
+    expect(modulePathValue(path), path).toBeUndefined();
+  }
+  for (const [path, expected] of [
+    [".", ""], ["./", ""], [".\\", ""],
+    ["deploy\\app", "deploy/app"], ["./\\app", "app"],
+    ["deploy\\..\\app", "app"], ["deploy/../app", "app"],
+  ]) {
+    expect(modulePathValue(path), path).toBe(expected);
+  }
 });
 
 test("sourceBuild API parsing uses the canonical repository path contract", () => {

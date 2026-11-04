@@ -159,6 +159,21 @@ const NORMAL_INSTALL = (name: string) => ({
 });
 
 for (const backend of BACKENDS) {
+  for (const mode of ["plan", "attempt"] as const) {
+    test("[" + backend + "] install rejects absolute backslash paths without creating a namespace in " + mode + " mode", async () => {
+      const fixture = await compose(backend);
+      for (const [index, path] of ["\\etc", "\\\\server\\share", "\\"].entries()) {
+        const response = await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", {
+          source: { name: "example", url: "https://github.com/takos/example.git", ref: "main", path },
+          capsule: { name: "path-check", environment: "production" },
+          ...(mode === "attempt" ? { mode: "attempt" } : {}),
+        }, "invalid-path-" + index);
+        expect(response.status, path).toBe(400);
+        expect(await fixture.operations.workspaces.listWorkspacesByOwner(NEWCOMER), path).toEqual([]);
+      }
+    });
+  }
+
   test(`[${backend}] a Workspace admin's install is owned by the admin, not the Workspace owner`, async () => {
     const fixture = await compose(backend);
     const created = await fixture.route(ADMIN, "POST", `/api/v1/workspaces/${fixture.workspaceId}/install-plans`, NORMAL_INSTALL("admins-app"), "admin-install");

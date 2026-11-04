@@ -440,6 +440,46 @@ test("source snapshot API exposes repository manifest status and digest without 
 
 });
 
+test("source compatibility rejects absolute backslash paths before creating a Run", async () => {
+  const reads: unknown[] = [];
+  const { app, store } = await makeAppWithStore({
+    readCapsuleSourceFiles: (_snapshot, options) => {
+      reads.push(options);
+      return Promise.resolve([{ path: "main.tf", text: 'output "value" { value = "ok" }' }]);
+    },
+  });
+  const created = await app.request("/internal/v1/sources", {
+    method: "POST", headers: HEADERS,
+    body: JSON.stringify({ workspaceId: "ws_001", name: "r", url: "https://github.com/acme/repo.git" }),
+  });
+  expect(created.status).toBe(201);
+  const { source } = await created.json();
+  const snapshot: SourceSnapshot = {
+    id: "snap_route0000000001", origin: "git", workspaceId: "ws_001", sourceId: source.id,
+    url: source.url, ref: source.defaultRef, resolvedCommit: "a".repeat(40), path: ".",
+    archiveRef: "workspaces/ws_001/sources/" + source.id + "/snapshots/snap_route0000000001/source.tar.zst",
+    archiveDigest: "sha256:" + "b".repeat(64), archiveSizeBytes: 42,
+    fetchedByRunId: "ssr_route0000000001", fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+  const endpoint = "/internal/v1/sources/" + source.id + "/compatibility-check";
+  for (const modulePath of ["\\etc", "\\\\server\\share", "\\"]) {
+    const response = await app.request(endpoint, {
+      method: "POST", headers: HEADERS,
+      body: JSON.stringify({ sourceSnapshotId: snapshot.id, modulePath }),
+    });
+    expect(response.status, modulePath).toBe(400);
+    expect(reads, modulePath).toEqual([]);
+    expect(await store.listRunsByWorkspace("ws_001"), modulePath).toEqual([]);
+  }
+  const relative = await app.request(endpoint, {
+    method: "POST", headers: HEADERS,
+    body: JSON.stringify({ sourceSnapshotId: snapshot.id, modulePath: "./\\deploy\\app" }),
+  });
+  expect(relative.status).toBe(201);
+  expect(reads).toEqual([{ modulePath: "deploy/app", runId: expect.stringMatching(/^ccr_/) }]);
+});
+
 test("source compatibility-check creates and reads a Capsule report", async () => {
   const { app, store } = await makeAppWithStore();
   const created = await app.request("/internal/v1/sources", {

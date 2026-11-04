@@ -440,6 +440,19 @@ function ownedSourceRequest(overrides: Partial<EnsureOwnedSourceRequest> = {}): 
   };
 }
 
+test("ensureOwnedSource rejects absolute backslash paths without storing a Source", async () => {
+  for (const path of ["\\etc", "\\\\server\\share", "\\"]) {
+    const { store, service } = makeService();
+    const request = ownedSourceRequest({ path });
+    await expect(service.ensureOwnedSource(request)).rejects.toMatchObject({ code: "invalid_argument" });
+    expect(await store.getSource(request.id), path).toBeUndefined();
+  }
+  for (const [path, expected] of [["deploy\\app", "deploy/app"], [".\\", "."]]) {
+    const { service } = makeService();
+    expect((await service.ensureOwnedSource(ownedSourceRequest({ path }))).source.defaultPath).toBe(expected);
+  }
+});
+
 test("ensureOwnedSource recovers committed creation after a lost acknowledgement and hides internal provenance", async () => {
   class LostAckSourceStore extends InMemoryOpenTofuControlStore {
     lost = false;
