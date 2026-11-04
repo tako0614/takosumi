@@ -16,6 +16,7 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<readonly InstallConfig[]>>();
+let cacheGeneration = 0;
 
 function cacheKey(
   workspaceId: string | undefined,
@@ -32,6 +33,7 @@ function fresh(
 }
 
 export function clearInstallConfigListCache(workspaceId?: string): void {
+  cacheGeneration++;
   if (!workspaceId) {
     cache.clear();
     inflight.clear();
@@ -69,9 +71,12 @@ export async function listInstallConfigsCached(
   const currentInflight = inflight.get(key);
   if (!options.force && currentInflight) return currentInflight;
 
+  const generation = cacheGeneration;
   const request = listInstallConfigs(workspaceId, { view: options.view })
     .then((installConfigs) => {
-      cache.set(key, { installConfigs, cachedAt: Date.now() });
+      if (generation === cacheGeneration) {
+        cache.set(key, { installConfigs, cachedAt: Date.now() });
+      }
       return installConfigs;
     })
     .finally(() => {

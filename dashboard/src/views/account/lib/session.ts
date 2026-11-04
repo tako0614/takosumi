@@ -32,7 +32,10 @@ import {
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
 import { SESSION_ME } from "./paths.ts";
-import { resetAppOwnershipCache } from "../../../lib/control-api.ts";
+import { resetAppOwnershipCache, type Workspace } from "../../../lib/control-api.ts";
+import { clearNotificationFeeds } from "../../../lib/notifications.ts";
+import { clearCapsuleListCache } from "../../../lib/capsule-list.ts";
+import { clearInstallConfigListCache } from "../../../lib/install-config-list.ts";
 import {
   clearSharedAuthSessionPreflight,
   isKnownSharedAuthRoutePresent,
@@ -88,6 +91,7 @@ let cachedError: SessionError | null = null;
 let cachedAt = 0;
 let initialized = false;
 let inflight: Promise<SessionRecord | null> | null = null;
+let sessionEpoch = 0;
 
 function notify(s: SessionRecord | null): void {
   for (const l of listeners) l(s);
@@ -153,19 +157,36 @@ function isExplicitUnauthenticatedSession(data: unknown): boolean {
 
 interface SessionRefreshOptions {
   /**
-   * The authenticated shell always needs the Workspace switcher. Asking the
-   * dashboard bootstrap for both records lets that first render share one
-   * request with `listWorkspacesCached()` instead of serially fetching a
-   * session-only bootstrap and then the Workspace bootstrap.
+   * Legacy Workspace screens may request their list alongside the session.
+   * The app-owned shell does not depend on that listing.
    */
   readonly includeWorkspaces?: boolean;
   /** Only the first guarded shell read waits for the existing RP health path. */
   readonly initialSharedAuthPreflight?: boolean;
 }
 
+/** The guarded shell's first session read (AuthGuard). */
+export const initialSessionOptions: SessionRefreshOptions = {
+  includeWorkspaces: false,
+  initialSharedAuthPreflight: true,
+};
+
+interface SessionProbeResult {
+  readonly session: SessionRecord | null;
+  readonly workspaces?: readonly Workspace[];
+}
+
+function clearSessionProjections(): void {
+  resetAppOwnershipCache();
+  clearNotificationFeeds();
+  clearWorkspaceListCache();
+  clearCapsuleListCache();
+  clearInstallConfigListCache();
+}
+
 async function fetchSessionMe(
   options: SessionRefreshOptions = {},
-): Promise<SessionRecord | null> {
+): Promise<SessionProbeResult> {
   if (typeof fetch === "undefined") {
     throw new SessionError(
       "error",
@@ -182,7 +203,7 @@ async function fetchSessionMe(
     const sharedAuthRoute = initialHealth?.route ??
       (isKnownSharedAuthRoutePresent() ? "present" : "absent");
     // The health result grants nothing. Canonical bootstrap must still
-    // authenticate the Cookie and authorize the Workspace list.
+    // authenticate the Cookie (and authorize any explicitly requested list).
     const data = options.includeWorkspaces
       ? await fetchDashboardWorkspaceBootstrap({
         initialHealthTicket: initialHealth?.ticket,
@@ -192,13 +213,10 @@ async function fetchSessionMe(
       });
     if (!data) {
       // A present Hosted RP never falls back to a second account-session
-      // projection when canonical Workspace bootstrap denied the request.
-      return sharedAuthRoute === "present"
+      // projection when canonical bootstrap denied the request.
+      return { session: sharedAuthRoute === "present"
         ? null
-        : await fetchAccountSessionMe();
-    }
-    if (Array.isArray(data.workspaces)) {
-      primeWorkspaceListCache(data.workspaces);
+        : await fetchAccountSessionMe() };
     }
     const session = pickResponseRecord(data);
     if (!session) {
@@ -210,7 +228,7 @@ async function fetchSessionMe(
         "Dashboard bootstrap response did not contain a session.",
       );
     }
-    return session;
+    return { session, ...(Array.isArray(data.workspaces) ? { workspaces: data.workspaces } : {}) };
   } catch (error) {
     if (error instanceof SharedAuthSessionPreflightError) {
       const details = dashboardResponseErrorDetails(
@@ -341,16 +359,20 @@ export function refreshSession(
   options: SessionRefreshOptions = {},
 ): Promise<SessionRecord | null> {
   if (inflight) return inflight;
+  const epoch = sessionEpoch;
   const request = fetchSessionMe(options)
-    .then((s) => {
+    .then(({ session: s, workspaces }) => {
+      if (epoch !== sessionEpoch) return null;
       if (!s || cachedSession?.subject !== s.subject || cachedSession?.primaryAccountId !== s.primaryAccountId) {
-        resetAppOwnershipCache();
+        clearSessionProjections();
       }
       cachedSession = s;
       cachedError = null;
       cachedAt = Date.now();
       initialized = true;
-      if (!s) clearWorkspaceListCache();
+      // Prime only the new authenticated identity's projection, after clearing
+      // the previous identity. Preserve the legacy combined bootstrap sharing.
+      if (s && workspaces) primeWorkspaceListCache(workspaces);
       notify(s);
       notifyState(
         s ? { kind: "authenticated", session: s } : { kind: "unauthenticated" },
@@ -358,7 +380,8 @@ export function refreshSession(
       return s;
     })
     .catch((error) => {
-      resetAppOwnershipCache();
+      if (epoch !== sessionEpoch) return null;
+      clearSessionProjections();
       const typed =
         error instanceof SessionError ? error : sessionErrorFromUnknown(error);
       cachedSession = null;
@@ -430,7 +453,7 @@ export function readSessionState(
     cachedSession.expiresAt > 0 &&
     cachedSession.expiresAt < Date.now()
   ) {
-    resetAppOwnershipCache();
+    clearSessionProjections();
     cachedSession = null;
   }
   // Preserve the cache-first contract while a stale authenticated session is
@@ -471,13 +494,16 @@ export function writeSession(_s: SessionRecord): void {
  * empty auto-created personal one — which reads as "signed in as someone else".
  */
 export function clearSession(): void {
-  resetAppOwnershipCache();
+  // A completed old probe cannot restore the just-cleared session, and a
+  // later login must not share that old request.
+  sessionEpoch++;
+  inflight = null;
+  clearSessionProjections();
   clearSharedAuthSessionPreflight();
   cachedSession = null;
   cachedError = null;
   cachedAt = Date.now();
   initialized = true;
-  clearWorkspaceListCache();
   notify(null);
   notifyState({ kind: "unauthenticated" });
   if (typeof fetch !== "undefined") {

@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "@solidjs/router";
 import {
+  createMemo,
   createSignal,
   type JSX,
   Match,
@@ -9,6 +10,7 @@ import {
   Switch,
 } from "solid-js";
 import {
+  initialSessionOptions,
   onSessionStateChange,
   readSessionState,
   refreshSessionState,
@@ -25,10 +27,6 @@ interface Props {
 }
 
 type AuthState = Exclude<SessionState["kind"], "loading"> | "loading";
-const initialSessionOptions = {
-  includeWorkspaces: true,
-  initialSharedAuthPreflight: true,
-} as const;
 
 /**
  * Wraps an account screen that requires a signed-in account-plane session.
@@ -46,13 +44,16 @@ export default function AuthGuard(props: Props) {
   // Cache-first: the session is held module-side and survives navigation, so a
   // page change that already has a known session renders instantly instead of
   // re-probing /session/me and flashing a full-screen spinner every time.
-  // The authenticated shell always mounts a Workspace switcher. Prime the
-  // session and Workspace list through the same bootstrap request so the
-  // first useful screen does not wait on two serial API roundtrips.
+  // App-owned screens need only the session. Legacy Workspace screens fetch
+  // their own list without making it a prerequisite for signing in.
   const cached = readSessionState(initialSessionOptions);
   const [session, setSession] = createSignal<SessionRecord | null>(
     cached.kind === "authenticated" ? cached.session : null,
   );
+  const sessionOwner = createMemo(() => {
+    const current = session();
+    return current ? JSON.stringify([current.subject, current.primaryAccountId ?? null]) : undefined;
+  });
   const [state, setState] = createSignal<AuthState>(
     cached.kind === "authenticated" ? "authenticated" : cached.kind,
   );
@@ -172,7 +173,7 @@ export default function AuthGuard(props: Props) {
         </main>
       </Match>
       <Match when={state() === "authenticated" && session()}>
-        {(s) => props.children(s())}
+        {(s) => <Show when={sessionOwner()} keyed>{(_owner) => props.children(s())}</Show>}
       </Match>
     </Switch>
   );

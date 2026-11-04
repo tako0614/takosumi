@@ -165,6 +165,14 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
     return json({ error: "intentional_fixture_failure" }, 404);
   }
   if (path === "/api/v1/workspaces") return json(workspacesResponse());
+  if (path === "/api/v1/ui-surfaces") {
+    const capsuleId = url.searchParams.get("capsuleId");
+    const apps = new Set(PORTABLE_APPS.map((app) => app.capsuleId));
+    return json({ interfaces: Object.values(PORTABLE_UI_SURFACES).flat().filter((surface) =>
+      apps.has(surface.metadata.ownerRef.id) &&
+      (capsuleId === null || surface.metadata.ownerRef.id === capsuleId)
+    ) });
+  }
 
   const workspaceMatch = path.match(/^\/api\/v1\/workspaces\/([^/]+)(?:\/(.*))?$/u);
   if (workspaceMatch) {
@@ -200,12 +208,13 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
 
   // One installed app: its record, the control plane's view of it and its
   // own Runs. Cases that need other states stub these per test.
-  const capsuleMatch = path.match(/^\/api\/v1\/capsules\/([^/]+)(?:\/(app|runs))?$/u);
+  const capsuleMatch = path.match(/^\/api\/v1\/capsules\/([^/]+)(?:\/(app|runs|activity))?$/u);
   if (capsuleMatch && request.method === "GET") {
     const capsule = portableCapsule(decodeURIComponent(capsuleMatch[1] ?? ""));
     if (!capsule) return json({ error: "not_found" }, 404);
     if (capsuleMatch[2] === "app") return json({ app: portableCapsuleApp(capsule) });
     if (capsuleMatch[2] === "runs") return json({ runs: portableCapsuleRuns(capsule) });
+    if (capsuleMatch[2] === "activity") return json(activityResponse());
     return json({
       capsule,
       installConfigReAdoption: { authorityGuard: PORTABLE_AUTHORITY_GUARD },

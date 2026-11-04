@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   clearSession,
+  initialSessionOptions,
+  onSessionStateChange,
   readSession,
   readSessionState,
   refreshSession,
@@ -66,6 +68,84 @@ describe("dashboard session bootstrap", () => {
       session: { subject: "tsub_canonical" },
     });
     expect(calls).toEqual([hostedSessionPath, workspaceBootstrapPath]);
+  });
+
+  test("the guarded shell authenticates without reading the legacy Workspace list", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === hostedSessionPath) {
+        return Response.json({ authenticated: true });
+      }
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return Response.json({ session: { subject: "tsub_app_owner" } });
+      }
+      // A broken legacy listing must not prevent opening the app-owned shell.
+      return Response.json({ error: "workspace_listing_unavailable" }, { status: 503 });
+    }) as typeof fetch;
+
+    const [first, mounted] = await Promise.all([
+      refreshSessionState(initialSessionOptions),
+      refreshSessionState(initialSessionOptions),
+    ]);
+    expect(first).toMatchObject({
+      kind: "authenticated", session: { subject: "tsub_app_owner" },
+    });
+    expect(mounted).toEqual(first);
+    expect(calls).toEqual([
+      hostedSessionPath,
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    ]);
+  });
+
+  test("the guarded shell still rejects a revoked canonical session after healthy RP status", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === hostedSessionPath) return Response.json({ authenticated: true });
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return new Response(null, { status: 401 });
+      }
+      return Response.json({ session: { subject: "tsub_stale_fallback" } });
+    }) as typeof fetch;
+
+    expect(await refreshSessionState(initialSessionOptions)).toEqual({ kind: "unauthenticated" });
+    expect(calls).toEqual([
+      hostedSessionPath,
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    ]);
+  });
+
+  test("the guarded shell preserves a session-only bootstrap failure and can retry", async () => {
+    const calls: string[] = [];
+    let recovered = false;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === hostedSessionPath) return Response.json({ authenticated: true });
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return recovered
+          ? Response.json({ session: { subject: "tsub_recovered" } })
+          : Response.json({ error: { code: "schema_maintenance" } }, { status: 503 });
+      }
+      return Response.json({ session: { subject: "tsub_stale_fallback" } });
+    }) as typeof fetch;
+
+    expect(await refreshSessionState(initialSessionOptions)).toMatchObject({
+      kind: "maintenance", error: { status: 503, code: "schema_maintenance" },
+    });
+    recovered = true;
+    expect(await refreshSessionState(initialSessionOptions)).toMatchObject({
+      kind: "authenticated", session: { subject: "tsub_recovered" },
+    });
+    expect(calls).toEqual([
+      hostedSessionPath,
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+      hostedSessionPath,
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    ]);
   });
 
   test("an absent Hosted route preserves the ordinary Workspace bootstrap", async () => {
@@ -631,6 +711,40 @@ describe("dashboard session bootstrap", () => {
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
     ]);
   });
+  test("a session probe started before sign-out cannot authenticate the shell afterwards", async () => {
+    let release!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { release = resolve; });
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "DELETE" ? new Response(null, { status: 204 }) : pending
+    ) as typeof fetch;
+    const states: string[] = [];
+    const off = onSessionStateChange((state) => states.push(state.kind));
+    try {
+      const stale = refreshSession();
+      clearSession();
+      release(Response.json({ session: { subject: "signed-out-account" } }));
+      expect(await stale).toBeNull();
+      expect(readSessionState()).toEqual({ kind: "unauthenticated" });
+      expect(states).toEqual(["unauthenticated"]);
+    } finally { off(); }
+  });
+
+  test("an old failed probe cannot clear the next account's authenticated session", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<Response>((_resolve, fail) => { reject = fail; });
+    let reads = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return ++reads === 1 ? pending : Response.json({ session: { subject: "next-account" } });
+    }) as typeof fetch;
+    const stale = refreshSession();
+    clearSession();
+    expect(await refreshSession()).toMatchObject({ subject: "next-account" });
+    reject(new Error("old request failed"));
+    expect(await stale).toBeNull();
+    expect(readSessionState()).toMatchObject({ kind: "authenticated", session: { subject: "next-account" } });
+  });
+
   test("app ownership cache survives same-account refresh and resets on account change and sign-out", async () => {
     let subject = "account-a";
     let appReads = 0;

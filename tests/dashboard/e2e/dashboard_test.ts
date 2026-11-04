@@ -34,6 +34,8 @@ import { registerInstallAuthReturnCase } from "./install_auth_return_case.ts";
 import { registerNavigationAccountCases } from "./navigation_account_case.ts";
 import { registerAppSharingCases } from "./app_sharing_case.ts";
 import { registerInstallReopenCases } from "./install_reopen_case.ts";
+import { registerRunDetailCases } from "./run_detail_case.ts";
+import { registerSessionIdentityCases } from "./session_identity_case.ts";
 
 type Expectations = {
   readonly appName: string;
@@ -50,6 +52,8 @@ const mode: DashboardE2EMode = rawMode;
 registerInstallAuthReturnCase(mode);
 registerNavigationAccountCases(mode);
 registerAppSharingCases(mode);
+registerRunDetailCases(mode);
+registerSessionIdentityCases(mode);
 
 const expectedWorkerVersionId =
   mode === "live" || mode === "public-live"
@@ -598,7 +602,7 @@ async function startReadinessBrowserFixture(
       readinessRequests.push(`${request.method()} ${path}`);
       return onReadinessRead(route);
     }
-    if (path === "/api/v1/workspaces/ws_alpha/activity") {
+    if (path === "/api/v1/workspaces/ws_alpha/activity" || path === "/api/v1/capsules/cap_provider_destination_e2e/activity") {
       if (onActivityRead) {
         return onActivityRead(route);
       }
@@ -1033,7 +1037,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           createdAt: "2026-08-01T00:00:00.000Z",
         }] } });
       }
-      if (path === "/api/v1/workspaces/ws_alpha/activity") {
+      if (path === "/api/v1/workspaces/ws_alpha/activity" || path === "/api/v1/capsules/cap_provider_destination_e2e/activity") {
         return route.fulfill({ json: { events: [{
           id: "activity_provider_activation_e2e", workspaceId: "ws_alpha",
           action: activationAction, targetType: "Capsule", targetId: "cap_provider_destination_e2e",
@@ -1054,7 +1058,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           observedAt: "2026-08-01T00:00:00.000Z",
         } } });
       }
-      if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces") {
+      if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces" || path === "/api/v1/ui-surfaces") {
         return route.fulfill({ json: { interfaces: [{
           apiVersion: "takosumi.dev/v1alpha1", kind: "Interface",
           metadata: {
@@ -1263,7 +1267,7 @@ test.describe("Takosumi dashboard browser surface", () => {
             body: "",
           });
         }
-        if (path === "/api/v1/workspaces/ws_alpha/runs") {
+        if (path === "/api/v1/workspaces/ws_alpha/runs" || path === `/api/v1/capsules/${capsuleId}/runs`) {
           return route.fulfill({ json: { runs: [] } });
         }
         return route.fallback();
@@ -1306,6 +1310,25 @@ test.describe("Takosumi dashboard browser surface", () => {
   }) => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
+    const legacyReads: string[] = [];
+    if (mode === "portable") {
+      await page.route("**/api/v1/**", async (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname === "/api/v1/dashboard/bootstrap" &&
+            url.searchParams.get("includeWorkspaces") === "false") {
+          const response = await route.fetch();
+          const { session } = await response.json();
+          return route.fulfill({ response, json: { session } });
+        }
+        if (url.pathname.startsWith("/api/v1/workspaces") ||
+            (url.pathname === "/api/v1/dashboard/bootstrap" &&
+             url.searchParams.get("includeWorkspaces") !== "false")) {
+          legacyReads.push(url.pathname + url.search);
+          return route.fulfill({ status: 503, json: { error: "workspace_listing_unavailable" } });
+        }
+        return route.continue();
+      });
+    }
     const ordinaryPreflight = mode === "portable"
       ? page.waitForResponse((response) => {
           const url = new URL(response.url());
@@ -1330,10 +1353,12 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect(await response.json()).toEqual({ error: "not_found" });
     }
     await expect((await bootstrap).status()).toBe(200);
+    expect(new URL((await bootstrap).url()).searchParams.get("includeWorkspaces")).toBe("false");
     const home = page.getByTestId("home-apps");
     await expect(home.getByTestId("home-app").filter({ hasText: expectations.appName }).first()).toBeVisible();
     await expect(home.getByTestId("home-app").filter({ hasText: "Beta Office" }).first()).toBeVisible();
     await expect(page.locator('[data-testid="workspace-switcher"]')).toHaveCount(0);
+    expect(legacyReads).toEqual([]);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1736,6 +1761,98 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect.poll(() => failedListReads).toBeGreaterThanOrEqual(1);
     await expect(page.getByRole("button", { name: /再試行|Retry/u })).toBeVisible();
     await expect(page.locator("body")).not.toContainText(/workspace switcher|スペース切り替え/iu);
+    await assertNoPageErrors(errors);
+  });
+
+  test("app notifications and the bell work without any Workspace listing", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic app notification fixture only");
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const legacyReads: string[] = [];
+    await page.route("**/api/v1/**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/v1/dashboard/bootstrap" &&
+          url.searchParams.get("includeWorkspaces") === "false") {
+        const response = await route.fetch();
+        const { session } = await response.json();
+        return route.fulfill({ response, json: {
+          session,
+          ...(url.searchParams.get("includeNotifications") === "true" ? {
+            notifications: [{ workspaceHandle: "internal-partition", event: {
+              id: "event_app_failure", workspaceId: "internal-partition",
+              action: "run.failed", targetType: "run", targetId: "run_app_failure",
+              metadata: { capsuleId: "app_shared", capsuleName: "Shared Office" },
+              createdAt: "2026-11-04T00:00:00Z",
+            } }],
+          } : {}),
+        } });
+      }
+      if (url.pathname.startsWith("/api/v1/workspaces") ||
+          url.pathname === "/api/v1/dashboard/bootstrap") {
+        legacyReads.push(url.pathname + url.search);
+        return route.fulfill({ status: 503, json: { error: "workspace_listing_unavailable" } });
+      }
+      return route.continue();
+    });
+    await gotoDashboardDocument(page, "/notifications");
+    await expect(page.locator(".wc-notif-list")).toContainText("Shared Office");
+    await expect(page.locator(".wc-notif-list a")).toHaveAttribute("href", "/runs/run_app_failure");
+    await expect(page.locator(".topbar-badge")).toHaveText("1");
+    await expect(page.locator("body")).not.toContainText("internal-partition");
+    expect(legacyReads).toEqual([]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("legacy notifications keep the selected Workspace and bell count", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic legacy notification fixture only");
+    const errors = pageErrors(page);
+    const selectedReads: string[] = [];
+    await page.addInitScript(() => localStorage.setItem("takosumi.currentWorkspaceId", "ws_beta"));
+    const entries = ["ws_alpha", "ws_beta"].map((workspaceId) => ({
+      workspaceHandle: workspaceId,
+      event: {
+        id: `event_${workspaceId}`, workspaceId,
+        action: "run.failed", targetType: "run", targetId: `run_${workspaceId}`,
+        metadata: { capsuleId: `app_${workspaceId}`, capsuleName: workspaceId },
+        createdAt: "2026-11-04T00:00:00Z",
+      },
+    }));
+    await page.route("**/api/v1/**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/v1/apps") {
+        return route.fulfill({ status: 404, json: { error: "not_found" } });
+      }
+      if (url.pathname === "/api/v1/dashboard/bootstrap" &&
+          url.searchParams.get("includeNotifications") === "true") {
+        selectedReads.push(url.searchParams.get("workspaceId") ?? "");
+        return route.fulfill({ json: { notifications: entries } });
+      }
+      if (url.pathname === "/api/v1/workspaces/ws_beta/activity") {
+        return route.fulfill({ json: { events: [entries[1]!.event] } });
+      }
+      return route.continue();
+    });
+    await gotoDashboardDocument(page, "/notifications");
+    await expect(page.locator(".wc-notif-list li")).toHaveCount(2);
+    await expect(page.locator(".wc-notif-summary")).toContainText("1");
+    await expect(page.locator(".topbar-badge")).toHaveText("1");
+    expect(selectedReads).toContain("ws_beta");
+    await assertNoPageErrors(errors);
+  });
+
+  test("notifications retry a failed app capability read without leaving the page", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic capability failure fixture only");
+    const errors = pageErrors(page);
+    let reads = 0;
+    await page.route("**/api/v1/apps**", async (route) => {
+      if (++reads === 1) return route.fulfill({ status: 503, json: { error: "capability_unavailable" } });
+      return route.continue();
+    });
+    await gotoDashboardDocument(page, "/notifications");
+    await expect(page.getByRole("button", { name: /再試行|Retry/u })).toBeVisible();
+    await page.getByRole("button", { name: /再試行|Retry/u }).click();
+    await expect(page.getByRole("main").getByRole("link", { name: /^(Find apps in the store|ストアでアプリを探す)$/u })).toBeVisible();
     await assertNoPageErrors(errors);
   });
 

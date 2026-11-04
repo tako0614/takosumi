@@ -45,11 +45,11 @@ import {
   getRunCostInfo,
   getRunLogs,
   getSource,
-  listActivity,
+  listCapsuleActivity,
   listStateVersions,
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
-  listRuns,
+  listRecentCapsuleRuns,
   openRunStream,
   type ProviderConnection,
   type ProviderResolution,
@@ -571,13 +571,13 @@ function Inner() {
   const [activity, { refetch: refetchActivity }] = createResource(
     () => {
       const r = runLatest();
-      if (!r?.workspaceId) return null;
+      if (!r?.capsuleId) return null;
       const isCompletedApply =
         (r.type === "apply" || r.type === "destroy_apply") &&
         r.status === "succeeded";
-      return isCompletedApply ? r.workspaceId : null;
+      return isCompletedApply ? r.capsuleId : null;
     },
-    (id) => listActivity(id, 100),
+    (id) => listCapsuleActivity(id, 100),
   );
   // The owning app, for the plain-language summary sentence + back link.
   const capsuleId = () => runLatest()?.capsuleId ?? null;
@@ -901,25 +901,23 @@ function Inner() {
   // Whether this plan's deploy approval is still OPEN is not a run-local
   // fact: an apply / destroy_apply explicitly linked by planRunId consumes it
   // (the run history's semantics, shared via lib/run-approval.ts). Read the
-  // newest slice of the Workspace Run ledger whenever this run COULD await a
+  // newest slice of the app's Run ledger whenever this run COULD await a
   // deploy — an already-applied plan opened from history must not present
   // 承認待ち + an active デプロイを実行 CTA again.
-  const [siblingRuns] = createResource(
+  const [siblingRuns, { refetch: refetchSiblingRuns }] = createResource(
     () => {
       if (run.error) return null;
       const r = runLatest();
-      if (!r || !isDeployApprovalCandidate(r)) return null;
+      if (!r?.capsuleId || !isDeployApprovalCandidate(r)) return null;
       // Key by run id so navigating plan → apply → back re-reads the ledger.
-      return [r.workspaceId, r.id] as const;
+      return [r.capsuleId, r.id] as const;
     },
-    ([workspaceId]) => listRuns(workspaceId, SIBLING_RUNS_LIMIT),
+    ([capsuleId]) => listRecentCapsuleRuns(capsuleId, SIBLING_RUNS_LIMIT),
   );
   const isDeployableRun = (r: Run): boolean => {
     if (!isDeployApprovalCandidate(r) || applied()) return false;
-    // Ledger read failed: fall back to run-local facts rather than
-    // permanently hiding the deploy button on a transient error — the backend
-    // re-verifies the plan digest and base state generation on apply anyway.
-    if (siblingRuns.error) return true;
+    // A failed or unfinished history read cannot prove approval is still open.
+    if (siblingRuns.error || siblingRuns.loading) return false;
     const siblings = siblingRuns.latest;
     // Still loading: stay conservative — don't claim an open approval yet.
     if (siblings === undefined) return false;
@@ -932,7 +930,7 @@ function Inner() {
   // no button.
   const deployApprovalConsumed = (r: Run): boolean => {
     if (!isDeployApprovalCandidate(r) || applied()) return false;
-    if (siblingRuns.error) return false;
+    if (siblingRuns.error || siblingRuns.loading) return false;
     const siblings = siblingRuns.latest;
     if (siblings === undefined) return false;
     return !awaitsDeployApproval(r, siblings);
@@ -945,7 +943,7 @@ function Inner() {
     isDeployApprovalCandidate(r) &&
     !applied() &&
     !siblingRuns.error &&
-    siblingRuns.latest === undefined;
+    (siblingRuns.loading || siblingRuns.latest === undefined);
   // A succeeded review run whose policy did NOT pass: it never becomes
   // deployable, so it must still offer a way forward (re-plan) instead of
   // dead-ending on the "blocked" line.
@@ -992,9 +990,9 @@ function Inner() {
         timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
       });
     } catch (error) {
-      if (currentRun && isRequestTimeout(error)) {
+      if (currentRun?.capsuleId && isRequestTimeout(error)) {
         const recovered = latestApplyRunForPlan(
-          await listRuns(currentRun.workspaceId, 30),
+          await listRecentCapsuleRuns(currentRun.capsuleId, 30),
           currentRun,
         );
         if (recovered) {
@@ -1324,6 +1322,9 @@ function Inner() {
           // The sibling ledger says a later apply already consumed this
           // plan's approval (e.g. opened from history) — settle the summary
           // instead of claiming the deploy is still waiting to be run.
+          if (siblingRuns.error) {
+            return { kind: "error", text: t("run.summary.approvalUnavailable") };
+          }
           if (deployApprovalConsumed(r)) {
             return { kind: "ok", text: t("run.summary.alreadyApplied") };
           }
@@ -1641,6 +1642,11 @@ function Inner() {
                         </div>
                       </div>
                     )}
+                  </Show>
+                  <Show when={isDeployApprovalCandidate(r()) && siblingRuns.error}>
+                    <Button variant="secondary" type="button" onClick={() => void refetchSiblingRuns()}>
+                      {t("common.retry")}
+                    </Button>
                   </Show>
                   {/* Why a policy stopped this plan or made it wait for an
                       approval: structured codes, never the recorded prose. */}

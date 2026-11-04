@@ -1,7 +1,7 @@
 /**
  * Notifications (`/notifications`) — the plain-language feed for the signed-in
- * person, aggregated across a bounded recent set of active workspaces plus the
- * current one. Each entry links to where it can be acted on: the app's page,
+ * person, aggregated across their apps. Legacy hosts retain their selected
+ * Workspace feed. Each entry links to where it can be acted on: the app's page,
  * the run, or 接続.
  *
  * Honesty contract: every sentence renders ONLY values the backend already
@@ -14,7 +14,7 @@ import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { A } from "@solidjs/router";
 import { AlertTriangle, Bell } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
-import type { ActivityEvent, ControlApiError } from "../../lib/control-api.ts";
+import { appOwnershipAvailable, type ActivityEvent, type ControlApiError } from "../../lib/control-api.ts";
 import {
   acknowledgeNotifications,
   attentionCount,
@@ -116,20 +116,24 @@ export default function NotificationsView() {
         // entries the badge already counted. The 要対応 banner and the bell
         // badge derive the SAME count from this feed (attentionCount, scoped to
         // the current Workspace).
-        const [refreshed] = createResource(() =>
-          refreshNotificationFeed({
-            force: true,
-            selectedWorkspaceId: currentWorkspaceId() || undefined,
-          }),
+        const [personalApps, { refetch: refetchAppOwnership }] = createResource(() => appOwnershipAvailable());
+        const legacyNotifications = () => !personalApps.error && personalApps() === false;
+        const selectedWorkspaceId = () =>
+          legacyNotifications() ? currentWorkspaceId() || undefined : undefined;
+        const [refreshed] = createResource(
+          () => !personalApps.error && personalApps() !== undefined
+            ? { selectedWorkspaceId: selectedWorkspaceId() }
+            : null,
+          (scope) => refreshNotificationFeed({ force: true, ...scope }),
         );
         const feed = () => notificationFeed();
         const serviceNameFor = (event: ActivityEvent): string | undefined =>
           activityServiceName(event);
         // Entries carry the Workspace handle (or id); people know their
         // Workspaces by display name. The list is the shell's cached copy.
-        const [workspaces] = createResource(() => listWorkspacesCached());
+        const [workspaces] = createResource(legacyNotifications, () => listWorkspacesCached());
         const multipleWorkspaces = () =>
-          (readyOrUndefined(workspaces) ?? []).length >= 2;
+          legacyNotifications() && (readyOrUndefined(workspaces) ?? []).length >= 2;
         const workspaceNameFor = (entry: FeedEntry): string => {
           const workspace = (readyOrUndefined(workspaces) ?? []).find(
             (item) => item.id === entry.event.workspaceId,
@@ -141,13 +145,13 @@ export default function NotificationsView() {
         // Skeleton / error only before the FIRST snapshot exists; afterwards a
         // failed background refresh silently keeps the last-known entries
         // (mirrors the TopBar badge's behaviour).
-        const loading = () => feed() === undefined && refreshed.loading;
+        const loading = () => feed() === undefined && (personalApps.loading || refreshed.loading);
         const error = () =>
           feed() === undefined
-            ? (refreshed.error as ControlApiError | undefined)
+            ? ((personalApps.error ?? refreshed.error) as ControlApiError | undefined)
             : undefined;
         const failureCount = () =>
-          attentionCount(feed(), currentWorkspaceId() || undefined);
+          attentionCount(feed(), selectedWorkspaceId());
         const openFailures = createMemo(() => attentionEvents(feed()));
 
         return (
@@ -181,7 +185,9 @@ export default function NotificationsView() {
                     size="sm"
                     type="button"
                     onClick={() =>
-                      void refreshNotificationFeed({ force: true })
+                      personalApps.error
+                        ? void refetchAppOwnership()
+                        : void refreshNotificationFeed({ force: true, selectedWorkspaceId: selectedWorkspaceId() })
                     }
                   >
                     {t("common.retry")}

@@ -54,15 +54,15 @@ describe("RunView", () => {
     // An already-applied plan opened from history must not present 承認待ち +
     // an active デプロイを実行 CTA: the run list's semantics (any apply /
     // an explicitly linked destroy_apply consumes the approval) are shared via
-    // lib/run-approval.ts, and RunView feeds it the Workspace Run ledger.
+    // lib/run-approval.ts, and RunView feeds it the app's Run ledger.
     expect(source).toContain('from "../../lib/run-approval.ts"');
     expect(source).toContain("isDeployApprovalCandidate");
     expect(source).toContain("awaitsDeployApproval(r, siblings)");
-    expect(source).toContain("listRuns(workspaceId, SIBLING_RUNS_LIMIT)");
-    // While the ledger read is loading, no CTA (conservative); a FAILED read
-    // falls back to run-local facts instead of hiding the button forever.
+    expect(source).toContain("listRecentCapsuleRuns(capsuleId, SIBLING_RUNS_LIMIT)");
+    // A failed or unfinished ledger cannot prove approval is still open.
     expect(source).toContain("if (siblings === undefined) return false;");
-    expect(source).toContain("if (siblingRuns.error) return true;");
+    expect(source).toContain("if (siblingRuns.error || siblingRuns.loading) return false;");
+    expect(source).toContain("refetchSiblingRuns()");
     // A consumed approval settles the summary instead of claiming "ready".
     expect(source).toContain("deployApprovalConsumed(r)");
     expect(source).toContain('t("run.summary.alreadyApplied")');
