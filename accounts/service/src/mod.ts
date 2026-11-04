@@ -1446,6 +1446,15 @@ export function createNotificationPusherRateLimiter(): NotificationPusherRateLim
 }
 
 /**
+ * The per-source limiter on Takosumi Mobile's code exchange on a
+ * shared-account product host (10 per minute). A person signs in rarely;
+ * each attempt costs the private RP an issuer round trip.
+ */
+export function createSharedAccountMobileExchangeRateLimiter(): NotificationPusherRateLimiter {
+  return createInMemoryRateLimiter(10);
+}
+
+/**
  * Create a simple in-isolate per-IP sliding-window rate limiter.
  *
  * Budget enforcement is best-effort: state lives only in the current
