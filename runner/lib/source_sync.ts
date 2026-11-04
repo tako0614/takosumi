@@ -28,6 +28,7 @@ import {
   RUN_ROOT,
   CAPSULE_COMPATIBILITY_MAX_FILE_BYTES,
   DEFAULT_SOURCE_ARCHIVE_MAX_BYTES,
+  DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
   SOURCE_CREDENTIAL_ENV_NAMES,
 } from "./constants.ts";
 import {
@@ -92,6 +93,10 @@ const SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_GITLINK =
   "source snapshot contains unsupported tracked gitlink";
 const SOURCE_SNAPSHOT_TREE_METADATA_SCAN_FAILED =
   "source snapshot tree metadata scan failed";
+const SOURCE_SNAPSHOT_EXPANDED_BUDGET_EXCEEDED =
+  "source snapshot exceeds decompressed byte limit";
+const SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED =
+  "source snapshot archive failed restore safety validation";
 
 /** Stable machine reason for a Git selector that resolved to no commit. */
 export const SOURCE_REF_NOT_FOUND_CODE = "source_ref_not_found" as const;
@@ -384,6 +389,11 @@ export async function runSourceSync(
   const maxArchiveBytes =
     positiveIntegerLimitFromProfile(runnerProfile, "maxSourceArchiveBytes") ??
     DEFAULT_SOURCE_ARCHIVE_MAX_BYTES;
+  const maxDecompressedBytes = Math.min(
+    positiveIntegerLimitFromProfile(runnerProfile, "maxSourceDecompressedBytes") ??
+      DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
+    DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
+  );
 
   const workspace = workspaceForRun(runId);
   await rm(workspace.root, { recursive: true, force: true });
@@ -456,7 +466,9 @@ export async function runSourceSync(
         }),
     );
     if (reuseSnapshot?.resolvedCommit === resolvedCommit) {
-      await timer.measure("source_snapshot_reuse", async () => undefined);
+      await timer.measure("source_snapshot_reuse", () =>
+        assertArchiveTreeFitsBudget(subtree, maxDecompressedBytes, gitContext.context.signal),
+      );
       return withPhaseTimings(
         {
           runId,
@@ -484,7 +496,7 @@ export async function runSourceSync(
     }
     const archivePath = sourceArchivePath(workspace);
     await timer.measure("source_archive", () =>
-      createDeterministicArchive(subtree, archivePath, gitContext),
+      createDeterministicArchive(subtree, archivePath, gitContext, maxDecompressedBytes),
     );
     const archiveBytes = await timer.measure("source_archive_read", () =>
       readFile(archivePath),
@@ -1120,15 +1132,21 @@ export async function assertTrackedSourceSnapshotArchiveable(input: {
 /**
  * Keep the archive format aligned with the restore validator even when this
  * helper is called outside `runSourceSync`: a source archive may contain only
- * regular files and directories, never a symlink entry.
+ * regular files and directories, never a symlink entry. Count their apparent
+ * bytes against the same expanded-size ceiling used before archive restore.
  */
-async function assertArchiveTreeHasNoSymlinks(
+async function assertArchiveTreeFitsBudget(
   directory: string,
-): Promise<void> {
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<number> {
+  signal?.throwIfAborted();
   if ((await lstat(directory)).isSymbolicLink()) {
     throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK);
   }
+  let bytes = 0;
   for (const entry of await readdir(directory, { withFileTypes: true })) {
+    signal?.throwIfAborted();
     // `.git` is excluded by the tar invocation and is not part of the source
     // snapshot payload. Do not inspect it or let its internal metadata affect
     // archive eligibility.
@@ -1137,9 +1155,18 @@ async function assertArchiveTreeHasNoSymlinks(
       throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK);
     }
     if (entry.isDirectory()) {
-      await assertArchiveTreeHasNoSymlinks(join(directory, entry.name));
+      bytes += await assertArchiveTreeFitsBudget(join(directory, entry.name), maxBytes - bytes, signal);
+    } else if (entry.isFile()) {
+      const file = await lstat(join(directory, entry.name));
+      if (!file.isFile()) throw new Error(SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED);
+      if (file.size > maxBytes - bytes) throw new Error(SOURCE_SNAPSHOT_EXPANDED_BUDGET_EXCEEDED);
+      bytes += file.size;
+    } else {
+      throw new Error(SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED);
     }
   }
+  signal?.throwIfAborted();
+  return bytes;
 }
 
 // Build a deterministic tar of the subtree (sorted entries, numeric owners,
@@ -1149,39 +1176,60 @@ export async function createDeterministicArchive(
   subtree: string,
   archivePath: string,
   git: SourceGitContext,
+  maxDecompressedBytes = DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
 ): Promise<void> {
-  await assertArchiveTreeHasNoSymlinks(subtree);
-  await runRequiredCommand(
-    [
-      "tar",
-      "--sort=name",
-      "--numeric-owner",
-      "--owner=0",
-      "--group=0",
-      "--mtime=@0",
-      "--exclude=.git",
-      "--format=gnu",
-      "-C",
-      subtree,
-      "-cf",
-      `${archivePath}.tar`,
-      ".",
-    ],
-    { cwd: RUN_ROOT, context: git.context },
-  );
-  await runRequiredCommand(
-    [
-      "zstd",
-      "-q",
-      `-${sourceArchiveZstdLevel()}`,
-      "-f",
-      "-o",
-      archivePath,
-      `${archivePath}.tar`,
-    ],
-    { cwd: RUN_ROOT, context: git.context },
-  );
-  await rm(`${archivePath}.tar`, { force: true });
+  const expandedLimit = Math.min(maxDecompressedBytes, DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES);
+  if (!Number.isSafeInteger(expandedLimit) || expandedLimit < 1) {
+    throw new Error(SOURCE_SNAPSHOT_EXPANDED_BUDGET_EXCEEDED);
+  }
+  await assertArchiveTreeFitsBudget(subtree, expandedLimit, git.context.signal);
+  try {
+    await runRequiredCommand(
+      [
+        "tar",
+        "--sort=name",
+        "--numeric-owner",
+        "--owner=0",
+        "--group=0",
+        "--mtime=@0",
+        "--exclude=.git",
+        "--format=gnu",
+        "-C",
+        subtree,
+        "-cf",
+        `${archivePath}.tar`,
+        ".",
+      ],
+      { cwd: RUN_ROOT, context: git.context },
+    );
+    await runRequiredCommand(
+      [
+        "zstd",
+        "-q",
+        `-${sourceArchiveZstdLevel()}`,
+        "-f",
+        "-o",
+        archivePath,
+        `${archivePath}.tar`,
+      ],
+      { cwd: RUN_ROOT, context: git.context },
+    );
+    try {
+      await assertSafeZstdTarArchive(archivePath, {
+        env: baseCommandEnv(),
+        ...(git.context.signal ? { signal: git.context.signal } : {}),
+        sourceArchiveMaxDecompressedBytes: expandedLimit,
+      });
+    } catch {
+      git.context.signal?.throwIfAborted();
+      throw new Error(SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED);
+    }
+  } catch (error) {
+    await rm(archivePath, { force: true });
+    throw error;
+  } finally {
+    await rm(`${archivePath}.tar`, { force: true });
+  }
 }
 
 export function sourceArchiveZstdLevel(): number {

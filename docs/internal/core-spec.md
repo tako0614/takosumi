@@ -149,6 +149,15 @@ A daily sweep recovers interrupted retirement and expired unclaimed preflight So
 Destroyed Capsules remain readable without adopted Source revision. Backups use the adopted
 snapshot, and update availability compares both ref and source subtree.
 
+Source sync checks the selected worktree's expanded file bytes before publishing
+or reusing an archive. Its limit is the lower of the Runner profile's
+`maxSourceDecompressedBytes` and the fixed restore ceiling; `.git` metadata is
+excluded consistently with the archive format. Newly produced archives also pass
+the restore validator before publication, and a failed validation removes the
+archive and its intermediate tar. A reused legacy archive still receives the
+normal byte/digest and extraction validation at restore; the fresh worktree
+budget check does not certify stored legacy bytes.
+
 Plan, Apply, Destroy, and Refresh are guarded Run operations, not separate
 ledgers. OpenTofu Outputs remain ordinary module values; an Interface may
 explicitly reference a Capsule output, but no reserved output name becomes a
