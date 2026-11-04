@@ -32,6 +32,10 @@ IMAGE_TAG="${TAKOSUMI_RUNNER_PROOF_IMAGE:-takosumi-runner-proof}"
 CONTAINER_NAME="takosumi-runner-proof-$$"
 RUN_ID="proof-$(date +%s)-$$"
 PAYLOAD_TS="${SCRIPT_DIR}/prove-runner-docker-payload.ts"
+PROOF_CUSTODY_DIR=""
+PROOF_CID_FILE=""
+CONTAINER_ID=""
+CONTAINER_START_ATTEMPTED=0
 
 PASS=0
 FAIL=1
@@ -44,7 +48,25 @@ fail() {
 }
 
 cleanup() {
-  docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  [ -n "${PROOF_CUSTODY_DIR}" ] || return 0
+  if [ -z "${CONTAINER_ID}" ] && [ -f "${PROOF_CID_FILE}" ]; then
+    CONTAINER_ID="$(cat "${PROOF_CID_FILE}")"
+  fi
+  if [ "${CONTAINER_START_ATTEMPTED}" = 1 ]; then
+    if [[ ! "${CONTAINER_ID}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "FAIL: container ID unproven; custody retained at ${PROOF_CUSTODY_DIR}" >&2
+      return 1
+    fi
+    if ! docker rm -f "${CONTAINER_ID}" >/dev/null 2>&1; then
+      echo "FAIL: container cleanup failed; custody retained at ${PROOF_CUSTODY_DIR}" >&2
+      return 1
+    fi
+  fi
+  if ! rm -f "${PROOF_CID_FILE}" || ! rmdir "${PROOF_CUSTODY_DIR}"; then
+    echo "FAIL: custody directory cleanup failed; custody retained at ${PROOF_CUSTODY_DIR}" >&2
+    return 1
+  fi
+  PROOF_CUSTODY_DIR=""
 }
 trap cleanup EXIT
 
@@ -54,6 +76,8 @@ require() {
 require docker
 require bun
 require curl
+PROOF_CUSTODY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/takosumi-runner-proof.XXXXXX")"
+PROOF_CID_FILE="${PROOF_CUSTODY_DIR}/container.cid"
 
 # --------------------------------------------------------------------------
 # 1) Build the image (context MUST be the repo root).
@@ -95,15 +119,18 @@ echo "image size: ${IMAGE_SIZE_HUMAN} (${IMAGE_SIZE} bytes)"
 echo "==================================================================="
 echo "STEP 2: run container detached"
 echo "==================================================================="
-# Let docker pick a free host port for container 8080.
-DOCKER_RUN_ARGS=(-d --name "${CONTAINER_NAME}" -p 0:8080)
+# Pick a free loopback port; this unauthenticated proof listener is local only.
+DOCKER_RUN_ARGS=(-d --name "${CONTAINER_NAME}" --cidfile "${PROOF_CID_FILE}" -p 127.0.0.1::8080)
 if [ "${TAKOSUMI_RUNNER_PROOF_APPARMOR_UNCONFINED:-0}" = "1" ]; then
   DOCKER_RUN_ARGS+=(--security-opt apparmor=unconfined)
 fi
+CONTAINER_START_ATTEMPTED=1
 docker run "${DOCKER_RUN_ARGS[@]}" "${IMAGE_TAG}" >/dev/null \
   || fail "docker run failed"
+CONTAINER_ID="$(cat "${PROOF_CID_FILE}" 2>/dev/null || true)"
+[[ "${CONTAINER_ID}" =~ ^[0-9a-f]{64}$ ]] || fail "docker did not record a valid container ID"
 
-HOST_PORT="$(docker port "${CONTAINER_NAME}" 8080/tcp | head -n1 | sed 's/.*://')"
+HOST_PORT="$(docker port "${CONTAINER_ID}" 8080/tcp | head -n1 | sed 's/.*://')"
 [ -n "${HOST_PORT}" ] || fail "could not resolve mapped host port"
 BASE_URL="http://127.0.0.1:${HOST_PORT}"
 echo "container ${CONTAINER_NAME} listening on ${BASE_URL}"
@@ -122,7 +149,7 @@ for _ in $(seq 1 60); do
 done
 if [ -z "${READY}" ]; then
   echo "----- container logs -----" >&2
-  docker logs "${CONTAINER_NAME}" >&2 || true
+  docker logs "${CONTAINER_ID}" >&2 || true
   fail "runner did not become ready on ${BASE_URL}/healthz"
 fi
 echo "runner is ready: $(curl -fsS "${BASE_URL}/healthz")"
@@ -130,7 +157,7 @@ echo "runner is ready: $(curl -fsS "${BASE_URL}/healthz")"
 # Restore the pinned proof source exactly where the ordinary Git runner path
 # expects the SourceSnapshot checkout. The invalid URL is never fetched: this
 # harness is proving the post-restore runner boundary, not SourceSync.
-bun run "${PAYLOAD_TS}" source | docker exec -i "${CONTAINER_NAME}" sh -c \
+bun run "${PAYLOAD_TS}" source | docker exec -i "${CONTAINER_ID}" sh -c \
   "mkdir -p '/tmp/takosumi-runs/${RUN_ID}/source' && cat > '/tmp/takosumi-runs/${RUN_ID}/source/main.tf'" \
   || fail "could not restore proof Git source into runner workspace"
 
@@ -232,6 +259,10 @@ fi
 # --------------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------------
+# Cleanup is part of the proof. Retain custody on failure, without retrying it
+# from the EXIT trap or announcing a passing result first.
+trap - EXIT
+cleanup || fail "container cleanup did not complete"
 echo "==================================================================="
 echo "image size      : ${IMAGE_SIZE_HUMAN}"
 echo "build time      : ${BUILD_SECONDS}s"
