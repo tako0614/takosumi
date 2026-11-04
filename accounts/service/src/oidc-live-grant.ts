@@ -6,7 +6,7 @@ import type {
   ControlWorkspaceRole,
 } from "./control-operations.ts";
 import type { AccountsStore } from "./store.ts";
-import type { AppRole } from "../../../contract/app-access.ts";
+import type { AppAccess, AppRole } from "../../../contract/app-access.ts";
 import { capsuleScopeRef } from "takosumi-contract/capsules";
 import { oidcClientActivationDigest } from "./oidc-activation.ts";
 import { accountsOidcModuleVariableProfile } from "../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
@@ -208,10 +208,10 @@ export async function validateOidcLiveGrant(input: {
   // App sign-in is available to every account. Management claims come only
   // from the live per-app resolver; Workspace claims are legacy evidence and
   // are never inferred from AppAccess.
-  let appRole: AppRole | undefined;
+  let appAccess: AppAccess | undefined;
   try {
     const access = await operations.appAccess?.resolveAppAccess(subject, capsuleId);
-    if (access?.capsuleId === capsuleId) appRole = access.role;
+    if (access?.capsuleId === capsuleId) appAccess = access;
   } catch {
     // Resolver outage cannot confer management authority to an ID token.
   }
@@ -219,13 +219,19 @@ export async function validateOidcLiveGrant(input: {
   // Legacy apps still read Workspace claims. For an owned Capsule, require
   // current app access before exposing the independent Workspace role; app
   // authority is carried only in app_role.
-  let ownedApp: boolean;
+  let ownership;
   try {
-    ownedApp = (await operations.appOwnership?.getOwnership(capsuleId)) !== undefined;
+    ownership = await operations.appOwnership?.getOwnership(capsuleId);
   } catch {
     return { ok: false, reason: "control_plane_unavailable" };
   }
-  const role = ownedApp
+  // Ownership may have moved while resolving the independent Workspace role.
+  // Never sign the earlier access snapshot against a different owner/epoch.
+  const appRole = appAccess && (!ownership || (
+    appAccess.ownerAccountId === ownership.ownerAccountId &&
+    appAccess.ownershipEpoch === ownership.ownershipEpoch
+  )) ? appAccess.role : undefined;
+  const role = ownership
     ? (appRole && workspaceRole ? workspaceRole : undefined)
     : workspaceRole;
   return {
