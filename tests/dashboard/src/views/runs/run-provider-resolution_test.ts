@@ -303,7 +303,7 @@ describe("Run review ProviderConnection evidence", () => {
 
   test("keeps launch URLs Interface-owned instead of inferring them from run state or outputs", () => {
     expect(runViewSource).not.toContain("listDeployments");
-    expect(runViewSource).toContain("listActivity");
+    expect(runViewSource).toContain("listCapsuleActivity");
     expect(runViewSource).not.toContain("launchUrlFromDeployment");
     expect(runViewSource).toContain("listAuthorizedUiSurfaces");
     expect(runViewSource).not.toContain("refreshSession");

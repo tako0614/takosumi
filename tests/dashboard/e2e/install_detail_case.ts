@@ -176,7 +176,7 @@ async function detailFixture(
     if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) { capsuleStatus = "active"; return route.fulfill({ json: { capsule: capsule() } }); }
     if (path === "/api/v1/state-versions/sv_inline/rollback-plan" && request.method() === "POST") { retryCount += 1; return route.fulfill({ status: 201, json: { run: plan() } }); }
     if (path === `/api/v1/capsules/${capId}/plan`) { retryCount += 1; return route.fulfill({ json: { run: plan() } }); }
-    if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: applied ? [apply(), plan()] : [plan()] } });
+    if (path === "/api/v1/workspaces/ws_alpha/runs" || path === `/api/v1/capsules/${capId}/runs`) return route.fulfill({ json: { runs: applied ? [apply(), plan()] : [plan()] } });
     if (path.startsWith("/api/v1/runs/") && path.endsWith("/cost")) {
       if (cost === "unavailable") return route.fulfill({ status: 503, json: { error: "fixture_cost_unavailable" } });
       return route.fulfill({ json: { cost: {
@@ -918,6 +918,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
     test("Uninstall confirms once, restores its real reservation, and supports cancellation", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
+      // The reservation uses this fixture's fixed timestamps, not today's date.
+      await page.clock.setFixedTime(new Date(now));
       // An old install-page locator opens the app's own page.
       await page.goto(`/new?capsule=${capId}`);
       await expect(page).toHaveURL(new RegExp(`/apps/${capId}$`, "u"));

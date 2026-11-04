@@ -9,6 +9,7 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<readonly Capsule[]>>();
+let cacheGeneration = 0;
 
 function cacheKey(
   workspaceId: string,
@@ -25,6 +26,7 @@ function fresh(
 }
 
 export function clearCapsuleListCache(workspaceId?: string): void {
+  cacheGeneration++;
   if (!workspaceId) {
     cache.clear();
     inflight.clear();
@@ -60,12 +62,15 @@ export async function listCapsulesCached(
   const currentInflight = inflight.get(key);
   if (!options.force && currentInflight) return currentInflight;
 
+  const generation = cacheGeneration;
   const request = listCapsules(workspaceId, {
     includeDestroyed: options.includeDestroyed,
   })
     .then((capsules) => {
-      cache.set(key, { capsules, cachedAt: Date.now() });
-      emitCapsuleListCacheChanged(workspaceId);
+      if (generation === cacheGeneration) {
+        cache.set(key, { capsules, cachedAt: Date.now() });
+        emitCapsuleListCacheChanged(workspaceId);
+      }
       return capsules;
     })
     .finally(() => {

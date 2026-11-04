@@ -1837,6 +1837,32 @@ export async function listActivity(
   return body.events ?? [];
 }
 
+/** Activity already authorized for one app, including a shared app. */
+export async function listCapsuleActivity(
+  capsuleId: string,
+  limit = 100,
+): Promise<readonly ActivityEvent[]> {
+  const events: ActivityEvent[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  // App Activity can return sparse or empty pages while scanning a partition.
+  // Keep this read bounded; an unfinished window is unavailable, never empty.
+  for (let page = 0; page < 10; page++) {
+    const body = await controlFetch<{
+      events?: readonly ActivityEvent[];
+      nextCursor?: unknown;
+      incomplete?: boolean;
+    }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/activity${query({ limit, cursor })}`);
+    if (!body || !Array.isArray(body.events) || body.incomplete === true) break;
+    events.push(...body.events.slice(0, limit - events.length));
+    if (events.length === limit || body.nextCursor === undefined) return events;
+    if (typeof body.nextCursor !== "string" || !body.nextCursor || cursors.has(body.nextCursor)) break;
+    cursor = body.nextCursor;
+    cursors.add(cursor);
+  }
+  throw new ControlApiError(502, "incomplete_capsule_activity_response", "App activity window could not be read completely.");
+}
+
 export async function listRuns(
   workspaceId: string,
   limit?: number,
@@ -2211,6 +2237,32 @@ export async function listCapsuleRuns(
   return typeof body.nextCursor === "string" && body.nextCursor
     ? { runs, nextCursor: body.nextCursor }
     : { runs };
+}
+
+/** A bounded newest-first app window for approval and lost-ACK recovery. */
+export async function listRecentCapsuleRuns(
+  capsuleId: string,
+  limit: number,
+): Promise<readonly Run[]> {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Run window limit must be a positive integer.");
+  const runs: Run[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  // A normal app page fills its requested limit unless it is the final page.
+  // Bound reads even if an invalid server sends empty pages with cursors.
+  const maxPages = Math.ceil(limit / CAPSULE_RUN_PAGE_MAX);
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex++) {
+    const page = await listCapsuleRuns(capsuleId, {
+      limit: Math.min(CAPSULE_RUN_PAGE_MAX, limit - runs.length),
+      ...(cursor ? { cursor } : {}),
+    });
+    runs.push(...page.runs.slice(0, limit - runs.length));
+    if (runs.length === limit || !page.nextCursor) return runs;
+    if (cursors.has(page.nextCursor)) break;
+    cursor = page.nextCursor;
+    cursors.add(cursor);
+  }
+  throw new ControlApiError(502, "incomplete_capsule_runs_response", "App history window could not be read completely.");
 }
 
 // --- Sources ---------------------------------------------------------------

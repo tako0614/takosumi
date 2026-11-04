@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "@solidjs/router";
 import {
+  createMemo,
   createSignal,
   type JSX,
   Match,
@@ -49,6 +50,10 @@ export default function AuthGuard(props: Props) {
   const [session, setSession] = createSignal<SessionRecord | null>(
     cached.kind === "authenticated" ? cached.session : null,
   );
+  const sessionOwner = createMemo(() => {
+    const current = session();
+    return current ? JSON.stringify([current.subject, current.primaryAccountId ?? null]) : undefined;
+  });
   const [state, setState] = createSignal<AuthState>(
     cached.kind === "authenticated" ? "authenticated" : cached.kind,
   );
@@ -168,7 +173,7 @@ export default function AuthGuard(props: Props) {
         </main>
       </Match>
       <Match when={state() === "authenticated" && session()}>
-        {(s) => props.children(s())}
+        {(s) => <Show when={sessionOwner()} keyed>{(_owner) => props.children(s())}</Show>}
       </Match>
     </Switch>
   );

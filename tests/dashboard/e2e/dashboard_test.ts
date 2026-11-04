@@ -34,6 +34,8 @@ import { registerInstallAuthReturnCase } from "./install_auth_return_case.ts";
 import { registerNavigationAccountCases } from "./navigation_account_case.ts";
 import { registerAppSharingCases } from "./app_sharing_case.ts";
 import { registerInstallReopenCases } from "./install_reopen_case.ts";
+import { registerRunDetailCases } from "./run_detail_case.ts";
+import { registerSessionIdentityCases } from "./session_identity_case.ts";
 
 type Expectations = {
   readonly appName: string;
@@ -50,6 +52,8 @@ const mode: DashboardE2EMode = rawMode;
 registerInstallAuthReturnCase(mode);
 registerNavigationAccountCases(mode);
 registerAppSharingCases(mode);
+registerRunDetailCases(mode);
+registerSessionIdentityCases(mode);
 
 const expectedWorkerVersionId =
   mode === "live" || mode === "public-live"
@@ -598,7 +602,7 @@ async function startReadinessBrowserFixture(
       readinessRequests.push(`${request.method()} ${path}`);
       return onReadinessRead(route);
     }
-    if (path === "/api/v1/workspaces/ws_alpha/activity") {
+    if (path === "/api/v1/workspaces/ws_alpha/activity" || path === "/api/v1/capsules/cap_provider_destination_e2e/activity") {
       if (onActivityRead) {
         return onActivityRead(route);
       }
@@ -1033,7 +1037,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           createdAt: "2026-08-01T00:00:00.000Z",
         }] } });
       }
-      if (path === "/api/v1/workspaces/ws_alpha/activity") {
+      if (path === "/api/v1/workspaces/ws_alpha/activity" || path === "/api/v1/capsules/cap_provider_destination_e2e/activity") {
         return route.fulfill({ json: { events: [{
           id: "activity_provider_activation_e2e", workspaceId: "ws_alpha",
           action: activationAction, targetType: "Capsule", targetId: "cap_provider_destination_e2e",
@@ -1263,7 +1267,7 @@ test.describe("Takosumi dashboard browser surface", () => {
             body: "",
           });
         }
-        if (path === "/api/v1/workspaces/ws_alpha/runs") {
+        if (path === "/api/v1/workspaces/ws_alpha/runs" || path === `/api/v1/capsules/${capsuleId}/runs`) {
           return route.fulfill({ json: { runs: [] } });
         }
         return route.fallback();

@@ -32,8 +32,10 @@ import {
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
 import { SESSION_ME } from "./paths.ts";
-import { resetAppOwnershipCache } from "../../../lib/control-api.ts";
+import { resetAppOwnershipCache, type Workspace } from "../../../lib/control-api.ts";
 import { clearNotificationFeeds } from "../../../lib/notifications.ts";
+import { clearCapsuleListCache } from "../../../lib/capsule-list.ts";
+import { clearInstallConfigListCache } from "../../../lib/install-config-list.ts";
 import {
   clearSharedAuthSessionPreflight,
   isKnownSharedAuthRoutePresent,
@@ -169,9 +171,22 @@ export const initialSessionOptions: SessionRefreshOptions = {
   initialSharedAuthPreflight: true,
 };
 
+interface SessionProbeResult {
+  readonly session: SessionRecord | null;
+  readonly workspaces?: readonly Workspace[];
+}
+
+function clearSessionProjections(): void {
+  resetAppOwnershipCache();
+  clearNotificationFeeds();
+  clearWorkspaceListCache();
+  clearCapsuleListCache();
+  clearInstallConfigListCache();
+}
+
 async function fetchSessionMe(
   options: SessionRefreshOptions = {},
-): Promise<SessionRecord | null> {
+): Promise<SessionProbeResult> {
   if (typeof fetch === "undefined") {
     throw new SessionError(
       "error",
@@ -199,12 +214,9 @@ async function fetchSessionMe(
     if (!data) {
       // A present Hosted RP never falls back to a second account-session
       // projection when canonical bootstrap denied the request.
-      return sharedAuthRoute === "present"
+      return { session: sharedAuthRoute === "present"
         ? null
-        : await fetchAccountSessionMe();
-    }
-    if (Array.isArray(data.workspaces)) {
-      primeWorkspaceListCache(data.workspaces);
+        : await fetchAccountSessionMe() };
     }
     const session = pickResponseRecord(data);
     if (!session) {
@@ -216,7 +228,7 @@ async function fetchSessionMe(
         "Dashboard bootstrap response did not contain a session.",
       );
     }
-    return session;
+    return { session, ...(Array.isArray(data.workspaces) ? { workspaces: data.workspaces } : {}) };
   } catch (error) {
     if (error instanceof SharedAuthSessionPreflightError) {
       const details = dashboardResponseErrorDetails(
@@ -349,17 +361,18 @@ export function refreshSession(
   if (inflight) return inflight;
   const epoch = sessionEpoch;
   const request = fetchSessionMe(options)
-    .then((s) => {
+    .then(({ session: s, workspaces }) => {
       if (epoch !== sessionEpoch) return null;
       if (!s || cachedSession?.subject !== s.subject || cachedSession?.primaryAccountId !== s.primaryAccountId) {
-        resetAppOwnershipCache();
-        clearNotificationFeeds();
+        clearSessionProjections();
       }
       cachedSession = s;
       cachedError = null;
       cachedAt = Date.now();
       initialized = true;
-      if (!s) clearWorkspaceListCache();
+      // Prime only the new authenticated identity's projection, after clearing
+      // the previous identity. Preserve the legacy combined bootstrap sharing.
+      if (s && workspaces) primeWorkspaceListCache(workspaces);
       notify(s);
       notifyState(
         s ? { kind: "authenticated", session: s } : { kind: "unauthenticated" },
@@ -368,8 +381,7 @@ export function refreshSession(
     })
     .catch((error) => {
       if (epoch !== sessionEpoch) return null;
-      resetAppOwnershipCache();
-      clearNotificationFeeds();
+      clearSessionProjections();
       const typed =
         error instanceof SessionError ? error : sessionErrorFromUnknown(error);
       cachedSession = null;
@@ -441,8 +453,7 @@ export function readSessionState(
     cachedSession.expiresAt > 0 &&
     cachedSession.expiresAt < Date.now()
   ) {
-    resetAppOwnershipCache();
-    clearNotificationFeeds();
+    clearSessionProjections();
     cachedSession = null;
   }
   // Preserve the cache-first contract while a stale authenticated session is
@@ -487,14 +498,12 @@ export function clearSession(): void {
   // later login must not share that old request.
   sessionEpoch++;
   inflight = null;
-  resetAppOwnershipCache();
-  clearNotificationFeeds();
+  clearSessionProjections();
   clearSharedAuthSessionPreflight();
   cachedSession = null;
   cachedError = null;
   cachedAt = Date.now();
   initialized = true;
-  clearWorkspaceListCache();
   notify(null);
   notifyState({ kind: "unauthenticated" });
   if (typeof fetch !== "undefined") {
