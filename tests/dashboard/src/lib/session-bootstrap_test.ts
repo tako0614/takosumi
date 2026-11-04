@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   clearSession,
   initialSessionOptions,
+  onSessionStateChange,
   readSession,
   readSessionState,
   refreshSession,
@@ -710,6 +711,40 @@ describe("dashboard session bootstrap", () => {
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
     ]);
   });
+  test("a session probe started before sign-out cannot authenticate the shell afterwards", async () => {
+    let release!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { release = resolve; });
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "DELETE" ? new Response(null, { status: 204 }) : pending
+    ) as typeof fetch;
+    const states: string[] = [];
+    const off = onSessionStateChange((state) => states.push(state.kind));
+    try {
+      const stale = refreshSession();
+      clearSession();
+      release(Response.json({ session: { subject: "signed-out-account" } }));
+      expect(await stale).toBeNull();
+      expect(readSessionState()).toEqual({ kind: "unauthenticated" });
+      expect(states).toEqual(["unauthenticated"]);
+    } finally { off(); }
+  });
+
+  test("an old failed probe cannot clear the next account's authenticated session", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<Response>((_resolve, fail) => { reject = fail; });
+    let reads = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return ++reads === 1 ? pending : Response.json({ session: { subject: "next-account" } });
+    }) as typeof fetch;
+    const stale = refreshSession();
+    clearSession();
+    expect(await refreshSession()).toMatchObject({ subject: "next-account" });
+    reject(new Error("old request failed"));
+    expect(await stale).toBeNull();
+    expect(readSessionState()).toMatchObject({ kind: "authenticated", session: { subject: "next-account" } });
+  });
+
   test("app ownership cache survives same-account refresh and resets on account change and sign-out", async () => {
     let subject = "account-a";
     let appReads = 0;

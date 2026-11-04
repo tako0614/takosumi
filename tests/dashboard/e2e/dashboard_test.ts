@@ -1760,6 +1760,98 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
+  test("app notifications and the bell work without any Workspace listing", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic app notification fixture only");
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const legacyReads: string[] = [];
+    await page.route("**/api/v1/**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/v1/dashboard/bootstrap" &&
+          url.searchParams.get("includeWorkspaces") === "false") {
+        const response = await route.fetch();
+        const { session } = await response.json();
+        return route.fulfill({ response, json: {
+          session,
+          ...(url.searchParams.get("includeNotifications") === "true" ? {
+            notifications: [{ workspaceHandle: "internal-partition", event: {
+              id: "event_app_failure", workspaceId: "internal-partition",
+              action: "run.failed", targetType: "run", targetId: "run_app_failure",
+              metadata: { capsuleId: "app_shared", capsuleName: "Shared Office" },
+              createdAt: "2026-11-04T00:00:00Z",
+            } }],
+          } : {}),
+        } });
+      }
+      if (url.pathname.startsWith("/api/v1/workspaces") ||
+          url.pathname === "/api/v1/dashboard/bootstrap") {
+        legacyReads.push(url.pathname + url.search);
+        return route.fulfill({ status: 503, json: { error: "workspace_listing_unavailable" } });
+      }
+      return route.continue();
+    });
+    await gotoDashboardDocument(page, "/notifications");
+    await expect(page.locator(".wc-notif-list")).toContainText("Shared Office");
+    await expect(page.locator(".wc-notif-list a")).toHaveAttribute("href", "/runs/run_app_failure");
+    await expect(page.locator(".topbar-badge")).toHaveText("1");
+    await expect(page.locator("body")).not.toContainText("internal-partition");
+    expect(legacyReads).toEqual([]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("legacy notifications keep the selected Workspace and bell count", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic legacy notification fixture only");
+    const errors = pageErrors(page);
+    const selectedReads: string[] = [];
+    await page.addInitScript(() => localStorage.setItem("takosumi.currentWorkspaceId", "ws_beta"));
+    const entries = ["ws_alpha", "ws_beta"].map((workspaceId) => ({
+      workspaceHandle: workspaceId,
+      event: {
+        id: `event_${workspaceId}`, workspaceId,
+        action: "run.failed", targetType: "run", targetId: `run_${workspaceId}`,
+        metadata: { capsuleId: `app_${workspaceId}`, capsuleName: workspaceId },
+        createdAt: "2026-11-04T00:00:00Z",
+      },
+    }));
+    await page.route("**/api/v1/**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/v1/apps") {
+        return route.fulfill({ status: 404, json: { error: "not_found" } });
+      }
+      if (url.pathname === "/api/v1/dashboard/bootstrap" &&
+          url.searchParams.get("includeNotifications") === "true") {
+        selectedReads.push(url.searchParams.get("workspaceId") ?? "");
+        return route.fulfill({ json: { notifications: entries } });
+      }
+      if (url.pathname === "/api/v1/workspaces/ws_beta/activity") {
+        return route.fulfill({ json: { events: [entries[1]!.event] } });
+      }
+      return route.continue();
+    });
+    await gotoDashboardDocument(page, "/notifications");
+    await expect(page.locator(".wc-notif-list li")).toHaveCount(2);
+    await expect(page.locator(".wc-notif-summary")).toContainText("1");
+    await expect(page.locator(".topbar-badge")).toHaveText("1");
+    expect(selectedReads).toContain("ws_beta");
+    await assertNoPageErrors(errors);
+  });
+
+  test("notifications retry a failed app capability read without leaving the page", async ({ page }) => {
+    test.skip(mode !== "portable", "synthetic capability failure fixture only");
+    const errors = pageErrors(page);
+    let reads = 0;
+    await page.route("**/api/v1/apps**", async (route) => {
+      if (++reads === 1) return route.fulfill({ status: 503, json: { error: "capability_unavailable" } });
+      return route.continue();
+    });
+    await gotoDashboardDocument(page, "/notifications");
+    await expect(page.getByRole("button", { name: /再試行|Retry/u })).toBeVisible();
+    await page.getByRole("button", { name: /再試行|Retry/u }).click();
+    await expect(page.getByRole("main").getByRole("link", { name: /^(Find apps in the store|ストアでアプリを探す)$/u })).toBeVisible();
+    await assertNoPageErrors(errors);
+  });
+
   test("notifications and the launcher say the next step and state in words", async ({
     page,
   }) => {

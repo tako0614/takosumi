@@ -1,23 +1,21 @@
 /**
  * Shared notification-feed primitives.
  *
- * The friendly notifications page reads the Activity trail for a bounded set
- * of recently updated active Workspaces, always pinning the current Workspace,
- * and merges them newest-first. The TopBar bell has a separate,
- * Workspace-scoped snapshot. Both surfaces use the same failure predicate and
- * count helper.
+ * The app-owned page and bell share the server's bounded app Activity
+ * projection. Legacy hosts retain a separate Workspace-scoped bell snapshot.
+ * Both surfaces use the same failure predicate and count helper.
  *
  * Honesty contract (inherited from the original feed): only values the backend
  * already recorded as public-safe Activity metadata are surfaced — no invented
  * prices, formulas, or messages.
  */
-import { createSignal } from "solid-js";
+import { createSignal, untrack } from "solid-js";
 import {
   type ActivityEvent,
   listActivity,
   type Workspace,
 } from "./control-api.ts";
-import { fetchDashboardWorkspaceBootstrap } from "./dashboard-bootstrap.ts";
+import { clearDashboardBootstrapCache, fetchDashboardBootstrap } from "./dashboard-bootstrap.ts";
 
 /** Max events fetched per Workspace and rendered in the merged feed. */
 export const NOTIF_PER_WORKSPACE_LIMIT = 50;
@@ -167,6 +165,21 @@ const [workspaceFeedSnapshot, setWorkspaceFeedSnapshot] = createSignal<
 >(undefined);
 const workspaceFeedInflight = new Map<string, Promise<readonly FeedEntry[]>>();
 let requestedWorkspaceId = "";
+let notificationEpoch = 0;
+
+/** Discard the previous session's snapshots and fence its pending reads. */
+export function clearNotificationFeeds(): void {
+  notificationEpoch++;
+  clearDashboardBootstrapCache();
+  setSharedFeed(undefined);
+  sharedFeedFetchedAt = 0;
+  sharedFeedScope = "";
+  requestedSharedFeedScope = "";
+  sharedFeedInflight.clear();
+  setWorkspaceFeedSnapshot(undefined);
+  requestedWorkspaceId = "";
+  workspaceFeedInflight.clear();
+}
 
 /** Reactive last-loaded cross-Workspace feed (`undefined` before first load). */
 export const notificationFeed = sharedFeed;
@@ -259,7 +272,9 @@ export async function refreshNotificationFeed(
   } = {},
 ): Promise<readonly FeedEntry[]> {
   const scope = options.selectedWorkspaceId?.trim() ?? "";
-  const current = sharedFeed();
+  // A navigation effect may call this cache accessor. Cache invalidation must
+  // not subscribe that effect and restart a read during session teardown.
+  const current = untrack(sharedFeed);
   if (
     !options.force &&
     current !== undefined &&
@@ -271,8 +286,9 @@ export async function refreshNotificationFeed(
   requestedSharedFeedScope = scope;
   const currentInflight = sharedFeedInflight.get(scope);
   if (currentInflight) return currentInflight;
+  const epoch = notificationEpoch;
   const request = (async () => {
-    const bootstrap = await fetchDashboardWorkspaceBootstrap({
+    const bootstrap = await fetchDashboardBootstrap({
       includeNotifications: true,
       selectedWorkspaceId: scope || undefined,
     });
@@ -280,7 +296,7 @@ export async function refreshNotificationFeed(
       throw new Error("Dashboard notification projection is unavailable");
     }
     const entries = bootstrap.notifications.slice(0, NOTIF_FEED_LIMIT);
-    if (requestedSharedFeedScope === scope) {
+    if (notificationEpoch === epoch && requestedSharedFeedScope === scope) {
       sharedFeedFetchedAt = Date.now();
       sharedFeedScope = scope;
       setSharedFeed(entries);
@@ -311,7 +327,7 @@ export async function refreshWorkspaceNotificationFeed(
   if (!normalizedWorkspaceId) return [];
   requestedWorkspaceId = normalizedWorkspaceId;
 
-  const current = workspaceFeedSnapshot();
+  const current = untrack(workspaceFeedSnapshot);
   if (
     !options.force &&
     current?.workspaceId === normalizedWorkspaceId &&
@@ -322,6 +338,7 @@ export async function refreshWorkspaceNotificationFeed(
 
   const currentInflight = workspaceFeedInflight.get(normalizedWorkspaceId);
   if (currentInflight) return currentInflight;
+  const epoch = notificationEpoch;
 
   const request = listActivity(normalizedWorkspaceId, NOTIF_PER_WORKSPACE_LIMIT)
     .then((events): readonly FeedEntry[] =>
@@ -333,7 +350,7 @@ export async function refreshWorkspaceNotificationFeed(
       })),
     )
     .then((entries) => {
-      if (requestedWorkspaceId === normalizedWorkspaceId) {
+      if (notificationEpoch === epoch && requestedWorkspaceId === normalizedWorkspaceId) {
         setWorkspaceFeedSnapshot({
           workspaceId: normalizedWorkspaceId,
           entries,

@@ -5,9 +5,8 @@
  * where the sidebar is hidden) and carries the global notifications / account
  * affordances (the profile avatar opens the account page and preferences).
  * The bell badge and the /notifications 要対応 banner derive the same failure
- * count from lib/notifications.ts. The bell refresh is Workspace-scoped and
- * TTL-throttled: ordinary navigation never lists every Workspace or fans out
- * one Activity request per Workspace.
+ * count from lib/notifications.ts. App-owned hosts share one TTL-throttled
+ * feed; legacy hosts refresh only their selected Workspace.
  */
 import { A, useLocation } from "@solidjs/router";
 import {
@@ -24,7 +23,9 @@ import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { SECTION_TITLES } from "./nav.ts";
 import {
   attentionCount,
+  notificationFeed,
   onNotificationsAcknowledged,
+  refreshNotificationFeed,
   refreshWorkspaceNotificationFeed,
   workspaceNotificationFeed,
 } from "../../../../lib/notifications.ts";
@@ -35,17 +36,22 @@ import { t } from "../../../../i18n/index.ts";
 export default function TopBar() {
   const loc = useLocation();
   const [personalApps] = createResource(() => appOwnershipAvailable());
+  const appNotifications = () => !personalApps.error && personalApps() === true;
   const legacyNotifications = () => !personalApps.error && personalApps() === false;
   const sectionTitle = () => {
     const hit = SECTION_TITLES.find(([re]) => re.test(loc.pathname));
     return hit ? t(hit[1]) : "";
   };
 
-  // Refresh exactly the selected Workspace on navigation (TTL-throttled in
-  // lib/notifications.ts — no polling loop). Errors are non-fatal for chrome:
+  // Refresh the app feed (or the legacy selected Workspace) on navigation,
+  // TTL-throttled in lib/notifications.ts. Errors are non-fatal for chrome:
   // the badge simply keeps its last known count.
   createEffect(() => {
     void loc.pathname;
+    if (appNotifications()) {
+      void refreshNotificationFeed().catch(() => {});
+      return;
+    }
     const workspaceId = legacyNotifications() ? currentWorkspaceId() : "";
     if (!workspaceId) return;
     void refreshWorkspaceNotificationFeed(workspaceId).catch(() => {});
@@ -56,6 +62,7 @@ export default function TopBar() {
   onCleanup(onNotificationsAcknowledged(() => setAckTick((n) => n + 1)));
   const badge = createMemo(() => {
     void ackTick();
+    if (appNotifications()) return attentionCount(notificationFeed());
     const workspaceId = legacyNotifications() ? currentWorkspaceId() : "";
     if (!workspaceId) return 0;
     return attentionCount(workspaceNotificationFeed(workspaceId), workspaceId);

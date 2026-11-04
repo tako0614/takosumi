@@ -33,6 +33,7 @@ import {
 } from "../../../lib/dashboard-bootstrap.ts";
 import { SESSION_ME } from "./paths.ts";
 import { resetAppOwnershipCache } from "../../../lib/control-api.ts";
+import { clearNotificationFeeds } from "../../../lib/notifications.ts";
 import {
   clearSharedAuthSessionPreflight,
   isKnownSharedAuthRoutePresent,
@@ -88,6 +89,7 @@ let cachedError: SessionError | null = null;
 let cachedAt = 0;
 let initialized = false;
 let inflight: Promise<SessionRecord | null> | null = null;
+let sessionEpoch = 0;
 
 function notify(s: SessionRecord | null): void {
   for (const l of listeners) l(s);
@@ -345,10 +347,13 @@ export function refreshSession(
   options: SessionRefreshOptions = {},
 ): Promise<SessionRecord | null> {
   if (inflight) return inflight;
+  const epoch = sessionEpoch;
   const request = fetchSessionMe(options)
     .then((s) => {
+      if (epoch !== sessionEpoch) return null;
       if (!s || cachedSession?.subject !== s.subject || cachedSession?.primaryAccountId !== s.primaryAccountId) {
         resetAppOwnershipCache();
+        clearNotificationFeeds();
       }
       cachedSession = s;
       cachedError = null;
@@ -362,7 +367,9 @@ export function refreshSession(
       return s;
     })
     .catch((error) => {
+      if (epoch !== sessionEpoch) return null;
       resetAppOwnershipCache();
+      clearNotificationFeeds();
       const typed =
         error instanceof SessionError ? error : sessionErrorFromUnknown(error);
       cachedSession = null;
@@ -435,6 +442,7 @@ export function readSessionState(
     cachedSession.expiresAt < Date.now()
   ) {
     resetAppOwnershipCache();
+    clearNotificationFeeds();
     cachedSession = null;
   }
   // Preserve the cache-first contract while a stale authenticated session is
@@ -475,7 +483,12 @@ export function writeSession(_s: SessionRecord): void {
  * empty auto-created personal one — which reads as "signed in as someone else".
  */
 export function clearSession(): void {
+  // A completed old probe cannot restore the just-cleared session, and a
+  // later login must not share that old request.
+  sessionEpoch++;
+  inflight = null;
   resetAppOwnershipCache();
+  clearNotificationFeeds();
   clearSharedAuthSessionPreflight();
   cachedSession = null;
   cachedError = null;

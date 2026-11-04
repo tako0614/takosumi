@@ -119,8 +119,8 @@ describe("Notifications", () => {
   });
   test("topbar badge and /notifications share the same failure-count derivation without a navigation fanout", () => {
     // One derivation, owned by lib/notifications.ts: attentionCount. The
-    // notifications page may load its cross-Workspace feed, while ordinary
-    // TopBar navigation is strictly scoped to the selected Workspace.
+    // app-owned page and TopBar share one bounded feed; legacy navigation
+    // retains the selected-Workspace projection.
     expect(notificationsLibSource).toContain("export function attentionCount");
     expect(notificationsLibSource).toContain(
       "export async function refreshNotificationFeed",
@@ -151,13 +151,13 @@ describe("Notifications", () => {
     expect(notificationsSource).toContain("acknowledgeNotifications(feed())");
     expect(topBarSource).toContain("loc.pathname");
     expect(topBarSource).not.toContain("peekCapsulesCached");
-    expect(topBarSource).not.toContain("refreshNotificationFeed()");
+    expect(topBarSource).toContain("refreshNotificationFeed()");
     expect(topBarSource).not.toContain("setInterval");
     // NotificationsView: same feed (revalidated in the background), same count.
     expect(notificationsSource).toContain("refreshNotificationFeed({");
-    expect(notificationsSource).toContain("selectedWorkspaceId:");
+    expect(notificationsSource).toContain("legacyNotifications() ? currentWorkspaceId() || undefined : undefined");
     expect(notificationsSource).toContain(
-      "attentionCount(feed(), currentWorkspaceId() || undefined)",
+      "attentionCount(feed(), selectedWorkspaceId())",
     );
     expect(notificationsSource).not.toMatch(
       /filter\(\(e\) => isFailureAction\(e\.event\.action\)\)\.length/,
@@ -174,23 +174,16 @@ describe("Notifications", () => {
     expect(notificationsLibSource).not.toContain("tg_notif_seen_at");
   });
 
-  test("badge/banner count is scoped to the CURRENT workspace; the feed is not", () => {
-    // Live-verified defect: after a Workspace switch the bell kept the
-    // previous Workspace's count. The COUNT filters on the current Workspace
-    // (badge == banner stays intact — both call the same scoped derivation);
-    // the page keeps cross-Workspace entries and labels the foreign ones.
+  test("only legacy notifications load Workspace membership chrome", () => {
+    // Legacy hosts retain their count filter; app-owned UI uses the account's
+    // authorized feed without depending on Workspace membership or selection.
     expect(notificationsLibSource).toContain("workspaceId?: string");
     expect(notificationsLibSource).toContain(
       "(!workspaceId || entry.event.workspaceId === workspaceId)",
     );
-    expect(notificationsSource).toContain('t("notif.otherWorkspace"');
-    // Named by the workspace's name, never its generated handle / id, and only
-    // when there is more than one workspace to tell apart.
-    expect(ja["notif.otherWorkspace"]).toContain("{name}");
-    expect(en["notif.otherWorkspace"]).toContain("{name}");
-    expect(ja["notif.otherWorkspace"]).not.toContain("スペース");
-    expect(notificationsSource).toContain("workspaceName(workspace)");
-    expect(notificationsSource).toContain("showWorkspace={multipleWorkspaces()}");
+    expect(notificationsSource).toContain("createResource(legacyNotifications, () => listWorkspacesCached())");
+    expect(notificationsSource).toContain("legacyNotifications() && (readyOrUndefined(workspaces) ?? []).length >= 2");
+    expect(topBarSource).toContain("attentionCount(notificationFeed())");
   });
 
   test("the bell opens onto the existing snapshot, not a full skeleton", () => {
@@ -201,7 +194,7 @@ describe("Notifications", () => {
       "const feed = () => notificationFeed();",
     );
     expect(notificationsSource).toContain(
-      "const loading = () => feed() === undefined && refreshed.loading;",
+      "const loading = () => feed() === undefined && (personalApps.loading || refreshed.loading);",
     );
     expect(notificationsSource).toMatch(
       /const error = \(\) =>\s*\n?\s*feed\(\) === undefined/,

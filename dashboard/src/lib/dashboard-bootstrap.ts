@@ -97,7 +97,7 @@ export function fetchDashboardBootstrap(
           options.selectedWorkspaceId,
           options.includeNotifications === true,
         )
-      : DASHBOARD_SESSION_BOOTSTRAP_PATH;
+      : dashboardSessionBootstrapPath(options);
   const current = inflight.get(path);
   if (current) return current;
   if (typeof fetch === "undefined") return Promise.resolve(undefined);
@@ -206,6 +206,19 @@ export function dashboardResponseErrorDetails(
           : `${status} ${statusText}`.trim();
   const code = typeof envelope.code === "string" ? envelope.code : undefined;
   return { message, ...(code ? { code } : {}) };
+}
+
+function dashboardSessionBootstrapPath(options: {
+  readonly includeNotifications?: boolean;
+  readonly selectedWorkspaceId?: string;
+}): string {
+  if (!options.includeNotifications) return DASHBOARD_SESSION_BOOTSTRAP_PATH;
+  const params = new URLSearchParams({
+    includeWorkspaces: "false",
+    includeNotifications: "true",
+  });
+  if (options.selectedWorkspaceId) params.set("workspaceId", options.selectedWorkspaceId);
+  return `${DASHBOARD_BOOTSTRAP_PATH}?${params.toString()}`;
 }
 
 function dashboardWorkspaceBootstrapPath(
