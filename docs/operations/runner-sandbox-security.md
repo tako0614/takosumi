@@ -26,6 +26,28 @@ process-local ordering does not isolate another Runner process under the same
 UID, survive a Runner restart, or replace the selected substrate's tenant
 isolation and teardown evidence.
 
+## Git configuration inputs
+
+Runner command environments ignore ambient global and system Git configuration.
+`GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` point to `/dev/null`, with
+`GIT_CONFIG_NOSYSTEM=1`. Source credentials cannot replace these runtime-owned
+controls. This prevents an earlier build's HOME config from redirecting a later
+credentialed Git operation through `url.*.insteadOf` or an implicit helper.
+
+SSH source commands also use `-F /dev/null`, while retaining the minted
+`known_hosts`, strict host checking, explicit identity and batch-mode controls.
+Both a minted key and `known_hosts` are required; global known-host databases
+and default user identities cannot supply missing source credentials. Credential
+paths are quoted for both the shell and SSH, and unsupported SSH environment
+expansion syntax is rejected before files are written.
+Git HTTPS custom trust can use the existing explicit `GIT_SSL_CAINFO` input;
+the existing `SSL_CERT_FILE` and `SSL_CERT_DIR` passthrough is retained. Ambient
+Git/SSH config is not a source-credential input.
+
+These command defaults do not isolate processes sharing a UID, other tools'
+HOME configuration, or operator-configured dependency/provider caches. The
+selected substrate still supplies the isolation and teardown described above.
+
 ## Worker relay memory and artifact limits
 
 The Cloudflare runner relay must stay below the Worker isolate memory ceiling
