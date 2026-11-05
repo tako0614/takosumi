@@ -30,7 +30,7 @@ export interface RuntimeInputProviderInstanceWiring {
   readonly variableName: string;
   readonly nonceArgument: string;
   readonly mapArgument: string;
-  /** Lowest exact provider version that accepts the two arguments. */
+  /** Lowest exact version in the declared provider major accepting the arguments. */
   readonly minimumProviderVersion: string;
 }
 

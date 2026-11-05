@@ -55,8 +55,9 @@ API では `POST /api/v1/connections` です。`/api/v1/provider-connections` �
 場合にだけ動き、そうでなければ Run は失敗します。カタログや Recipe に対応情報があるだけでは有効にならず、既存の静的な Connection や割り当ても自動では切り替わりません。
 
 必要な provider のバージョンは provider ごとに異なります。たとえば `TAKOFORM_TOKEN_FILE`
-による更新には Terraform provider `tako0614/takoform` の 4.1.0 以上が必要です。これはこの
-provider 固有の条件であり、Takosumi 全体の provider バージョン要件ではありません。
+による更新には Terraform provider `tako0614/takoform` の v4 系で 4.1.0 以上が必要です。
+別の major へ対応を自動では引き継ぎません。これはこの provider 固有の条件であり、
+Takosumi 全体の provider バージョン要件ではありません。
 
 ## 値がどこまで行くか
 

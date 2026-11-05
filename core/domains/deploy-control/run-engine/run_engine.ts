@@ -4244,9 +4244,9 @@ export class RunEngine {
           code: RUNTIME_INPUTS_PROVIDER_VERSION_UNPROVEN_REASON,
           message:
             `run-scoped sensitive provider inputs stay inert: provider ` +
-            `${wiring.moduleLocalName} is not pinned to an exact version of at ` +
-            `least ${wiring.minimumProviderVersion}, which is the first release ` +
-            `that accepts them`,
+            `${wiring.moduleLocalName} needs an exact supported release for ` +
+            `${wiring.minimumProviderVersion}: the same stable major at or ` +
+            `above that floor, or the exact declared unstable release`,
           ...(pinnedVersion ? { detail: `pinned version ${pinnedVersion}` } : {}),
         },
       };

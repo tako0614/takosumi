@@ -62,9 +62,10 @@ alone does not enable it, and Takosumi does not switch an existing static Connec
 automatically.
 
 The required provider version depends on the provider. For example, renewal through
-`TAKOFORM_TOKEN_FILE` requires version 4.1.0 or later of the `tako0614/takoform`
-Terraform provider. This floor applies only to that provider; it is not a minimum version
-for providers across Takosumi.
+`TAKOFORM_TOKEN_FILE` requires version 4.1.0 or later within major 4 of the
+`tako0614/takoform` Terraform provider. Support does not carry over automatically
+to another major. This floor applies only to that provider; it is not a minimum
+version for providers across Takosumi.
 
 ## How far the values travel
 
