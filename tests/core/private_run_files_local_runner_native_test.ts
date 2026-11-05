@@ -5,7 +5,11 @@ import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { ACCOUNT_SESSION_COOKIE_NAME } from "../../accounts/service/src/account-session.ts";
+import { handleControlRoute } from "../../accounts/service/src/control-routes.ts";
+import { InMemoryAccountsStore } from "../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../core/bootstrap.ts";
+import { defaultCapsuleInstallConfig } from "../../core/domains/capsules/default_install_config.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import { StorageMigrationRunner } from "../../core/adapters/storage/migration-runner/mod.ts";
 import type { SqlClient } from "../../core/adapters/storage/sql.ts";
@@ -44,6 +48,30 @@ const STORE_ID = "local-runner-native-proof";
 const FORM = "https://edge.forms.takoform.com/forms/ModuleWorker/0.3.0/";
 const HOST_API_PATH = "/apis/forms.takoform.com/v2";
 const enabled = process.env[OPT_IN] === "1";
+const gitInstallEnabled = process.env.TAKOSUMI_TEST_PRIVATE_RUN_FILE_GIT_INSTALL === "1";
+
+test.skipIf(!gitInstallEnabled)(
+  "normal Git install first Plan carries its operator private-file slot into the real Provider",
+  async () => {
+    const providerRoot = process.env.TAKOSUMI_TEST_PROVIDER_SOURCE_ROOT;
+    const sourceCommit = process.env.TAKOSUMI_TEST_PRIVATE_RUN_FILE_GIT_COMMIT;
+    if (!providerRoot || !sourceCommit || !/^[a-f0-9]{40}$/u.test(sourceCommit)) {
+      throw new Error("Provider source and an exact pushed TAKOSUMI_TEST_PRIVATE_RUN_FILE_GIT_COMMIT are required");
+    }
+    const proof = await proveLocalRunnerPrivateFiles(providerRoot, { sourceCommit });
+    expect(proof.planStatus).toBe("succeeded");
+    expect(proof.installPhase).toBe("reviewable");
+    expect(proof.canonicalPrivateSlot).toBe(PRIVATE_SLOT);
+    expect(proof.privatePointerVersion).toBe(1);
+    expect(proof.privatePointerMatchesReceipt).toBe(true);
+    expect(proof.hostMutations).toBe(0);
+    expect(proof.publicResponsesHidePrivateDispatch).toBe(true);
+    expect(proof.runnerListenHostname).toBe("127.0.0.1");
+    expect(proof.sourceCommit).toBe(sourceCommit);
+    console.info(JSON.stringify(proof));
+  },
+  120_000,
+);
 
 interface Receipt {
   readonly version: number;
@@ -226,7 +254,124 @@ interface ProofReport {
   readonly boundaries: readonly string[];
 }
 
-async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<ProofReport> {
+interface GitInstallFirstPlanProof {
+  readonly kind: "takosumi.git-install-first-private-plan-proof/v1";
+  readonly status: "passed";
+  readonly takosumiCommit: string;
+  readonly providerCommit: string;
+  readonly providerBinaryDigest: string;
+  readonly sourceCommit: string;
+  readonly sourceArchiveDigest: string;
+  readonly providerLockDigest: string;
+  readonly installPlanId: string;
+  readonly capsuleId: string;
+  readonly sourceSyncRunId: string;
+  readonly planRunId: string;
+  readonly planStatus: string;
+  readonly installPhase: "reviewable";
+  readonly canonicalPrivateSlot: string;
+  readonly privatePointerVersion: number;
+  readonly privatePointerMatchesReceipt: boolean;
+  readonly hostMutations: number;
+  readonly publicResponsesHidePrivateDispatch: boolean;
+  readonly runnerListenHostname: string;
+  readonly runnerPid: number;
+  readonly runnerServerPid: number;
+  readonly boundaries: readonly string[];
+}
+
+async function createGitInstallFirstPlan(input: {
+  readonly operations: Awaited<ReturnType<typeof createTakosumiService>>["operations"];
+  readonly store: SqlOpenTofuControlStore;
+  readonly sourceCommit: string;
+}) {
+  const currentCommit = (await commandText("git", ["rev-parse", "HEAD"])).trim();
+  if (input.sourceCommit !== currentCommit) {
+    throw new Error("Git fixture must use the exact pushed commit of this native candidate");
+  }
+  const accounts = new InMemoryAccountsStore();
+  const subject = "native_git_private_file_owner";
+  const sessionId = `session_${randomUUID().replaceAll("-", "")}`;
+  const now = Date.now();
+  await accounts.saveAccount({
+    subject, email: "native-git-installer@example.test", displayName: "Native Git installer",
+    createdAt: now, updatedAt: now,
+  });
+  await accounts.saveAccountSession({
+    sessionId, subject, createdAt: now, expiresAt: now + 300_000,
+  });
+  expect(await input.operations.workspaces.listWorkspacesByOwner(subject)).toHaveLength(0);
+  const publicResponses: string[] = [];
+  const route = async (path: string, body?: unknown) => {
+    const url = new URL(`https://native-git-install.example.test${path}`);
+    const response = await handleControlRoute({
+      request: new Request(url, {
+        method: "POST",
+        headers: {
+          cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}`,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          ...(path === "/api/v1/install-plans"
+            ? { "idempotency-key": "native-git-private-file-first-plan" } : {}),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+      url, store: accounts, operations: input.operations,
+    });
+    if (!response) throw new Error("normal Accounts install route was not mounted");
+    const text = await response.text();
+    publicResponses.push(text);
+    const payload = JSON.parse(text) as { installPlan?: Record<string, unknown> };
+    if (!response.ok || !payload.installPlan ||
+      typeof payload.installPlan.id !== "string" || typeof payload.installPlan.phase !== "string") {
+      throw new Error(`normal Accounts install route returned HTTP ${response.status}`);
+    }
+    return payload.installPlan;
+  };
+  let plan = await route("/api/v1/install-plans", {
+    source: {
+      name: "native-private-file-fixture",
+      url: "https://github.com/tako0614/takosumi.git",
+      ref: input.sourceCommit,
+      path: "tests/fixtures/private-run-file-provider",
+    },
+    capsule: { name: "native-private-file-fixture", environment: "local-proof" },
+    options: { modulePath: ".", providerBindings: [] },
+  });
+  const installPlanId = String(plan.id);
+  for (let step = 0; step < 120 && plan.phase !== "reviewable"; step += 1) {
+    if (["failed", "invalidated", "expired", "awaiting_input"].includes(String(plan.phase))) {
+      throw new Error(`normal Git install stopped at ${String(plan.phase)}`);
+    }
+    plan = await route(`/api/v1/install-plans/${installPlanId}/reconcile`);
+    if (plan.phase !== "reviewable") await Bun.sleep(100);
+  }
+  expect(plan.phase).toBe("reviewable");
+  for (const key of ["capsuleId", "sourceSyncRunId", "sourceSnapshotId", "planRunId"]) {
+    if (typeof plan[key] !== "string") throw new Error(`normal Git install omitted ${key}`);
+  }
+  const capsuleId = String(plan.capsuleId);
+  const planRun = await input.store.getPlanRun(String(plan.planRunId));
+  if (!planRun || planRun.capsuleId !== capsuleId) throw new Error("first Plan is not bound to its installed Capsule");
+  const ownership = await input.operations.appOwnership.getOwnership(capsuleId);
+  expect(ownership?.ownerAccountId).toBe(subject);
+  const snapshot = await input.operations.getSourceSnapshot(String(plan.sourceSnapshotId));
+  expect(snapshot.resolvedCommit).toBe(input.sourceCommit);
+  const replay = await route(`/api/v1/install-plans/${installPlanId}/reconcile`);
+  expect(replay.planRunId).toBe(planRun.id);
+  return {
+    planRun, capsuleId, installPlanId, publicResponses,
+    sourceSyncRunId: String(plan.sourceSyncRunId),
+    sourceCommit: snapshot.resolvedCommit, sourceArchiveDigest: snapshot.archiveDigest,
+  };
+}
+
+async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<ProofReport>;
+async function proveLocalRunnerPrivateFiles(
+  providerRoot: string, gitInstall: { readonly sourceCommit: string },
+): Promise<GitInstallFirstPlanProof>;
+async function proveLocalRunnerPrivateFiles(
+  providerRoot: string, gitInstall?: { readonly sourceCommit: string },
+): Promise<ProofReport | GitInstallFirstPlanProof> {
   const tempRoot = await mkdtemp(join(tmpdir(), "takosumi-prf-runner-"));
   await chmod(tempRoot, 0o700);
   const runRoot = join(tempRoot, "runner-root");
@@ -537,6 +682,17 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
       artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
       executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
       privateRunFiles: privateRunFilesFor(client),
+      ...(gitInstall ? { operatorInstallConfigs: [{
+        ...defaultCapsuleInstallConfig(),
+        privateRunFiles: [{ slot: PRIVATE_SLOT }],
+        variableMapping: {
+          fixture_host_endpoint: host.url,
+          fixture_host_api_root: hostApiRoot,
+          fixture_intent_slot: PRIVATE_SLOT,
+          fixture_store_id: STORE_ID,
+        },
+        policy: { providerInstallation: { requireMirror: true } },
+      }] } : {}),
     });
     let service = await serviceFor(sql.client);
     const coreServer = Bun.serve({
@@ -548,100 +704,8 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
     corePortRef.port = coreServer.port;
 
     let store = new SqlOpenTofuControlStore({ client: sql.client });
-    const seeded = await seedCapsuleModel(store, {
-      workspaceId: `workspace_native_${randomUUID().replaceAll("-", "")}`,
-      capsuleId: `capsule_native_${randomUUID().replaceAll("-", "")}`,
-      sourceId: `source_native_${randomUUID().replaceAll("-", "")}`,
-      snapshotId: `snapshot_native_${randomUUID().replaceAll("-", "")}`,
-      installConfigId: `install_native_${randomUUID().replaceAll("-", "")}`,
-      name: "provider-remote-snapshot",
-      environment: "local-proof",
-      withoutSnapshot: true,
-      requiredProviders: [],
-      installConfig: {
-        privateRunFiles: [{ slot: PRIVATE_SLOT }],
-        policy: { providerInstallation: { requireMirror: true } },
-      },
-    });
-    const moduleDir = join(tempRoot, "module");
-    await mkdir(moduleDir, { recursive: true, mode: 0o700 });
-    const mainTf = `terraform {
-  required_version = "= 1.12.3"
-  required_providers {
-    takoform = {
-      source  = ${JSON.stringify(PROVIDER_SOURCE)}
-      version = "= ${PROVIDER_VERSION}"
-    }
-  }
-}
-provider "takoform" {
-  alias             = "main"
-  endpoint          = ${JSON.stringify(host.url)}
-  host_api_root     = ${JSON.stringify(hostApiRoot)}
-  token             = "fixture-token"
-  store_id          = ${JSON.stringify(STORE_ID)}
-  space             = "prod"
-  intent_store_slot = ${JSON.stringify(PRIVATE_SLOT)}
-}
-resource "takoform_module_worker" "app" {
-  provider = takoform.main
-  name = "app"
-}
-`;
-    await writeFile(join(moduleDir, "main.tf"), mainTf, { mode: 0o600 });
-    const archive = await createSourceArchive(tempRoot, moduleDir);
-    const snapshot = {
-      ...seeded.snapshot,
-      archiveDigest: archive.digest,
-      archiveSizeBytes: archive.bytes.byteLength,
-      repositoryInstallMetadata: { status: "absent" as const },
-      repositoryManifest: { status: "absent" as const },
-      repositoryModules: {
-        status: "ready" as const,
-        scopePath: ".",
-        modules: [{
-          path: ".",
-          providerPackages: [{ source: PROVIDER_SOURCE, allowed: true }],
-          rootProviderRequirements: [{
-            source: PROVIDER_SOURCE,
-            moduleLocalName: "takoform",
-            version: PROVIDER_VERSION,
-          }],
-        }],
-      },
-    };
-    await store.putSourceSnapshot(snapshot);
-    await archiveStore.write(snapshot.archiveRef, archive.bytes);
-    const compatibilityId = `compat_${randomUUID().replaceAll("-", "")}`;
-    await store.putCapsuleCompatibilityReport({
-      id: compatibilityId,
-      sourceId: seeded.source.id,
-      sourceSnapshotId: snapshot.id,
-      capsuleId: seeded.capsule.id,
-      modulePath: ".",
-      level: "ready",
-      findings: [],
-      providerPackages: [{ source: PROVIDER_SOURCE, allowed: true }],
-      rootProviderRequirements: [{
-        source: PROVIDER_SOURCE,
-        moduleLocalName: "takoform",
-        version: PROVIDER_VERSION,
-      }],
-      resources: [],
-      dataSources: [],
-      provisioners: [],
-      rootModuleVariables: [],
-      rootModuleVariableDeclarations: [],
-      rootModuleOutputs: [],
-      createdAt: new Date().toISOString(),
-    });
-    const capsule = await store.getCapsule(seeded.capsule.id);
-    if (!capsule) throw new Error("seeded Capsule disappeared from native PostgreSQL");
-    await store.putCapsule({
-      ...capsule,
-      compatibilityReportId: compatibilityId,
-      compatibilityStatus: "ready",
-      updatedAt: new Date().toISOString(),
+    const seededAuthority = gitInstall ? undefined : await createSeededNativeAuthority({
+      store, tempRoot, host, hostApiRoot, archiveStore,
     });
 
     let controller = service.operations.controller;
@@ -657,7 +721,10 @@ resource "takoform_module_worker" "app" {
     });
     runnerPids.push(planRunner.pid);
     activeRunnerUrl = planRunner.baseUrl;
-    const plan = await controller.createCapsulePlan(seeded.capsule.id);
+    const gitPlan = gitInstall ? await createGitInstallFirstPlan({
+      operations: service.operations, store, sourceCommit: gitInstall.sourceCommit,
+    }) : undefined;
+    const plan = gitPlan ?? await controller.createCapsulePlan(seededAuthority!.capsuleId);
     if (plan.planRun.status !== "succeeded") {
       const persistedPlan = await store.getPlanRun(plan.planRun.id);
       const diagnosticCodes = plan.planRun.diagnostics?.map((item) => item.code).filter(Boolean);
@@ -669,6 +736,63 @@ resource "takoform_module_worker" "app" {
     const providerLockDigest = plan.planRun.providerLockDigest;
     if (!providerLockDigest) throw new Error("OpenTofu Runner did not return a provider lock digest");
     await stopRunnerProcess(planRunner);
+    if (gitPlan) {
+      const capsule = await store.getCapsule(gitPlan.capsuleId);
+      if (!capsule) throw new Error("normal Git install did not persist its Capsule");
+      const config = await service.operations.capsules.getInstallConfig(capsule.installConfigId);
+      const pointer = await sql.client.query<{ version: number | string; digest: string }>(
+        `select version, digest from takosumi_private_run_file_pointers
+          where workspace_id = $1 and capsule_id = $2 and environment = $3 and slot = $4`,
+        [capsule.workspaceId, capsule.id, capsule.environment, PRIVATE_SLOT],
+      );
+      const receipt = wireEvidence.find((item) => item.operation === "commit")?.receipt;
+      const dispatch = runnerDispatches.filter((item) => item.runId === plan.planRun.id);
+      expect(config.privateRunFiles).toEqual([{ slot: PRIVATE_SLOT }]);
+      expect(dispatch).toHaveLength(1);
+      expect(dispatch[0]?.slot).toBe(PRIVATE_SLOT);
+      expect(pointer.rows).toHaveLength(1);
+      expect(Number(pointer.rows[0]?.version)).toBe(1);
+      expect(receipt?.expectedVersion).toBe(0);
+      expect(receipt?.version).toBe(1);
+      expect(pointer.rows[0]?.digest).toBe(receipt?.digest);
+      expect(host.mutations).toBe(0);
+      const responsesHideDispatch = gitPlan.publicResponses.every((response) =>
+        !response.includes(privateEndpoint) && !response.includes('"privateRunFiles"')
+      );
+      expect(responsesHideDispatch).toBe(true);
+      return {
+        kind: "takosumi.git-install-first-private-plan-proof/v1",
+        status: "passed",
+        takosumiCommit: (await commandText("git", ["rev-parse", "HEAD"])).trim(),
+        providerCommit: providerSource.commit,
+        providerBinaryDigest,
+        sourceCommit: gitPlan.sourceCommit,
+        sourceArchiveDigest: gitPlan.sourceArchiveDigest,
+        providerLockDigest,
+        installPlanId: gitPlan.installPlanId,
+        capsuleId: capsule.id,
+        sourceSyncRunId: gitPlan.sourceSyncRunId,
+        planRunId: plan.planRun.id,
+        planStatus: plan.planRun.status,
+        installPhase: "reviewable",
+        canonicalPrivateSlot: config.privateRunFiles![0]!.slot,
+        privatePointerVersion: Number(pointer.rows[0]!.version),
+        privatePointerMatchesReceipt: pointer.rows[0]!.digest === receipt!.digest,
+        hostMutations: host.mutations,
+        publicResponsesHidePrivateDispatch: responsesHideDispatch,
+        runnerListenHostname: planRunner.listenHostname!,
+        runnerPid: planRunner.pid,
+        runnerServerPid: planRunner.serverPid!,
+        boundaries: [
+          "normal workspace-less Accounts install route and coordinator; only initial local account/session are fixtures; no Namespace, Capsule, SourceSnapshot, compatibility or Run seed",
+          "real public Git source_sync of this exact pushed test fixture; unchanged source URL and DNS/SSRF guards",
+          "explicit operator-owned base InstallConfig supplies the slot and synthetic Host tuple; the repository does not grant private-file authority",
+          "real local Runner/OpenTofu/Provider5, native ephemeral PostgreSQL and encrypted private blobs; synthetic HTTPS Host; no Host mutation",
+          "first Plan component only; no real app install, Apply, real authentication/SSO, Cloud/image, live service or publication qualification",
+        ],
+      };
+    }
+    if (!seededAuthority) throw new Error("seeded native authority is missing");
 
     // Reopen Core's SQL adapter after a real PostgreSQL daemon restart. The
     // Plan Run and private-file receipt/blob must still be recoverable before
@@ -790,7 +914,7 @@ resource "takoform_module_worker" "app" {
     });
     runnerPids.push(destroyRunner.pid);
     activeRunnerUrl = destroyRunner.baseUrl;
-    const destroyPlan = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+    const destroyPlan = await controller.createCapsuleDestroyPlan(seededAuthority.capsuleId);
     if (destroyPlan.planRun.status !== "waiting_approval") {
       throw new Error(`native destroy plan has unexpected status ${destroyPlan.planRun.status}`);
     }
@@ -826,7 +950,7 @@ resource "takoform_module_worker" "app" {
       providerCommit: providerSource.commit,
       providerVersion: PROVIDER_VERSION,
       providerBinaryDigest,
-      sourceArchiveDigest: archive.digest,
+      sourceArchiveDigest: seededAuthority.sourceArchiveDigest,
       providerLockDigest,
       tofuVersion: tofuVersion.trim().split("\n").slice(0, 2).join(" "),
       bunVersion: Bun.version,
@@ -889,6 +1013,112 @@ resource "takoform_module_worker" "app" {
     }
     await rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+async function createSeededNativeAuthority(input: {
+  readonly store: SqlOpenTofuControlStore;
+  readonly tempRoot: string;
+  readonly host: { readonly url: string };
+  readonly hostApiRoot: string;
+  readonly archiveStore: ReturnType<typeof createFileSourceArchiveStore>;
+}): Promise<{ capsuleId: string; sourceArchiveDigest: string }> {
+  const { store, tempRoot, host, hostApiRoot, archiveStore } = input;
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: `workspace_native_${randomUUID().replaceAll("-", "")}`,
+    capsuleId: `capsule_native_${randomUUID().replaceAll("-", "")}`,
+    sourceId: `source_native_${randomUUID().replaceAll("-", "")}`,
+    snapshotId: `snapshot_native_${randomUUID().replaceAll("-", "")}`,
+    installConfigId: `install_native_${randomUUID().replaceAll("-", "")}`,
+    name: "provider-remote-snapshot",
+    environment: "local-proof",
+    withoutSnapshot: true,
+    requiredProviders: [],
+    installConfig: {
+      privateRunFiles: [{ slot: PRIVATE_SLOT }],
+      policy: { providerInstallation: { requireMirror: true } },
+    },
+  });
+  const moduleDir = join(tempRoot, "module");
+  await mkdir(moduleDir, { recursive: true, mode: 0o700 });
+  const mainTf = `terraform {
+  required_version = "= 1.12.3"
+  required_providers {
+    takoform = {
+      source  = ${JSON.stringify(PROVIDER_SOURCE)}
+      version = "= ${PROVIDER_VERSION}"
+    }
+  }
+}
+provider "takoform" {
+  alias             = "main"
+  endpoint          = ${JSON.stringify(host.url)}
+  host_api_root     = ${JSON.stringify(hostApiRoot)}
+  token             = "fixture-token"
+  store_id          = ${JSON.stringify(STORE_ID)}
+  space             = "prod"
+  intent_store_slot = ${JSON.stringify(PRIVATE_SLOT)}
+}
+resource "takoform_module_worker" "app" {
+  provider = takoform.main
+  name = "app"
+}
+`;
+  await writeFile(join(moduleDir, "main.tf"), mainTf, { mode: 0o600 });
+  const archive = await createSourceArchive(tempRoot, moduleDir);
+  const snapshot = {
+    ...seeded.snapshot,
+    archiveDigest: archive.digest,
+    archiveSizeBytes: archive.bytes.byteLength,
+    repositoryInstallMetadata: { status: "absent" as const },
+    repositoryManifest: { status: "absent" as const },
+    repositoryModules: {
+      status: "ready" as const,
+      scopePath: ".",
+      modules: [{
+        path: ".",
+        providerPackages: [{ source: PROVIDER_SOURCE, allowed: true }],
+        rootProviderRequirements: [{
+          source: PROVIDER_SOURCE,
+          moduleLocalName: "takoform",
+          version: PROVIDER_VERSION,
+        }],
+      }],
+    },
+  };
+  await store.putSourceSnapshot(snapshot);
+  await archiveStore.write(snapshot.archiveRef, archive.bytes);
+  const compatibilityId = `compat_${randomUUID().replaceAll("-", "")}`;
+  await store.putCapsuleCompatibilityReport({
+    id: compatibilityId,
+    sourceId: seeded.source.id,
+    sourceSnapshotId: snapshot.id,
+    capsuleId: seeded.capsule.id,
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providerPackages: [{ source: PROVIDER_SOURCE, allowed: true }],
+    rootProviderRequirements: [{
+      source: PROVIDER_SOURCE,
+      moduleLocalName: "takoform",
+      version: PROVIDER_VERSION,
+    }],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: [],
+    rootModuleVariableDeclarations: [],
+    rootModuleOutputs: [],
+    createdAt: new Date().toISOString(),
+  });
+  const capsule = await store.getCapsule(seeded.capsule.id);
+  if (!capsule) throw new Error("seeded Capsule disappeared from native PostgreSQL");
+  await store.putCapsule({
+    ...capsule,
+    compatibilityReportId: compatibilityId,
+    compatibilityStatus: "ready",
+    updatedAt: new Date().toISOString(),
+  });
+  return { capsuleId: seeded.capsule.id, sourceArchiveDigest: archive.digest };
 }
 
 async function inspectProviderSource(root: string): Promise<{ commit: string }> {
