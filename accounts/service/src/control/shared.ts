@@ -115,6 +115,7 @@ import {
   methodNotAllowed,
   readJsonObject,
   readOptionalJsonObject,
+  RequestBodyReadError,
   stringValue,
 } from "../http-helpers.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
@@ -412,10 +413,14 @@ export async function publicApplyActionResponse(
 
 /**
  * Renders an `OpenTofuControllerError` (carrying a `.code`) to the contract's
- * code->HTTP-status mapping. Workspace admission loss is a precondition failure;
- * other non-controller errors collapse to 500.
+ * code->HTTP-status mapping. Bounded body validation keeps its explicit 400/413
+ * status; Workspace admission loss is a precondition failure. Other errors
+ * collapse to 500.
  */
 export function controllerErrorResponse(error: unknown): Response {
+  if (error instanceof RequestBodyReadError) {
+    return errorJson(error.code, error.message, error.status);
+  }
   if (error instanceof WorkspaceManagementAdmissionConflictError) {
     return errorJson(
       "failed_precondition",

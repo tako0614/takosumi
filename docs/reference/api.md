@@ -756,6 +756,9 @@ webhook secret の復旧手順、旧 secret の失効タイミング、応答を
 [Source と Capsule](../concepts/sources.md) を参照してください。service 内部向けの同等経路は
 `POST /internal/v1/sources/{sourceId}/hook-secret/rotate` です。
 
+公開APIのhook secret回転は本文なしで呼びます。本文が1 byteでもあれば
+`413 request_too_large` で拒否し、secretを変更しません。
+
 `DELETE /api/v1/sources/{sourceId}` は Workspace の owner/admin が未参照の
 Source を削除します。非破棄 Capsule に追跡されていると `409
 source_referenced_by_capsule`、進行中 Run があると `409
@@ -837,6 +840,9 @@ Workspace・environment で名前が使われていないかを確かめます�
 `capsule_initial_authority_conflict`）にします。試行は従来どおり入力に戻ります。
 試行ではない plan も、Capsule を記録する前（`syncing_source` から `creating_capsule` まで、または
 そこで `failed`）なら、始めた本人が `expectedGeneration` を付けた `DELETE` で捨てられます。
+`DELETE` の本文はUTF-8で16 KiBまでの `{ expectedGeneration }` です。
+本文が空または空白だけならqueryの `expectedGeneration` も使えますが、JSON本文との併用は拒否します。
+本文が上限を超えると `413 request_too_large` で拒否し、planを変更しません。
 lease を持つ処理がないことを確かめ、応答が失われて残った未適用の Capsule があれば試行と同じく
 abandon し、`discarded`（`install_plan_discarded`）にします。このような plan は open 一覧
 （`open=1`）にも載ります。試行と違って期限がなく、drain が決着させるのは一度も claim されて
