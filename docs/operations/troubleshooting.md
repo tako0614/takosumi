@@ -337,11 +337,30 @@ alarm の wall より後に発火します。期限の伝達が入った後は R
 - operator 向けの webhook release activator は `deadlineAt` を使いません。外部の
   materializer が受け持つ release は、この期限では止まりません。
 
-期限で止まった Apply の残骸は、普段の失敗と同じ手順で片付けます。provider 側で
-どの resource が作られたかは部分 StateVersion に残っています。期限の伝達より前の
-runner image で起きた `runner_mutation_indeterminate` (alarm が
-`exceededWallTime` で切れたもの) は state が残っていないので、provider 側の
-resource を operator が個別に確認して片付ける必要があります。
+期限で止まった Apply は、部分 StateVersion が保存されていれば、その内容と
+provider 側の状態を照合します。StateVersion が無い場合も、外部への操作が
+行われていないとは判断できません。
+
+### 操作の結果を確認できない場合
+
+`runner_mutation_indeterminate` は、信頼できる実行完了を確認できなかったことを
+示します。Runner の異常終了や完了応答の喪失でも発生し、provider / Host が操作を
+受理した後に StateVersion や Output を保存できていない場合があります。
+
+新しい反映・削除を始める前に、operator が元の Run と外部操作の結果を照合します。
+元の Run、診断、保存された StateVersion、Runner の durable claim を保持してください。
+private Run file を使う構成では、元 intent・pointer・receipt・暗号文と復号に必要な
+key custody も保持します。秘密値を通常ログや問い合わせ本文へ貼り付けないでください。
+
+元の Operation ID が記録されていれば、その正確な Operation / Resource を確認します。
+Operation ACK が未記録なら、Host / provider の管理者へ元操作の照合を依頼します。
+新しい key での送信、同名 Resource の adoption、receipt の手書きで不明状態を解消しません。
+ローカル supervisor 構成では、実際の子孫 process の drain と owner close を確認するまで
+Runner の所有権を保持します。
+新しい変更確認だけでは外部操作の結果や再適用の安全性は確定しません。
+
+private Run file の保持と ACK の境界は
+[private-run-files.md](../internal/private-run-files.md#retention-boundary)を参照してください。
 
 ## エスカレーション
 

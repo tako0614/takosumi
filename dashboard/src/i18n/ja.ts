@@ -883,6 +883,8 @@ export const ja = {
     "指定されたバージョンが見つかりませんでした。バージョンを確認して、もう一度お試しください。",
   "runError.stateGenerationMismatch":
     "別の変更が先に適用されました。もう一度内容を確認してから適用してください。",
+  "runError.mutationIndeterminate":
+    "操作が完了したか確認できません。実行を繰り返す前に、管理者に結果の確認を依頼してください。",
   "runError.planFailed":
     "変更内容の確認に失敗しました。詳細を確認して、もう一度お試しください。",
   "runError.applyFailed":
