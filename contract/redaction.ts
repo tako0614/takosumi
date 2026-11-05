@@ -69,6 +69,107 @@ export interface RedactionOptions {
   readonly redactStringValues?: boolean;
 }
 
+export interface OriginalRedactionSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
+export interface RedactionEdit extends OriginalRedactionSpan {
+  readonly replacement: string;
+  readonly maskStart?: number;
+  readonly maskEnd?: number;
+}
+
+// Only the Runner exact-value path allocates this map. Each surviving UTF-16
+// code unit retains its original index; replacement text has no source index.
+// This lets later structural passes report original spans even after an earlier
+// pass has changed the string, without guessing alignment from repeated text.
+export class OriginalSpanTrace {
+  value: string;
+  readonly spans: OriginalRedactionSpan[] = [];
+  failed = false;
+  private indices: Int32Array;
+  private readonly originalLength: number;
+
+  constructor(value: string) {
+    this.value = value;
+    this.originalLength = value.length;
+    this.indices = new Int32Array(value.length);
+    for (let index = 0; index < value.length; index += 1) this.indices[index] = index;
+  }
+
+  apply(next: string, edits: readonly RedactionEdit[]): void {
+    if (this.failed) return;
+    if (edits.length === 0) {
+      if (next !== this.value) this.failClosed();
+      return;
+    }
+    let expectedLength = this.value.length;
+    let previousEnd = 0;
+    for (const edit of edits) {
+      if (edit.start < previousEnd || edit.end < edit.start ||
+        edit.end > this.value.length ||
+        (edit.maskStart !== undefined &&
+          (edit.maskStart < edit.start || edit.maskStart > edit.end)) ||
+        (edit.maskEnd !== undefined &&
+          (edit.maskEnd < (edit.maskStart ?? edit.start) ||
+            edit.maskEnd > edit.end))) {
+        this.failClosed();
+        return;
+      }
+      expectedLength += edit.replacement.length - (edit.end - edit.start);
+      previousEnd = edit.end;
+    }
+    if (expectedLength !== next.length) {
+      this.failClosed();
+      return;
+    }
+    const nextIndices = new Int32Array(next.length);
+    const chunks: string[] = [];
+    let source = 0;
+    let target = 0;
+    for (const edit of edits) {
+      chunks.push(this.value.slice(source, edit.start), edit.replacement);
+      nextIndices.set(this.indices.subarray(source, edit.start), target);
+      target += edit.start - source;
+      nextIndices.fill(-1, target, target + edit.replacement.length);
+      target += edit.replacement.length;
+      this.record(edit.maskStart ?? edit.start, edit.maskEnd ?? edit.end);
+      source = edit.end;
+    }
+    chunks.push(this.value.slice(source));
+    nextIndices.set(this.indices.subarray(source), target);
+    if (chunks.join("") !== next) {
+      this.failClosed();
+      return;
+    }
+    this.value = next;
+    this.indices = nextIndices;
+  }
+
+  private record(start: number, end: number): void {
+    let runStart = -1;
+    let previous = -1;
+    for (let index = start; index < end; index += 1) {
+      const original = this.indices[index];
+      if (original < 0) continue;
+      if (runStart >= 0 && original !== previous + 1) {
+        this.spans.push({ start: runStart, end: previous + 1 });
+        runStart = -1;
+      }
+      if (runStart < 0) runStart = original;
+      previous = original;
+    }
+    if (runStart >= 0) this.spans.push({ start: runStart, end: previous + 1 });
+  }
+
+  private failClosed(): void {
+    this.failed = true;
+    this.spans.length = 0;
+    this.spans.push({ start: 0, end: this.originalLength });
+  }
+}
+
 export function isSecretKey(
   key: string,
   options: RedactionOptions = {},
@@ -152,9 +253,68 @@ export function redactString(
   return redactedValue;
 }
 
+/** Structural replacement spans in the original input, for combining with
+ * Runner's literal credential matches. The ordinary redactString path remains
+ * allocation-free with respect to the source-index map. */
+export function traceRedactString(
+  value: string,
+  options: RedactionOptions = {},
+): OriginalSpanTrace {
+  const replacement = redacted(options);
+  const trace = new OriginalSpanTrace(value);
+  const step = (transform: (text: string, edits: RedactionEdit[]) => string) => {
+    if (trace.failed) return;
+    const edits: RedactionEdit[] = [];
+    trace.apply(transform(trace.value, edits), edits);
+  };
+  step((text, edits) => redactPrivateKeyBlocks(text, replacement, edits));
+  step((text, edits) => redactQuotedSecretAssignments(text, replacement, true, edits));
+  step((text, edits) => redactUnquotedSecretAssignments(text, replacement, true, edits));
+  step((text, edits) =>
+    redactCredentialFields(text, AUTHORIZATION_FIELD_PATTERN, replacement, edits));
+  step((text, edits) =>
+    redactCredentialFields(text, DIGEST_PARAMETERS_PATTERN, replacement, edits));
+  step((text, edits) => redactUrlCredentials(text, replacement, edits));
+  for (const pattern of [HTTP_AUTH_SCHEME_PATTERN, TOKEN_SCHEME_PATTERN]) {
+    step((text, edits) => {
+      pattern.lastIndex = 0;
+      return text.replace(pattern, (match: string, scheme: string, offset: number) => {
+        const start = offset + scheme.length;
+        let maskStart = start;
+        while (maskStart < offset + match.length && isWhitespace(text[maskStart])) {
+          maskStart += 1;
+        }
+        edits.push({
+          start,
+          end: offset + match.length,
+          replacement: ` ${replacement}`,
+          maskStart,
+        });
+        return `${scheme} ${replacement}`;
+      });
+    });
+  }
+  step((text, edits) => redactQuotedSecretAssignments(text, replacement, false, edits));
+  step((text, edits) => redactUnquotedSecretAssignments(text, replacement, false, edits));
+  for (const pattern of SECRET_VALUE_REPLACEMENTS) {
+    step((text, edits) => {
+      pattern.lastIndex = 0;
+      return text.replace(pattern, (match: string, offset: number) => {
+        edits.push({ start: offset, end: offset + match.length, replacement });
+        return replacement;
+      });
+    });
+  }
+  return trace;
+}
+
 // scheme://user:password@host — walk from the fixed :// delimiter rather than
 // asking a regex to retry a long dotted scheme at every word boundary.
-function redactUrlCredentials(value: string, replacement: string): string {
+function redactUrlCredentials(
+  value: string,
+  replacement: string,
+  edits?: RedactionEdit[],
+): string {
   const chunks: string[] = [];
   let cursor = 0;
   let search = 0;
@@ -184,6 +344,7 @@ function redactUrlCredentials(value: string, replacement: string): string {
     while (index < value.length && isUriPasswordChar(value[index])) index += 1;
     if (index === passwordStart || value[index] !== "@") continue;
     chunks.push(value.slice(cursor, passwordStart), replacement);
+    edits?.push({ start: passwordStart, end: index, replacement });
     cursor = index;
     search = index + 1;
   }
@@ -219,6 +380,7 @@ function redactCredentialFields(
   value: string,
   pattern: RegExp,
   replacement: string,
+  edits?: RedactionEdit[],
 ): string {
   pattern.lastIndex = 0;
   const chunks: string[] = [];
@@ -226,7 +388,13 @@ function redactCredentialFields(
   for (const match of value.matchAll(pattern)) {
     if (match.index < cursor) continue;
     const prefix = match[1];
-    const end = credentialFieldEnd(value, match.index + match[0].length);
+    const start = match.index + match[0].length;
+    const end = credentialFieldEnd(value, start);
+    edits?.push({
+      start,
+      end,
+      replacement: /[ \t]$/u.test(prefix) ? replacement : ` ${replacement}`,
+    });
     chunks.push(
       value.slice(cursor, match.index),
       /[ \t]$/u.test(prefix) ? prefix : `${prefix} `,
@@ -308,7 +476,11 @@ function isAsciiLetter(code: number): boolean {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
-function redactPrivateKeyBlocks(value: string, replacement: string): string {
+function redactPrivateKeyBlocks(
+  value: string,
+  replacement: string,
+  edits?: RedactionEdit[],
+): string {
   const chunks: string[] = [];
   let cursor = 0;
   while (cursor < value.length) {
@@ -331,7 +503,9 @@ function redactPrivateKeyBlocks(value: string, replacement: string): string {
     const endHeader = header.replace("BEGIN", "END");
     const endStart = value.indexOf(endHeader, headerEnd);
     chunks.push(value.slice(cursor, begin), replacement);
-    cursor = endStart < 0 ? value.length : endStart + endHeader.length;
+    const end = endStart < 0 ? value.length : endStart + endHeader.length;
+    edits?.push({ start: begin, end, replacement });
+    cursor = end;
   }
   if (cursor === 0) return value;
   chunks.push(value.slice(cursor));
@@ -354,6 +528,7 @@ function redactQuotedSecretAssignments(
   value: string,
   replacement: string,
   structuredOnly: boolean,
+  edits?: RedactionEdit[],
 ): string {
   const chunks: string[] = [];
   let cursor = 0;
@@ -385,6 +560,7 @@ function redactQuotedSecretAssignments(
     if (isStructuredOpening(opening) !== structuredOnly) continue;
     const end = secretAssignmentValueEnd(value, valueStart);
     chunks.push(value.slice(cursor, valueStart), replacement);
+    edits?.push({ start: valueStart, end, replacement });
     cursor = end;
     index = end;
   }
@@ -408,6 +584,7 @@ function redactUnquotedSecretAssignments(
   value: string,
   replacement: string,
   structuredOnly: boolean,
+  edits?: RedactionEdit[],
 ): string {
   ASSIGNMENT_SEPARATOR_PATTERN.lastIndex = 0;
   const chunks: string[] = [];
@@ -442,6 +619,7 @@ function redactUnquotedSecretAssignments(
       ? credentialFieldEnd(value, start)
       : secretAssignmentValueEnd(value, start);
     chunks.push(value.slice(cursor, start), replacement);
+    edits?.push({ start, end, replacement });
     cursor = end;
   }
   if (cursor === 0) return value;
