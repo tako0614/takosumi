@@ -80,4 +80,3 @@ export async function stopNativeRunnerProcess(
     throw runner.shutdownError;
   }
 }
-
