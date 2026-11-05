@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import Ajv2020 from "ajv/dist/2020.js";
 import { join } from "node:path";
+import { credentialProseFixtures, credentialSpanFixtures } from "../helpers/credential_span_fixtures.ts";
 
 import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-manifest-v2.1.schema.json" with { type: "json" };
 import repositoryManifestV2_2Schema from "../../docs/public/schemas/repository-manifest-v2.2.schema.json" with { type: "json" };
@@ -45,6 +46,31 @@ test("manifest presentation and Interface values reject complete credential span
 async function fixture(name: string): Promise<string> {
   return await Bun.file(join(fixtureDirectory, name)).text();
 }
+
+test.each(credentialSpanFixtures)("manifest presentation, Interface and argv reject credential continuations: $name", async ({ input, sensitive }) => {
+  const presentation = JSON.parse(await fixture("valid.json"));
+  presentation.install.modules["."].inputs[0].label.en = input;
+  const interfaceDocument = JSON.parse(await fixture("v2-launcher.json"));
+  interfaceDocument.install.modules["deploy/takoform"].interfaces[0].spec.document = { text: input };
+  const sourceBuild = {
+    apiVersion: "takosumi.com/v2.3",
+    kind: "Repository",
+    install: { modules: { ".": { inputs: [], sourceBuild: {
+      commands: [{ argv: ["echo", input] }], outputs: ["dist/result.txt"],
+    } } } },
+  };
+  for (const document of [presentation, interfaceDocument, sourceBuild]) {
+    const result = parseRepositoryManifestText(JSON.stringify(document));
+    expect(result.ok).toBe(false);
+    for (const value of sensitive) expect(JSON.stringify(result)).not.toContain(value);
+  }
+});
+
+test.each(credentialProseFixtures)("manifest presentation preserves public/prose controls: %s", async (input) => {
+  const document = JSON.parse(await fixture("valid.json"));
+  document.install.modules["."].inputs[0].label.en = input;
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(true);
+});
 
 test("repository manifest accepts the closed v1 install proposal", async () => {
   const parsed = parseRepositoryManifestText(await fixture("valid.json"));

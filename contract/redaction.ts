@@ -48,6 +48,7 @@ const ASSIGNMENT_SEPARATOR_PATTERN = /[=:]/g;
 // valid \u escapes before applying the same secret-key policy as object values.
 // JavaScript string indexing uses UTF-16 code units, not UTF-8 bytes.
 const MAX_STRUCTURED_SECRET_CODE_UNITS = 1_048_576;
+const MAX_MULTILINE_SECRET_CODE_UNITS = 1_048_576;
 const SECRET_VALUE_PATTERNS = [
   /\b(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql):\/\//i,
   /\bsk-[A-Za-z0-9_-]{8,}\b/,
@@ -223,7 +224,11 @@ export function redactString(
   let redactedValue = redactUrlCredentials(redactCredentialFields(
     redactCredentialFields(
       redactSecretAssignments(
-        redactPrivateKeyBlocks(value, replacement),
+        redactAgeIdentities(redactPuttyPrivateKeys(
+          redactPrivateArmorBlocks(
+            redactPrivateKeyBlocks(value, replacement), replacement,
+          ), replacement,
+        ), replacement),
         replacement,
         true,
       ),
@@ -268,6 +273,9 @@ export function traceRedactString(
     trace.apply(transform(trace.value, edits), edits);
   };
   step((text, edits) => redactPrivateKeyBlocks(text, replacement, edits));
+  step((text, edits) => redactPrivateArmorBlocks(text, replacement, edits));
+  step((text, edits) => redactPuttyPrivateKeys(text, replacement, edits));
+  step((text, edits) => redactAgeIdentities(text, replacement, edits));
   step((text, edits) => redactQuotedSecretAssignments(text, replacement, true, edits));
   step((text, edits) => redactUnquotedSecretAssignments(text, replacement, true, edits));
   step((text, edits) =>
@@ -295,6 +303,7 @@ export function traceRedactString(
     });
   }
   step((text, edits) => redactQuotedSecretAssignments(text, replacement, false, edits));
+  step((text, edits) => redactSingleQuotedYamlAssignments(text, replacement, edits));
   step((text, edits) => redactUnquotedSecretAssignments(text, replacement, false, edits));
   for (const pattern of SECRET_VALUE_REPLACEMENTS) {
     step((text, edits) => {
@@ -512,16 +521,267 @@ function redactPrivateKeyBlocks(
   return chunks.join("");
 }
 
+const PRIVATE_ARMOR_FAMILIES = [
+  {
+    begin: "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    end: "-----END PGP PRIVATE KEY BLOCK-----",
+  },
+  {
+    begin: "---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----",
+    end: "---- END SSH2 ENCRYPTED PRIVATE KEY ----",
+  },
+  {
+    begin: "---- BEGIN SSH2 PRIVATE KEY ----",
+    end: "---- END SSH2 PRIVATE KEY ----",
+  },
+] as const;
+
+function redactPrivateArmorBlocks(
+  value: string,
+  replacement: string,
+  edits?: RedactionEdit[],
+): string {
+  const chunks: string[] = [];
+  let cursor = 0;
+  // Cache each next delimiter so many explanatory openings cannot repeatedly
+  // scan the same suffix for an absent closing marker.
+  const begins = PRIVATE_ARMOR_FAMILIES.map((family) =>
+    value.indexOf(family.begin));
+  const ends: (number | undefined)[] = PRIVATE_ARMOR_FAMILIES.map(() => undefined);
+  while (true) {
+    let familyIndex = -1;
+    for (let index = 0; index < begins.length; index += 1) {
+      if (begins[index] >= 0 &&
+        (familyIndex < 0 || begins[index] < begins[familyIndex])) familyIndex = index;
+    }
+    if (familyIndex < 0) break;
+    const family = PRIVATE_ARMOR_FAMILIES[familyIndex];
+    const begin = begins[familyIndex];
+    const headerEnd = begin + family.begin.length;
+    if (ends[familyIndex] === undefined ||
+      (ends[familyIndex]! >= 0 && ends[familyIndex]! < headerEnd)) {
+      ends[familyIndex] = value.indexOf(family.end, headerEnd);
+    }
+    const endStart = ends[familyIndex]!;
+    const followsNewline = value[headerEnd] === "\n" || value[headerEnd] === "\r";
+    if (followsNewline || endStart >= 0) {
+      const end = endStart < 0 ? value.length : endStart + family.end.length;
+      chunks.push(value.slice(cursor, begin), replacement);
+      edits?.push({ start: begin, end, replacement });
+      cursor = end;
+    }
+    begins[familyIndex] = value.indexOf(family.begin, headerEnd);
+    for (let index = 0; index < begins.length; index += 1) {
+      if (begins[index] >= 0 && begins[index] < cursor) {
+        begins[index] = value.indexOf(PRIVATE_ARMOR_FAMILIES[index].begin, cursor);
+      }
+    }
+  }
+  if (chunks.length === 0) return value;
+  chunks.push(value.slice(cursor));
+  return chunks.join("");
+}
+
+interface BoundedLine {
+  readonly end: number;
+  readonly next: number;
+}
+
+function boundedLine(value: string, start: number, limit: number): BoundedLine | null {
+  for (let index = start; index < limit; index += 1) {
+    if (value[index] === "\r") {
+      return { end: index, next: value[index + 1] === "\n" ? index + 2 : index + 1 };
+    }
+    if (value[index] === "\n") {
+      return { end: index, next: index + 1 };
+    }
+  }
+  return limit === value.length ? { end: limit, next: limit } : null;
+}
+
+function redactPuttyPrivateKeys(
+  value: string,
+  replacement: string,
+  edits?: RedactionEdit[],
+): string {
+  const marker = "PuTTY-User-Key-File-";
+  const chunks: string[] = [];
+  let cursor = 0;
+  let search = 0;
+  while (search < value.length) {
+    const begin = value.indexOf(marker, search);
+    if (begin < 0) break;
+    search = begin + marker.length;
+    let lineStart = begin;
+    while (lineStart > 0 && begin - lineStart < 128 &&
+      value[lineStart - 1] !== "\n" && value[lineStart - 1] !== "\r") {
+      lineStart -= 1;
+    }
+    if (lineStart > 0 && value[lineStart - 1] !== "\n" &&
+      value[lineStart - 1] !== "\r") continue;
+    let linePrefixIsIndent = true;
+    for (let index = lineStart; index < begin; index += 1) {
+      if (value[index] !== " ") linePrefixIsIndent = false;
+    }
+    if (!linePrefixIsIndent) continue;
+    const limit = Math.min(value.length, begin + MAX_MULTILINE_SECRET_CODE_UNITS);
+    const header = boundedLine(value, begin, limit);
+    if (!header || header.next === header.end || header.end - begin > 100) continue;
+    const headerMatch = /^PuTTY-User-Key-File-([23]): (?:ssh-[A-Za-z0-9-]+|ecdsa-sha2-[A-Za-z0-9-]+)$/u
+      .exec(value.slice(begin, header.end));
+    if (!headerMatch) continue;
+    const encryption = boundedLine(value, header.next, limit);
+    if (!encryption || !/^Encryption: (?:none|aes256-cbc)$/u.test(
+      value.slice(header.next, encryption.end))) continue;
+    let position = encryption.next;
+    let end = value.length;
+    while (position < limit) {
+      const line = boundedLine(value, position, limit);
+      if (!line) break;
+      const text = value.slice(position, line.end);
+      if (text.startsWith("Private-Lines:")) {
+        const countMatch = /^Private-Lines: ([1-9][0-9]{0,5})$/u.exec(text);
+        if (!countMatch) break;
+        const count = Number(countMatch[1]);
+        position = line.next;
+        let valid = true;
+        for (let index = 0; index < count; index += 1) {
+          const data = boundedLine(value, position, limit);
+          if (!data || data.end === position ||
+            !/^[A-Za-z0-9+/=]+$/u.test(value.slice(position, data.end))) {
+            valid = false;
+            break;
+          }
+          position = data.next;
+        }
+        if (!valid) break;
+        const mac = boundedLine(value, position, limit);
+        if (!mac || !new RegExp(
+          `^Private-MAC: [0-9a-fA-F]{${headerMatch[1] === "2" ? 40 : 64}}$`, "u",
+        ).test(value.slice(position, mac.end))) break;
+        end = mac.end;
+        break;
+      }
+      if (line.next === position) break;
+      position = line.next;
+    }
+    chunks.push(value.slice(cursor, begin), replacement);
+    edits?.push({ start: begin, end, replacement });
+    cursor = end;
+    search = end;
+  }
+  if (chunks.length === 0) return value;
+  chunks.push(value.slice(cursor));
+  return chunks.join("");
+}
+
+const AGE_X25519_PREFIX = "AGE-SECRET-KEY-1";
+const AGE_BECH32_ALPHABET = "QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L";
+
+function isAgeTokenCharacter(character: string | undefined): boolean {
+  return character !== undefined && /[A-Za-z0-9_-]/u.test(character);
+}
+
+function redactAgeIdentities(
+  value: string,
+  replacement: string,
+  edits?: RedactionEdit[],
+): string {
+  const chunks: string[] = [];
+  let cursor = 0;
+  let search = 0;
+  while (search < value.length) {
+    const begin = value.indexOf(AGE_X25519_PREFIX, search);
+    if (begin < 0) break;
+    search = begin + AGE_X25519_PREFIX.length;
+    const end = search + 58; // 32 bytes -> 52 Bech32 data symbols + 6 checksum symbols.
+    if (isAgeTokenCharacter(value[begin - 1]) || end > value.length ||
+      isAgeTokenCharacter(value[end])) continue;
+    let valid = true;
+    for (let index = search; index < end; index += 1) {
+      if (!AGE_BECH32_ALPHABET.includes(value[index])) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) continue;
+    chunks.push(value.slice(cursor, begin), replacement);
+    edits?.push({ start: begin, end, replacement });
+    cursor = end;
+    search = end;
+  }
+  if (chunks.length === 0) return value;
+  chunks.push(value.slice(cursor));
+  return chunks.join("");
+}
+
 function redactSecretAssignments(
   value: string,
   replacement: string,
   structuredOnly: boolean,
 ): string {
+  const quoted = redactQuotedSecretAssignments(value, replacement, structuredOnly);
   return redactUnquotedSecretAssignments(
-    redactQuotedSecretAssignments(value, replacement, structuredOnly),
+    structuredOnly ? quoted : redactSingleQuotedYamlAssignments(quoted, replacement),
     replacement,
     structuredOnly,
   );
+}
+
+function redactSingleQuotedYamlAssignments(
+  value: string,
+  replacement: string,
+  edits?: RedactionEdit[],
+): string {
+  const chunks: string[] = [];
+  let cursor = 0;
+  let search = 0;
+  while (search < value.length) {
+    const keyStart = value.indexOf("'", search);
+    if (keyStart < 0) break;
+    search = keyStart + 1;
+    const keyLimit = Math.min(value.length, keyStart + 512);
+    let keyEnd = search;
+    while (keyEnd < keyLimit && value[keyEnd] !== "\n" &&
+      value[keyEnd] !== "\r") {
+      if (value[keyEnd] === "'") {
+        if (value[keyEnd + 1] === "'") keyEnd += 2;
+        else break;
+      } else keyEnd += 1;
+    }
+    if (keyEnd >= keyLimit || value[keyEnd] !== "'") continue;
+    const key = value.slice(search, keyEnd).replaceAll("''", "'");
+    if (!isSecretKey(key)) continue;
+    let separator = keyEnd + 1;
+    while (separator < keyLimit &&
+      (value[separator] === " " || value[separator] === "\t")) separator += 1;
+    if (separator >= keyLimit) {
+      chunks.push(value.slice(cursor, keyStart), replacement);
+      edits?.push({ start: keyStart, end: value.length, replacement });
+      cursor = value.length;
+      break;
+    }
+    if (value[separator] !== ":") continue;
+    let start = separator + 1;
+    const startLimit = Math.min(value.length, start + MAX_MULTILINE_SECRET_CODE_UNITS);
+    while (start < startLimit &&
+      (value[start] === " " || value[start] === "\t")) start += 1;
+    if (start === startLimit && startLimit < value.length) {
+      chunks.push(value.slice(cursor, separator + 1), replacement);
+      edits?.push({ start: separator + 1, end: value.length, replacement });
+      cursor = value.length;
+      break;
+    }
+    const end = yamlBlockValueEnd(value, start, keyStart);
+    if (end === undefined) continue;
+    chunks.push(value.slice(cursor, start), replacement);
+    edits?.push({ start, end, replacement });
+    cursor = end;
+    search = end;
+  }
+  if (chunks.length === 0) return value;
+  chunks.push(value.slice(cursor));
+  return chunks.join("");
 }
 
 function redactQuotedSecretAssignments(
@@ -533,6 +793,7 @@ function redactQuotedSecretAssignments(
   const chunks: string[] = [];
   let cursor = 0;
   let index = 0;
+  const shellLine = { newline: -1 };
   while (index < value.length) {
     const keyStart = value.indexOf('"', index);
     if (keyStart < 0) break;
@@ -552,13 +813,23 @@ function redactQuotedSecretAssignments(
     if (!isSecretKey(key)) continue;
     const start = separator + 1;
     let valueStart = start;
-    while (valueStart < value.length && isWhitespace(value[valueStart])) {
+    const valueLimit = Math.min(value.length, start + MAX_MULTILINE_SECRET_CODE_UNITS);
+    while (valueStart < valueLimit && isWhitespace(value[valueStart])) {
       valueStart += 1;
+    }
+    if (valueStart === valueLimit && valueLimit < value.length) {
+      chunks.push(value.slice(cursor, start), replacement);
+      edits?.push({ start, end: value.length, replacement });
+      cursor = value.length;
+      break;
     }
     if (valueStart >= value.length) continue;
     const opening = value[valueStart];
     if (isStructuredOpening(opening) !== structuredOnly) continue;
-    const end = secretAssignmentValueEnd(value, valueStart);
+    const yamlEnd = !structuredOnly && value[separator] === ":"
+      ? yamlBlockValueEnd(value, valueStart, keyStart)
+      : undefined;
+    const end = yamlEnd ?? secretAssignmentValueEnd(value, valueStart, shellLine);
     chunks.push(value.slice(cursor, valueStart), replacement);
     edits?.push({ start: valueStart, end, replacement });
     cursor = end;
@@ -589,6 +860,7 @@ function redactUnquotedSecretAssignments(
   ASSIGNMENT_SEPARATOR_PATTERN.lastIndex = 0;
   const chunks: string[] = [];
   let cursor = 0;
+  const shellLine = { newline: -1 };
   for (const match of value.matchAll(ASSIGNMENT_SEPARATOR_PATTERN)) {
     const separator = match.index;
     if (separator < cursor) continue;
@@ -608,16 +880,28 @@ function redactUnquotedSecretAssignments(
       continue;
     }
     let start = separator + 1;
-    while (start < value.length && isWhitespace(value[start])) start += 1;
+    const valueLimit = Math.min(value.length, start + MAX_MULTILINE_SECRET_CODE_UNITS);
+    while (start < valueLimit && isWhitespace(value[start])) start += 1;
+    if (start === valueLimit && valueLimit < value.length) {
+      chunks.push(value.slice(cursor, separator + 1), replacement);
+      edits?.push({ start: separator + 1, end: value.length, replacement });
+      cursor = value.length;
+      break;
+    }
     if (start >= value.length || isStructuredOpening(value[start]) !== structuredOnly) {
       continue;
     }
-    const end = !structuredOnly &&
+    const yamlEnd = !structuredOnly && value[separator] === ":"
+      ? yamlBlockValueEnd(value, start, keyStart)
+      : undefined;
+    const end = yamlEnd ?? (!structuredOnly &&
         (normalized === "auth" || normalized === "authorization")
       // A persisted auth value is a credential field even when its scheme is
       // unknown; same-line atoms and parameters are part of that field.
-      ? credentialFieldEnd(value, start)
-      : secretAssignmentValueEnd(value, start);
+      ? continuedShellValueEnd(
+        value, start, credentialFieldEnd(value, start), shellLine,
+      )
+      : secretAssignmentValueEnd(value, start, shellLine));
     chunks.push(value.slice(cursor, start), replacement);
     edits?.push({ start, end, replacement });
     cursor = end;
@@ -627,7 +911,130 @@ function redactUnquotedSecretAssignments(
   return chunks.join("");
 }
 
-function secretAssignmentValueEnd(value: string, start: number): number {
+// A narrow YAML block-scalar recognizer for already-classified secret keys.
+// Uncertain headers, indentation, or a scan ceiling mask through EOF rather
+// than leaving an apparent continuation as a second, visible value.
+function yamlBlockValueEnd(
+  value: string,
+  start: number,
+  keyStart: number,
+): number | undefined {
+  if (value[start] !== "|" && value[start] !== ">" &&
+    value[start] !== "&" && value[start] !== "!") return undefined;
+  let lineStart = keyStart;
+  while (lineStart > 0 && keyStart - lineStart < 512 &&
+    value[lineStart - 1] !== "\n" && value[lineStart - 1] !== "\r") lineStart -= 1;
+  if (lineStart > 0 && value[lineStart - 1] !== "\n" &&
+    value[lineStart - 1] !== "\r") return value.length;
+  let prefix = lineStart;
+  while (value[prefix] === " ") prefix += 1;
+  while (value[prefix] === "-" && value[prefix + 1] === " " &&
+    prefix < keyStart) {
+    prefix += 2;
+    while (value[prefix] === " ") prefix += 1;
+  }
+  const prefixIsYaml = prefix === keyStart;
+  const keyColumn = keyStart - lineStart;
+  const header = boundedLine(value, start, Math.min(value.length, start + 512));
+  if (!header) return value.length;
+  // A log prefix obscures the YAML indentation. A following physical line can
+  // contain a block body, so seal it; a same-line prose example is not a block.
+  if (!prefixIsYaml) return header.next === header.end ? undefined : value.length;
+  let index = start;
+  for (let property = 0; property < 8 &&
+    (value[index] === "&" || value[index] === "!"); property += 1) {
+    if (value[index] === "!" && value[index + 1] === "<") {
+      index += 2;
+      while (index < header.end && value[index] !== ">") index += 1;
+      if (index === header.end) return value.length;
+      index += 1;
+    } else {
+      index += 1;
+      const tokenStart = index;
+      while (index < header.end && /[A-Za-z0-9_!.-]/u.test(value[index])) {
+        index += 1;
+      }
+      if (index === tokenStart) return value.length;
+    }
+    if (value[index] !== " " && value[index] !== "\t") return value.length;
+    while (value[index] === " " || value[index] === "\t") index += 1;
+  }
+  if (value[index] !== "|" && value[index] !== ">") return undefined;
+  index += 1;
+  let explicitIndent: number | undefined;
+  let chomping = false;
+  for (let count = 0; count < 2; count += 1) {
+    const character = value[index];
+    if (character >= "1" && character <= "9" && explicitIndent === undefined) {
+      explicitIndent = Number(character);
+    } else if ((character === "+" || character === "-") && !chomping) {
+      chomping = true;
+    } else break;
+    index += 1;
+  }
+  const modifierEnd = index;
+  while (value[index] === " " || value[index] === "\t") index += 1;
+  if (index < header.end &&
+    (value[index] !== "#" || index === modifierEnd)) return value.length;
+  if (header.next === header.end) return value.length;
+
+  const limit = Math.min(value.length, start + MAX_MULTILINE_SECRET_CODE_UNITS);
+  let contentIndent = explicitIndent === undefined
+    ? undefined
+    : keyColumn + explicitIndent;
+  let leadingBlankIndent = 0;
+  let position = header.next;
+  while (position < value.length) {
+    if (position >= limit) return value.length;
+    const line = boundedLine(value, position, limit);
+    if (!line) return value.length;
+    let content = position;
+    while (content < line.end && value[content] === " ") content += 1;
+    const indent = content - position;
+    if (content === line.end) {
+      if (contentIndent === undefined) {
+        leadingBlankIndent = Math.max(leadingBlankIndent, indent);
+      }
+      position = line.next;
+      continue;
+    }
+    if (value[content] === "\t") return value.length;
+    if (contentIndent === undefined) {
+      if (indent <= keyColumn) {
+        return isClearYamlBoundary(value, content, line.end)
+          ? precedingLineBreak(value, position)
+          : value.length;
+      }
+      contentIndent = indent;
+      if (leadingBlankIndent > contentIndent) return value.length;
+    }
+    if (indent >= contentIndent) {
+      position = line.next;
+      continue;
+    }
+    return indent <= keyColumn && isClearYamlBoundary(value, content, line.end)
+      ? precedingLineBreak(value, position)
+      : value.length;
+  }
+  return value.length;
+}
+
+function precedingLineBreak(value: string, lineStart: number): number {
+  return value[lineStart - 2] === "\r" ? lineStart - 2 : lineStart - 1;
+}
+
+function isClearYamlBoundary(value: string, start: number, end: number): boolean {
+  if (end - start > 256) return false;
+  const line = value.slice(start, end);
+  return /^(?:[A-Za-z_][A-Za-z0-9_.-]*|-[ ]+[A-Za-z_][A-Za-z0-9_.-]*)[ \t]*:/u
+    .test(line) || line === "---" || line === "...";
+}
+
+function secretAssignmentValueEnd(
+  value: string,
+  start: number,
+  shellLine?: { newline: number },
+): number {
   if (isStructuredOpening(value[start])) {
     const end = structuredValueEnd(value, start);
     if (end === value.length || isSafeValueBoundary(value[end])) return end;
@@ -640,7 +1047,51 @@ function secretAssignmentValueEnd(value: string, start: number): number {
     if (value[index] === '"' || value[index] === "'") ambiguousQuote = true;
     index += 1;
   }
-  return ambiguousQuote ? value.length : index;
+  if (ambiguousQuote) return value.length;
+  return continuedShellValueEnd(value, start, index, shellLine);
+}
+
+function continuedShellValueEnd(
+  value: string,
+  start: number,
+  atomEnd: number,
+  cache?: { newline: number },
+): number {
+  if (value[atomEnd] !== " " && value[atomEnd] !== "\t" &&
+    value[atomEnd] !== "\r" && value[atomEnd] !== "\n") return atomEnd;
+  const limit = Math.min(value.length, start + MAX_MULTILINE_SECRET_CODE_UNITS);
+  let newline = cache?.newline ?? -1;
+  if (newline < atomEnd) {
+    newline = atomEnd;
+    while (newline < limit && value[newline] !== "\n" && value[newline] !== "\r") {
+      newline += 1;
+    }
+    if (cache) cache.newline = newline;
+  }
+  if (newline === limit && limit < value.length) return value.length;
+  if (newline >= value.length) return atomEnd;
+  if (!hasOddTerminalBackslashes(value, newline)) return atomEnd;
+  while (true) {
+    // Diagnostics can normalize physical line breaks to CR alone. Treat that
+    // conservatively like LF, while consuming CRLF as one boundary.
+    const nextStart = newline + (value[newline] === "\r" && value[newline + 1] === "\n" ? 2 : 1);
+    if (nextStart >= value.length) return value.length;
+    newline = nextStart;
+    while (newline < limit && value[newline] !== "\n" && value[newline] !== "\r") {
+      newline += 1;
+    }
+    if (newline === limit && limit < value.length) return value.length;
+    if (newline >= value.length) return value.length;
+    if (!hasOddTerminalBackslashes(value, newline)) return newline;
+  }
+}
+
+function hasOddTerminalBackslashes(value: string, lineEnd: number): boolean {
+  let count = 0;
+  for (let index = lineEnd - 1; index >= 0 && value[index] === "\\"; index -= 1) {
+    count += 1;
+  }
+  return count % 2 === 1;
 }
 
 function isStructuredOpening(character: string | undefined): boolean {

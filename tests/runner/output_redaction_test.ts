@@ -1,6 +1,30 @@
 // takos-secret-scan: synthetic — these canaries are deliberately not credentials.
 import { expect, test } from "bun:test";
 import { redactRunnerOutput } from "../../runner/entrypoint.ts";
+import { credentialProseFixtures, credentialSpanFixtures } from "../helpers/credential_span_fixtures.ts";
+
+test.each(credentialSpanFixtures)("Runner retains complete credential continuation spans: $name", ({ input, sensitive, suffix }) => {
+  for (const exactValues of [[], ["unrelated-exact-value"]]) {
+    const output = redactRunnerOutput(input, exactValues);
+    expect(output).toContain("[redacted]");
+    for (const value of sensitive) expect(output).not.toContain(value);
+    expect(output.endsWith(suffix)).toBe(true);
+    expect(redactRunnerOutput(output, exactValues)).toBe(output);
+  }
+});
+
+test.each(credentialSpanFixtures)("Runner unions overlapping multiline exacts with structural spans: $name", ({ input, sensitive }) => {
+  const knownTail = input.slice(input.indexOf(sensitive[0]));
+  const output = redactRunnerOutput(`prefix 🔍\n${input}\nfinal: retained`, [knownTail]);
+  for (const value of sensitive) expect(output).not.toContain(value);
+  expect(output).not.toContain("safe: visible");
+  expect(output.endsWith("\nfinal: retained")).toBe(true);
+  expect(output).toContain("[redacted]");
+});
+
+test.each(credentialProseFixtures)("Runner exact path preserves public/prose controls: %s", (input) => {
+  expect(redactRunnerOutput(input, ["unrelated-exact-value"])).toBe(input);
+});
 
 test.each([
   ["contains an auth fragment", "Bearer abcdefgh!CANARY", "error: Bearer abcdefgh!CANARY", "error: [redacted]"],
