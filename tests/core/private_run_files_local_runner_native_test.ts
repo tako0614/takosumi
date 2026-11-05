@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { createTakosumiService } from "../../core/bootstrap.ts";
@@ -37,7 +38,7 @@ import {
 const OPT_IN = "TAKOSUMI_TEST_PRIVATE_RUN_FILE_PROVIDER_RUNNER";
 const PROVIDER_SOURCE = "registry.terraform.io/tako0614/takoform";
 const PROVIDER_VERSION = "5.0.0";
-const PROVIDER_COMMIT = "cb5569b76a80bcea0deb79b51b5bb19d186b4888";
+const PROVIDER_COMMIT = "31233dad14c2eed5a0a169a6fbe7749bbaa99111";
 const PRIVATE_SLOT = "host-v2-intent";
 const STORE_ID = "local-runner-native-proof";
 const FORM = "https://edge.forms.takoform.com/forms/ModuleWorker/0.3.0/";
@@ -152,6 +153,8 @@ test.skipIf(!enabled)(
     const proof = await proveLocalRunnerPrivateFiles(providerRoot);
     expect(proof.runnerPids).toHaveLength(3);
     expect(new Set(proof.runnerPids).size).toBe(3);
+    expect(proof.runnerListenHostnames).toEqual(["127.0.0.1", "127.0.0.1", "127.0.0.1"]);
+    expect(new Set(proof.runnerServerPids).size).toBe(3);
     expect(proof.planAndApplyUseCurrentGrant).toBe(true);
     expect(proof.applyGrantRenewal.refreshed).toBe(true);
     expect(proof.applyGrantRenewal.sequence).toBe(1);
@@ -187,6 +190,8 @@ interface ProofReport {
   readonly bunVersion: string;
   readonly goVersion: string;
   readonly runnerPids: readonly number[];
+  readonly runnerListenHostnames: readonly string[];
+  readonly runnerServerPids: readonly number[];
   readonly slot: string;
   readonly planAndApplyUseCurrentGrant: true;
   readonly applyGrantRenewal: {
@@ -222,7 +227,7 @@ interface ProofReport {
 }
 
 async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<ProofReport> {
-  const tempRoot = await mkdtemp(join("/dev/shm/t", "takosumi-prf-runner-"));
+  const tempRoot = await mkdtemp(join(tmpdir(), "takosumi-prf-runner-"));
   await chmod(tempRoot, 0o700);
   const runRoot = join(tempRoot, "runner-root");
   const providerMirror = join(tempRoot, "provider-mirror");
@@ -644,12 +649,12 @@ resource "takoform_module_worker" "app" {
     activeRunnerUrl = undefined;
     const planRunner = await startRunnerProcess({
       index: 1,
+      registry: runnerProcesses,
       tempRoot,
       runRoot,
       providerMirror,
       certificatePath,
     });
-    runnerProcesses.push(planRunner);
     runnerPids.push(planRunner.pid);
     activeRunnerUrl = planRunner.baseUrl;
     const plan = await controller.createCapsulePlan(seeded.capsule.id);
@@ -681,12 +686,12 @@ resource "takoform_module_worker" "app" {
 
     const applyRunner = await startRunnerProcess({
       index: 2,
+      registry: runnerProcesses,
       tempRoot,
       runRoot,
       providerMirror,
       certificatePath,
     });
-    runnerProcesses.push(applyRunner);
     runnerPids.push(applyRunner.pid);
     activeRunnerUrl = applyRunner.baseUrl;
     dropNextCommitAck = true;
@@ -777,12 +782,12 @@ resource "takoform_module_worker" "app" {
 
     const destroyRunner = await startRunnerProcess({
       index: 3,
+      registry: runnerProcesses,
       tempRoot,
       runRoot,
       providerMirror,
       certificatePath,
     });
-    runnerProcesses.push(destroyRunner);
     runnerPids.push(destroyRunner.pid);
     activeRunnerUrl = destroyRunner.baseUrl;
     const destroyPlan = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
@@ -827,6 +832,8 @@ resource "takoform_module_worker" "app" {
       bunVersion: Bun.version,
       goVersion: goVersion.trim(),
       runnerPids,
+      runnerListenHostnames: runnerProcesses.map((runner) => runner.listenHostname!),
+      runnerServerPids: runnerProcesses.map((runner) => runner.serverPid!),
       postgresRestart,
       slot: PRIVATE_SLOT,
       planAndApplyUseCurrentGrant: true,
@@ -854,7 +861,7 @@ resource "takoform_module_worker" "app" {
       destroyReceivedSameSlot: true,
       boundaries: [
         "native local PostgreSQL server and application-created encrypted blob files; the PostgreSQL daemon was SIGTERM-stopped/restarted before Apply and Plan Run readback used a fresh SQL pool",
-        "real local Runner entrypoint OS processes, OpenTofu CLI, and compiled Provider binary from the pinned source commit",
+        "real Runner server and inherited-OFD supervisor in test-owned loopback OS-process composition, OpenTofu CLI, and compiled Provider binary from the pinned source commit",
         "deterministic local HTTPS Host fixture; no production Host or authentication authority",
         "Core Run controller and current-grant minter are real; provider-private commit ACK loss is injected at a loopback HTTP proxy",
         "the original commit uses its pre-rotation grant; refresh completes while its ACK is held, then the exact resolve uses the new descriptor; only the private-file grant clock advances, not Run lease or heartbeat time",
@@ -865,14 +872,21 @@ resource "takoform_module_worker" "app" {
       ],
     };
   } finally {
+    const cleanupErrors: unknown[] = [];
     for (const runner of runnerProcesses.reverse()) {
-      if (!runner.stopped) await stopRunnerProcess(runner).catch(() => {});
+      // A previously exited process may still have an unproven drain result.
+      try { await stopRunnerProcess(runner); } catch (error) { cleanupErrors.push(error); }
     }
     for (const server of servers.reverse()) {
-      await server.stop(true);
+      try { await server.stop(true); } catch (error) { cleanupErrors.push(error); }
     }
-    await sql?.close();
-    await database?.close();
+    try { await sql?.close(); } catch (error) { cleanupErrors.push(error); }
+    try { await database?.close(); } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length) {
+      // Retain partial Runner/blob diagnostics only. database.close() deliberately
+      // retires the owned ephemeral PG fixture; this scratch is not a recovery point.
+      throw new AggregateError(cleanupErrors, "native proof cleanup failed; diagnostic scratch retained");
+    }
     await rm(tempRoot, { recursive: true, force: true });
   }
 }
@@ -892,7 +906,6 @@ async function compileProvider(root: string, output: string): Promise<void> {
     GOPROXY: "off",
     GOSUMDB: "off",
     GOTOOLCHAIN: "local",
-    GOCACHE: process.env.GOCACHE ?? "/root/hdd/go-cache",
     GOOS: "linux",
     GOARCH: "amd64",
   };
@@ -910,11 +923,15 @@ interface RunnerProcess {
   readonly child: ReturnType<typeof Bun.spawn>;
   readonly recentOutput: string[];
   stopped: boolean;
+  shutdownError?: Error;
+  listenHostname?: string;
+  serverPid?: number;
   outputTail(): readonly string[];
 }
 
 async function startRunnerProcess(input: {
   readonly index: number;
+  readonly registry: RunnerProcess[];
   readonly tempRoot: string;
   readonly runRoot: string;
   readonly providerMirror: string;
@@ -928,8 +945,8 @@ async function startRunnerProcess(input: {
   const child = Bun.spawn([
     process.execPath,
     "--no-env-file",
-    "runner/entrypoint.ts",
-    "--local-preparation-v2-supervisor",
+    "tests/helpers/deploy-control/private_run_file_runner_process.ts",
+    "--supervisor",
   ], {
     cwd: process.cwd(),
     env: {
@@ -939,6 +956,7 @@ async function startRunnerProcess(input: {
       TMP: join(input.tempRoot, "tmp"),
       TEMP: join(input.tempRoot, "tmp"),
       PORT: String(port),
+      TAKOSUMI_TEST_RUNNER_LISTENER_RECORD: join(input.tempRoot, `runner-listener-${input.index}.json`),
       TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE: "local-http",
       TAKOSUMI_OPENTOFU_RUN_ROOT: instanceRunRoot,
       OPENTOFU_PROVIDER_MIRROR: input.providerMirror,
@@ -948,6 +966,13 @@ async function startRunnerProcess(input: {
     stderr: "pipe",
   });
   const recentOutput: string[] = [];
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const runner: RunnerProcess = {
+    pid: child.pid, baseUrl, child, recentOutput, stopped: false,
+    outputTail: () => recentOutput.slice(-12),
+  };
+  // Ownership is registered before health, listener readback, or capability checks can throw.
+  input.registry.push(runner);
   const capture = (stream: ReadableStream<Uint8Array>) => stream.pipeTo(new WritableStream({
     write(chunk) {
       recentOutput.push(...redactDiagnostic(new TextDecoder().decode(chunk)).split(/\r?\n/u).filter(Boolean));
@@ -956,7 +981,6 @@ async function startRunnerProcess(input: {
   })).catch(() => undefined);
   void capture(child.stdout);
   void capture(child.stderr);
-  const baseUrl = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error("local Runner entrypoint exited before health readiness");
@@ -970,28 +994,32 @@ async function startRunnerProcess(input: {
           !health.capabilities.includes(PRIVATE_RUN_FILE_REFRESH_CAPABILITY)) {
           throw new Error("local Runner entrypoint did not expose the expected private preparation capability");
         }
-        return {
-          pid: child.pid,
-          baseUrl,
-          child,
-          recentOutput,
-          stopped: false,
-          outputTail: () => recentOutput.slice(-12),
-        };
+        const listener = JSON.parse(await readFile(
+          join(input.tempRoot, `runner-listener-${input.index}.json`), "utf8",
+        )) as { hostname?: unknown; port?: unknown; pid?: unknown };
+        if (listener.hostname !== "127.0.0.1" || listener.port !== port || typeof listener.pid !== "number" || !Number.isSafeInteger(listener.pid) || listener.pid <= 0) {
+          throw new Error("native Runner listener is not the owned loopback address");
+        }
+        runner.listenHostname = listener.hostname;
+        runner.serverPid = listener.pid as number;
+        return runner;
       }
       await response.body?.cancel();
     } catch (error) {
-      if (error instanceof Error && error.message.includes("expected private preparation")) throw error;
+      if (error instanceof Error && (error.message.includes("expected private preparation") || error.message.includes("owned loopback address"))) throw error;
     }
     await Bun.sleep(100);
   }
-  child.kill("SIGTERM");
-  await child.exited;
+  // The supervisor may deliberately HOLD uncertain custody; the registered
+  // process belongs to the bounded common cleanup, never an unbounded wait here.
   throw new Error("local Runner entrypoint did not become healthy before the deadline");
 }
 
 async function stopRunnerProcess(runner: RunnerProcess): Promise<void> {
-  if (runner.stopped) return;
+  if (runner.stopped) {
+    if (runner.shutdownError) throw runner.shutdownError;
+    return;
+  }
   runner.child.kill("SIGTERM");
   const exitCode = await Promise.race([
     runner.child.exited,
@@ -1001,10 +1029,14 @@ async function stopRunnerProcess(runner: RunnerProcess): Promise<void> {
     runner.child.kill("SIGKILL");
     await runner.child.exited;
     runner.stopped = true;
-    throw new Error("local Runner shutdown required forced termination");
+    runner.shutdownError = new Error("local Runner shutdown required forced termination");
+    throw runner.shutdownError;
   }
   runner.stopped = true;
-  if (exitCode !== 0) throw new Error("local Runner entrypoint did not exit cleanly");
+  if (exitCode !== 0) {
+    runner.shutdownError = new Error("local Runner entrypoint did not exit cleanly");
+    throw runner.shutdownError;
+  }
 }
 
 function createNativeProviderRunnerProfile(base: RunnerProfile): RunnerProfile {
