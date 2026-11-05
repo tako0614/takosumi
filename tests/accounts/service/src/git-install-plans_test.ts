@@ -854,6 +854,134 @@ test("Git install plan continues with a scanner-selected module when optional ma
   expect(reviewable?.installModulePath).toBe(".");
 });
 
+for (const scopePath of [".", "nested/app"]) {
+  test(`unlisted module uses generic install without dropping private slots: ${scopePath}`, async () => {
+    const fixture = installFixture({
+      repositoryManifest: repositoryManifest(["other/module"]),
+      repositoryModules: {
+        status: "ready", scopePath,
+        modules: [{ path: ".", providerPackages: [], rootProviderRequirements: [] }],
+      },
+      installConfigs: [{ ...defaultCapsuleInstallConfig(), privateRunFiles: [{ slot: "retained-slot" }] }],
+    });
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans", "POST",
+      createBody({ sourcePath: scopePath, modulePath: "." }),
+      { "idempotency-key": `unlisted-${scopePath}` },
+    );
+    expect(created.status).toBe(201);
+    const id = (await created.json()).installPlan.id as string;
+    await fixture.reconcile(id);
+    await fixture.reconcile(id);
+    fixture.succeedSourceSync();
+    for (let step = 0; step < 8; step += 1) await fixture.reconcile(id);
+    const plan = await fixture.planStore.get(id);
+    expect(plan?.phase).toBe("reviewable");
+    const config = fixture.getInstallConfig(plan?.installConfigId!);
+    expect(config?.privateRunFiles).toEqual([{ slot: "retained-slot" }]);
+    expect(config?.internal?.genericOpenTofuSourceSnapshotId).toBe(plan?.sourceSnapshotId);
+    expect(config?.internal?.genericOpenTofuVariableContractDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(fixture.compatibilityMutationCount).toBe(1);
+    expect(fixture.counts.capsule).toBe(1);
+    expect(fixture.counts.plan).toBe(1);
+    expect(fixture.approvalCalls).toBe(0);
+    expect(fixture.applyCalls).toBe(0);
+  });
+}
+
+test("unlisted module keeps the ordinary attempt input and confirmation flow", async () => {
+  const fixture = installFixture({ repositoryManifest: repositoryManifest(["other/module"]) });
+  const id = await startAttempt(fixture, attemptBody({ modulePath: "." }), "unlisted-attempt");
+  const paused = await reconcileUntilIdle(fixture, id);
+  expect(paused.installPlan.phase).toBe("awaiting_input");
+  expect(fixture.counts.capsule).toBe(0);
+  const confirmed = await answer(fixture, id, {
+    expectedGeneration: paused.installPlan.generation, continue: true,
+  });
+  expect(confirmed.ok).toBe(true);
+  const reviewed = await reconcileUntilIdle(fixture, id);
+  expect(reviewed.installPlan.phase).toBe("reviewable");
+  const config = fixture.getInstallConfig(reviewed.installPlan.installConfigId);
+  expect(config?.internal?.genericOpenTofuSourceSnapshotId).toBe(reviewed.installPlan.sourceSnapshotId);
+  expect(fixture.counts.capsule).toBe(1);
+  expect(fixture.counts.plan).toBe(1);
+  expect(fixture.approvalCalls).toBe(0);
+  expect(fixture.applyCalls).toBe(0);
+});
+
+test("unlisted module preserves exact generic preflight authority", async () => {
+  const fixture = installFixture({ repositoryManifest: repositoryManifest(["other/module"]) });
+  const preflight = fixture.seedPreflight({ variableDeclarations: [] });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans", "POST",
+    { ...createBody({ modulePath: ".", providerBindings: [] }), preflight },
+    { "idempotency-key": "unlisted-preflight" },
+  );
+  expect(created.status).toBe(201);
+  const id = (await created.json()).installPlan.id as string;
+  const authority = await fixture.reconcile(id);
+  const planning = (await authority.json()).installPlan;
+  expect(planning.phase).toBe("planning");
+  expect(fixture.getInstallConfig(planning.installConfigId)?.internal?.genericOpenTofuSourceSnapshotId)
+    .toBe(preflight.sourceSnapshotId);
+  const reviewed = await fixture.reconcile(id);
+  expect((await reviewed.json()).installPlan.phase).toBe("reviewable");
+  expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 1, plan: 1 });
+  expect(fixture.compatibilityMutationCount).toBe(0);
+});
+
+test("unlisted module cannot bypass required manifest API through generic preflight", async () => {
+  const fixture = installFixture({
+    repositoryManifest: repositoryManifest(["other/module"]),
+    installConfigs: [{
+      ...defaultCapsuleInstallConfig(),
+      policy: { repositoryInstallUx: { requiredManifestApiVersion: "takosumi.com/v2.2" } },
+    }],
+  });
+  const preflight = fixture.seedPreflight({ variableDeclarations: [] });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans", "POST",
+    { ...createBody({ modulePath: ".", providerBindings: [] }), preflight },
+    { "idempotency-key": "unlisted-preflight-policy" },
+  );
+  expect(created.status).toBe(201);
+  const id = (await created.json()).installPlan.id as string;
+  const refused = await fixture.reconcile(id);
+  expect((await refused.json()).installPlan.phase).toBe("failed");
+  expect(fixture.counts.capsule).toBe(0);
+  expect(fixture.counts.plan).toBe(0);
+});
+
+for (const requiredVersion of ["takosumi.com/v2.1", "takosumi.com/v2.2"] as const) {
+  test(`unlisted module retains required manifest API policy: ${requiredVersion}`, async () => {
+    const fixture = installFixture({
+      repositoryManifest: repositoryManifest(["other/module"]),
+      installConfigs: [{
+        ...defaultCapsuleInstallConfig(),
+        policy: { repositoryInstallUx: { requiredManifestApiVersion: requiredVersion } },
+      }],
+    });
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans", "POST", createBody(),
+      { "idempotency-key": "unlisted-required-version" },
+    );
+    const id = (await created.json()).installPlan.id as string;
+    await fixture.reconcile(id);
+    await fixture.reconcile(id);
+    fixture.succeedSourceSync();
+    for (let step = 0; step < 8; step += 1) await fixture.reconcile(id);
+    const plan = await fixture.planStore.get(id);
+    if (requiredVersion === "takosumi.com/v2.1") {
+      expect(plan?.phase).toBe("reviewable");
+    } else {
+      expect(plan?.phase).toBe("failed");
+      expect(plan?.diagnostic?.code).toBe("repository_install_ux_manifest_api_version_required");
+      expect(fixture.counts.capsule).toBe(0);
+      expect(fixture.counts.plan).toBe(0);
+    }
+  });
+}
+
 test("generic Git install materializes exact runner variable provenance", async () => {
   const fixture = installFixture({
     repositoryManifest: {
@@ -5202,7 +5330,7 @@ function installFixture(
         archiveRef: "source-archive/snap_preflight",
         archiveDigest: `sha256:${"d".repeat(64)}`,
         archiveSizeBytes: 64,
-        repositoryManifest: { status: "absent" },
+        repositoryManifest: options.repositoryManifest ?? { status: "absent" },
         repositoryModules: {
           status: "ready",
           scopePath: ".",
