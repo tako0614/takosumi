@@ -8,6 +8,10 @@ import {
   MCP_SERVER_INVOKE_PERMISSION,
 } from "takosumi-contract";
 import type { InstallConfig } from "takosumi-contract/install-configs";
+import {
+  readBoundedRequestText,
+  RequestBodyReadError,
+} from "../accounts/service/src/http-helpers.ts";
 
 export const OPERATOR_CONTROL_MCP_PATH = "/mcp/operator-control/v1" as const;
 export const OPERATOR_CONTROL_MCP_ENABLED_ENV =
@@ -478,12 +482,18 @@ export async function handleOperatorControlMcpRequest(
       headers: { allow: "POST", "cache-control": "no-store" },
     });
   }
-  const text = await request.text();
-  if (text.length > 1_048_576) {
-    return jsonRpcResponse(
-      jsonRpcError(null, -32600, "request too large"),
-      413,
-    );
+  let text: string;
+  try {
+    text = await readBoundedRequestText(request, 1_048_576);
+  } catch (error) {
+    if (!(error instanceof RequestBodyReadError)) throw error;
+    if (error.status === 413) {
+      return jsonRpcResponse(
+        jsonRpcError(null, -32600, "request too large"),
+        413,
+      );
+    }
+    return jsonRpcResponse(jsonRpcError(null, -32700, "parse error"), 400);
   }
   let value: unknown;
   try {

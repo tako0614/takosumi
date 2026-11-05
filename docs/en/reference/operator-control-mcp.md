@@ -101,6 +101,10 @@ MCP, and nothing is reachable after the MCP's app is transferred to someone
 else. New apps are installed through `POST /api/v1/install-plans` in the user's
 own namespace and are owned by the user. The adapter uses no Workspace route.
 
+POST bodies must be UTF-8 JSON and are limited to **1 MiB (1,048,576 bytes)**.
+An oversized body returns HTTP `413` with JSON-RPC `-32600`; invalid UTF-8 or
+JSON syntax returns HTTP `400` with `-32700`. Rejected bodies do not execute tools.
+
 While Interface tokens still carry a Workspace (until TASK-0118 Phase 9.4), that
 Workspace is a restriction applied first: the target app must also be in it,
 a new install is refused when it would land outside it, and an idempotent
