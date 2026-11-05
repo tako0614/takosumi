@@ -134,21 +134,45 @@ test("lost-ACK custody rejects a Host POST before the matching resolve response"
 });
 
 test("uncertain native drain waits without force before cohort cleanup", async () => {
+  await proveNativeShutdownWait(false);
+});
+
+test("a failed native shutdown signal still waits for custody proof", async () => {
+  await proveNativeShutdownWait(true);
+});
+
+test("diagnostic failure cannot release uncertain native custody", async () => {
+  await proveNativeShutdownWait(false, true);
+});
+
+async function proveNativeShutdownWait(signalFailure: boolean, diagnosticFailure = false): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "takosumi-native-shutdown-wait-"));
   const exited = deferred<number>();
   const signals: string[] = [];
   const runner: RunnerProcess = {
     pid: 4321, baseUrl: "http://127.0.0.1", runRoot: join(root, "run-root"),
     shutdownRecordPath: join(root, "shutdown.json"),
-    child: { exited: exited.promise, kill(signal) { signals.push(String(signal)); return true; } },
+    child: { exited: exited.promise, kill(signal) {
+      signals.push(String(signal));
+      if (signalFailure) throw new Error("synthetic signal failure");
+      return true;
+    } },
     recentOutput: [], stopped: false, outputTail: () => [],
   };
   const closure = {
     kind: "takosumi.native-runner-shutdown/v1", pid: runner.pid, runRoot: runner.runRoot,
     launched: true, drained: true, ownerClosed: true,
   };
-  const stopping = stopRunnerProcess(runner, 1);
+  let diagnosticCalls = 0;
+  const stopping = stopRunnerProcess(runner, 1, () => {
+    diagnosticCalls += 1;
+    if (diagnosticFailure) throw new Error("synthetic diagnostic failure");
+  });
+  let outcome = "pending";
+  void stopping.then(() => { outcome = "closed"; }, () => { outcome = "rejected"; });
   try {
+    await Bun.sleep(10);
+    expect(outcome).toBe("pending");
     const waitRecord = Bun.file(`${runner.shutdownRecordPath}.wait.json`);
     let waitState: string | undefined;
     for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -157,6 +181,7 @@ test("uncertain native drain waits without force before cohort cleanup", async (
       await Bun.sleep(5);
     }
     expect(waitState).toBe("waiting-for-drain");
+    expect(diagnosticCalls).toBeGreaterThan(0);
     expect(signals).toEqual(["SIGTERM"]);
     expect(runner.stopped).toBe(false);
     await writeFile(runner.shutdownRecordPath, JSON.stringify(closure));
@@ -171,7 +196,7 @@ test("uncertain native drain waits without force before cohort cleanup", async (
     await stopping.catch(() => {});
     await rm(root, { recursive: true, force: true });
   }
-});
+}
 
 function assertLostAckResolvedBeforeHostPost(
   events: readonly CustodyEvent[],
@@ -320,6 +345,7 @@ interface GitInstallFirstPlanProof {
   readonly runnerListenHostname: string;
   readonly runnerPid: number;
   readonly runnerServerPid: number;
+  readonly runnerShutdown: Readonly<Record<string, unknown>>;
   readonly boundaries: readonly string[];
 }
 
@@ -826,6 +852,7 @@ async function proveLocalRunnerPrivateFiles(
         runnerListenHostname: planRunner.listenHostname!,
         runnerPid: planRunner.pid,
         runnerServerPid: planRunner.serverPid!,
+        runnerShutdown: planRunner.shutdownRecord!,
         boundaries: [
           "normal workspace-less Accounts install route and coordinator; only initial local account/session are fixtures; no Namespace, Capsule, SourceSnapshot, compatibility or Run seed",
           "real public Git source_sync of this exact pushed test fixture; unchanged source URL and DNS/SSRF guards",
@@ -1199,6 +1226,7 @@ interface RunnerProcess {
   readonly recentOutput: string[];
   stopped: boolean;
   shutdownError?: Error;
+  shutdownRecord?: Readonly<Record<string, unknown>>;
   listenHostname?: string;
   serverPid?: number;
   outputTail(): readonly string[];
@@ -1294,26 +1322,35 @@ async function startRunnerProcess(input: {
   throw new Error("local Runner entrypoint did not become healthy before the deadline");
 }
 
-async function stopRunnerProcess(runner: RunnerProcess, observationBudgetMs = 15_000): Promise<void> {
+async function stopRunnerProcess(
+  runner: RunnerProcess,
+  observationBudgetMs = 15_000,
+  report: (message: string) => void = (message) => console.error(message),
+): Promise<void> {
   if (runner.stopped) {
     if (runner.shutdownError) throw runner.shutdownError;
     return;
   }
-  runner.child.kill("SIGTERM");
+  const reportSafely = (message: string) => { try { report(message); } catch { /* Custody outranks diagnostics. */ } };
+  try { runner.child.kill("SIGTERM"); } catch {
+    reportSafely("native Runner signal failed; waiting for custody closure proof");
+  }
   const waitPath = `${runner.shutdownRecordPath}.wait.json`;
   let observation: Promise<void> | undefined;
   const timer = setTimeout(() => {
-    observation = writeFile(waitPath, JSON.stringify({
-      state: "waiting-for-drain", pid: runner.pid, runRoot: runner.runRoot,
-      cohortPid: process.pid,
-    }) + "\n", { mode: 0o600 }).catch(() => {
-      // A missing diagnostic never authorizes killing the owner or closing its cohort.
-    });
-    console.error(`native Runner drain remains pending; cohort retained at ${dirname(runner.shutdownRecordPath)}`);
+    try {
+      observation = writeFile(waitPath, JSON.stringify({
+        state: "waiting-for-drain", pid: runner.pid, runRoot: runner.runRoot,
+        cohortPid: process.pid,
+      }) + "\n", { mode: 0o600 }).catch(() => {});
+    } catch { /* A diagnostic failure never releases the cohort. */ }
+    reportSafely(`native Runner drain remains pending; cohort retained at ${dirname(runner.shutdownRecordPath)}`);
   }, observationBudgetMs);
-  let exitCode: number;
+  let exitCode: number | undefined;
   try {
     exitCode = await runner.child.exited;
+  } catch {
+    reportSafely("native Runner exit observation failed; custody remains unproven");
   } finally {
     clearTimeout(timer);
   }
@@ -1324,7 +1361,7 @@ async function stopRunnerProcess(runner: RunnerProcess, observationBudgetMs = 15
   } catch {
     // Exit alone does not prove that the supervised tree and owner closed.
   }
-  if (closure?.kind !== "takosumi.native-runner-shutdown/v1" || closure.pid !== runner.pid ||
+  if (exitCode === undefined || closure?.kind !== "takosumi.native-runner-shutdown/v1" || closure.pid !== runner.pid ||
     closure.runRoot !== runner.runRoot || closure.drained !== true || closure.ownerClosed !== true) {
     try {
       await writeFile(join(dirname(runner.shutdownRecordPath), "HOLD.json"), JSON.stringify({
@@ -1332,9 +1369,10 @@ async function stopRunnerProcess(runner: RunnerProcess, observationBudgetMs = 15
         supervisorPid: runner.pid, runRoot: runner.runRoot,
       }) + "\n", { mode: 0o600 });
     } catch { /* Preserve the live Core/PG/keys even if diagnostic writes fail. */ }
-    console.error("native Runner shutdown custody unproven; cohort HOLD");
+    reportSafely("native Runner shutdown custody unproven; cohort HOLD");
     await new Promise<never>(() => { setInterval(() => {}, 60_000); });
   }
+  runner.shutdownRecord = closure;
   if (observation) {
     await writeFile(waitPath, JSON.stringify({
       state: "drained", pid: runner.pid, runRoot: runner.runRoot,

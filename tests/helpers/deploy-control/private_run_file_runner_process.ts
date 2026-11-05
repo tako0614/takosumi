@@ -108,7 +108,8 @@ async function runSupervisor(): Promise<void> {
         return;
       } catch { /* Unknown custody retains the process and ownership below. */ }
     }
-    process.stderr.write("native Runner supervision failed; custody closure unproven\n");
+    try { process.stderr.write("native Runner supervision failed; custody closure unproven\n"); }
+    catch { /* Preserve ownership even when diagnostics are unavailable. */ }
     await new Promise<void>(() => { setInterval(() => {}, 60_000); });
   }
 }
