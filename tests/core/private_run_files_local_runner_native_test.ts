@@ -353,6 +353,7 @@ async function createGitInstallFirstPlan(input: {
   readonly operations: Awaited<ReturnType<typeof createTakosumiService>>["operations"];
   readonly store: SqlOpenTofuControlStore;
   readonly sourceCommit: string;
+  readonly diagnosticRoot: string;
 }) {
   const currentCommit = (await commandText("git", ["rev-parse", "HEAD"])).trim();
   if (input.sourceCommit !== currentCommit) {
@@ -389,6 +390,8 @@ async function createGitInstallFirstPlan(input: {
     if (!response) throw new Error("normal Accounts install route was not mounted");
     const text = await response.text();
     publicResponses.push(text);
+    await writeFile(join(input.diagnosticRoot, "git-install-responses.json"),
+      JSON.stringify(publicResponses, null, 2) + "\n", { mode: 0o600 });
     const payload = JSON.parse(text) as { installPlan?: Record<string, unknown> };
     if (!response.ok || !payload.installPlan ||
       typeof payload.installPlan.id !== "string" || typeof payload.installPlan.phase !== "string") {
@@ -409,7 +412,19 @@ async function createGitInstallFirstPlan(input: {
   const installPlanId = String(plan.id);
   for (let step = 0; step < 120 && plan.phase !== "reviewable"; step += 1) {
     if (["failed", "invalidated", "expired", "awaiting_input"].includes(String(plan.phase))) {
-      throw new Error(`normal Git install stopped at ${String(plan.phase)}`);
+      const sync = typeof plan.sourceSyncRunId === "string"
+        ? await input.store.getSourceSyncRun(plan.sourceSyncRunId) : undefined;
+      const run = typeof plan.planRunId === "string"
+        ? await input.store.getPlanRun(plan.planRunId) : undefined;
+      await writeFile(join(input.diagnosticRoot, "git-install-failure.json"), JSON.stringify({
+        installPlan: plan,
+        sourceSync: sync && { id: sync.id, status: sync.status, errorCode: sync.errorCode,
+          diagnosticCodes: sync.diagnostics?.map((item) => item.code) },
+        planRun: run && { id: run.id, status: run.status, errorCode: run.errorCode,
+          diagnosticCodes: run.diagnostics?.map((item) => item.code) },
+      }, null, 2) + "\n", { mode: 0o600 });
+      const diagnostic = plan.diagnostic as { code?: unknown } | undefined;
+      throw new Error(`normal Git install stopped at ${String(plan.phase)}; diagnostic=${String(diagnostic?.code)}; sourceSync=${sync?.status ?? "absent"}; Plan=${run?.status ?? "absent"}; diagnostic root=${input.diagnosticRoot}`);
     }
     plan = await route(`/api/v1/install-plans/${installPlanId}/reconcile`);
     if (plan.phase !== "reviewable") await Bun.sleep(100);
@@ -460,6 +475,7 @@ async function proveLocalRunnerPrivateFiles(
   const servers: Array<{ stop(force?: boolean): void | Promise<void> }> = [];
   let database: Awaited<ReturnType<typeof createNativePostgresRestartContainer>> | undefined;
   let sql: Awaited<ReturnType<typeof openNativePostgresSqlClient>> | undefined;
+  let scenarioSucceeded = false;
 
   try {
     await mkdir(join(tempRoot, "home"), { recursive: true, mode: 0o700 });
@@ -790,9 +806,19 @@ async function proveLocalRunnerPrivateFiles(
     });
     runnerPids.push(planRunner.pid);
     activeRunnerUrl = planRunner.baseUrl;
-    const gitPlan = gitInstall ? await createGitInstallFirstPlan({
-      operations: service.operations, store, sourceCommit: gitInstall.sourceCommit,
-    }) : undefined;
+    let gitPlan: Awaited<ReturnType<typeof createGitInstallFirstPlan>> | undefined;
+    try {
+      gitPlan = gitInstall ? await createGitInstallFirstPlan({
+        operations: service.operations, store, sourceCommit: gitInstall.sourceCommit, diagnosticRoot: tempRoot,
+      }) : undefined;
+    } catch (error) {
+      try {
+        await writeFile(join(tempRoot, "git-install-runner-boundary.json"), JSON.stringify({
+          runnerHttpEvidence, runnerDispatches, runnerOutput: planRunner.outputTail(),
+        }, null, 2) + "\n", { mode: 0o600 });
+      } catch { /* Preserve the original failure even if diagnostics cannot be saved. */ }
+      throw error;
+    }
     const plan = gitPlan ?? await controller.createCapsulePlan(seededAuthority!.capsuleId);
     if (plan.planRun.status !== "succeeded") {
       const persistedPlan = await store.getPlanRun(plan.planRun.id);
@@ -829,6 +855,7 @@ async function proveLocalRunnerPrivateFiles(
         !response.includes(privateEndpoint) && !response.includes('"privateRunFiles"')
       );
       expect(responsesHideDispatch).toBe(true);
+      scenarioSucceeded = true;
       return {
         kind: "takosumi.git-install-first-private-plan-proof/v1",
         status: "passed",
@@ -1013,6 +1040,7 @@ async function proveLocalRunnerPrivateFiles(
       throw new Error("Core did not send the private slot through the Destroy action");
     }
 
+    scenarioSucceeded = true;
     return {
       kind: "takosumi.local-private-run-file-provider-runner-proof/v1",
       status: "passed",
@@ -1081,7 +1109,12 @@ async function proveLocalRunnerPrivateFiles(
       // retires the owned ephemeral PG fixture; this scratch is not a recovery point.
       throw new AggregateError(cleanupErrors, "native proof cleanup failed; diagnostic scratch retained");
     }
-    await rm(tempRoot, { recursive: true, force: true });
+    if (scenarioSucceeded) {
+      await rm(tempRoot, { recursive: true, force: true });
+    } else {
+      try { console.error(`native proof failed; diagnostic scratch retained at ${tempRoot}; not a backup or key-custody proof`); }
+      catch { /* All process custody has already closed; preserve the diagnostics. */ }
+    }
   }
 }
 
