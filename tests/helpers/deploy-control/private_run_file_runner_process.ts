@@ -55,6 +55,7 @@ async function runSupervisor(): Promise<void> {
   let owner: RunRootOwnership | undefined;
   let supervisor: PreparationV2ChildSupervisor | undefined;
   let launched = false;
+  let drained = false;
   let stopRequested = false;
   let removeSignals = () => {};
   try {
@@ -78,12 +79,22 @@ async function runSupervisor(): Promise<void> {
         ["--no-env-file", import.meta.path, "--child"],
         { env, drainTimeoutMs: 30_000, retryIntervalMs: 250 },
       );
+      drained = result.drained;
+      if (!drained) throw new Error("native Runner tree is not drained");
       if (result.exitCode !== 0 || result.signalCode !== null) process.exitCode = 1;
     }
     await supervisor.close();
     supervisor = undefined;
     await owner.close();
     owner = undefined;
+    const recordPath = Bun.env.TAKOSUMI_TEST_RUNNER_SHUTDOWN_RECORD;
+    if (recordPath) {
+      await writeFile(recordPath, JSON.stringify({
+        kind: "takosumi.native-runner-shutdown/v1",
+        pid: process.pid, runRoot: RUN_ROOT, launched,
+        drained: !launched || drained, ownerClosed: true,
+      }) + "\n", { mode: 0o600 });
+    }
     removeSignals();
   } catch {
     process.exitCode = 1;
@@ -97,7 +108,8 @@ async function runSupervisor(): Promise<void> {
         return;
       } catch { /* Unknown custody retains the process and ownership below. */ }
     }
-    process.stderr.write("native Runner supervision failed; root remains owned\n");
+    try { process.stderr.write("native Runner supervision failed; custody closure unproven\n"); }
+    catch { /* Preserve ownership even when diagnostics are unavailable. */ }
     await new Promise<void>(() => { setInterval(() => {}, 60_000); });
   }
 }

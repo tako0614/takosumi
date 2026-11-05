@@ -35,6 +35,11 @@ import {
   openNativePostgresSqlClient,
 } from "../helpers/deploy-control/native_postgres_restart.ts";
 
+import {
+  stopNativeRunnerProcess as stopRunnerProcess,
+  type NativeRunnerShutdownHandle,
+} from "../helpers/deploy-control/native_runner_shutdown.ts";
+
 const OPT_IN = "TAKOSUMI_TEST_PRIVATE_RUN_FILE_PROVIDER_RUNNER";
 const PROVIDER_SOURCE = "registry.terraform.io/tako0614/takoform";
 const PROVIDER_VERSION = "5.0.0";
@@ -174,7 +179,8 @@ test.skipIf(!enabled)(
     expect(proof.destroyReceivedSameSlot).toBe(true);
     console.info(JSON.stringify(proof));
   },
-  120_000,
+  // A framework timeout must not kill an owner during uncertain drain.
+  0,
 );
 
 interface ProofReport {
@@ -917,13 +923,9 @@ async function compileProvider(root: string, output: string): Promise<void> {
   await chmod(output, 0o755);
 }
 
-interface RunnerProcess {
-  readonly pid: number;
+interface RunnerProcess extends NativeRunnerShutdownHandle {
   readonly baseUrl: string;
-  readonly child: ReturnType<typeof Bun.spawn>;
   readonly recentOutput: string[];
-  stopped: boolean;
-  shutdownError?: Error;
   listenHostname?: string;
   serverPid?: number;
   outputTail(): readonly string[];
@@ -942,6 +944,8 @@ async function startRunnerProcess(input: {
   // not: Apply must restore the exact Plan artifact after process restart.
   const instanceRunRoot = input.runRoot;
   await mkdir(instanceRunRoot, { recursive: true, mode: 0o700 });
+  const shutdownRecordPath = join(input.tempRoot, `runner-shutdown-${input.index}.json`);
+  if (await Bun.file(shutdownRecordPath).exists()) throw new Error("native shutdown record already exists");
   const child = Bun.spawn([
     process.execPath,
     "--no-env-file",
@@ -957,6 +961,7 @@ async function startRunnerProcess(input: {
       TEMP: join(input.tempRoot, "tmp"),
       PORT: String(port),
       TAKOSUMI_TEST_RUNNER_LISTENER_RECORD: join(input.tempRoot, `runner-listener-${input.index}.json`),
+      TAKOSUMI_TEST_RUNNER_SHUTDOWN_RECORD: shutdownRecordPath,
       TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE: "local-http",
       TAKOSUMI_OPENTOFU_RUN_ROOT: instanceRunRoot,
       OPENTOFU_PROVIDER_MIRROR: input.providerMirror,
@@ -969,6 +974,7 @@ async function startRunnerProcess(input: {
   const baseUrl = `http://127.0.0.1:${port}`;
   const runner: RunnerProcess = {
     pid: child.pid, baseUrl, child, recentOutput, stopped: false,
+    runRoot: instanceRunRoot, shutdownRecordPath,
     outputTail: () => recentOutput.slice(-12),
   };
   // Ownership is registered before health, listener readback, or capability checks can throw.
@@ -1013,30 +1019,6 @@ async function startRunnerProcess(input: {
   // The supervisor may deliberately HOLD uncertain custody; the registered
   // process belongs to the bounded common cleanup, never an unbounded wait here.
   throw new Error("local Runner entrypoint did not become healthy before the deadline");
-}
-
-async function stopRunnerProcess(runner: RunnerProcess): Promise<void> {
-  if (runner.stopped) {
-    if (runner.shutdownError) throw runner.shutdownError;
-    return;
-  }
-  runner.child.kill("SIGTERM");
-  const exitCode = await Promise.race([
-    runner.child.exited,
-    Bun.sleep(15_000).then(() => undefined),
-  ]);
-  if (exitCode === undefined) {
-    runner.child.kill("SIGKILL");
-    await runner.child.exited;
-    runner.stopped = true;
-    runner.shutdownError = new Error("local Runner shutdown required forced termination");
-    throw runner.shutdownError;
-  }
-  runner.stopped = true;
-  if (exitCode !== 0) {
-    runner.shutdownError = new Error("local Runner entrypoint did not exit cleanly");
-    throw runner.shutdownError;
-  }
 }
 
 function createNativeProviderRunnerProfile(base: RunnerProfile): RunnerProfile {
