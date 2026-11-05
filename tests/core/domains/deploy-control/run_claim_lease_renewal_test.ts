@@ -2069,55 +2069,58 @@ test("renewable PlanRun refreshes under its own plan owner", async () => {
   }
 });
 
-test("renewable provider floor rejects a selected older version before runner dispatch", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  const { applyRunId, planRunId, vault } =
-    await seedRenewableApplyFixture(store, "refresh_provider_floor");
-  const planRun = await store.getPlanRun(planRunId);
-  if (!planRun?.requiredProviderRequirements) {
-    throw new Error("renewable floor fixture Plan provider requirement is missing");
-  }
-  await store.putPlanRun({
-    ...planRun,
-    requiredProviderRequirements: planRun.requiredProviderRequirements.map(
-      (requirement) => ({ ...requirement, version: "4.0.0" }),
-    ),
-  });
-  const connectionId = "conn_fixture_ws_cap_refresh_provider_floor_cloudflare";
-  const connection = await store.getConnection(connectionId);
-  if (!connection?.credentialRecipe?.renewableEnv) {
-    throw new Error("renewable floor fixture connection is missing");
-  }
-  await store.putConnection({
-    ...connection,
-    credentialRecipe: {
-      ...connection.credentialRecipe,
-      renewableEnv: {
-        ...connection.credentialRecipe.renewableEnv,
-        minimumProviderVersion: "4.1.0",
+test.each(["4.0.0", "5.0.0", "10.0.0"])(
+  "renewable provider release line rejects an unsupported selected version before runner dispatch: %s",
+  async (providerVersion) => {
+    const store = new InMemoryOpenTofuControlStore();
+    const { applyRunId, planRunId, vault } =
+      await seedRenewableApplyFixture(store, "refresh_provider_floor");
+    const planRun = await store.getPlanRun(planRunId);
+    if (!planRun?.requiredProviderRequirements) {
+      throw new Error("renewable floor fixture Plan provider requirement is missing");
+    }
+    await store.putPlanRun({
+      ...planRun,
+      requiredProviderRequirements: planRun.requiredProviderRequirements.map(
+        (requirement) => ({ ...requirement, version: providerVersion }),
+      ),
+    });
+    const connectionId = "conn_fixture_ws_cap_refresh_provider_floor_cloudflare";
+    const connection = await store.getConnection(connectionId);
+    if (!connection?.credentialRecipe?.renewableEnv) {
+      throw new Error("renewable floor fixture connection is missing");
+    }
+    await store.putConnection({
+      ...connection,
+      credentialRecipe: {
+        ...connection.credentialRecipe,
+        renewableEnv: {
+          ...connection.credentialRecipe.renewableEnv,
+          minimumProviderVersion: "4.1.0",
+        },
       },
-    },
-  });
-  let capabilityChecks = 0;
-  let applyCalls = 0;
-  const controller = controllerWith(store, {
-    vault,
-    now: () => Date.parse("2026-09-27T07:00:00.000Z"),
-    assertCredentialRefreshCapability: async () => { capabilityChecks += 1; },
-    refreshCredentials: async () => {},
-    apply: async () => {
-      applyCalls += 1;
-      return fixtureStateCommit();
-    },
-  });
-  const response = await controller.runQueuedApply(applyRunId);
-  expect(response.applyRun.status).toBe("failed");
-  expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
-    "renewable_provider_version_unproven",
-  );
-  expect(capabilityChecks).toBe(0);
-  expect(applyCalls).toBe(0);
-});
+    });
+    let capabilityChecks = 0;
+    let applyCalls = 0;
+    const controller = controllerWith(store, {
+      vault,
+      now: () => Date.parse("2026-09-27T07:00:00.000Z"),
+      assertCredentialRefreshCapability: async () => { capabilityChecks += 1; },
+      refreshCredentials: async () => {},
+      apply: async () => {
+        applyCalls += 1;
+        return fixtureStateCommit();
+      },
+    });
+    const response = await controller.runQueuedApply(applyRunId);
+    expect(capabilityChecks).toBe(0);
+    expect(applyCalls).toBe(0);
+    expect(response.applyRun.status).toBe("failed");
+    expect(response.applyRun.diagnostics?.map((item) => item.code)).toContain(
+      "renewable_provider_version_unproven",
+    );
+  },
+);
 
 test("a delayed runner capability probe cannot dispatch an expired initial credential", async () => {
   const store = new InMemoryOpenTofuControlStore();

@@ -641,14 +641,20 @@ protocol shape only. It never carries, names, or selects a value, and Core holds
 no provider identity of its own: the recipe is the sole place Takosumi learns
 that a provider understands the protocol.
 
-The declaration also carries the lowest exact provider version that accepts the
-two arguments. Below that floor the arguments are not in the provider schema and
-a plan fails with `Unsupported argument`, so the wiring is attached only when the
-Capsule's resolved requirement for that provider instance pins an exact version
-at or above the floor. Anything weaker — a range, or no declared version — leaves
-the path inert and records a value-free plan warning naming the floor. It never
+The declaration also carries the lowest exact version in the provider major that
+accepts the two arguments. A different major may remove the protocol entirely.
+The wiring is attached only when the Capsule's resolved requirement for that
+provider instance pins an exact version in the declared major, at or above the
+floor. An older version, a different major, a range, or no declared version leaves
+the path inert and records a value-free plan warning naming the release line. It never
 fails a Capsule, because a Capsule that needs no run-scoped sensitive inputs must
 still plan.
+
+For a stable major, the declaration covers exact stable releases at or above the
+floor in that major. Major-zero and prerelease APIs have no inferred compatible
+successor here: only the declared exact release is accepted. Build metadata is
+ignored; malformed SemVer is unproven, and numeric identifiers are compared
+without floating-point rounding.
 
 The deliverable name set is the Capsule's manifest-gated runtime binding
 profile: every binding-delivered sensitive value the manifest requests for the
@@ -791,6 +797,12 @@ and the name set and fails closed with `runtime_inputs_nonce_changed`,
 resolution that no longer declares the protocol forces a re-plan instead of
 applying a reviewed root against different material. Every failure is a
 precondition on Capsule material and reports its own reason.
+
+The credential broker also checks the saved Plan's exact provider-instance
+version against the resolved recipe's release line before opening material.
+Saved roots, nonces and descriptors are never rewritten. A retained descriptor
+whose provider pin is absent, ambiguous or outside that line fails with
+`runtime_inputs_provider_version_unproven` and requires a re-plan.
 
 The runner binds each map to its declared variable and supplies it to OpenTofu
 through `-var-file=<pipe>`, at plan (empty) and again at apply (exact). The pipe

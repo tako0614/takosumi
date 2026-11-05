@@ -796,6 +796,11 @@ async function runtimeInputBrokerFor(options: {
   });
   const run = {
     ...planRun([RUNTIME_INPUT_PROVIDER]),
+    requiredProviderRequirements: [{
+      source: RUNTIME_INPUT_PROVIDER,
+      moduleLocalName: "takoform",
+      version: "4.0.0",
+    }],
     workspaceId: seeded.workspace.id,
     capsuleId: seeded.capsule.id,
     capsuleContext: {
@@ -842,6 +847,61 @@ test("apply accepts a retained legacy runtime-input descriptor", async () => {
   });
   const credentials = await broker.mintRunCredentials(run, "apply", "run_1");
   expect(credentials?.runtimeInputs?.[0]?.values).toEqual(RUNTIME_INPUT_VALUES);
+});
+
+async function expectSavedRuntimeInputRefusal(
+  requirements: PlanRun["requiredProviderRequirements"],
+) {
+  const calls: string[] = [];
+  const materializer = {
+    ...runtimeInputMaterializerStub(),
+    profile: async () => { calls.push("profile"); throw new Error("unproven provider must not read a profile"); },
+    nonce: async () => { calls.push("nonce"); throw new Error("unproven provider must not derive a nonce"); },
+    materialize: async () => { calls.push("materialize"); throw new Error("unproven provider must not open secrets"); },
+  };
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    materializer,
+  });
+  const saved = { ...run, requiredProviderRequirements: requirements };
+  const before = JSON.stringify(saved);
+  const error = await broker.mintRunCredentials(saved, "apply", "run_1")
+    .then(() => undefined, (value: unknown) => value);
+  expect(calls).toEqual([]);
+  expect(error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "runtime_inputs_provider_version_unproven" },
+  });
+  expect(JSON.stringify(saved)).toBe(before);
+}
+
+test.each(["3.0.0", "5.0.0", "10.0.0", ">= 4.0.0", undefined])(
+  "saved runtime-input wiring cannot mint for an unproven provider version: %s",
+  async (version) => {
+    await expectSavedRuntimeInputRefusal([{
+      source: RUNTIME_INPUT_PROVIDER,
+      moduleLocalName: "takoform",
+      ...(version === undefined ? {} : { version }),
+    }]);
+  },
+);
+
+const savedRuntimeInputRequirement = {
+  source: RUNTIME_INPUT_PROVIDER,
+  moduleLocalName: "takoform",
+  version: "4.0.0",
+};
+test.each([
+  ["missing requirements", undefined],
+  ["different provider source", [{
+    ...savedRuntimeInputRequirement,
+    source: "registry.opentofu.org/example/other",
+  }]],
+  ["duplicate requirements", [savedRuntimeInputRequirement, savedRuntimeInputRequirement]],
+  ["different child instance", [{ ...savedRuntimeInputRequirement, childAlias: "other" }]],
+  ["different module local name", [{ ...savedRuntimeInputRequirement, moduleLocalName: "other" }]],
+] as const)("saved runtime-input wiring cannot mint with %s", async (_name, requirements) => {
+  await expectSavedRuntimeInputRefusal(requirements);
 });
 
 test("apply rejects a serialized descriptor for a different provider alias", async () => {

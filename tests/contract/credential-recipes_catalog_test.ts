@@ -240,10 +240,11 @@ test("the generated recipe asset carries the protocol shape and no value source"
       mapArgument: "runtime_inputs",
     }),
   ).toBe(false);
-  // Only an exact pin at or above the floor proves the arguments exist.
+  // Only an exact pin in the declared major at or above the floor proves support.
   expect(providerVersionMeetsRuntimeInputFloor("4.0.0", "4.0.0")).toBe(true);
   expect(providerVersionMeetsRuntimeInputFloor("4.1.2", "4.0.0")).toBe(true);
-  expect(providerVersionMeetsRuntimeInputFloor("10.0.0", "4.0.0")).toBe(true);
+  expect(providerVersionMeetsRuntimeInputFloor("5.0.0", "4.0.0")).toBe(false);
+  expect(providerVersionMeetsRuntimeInputFloor("10.0.0", "4.0.0")).toBe(false);
   expect(providerVersionMeetsRuntimeInputFloor("3.0.0", "4.0.0")).toBe(false);
   expect(providerVersionMeetsRuntimeInputFloor("4.0.0-rc.1", "4.0.0")).toBe(
     false,
@@ -261,6 +262,30 @@ test("the generated recipe asset carries the protocol shape and no value source"
       expect(mode.runtimeInputs).toBeUndefined();
     }
   }
+});
+
+test.each([
+  ["4.1.0+rebuilt", "4.0.0", true],
+  ["0.1.0+rebuilt", "0.1.0", true],
+  ["0.1.1", "0.1.0", false],
+  ["0.2.0", "0.1.0", false],
+  ["4.1.0-rc.1", "4.0.0", false],
+  ["4.0.0-rc.1+rebuilt", "4.0.0-rc.1", true],
+  ["4.0.0-rc.2", "4.0.0-rc.1", false],
+  ["4.0.0", "4.0.0-rc.1", false],
+  ["4.01.0", "4.0.0", false],
+  ["04.1.0", "4.0.0", false],
+  ["4.0.0-01", "4.0.0", false],
+  ["4.0.0-rc..1", "4.0.0", false],
+  ["4.0.0+build..1", "4.0.0", false],
+  ["4.0.0\n", "4.0.0", false],
+  ["4.1.0", "04.0.0", false],
+  ["4.9007199254740993.0", "4.9007199254740992.0", true],
+  ["4.9007199254740992.0", "4.9007199254740993.0", false],
+  ["9007199254740993.1.0", "9007199254740992.0.0", false],
+  ["4.0.0-9007199254740993", "4.0.0-9007199254740992", false],
+] as const)("capability pins preserve exact release evidence: %s / %s", (version, floor, supported) => {
+  expect(providerVersionMeetsRuntimeInputFloor(version, floor)).toBe(supported);
 });
 
 test("Takoform renewable support is reference capability, not recipe opt-in", () => {

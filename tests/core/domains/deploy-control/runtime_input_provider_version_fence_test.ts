@@ -1,5 +1,5 @@
 // The two provider-block arguments for run-scoped sensitive inputs exist only
-// from Takoform Provider 4.0.0. Below that floor the provider refuses them with
+// in Takoform Provider 4.x from 4.0.0. An unproven release refuses them with
 // `Unsupported argument`, and the refusal lands only after the reviewed root is
 // already baked — so the wiring must stay inert instead, without failing a
 // Capsule that never needed it.
@@ -379,53 +379,80 @@ test("a provider pinned at or above the floor receives the run-scoped sensitive 
   )).toBe(true);
 });
 
-test("a provider below the floor stays inert and the plan says why", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  const { seeded, controller, observed, compatibilityReportId } =
-    await seedFenceModel(store, {
-      providerVersion: "3.0.0",
-      capsuleId: "cap_fence_old",
-      runnerEchoesPlanDiagnostics: true,
+test.each(["3.0.0", "5.0.0", "10.0.0"])(
+  "a provider outside the declared release line stays inert through Plan and Apply: %s",
+  async (providerVersion) => {
+    const store = new InMemoryOpenTofuControlStore();
+    const {
+      seeded,
+      controller,
+      observed,
+      compatibilityReportId,
+      runtimeInputMaterializerCalls,
+      refuseRuntimeInputMaterialization,
+    } =
+      await seedFenceModel(store, {
+        providerVersion,
+        capsuleId: `cap_fence_${providerVersion.replaceAll(".", "_")}`,
+        runnerEchoesPlanDiagnostics: true,
+      });
+
+    const planned = await controller.createCapsulePlan(
+      seeded.capsule.id,
+      {},
+      { compatibilityReportId },
+    );
+    // A Capsule that does not need run-scoped sensitive inputs must still plan.
+    expect(planned.planRun.status).toBe("succeeded");
+
+    const files = observed.plan?.generatedRoot?.files ?? {};
+    expect(Object.keys(files).sort()).toEqual([
+      "main.tf",
+      "outputs.tf",
+      "versions.tf",
+    ]);
+    expect(files["main.tf"]).not.toContain("runtime_input_nonce");
+    expect(files["main.tf"]).not.toContain("runtime_inputs");
+    expect(observed.plan?.credentials?.runtimeInputs).toBeUndefined();
+
+    const stored = await store.getPlanRun(planned.planRun.id);
+    const diagnostic = (stored?.diagnostics ?? []).find(
+      (entry) => entry.code === "runtime_inputs_provider_version_unproven",
+    );
+    expect(diagnostic?.severity).toBe("warning");
+    expect(diagnostic?.message).toContain("4.0.0");
+    expect(planned.planRun.diagnostics).toEqual(stored?.diagnostics);
+    expect((stored?.diagnostics ?? []).filter(
+      (entry) => entry.code === "runtime_inputs_provider_version_unproven",
+    )).toHaveLength(1);
+    expect((stored?.diagnostics ?? []).filter(
+      (entry) => entry.code === "core_plan_elapsed_timings",
+    )).toHaveLength(1);
+    // The notice names the floor and the pinned version, and nothing else.
+    expect(JSON.stringify(stored?.diagnostics)).not.toContain("ENCRYPTION_KEY");
+    // No material was minted for a Capsule the path never reached.
+    expect(
+      await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`),
+    ).toBeUndefined();
+    expect(runtimeInputMaterializerCalls).toEqual({
+      profile: 0,
+      nonce: 0,
+      materialize: 0,
     });
-
-  const planned = await controller.createCapsulePlan(
-    seeded.capsule.id,
-    {},
-    { compatibilityReportId },
-  );
-  // A Capsule that does not need run-scoped sensitive inputs must still plan.
-  expect(planned.planRun.status).toBe("succeeded");
-
-  const files = observed.plan?.generatedRoot?.files ?? {};
-  expect(Object.keys(files).sort()).toEqual([
-    "main.tf",
-    "outputs.tf",
-    "versions.tf",
-  ]);
-  expect(files["main.tf"]).not.toContain("runtime_input_nonce");
-  expect(files["main.tf"]).not.toContain("runtime_inputs");
-  expect(observed.plan?.credentials?.runtimeInputs).toBeUndefined();
-
-  const stored = await store.getPlanRun(planned.planRun.id);
-  const diagnostic = (stored?.diagnostics ?? []).find(
-    (entry) => entry.code === "runtime_inputs_provider_version_unproven",
-  );
-  expect(diagnostic?.severity).toBe("warning");
-  expect(diagnostic?.message).toContain("4.0.0");
-  expect(planned.planRun.diagnostics).toEqual(stored?.diagnostics);
-  expect((stored?.diagnostics ?? []).filter(
-    (entry) => entry.code === "runtime_inputs_provider_version_unproven",
-  )).toHaveLength(1);
-  expect((stored?.diagnostics ?? []).filter(
-    (entry) => entry.code === "core_plan_elapsed_timings",
-  )).toHaveLength(1);
-  // The notice names the floor and the pinned version, and nothing else.
-  expect(JSON.stringify(stored?.diagnostics)).not.toContain("ENCRYPTION_KEY");
-  // No material was minted for a Capsule the path never reached.
-  expect(
-    await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`),
-  ).toBeUndefined();
-});
+    refuseRuntimeInputMaterialization();
+    const applied = await controller.createApplyRun({
+      planRunId: planned.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planned.planRun),
+    });
+    expect(applied.applyRun.status).toBe("succeeded");
+    expect(observed.apply?.credentials?.runtimeInputs).toBeUndefined();
+    expect(runtimeInputMaterializerCalls).toEqual({
+      profile: 0,
+      nonce: 0,
+      materialize: 0,
+    });
+  },
+);
 
 test("a pre-dispatch provider warning survives when the runner returns no diagnostics", async () => {
   const store = new InMemoryOpenTofuControlStore();

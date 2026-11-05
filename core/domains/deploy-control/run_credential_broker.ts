@@ -54,6 +54,7 @@ import {
   RUNTIME_INPUTS_NAME_SET_CHANGED_REASON,
   RUNTIME_INPUTS_NONCE_CHANGED_REASON,
   RUNTIME_INPUTS_PREVIOUS_GENERATION_UNREADABLE_REASON,
+  RUNTIME_INPUTS_PROVIDER_VERSION_UNPROVEN_REASON,
   RUNTIME_INPUTS_VARIABLE_CHANGED_REASON,
   RUNTIME_INPUTS_WIRING_MISSING_REASON,
   structuredErrorReason,
@@ -80,7 +81,10 @@ import {
   type ResolvedCapsuleProviderBinding,
 } from "../connections/mod.ts";
 import type { RunCredentials, RunCredentialRuntimeInputs } from "./mod.ts";
-import type { RunCredentialRecipeManifest } from "takosumi-contract/credential-recipes";
+import {
+  providerVersionMeetsRuntimeInputFloor,
+  type RunCredentialRecipeManifest,
+} from "takosumi-contract/credential-recipes";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 /**
@@ -596,6 +600,33 @@ export class RunCredentialBroker {
           `reviewed with run-scoped sensitive provider inputs, but no resolved ` +
           `Provider Connection declares them for this apply; re-plan before apply`,
         { reason: RUNTIME_INPUTS_WIRING_MISSING_REASON },
+      );
+    }
+    // A saved Plan may predate the release-line fence. Its reviewed root and
+    // descriptor stay immutable, but neither can authorize opening material for
+    // a provider whose pinned version no longer proves this protocol exists.
+    const requirements = planRun.requiredProviderRequirements?.filter((item) =>
+      item.moduleLocalName === wiring.moduleLocalName &&
+      item.childAlias === undefined
+    );
+    const requirement = requirements?.length === 1 ? requirements[0] : undefined;
+    const matchingSource = requirement && mintable.some((entry) =>
+      entry.moduleLocalName === wiring.moduleLocalName &&
+      entry.rootAlias === wiring.rootAlias &&
+      sameProviderSource(entry.provider, requirement.source)
+    );
+    if (
+      !matchingSource ||
+      !providerVersionMeetsRuntimeInputFloor(
+        requirement?.version,
+        wiring.minimumProviderVersion,
+      )
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `saved runtime-input wiring for plan run ${planRun.id} has no exact ` +
+          `supported provider version; re-plan before apply`,
+        { reason: RUNTIME_INPUTS_PROVIDER_VERSION_UNPROVEN_REASON },
       );
     }
     assertRuntimeInputNames(descriptor.names);
