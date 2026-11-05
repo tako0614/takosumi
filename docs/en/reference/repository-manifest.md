@@ -392,8 +392,11 @@ feature labels) are scanned for known credential-like
 patterns, including `sk-…`, bearer/assignment forms, and URI credentials.
 Structured Interface documents and literals are scanned recursively for both
 secret-like values and authority-key names. This deliberately rejects concrete
-material, not ordinary words such as “token” in user-facing prose, and
-diagnostics never echo a value. JSON values in those documents/literals are
+material, not ordinary words such as “token” in user-facing prose. Values after
+`Bearer`, `Basic`, or `Digest` are rejected regardless of scheme casing, even
+within prose. The historical capitalized `Token abc123` form is also rejected;
+ordinary lowercase prose such as `Use a token value supplied by the operator.`
+remains allowed. Diagnostics never echo a value. JSON values in those documents/literals are
 bounded to recursive depth 32 by the parser; the structural schema documents
 that parser-owned constraint rather than pretending to encode it.
 

@@ -1,6 +1,7 @@
 // SECURITY DRY: the secret regex set (SECRET_KEY_PATTERN / SECRET_KEY_SUBSTRINGS
-// / BEARER_TOKEN_PATTERN / AUTH_HEADER_PATTERN / URL_CREDENTIAL_PATTERN /
-// ASSIGNMENT_SECRET_PATTERN) and the redactString / isSecretKey primitives live
+// / HTTP_AUTH_SCHEME_PATTERN / TOKEN_SCHEME_PATTERN / AUTH_HEADER_PATTERN /
+// URL_CREDENTIAL_PATTERN / ASSIGNMENT_SECRET_PATTERN) and the redactString /
+// isSecretKey primitives live
 // in the observability redaction module, which is the canonical (superset)
 // implementation. This module re-exports those primitives and only adds the
 // `unknown`-typed walkers (`redactUnknown` / `redactRecord`) that handle Error

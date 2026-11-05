@@ -766,7 +766,15 @@ test("repository manifest v2 rejects secret-like values and authority IDs recurs
     );
   }
 
-  for (const value of ["sk-example_12345678", "Bearer opaque-token"]) {
+  for (const value of [
+    "sk-example_12345678",
+    "Bearer opaque-token",
+    "bearer opaque-fixture-value",
+    "bEaReR opaque-fixture-value",
+    "basic opaque-fixture-value",
+    "dIgEsT opaque-fixture-value",
+    "Token opaque-fixture-value",
+  ]) {
     declaration.spec.document = {
       display: { title: "Example" },
       nested: { values: [value] },

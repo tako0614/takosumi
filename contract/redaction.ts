@@ -18,8 +18,13 @@ function normalizeSecretKey(key: string): string {
   return key.toLowerCase().replace(/[_\-\s]+/g, "");
 }
 
-const BEARER_TOKEN_PATTERN =
-  /\b(Bearer|Basic|Digest|Token)\s+[-._~+/=a-zA-Z0-9]+/g;
+// HTTP authentication scheme names are case-insensitive (RFC 9110 section 11.1).
+// This pattern handles token-like fragments, not parameterized Digest fields.
+// Keep the historical Token marker separate: matching ordinary lowercase
+// "token value" would reject the public prose accepted by manifest admission.
+const HTTP_AUTH_SCHEME_PATTERN =
+  /\b(Bearer|Basic|Digest)\s+[-._~+/=a-zA-Z0-9]+/gi;
+const TOKEN_SCHEME_PATTERN = /\b(Token)\s+[-._~+/=a-zA-Z0-9]+/g;
 // SECURITY (ReDoS): the optional scheme carries its own trailing `\s*` instead
 // of sitting between two independent whitespace runs. `\s*(?:scheme)?\s*` left
 // a whitespace run of length M with M+1 ambiguous splits, each one re-testing
@@ -120,9 +125,14 @@ export function redactString(
       AUTH_HEADER_PATTERN,
       (_match, prefix: string) => `${prefix}${replacement}`,
     )
-    // Mask Authorization scheme tokens (Bearer / Basic / Digest / Token).
+    // Mask scheme-prefixed token-like fragments without depending on casing.
     .replace(
-      BEARER_TOKEN_PATTERN,
+      HTTP_AUTH_SCHEME_PATTERN,
+      (_match, scheme: string) => `${scheme} ${replacement}`,
+    )
+    // Preserve the existing capitalized Token marker and lowercase prose boundary.
+    .replace(
+      TOKEN_SCHEME_PATTERN,
       (_match, scheme: string) => `${scheme} ${replacement}`,
     )
     // Mask key=value / key: value / key="value" credential assignments, keeping
