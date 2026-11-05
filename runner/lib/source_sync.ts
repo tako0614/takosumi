@@ -791,23 +791,44 @@ function repositoryModuleDiscoveryReason(
   return "configuration_invalid";
 }
 
-// Writes any minted credential files to the per-run credential dir and builds
-// the command env that wires git to use them WITHOUT ever putting a secret in
-// the URL or process arg list. https token flow uses GIT_ASKPASS; ssh-key flow
-// uses GIT_SSH_COMMAND with StrictHostKeyChecking=yes against the minted
-// known_hosts (StrictHostKeyChecking=no is forbidden).
+function literalSshCredentialPath(path: string): string {
+  // OpenSSH expands percent tokens and ${ENV} after shell parsing. Percent
+  // has a literal escape; reject syntax that cannot preserve the minted path.
+  if (/[\0\r\n]|\$\{/u.test(path)) {
+    throw new Error("ssh credential path contains unsupported expansion syntax");
+  }
+  return path.replaceAll("%", "%%");
+}
+
+function sshCredentialFileOption(
+  name: "UserKnownHostsFile" | "IdentityFile",
+  path: string,
+): string {
+  const value = literalSshCredentialPath(path).replace(/[\\"]/g, "\\$&");
+  return shellQuote(`${name}="${value}"`);
+}
+
+// Writes minted source files without putting secret values in URLs or args.
+// SSH uses only the minted key and known_hosts, with strict host verification.
 export async function prepareSourceGitContext(
   source: SourceSyncSource,
   credentials: SourceCredentials,
   credentialDir: string,
   signal?: AbortSignal,
 ): Promise<SourceGitContext> {
+  const scheme = sourceUrlScheme(source.url);
+  if (scheme === "ssh") {
+    literalSshCredentialPath(credentialDir);
+    for (const file of credentials.files) {
+      literalSshCredentialPath(join(credentialDir, file.path));
+    }
+  }
   const env: Record<string, string> = {
+    // Minted source values feed askpass, never the URL. Runner-owned controls
+    // remain authoritative even if an internal caller supplies extra env.
+    ...credentials.env,
     ...baseCommandEnv(),
     GIT_TERMINAL_PROMPT: "0",
-    // Minted env (e.g. GIT_HTTPS_TOKEN, or a username) is threaded through but
-    // is consumed by the askpass script, never written to the URL.
-    ...credentials.env,
   };
 
   let wroteKeyFile = false;
@@ -831,7 +852,6 @@ export async function prepareSourceGitContext(
     }
   }
 
-  const scheme = sourceUrlScheme(source.url);
   if (scheme === "ssh") {
     // SECURITY INVARIANT: an ssh source ALWAYS requires a minted known_hosts
     // entry so host verification runs with StrictHostKeyChecking=yes. Without
@@ -845,20 +865,29 @@ export async function prepareSourceGitContext(
           : "ssh source requires a minted ssh key and known_hosts (StrictHostKeyChecking=yes)",
       );
     }
+    if (!wroteKeyFile) {
+      throw new Error("ssh source requires a minted ssh key; ambient identities are not allowed");
+    }
+    // SSH parses -o values after the shell has parsed GIT_SSH_COMMAND. Quote
+    // the path for SSH first, then the whole option for the shell.
     const sshParts = [
       "ssh",
+      "-F",
+      "/dev/null",
       "-o",
       "StrictHostKeyChecking=yes",
       "-o",
-      `UserKnownHostsFile=${shellQuote(knownHostsPath)}`,
+      sshCredentialFileOption("UserKnownHostsFile", knownHostsPath),
+      "-o",
+      "GlobalKnownHostsFile=/dev/null",
       "-o",
       "IdentitiesOnly=yes",
       "-o",
       "BatchMode=yes",
     ];
-    if (wroteKeyFile) {
-      sshParts.push("-i", shellQuote(keyFilePath));
-    }
+    // Unlike -i, the config option avoids an eager stat before SSH expands
+    // literal percent escapes in the minted filename.
+    sshParts.push("-o", sshCredentialFileOption("IdentityFile", keyFilePath));
     env.GIT_SSH_COMMAND = sshParts.join(" ");
   } else if (askpassPath) {
     // https token flow: GIT_ASKPASS points at the minted script which echoes

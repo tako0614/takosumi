@@ -1521,6 +1521,10 @@ export async function prepareProviderCredentialFiles(
 export function baseCommandEnv(): Record<string, string> {
   const env: Record<string, string> = {
     GIT_TERMINAL_PROMPT: "0",
+    // Run commands use declared source inputs, not writable ambient Git policy.
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
     TF_INPUT: "0",
     TF_IN_AUTOMATION: "1",
   };

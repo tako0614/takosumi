@@ -131,6 +131,13 @@ Leaving `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` empty makes the runner unpack
 providers into per-Run work areas. Nothing is shared, and in exchange no
 mix-up between Runs can happen.
 
+Git in Runner command environments ignores inherited global/system Git config.
+SSH sources also skip implicit SSH config and retain the Connection's key and
+`known_hosts` checks. Custom Git HTTPS CA trust can use the existing
+`GIT_SSL_CAINFO` input; `SSL_CERT_FILE` and `SSL_CERT_DIR` passthrough is retained.
+Configuration suppression is separate from same-UID or shared-cache isolation; see the
+[Runner responsibility boundary](../../operations/runner-sandbox-security.md#git-configuration-inputs).
+
 Due uninstall requests are advanced by the hourly cron on Cloudflare and by an
 in-process 15-minute cadence on PostgreSQL. Right before teardown the control
 plane attempts one Capsule-scoped export and records its outcome on the
