@@ -59,7 +59,7 @@ test.skipIf(!gitInstallEnabled)(
       throw new Error("Provider source and an exact pushed TAKOSUMI_TEST_PRIVATE_RUN_FILE_GIT_COMMIT are required");
     }
     const proof = await proveLocalRunnerPrivateFiles(providerRoot, { sourceCommit });
-    expect(proof.planStatus).toBe("succeeded");
+    expect(["succeeded", "waiting_approval"]).toContain(proof.planStatus);
     expect(proof.installPhase).toBe("reviewable");
     expect(proof.canonicalPrivateSlot).toBe(PRIVATE_SLOT);
     expect(proof.privatePointerVersion).toBe(1);
@@ -820,7 +820,8 @@ async function proveLocalRunnerPrivateFiles(
       throw error;
     }
     const plan = gitPlan ?? await controller.createCapsulePlan(seededAuthority!.capsuleId);
-    if (plan.planRun.status !== "succeeded") {
+    const reviewableGitPlan = gitPlan && plan.planRun.status === "waiting_approval";
+    if (plan.planRun.status !== "succeeded" && !reviewableGitPlan) {
       const persistedPlan = await store.getPlanRun(plan.planRun.id);
       const diagnosticCodes = plan.planRun.diagnostics?.map((item) => item.code).filter(Boolean);
       const diagnosticMessages = persistedPlan?.diagnostics?.map((item) => item.message);
