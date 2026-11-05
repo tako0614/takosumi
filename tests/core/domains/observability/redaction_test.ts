@@ -29,7 +29,7 @@ test("redaction masks nested secret and token fields", () => {
 test("redaction masks bearer and assignment secrets inside strings", () => {
   assert.equal(
     redactString("Authorization: Bearer abc.def token=xyz&safe=true"),
-    "Authorization: Bearer [REDACTED] token=[REDACTED]&safe=true",
+    "Authorization: [REDACTED]",
   );
 });
 
@@ -102,6 +102,187 @@ test("secret-like detection rejects private keys and credential-bearing service 
     containsSecretLikeString("https://service.example/workspace"),
     false,
   );
+});
+
+test("private-key PEM bodies and multiple blocks are fully masked", () => {
+  const input = [
+    "before-safe",
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "pem-canary-alpha",
+    "-----END RSA PRIVATE KEY-----",
+    "between-safe",
+    "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+    "pem-canary-beta",
+    "-----END ENCRYPTED PRIVATE KEY-----",
+    "after-safe",
+  ].join("\n");
+  assert.equal(redactString(input), [
+    "before-safe", "[REDACTED]", "between-safe", "[REDACTED]", "after-safe",
+  ].join("\n"));
+  assert.equal(containsSecretLikeString(input), true);
+});
+
+test("incomplete or mismatched PEM end fails closed", () => {
+  for (const tail of [
+    "pem-canary-gamma\ntrailing-canary",
+    "pem-canary-gamma\n-----END EC PRIVATE KEY-----\ntrailing-canary",
+  ]) {
+    assert.equal(redactString(`pre-safe\n-----BEGIN RSA PRIVATE KEY-----\n${tail}`),
+      "pre-safe\n[REDACTED]");
+  }
+});
+
+test("structured credential assignments mask nested mixed values and quoted escapes", () => {
+  assert.equal(
+    redactString('GOOGLE_CREDENTIALS={"outer":[{"v":"object-canary"},["array-canary",{"x":"leaf-canary"}]]} safe=visible'),
+    "GOOGLE_CREDENTIALS=[REDACTED] safe=visible",
+  );
+  assert.equal(
+    redactString(String.raw`CREDENTIALS='{"entry":"quote-\'canary","path":"slash-\\canary"}' safe=visible`),
+    "CREDENTIALS=[REDACTED] safe=visible",
+  );
+});
+
+test("malformed or oversized structured credentials fail closed", () => {
+  assert.equal(redactString("CREDENTIALS={[}mismatch-tail-canary safe=visible"),
+    "CREDENTIALS=[REDACTED]");
+  assert.equal(redactString('CREDENTIALS="unterminated-canary\\" tail-canary'),
+    "CREDENTIALS=[REDACTED]");
+  assert.equal(redactString('CREDENTIALS={"x":["unterminated-canary"} tail-canary'),
+    "CREDENTIALS=[REDACTED]");
+  assert.equal(redactString(`CREDENTIALS={${"x".repeat(1_048_576)}over-budget-canary`),
+    "CREDENTIALS=[REDACTED]");
+});
+
+test("Digest parameter lists hide later values while preserving next line", () => {
+  const header = 'Authorization: dIgEsT username="u,\\"ser", nonce="nonce-canary", response="response-canary", cnonce="cnonce-canary", opaque="opaque-canary"\nNext: visible';
+  assert.equal(redactString(header), "Authorization: [REDACTED]\nNext: visible");
+  assert.equal(containsSecretLikeString(header), true);
+  assert.equal(
+    redactString('upstream dIgEsT username="u,ser", nonce="nonce-canary"\nNext: visible'),
+    "upstream dIgEsT [REDACTED]\nNext: visible",
+  );
+  assert.equal(
+    redactString("upstream Digest username*=UTF-8''user-canary, response=hash-canary\nNext: visible"),
+    "upstream Digest [REDACTED]\nNext: visible",
+  );
+  assert.equal(containsSecretLikeString("Use a token value supplied by the operator."), false);
+});
+
+test("folded and malformed Digest fields mask continued parameters", () => {
+  assert.equal(
+    redactString('Authorization: dIgEsT username="u",\r\n nonce="NONCE_CANARY",\r\n\tresponse="RESPONSE_CANARY", cnonce="CNONCE_CANARY"\r\nSafe: retained'),
+    "Authorization: [REDACTED]\r\nSafe: retained",
+  );
+  assert.equal(
+    redactString('Authorization: Digest\r\n username="USER_CANARY", nonce="NONCE_CANARY"\r\nSafe: retained'),
+    "Authorization: [REDACTED]\r\nSafe: retained",
+  );
+  assert.equal(
+    redactString('Authorization: Digest username="u",\nnonce="NONCE_CANARY", response="RESPONSE_CANARY"\nSafe: retained'),
+    "Authorization: [REDACTED]\nSafe: retained",
+  );
+  assert.equal(
+    redactString('Authorization: Digest username="unterminated-canary\nnonce="NONCE_CANARY"\nSafe: retained'),
+    "Authorization: [REDACTED]\nSafe: retained",
+  );
+  assert.equal(
+    redactString('Authorization: Digest username="unterminated-canary\nloose-tail-canary'),
+    "Authorization: [REDACTED]",
+  );
+});
+
+test("SQL-style doubled single quotes remain inside a credential value", () => {
+  assert.equal(redactString("CREDENTIALS='first''sensitive tail' safe=visible"),
+    "CREDENTIALS=[REDACTED] safe=visible");
+});
+
+test("quoted JSON secret keys and adjacent credential fragments are masked", () => {
+  assert.equal(
+    redactString(String.raw`{"cred\u0065ntials":{"v":"JSON_CANARY with space"},"safe":"visible"}`),
+    String.raw`{"cred\u0065ntials":[REDACTED],"safe":"visible"}`,
+  );
+  assert.equal(redactString('CREDENTIALS="first"\'CANARY tail\''),
+    "CREDENTIALS=[REDACTED]");
+  assert.equal(redactString('CREDENTIALS="first"CANARYtail'),
+    "CREDENTIALS=[REDACTED]");
+  assert.equal(redactString('CREDENTIALS="first" safe=visible'),
+    "CREDENTIALS=[REDACTED] safe=visible");
+});
+
+test("standalone URL credentials retain the password-only masking", () => {
+  assert.equal(
+    redactString("fetch https://user:password-canary@host.invalid/path"),
+    "fetch https://user:[REDACTED]@host.invalid/path",
+  );
+});
+
+test("URL scheme word boundaries retain password masking", () => {
+  assert.equal(redactString("1a.b://user:plain-canary@host.invalid"),
+    "1a.b://user:[REDACTED]@host.invalid");
+  assert.equal(redactString("_abc.def://user:other-canary@host.invalid"),
+    "_abc.def://user:[REDACTED]@host.invalid");
+});
+
+test("scalar auth assignments mask values without changing Authorization headers", () => {
+  assert.equal(redactString("auth=plain-canary"), "auth=[REDACTED]");
+  assert.equal(redactString("authorization=other-canary"),
+    "authorization=[REDACTED]");
+  assert.equal(redactString("auth=plain-canary safe=visible"),
+    "auth=[REDACTED]");
+  assert.equal(redactString('auth=Bearer "quoted-canary with space" safe=visible'),
+    "auth=[REDACTED]");
+  assert.equal(redactString("auth=Negotiate plain-canary\nSafe: retained"),
+    "auth=[REDACTED]\nSafe: retained");
+  assert.equal(
+    redactString("authorization=Signature keyId=plain-canary, signature=secret-canary\r\nSafe: retained"),
+    "authorization=[REDACTED]\r\nSafe: retained",
+  );
+  assert.equal(redactString("auth=customscheme plain-canary\nSafe: retained"),
+    "auth=[REDACTED]\nSafe: retained");
+  assert.equal(
+    redactString('auth=Bearer "quoted-canary with space", nonce="N_CANARY"\nSafe: retained'),
+    "auth=[REDACTED]\nSafe: retained",
+  );
+  assert.equal(redactString("Authorization: Bearer abc.def token=xyz&safe=true"),
+    "Authorization: [REDACTED]");
+});
+
+test("bare Digest recognizes RFC-valid punctuation-led auth parameters", () => {
+  for (const initial of ["!", "#", "$", "%", "&", "'", "*", "^", "`", "|"]) {
+    const input = `Digest ${initial}ext="x", nonce="N_CANARY", response="R_CANARY"\nSafe: retained`;
+    assert.equal(redactString(input), "Digest [REDACTED]\nSafe: retained");
+    assert.equal(containsSecretLikeString(input), true);
+  }
+  assert.equal(redactString("Digest !metadata=visible"), "Digest [REDACTED]");
+  assert.equal(containsSecretLikeString("Use a token value supplied by the operator."), false);
+});
+
+test("Authorization masks complete Negotiate and Signature fields", () => {
+  assert.equal(
+    redactString("Authorization: Negotiate plain-canary\nSafe: retained"),
+    "Authorization: [REDACTED]\nSafe: retained",
+  );
+  assert.equal(
+    redactString('Authorization: Signature keyId="one", signature="secret-canary"\r\nSafe: retained'),
+    "Authorization: [REDACTED]\r\nSafe: retained",
+  );
+  assert.equal(
+    redactString('aUtHoRiZaTiOn: Signature keyId="one",\r\n signature="secret-canary",\r\n\talgorithm="hmac"\r\nSafe: retained'),
+    "aUtHoRiZaTiOn: [REDACTED]\r\nSafe: retained",
+  );
+});
+
+test("Authorization masks malformed Basic and Bearer extra atoms", () => {
+  assert.equal(
+    redactString('Authorization: Bearer first-canary extra-canary\nSafe: retained'),
+    "Authorization: [REDACTED]\nSafe: retained",
+  );
+  assert.equal(
+    redactString('Authorization: Basic "quoted-canary with space"\nSafe: retained'),
+    "Authorization: [REDACTED]\nSafe: retained",
+  );
+  assert.equal(redactString("Bearer bare-canary"), "Bearer [REDACTED]");
 });
 
 test("unknown redaction terminates on cycles, BigInt and hostile properties", () => {

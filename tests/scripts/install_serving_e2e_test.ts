@@ -384,7 +384,7 @@ test("a diagnostic's detail is redacted, stripped of control bytes, and bounded"
     }],
   });
   expect(hostile).toBe(
-    "source_build_failed: runner failure (error : install TAKOFORM_TOKEN=[REDACTED] Authorization: Bearer [REDACTED] done)",
+    "source_build_failed: runner failure (error : install TAKOFORM_TOKEN=[REDACTED] Authorization: [REDACTED])",
   );
   expect(/\p{Cc}/u.test(hostile ?? "")).toBe(false);
 

@@ -66,16 +66,6 @@ export const DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES =
 export const RUNNER_REDACTED_VALUE = "[redacted]";
 export const RUNNER_SECRET_WORD =
   "(?:secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|connection[_-]?string|database[_-]?url|dsn)";
-export const RUNNER_AUTH_HEADER_PATTERN =
-  /\b(Authorization\s*:\s*(?:Bearer|Basic|Digest|Token)?\s*)[^\s,;]+/gi;
-export const RUNNER_AUTH_SCHEME_PATTERN =
-  /\b(Bearer|Basic|Digest|Token)\s+[-._~+/=a-zA-Z0-9]+/g;
-export const RUNNER_URL_CREDENTIAL_PATTERN =
-  /\b([a-z][a-z0-9+.\-]*:\/\/[^:/?#\s@]+:)([^@/?#\s]+)@/gi;
-export const RUNNER_SECRET_ASSIGNMENT_PATTERN = new RegExp(
-  `\\b((${RUNNER_SECRET_WORD})|(?:[A-Za-z_][A-Za-z0-9_.-]*${RUNNER_SECRET_WORD}[A-Za-z0-9_.-]*))(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s,&;]+)`,
-  "gi",
-);
 export const RUNNER_TF_VAR_ASSIGNMENT_PATTERN =
   /\b(TF_VAR_[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,&;]+)/g;
 export const RUNNER_SECRET_ENV_NAME_PATTERN = new RegExp(

@@ -334,6 +334,10 @@ bearer や代入の形、URI に埋め込んだ認証情報など、よく知ら
 `Bearer`、`Basic`、`Digest` のすぐ後に値を書く形は、大文字・小文字の区別なく、文中のどこにあっても
 認証情報らしい形として拒否します。大文字で始まる `Token abc123` も従来どおり拒否しますが、
 `Use a token value supplied by the operator.` のような小文字の `token` を使う文章は許可します。
+秘密名に代入された引用符つきの値や JSON の値は、入れ子も含めて一つの値として検査します。
+private-key PEM、パラメータつきの `Digest`、明示的な `Authorization:` フィールドも検査の対象です。
+診断では `Authorization:` の値全体を伏せ、閉じていない秘密値や PEM は安全な終端が分かるまで
+後続も伏せます。この検査は認識できる形を対象とし、任意の文字列から秘密を判別するものではありません。
 エラーの説明に値をそのまま書き出すことはありません。これらの公開 JSON の値の入れ子の深さは、Takosumi の
 解析処理（parser）が最大 32 に制限します。JSON Schema の形の検査では深さを表せないため、Schema の
 `x-takosumi-semanticConstraints` に、Takosumi が確かめる制約として記しています。
