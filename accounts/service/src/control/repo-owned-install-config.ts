@@ -278,17 +278,11 @@ export async function adoptRepoOwnedInstallConfig(
   // The manifest can assist only an actual file-derived module. A valid
   // manifest with no matching entry is simply absent for this module; it does
   // not make the real OpenTofu configuration uninstallable.
-  const manifestModulePath = repositoryManifestModulePath(
+  const manifestModulePath = declaredRepositoryManifestModulePath(
     input.sourceSnapshot!,
     selectedModule.modulePath,
   );
-  if (
-    !manifestModulePath ||
-    !Object.prototype.hasOwnProperty.call(
-      observation.document.install.modules,
-      manifestModulePath,
-    )
-  ) {
+  if (!manifestModulePath) {
     return { status: "absent" };
   }
 
@@ -997,6 +991,19 @@ export function resolveRepoOwnedInstallModulePath(input: {
 function canonicalSourceSnapshotPath(snapshot: SourceSnapshot): string {
   const parsed = modulePathValue(snapshot.path);
   return parsed === "" ? "." : parsed ?? "";
+}
+
+/** Look up assistance for this already scanner-selected module only. */
+export function declaredRepositoryManifestModulePath(
+  snapshot: SourceSnapshot,
+  modulePath: string,
+): string | undefined {
+  const manifest = snapshot.repositoryManifest;
+  if (manifest?.status !== "present") return undefined;
+  const path = repositoryManifestModulePath(snapshot, modulePath);
+  return path && Object.prototype.hasOwnProperty.call(manifest.document.install.modules, path)
+    ? path
+    : undefined;
 }
 
 /**
