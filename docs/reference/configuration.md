@@ -130,7 +130,7 @@ Runner commandのGitは、親のglobal／system Git configを読みません。S
 Git HTTPSの独自CAは既存の`GIT_SSL_CAINFO`で指定します。
 `SSL_CERT_FILE`／`SSL_CERT_DIR`の引継ぎも維持します。
 設定の読取り抑止と、同一UIDや共有cacheの隔離は別です。
-[Runnerの責任境界](../operations/runner-sandbox-security.md#git-configuration-inputs)を参照してください。
+[Runnerの責任境界](https://github.com/tako0614/takosumi/blob/main/docs/operations/runner-sandbox-security.md#git-configuration-inputs)を参照してください。
 
 期日を過ぎた削除予約は、Cloudflare 構成では毎時の cron が、PostgreSQL 構成では
 プロセス内の 15 分ごとの定期処理が進めます。破棄の直前に一度だけ Capsule 単位の

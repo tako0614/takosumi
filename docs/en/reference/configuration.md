@@ -136,7 +136,7 @@ SSH sources also skip implicit SSH config and retain the Connection's key and
 `known_hosts` checks. Custom Git HTTPS CA trust can use the existing
 `GIT_SSL_CAINFO` input; `SSL_CERT_FILE` and `SSL_CERT_DIR` passthrough is retained.
 Configuration suppression is separate from same-UID or shared-cache isolation; see the
-[Runner responsibility boundary](../../operations/runner-sandbox-security.md#git-configuration-inputs).
+[Runner responsibility boundary](https://github.com/tako0614/takosumi/blob/main/docs/operations/runner-sandbox-security.md#git-configuration-inputs).
 
 Due uninstall requests are advanced by the hourly cron on Cloudflare and by an
 in-process 15-minute cadence on PostgreSQL. Right before teardown the control
