@@ -137,7 +137,7 @@ test("createTakosumiLogger redacts secret-looking fields and error text", () => 
   assert.equal(parsed.nested.authToken, "[REDACTED]");
   assert.equal(
     parsed.error.message,
-    "provider failed with Authorization: Bearer [REDACTED] and password=[REDACTED]",
+    "provider failed with Authorization: [REDACTED]",
   );
 });
 

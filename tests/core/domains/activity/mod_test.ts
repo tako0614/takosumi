@@ -65,7 +65,7 @@ test("record redacts secret-shaped metadata before persisting", async () => {
   expect(event?.metadata).toEqual({
     displayName: "Cloudflare",
     apiToken: "[REDACTED]",
-    detail: "Authorization: Bearer [REDACTED] password=[REDACTED]",
+    detail: "Authorization: [REDACTED]",
     nested: { databaseUrl: "[REDACTED]" },
   });
 });
