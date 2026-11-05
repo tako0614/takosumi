@@ -1,10 +1,25 @@
 import { expect, test } from "bun:test";
+import { credentialProseFixtures, credentialSpanFixtures } from "../helpers/credential_span_fixtures.ts";
 
 import {
   parseProviderConfigurationsEnvelope,
   providerConfigurationsEnvelope,
   providerConfigurationsJson,
 } from "../../contract/provider-configurations.ts";
+
+test.each(credentialSpanFixtures)("provider non-secret configuration rejects credential continuations: $name", ({ input }) => {
+  expect(() => providerConfigurationsEnvelope([{
+    provider: "hashicorp/null",
+    configuration: { text: input },
+  }])).toThrow("contains a secret-like value");
+});
+
+test.each(credentialProseFixtures)("provider non-secret configuration retains format prose: %s", (input) => {
+  expect(providerConfigurationsEnvelope([{
+    provider: "hashicorp/null",
+    configuration: { text: input },
+  }]).providers[0]?.configuration.text).toBe(input);
+});
 
 test("provider configuration envelope canonicalizes provider, alias, entry, and JSON-key order", () => {
   const envelope = providerConfigurationsEnvelope([

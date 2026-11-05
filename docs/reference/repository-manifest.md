@@ -336,6 +336,15 @@ bearer や代入の形、URI に埋め込んだ認証情報など、よく知ら
 `Use a token value supplied by the operator.` のような小文字の `token` を使う文章は許可します。
 秘密名に代入された引用符つきの値や JSON の値は、入れ子も含めて一つの値として検査します。
 private-key PEM、パラメータつきの `Digest`、明示的な `Authorization:` フィールドも検査の対象です。
+秘密名の YAML block scalar（`|` / `>`）や、行末の奇数個の backslash で続く shell の値も
+継続行を含めて検査します。YAML は限定した形を読み取り、indent / chomping indicator、comment、
+anchor / tag を扱います。曖昧な形や 1,048,576 UTF-16 code unit の走査上限を超える値は、
+診断の末尾まで伏せます。完全な YAML parser ではありません。
+診断に含まれる shell 形の継続では、LF / CRLF に加えて CR のみの改行も保守的に扱います。
+PGP private-key block、SSH2 encrypted private-key block、PuTTY v2/v3 の private-key file、
+大文字の age X25519 identity の字句形も検査します。age の checksum を検証するものではなく、
+任意の age plugin identity を扱うものでもありません。public-key block や、形式の marker を
+説明する通常の文章は、それだけでは秘密として扱いません。
 診断では `Authorization:` の値全体を伏せ、閉じていない秘密値や PEM は安全な終端が分かるまで
 後続も伏せます。この検査は認識できる形を対象とし、任意の文字列から秘密を判別するものではありません。
 エラーの説明に値をそのまま書き出すことはありません。これらの公開 JSON の値の入れ子の深さは、Takosumi の

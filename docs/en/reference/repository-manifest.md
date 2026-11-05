@@ -399,6 +399,18 @@ ordinary lowercase prose such as `Use a token value supplied by the operator.`
 remains allowed. Quoted and JSON values assigned to secret names are scanned as
 complete values, including nested content. Private-key PEM blocks, parameterized
 `Digest` credentials, and explicit `Authorization:` fields are also recognized.
+YAML block scalars (`|` / `>`) assigned to secret names and shell values continued
+by an odd number of terminal backslashes are scanned through their continuation
+lines. The bounded YAML scanner handles indentation/chomping indicators,
+comments, anchors and tags. Uncertain forms or values exceeding its 1,048,576
+UTF-16 code-unit scanning budget hide the remainder of the diagnostic. This is
+not a complete YAML parser.
+Shell-shaped diagnostic continuations conservatively accept CR-only line breaks
+as well as LF and CRLF.
+PGP private-key blocks, SSH2 encrypted private-key blocks, PuTTY v2/v3 private-key
+files and uppercase age X25519 identity lexical shapes are also recognized. The
+age check does not validate checksums or cover arbitrary plugin identities.
+Public-key blocks and ordinary prose explaining a format marker remain visible.
 Diagnostics mask the entire `Authorization:` value. Unclosed secret values and
 PEM blocks conservatively hide following content when no safe end is known.
 These checks recognize defined credential shapes; they cannot identify arbitrary
