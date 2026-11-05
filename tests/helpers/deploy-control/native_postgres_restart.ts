@@ -240,12 +240,26 @@ function assertNativeOptIn(): void {
   }
 }
 
-async function runLocalDocker(args: readonly string[]): Promise<string> {
+type DockerCommandExecutor = (
+  args: readonly string[],
+  options: { readonly encoding: "utf8"; readonly maxBuffer: number; readonly timeout?: number },
+) => Promise<{ readonly stdout: string }>;
+
+export async function runNativePostgresDockerCommand(
+  args: readonly string[],
+  execute?: DockerCommandExecutor,
+): Promise<string> {
+  if (!execute) assertNativeOptIn();
+  const executeCommand = execute ??
+    ((argv, options) => execFileAsync("docker", [...argv], options));
   try {
-    const result = await execFileAsync("docker", [...args], {
+    const result = await executeCommand(args, {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
-      timeout: 30_000,
+      // `docker run` can still create the named container after its CLI is
+      // killed. Keep this exact producer alive until its actual ACK/exit;
+      // observations must not abandon an in-flight resource mutation.
+      ...(args[0] === "run" ? {} : { timeout: 30_000 }),
     });
     return result.stdout.trim();
   } catch (error) {
@@ -696,7 +710,7 @@ export async function createNativePostgresRestartContainer(
   options: NativePostgresRestartOptions = {},
 ): Promise<NativePostgresRestartContainer> {
   if (!options.runDocker) assertNativeOptIn();
-  const runDocker = options.runDocker ?? runLocalDocker;
+  const runDocker = options.runDocker ?? runNativePostgresDockerCommand;
   const dataRoot = options.dataRoot ?? DEFAULT_DATA_ROOT;
 
   // `docker image inspect` is local-only; `--pull=never` prevents any registry fetch.

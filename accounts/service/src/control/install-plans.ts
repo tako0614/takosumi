@@ -104,6 +104,7 @@ import {
 } from "./generic-opentofu-variable-contract.ts";
 import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
 import {
+  declaredRepositoryManifestModulePath,
   previewRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
 } from "./repo-owned-install-config.ts";
@@ -2004,6 +2005,24 @@ async function sourceSyncProgress(
   });
 }
 
+function requiredManifestVersionFailure(
+  snapshot: SourceSnapshot,
+  baseConfig: InstallConfig,
+) {
+  const requiredVersion = baseConfig.policy?.repositoryInstallUx?.requiredManifestApiVersion;
+  const manifest = snapshot.repositoryManifest;
+  if (
+    requiredVersion &&
+    (manifest?.status !== "present" || manifest.document.apiVersion !== requiredVersion)
+  ) {
+    return {
+      code: "repository_install_ux_manifest_api_version_required",
+      message: "The generic host policy requires an exact repository install manifest API version before this plan can continue.",
+    } as const;
+  }
+  return undefined;
+}
+
 async function prepareInstallCompilation(
   plan: StoredGitInstallPlan,
   operations: ControlPlaneOperations,
@@ -2047,21 +2066,12 @@ async function prepareInstallCompilation(
     });
   }
 
-  const manifest = snapshot.repositoryManifest;
-  if (!manifest || manifest.status === "absent" || manifest.status === "invalid") {
-    const requiredManifestApiVersion =
-      base.installConfig.policy?.repositoryInstallUx
-        ?.requiredManifestApiVersion;
-    if (requiredManifestApiVersion) {
-      return failedPlan(plan, {
-        code: "repository_install_ux_manifest_api_version_required",
-        message:
-          "The generic host policy requires a valid repository install manifest before this plan can continue.",
-      });
-    }
+  const manifestPolicyFailure = requiredManifestVersionFailure(snapshot, base.installConfig);
+  if (manifestPolicyFailure) return failedPlan(plan, manifestPolicyFailure);
+  if (!declaredRepositoryManifestModulePath(snapshot, moduleSelection.modulePath)) {
     // The repository manifest is optional assistance. A malformed optional
-    // document disables that assistance, but the exact scanner-selected
-    // OpenTofu root can still be installed through the generic host policy.
+    // document or an unlisted module disables that assistance, but the exact
+    // scanner-selected root can still use the generic host policy.
     // Even a plain Git repository must execute the exact scanner-selected
     // root; never let a missing InstallConfig.modulePath fall back to
     // Source.defaultPath.
@@ -2824,7 +2834,9 @@ async function materializePreflightInitialInstallConfig(input: {
     throw permanent(selection.diagnostic.code, selection.diagnostic.message);
   }
   const manifest = input.snapshot.repositoryManifest;
-  if (manifest?.status === "present") {
+  const manifestPolicyFailure = requiredManifestVersionFailure(input.snapshot, baseConfig);
+  if (manifestPolicyFailure) throw permanent(manifestPolicyFailure.code, manifestPolicyFailure.message);
+  if (manifest?.status === "present" && declaredRepositoryManifestModulePath(input.snapshot, selection.modulePath)) {
     if (
       reviewed.internal?.sourceSnapshotId !== input.snapshot.id ||
       reviewed.internal.repositoryInstallUxDigest !== manifest.digest ||
@@ -2992,7 +3004,9 @@ async function materializeCoordinatorInitialInstallConfig(input: {
       "The exact host policy or repository module changed after review preparation.",
     );
   }
-  if (input.snapshot.repositoryManifest?.status === "present") {
+  const manifestPolicyFailure = requiredManifestVersionFailure(input.snapshot, base.installConfig);
+  if (manifestPolicyFailure) throw permanent(manifestPolicyFailure.code, manifestPolicyFailure.message);
+  if (declaredRepositoryManifestModulePath(input.snapshot, selection.modulePath)) {
     const preview = await previewRepoOwnedInstallConfig({
       operations: input.operations,
       source: input.source,

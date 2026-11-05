@@ -5,7 +5,11 @@ import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { ACCOUNT_SESSION_COOKIE_NAME } from "../../accounts/service/src/account-session.ts";
+import { handleControlRoute } from "../../accounts/service/src/control-routes.ts";
+import { InMemoryAccountsStore } from "../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../core/bootstrap.ts";
+import { defaultCapsuleInstallConfig } from "../../core/domains/capsules/default_install_config.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import { StorageMigrationRunner } from "../../core/adapters/storage/migration-runner/mod.ts";
 import type { SqlClient } from "../../core/adapters/storage/sql.ts";
@@ -44,6 +48,32 @@ const STORE_ID = "local-runner-native-proof";
 const FORM = "https://edge.forms.takoform.com/forms/ModuleWorker/0.3.0/";
 const HOST_API_PATH = "/apis/forms.takoform.com/v2";
 const enabled = process.env[OPT_IN] === "1";
+const gitInstallEnabled = process.env.TAKOSUMI_TEST_PRIVATE_RUN_FILE_GIT_INSTALL === "1";
+
+test.skipIf(!gitInstallEnabled)(
+  "normal Git install first Plan carries its operator private-file slot into the real Provider",
+  async () => {
+    const providerRoot = process.env.TAKOSUMI_TEST_PROVIDER_SOURCE_ROOT;
+    const sourceCommit = process.env.TAKOSUMI_TEST_PRIVATE_RUN_FILE_GIT_COMMIT;
+    if (!providerRoot || !sourceCommit || !/^[a-f0-9]{40}$/u.test(sourceCommit)) {
+      throw new Error("Provider source and an exact pushed TAKOSUMI_TEST_PRIVATE_RUN_FILE_GIT_COMMIT are required");
+    }
+    const proof = await proveLocalRunnerPrivateFiles(providerRoot, { sourceCommit });
+    expect(["succeeded", "waiting_approval"]).toContain(proof.planStatus);
+    expect(proof.installPhase).toBe("reviewable");
+    expect(proof.canonicalPrivateSlot).toBe(PRIVATE_SLOT);
+    expect(proof.privatePointerVersion).toBe(1);
+    expect(proof.privatePointerMatchesReceipt).toBe(true);
+    expect(proof.hostMutations).toBe(0);
+    expect(proof.publicResponsesHidePrivateDispatch).toBe(true);
+    expect(proof.runnerListenHostname).toBe("127.0.0.1");
+    expect(proof.sourceCommit).toBe(sourceCommit);
+    console.info(JSON.stringify(proof));
+  },
+  // A framework timeout kills spawned children and can destroy an OFD owner
+  // during uncertain drain. The operator observes the live native invocation.
+  0,
+);
 
 interface Receipt {
   readonly version: number;
@@ -102,6 +132,71 @@ test("lost-ACK custody rejects a Host POST before the matching resolve response"
   expect(() => assertLostAckResolvedBeforeHostPost(reordered, receipt))
     .toThrow("matching resolve response must precede the first Host POST");
 });
+
+test("uncertain native drain waits without force before cohort cleanup", async () => {
+  await proveNativeShutdownWait(false);
+});
+
+test("a failed native shutdown signal still waits for custody proof", async () => {
+  await proveNativeShutdownWait(true);
+});
+
+test("diagnostic failure cannot release uncertain native custody", async () => {
+  await proveNativeShutdownWait(false, true);
+});
+
+async function proveNativeShutdownWait(signalFailure: boolean, diagnosticFailure = false): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-native-shutdown-wait-"));
+  const exited = deferred<number>();
+  const signals: string[] = [];
+  const runner: RunnerProcess = {
+    pid: 4321, baseUrl: "http://127.0.0.1", runRoot: join(root, "run-root"),
+    shutdownRecordPath: join(root, "shutdown.json"),
+    child: { exited: exited.promise, kill(signal) {
+      signals.push(String(signal));
+      if (signalFailure) throw new Error("synthetic signal failure");
+      return true;
+    } },
+    recentOutput: [], stopped: false, outputTail: () => [],
+  };
+  const closure = {
+    kind: "takosumi.native-runner-shutdown/v1", pid: runner.pid, runRoot: runner.runRoot,
+    launched: true, drained: true, ownerClosed: true,
+  };
+  let diagnosticCalls = 0;
+  const stopping = stopRunnerProcess(runner, 1, () => {
+    diagnosticCalls += 1;
+    if (diagnosticFailure) throw new Error("synthetic diagnostic failure");
+  });
+  let outcome = "pending";
+  void stopping.then(() => { outcome = "closed"; }, () => { outcome = "rejected"; });
+  try {
+    await Bun.sleep(10);
+    expect(outcome).toBe("pending");
+    const waitRecord = Bun.file(`${runner.shutdownRecordPath}.wait.json`);
+    let waitState: string | undefined;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      try { waitState = (await waitRecord.json()).state; } catch { /* A diagnostic write may still be in flight. */ }
+      if (waitState === "waiting-for-drain") break;
+      await Bun.sleep(5);
+    }
+    expect(waitState).toBe("waiting-for-drain");
+    expect(diagnosticCalls).toBeGreaterThan(0);
+    expect(signals).toEqual(["SIGTERM"]);
+    expect(runner.stopped).toBe(false);
+    await writeFile(runner.shutdownRecordPath, JSON.stringify(closure));
+    exited.resolve(0);
+    await stopping;
+    expect(runner.stopped).toBe(true);
+    expect((await waitRecord.json()).state).toBe("drained");
+    expect(signals).toEqual(["SIGTERM"]);
+  } finally {
+    await writeFile(runner.shutdownRecordPath, JSON.stringify(closure));
+    exited.resolve(0);
+    await stopping.catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 function assertLostAckResolvedBeforeHostPost(
   events: readonly CustodyEvent[],
@@ -174,7 +269,8 @@ test.skipIf(!enabled)(
     expect(proof.destroyReceivedSameSlot).toBe(true);
     console.info(JSON.stringify(proof));
   },
-  120_000,
+  // Keep the supervisor/cohort alive if native custody is uncertain.
+  0,
 );
 
 interface ProofReport {
@@ -226,7 +322,157 @@ interface ProofReport {
   readonly boundaries: readonly string[];
 }
 
-async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<ProofReport> {
+interface GitInstallFirstPlanProof {
+  readonly kind: "takosumi.git-install-first-private-plan-proof/v1";
+  readonly status: "passed";
+  readonly takosumiCommit: string;
+  readonly providerCommit: string;
+  readonly providerBinaryDigest: string;
+  readonly sourceCommit: string;
+  readonly sourceArchiveDigest: string;
+  readonly providerLockDigest: string;
+  readonly installPlanId: string;
+  readonly capsuleId: string;
+  readonly sourceSyncRunId: string;
+  readonly planRunId: string;
+  readonly planStatus: string;
+  readonly installPhase: "reviewable";
+  readonly canonicalPrivateSlot: string;
+  readonly privatePointerVersion: number;
+  readonly privatePointerMatchesReceipt: boolean;
+  readonly hostMutations: number;
+  readonly publicResponsesHidePrivateDispatch: boolean;
+  readonly runnerListenHostname: string;
+  readonly runnerPid: number;
+  readonly runnerServerPid: number;
+  readonly runnerShutdown: Readonly<Record<string, unknown>>;
+  readonly boundaries: readonly string[];
+}
+
+async function createGitInstallFirstPlan(input: {
+  readonly operations: Awaited<ReturnType<typeof createTakosumiService>>["operations"];
+  readonly store: SqlOpenTofuControlStore;
+  readonly sourceCommit: string;
+  readonly diagnosticRoot: string;
+}) {
+  const currentCommit = (await commandText("git", ["rev-parse", "HEAD"])).trim();
+  if (input.sourceCommit !== currentCommit) {
+    throw new Error("Git fixture must use the exact pushed commit of this native candidate");
+  }
+  const accounts = new InMemoryAccountsStore();
+  const subject = "native_git_private_file_owner";
+  const sessionId = `session_${randomUUID().replaceAll("-", "")}`;
+  const now = Date.now();
+  await accounts.saveAccount({
+    subject, email: "native-git-installer@example.test", displayName: "Native Git installer",
+    createdAt: now, updatedAt: now,
+  });
+  await accounts.saveAccountSession({
+    sessionId, subject, createdAt: now, expiresAt: now + 300_000,
+  });
+  expect(await input.operations.workspaces.listWorkspacesByOwner(subject)).toHaveLength(0);
+  const publicResponses: string[] = [];
+  const compatibilityEvidence: unknown[] = [];
+  const observedOperations = {
+    ...input.operations,
+    async createSourceCompatibilityCheck(
+      ...args: Parameters<typeof input.operations.createSourceCompatibilityCheck>
+    ) {
+      const result = await input.operations.createSourceCompatibilityCheck(...args);
+      compatibilityEvidence.push({
+        report: { id: result.report.id, level: result.report.level,
+          findings: result.report.findings.map(({ code, compatibilityImpact }) => ({ code, compatibilityImpact })) },
+        run: result.run && { id: result.run.id, status: result.run.status, errorCode: result.run.errorCode },
+      });
+      await writeFile(join(input.diagnosticRoot, "git-install-compatibility.json"),
+        JSON.stringify(compatibilityEvidence, null, 2) + "\n", { mode: 0o600 });
+      return result;
+    },
+  };
+  const route = async (path: string, body?: unknown) => {
+    const url = new URL(`https://native-git-install.example.test${path}`);
+    const response = await handleControlRoute({
+      request: new Request(url, {
+        method: "POST",
+        headers: {
+          cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}`,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          ...(path === "/api/v1/install-plans"
+            ? { "idempotency-key": "native-git-private-file-first-plan" } : {}),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+      url, store: accounts, operations: observedOperations,
+    });
+    if (!response) throw new Error("normal Accounts install route was not mounted");
+    const text = await response.text();
+    publicResponses.push(text);
+    await writeFile(join(input.diagnosticRoot, "git-install-responses.json"),
+      JSON.stringify(publicResponses, null, 2) + "\n", { mode: 0o600 });
+    const payload = JSON.parse(text) as { installPlan?: Record<string, unknown> };
+    if (!response.ok || !payload.installPlan ||
+      typeof payload.installPlan.id !== "string" || typeof payload.installPlan.phase !== "string") {
+      throw new Error(`normal Accounts install route returned HTTP ${response.status}`);
+    }
+    return payload.installPlan;
+  };
+  let plan = await route("/api/v1/install-plans", {
+    source: {
+      name: "native-private-file-fixture",
+      url: "https://github.com/tako0614/takosumi.git",
+      ref: input.sourceCommit,
+      path: "tests/fixtures/private-run-file-provider",
+    },
+    capsule: { name: "native-private-file-fixture", environment: "local-proof" },
+    options: { modulePath: ".", providerBindings: [] },
+  });
+  const installPlanId = String(plan.id);
+  for (let step = 0; step < 120 && plan.phase !== "reviewable"; step += 1) {
+    if (["failed", "invalidated", "expired", "awaiting_input"].includes(String(plan.phase))) {
+      const sync = typeof plan.sourceSyncRunId === "string"
+        ? await input.store.getSourceSyncRun(plan.sourceSyncRunId) : undefined;
+      const run = typeof plan.planRunId === "string"
+        ? await input.store.getPlanRun(plan.planRunId) : undefined;
+      await writeFile(join(input.diagnosticRoot, "git-install-failure.json"), JSON.stringify({
+        installPlan: plan,
+        sourceSync: sync && { id: sync.id, status: sync.status, errorCode: sync.errorCode,
+          diagnosticCodes: sync.diagnostics?.map((item) => item.code) },
+        planRun: run && { id: run.id, status: run.status, errorCode: run.errorCode,
+          diagnosticCodes: run.diagnostics?.map((item) => item.code) },
+      }, null, 2) + "\n", { mode: 0o600 });
+      const diagnostic = plan.diagnostic as { code?: unknown } | undefined;
+      throw new Error(`normal Git install stopped at ${String(plan.phase)}; diagnostic=${String(diagnostic?.code)}; sourceSync=${sync?.status ?? "absent"}; Plan=${run?.status ?? "absent"}; diagnostic root=${input.diagnosticRoot}`);
+    }
+    plan = await route(`/api/v1/install-plans/${installPlanId}/reconcile`);
+    if (plan.phase !== "reviewable") await Bun.sleep(100);
+  }
+  expect(plan.phase).toBe("reviewable");
+  for (const key of ["capsuleId", "sourceSyncRunId", "sourceSnapshotId", "planRunId"]) {
+    if (typeof plan[key] !== "string") throw new Error(`normal Git install omitted ${key}`);
+  }
+  const capsuleId = String(plan.capsuleId);
+  const planRun = await input.store.getPlanRun(String(plan.planRunId));
+  if (!planRun || planRun.capsuleId !== capsuleId) throw new Error("first Plan is not bound to its installed Capsule");
+  const ownership = await input.operations.appOwnership.getOwnership(capsuleId);
+  expect(ownership?.ownerAccountId).toBe(subject);
+  const snapshot = await input.operations.getSourceSnapshot(String(plan.sourceSnapshotId));
+  expect(snapshot.resolvedCommit).toBe(input.sourceCommit);
+  const replay = await route(`/api/v1/install-plans/${installPlanId}/reconcile`);
+  expect(replay.planRunId).toBe(planRun.id);
+  return {
+    planRun, capsuleId, installPlanId, publicResponses,
+    sourceSyncRunId: String(plan.sourceSyncRunId),
+    sourceCommit: snapshot.resolvedCommit, sourceArchiveDigest: snapshot.archiveDigest,
+  };
+}
+
+async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<ProofReport>;
+async function proveLocalRunnerPrivateFiles(
+  providerRoot: string, gitInstall: { readonly sourceCommit: string },
+): Promise<GitInstallFirstPlanProof>;
+async function proveLocalRunnerPrivateFiles(
+  providerRoot: string, gitInstall?: { readonly sourceCommit: string },
+): Promise<ProofReport | GitInstallFirstPlanProof> {
   const tempRoot = await mkdtemp(join(tmpdir(), "takosumi-prf-runner-"));
   await chmod(tempRoot, 0o700);
   const runRoot = join(tempRoot, "runner-root");
@@ -246,6 +492,7 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
   const servers: Array<{ stop(force?: boolean): void | Promise<void> }> = [];
   let database: Awaited<ReturnType<typeof createNativePostgresRestartContainer>> | undefined;
   let sql: Awaited<ReturnType<typeof openNativePostgresSqlClient>> | undefined;
+  let scenarioSucceeded = false;
 
   try {
     await mkdir(join(tempRoot, "home"), { recursive: true, mode: 0o700 });
@@ -273,7 +520,12 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
     const certificate = await readFile(certificatePath);
     const key = await readFile(keyPath);
     const custodyEvents: CustodyEvent[] = [];
-    const host = createFakeV2Host(certificate, key, custodyEvents);
+    const host = createFakeV2Host(certificate, key, custodyEvents, {
+      // This first-Plan proof exercises private-file delivery without a
+      // credential binding. Only discovery/support reads are public; all Host
+      // mutations retain the fixture's bearer check and remain uncalled.
+      publicSupport: gitInstall !== undefined,
+    });
     servers.push(host);
     const hostApiRoot = `${host.url}${HOST_API_PATH}`;
 
@@ -537,6 +789,17 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
       artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
       executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
       privateRunFiles: privateRunFilesFor(client),
+      ...(gitInstall ? { operatorInstallConfigs: [{
+        ...defaultCapsuleInstallConfig(),
+        privateRunFiles: [{ slot: PRIVATE_SLOT }],
+        variableMapping: {
+          fixture_host_endpoint: host.url,
+          fixture_host_api_root: hostApiRoot,
+          fixture_intent_slot: PRIVATE_SLOT,
+          fixture_store_id: STORE_ID,
+        },
+        policy: { providerInstallation: { requireMirror: true } },
+      }] } : {}),
     });
     let service = await serviceFor(sql.client);
     const coreServer = Bun.serve({
@@ -548,100 +811,8 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
     corePortRef.port = coreServer.port;
 
     let store = new SqlOpenTofuControlStore({ client: sql.client });
-    const seeded = await seedCapsuleModel(store, {
-      workspaceId: `workspace_native_${randomUUID().replaceAll("-", "")}`,
-      capsuleId: `capsule_native_${randomUUID().replaceAll("-", "")}`,
-      sourceId: `source_native_${randomUUID().replaceAll("-", "")}`,
-      snapshotId: `snapshot_native_${randomUUID().replaceAll("-", "")}`,
-      installConfigId: `install_native_${randomUUID().replaceAll("-", "")}`,
-      name: "provider-remote-snapshot",
-      environment: "local-proof",
-      withoutSnapshot: true,
-      requiredProviders: [],
-      installConfig: {
-        privateRunFiles: [{ slot: PRIVATE_SLOT }],
-        policy: { providerInstallation: { requireMirror: true } },
-      },
-    });
-    const moduleDir = join(tempRoot, "module");
-    await mkdir(moduleDir, { recursive: true, mode: 0o700 });
-    const mainTf = `terraform {
-  required_version = "= 1.12.3"
-  required_providers {
-    takoform = {
-      source  = ${JSON.stringify(PROVIDER_SOURCE)}
-      version = "= ${PROVIDER_VERSION}"
-    }
-  }
-}
-provider "takoform" {
-  alias             = "main"
-  endpoint          = ${JSON.stringify(host.url)}
-  host_api_root     = ${JSON.stringify(hostApiRoot)}
-  token             = "fixture-token"
-  store_id          = ${JSON.stringify(STORE_ID)}
-  space             = "prod"
-  intent_store_slot = ${JSON.stringify(PRIVATE_SLOT)}
-}
-resource "takoform_module_worker" "app" {
-  provider = takoform.main
-  name = "app"
-}
-`;
-    await writeFile(join(moduleDir, "main.tf"), mainTf, { mode: 0o600 });
-    const archive = await createSourceArchive(tempRoot, moduleDir);
-    const snapshot = {
-      ...seeded.snapshot,
-      archiveDigest: archive.digest,
-      archiveSizeBytes: archive.bytes.byteLength,
-      repositoryInstallMetadata: { status: "absent" as const },
-      repositoryManifest: { status: "absent" as const },
-      repositoryModules: {
-        status: "ready" as const,
-        scopePath: ".",
-        modules: [{
-          path: ".",
-          providerPackages: [{ source: PROVIDER_SOURCE, allowed: true }],
-          rootProviderRequirements: [{
-            source: PROVIDER_SOURCE,
-            moduleLocalName: "takoform",
-            version: PROVIDER_VERSION,
-          }],
-        }],
-      },
-    };
-    await store.putSourceSnapshot(snapshot);
-    await archiveStore.write(snapshot.archiveRef, archive.bytes);
-    const compatibilityId = `compat_${randomUUID().replaceAll("-", "")}`;
-    await store.putCapsuleCompatibilityReport({
-      id: compatibilityId,
-      sourceId: seeded.source.id,
-      sourceSnapshotId: snapshot.id,
-      capsuleId: seeded.capsule.id,
-      modulePath: ".",
-      level: "ready",
-      findings: [],
-      providerPackages: [{ source: PROVIDER_SOURCE, allowed: true }],
-      rootProviderRequirements: [{
-        source: PROVIDER_SOURCE,
-        moduleLocalName: "takoform",
-        version: PROVIDER_VERSION,
-      }],
-      resources: [],
-      dataSources: [],
-      provisioners: [],
-      rootModuleVariables: [],
-      rootModuleVariableDeclarations: [],
-      rootModuleOutputs: [],
-      createdAt: new Date().toISOString(),
-    });
-    const capsule = await store.getCapsule(seeded.capsule.id);
-    if (!capsule) throw new Error("seeded Capsule disappeared from native PostgreSQL");
-    await store.putCapsule({
-      ...capsule,
-      compatibilityReportId: compatibilityId,
-      compatibilityStatus: "ready",
-      updatedAt: new Date().toISOString(),
+    const seededAuthority = gitInstall ? undefined : await createSeededNativeAuthority({
+      store, tempRoot, host, hostApiRoot, archiveStore,
     });
 
     let controller = service.operations.controller;
@@ -657,8 +828,22 @@ resource "takoform_module_worker" "app" {
     });
     runnerPids.push(planRunner.pid);
     activeRunnerUrl = planRunner.baseUrl;
-    const plan = await controller.createCapsulePlan(seeded.capsule.id);
-    if (plan.planRun.status !== "succeeded") {
+    let gitPlan: Awaited<ReturnType<typeof createGitInstallFirstPlan>> | undefined;
+    try {
+      gitPlan = gitInstall ? await createGitInstallFirstPlan({
+        operations: service.operations, store, sourceCommit: gitInstall.sourceCommit, diagnosticRoot: tempRoot,
+      }) : undefined;
+    } catch (error) {
+      try {
+        await writeFile(join(tempRoot, "git-install-runner-boundary.json"), JSON.stringify({
+          runnerHttpEvidence, runnerDispatches, runnerOutput: planRunner.outputTail(),
+        }, null, 2) + "\n", { mode: 0o600 });
+      } catch { /* Preserve the original failure even if diagnostics cannot be saved. */ }
+      throw error;
+    }
+    const plan = gitPlan ?? await controller.createCapsulePlan(seededAuthority!.capsuleId);
+    const reviewableGitPlan = gitPlan && plan.planRun.status === "waiting_approval";
+    if (plan.planRun.status !== "succeeded" && !reviewableGitPlan) {
       const persistedPlan = await store.getPlanRun(plan.planRun.id);
       const diagnosticCodes = plan.planRun.diagnostics?.map((item) => item.code).filter(Boolean);
       const diagnosticMessages = persistedPlan?.diagnostics?.map((item) => item.message);
@@ -669,6 +854,65 @@ resource "takoform_module_worker" "app" {
     const providerLockDigest = plan.planRun.providerLockDigest;
     if (!providerLockDigest) throw new Error("OpenTofu Runner did not return a provider lock digest");
     await stopRunnerProcess(planRunner);
+    if (gitPlan) {
+      const capsule = await store.getCapsule(gitPlan.capsuleId);
+      if (!capsule) throw new Error("normal Git install did not persist its Capsule");
+      const config = await service.operations.capsules.getInstallConfig(capsule.installConfigId);
+      const pointer = await sql.client.query<{ version: number | string; digest: string }>(
+        `select version, digest from takosumi_private_run_file_pointers
+          where workspace_id = $1 and capsule_id = $2 and environment = $3 and slot = $4`,
+        [capsule.workspaceId, capsule.id, capsule.environment, PRIVATE_SLOT],
+      );
+      const receipt = wireEvidence.find((item) => item.operation === "commit")?.receipt;
+      const dispatch = runnerDispatches.filter((item) => item.runId === plan.planRun.id);
+      expect(config.privateRunFiles).toEqual([{ slot: PRIVATE_SLOT }]);
+      expect(dispatch).toHaveLength(1);
+      expect(dispatch[0]?.slot).toBe(PRIVATE_SLOT);
+      expect(pointer.rows).toHaveLength(1);
+      expect(Number(pointer.rows[0]?.version)).toBe(1);
+      expect(receipt?.expectedVersion).toBe(0);
+      expect(receipt?.version).toBe(1);
+      expect(pointer.rows[0]?.digest).toBe(receipt?.digest);
+      expect(host.mutations).toBe(0);
+      const responsesHideDispatch = gitPlan.publicResponses.every((response) =>
+        !response.includes(privateEndpoint) && !response.includes('"privateRunFiles"')
+      );
+      expect(responsesHideDispatch).toBe(true);
+      scenarioSucceeded = true;
+      return {
+        kind: "takosumi.git-install-first-private-plan-proof/v1",
+        status: "passed",
+        takosumiCommit: (await commandText("git", ["rev-parse", "HEAD"])).trim(),
+        providerCommit: providerSource.commit,
+        providerBinaryDigest,
+        sourceCommit: gitPlan.sourceCommit,
+        sourceArchiveDigest: gitPlan.sourceArchiveDigest,
+        providerLockDigest,
+        installPlanId: gitPlan.installPlanId,
+        capsuleId: capsule.id,
+        sourceSyncRunId: gitPlan.sourceSyncRunId,
+        planRunId: plan.planRun.id,
+        planStatus: plan.planRun.status,
+        installPhase: "reviewable",
+        canonicalPrivateSlot: config.privateRunFiles![0]!.slot,
+        privatePointerVersion: Number(pointer.rows[0]!.version),
+        privatePointerMatchesReceipt: pointer.rows[0]!.digest === receipt!.digest,
+        hostMutations: host.mutations,
+        publicResponsesHidePrivateDispatch: responsesHideDispatch,
+        runnerListenHostname: planRunner.listenHostname!,
+        runnerPid: planRunner.pid,
+        runnerServerPid: planRunner.serverPid!,
+        runnerShutdown: planRunner.shutdownRecord!,
+        boundaries: [
+          "normal workspace-less Accounts install route and coordinator; only initial local account/session are fixtures; no Namespace, Capsule, SourceSnapshot, compatibility or Run seed",
+          "real public Git source_sync of this exact pushed test fixture; unchanged source URL and DNS/SSRF guards",
+          "explicit operator-owned base InstallConfig supplies the slot and synthetic Host tuple; the repository does not grant private-file authority",
+          "real local Runner/OpenTofu/Provider5, native ephemeral PostgreSQL and encrypted private blobs; synthetic HTTPS Host; no Host mutation",
+          "first Plan component only; no real app install, Apply, real authentication/SSO, Cloud/image, live service or publication qualification",
+        ],
+      };
+    }
+    if (!seededAuthority) throw new Error("seeded native authority is missing");
 
     // Reopen Core's SQL adapter after a real PostgreSQL daemon restart. The
     // Plan Run and private-file receipt/blob must still be recoverable before
@@ -790,7 +1034,7 @@ resource "takoform_module_worker" "app" {
     });
     runnerPids.push(destroyRunner.pid);
     activeRunnerUrl = destroyRunner.baseUrl;
-    const destroyPlan = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+    const destroyPlan = await controller.createCapsuleDestroyPlan(seededAuthority.capsuleId);
     if (destroyPlan.planRun.status !== "waiting_approval") {
       throw new Error(`native destroy plan has unexpected status ${destroyPlan.planRun.status}`);
     }
@@ -819,6 +1063,7 @@ resource "takoform_module_worker" "app" {
       throw new Error("Core did not send the private slot through the Destroy action");
     }
 
+    scenarioSucceeded = true;
     return {
       kind: "takosumi.local-private-run-file-provider-runner-proof/v1",
       status: "passed",
@@ -826,7 +1071,7 @@ resource "takoform_module_worker" "app" {
       providerCommit: providerSource.commit,
       providerVersion: PROVIDER_VERSION,
       providerBinaryDigest,
-      sourceArchiveDigest: archive.digest,
+      sourceArchiveDigest: seededAuthority.sourceArchiveDigest,
       providerLockDigest,
       tofuVersion: tofuVersion.trim().split("\n").slice(0, 2).join(" "),
       bunVersion: Bun.version,
@@ -887,8 +1132,119 @@ resource "takoform_module_worker" "app" {
       // retires the owned ephemeral PG fixture; this scratch is not a recovery point.
       throw new AggregateError(cleanupErrors, "native proof cleanup failed; diagnostic scratch retained");
     }
-    await rm(tempRoot, { recursive: true, force: true });
+    if (scenarioSucceeded) {
+      await rm(tempRoot, { recursive: true, force: true });
+    } else {
+      try { console.error(`native proof failed; diagnostic scratch retained at ${tempRoot}; not a backup or key-custody proof`); }
+      catch { /* All process custody has already closed; preserve the diagnostics. */ }
+    }
   }
+}
+
+async function createSeededNativeAuthority(input: {
+  readonly store: SqlOpenTofuControlStore;
+  readonly tempRoot: string;
+  readonly host: { readonly url: string };
+  readonly hostApiRoot: string;
+  readonly archiveStore: ReturnType<typeof createFileSourceArchiveStore>;
+}): Promise<{ capsuleId: string; sourceArchiveDigest: string }> {
+  const { store, tempRoot, host, hostApiRoot, archiveStore } = input;
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: `workspace_native_${randomUUID().replaceAll("-", "")}`,
+    capsuleId: `capsule_native_${randomUUID().replaceAll("-", "")}`,
+    sourceId: `source_native_${randomUUID().replaceAll("-", "")}`,
+    snapshotId: `snapshot_native_${randomUUID().replaceAll("-", "")}`,
+    installConfigId: `install_native_${randomUUID().replaceAll("-", "")}`,
+    name: "provider-remote-snapshot",
+    environment: "local-proof",
+    withoutSnapshot: true,
+    requiredProviders: [],
+    installConfig: {
+      privateRunFiles: [{ slot: PRIVATE_SLOT }],
+      policy: { providerInstallation: { requireMirror: true } },
+    },
+  });
+  const moduleDir = join(tempRoot, "module");
+  await mkdir(moduleDir, { recursive: true, mode: 0o700 });
+  const mainTf = `terraform {
+  required_version = "= 1.12.3"
+  required_providers {
+    takoform = {
+      source  = ${JSON.stringify(PROVIDER_SOURCE)}
+      version = "= ${PROVIDER_VERSION}"
+    }
+  }
+}
+provider "takoform" {
+  alias             = "main"
+  endpoint          = ${JSON.stringify(host.url)}
+  host_api_root     = ${JSON.stringify(hostApiRoot)}
+  token             = "fixture-token"
+  store_id          = ${JSON.stringify(STORE_ID)}
+  space             = "prod"
+  intent_store_slot = ${JSON.stringify(PRIVATE_SLOT)}
+}
+resource "takoform_module_worker" "app" {
+  provider = takoform.main
+  name = "app"
+}
+`;
+  await writeFile(join(moduleDir, "main.tf"), mainTf, { mode: 0o600 });
+  const archive = await createSourceArchive(tempRoot, moduleDir);
+  const snapshot = {
+    ...seeded.snapshot,
+    archiveDigest: archive.digest,
+    archiveSizeBytes: archive.bytes.byteLength,
+    repositoryInstallMetadata: { status: "absent" as const },
+    repositoryManifest: { status: "absent" as const },
+    repositoryModules: {
+      status: "ready" as const,
+      scopePath: ".",
+      modules: [{
+        path: ".",
+        providerPackages: [{ source: PROVIDER_SOURCE, allowed: true }],
+        rootProviderRequirements: [{
+          source: PROVIDER_SOURCE,
+          moduleLocalName: "takoform",
+          version: PROVIDER_VERSION,
+        }],
+      }],
+    },
+  };
+  await store.putSourceSnapshot(snapshot);
+  await archiveStore.write(snapshot.archiveRef, archive.bytes);
+  const compatibilityId = `compat_${randomUUID().replaceAll("-", "")}`;
+  await store.putCapsuleCompatibilityReport({
+    id: compatibilityId,
+    sourceId: seeded.source.id,
+    sourceSnapshotId: snapshot.id,
+    capsuleId: seeded.capsule.id,
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providerPackages: [{ source: PROVIDER_SOURCE, allowed: true }],
+    rootProviderRequirements: [{
+      source: PROVIDER_SOURCE,
+      moduleLocalName: "takoform",
+      version: PROVIDER_VERSION,
+    }],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: [],
+    rootModuleVariableDeclarations: [],
+    rootModuleOutputs: [],
+    createdAt: new Date().toISOString(),
+  });
+  const capsule = await store.getCapsule(seeded.capsule.id);
+  if (!capsule) throw new Error("seeded Capsule disappeared from native PostgreSQL");
+  await store.putCapsule({
+    ...capsule,
+    compatibilityReportId: compatibilityId,
+    compatibilityStatus: "ready",
+    updatedAt: new Date().toISOString(),
+  });
+  return { capsuleId: seeded.capsule.id, sourceArchiveDigest: archive.digest };
 }
 
 async function inspectProviderSource(root: string): Promise<{ commit: string }> {
@@ -920,10 +1276,13 @@ async function compileProvider(root: string, output: string): Promise<void> {
 interface RunnerProcess {
   readonly pid: number;
   readonly baseUrl: string;
-  readonly child: ReturnType<typeof Bun.spawn>;
+  readonly child: Pick<ReturnType<typeof Bun.spawn>, "kill" | "exited">;
+  readonly runRoot: string;
+  readonly shutdownRecordPath: string;
   readonly recentOutput: string[];
   stopped: boolean;
   shutdownError?: Error;
+  shutdownRecord?: Readonly<Record<string, unknown>>;
   listenHostname?: string;
   serverPid?: number;
   outputTail(): readonly string[];
@@ -942,6 +1301,8 @@ async function startRunnerProcess(input: {
   // not: Apply must restore the exact Plan artifact after process restart.
   const instanceRunRoot = input.runRoot;
   await mkdir(instanceRunRoot, { recursive: true, mode: 0o700 });
+  const shutdownRecordPath = join(input.tempRoot, `runner-shutdown-${input.index}.json`);
+  if (await Bun.file(shutdownRecordPath).exists()) throw new Error("native shutdown record already exists");
   const child = Bun.spawn([
     process.execPath,
     "--no-env-file",
@@ -957,6 +1318,7 @@ async function startRunnerProcess(input: {
       TEMP: join(input.tempRoot, "tmp"),
       PORT: String(port),
       TAKOSUMI_TEST_RUNNER_LISTENER_RECORD: join(input.tempRoot, `runner-listener-${input.index}.json`),
+      TAKOSUMI_TEST_RUNNER_SHUTDOWN_RECORD: shutdownRecordPath,
       TAKOSUMI_RUNNER_MUTATION_CUSTODY_MODE: "local-http",
       TAKOSUMI_OPENTOFU_RUN_ROOT: instanceRunRoot,
       OPENTOFU_PROVIDER_MIRROR: input.providerMirror,
@@ -969,6 +1331,7 @@ async function startRunnerProcess(input: {
   const baseUrl = `http://127.0.0.1:${port}`;
   const runner: RunnerProcess = {
     pid: child.pid, baseUrl, child, recentOutput, stopped: false,
+    runRoot: instanceRunRoot, shutdownRecordPath,
     outputTail: () => recentOutput.slice(-12),
   };
   // Ownership is registered before health, listener readback, or capability checks can throw.
@@ -1015,22 +1378,62 @@ async function startRunnerProcess(input: {
   throw new Error("local Runner entrypoint did not become healthy before the deadline");
 }
 
-async function stopRunnerProcess(runner: RunnerProcess): Promise<void> {
+async function stopRunnerProcess(
+  runner: RunnerProcess,
+  observationBudgetMs = 15_000,
+  report: (message: string) => void = (message) => console.error(message),
+): Promise<void> {
   if (runner.stopped) {
     if (runner.shutdownError) throw runner.shutdownError;
     return;
   }
-  runner.child.kill("SIGTERM");
-  const exitCode = await Promise.race([
-    runner.child.exited,
-    Bun.sleep(15_000).then(() => undefined),
-  ]);
-  if (exitCode === undefined) {
-    runner.child.kill("SIGKILL");
-    await runner.child.exited;
-    runner.stopped = true;
-    runner.shutdownError = new Error("local Runner shutdown required forced termination");
-    throw runner.shutdownError;
+  const reportSafely = (message: string) => { try { report(message); } catch { /* Custody outranks diagnostics. */ } };
+  try { runner.child.kill("SIGTERM"); } catch {
+    reportSafely("native Runner signal failed; waiting for custody closure proof");
+  }
+  const waitPath = `${runner.shutdownRecordPath}.wait.json`;
+  let observation: Promise<void> | undefined;
+  const timer = setTimeout(() => {
+    try {
+      observation = writeFile(waitPath, JSON.stringify({
+        state: "waiting-for-drain", pid: runner.pid, runRoot: runner.runRoot,
+        cohortPid: process.pid,
+      }) + "\n", { mode: 0o600 }).catch(() => {});
+    } catch { /* A diagnostic failure never releases the cohort. */ }
+    reportSafely(`native Runner drain remains pending; cohort retained at ${dirname(runner.shutdownRecordPath)}`);
+  }, observationBudgetMs);
+  let exitCode: number | undefined;
+  try {
+    exitCode = await runner.child.exited;
+  } catch {
+    reportSafely("native Runner exit observation failed; custody remains unproven");
+  } finally {
+    clearTimeout(timer);
+  }
+  await observation;
+  let closure: Record<string, unknown> | undefined;
+  try {
+    closure = JSON.parse(await readFile(runner.shutdownRecordPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    // Exit alone does not prove that the supervised tree and owner closed.
+  }
+  if (exitCode === undefined || closure?.kind !== "takosumi.native-runner-shutdown/v1" || closure.pid !== runner.pid ||
+    closure.runRoot !== runner.runRoot || closure.drained !== true || closure.ownerClosed !== true) {
+    try {
+      await writeFile(join(dirname(runner.shutdownRecordPath), "HOLD.json"), JSON.stringify({
+        state: "HOLD", reason: "native shutdown custody unproven", pid: process.pid,
+        supervisorPid: runner.pid, runRoot: runner.runRoot,
+      }) + "\n", { mode: 0o600 });
+    } catch { /* Preserve the live Core/PG/keys even if diagnostic writes fail. */ }
+    reportSafely("native Runner shutdown custody unproven; cohort HOLD");
+    await new Promise<never>(() => { setInterval(() => {}, 60_000); });
+  }
+  runner.shutdownRecord = closure;
+  if (observation) {
+    await writeFile(waitPath, JSON.stringify({
+      state: "drained", pid: runner.pid, runRoot: runner.runRoot,
+      ownerClosed: true, cohortPid: process.pid,
+    }) + "\n", { mode: 0o600 });
   }
   runner.stopped = true;
   if (exitCode !== 0) {
@@ -1048,7 +1451,12 @@ function createNativeProviderRunnerProfile(base: RunnerProfile): RunnerProfile {
   };
 }
 
-function createFakeV2Host(cert: Buffer, key: Buffer, custodyEvents: CustodyEvent[]) {
+function createFakeV2Host(
+  cert: Buffer,
+  key: Buffer,
+  custodyEvents: CustodyEvent[],
+  options: { readonly publicSupport: boolean },
+) {
   let resourceExists = false;
   let generation = 0;
   let operationId = "";
@@ -1065,7 +1473,9 @@ function createFakeV2Host(cert: Buffer, key: Buffer, custodyEvents: CustodyEvent
       if (request.method === "POST" && url.pathname === `${HOST_API_PATH}/resources`) {
         custodyEvents.push({ kind: "host_post" });
       }
-      if (url.pathname !== "/.well-known/takoform/v2" &&
+      const publicSupport = options.publicSupport && request.method === "GET" &&
+        url.pathname === `${HOST_API_PATH}/support`;
+      if (url.pathname !== "/.well-known/takoform/v2" && !publicSupport &&
         request.headers.get("authorization") !== "Bearer fixture-token") {
         return problem(401, "unauthorized");
       }
