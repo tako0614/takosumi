@@ -97,6 +97,10 @@ permission を確認します。token は MCP 自身のアプリ（Interface を
 したあとは何もできません。新しいアプリは `POST /api/v1/install-plans` で利用者の
 個人の場所に入り、利用者が所有者になります。Workspace の route は使いません。
 
+POST の本文は UTF-8 JSON、上限は **1 MiB（1,048,576 bytes）** です。
+上限超過は HTTP `413`／JSON-RPC `-32600`、不正な UTF-8 または JSON 構文は
+HTTP `400`／JSON-RPC `-32700` で拒否し、tool を実行しません。
+
 Interface token に Workspace が残っているあいだ（TASK-0118 の Phase 9.4 まで）は、
 その Workspace を先に適用する制限として扱います。対象のアプリもその Workspace に
 ある必要があり、新しいアプリがその外に入る install は断ります。同じ

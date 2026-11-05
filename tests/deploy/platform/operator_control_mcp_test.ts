@@ -25,6 +25,7 @@ import {
 
 const ORIGIN = "https://app.takosumi.test";
 const RESOURCE = operatorControlMcpResource(ORIGIN);
+const MCP_BODY_MAX_BYTES = 1_048_576;
 
 function request(method: string, params?: unknown): Request {
   return new Request(RESOURCE, {
@@ -40,6 +41,37 @@ function request(method: string, params?: unknown): Request {
       ...(params === undefined ? {} : { params }),
     }),
   });
+}
+
+function streamedRequest(
+  chunks: readonly Uint8Array[],
+  declaredLength?: string,
+): { request: Request; pulls: () => number; cancelled: () => boolean } {
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = chunks[pulls++];
+      if (chunk) controller.enqueue(chunk);
+      else controller.close();
+    },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  const headers: Record<string, string> = {
+    authorization: "Bearer invocation-only-interface-token",
+    "content-type": "application/json",
+  };
+  if (declaredLength !== undefined) headers["content-length"] = declaredLength;
+  return {
+    request: new Request(RESOURCE, {
+      method: "POST",
+      headers,
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" }),
+    pulls: () => pulls,
+    cancelled: () => cancelled,
+  };
 }
 
 function interfaceSession(
@@ -99,6 +131,22 @@ function authorityFor(
   };
 }
 
+function authorizedRouteProbe() {
+  let dispatches = 0;
+  return {
+    dependencies: {
+      verifySession: async () => interfaceSession(),
+      createAuthority: async () => authorityFor({
+        dispatchPublicControl: async () => {
+          dispatches += 1;
+          return Response.json({});
+        },
+      }),
+    },
+    dispatches: () => dispatches,
+  };
+}
+
 test("operator control MCP is absent until explicitly enabled", async () => {
   let verified = false;
   const response = await handlePlatformOperatorControlMcpRequest(
@@ -114,6 +162,148 @@ test("operator control MCP is absent until explicitly enabled", async () => {
 
   expect(response?.status).toBe(404);
   expect(verified).toBe(false);
+});
+
+test("disabled and unauthorized MCP routes never pull the request body", async () => {
+  for (const scenario of [
+    { enabled: false, session: interfaceSession(), status: 404, verifies: 0 },
+    { enabled: true, session: interfaceSession({ authenticated: false }), status: 401, verifies: 1 },
+    { enabled: true, session: interfaceSession({ scopes: ["admin"] }), status: 401, verifies: 1 },
+  ]) {
+    const incoming = streamedRequest([new TextEncoder().encode('{"jsonrpc":"2.0"}')]);
+    let verifies = 0;
+    let createsAuthority = 0;
+    const response = await handlePlatformOperatorControlMcpRequest(
+      incoming.request,
+      env(scenario.enabled),
+      {
+        verifySession: async () => {
+          verifies += 1;
+          return scenario.session;
+        },
+        createAuthority: async () => {
+          createsAuthority += 1;
+          return authorityFor();
+        },
+      },
+    );
+    expect(response?.status).toBe(scenario.status);
+    expect(verifies).toBe(scenario.verifies);
+    expect(createsAuthority).toBe(0);
+    expect(incoming.pulls()).toBe(0);
+    expect(incoming.request.bodyUsed).toBe(false);
+  }
+});
+
+test("declared oversized MCP body is rejected before a stream read or dispatch", async () => {
+  const incoming = streamedRequest(
+    [new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"method":"ping"}')],
+    String(MCP_BODY_MAX_BYTES + 1),
+  );
+  const probe = authorizedRouteProbe();
+  const response = await handlePlatformOperatorControlMcpRequest(
+    incoming.request, env(), probe.dependencies,
+  );
+  expect(response?.status).toBe(413);
+  expect(await response?.json()).toMatchObject({
+    jsonrpc: "2.0", id: null, error: { code: -32600, message: "request too large" },
+  });
+  expect(incoming.pulls()).toBe(0);
+  expect(incoming.request.bodyUsed).toBe(false);
+  expect(probe.dispatches()).toBe(0);
+});
+
+test("headerless and falsely short MCP streams stop and cancel at the byte cap", async () => {
+  const chunks = [new Uint8Array(MCP_BODY_MAX_BYTES), new Uint8Array([32])];
+  for (const declaredLength of [undefined, "0"]) {
+    const incoming = streamedRequest(chunks, declaredLength);
+    const probe = authorizedRouteProbe();
+    const response = await handlePlatformOperatorControlMcpRequest(
+      incoming.request, env(), probe.dependencies,
+    );
+    expect(response?.status).toBe(413);
+    expect(await response?.json()).toMatchObject({
+      jsonrpc: "2.0", id: null, error: { code: -32600, message: "request too large" },
+    });
+    expect(incoming.pulls()).toBe(2);
+    expect(incoming.cancelled()).toBe(true);
+    expect(probe.dispatches()).toBe(0);
+  }
+});
+
+test("MCP body cap counts UTF-8 bytes rather than UTF-16 characters", async () => {
+  const text = JSON.stringify({
+    jsonrpc: "2.0", id: 1, method: "ping", params: { note: "é".repeat(600_000) },
+  });
+  const bytes = new TextEncoder().encode(text);
+  expect(text.length).toBeLessThan(MCP_BODY_MAX_BYTES);
+  expect(bytes.byteLength).toBeGreaterThan(MCP_BODY_MAX_BYTES);
+  const incoming = streamedRequest([bytes], "0");
+  const probe = authorizedRouteProbe();
+  const response = await handlePlatformOperatorControlMcpRequest(
+    incoming.request, env(), probe.dependencies,
+  );
+  expect(response?.status).toBe(413);
+  expect(incoming.cancelled()).toBe(true);
+  expect(probe.dispatches()).toBe(0);
+});
+
+test("invalid UTF-8 MCP body returns JSON-RPC parse error without dispatch", async () => {
+  const encoder = new TextEncoder();
+  const before = encoder.encode('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"note":"');
+  const after = encoder.encode('"}}');
+  const bytes = new Uint8Array(before.byteLength + 1 + after.byteLength);
+  bytes.set(before);
+  bytes[before.byteLength] = 0xff;
+  bytes.set(after, before.byteLength + 1);
+  // The old request.text() replacement decode yields valid JSON and ping 200.
+  expect(JSON.parse(new TextDecoder().decode(bytes))).toMatchObject({ method: "ping" });
+  const incoming = streamedRequest([bytes]);
+  const probe = authorizedRouteProbe();
+  const response = await handlePlatformOperatorControlMcpRequest(
+    incoming.request, env(), probe.dependencies,
+  );
+  expect(response?.status).toBe(400);
+  expect(await response?.json()).toMatchObject({
+    jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" },
+  });
+  expect(probe.dispatches()).toBe(0);
+});
+
+test("MCP reader accepts a valid ping at exactly the byte limit", async () => {
+  const ping = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" });
+  const bytes = new TextEncoder().encode(ping.padEnd(MCP_BODY_MAX_BYTES, " "));
+  expect(bytes.byteLength).toBe(MCP_BODY_MAX_BYTES);
+  const incoming = streamedRequest([bytes], String(MCP_BODY_MAX_BYTES));
+  const probe = authorizedRouteProbe();
+  const response = await handlePlatformOperatorControlMcpRequest(
+    incoming.request, env(), probe.dependencies,
+  );
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({ jsonrpc: "2.0", id: 1, result: {} });
+  expect(incoming.cancelled()).toBe(false);
+  expect(probe.dispatches()).toBe(0);
+});
+
+test("bounded MCP reader preserves initialize and ping", async () => {
+  const probe = authorizedRouteProbe();
+  const initialize = await handlePlatformOperatorControlMcpRequest(
+    request("initialize"), env(), probe.dependencies,
+  );
+  expect(initialize?.status).toBe(200);
+  expect(await initialize?.json()).toMatchObject({
+    jsonrpc: "2.0", id: 1,
+    result: {
+      protocolVersion: OPERATOR_CONTROL_MCP_INTERFACE_BLUEPRINT.spec.version,
+      serverInfo: { name: "takosumi-operator-control" },
+    },
+  });
+  const ping = await handlePlatformOperatorControlMcpRequest(
+    request("ping"), env(), probe.dependencies,
+  );
+  expect(ping?.status).toBe(200);
+  expect(await ping?.json()).toEqual({ jsonrpc: "2.0", id: 1, result: {} });
+  expect(probe.dispatches()).toBe(0);
 });
 
 test("every MCP POST re-introspects exact Interface OAuth evidence and serves adapter-owned annotations", async () => {
