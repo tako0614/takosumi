@@ -7,36 +7,18 @@
 import type {
   CommandContext,
 } from "./types.ts";
+import { redactString } from "../../contract/redaction.ts";
 import {
   RUNNER_REDACTED_VALUE,
-  RUNNER_AUTH_HEADER_PATTERN,
-  RUNNER_AUTH_SCHEME_PATTERN,
-  RUNNER_URL_CREDENTIAL_PATTERN,
-  RUNNER_SECRET_ASSIGNMENT_PATTERN,
   RUNNER_TF_VAR_ASSIGNMENT_PATTERN,
 } from "./constants.ts";
 export function redactRunnerOutput(
   text: string,
   exactValues: readonly string[] = [],
 ): string {
-  let redacted = redactExactCredentialValues(text, exactValues)
-    .replace(
-      RUNNER_URL_CREDENTIAL_PATTERN,
-      (_match, prefix: string) => `${prefix}${RUNNER_REDACTED_VALUE}@`,
-    )
-    .replace(
-      RUNNER_AUTH_HEADER_PATTERN,
-      (_match, prefix: string) => `${prefix}${RUNNER_REDACTED_VALUE}`,
-    )
-    .replace(
-      RUNNER_AUTH_SCHEME_PATTERN,
-      (_match, scheme: string) => `${scheme} ${RUNNER_REDACTED_VALUE}`,
-    )
-    .replace(
-      RUNNER_SECRET_ASSIGNMENT_PATTERN,
-      (_match, key: string, _bareKey: string, sep: string) =>
-        `${key}${sep}${RUNNER_REDACTED_VALUE}`,
-    )
+  // Preserve field names until structural redaction has consumed their values.
+  // An exact credential can itself equal a key such as "password".
+  let redacted = redactString(text, { redactedValue: RUNNER_REDACTED_VALUE })
     .replace(
       RUNNER_TF_VAR_ASSIGNMENT_PATTERN,
       (_match, prefix: string) => `${prefix}${RUNNER_REDACTED_VALUE}`,

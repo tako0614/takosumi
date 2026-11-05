@@ -396,7 +396,13 @@ material, not ordinary words such as “token” in user-facing prose. Values af
 `Bearer`, `Basic`, or `Digest` are rejected regardless of scheme casing, even
 within prose. The historical capitalized `Token abc123` form is also rejected;
 ordinary lowercase prose such as `Use a token value supplied by the operator.`
-remains allowed. Diagnostics never echo a value. JSON values in those documents/literals are
+remains allowed. Quoted and JSON values assigned to secret names are scanned as
+complete values, including nested content. Private-key PEM blocks, parameterized
+`Digest` credentials, and explicit `Authorization:` fields are also recognized.
+Diagnostics mask the entire `Authorization:` value. Unclosed secret values and
+PEM blocks conservatively hide following content when no safe end is known.
+These checks recognize defined credential shapes; they cannot identify arbitrary
+secrets in otherwise unlabelled text. Diagnostics never echo a value. JSON values in those documents/literals are
 bounded to recursive depth 32 by the parser; the structural schema documents
 that parser-owned constraint rather than pretending to encode it.
 

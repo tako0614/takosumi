@@ -18,6 +18,30 @@ const fixtureDirectory = join(
   "repository-manifest",
 );
 
+// takos-secret-scan: synthetic — these are credential-shaped admission canaries.
+test("manifest presentation and Interface values reject complete credential spans", async () => {
+  for (const value of [
+    'Digest username="one", nonce="nonce-canary", response="response-canary"',
+    'Authorization: Negotiate negotiate-canary',
+    'auth=Signature keyId=signature-canary',
+    'credentials={"nested":["json-canary",{"value":"other-canary"}]}',
+    'credentials={"nested":["unclosed-canary"}',
+    '-----BEGIN PRIVATE KEY-----\npem-canary\n-----END PRIVATE KEY-----',
+    '-----BEGIN PRIVATE KEY-----\ntruncated-pem-canary',
+  ]) {
+    const presentation = JSON.parse(await fixture("valid.json"));
+    presentation.install.modules["."].inputs[0].label.en = value;
+    const interfaceDocument = JSON.parse(await fixture("v2-launcher.json"));
+    const declaration = interfaceDocument.install.modules["deploy/takoform"].interfaces[0];
+    declaration.spec.document = { nested: { values: [value] } };
+    for (const document of [presentation, interfaceDocument]) {
+      const result = parseRepositoryManifestText(JSON.stringify(document));
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).not.toContain("canary");
+    }
+  }
+});
+
 async function fixture(name: string): Promise<string> {
   return await Bun.file(join(fixtureDirectory, name)).text();
 }
