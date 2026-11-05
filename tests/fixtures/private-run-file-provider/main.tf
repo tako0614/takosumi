@@ -19,7 +19,6 @@ provider "takoform" {
   alias             = "main"
   endpoint          = var.fixture_host_endpoint
   host_api_root     = var.fixture_host_api_root
-  token             = "fixture-token"
   store_id          = var.fixture_store_id
   space             = "prod"
   intent_store_slot = var.fixture_intent_slot
@@ -28,4 +27,8 @@ provider "takoform" {
 resource "takoform_module_worker" "app" {
   provider = takoform.main
   name     = "app"
+}
+
+output "worker_name" {
+  value = takoform_module_worker.app.name
 }

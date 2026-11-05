@@ -372,6 +372,23 @@ async function createGitInstallFirstPlan(input: {
   });
   expect(await input.operations.workspaces.listWorkspacesByOwner(subject)).toHaveLength(0);
   const publicResponses: string[] = [];
+  const compatibilityEvidence: unknown[] = [];
+  const observedOperations = {
+    ...input.operations,
+    async createSourceCompatibilityCheck(
+      ...args: Parameters<typeof input.operations.createSourceCompatibilityCheck>
+    ) {
+      const result = await input.operations.createSourceCompatibilityCheck(...args);
+      compatibilityEvidence.push({
+        report: { id: result.report.id, level: result.report.level,
+          findings: result.report.findings.map(({ code, compatibilityImpact }) => ({ code, compatibilityImpact })) },
+        run: result.run && { id: result.run.id, status: result.run.status, errorCode: result.run.errorCode },
+      });
+      await writeFile(join(input.diagnosticRoot, "git-install-compatibility.json"),
+        JSON.stringify(compatibilityEvidence, null, 2) + "\n", { mode: 0o600 });
+      return result;
+    },
+  };
   const route = async (path: string, body?: unknown) => {
     const url = new URL(`https://native-git-install.example.test${path}`);
     const response = await handleControlRoute({
@@ -385,7 +402,7 @@ async function createGitInstallFirstPlan(input: {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       }),
-      url, store: accounts, operations: input.operations,
+      url, store: accounts, operations: observedOperations,
     });
     if (!response) throw new Error("normal Accounts install route was not mounted");
     const text = await response.text();
@@ -503,7 +520,12 @@ async function proveLocalRunnerPrivateFiles(
     const certificate = await readFile(certificatePath);
     const key = await readFile(keyPath);
     const custodyEvents: CustodyEvent[] = [];
-    const host = createFakeV2Host(certificate, key, custodyEvents);
+    const host = createFakeV2Host(certificate, key, custodyEvents, {
+      // This first-Plan proof exercises private-file delivery without a
+      // credential binding. Only discovery/support reads are public; all Host
+      // mutations retain the fixture's bearer check and remain uncalled.
+      publicSupport: gitInstall !== undefined,
+    });
     servers.push(host);
     const hostApiRoot = `${host.url}${HOST_API_PATH}`;
 
@@ -1429,7 +1451,12 @@ function createNativeProviderRunnerProfile(base: RunnerProfile): RunnerProfile {
   };
 }
 
-function createFakeV2Host(cert: Buffer, key: Buffer, custodyEvents: CustodyEvent[]) {
+function createFakeV2Host(
+  cert: Buffer,
+  key: Buffer,
+  custodyEvents: CustodyEvent[],
+  options: { readonly publicSupport: boolean },
+) {
   let resourceExists = false;
   let generation = 0;
   let operationId = "";
@@ -1446,7 +1473,9 @@ function createFakeV2Host(cert: Buffer, key: Buffer, custodyEvents: CustodyEvent
       if (request.method === "POST" && url.pathname === `${HOST_API_PATH}/resources`) {
         custodyEvents.push({ kind: "host_post" });
       }
-      if (url.pathname !== "/.well-known/takoform/v2" &&
+      const publicSupport = options.publicSupport && request.method === "GET" &&
+        url.pathname === `${HOST_API_PATH}/support`;
+      if (url.pathname !== "/.well-known/takoform/v2" && !publicSupport &&
         request.headers.get("authorization") !== "Bearer fixture-token") {
         return problem(401, "unauthorized");
       }
