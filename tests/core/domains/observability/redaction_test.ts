@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { containsSecretLikeString, redactJsonObject, redactString } from "takosumi-contract/redaction";
 import { redactUnknown } from "../../../../core/shared/redaction.ts";
 import { errorMessage } from "../../../../core/shared/errors.ts";
+import { errorDiagnostic, redactRunDiagnostics } from "../../../../core/domains/deploy-control/projection.ts";
 
 test("redaction masks nested secret and token fields", () => {
   const redacted = redactJsonObject({
@@ -30,6 +31,38 @@ test("redaction masks bearer and assignment secrets inside strings", () => {
     redactString("Authorization: Bearer abc.def token=xyz&safe=true"),
     "Authorization: Bearer [REDACTED] token=[REDACTED]&safe=true",
   );
+});
+
+for (const scheme of ["bearer", "bEaReR", "basic", "bAsIc", "digest", "dIgEsT"]) {
+  test(`redaction masks token-like auth fragments after case-insensitive ${scheme}`, () => {
+    const input = `provider rejected ${scheme} opaque-fixture-value`;
+    const expected = `provider rejected ${scheme} [REDACTED]`;
+    assert.equal(redactString(input), expected);
+    assert.equal(containsSecretLikeString(input), true);
+    assert.deepEqual(redactJsonObject({ message: input }), { message: expected });
+    assert.equal(redactString(expected), expected);
+  });
+}
+
+test("Run error and diagnostic projection masks mixed-case token-like auth fragments", () => {
+  assert.deepEqual(errorDiagnostic(new Error("provider rejected bEaReR opaque-fixture-value")), {
+    severity: "error",
+    message: "provider rejected bEaReR [REDACTED]",
+  });
+  assert.deepEqual(redactRunDiagnostics([{
+    severity: "warning",
+    message: "upstream rejected basic opaque-fixture-value",
+    detail: "retry used dIgEsT opaque-fixture-value",
+  }]), [{
+    severity: "warning",
+    message: "upstream rejected basic [REDACTED]",
+    detail: "retry used dIgEsT [REDACTED]",
+  }]);
+});
+
+test("Token prose retains its existing metadata detection boundary", () => {
+  assert.equal(containsSecretLikeString("Use a token value supplied by the operator."), false);
+  assert.equal(redactString("Token opaque-fixture-value"), "Token [REDACTED]");
 });
 
 test("redaction masks prefixed env-style secret assignments and DSN passwords", () => {
