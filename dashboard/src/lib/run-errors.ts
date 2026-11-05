@@ -18,6 +18,7 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   source_sync_failed: "runError.sourceSyncFailed",
   source_ref_not_found: "runError.sourceRefNotFound",
   state_generation_mismatch: "runError.stateGenerationMismatch",
+  runner_mutation_indeterminate: "runError.mutationIndeterminate",
   plan_failed: "runError.planFailed",
   apply_failed: "runError.applyFailed",
   run_failed: "runError.runFailed",

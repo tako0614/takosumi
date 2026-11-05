@@ -870,6 +870,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The selected version was not found. Check the version, then try again.",
   "runError.stateGenerationMismatch":
     "Another change was applied first. Review again before applying.",
+  "runError.mutationIndeterminate":
+    "The operation's outcome is unknown. Ask an operator to check it before running it again.",
   "runError.planFailed":
     "The change review failed. Check the details, then try again.",
   "runError.applyFailed":
