@@ -88,6 +88,7 @@ import {
   errorJson,
   json,
   methodNotAllowed,
+  readBoundedRequestText,
   readJsonObject,
   stringValue,
 } from "../http-helpers.ts";
@@ -1069,7 +1070,7 @@ async function discardExpectedGeneration(
   url: URL,
 ): Promise<number | undefined> {
   const query = url.searchParams.get("expectedGeneration");
-  const text = await request.text();
+  const text = await readBoundedRequestText(request, 16 * 1024);
   if (text.trim() !== "") {
     let body: unknown;
     try {

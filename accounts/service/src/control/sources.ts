@@ -89,6 +89,7 @@ import {
   errorJson,
   json,
   methodNotAllowed,
+  readBoundedRequestText,
   readJsonObject,
   readOptionalJsonObject,
   stringValue,
@@ -215,9 +216,7 @@ export async function handleSources(
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
       const auth = await requireSourceAccess(ctx, source, workspaceId, "change_settings");
       if (!auth.ok) return auth.response;
-      if ((await request.text()).length !== 0) {
-        return errorJson("invalid_request", "Hook secret rotation accepts no request body.", 400);
-      }
+      await readBoundedRequestText(request, 0);
       const response = await operations.rotateSourceHookSecret(sourceId, ctx.session.subject);
       const result = jsonStatus({ ...response, source: publicSource(response.source) }, 200);
       result.headers.set("cache-control", "no-store");

@@ -770,6 +770,9 @@ verification.
 | GET | `/api/v1/sources/{sourceId}/snapshots` | List SourceSnapshots |
 | GET | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` | List install module directories and provider requirements scanned from one SourceSnapshot tree |
 
+Call the public hook-secret rotation API without a body. Any nonempty body returns
+`413 request_too_large` without changing the secret.
+
 Source deletion uses archive custody when the Source is owned, retiring, or has snapshot/sync history.
 It deletes archives first, then atomically removes snapshots and the Source with `source.retired`
 Activity. Failed cleanup keeps the rows for retry. Only pristine unowned Sources use `source.deleted`.
@@ -847,7 +850,11 @@ it `failed` with code and reason `capsule_initial_authority_conflict`. An
 attempt still returns to its input sheet. A plan that is not an attempt can be
 discarded by the member who started it, with `DELETE` and its
 `expectedGeneration`, while it has not recorded its Capsule (`syncing_source`
-through `creating_capsule`, or `failed` there). The discard first makes sure no
+through `creating_capsule`, or `failed` there). The DELETE body is UTF-8 JSON
+`{ expectedGeneration }`, limited to 16 KiB. An empty or whitespace-only body may
+instead use the `expectedGeneration` query parameter; combining a nonblank JSON
+body with the query is rejected. An oversized body returns `413 request_too_large`
+without changing the plan. The discard first makes sure no
 lease holder works on it, abandons a never-applied Capsule left by a lost
 acknowledgement exactly as for an attempt, and records `discarded`
 (`install_plan_discarded`). Such plans are also listed by `open=1`. They never

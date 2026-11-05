@@ -2107,6 +2107,84 @@ function discard(
   );
 }
 
+test("Accounts control body limits stop oversized install plan discards without mutation", async () => {
+  for (const declared of [undefined, "0", "16385"]) {
+    const fixture = installFixture();
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans", "POST", createBody(),
+      { "idempotency-key": "bounded-discard-stream" },
+    );
+    expect(created.status).toBe(201);
+    const plan = (await created.json()).installPlan;
+    const before = await fixture.planStore.get(plan.id);
+    const mutations = fixture.mutationCount();
+    let pulls = 0;
+    let bytes = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > 3) return controller.close();
+        const chunk = new Uint8Array(pulls === 1 ? 16_384 : 1);
+        bytes += chunk.length;
+        controller.enqueue(chunk);
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const response = await fixture.requestRaw(
+      `/api/v1/install-plans/${plan.id}`, "DELETE", body,
+      declared === undefined ? {} : { "content-length": declared },
+    );
+    expect(bytes).toBe(declared === "16385" ? 0 : 16_385);
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { code: "request_too_large" } });
+    expect(pulls).toBe(declared === "16385" ? 0 : 2);
+    expect(cancelled).toBe(declared !== "16385");
+    expect(await fixture.planStore.get(plan.id)).toEqual(before);
+    expect(fixture.mutationCount()).toBe(mutations);
+  }
+});
+
+test("Accounts control body limits preserve exact generation discard forms and authorization", async () => {
+  for (const form of ["json-at-limit", "empty-query", "foreign", "mixed", "invalid-utf8"] as const) {
+    const fixture = installFixture();
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans", "POST", createBody(),
+      { "idempotency-key": "bounded-discard-forms" },
+    );
+    expect(created.status).toBe(201);
+    const plan = (await created.json()).installPlan;
+    const before = await fixture.planStore.get(plan.id);
+    const json = JSON.stringify({ expectedGeneration: plan.generation });
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (form === "foreign") controller.enqueue(new Uint8Array(65_536));
+        else {
+          if (form === "invalid-utf8") controller.enqueue(new Uint8Array([0xff]));
+          else if (form !== "empty-query") {
+            controller.enqueue(new TextEncoder().encode(form === "json-at-limit" ? json.padEnd(16_384, " ") : json));
+          }
+          controller.close();
+        }
+      },
+    }, { highWaterMark: 0 });
+    const query = form === "empty-query" || form === "mixed" ? `?expectedGeneration=${plan.generation}` : "";
+    const response = await fixture.requestRaw(
+      `/api/v1/install-plans/${plan.id}${query}`, "DELETE", body, {},
+      form === "foreign" ? "tsub_foreign" : WORKSPACE.ownerUserId,
+    );
+    expect(response.status).toBe(form === "foreign" ? 403 : form === "mixed" || form === "invalid-utf8" ? 400 : 200);
+    if (form === "foreign") expect(pulls).toBe(0);
+    if (response.status === 200) {
+      expect((await response.json()).installPlan.phase).toBe("discarded");
+    } else {
+      expect(await fixture.planStore.get(plan.id)).toEqual(before);
+    }
+  }
+});
+
 test("workspace-less install keeps the requester's canonical personal owner for provider bindings", async () => {
   const fixture = attemptFixture({ compatibilityRootModuleVariableDeclarations: [] });
   fixture.operations.workspaces.listWorkspacesByOwner = async (accountId) =>
@@ -5444,6 +5522,7 @@ function installFixture(
     reconcile: (planId: string) =>
       request(`/api/v1/install-plans/${planId}/reconcile`, "POST"),
     request,
+    requestRaw,
   };
 
   async function request(
@@ -5453,15 +5532,25 @@ function installFixture(
     headers: Readonly<Record<string, string>> = {},
     subject = WORKSPACE.ownerUserId,
   ): Promise<Response> {
+    return await requestRaw(path, method, body === undefined ? undefined : JSON.stringify(body), {
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...headers,
+    }, subject);
+  }
+
+  async function requestRaw(
+    path: string,
+    method: string,
+    body?: BodyInit,
+    headers: Readonly<Record<string, string>> = {},
+    subject = WORKSPACE.ownerUserId,
+  ): Promise<Response> {
     const url = new URL(`https://app.example.test${path}`);
     const response = await handleAuthenticatedControlRoute({
       request: new Request(url, {
         method,
-        headers: {
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
-          ...headers,
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        headers,
+        ...(body === undefined ? {} : { body }),
       }),
       url,
       store: accountsStore,

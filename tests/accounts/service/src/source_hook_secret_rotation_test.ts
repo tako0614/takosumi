@@ -152,7 +152,7 @@ async function request(
     readonly path?: string;
     readonly method?: string;
     readonly headers?: Readonly<Record<string, string>>;
-    readonly body?: string;
+    readonly body?: BodyInit;
   } = {},
 ): Promise<Response> {
   const url = new URL(
@@ -312,9 +312,60 @@ test("Source hook secret rotation rejects request bodies, including secret repla
     body: JSON.stringify({ hookSecret: "caller-selected-secret" }),
   });
 
-  expect(response.status).toBe(400);
+  expect(response.status).toBe(413);
   expect(await state.controlStore.getSource(sourceId)).toMatchObject({
     hookSecretHash: before?.hookSecretHash,
   });
   expect(await state.controlStore.listActivityEvents(workspaceId)).toHaveLength(0);
+});
+
+test("Accounts control body limits reject rotation bodies before draining the stream", async () => {
+  for (const declared of [undefined, "0", "4194304"]) {
+    const state = await fixture();
+    const before = await state.controlStore.getSource(sourceId);
+    const token = "session_hook_bounded_body";
+    saveSession(state.accounts, ownerId, token);
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls <= 64) controller.enqueue(new Uint8Array(65_536));
+        else controller.close();
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const response = await request(state, {
+      token,
+      body,
+      ...(declared === undefined ? {} : { headers: { "content-length": declared } }),
+    });
+    expect(pulls).toBe(declared === "4194304" ? 0 : 1);
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { code: "request_too_large" } });
+    expect(cancelled).toBe(declared !== "4194304");
+    expect(await state.controlStore.getSource(sourceId)).toEqual(before);
+    expect(await state.controlStore.listActivityEvents(workspaceId)).toHaveLength(0);
+  }
+});
+
+test("Accounts control body limits leave rotation authentication and empty streams intact", async () => {
+  for (const actor of ["anonymous", "stranger", "owner"] as const) {
+    const state = await fixture();
+    const token = actor === "anonymous" ? undefined : `session_hook_bounded_${actor}`;
+    if (token) saveSession(state.accounts, actor === "owner" ? ownerId : "tsub_stranger", token);
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (actor === "owner") controller.close();
+        else controller.enqueue(new Uint8Array(65_536));
+      },
+    }, { highWaterMark: 0 });
+    const response = await request(state, { token, body });
+    expect(response.status).toBe(actor === "owner" ? 200 : actor === "anonymous" ? 401 : 403);
+    expect(pulls).toBe(actor === "owner" ? 1 : 0);
+    const events = await state.controlStore.listActivityEvents(workspaceId);
+    expect(events).toHaveLength(actor === "owner" ? 1 : 0);
+  }
 });
