@@ -38,16 +38,16 @@ import "./StoreBrowser.css";
 
 const STR = {
   tagline: {
-    ja: "追加できるサービスを探す",
-    en: "Find services to add",
+    ja: "インストールできるアプリを探す",
+    en: "Find apps to install",
   },
-  search: { ja: "サービスを検索…", en: "Search services…" },
+  search: { ja: "アプリを検索…", en: "Search apps…" },
   sortUpdated: { ja: "更新順", en: "Recently updated" },
   sortCreated: { ja: "作成順", en: "Recently added" },
   storeFilter: { ja: "表示ストア", en: "Store" },
   allStores: { ja: "すべてのストア", en: "All stores" },
   loadMore: { ja: "さらに読み込む", en: "Load more" },
-  none: { ja: "該当するサービスがありません", en: "No matching services" },
+  none: { ja: "該当するアプリがありません", en: "No matching apps" },
   noneUnfetched: {
     ja: "読み込み済みの範囲には該当がありません。続きを読み込むと検索対象が増えます。",
     en: "No matches in what's loaded yet. Load more to search more listings.",
@@ -83,8 +83,8 @@ const STR = {
     en: "No store source is configured.",
   },
   noStoreCta: { ja: "取得元を設定", en: "Configure a source" },
-  install: { ja: "追加", en: "Add" },
-  installAria: { ja: "追加: {name}", en: "Add {name}" },
+  install: { ja: "インストール", en: "Install" },
+  installAria: { ja: "インストール: {name}", en: "Install {name}" },
   installedUnknown: { ja: "インストール状況を確認できません", en: "Install status unavailable" },
   installedPartial: { ja: "確認できた範囲では{count}件インストール済み", en: "At least {count} installed" },
   installedUnknownHint: {
@@ -93,9 +93,9 @@ const STR = {
   },
   loadingAnnounce: { ja: "読み込み中…", en: "Loading…" },
   resultsAnnounce: {
-    ja: "{n} 件のサービスが見つかりました",
+    ja: "{n} 件のアプリが見つかりました",
     // Count-neutral: the STR table has no plural support.
-    en: "Services found: {n}",
+    en: "Apps found: {n}",
   },
   close: { ja: "閉じる", en: "Close" },
   source: { ja: "取得元の詳細", en: "Source details" },
@@ -327,9 +327,8 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           type="button"
           class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"}
           // Every card repeats the same visible verb; the accessible name
-          // carries the listing so the buttons are distinguishable. The verb is
-          // 追加/Add — the same one the add flow's CTA and every progress,
-          // done and error line use.
+          // carries the listing so the buttons are distinguishable. Install
+          // opens the host's flow; applying still requires its explicit review.
           aria-label={s("installAria", props.locale).replace(
             "{name}",
             pick(listing.name, props.locale),

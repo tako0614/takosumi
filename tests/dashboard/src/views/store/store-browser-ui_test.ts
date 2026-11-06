@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ja as jaMessages } from "../../../../../dashboard/src/i18n/ja.ts";
+import { en as enMessages } from "../../../../../dashboard/src/i18n/en.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const storeBrowserSource = readFileSync(
@@ -46,12 +48,12 @@ describe("StoreBrowser install UI", () => {
     ]) {
       expect(table).not.toContain(banned);
     }
-    // One verb for one action, matching ja.ts's `new.installCta`. 「追加」 is
-    // that verb: 42 dictionary entries say 追加 and the progress, done and
-    // error lines all do, so a button reading インストール made pressing one
-    // word produce another.
-    expect(table).toContain('install: { ja: "追加", en: "Add" }');
-    expect(table).not.toContain('ja: "インストール"');
+    // This separate locale table follows the canonical app/install contract.
+    // Adding a store source remains a different action (addServer).
+    expect(table).not.toMatch(/サービス|\bservices?\b/iu);
+    expect(table).toContain(
+      `install: { ja: "${jaMessages["installStore.install"]}", en: "${enMessages["installStore.install"]}" }`,
+    );
     // Every entry carries both locales...
     const entries = table.match(/ja: "([^"]*)"/g) ?? [];
     const english = table.match(/en: "([^"]*)"/g) ?? [];

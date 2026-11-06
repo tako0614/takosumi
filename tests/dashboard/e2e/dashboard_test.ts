@@ -1118,7 +1118,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
 
     await page.goto("/new", { waitUntil: "domcontentloaded" });
-    const search = page.getByRole("searchbox", { name: "Search services…" });
+    const search = page.getByRole("searchbox", { name: "Search apps…" });
     await expect(search).toBeVisible();
     await search.fill("Readiness");
     await expect(page.getByRole("heading", { name: "Readiness Service" })).toBeVisible();
