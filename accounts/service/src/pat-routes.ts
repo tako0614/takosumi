@@ -109,8 +109,8 @@ const PERSONAL_ACCESS_TOKEN_SCOPE_CATALOG_METADATA: Readonly<
   write: {
     label: { ja: "書き込み", en: "Write" },
     description: {
-      ja: "既存アカウント API の読み取りと書き込みにアクセスします。",
-      en: "Read and write access to legacy account APIs.",
+      ja: "既存アカウント API の書き込みにアクセスします。読み取りも必要な場合は「読み取り」も選択してください。",
+      en: "Write access to legacy account APIs. Select Read as well if you need read access.",
     },
     workspaceBinding: "optional",
   },
