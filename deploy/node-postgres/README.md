@@ -135,8 +135,8 @@ TAKOSUMI_ACCOUNTS_REDIRECT_URIS=https://app.example.com/oauth/callback
 # "d" coordinate; the pairwise secret is an independent 64-char random string.
 TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK={"kty":"EC","crv":"P-256","d":"...","x":"...","y":"..."}
 TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET=replace-me-with-a-64-char-random-string
-# Server secrets. Without the passphrase the service refuses to start; without
-# the salt it hashes sessions with a public dev-only salt.
+# Server secrets. Without the passphrase the service refuses to start.
+# Compose rejects a missing or empty session hash salt before services start.
 TAKOSUMI_SECRET_STORE_PASSPHRASE=
 TAKOSUMI_ACCOUNT_SESSION_HASH_SALT=
 TAKOSUMI_DEPLOY_CONTROL_TOKEN=
