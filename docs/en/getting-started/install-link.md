@@ -129,7 +129,7 @@ In a README, put it next to the link with an origin, so everyone can open one of
 
 If an install link with `git` or `source` matches any of the following and returns to the
 store list, none of its values are used and a message explains that the link is invalid.
-Check the link with its publisher, or add the app using its Git URL.
+Check the link with its publisher, or install the app using its Git URL.
 
 - A parameter that is not in the table above. This includes tracking parameters such as
   `utm_source` and attempts to pass variable values such as `var.<name>`

@@ -224,7 +224,7 @@ export const ja = {
   "installStore.open": "開く",
   "installStore.chooseAnother": "別のアプリを探す",
   "installStore.invalidSource": "有効なhttpsのGit URLを入力してください。",
-  "installStore.invalidInstallLink": "追加リンクが正しくありません。配布元に確認するか、Git URLから追加してください。",
+  "installStore.invalidInstallLink": "インストールリンクが正しくありません。配布元に確認するか、Git URLからインストールしてください。",
   "installStore.invalidName":
     "アプリ名は半角小文字・数字・ハイフンで入力してください。",
   "installStore.planMissing": "変更の確認を開始できたか確認できませんでした。",

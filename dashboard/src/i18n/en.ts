@@ -214,7 +214,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.open": "Open",
   "installStore.chooseAnother": "Find another app",
   "installStore.invalidSource": "Enter a valid HTTPS Git URL.",
-  "installStore.invalidInstallLink": "This install link is invalid. Check the link with its publisher, or add the app using its Git URL.",
+  "installStore.invalidInstallLink": "This install link is invalid. Check the link with its publisher, or install the app using its Git URL.",
   "installStore.invalidName":
     "Use lowercase letters, numbers, and hyphens for the app name.",
   "installStore.planMissing": "We couldn't confirm that the review started.",
