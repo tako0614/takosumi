@@ -1,8 +1,9 @@
 # Share an install link
 
-Put an install link in a README or on a website, and readers can open the Takosumi add screen
-with your repository already filled in. The link only fills in the form. **Opening it creates
-nothing.** The person adding checks the screen and presses **Add** themselves.
+Put an install link in a README or on a website, and readers can open the app install screen with
+the source already filled in. The link only fills in the form. **Opening it creates nothing.**
+Pressing **Install** reads the Git version. The person checks the app name, connections, and settings,
+then reviews the planned changes under **What this install does**. They choose **Allow and install** to apply them.
 
 Get the repository into the shape described in
 [Prepare a repository](./prepare-repository.md) first.
@@ -20,7 +21,7 @@ For a Takosumi you run yourself, it is your origin.
 In a README, make it a Markdown link:
 
 ```markdown
-[Add with Takosumi](https://takosumi.example.com/install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deploy/opentofu)
+[Install with Takosumi](https://takosumi.example.com/install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deploy/opentofu)
 ```
 
 Replace the origin, repository, version, and folder with your own.
@@ -33,32 +34,30 @@ URL-encode a value that contains `&`, `+`, `#`, `%`, or a space. For example, wr
 | Parameter | Meaning |
 | --- | --- |
 | `git` | URL of the Git repository that holds the module (the folder with your OpenTofu configuration). It starts with `https://` and has no user name, password, `?` query, or `#` fragment |
-| `ref` | The version to add: a branch, tag, or commit. Without it, the default branch |
-| `path` | The folder of the module to add. Without it, Takosumi checks the repository and decides |
+| `ref` | The version to install: a branch, tag, or commit. Without it, the default branch |
+| `path` | The folder of the module to install. Without it, Takosumi checks the repository and decides |
 | `sourcePath` | The folder inside the repository that Takosumi fetches and checks. Without it, the whole repository (`.`) |
-| `name` | The service name: lowercase letters, numbers, and hyphens only. Without it, the repository name |
+| `name` | App name. Without it, Takosumi proposes a lowercase name from the Git URL |
 | `source` | `git`, `ref`, and `path` packed into one value (see "Packed form" below) |
-| `product`, `return_uri` | Used as a pair to return to your own app after adding ([App Handoff](../reference/app-handoff.md)) |
+| `product`, `return_uri` | Used as a pair to return to your own app after installation ([App Handoff](../reference/app-handoff.md)) |
 
 Every link needs exactly one of `git` or `source`. The rest are optional. Module variable values
-cannot travel in the link. The person adding enters them on the **Set up the service** screen.
+cannot travel in the link. The person enters them in **Settings** on the install screen.
 
-If the repository name has anything other than lowercase letters, numbers, and hyphens (capital
-letters, `_`, `.`, and so on), add `name`. With the repository name as is,
-pressing **Add** shows "Use lowercase letters, numbers, and hyphens for the service name." and
-the person adding has to fix the name.
+`name` is optional. Supplied text is normalized as an app name. If it is omitted, Takosumi proposes a
+name from the Git URL. The person can edit the app name on the install screen.
 
 ### Choosing the version
 
-When the service is added, Takosumi pins `ref` to the commit it points to at that moment. What
+When the app is installed, Takosumi pins `ref` to the commit it points to at that moment. What
 happens after that depends on the kind of `ref`:
 
-- **A branch** (such as `main`): the service tracks that branch. When a new commit arrives, it
+- **A branch** (such as `main`): the app tracks that branch. When a new commit arrives, it
   shows **Update available**.
-- **A tag or commit** (such as `v1.2.0`): the service stays on that version. The person who added
+- **A tag or commit** (such as `v1.2.0`): the app stays on that version. The person who installed
   it moves to a newer one with **Change version**
   ([Update to a new version](./after-adding.md#update-to-a-new-version)). If you move the tag to
-  another commit, though, the service shows **Update available**, as it would for a branch.
+  another commit, though, the app shows **Update available**, as it would for a branch.
 
 ### `path` and `sourcePath`
 
@@ -78,17 +77,14 @@ Write folders like `deploy/opentofu`. A folder cannot start with `/` or `./`, en
 contain an empty part (`a//b`), a `.` or `..` part, `\`, or a drive name (`C:`), or be longer than
 1,024 characters.
 
-After the person adding presses **Add**, Takosumi checks the repository and compares `path` with
+After the person presses **Install**, Takosumi checks the repository and compares `path` with
 what it found:
 
-- `path` is found and it is the only module: Takosumi uses it.
-- `path` is found and there are other modules: **Choose a module** opens with that module
-  selected. The person adding can still choose another one.
-- `path` is not found: `path` is ignored and the check decides. With one module, Takosumi uses
-  it. With several, the person adding chooses. With none, the screen says "No module that can be
-  added was found in this repository version." Nothing says that `path` was ignored, so a wrong
-  path is easy to miss, especially a path written from the top of the repository when
-  `sourcePath` is set.
+- The scan confirms `path`: Takosumi uses that module without a selection screen, even if other modules exist.
+- If the scan cannot confirm `path` but finds installable modules, **Choose a module** opens so
+  the person can choose one of the scanned modules.
+- No installable module can be identified: the screen says "No installable module could be
+  identified in this version."
 
 ### Packed form
 
@@ -163,20 +159,24 @@ once decoded behaves the same way.
 
 ## Check before you share
 
-Open the link yourself. On the first add screen, **Source** should show the repository, version,
-and folder. The Git URL and the other values are in the collapsed **Source details**.
+Open the link yourself. On the first install screen, **Source and version** should show the intended repository.
+If the link specifies `ref`, check that version too. Choose **Install** to check the required connections,
+settings, and planned changes.
+Check the link's `path` against the `sourcePath` rules above.
 If the store list opens with an invalid-link message, check the rules above.
 The first screen is the same one shown in the
 [Quickstart](./quickstart.md#_6-add-the-example).
 
 ## What the person opening it sees
 
-1. Someone who is not signed in sees the sign-in screen with the name, version, and folder of the
-   service they are adding. After signing in, they return to the add screen.
-2. The first add screen shows the service name, **Source**, and the steps that follow.
-3. After they press **Add**, Takosumi pins `ref` to a commit and checks the repository. On
-   **Set up the service** they enter variables and connections, and on **Review before adding**
-   they check everything before adding.
+1. Someone who is not signed in sees the sign-in screen with context for the app they are installing.
+   After signing in, they return to the install screen.
+2. The install screen shows the app name, **Source and version**, and the steps that follow.
+3. Pressing **Install** pins `ref` to a commit and checks the repository. The person sets the app
+   name, connections, and settings, reviews the planned changes, and then chooses
+   **Allow and install** to apply them. From the Store, manually entered Git URLs use
+   **Install from a Git repository** and **Continue** before the install screen. An existing app
+   also offers **Open** and **Install another**.
 
 Link values end up in browser history and logs. Keep secrets out of the link.
 
@@ -184,7 +184,7 @@ Link values end up in browser history and logs. Keep secrets out of the link.
 
 - [Prepare a repository](./prepare-repository.md)
 - [Show your app on the home screen](./home-launcher.md)
-- [Update, restore, or delete a service](./after-adding.md)
+- [Update, restore, or delete an app](./after-adding.md)
 - [Sources and Capsules](../concepts/sources.md)
-- [App Handoff](../reference/app-handoff.md) — return to your own app after adding, and the
+- [App Handoff](../reference/app-handoff.md) — return to your own app after installation, and the
   detailed `web+takosumi:` rules

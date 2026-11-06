@@ -1,7 +1,7 @@
 # App Handoff Protocol
 
 Takosumi App Handoff は、任意のクライアントから、その Takosumi installation が管理する
-service を作成するための小さな URL プロトコルです。対象は mobile app に限らず、
+アプリをインストールするための小さな URL プロトコルです。対象は mobile app に限らず、
 web app、desktop app、ブラウザリンク、CLI 出力も含みます。
 
 Takosumi は plain OpenTofu/Terraform source を受け取って Capsule を作成し、通常の
@@ -11,8 +11,8 @@ Takosumi フローを実行します。connection payload をクライアント�
 作成には通常の Takosumi dashboard を使います。クライアントは
 完了後に自分の product app または web callback URL へ戻ります。
 
-README やウェブサイトに置く追加リンクだけが必要なら、[追加リンクを配る](../getting-started/install-link.md)
-を読んでください。このページは、追加のあとに自分のクライアントへ戻す使い方を含めた protocol 全体です。
+README やウェブサイトに置くインストールリンクだけが必要なら、[インストールリンクを配る](../getting-started/install-link.md)
+を読んでください。このページは、インストールのあとに自分のクライアントへ戻す使い方を含めた protocol 全体です。
 
 全体の流れは次のとおりです。
 
@@ -44,8 +44,8 @@ dashboard 内では `/new` に正規化されることがありますが、外�
 | `source`     | `git::<HTTPS URL>//<module のフォルダ>?ref=<ref>` 形式の packed module address（`//<フォルダ>` と `?ref=` は省略可） |
 | `ref`        | Git branch / tag / commit                                      |
 | `sourcePath` | sync/archive/scan する Git subtree。省略時は `.`               |
-| `path`       | 追加する module のフォルダ。`sourcePath` からの相対パス。scan の結果に無ければ使わない |
-| `name`       | サービス名（半角小文字、数字、ハイフン）。省略時はリポジトリ名 |
+| `path`       | インストールする module のフォルダ。`sourcePath` からの相対パス。scan で確認できる必要があります |
+| `name`       | アプリ名。入力は小文字・数字・ハイフンを使う形に整えます。省略時は Git URL から名前を提案 |
 | `product`    | `return_uri` とセットで使うクライアント product key            |
 | `return_uri` | `product` とセットで使う connection payload の返却先           |
 
@@ -54,7 +54,7 @@ dashboard 内では `/new` に正規化されることがありますが、外�
 release ref を決める権限は持ちません。`product` と `return_uri` は、完了後に
 クライアントへ戻すためだけに使う組です。
 
-`return_uri` がなければ、この URL は通常の hosted service 作成リンクとして働きます。
+`return_uri` がなければ、この URL は通常のアプリのインストールリンクとして働きます。
 このときは `product` も付けません。`return_uri` があるときは、Takosumi が `product`
 と `return_uri` を保持します。sign-in、ProviderConnection の設定、plan、apply と
 画面が変わっても引き継ぎます。
@@ -104,8 +104,13 @@ Takosumi は `handoff` の値を `web+takosumi:install` の形として読み、
 
 ## OpenTofu をそのまま使う流れ
 
-この URL が行うのは、dashboard フローの事前入力までです。作成そのものは、画面上の
-明示的な操作で進みます。
+この URL が行うのは、dashboard フローの事前入力までです。利用者は **インストール** を押して Git の版を読み、
+アプリ名・接続・設定を整えてから、**インストール内容** で作られるものを確認します。
+**許可してインストール** を押すまでは
+クラウドに作成しません。Store で Git URL を手入力するときは **Gitリポジトリからインストール** を選び、
+URL を入力して **続ける** を押してからインストール画面へ進みます。
+
+画面上の準備・確認と適用に対応する技術上の流れは次のとおりです。
 
 1. Git URL / ref / `sourcePath` から Source を作る
 2. Snapshot の tree scan で `path` を照合して Capsule を作る
