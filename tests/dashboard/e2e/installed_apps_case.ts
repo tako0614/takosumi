@@ -173,7 +173,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
       await expect(card.getByTestId("store-installed-unknown")).toBeVisible();
       await expect(card.getByText("インストール状況を確認できません", { exact: true })).toBeVisible();
-      await expect(card.getByRole("button", { name: "追加: 共有オフィス" })).toBeVisible();
+      await expect(card.getByRole("button", { name: "インストール: 共有オフィス" })).toBeVisible();
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
       await expect(page.getByText("インストール済みのアプリを確認できませんでした。", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeEnabled();
@@ -231,9 +231,9 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       await expect(card).toBeVisible();
       await expect(card.getByTestId("store-installed-loading")).toBeVisible();
       await expect(card.getByTestId("store-installed-unknown")).toHaveCount(0);
-      await expect(card.getByRole("button", { name: "追加: 共有オフィス" })).toHaveCount(0);
+      await expect(card.getByRole("button", { name: "インストール: 共有オフィス" })).toHaveCount(0);
       releaseRead();
-      await expect(card.getByRole("button", { name: "追加: 共有オフィス" })).toBeEnabled();
+      await expect(card.getByRole("button", { name: "インストール: 共有オフィス" })).toBeEnabled();
       expect(h.errors).toEqual([]);
     });
 
