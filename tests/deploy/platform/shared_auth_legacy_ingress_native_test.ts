@@ -298,10 +298,12 @@ test("native platform HTTP closes primary and alias legacy ingress while preserv
     await acquireControlD1MaintenanceFence(controlDb, { sourceCommit: "f".repeat(40), manifestDigest: "sha256:" + "f".repeat(64),
       environment: "staging", databaseRole: "in_place", releasePolicy: "in_place" }, new Date().toISOString());
     const fenced = await fetch(origin, "/api/v1/workspaces/ws_native", { headers: { cookie: rpCookie } });
-    // Existing Control error translation is 500, still an explicit denial
-    // with no Workspace data. This fixture does not claim retryable readiness.
-    expect(fenced.status, await fenced.clone().text()).toBe(500);
-    expect(await fenced.json()).toMatchObject({ error: { code: "internal_error" } });
+    // The fence also blocks profile initialization, so lazy Control startup
+    // returns its unavailable envelope before a Workspace handler can run.
+    expect(fenced.status, await fenced.clone().text()).toBe(503);
+    const fencedBody = await fenced.json();
+    expect(fencedBody).toMatchObject({ error: { code: "feature_unavailable" } });
+    expect(Object.keys(fencedBody)).toEqual(["error"]);
   } finally {
     try { await runtime.dispose(); } finally { directAgent.destroy(); }
   }
