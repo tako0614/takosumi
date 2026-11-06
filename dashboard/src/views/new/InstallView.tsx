@@ -25,7 +25,7 @@ import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { listConnections, listInstalledApps, listOpenGitInstallAttempts } from "../../lib/control-api.ts";
-import { capsuleNameFromUrl, isSafeHttpsGitUrl, parseInstallPrefill } from "../../lib/install-link.ts";
+import { capsuleNameFromUrl, hasInstallPrefillParams, isSafeHttpsGitUrl, parseInstallPrefill } from "../../lib/install-link.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import {
   appendAppHandoff,
@@ -119,7 +119,12 @@ function InstallRoute(props: { readonly principalId: string }) {
         parseInstallPrefill(withoutInstallContext(location.search)),
     );
   return (
-    <Switch fallback={<StorePage principalId={props.principalId} />}>
+    <Switch fallback={
+      <StorePage
+        principalId={props.principalId}
+        rejectedInstallLink={hasInstallPrefillParams(withoutInstallContext(location.search))}
+      />
+    }>
       <Match when={legacyCapsuleLocator(location.search)}>
         {(capsuleId) => <Navigate href={appPageHref(capsuleId())} />}
       </Match>
@@ -132,7 +137,7 @@ function InstallRoute(props: { readonly principalId: string }) {
 
 // --- The Store -------------------------------------------------------------------
 
-function StorePage(props: { readonly principalId: string }) {
+function StorePage(props: { readonly principalId: string; readonly rejectedInstallLink: boolean }) {
   const navigate = useNavigate();
   const [gitUrl, setGitUrl] = createSignal("");
   const [gitError, setGitError] = createSignal<string>();
@@ -155,6 +160,11 @@ function StorePage(props: { readonly principalId: string }) {
       }
     >
       <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
+      <Show when={props.rejectedInstallLink}>
+        <div class="iv-error" role="alert" data-testid="install-link-refusal">
+          <p>{t("installStore.invalidInstallLink")}</p>
+        </div>
+      </Show>
       <OpenAttempts principalId={props.principalId} />
       <Show when={installedApps.error}>
         <div class="iv-error" role="alert">

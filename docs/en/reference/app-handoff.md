@@ -127,8 +127,8 @@ require a Takosumi-specific source metadata file or product-specific metadata
 file.
 
 `sourcePath` and `path` accept only `.` or canonical relative directories. If the
-link contains any unknown, duplicate, or invalid query field, none of its values are used and
-the add screen opens with an empty source, without an error
+install link has `git` or `source` and returns to the store list because of an unknown,
+duplicate, or invalid query field, none of its values are used and an invalid-link message is shown
 ([When a link is not used](../getting-started/install-link.md#when-a-link-is-not-used)).
 Module inputs do not travel in the URL; links carrying `var.<name>` or
 `varjson.<name>` are rejected. Inputs are entered in the Takosumi dashboard screen.
