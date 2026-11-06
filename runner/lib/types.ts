@@ -291,6 +291,8 @@ export interface TarVerboseEntry {
 
 export interface PreparedProviderCredentialFiles {
   readonly context: CommandContext;
+  /** Internal borrow for nested runtime-secret preparation; parent owns release. */
+  readonly phaseBorrow: { poison(): void };
   readonly cleanup: () => Promise<void>;
 }
 

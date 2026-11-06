@@ -1,10 +1,65 @@
 import { expect, test } from "bun:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { workspaceForRun } from "../../runner/lib/artifacts.ts";
 import { runPlan, runReviewedPlanApply } from "../../runner/lib/plan_apply.ts";
 import { generateOpenTofuChildModuleRoot } from "../../lib/rootgen/src/mod.ts";
+import { enterSourceBuildPhase, readSourceBuildPhaseForTest } from "../../runner/lib/source_build_phase_gate.ts";
+
+test("direct-root commit discovery finishes before the provider phase owns HOME", async () => {
+  const runId = `direct-root-phase-order-${crypto.randomUUID()}`;
+  const workspace = workspaceForRun(runId);
+  const shimRoot = await mkdtemp(join(tmpdir(), "direct-root-git-shim-"));
+  const marker = join(shimRoot, "rev-parse-started");
+  const release = join(shimRoot, "release-rev-parse");
+  const priorPath = Bun.env.PATH;
+  let plan: Promise<unknown> | undefined;
+  let queuedBuild: Promise<Awaited<ReturnType<typeof enterSourceBuildPhase>>> | undefined;
+  try {
+    await mkdir(workspace.sourceRoot, { recursive: true });
+    await writeFile(join(workspace.sourceRoot, "main.tf"), "terraform {}\n");
+    await writeFile(join(shimRoot, "git"), [
+      "#!/bin/sh",
+      'test "$1" = "rev-parse" || exit 1',
+      `: > '${marker}'`,
+      `while test ! -f '${release}'; do sleep 0.01; done`,
+      `printf '%s\\n' '${"a".repeat(40)}'`,
+      "",
+    ].join("\n"));
+    await chmod(join(shimRoot, "git"), 0o755);
+    Bun.env.PATH = `${shimRoot}:${priorPath ?? "/usr/local/bin:/usr/bin:/bin"}`;
+    plan = runPlan(runId, {
+      planRun: { operation: "create", source: { kind: "git", url: "https://source.example.test/repo.git" } },
+    });
+    for (let i = 0; i < 500 && !await lstat(marker).then(() => true, () => false); i += 1) {
+      await Bun.sleep(1);
+    }
+    expect(await lstat(marker).then(() => true, () => false)).toBe(true);
+    // The shim is running under only the temporary rev-parse lease. The old
+    // order had already acquired the provider phase as a second lease here.
+    expect(readSourceBuildPhaseForTest().activeSensitive).toBe(1);
+    queuedBuild = enterSourceBuildPhase();
+    expect(readSourceBuildPhaseForTest().queuedBuilds).toBe(1);
+    await writeFile(release, "go");
+    const first = await Promise.race([
+      queuedBuild.then(() => "build"),
+      plan.then(() => "plan"),
+    ]);
+    expect(first).toBe("build");
+    (await queuedBuild).release();
+    const result = await plan as { readonly status: string };
+    expect(result.status).toBe("succeeded");
+  } finally {
+    await writeFile(release, "go").catch(() => {});
+    if (queuedBuild) (await queuedBuild.catch(() => undefined))?.release();
+    await plan?.catch(() => {});
+    if (priorPath === undefined) delete Bun.env.PATH; else Bun.env.PATH = priorPath;
+    await rm(workspace.root, { recursive: true, force: true });
+    await rm(shimRoot, { recursive: true, force: true });
+  }
+});
 
 test("legacy source-less destroy operator modules require the internal drain marker and generated root", async () => {
   const runId = `legacy-sourceless-destroy-${crypto.randomUUID()}`;

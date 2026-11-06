@@ -501,5 +501,7 @@ test("a killed build supervisor poisons later synthetic secret preparation", asy
   expect(stderr).toBe("");
   const result = JSON.parse(stdout) as Record<string, unknown>;
   expect(result.buildRejected).toBe(true);
+  expect(result.phaseHomeRetained).toBe(true);
   expect(result.nextSecret).toBe("source build isolation is unavailable");
+  expect(result.nextProviderFree).toBe("source build isolation is unavailable");
 });

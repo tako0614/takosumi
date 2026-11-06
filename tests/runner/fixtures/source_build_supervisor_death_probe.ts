@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSourceBuild } from "../../../runner/lib/source_build.ts";
 import { prepareRuntimeSecretFiles } from "../../../runner/lib/runtime_secrets.ts";
+import { prepareProviderCredentialFiles } from "../../../runner/lib/credentials.ts";
 import type { RunWorkspace } from "../../../runner/lib/types.ts";
 
 const root = await mkdtemp(join(tmpdir(), "takosumi-supervisor-death-"));
@@ -19,6 +20,7 @@ const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], {
 });
 child.unref();
 writeFileSync("escaped.pid", String(child.pid));
+writeFileSync("phase-home-path", process.env.HOME);
 process.kill(process.ppid, "SIGKILL");
 `] }],
       outputs: ["escaped.pid"],
@@ -26,7 +28,15 @@ process.kill(process.ppid, "SIGKILL");
     root,
   ).catch((error) => error);
   escapedPid = Number(await readFile(join(root, "escaped.pid"), "utf8"));
+  const phaseHomePath = await readFile(join(root, "phase-home-path"), "utf8");
+  const phaseHomeRetained = (await lstat(phaseHomePath)).isDirectory();
   const workspace = { root: join(root, "next-run") } as RunWorkspace;
+  const nextProviderFree = await prepareProviderCredentialFiles(
+    { env: {} }, workspace,
+  ).then(async (prepared) => {
+    await prepared.cleanup();
+    return "created";
+  }).catch((error) => error instanceof Error ? error.message : String(error));
   const nextSecret = await prepareRuntimeSecretFiles(
     { env: {} },
     workspace,
@@ -47,8 +57,10 @@ process.kill(process.ppid, "SIGKILL");
   }).catch((error) => error instanceof Error ? error.message : String(error));
   console.log(JSON.stringify({
     buildRejected: buildError instanceof Error,
+    phaseHomeRetained,
     escapedPid,
     nextSecret,
+    nextProviderFree,
   }));
 } finally {
   if (escapedPid !== undefined && Number.isSafeInteger(escapedPid)) {

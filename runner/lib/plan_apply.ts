@@ -108,6 +108,7 @@ import {
   plannedOutputsFromPlanJson,
 } from "./providers.ts";
 import { runSourceBuild } from "./source_build.ts";
+import { enterCommandPhaseHome } from "./phase_home.ts";
 
 export async function runPlan(
   runId: string,
@@ -330,6 +331,11 @@ export async function runDirectRootPlan(
     variableFilePath,
     `${JSON.stringify(parseVariables(request))}\n`,
   );
+  const sourceCommit =
+    source.kind === "git"
+      ? (source.commit ??
+        (await gitRevParseHead(workspace.sourceRoot, commandContext)))
+      : undefined;
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
@@ -358,11 +364,6 @@ export async function runDirectRootPlan(
         return { providerScan, requiredProviders };
       },
     );
-    const sourceCommit =
-      source.kind === "git"
-        ? (source.commit ??
-          (await gitRevParseHead(workspace.sourceRoot, commandContext)))
-        : undefined;
     finishPreparation?.();
     return await initPlanAndBuildResponse(runId, workspace, moduleDir, {
       operation,
@@ -1034,16 +1035,30 @@ export async function runCompatibilityCheck(
   request: unknown,
   signal?: AbortSignal,
 ): Promise<JsonRecord> {
+  const phase = await enterCommandPhaseHome(signal);
+  try {
+    return await runCompatibilityCheckInPhase(runId, request, signal, phase.home.env);
+  } finally {
+    await phase.cleanup();
+  }
+}
+
+async function runCompatibilityCheckInPhase(
+  runId: string,
+  request: unknown,
+  signal: AbortSignal | undefined,
+  phaseEnv: { readonly HOME: string; readonly XDG_CONFIG_HOME: string },
+): Promise<JsonRecord> {
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "source root");
   const modulePath = compatibilityModulePath(request);
   const moduleRoot = resolveModulePath(workspace.sourceRoot, modulePath);
   await assertDirectory(moduleRoot, "compatibility module root");
   const context: CommandContext = {
-    env: buildPhaseEnv(),
+    env: { ...buildPhaseEnv(), ...phaseEnv },
     ...(signal ? { signal } : {}),
   };
-  assertCommandEnvHasNoProviderCredentials(context.env);
+  assertCommandEnvHasNoProviderCredentials(context.env, ["HOME", "XDG_CONFIG_HOME"]);
   const preInitProviderScan =
     await requiredProviderSourcesFromTerraformTree(moduleRoot);
   if (!preInitProviderScan.complete) {

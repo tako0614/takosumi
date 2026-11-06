@@ -35,6 +35,7 @@ import type {
 } from "./types.ts";
 import { BASE_COMMAND_ENV_NAMES } from "./constants.ts";
 import { enterSensitiveFilePhase } from "./source_build_phase_gate.ts";
+import { createPhaseHome, type PhaseHome } from "./phase_home.ts";
 import {
   isRecord,
   recordField,
@@ -1332,21 +1333,40 @@ export async function prepareProviderCredentialFiles(
   const files = context.credentialFiles ?? [];
   const renewable = context.renewableCredentials ?? [];
   const privateRunFiles = context.privateRunFiles ?? [];
-  const hasProviderEnv = Object.keys(context.env).some(isAdmittedDeclaredProviderEnvName);
-  const hasRuntimeInputs = (context.runtimeInputs?.length ?? 0) > 0;
+  const phaseLease = await enterSensitiveFilePhase(context.signal);
+  let phaseHome: PhaseHome | undefined;
+  try {
+    phaseHome = await createPhaseHome();
+  } catch (error) {
+    phaseLease.poison();
+    throw error;
+  }
+  const phaseContext: CommandContext = {
+    ...context,
+    env: {
+      ...context.env,
+      HOME: phaseHome.env.HOME,
+      ...(Object.hasOwn(context.env, "XDG_CONFIG_HOME")
+        ? {}
+        : { XDG_CONFIG_HOME: phaseHome.env.XDG_CONFIG_HOME }),
+    },
+  };
   if (files.length === 0 && renewable.length === 0 && privateRunFiles.length === 0) {
-    if (!hasProviderEnv && !hasRuntimeInputs) return { context, cleanup: async () => {} };
-    const phaseLease = await enterSensitiveFilePhase(context.signal);
-    return { context, cleanup: async () => phaseLease.release() };
+    let cleaned = false;
+    return {
+      context: phaseContext,
+      phaseBorrow: phaseLease,
+      cleanup: async () => {
+        if (cleaned) return;
+        cleaned = true;
+        try { await phaseHome.cleanup(); phaseLease.release(); }
+        catch { phaseLease.poison(); }
+      },
+    };
   }
   // A SIBLING of the run workspace with a random suffix, never a child of it:
   // the source-build phase runs user commands inside `workspace.sourceRoot`,
   // and `<workspace.root>/.provider-credentials` was one `../` away from them.
-  const tmpInfo = await lstat("/tmp");
-  if (!tmpInfo.isDirectory() || tmpInfo.isSymbolicLink()) {
-    throw new Error("run credential parent directory is unsafe");
-  }
-  const phaseLease = await enterSensitiveFilePhase(context.signal);
   let credentialDir: string | undefined;
   let session: CredentialRefreshSession | undefined;
   let privateRunFileSession: PrivateRunFileRefreshSession | undefined;
@@ -1354,6 +1374,10 @@ export async function prepareProviderCredentialFiles(
   let createdSession = false;
   let privateRunFileSessionRegistered = false;
   try {
+    const tmpInfo = await lstat("/tmp");
+    if (!tmpInfo.isDirectory() || tmpInfo.isSymbolicLink()) {
+      throw new Error("run credential parent directory is unsafe");
+    }
     try {
       credentialDir = await mkdtemp(`/tmp/${await credentialDirPrefixForWorkspace(workspace)}`);
     } catch {
@@ -1363,7 +1387,7 @@ export async function prepareProviderCredentialFiles(
     if (!credentialDir) throw new Error("credential directory was not created");
     const ownedCredentialDir = credentialDir;
     await chmod(credentialDir, 0o700);
-    const env: Record<string, string> = { ...context.env };
+    const env: Record<string, string> = { ...phaseContext.env };
     const renewableFiles = new Map<string, string>();
     if (renewable.length > 0) {
       if (!runId || !context.credentialRefreshOwner || !context.credentialManifestDigest) {
@@ -1453,7 +1477,7 @@ export async function prepareProviderCredentialFiles(
     }
     return {
       context: {
-        ...context,
+        ...phaseContext,
         env,
         ...(privateRunFilesFile ? { privateRunFilesFile } : {}),
         ...(session ? { redactionValues: session.redactionValues } : {}),
@@ -1461,6 +1485,7 @@ export async function prepareProviderCredentialFiles(
           ? { redactionValues: privateRunFileSession.redactionValues }
           : {}),
       },
+      phaseBorrow: phaseLease,
       cleanup: async () => {
         // A directory that cannot be removed poisons the lease but does not
         // throw: callers run this in a `finally`, where a throw would replace
@@ -1481,7 +1506,10 @@ export async function prepareProviderCredentialFiles(
               }
             }
           } finally {
-            await shredCredentialDir(ownedCredentialDir).catch(() => { removalFailed = true; });
+            await Promise.all([
+              shredCredentialDir(ownedCredentialDir).catch(() => { removalFailed = true; }),
+              phaseHome.cleanup().catch(() => { removalFailed = true; }),
+            ]);
           }
           if (removalFailed) phaseLease.poison();
           else phaseLease.release();
@@ -1509,6 +1537,7 @@ export async function prepareProviderCredentialFiles(
     if (credentialDir) {
       await shredCredentialDir(credentialDir).catch(() => { cleanupFailed = true; });
     }
+    await phaseHome.cleanup().catch(() => { cleanupFailed = true; });
     if (cleanupFailed) phaseLease.poison();
     else phaseLease.release();
     if (privateRunFiles.length > 0) {

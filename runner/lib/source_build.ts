@@ -21,6 +21,8 @@ const SOURCE_BUILD_ENV_NAMES = [
   "BUN_INSTALL_CACHE_DIR",
   "npm_config_cache",
   "XDG_CACHE_HOME",
+  "HOME",
+  "XDG_CONFIG_HOME",
 ] as const;
 // Source-build output is user-controlled and can be copied into Run failure
 // details. Redact before enforcing the bound so a credential-like assignment
@@ -137,6 +139,11 @@ function boundedBuildOutput(text: string): string {
 
 async function sourceBuildEnv(): Promise<Record<string, string>> {
   const env = buildPhaseEnv();
+  if (!Bun.env.HOME || !Bun.env.XDG_CONFIG_HOME) {
+    throw new Error("source build phase HOME is missing");
+  }
+  env.HOME = Bun.env.HOME;
+  env.XDG_CONFIG_HOME = Bun.env.XDG_CONFIG_HOME;
   env.CI = "1";
   const cacheRoot = Bun.env[SOURCE_BUILD_CACHE_DIR_ENV]?.trim();
   if (!cacheRoot) return env;

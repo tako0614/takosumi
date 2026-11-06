@@ -50,6 +50,7 @@ import {
 import { workspaceForRun } from "./artifacts.ts";
 import { parseSourceBuild } from "./parsing.ts";
 import { runSourceBuild } from "./source_build.ts";
+import { enterCommandPhaseHome } from "./phase_home.ts";
 import {
   assertReleaseCommandsDoNotOverrideRuntimeSecretEnv,
   prepareRuntimeSecretFiles,
@@ -67,14 +68,29 @@ export async function runBackup(
     return await runProviderSnapshotBackup(runId, backup, signal);
   }
 
+  const phase = await enterCommandPhaseHome(signal);
+  try {
+    return await runCommandBackupInPhase(runId, backup, signal, phase.home.env);
+  } finally {
+    await phase.cleanup();
+  }
+}
+
+async function runCommandBackupInPhase(
+  runId: string,
+  backup: BackupSpec,
+  signal: AbortSignal | undefined,
+  phaseEnv: { readonly HOME: string; readonly XDG_CONFIG_HOME: string },
+): Promise<JsonRecord> {
+
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "backup source root");
   const context: CommandContext = {
-    env: buildPhaseEnv(),
+    env: { ...buildPhaseEnv(), ...phaseEnv },
     timeoutMs: 10 * 60 * 1000,
     ...(signal ? { signal } : {}),
   };
-  assertCommandEnvHasNoProviderCredentials(context.env);
+  assertCommandEnvHasNoProviderCredentials(context.env, ["HOME", "XDG_CONFIG_HOME"]);
   const logs: string[] = [];
   let stdout = "";
   let stderr = "";
@@ -165,6 +181,7 @@ export async function runRelease(
       workspace,
       runtimeSecrets,
       runtimeSecretFileSystem,
+      preparedCredentials.phaseBorrow,
     );
     for (const command of release.commands) {
       const cwd = releaseCommandCwd(workspace, command);
@@ -268,11 +285,30 @@ export async function runProviderSnapshotBackup(
     );
   }
 
+  const phase = await enterCommandPhaseHome(signal);
+  try {
+    return await runProviderSnapshotCommandInPhase(
+      runId, backup, adapterId, adapter.command, signal, phase.home.env,
+    );
+  } finally {
+    await phase.cleanup();
+  }
+}
+
+async function runProviderSnapshotCommandInPhase(
+  runId: string,
+  backup: BackupSpec,
+  adapterId: string,
+  command: string,
+  signal: AbortSignal | undefined,
+  phaseEnv: { readonly HOME: string; readonly XDG_CONFIG_HOME: string },
+): Promise<JsonRecord> {
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
   const context: CommandContext = {
     env: {
       ...baseCommandEnv(),
+      ...phaseEnv,
       TAKOSUMI_BACKUP_MODE: "provider_snapshot",
       TAKOSUMI_BACKUP_ADAPTER_ID: adapterId,
       TAKOSUMI_BACKUP_OUTPUT_PATH: backup.outputPath,
@@ -281,7 +317,7 @@ export async function runProviderSnapshotBackup(
     timeoutMs: 10 * 60 * 1000,
     ...(signal ? { signal } : {}),
   };
-  const result = await runCommand(["bash", "-lc", adapter.command], {
+  const result = await runCommand(["bash", "-lc", command], {
     cwd: workspace.root,
     context,
   });

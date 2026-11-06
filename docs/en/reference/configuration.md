@@ -131,6 +131,15 @@ Leaving `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` empty makes the runner unpack
 providers into per-Run work areas. Nothing is shared, and in exchange no
 mix-up between Runs can happen.
 
+The Runner creates a private `HOME` for each command phase. When a provider
+input has not explicitly declared `XDG_CONFIG_HOME`, implicit configuration
+uses the fresh `HOME/.config`. Commands in one `sourceBuild` share a HOME;
+later phases receive distinct HOMEs. Declared provider `XDG_CONFIG_HOME` and
+explicit configuration selected by a build command remain in effect. The
+configured `bun` / `npm` / `xdg` source-build caches and provider cache survive
+phase HOME cleanup. This does not isolate processes sharing a UID or shared
+caches, nor does a runner restart guarantee a fresh filesystem.
+
 Git in Runner command environments ignores inherited global/system Git config.
 SSH sources also skip implicit SSH config and retain the Connection's key and
 `known_hosts` checks. Custom Git HTTPS CA trust can use the existing
