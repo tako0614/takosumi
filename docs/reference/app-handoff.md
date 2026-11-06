@@ -118,8 +118,8 @@ source リポジトリは plain OpenTofu/Terraform module のままで足りま�
 source metadata ファイルや製品固有の metadata ファイルを置く必要はありません。
 
 `sourcePath` と `path` は `.` または正規化済みの relative directory だけを受け付けます。
-未知・重複・不正なクエリフィールドが 1 つでもあるリンクは、どの値も使われず、取得元が空の
-追加画面が開きます。エラーは表示されません（[リンクが使われないとき](../getting-started/install-link.md#リンクが使われないとき)）。module input は URL
+`git` か `source` がある追加リンクが未知・重複・不正なクエリフィールドのためストアの一覧へ戻ると、
+どの値も使われず、不正な追加リンクの案内が表示されます（[リンクが使われないとき](../getting-started/install-link.md#リンクが使われないとき)）。module input は URL
 では渡しません。`var.<name>` や `varjson.<name>` を付けたリンクも拒否されます。入力は Takosumi dashboard の画面で
 入れます。secret、token、provider credential、private key の渡し先はさらに別で、
 ProviderConnection、Credential Recipe、ProviderBinding、Secret、または製品側の

@@ -127,8 +127,9 @@ In a README, put it next to the link with an origin, so everyone can open one of
 
 ## When a link is not used
 
-If a link with `git` or `source` matches any of the following, none of its values are used, and
-the add screen opens with an empty source. **No error is shown.**
+If an install link with `git` or `source` matches any of the following and returns to the
+store list, none of its values are used and a message explains that the link is invalid.
+Check the link with its publisher, or install the app using its Git URL.
 
 - A parameter that is not in the table above. This includes tracking parameters such as
   `utm_source` and attempts to pass variable values such as `var.<name>`
@@ -148,10 +149,11 @@ the add screen opens with an empty source. **No error is shown.**
 A link with neither `git` nor `source` opens the store list instead of a filled-in add
 screen.
 
-For a `web+takosumi:install` link, only the following cases open the add screen with an empty
-source, as `/install` does. Every other failure of a `web+takosumi:install` link (an unknown
-parameter, an empty value, a broken `path`, and so on) opens the store list with nothing filled
-in, and so does a link longer than 4,096 characters once decoded.
+For a `web+takosumi:install` link, only the following cases show the invalid-link message
+on the store list, as `/install` does. Every other failure of a `web+takosumi:install` link
+(an unknown parameter, an empty value, a broken `path`, and so on) opens the store list
+without carrying the link values or showing that message. A link longer than 4,096 characters
+once decoded behaves the same way.
 
 - The `git` URL breaks its conditions (`https://`, no user name or password, no query or
   fragment)
@@ -162,9 +164,8 @@ in, and so does a link longer than 4,096 characters once decoded.
 ## Check before you share
 
 Open the link yourself. On the first add screen, **Source** should show the repository, version,
-and folder. The Git URL and the other values are in the collapsed **Source details**. If
-**Source** is missing and the fields in **Source details** are empty, one of the cases above
-applies.
+and folder. The Git URL and the other values are in the collapsed **Source details**.
+If the store list opens with an invalid-link message, check the rules above.
 The first screen is the same one shown in the
 [Quickstart](./quickstart.md#_6-add-the-example).
 
