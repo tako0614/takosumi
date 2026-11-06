@@ -1,7 +1,7 @@
 # App Handoff Protocol
 
-Takosumi App Handoff is the small URL protocol for creating a Takosumi-managed
-hosted service from any client: web app, desktop app, mobile app, browser link,
+Takosumi App Handoff is the small URL protocol for installing a Takosumi-managed
+app from any client: web app, desktop app, mobile app, browser link,
 or CLI output.
 
 The Takosumi dashboard is a web/dashboard flow. This protocol does not require or imply a
@@ -14,7 +14,7 @@ Takosumi flow, then optionally returns a connection payload to the client.
 
 If you only need an install link for a README or website, read
 [Share an install link](../getting-started/install-link.md). This page covers the whole
-protocol, including returning to your own client after adding.
+protocol, including returning to your own client after installation.
 
 ```text
 client
@@ -47,8 +47,8 @@ Supported query parameters:
 | `source`     | `git` or `source` | Packed module address: `git::<HTTPS URL>//<module folder>?ref=<ref>` (`//<folder>` and `?ref=` are optional) |
 | `ref`        | no       | Git branch, tag, or commit                                    |
 | `sourcePath` | no       | Git subtree captured, archived, and scanned; defaults to `.`  |
-| `path`       | no       | Folder of the module to add, relative to `sourcePath`; ignored if the scan does not find it |
-| `name`       | no       | Service name (lowercase letters, numbers, hyphens); defaults to the repository name |
+| `path`       | no       | Folder of the module to install, relative to `sourcePath`; it must be confirmed by the scan |
+| `name`       | no       | App name. Supplied text is normalized to lowercase letters, numbers, and hyphens; without it, Takosumi proposes a name from the Git URL |
 | `product`    | no       | Client product key, only with `return_uri`                    |
 | `return_uri` | no       | Connection payload target, only with `product`                |
 
@@ -58,8 +58,8 @@ creation target or release-ref authority. `product` does not select the install
 target. Use `product` and `return_uri` together only when Takosumi should return
 to a client.
 
-If `return_uri` is absent, the flow is just a normal hosted-service creation
-link. In that case, do not include `product`. If `return_uri` is present,
+If `return_uri` is absent, the flow is a normal app-install link. In that case, do not include
+`product`. If `return_uri` is present,
 Takosumi preserves `product` and `return_uri` through sign-in, provider
 connection setup, plan, and apply screens.
 
@@ -109,7 +109,12 @@ supported. How to use it is in
 ## OpenTofu-Native Flow
 
 The URL does not install anything by itself. It only pre-fills an explicit
-dashboard flow:
+dashboard flow. The person presses **Install** to read the Git version, sets the app name,
+connections, and settings, then reviews the planned changes under **What this install does**.
+They choose **Allow and install** to apply them. From the Store, a manually entered Git URL uses
+**Install from a Git repository** and **Continue** before opening the install screen.
+
+The underlying technical sequence covers preparation, review, and application:
 
 ```text
 Git URL / ref / sourcePath
