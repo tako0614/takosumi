@@ -32,7 +32,7 @@ resource "takoform_at_least_once_queue" "events" {
   provider = takoform.main
   name     = "events"
   spec = {
-    message_retention_seconds = 60
+    message_retention_seconds = 61
   }
 }
 
