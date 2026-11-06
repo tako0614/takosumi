@@ -3,6 +3,7 @@ import type { SourceBuildConfig } from "./types.ts";
 import { buildPhaseEnv } from "./credentials.ts";
 import { SOURCE_BUILD_CACHE_DIR_ENV } from "./constants.ts";
 import { enterSourceBuildPhase } from "./source_build_phase_gate.ts";
+import { createPhaseHome, type PhaseHome } from "./phase_home.ts";
 
 interface ChildResult {
   readonly drained: boolean;
@@ -24,8 +25,18 @@ export async function runSupervisedSourceBuild(
   const lease = await enterSourceBuildPhase(options.signal);
   let spawned = false;
   let provenDrained = false;
+  let completed = false;
+  let setupFailed = false;
+  let home: PhaseHome | undefined;
   try {
+    try {
+      home = await createPhaseHome([sourceRoot]);
+    } catch (error) {
+      setupFailed = true;
+      throw error;
+    }
     const env = buildPhaseEnv();
+    Object.assign(env, home.env);
     const cacheRoot = Bun.env[SOURCE_BUILD_CACHE_DIR_ENV];
     if (cacheRoot !== undefined) env[SOURCE_BUILD_CACHE_DIR_ENV] = cacheRoot;
     const child = Bun.spawn(
@@ -67,6 +78,7 @@ export async function runSupervisedSourceBuild(
       if (typeof result.log !== "string") {
         throw new Error("source build child returned an invalid completion");
       }
+      completed = true;
       return result.log;
     } finally {
       options.signal?.removeEventListener("abort", abort);
@@ -77,7 +89,15 @@ export async function runSupervisedSourceBuild(
       }
     }
   } finally {
-    if (spawned && !provenDrained) lease.poison();
-    else lease.release();
+    // A missing ECHILD proof means descendants may still hold this HOME.
+    if (setupFailed || (spawned && !provenDrained)) {
+      lease.poison();
+    } else {
+      let cleanupFailed = false;
+      if (home) await home.cleanup().catch(() => { cleanupFailed = true; });
+      if (cleanupFailed) lease.poison();
+      else lease.release();
+      if (cleanupFailed && completed) throw new Error("source build phase HOME cleanup failed");
+    }
   }
 }

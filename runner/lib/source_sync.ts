@@ -43,6 +43,7 @@ import {
 } from "./util.ts";
 import { redactCredentialOutput } from "./redaction.ts";
 import { runRequiredCommand, runCommand } from "./exec.ts";
+import { enterCommandPhaseHome } from "./phase_home.ts";
 import {
   assertSourceUrlPolicy,
   normalizeSourceSubtreePath,
@@ -161,6 +162,20 @@ export async function runStableSemverTagResolution(
   request: unknown,
   signal?: AbortSignal,
 ): Promise<JsonRecord> {
+  const phase = await enterCommandPhaseHome(signal);
+  try {
+    return await runStableSemverTagResolutionInPhase(runId, request, signal, phase.home.env);
+  } finally {
+    await phase.cleanup();
+  }
+}
+
+async function runStableSemverTagResolutionInPhase(
+  runId: string,
+  request: unknown,
+  signal: AbortSignal | undefined,
+  phaseEnv: { readonly HOME: string; readonly XDG_CONFIG_HOME: string },
+): Promise<JsonRecord> {
   const url = requiredStringField(request, "url");
   assertSourceUrlPolicy(url);
   if (sourceUrlScheme(url) !== "https") {
@@ -168,7 +183,7 @@ export async function runStableSemverTagResolution(
   }
   await assertResolvedHostNotBlocked(sourceUrlHost(url), "source URL host");
   const context: CommandContext = {
-    env: { ...baseCommandEnv(), GIT_TERMINAL_PROMPT: "0" },
+    env: { ...baseCommandEnv(), ...phaseEnv, GIT_TERMINAL_PROMPT: "0" },
     ...(signal ? { signal } : {}),
   };
   // Tag discovery can be the first operation on a fresh runner filesystem.
@@ -379,6 +394,20 @@ export async function runSourceSync(
   request: unknown,
   signal?: AbortSignal,
 ): Promise<JsonRecord> {
+  const phase = await enterCommandPhaseHome(signal);
+  try {
+    return await runSourceSyncInPhase(runId, request, signal, phase);
+  } finally {
+    await phase.cleanup();
+  }
+}
+
+async function runSourceSyncInPhase(
+  runId: string,
+  request: unknown,
+  signal: AbortSignal | undefined,
+  phase: Awaited<ReturnType<typeof enterCommandPhaseHome>>,
+): Promise<JsonRecord> {
   const source = parseSourceSyncSource(request);
   const credentials = parseSourceCredentials(request);
   const reuseSnapshot = parseReusableSourceSnapshot(request);
@@ -414,7 +443,7 @@ export async function runSourceSync(
       ),
     );
     const gitContext = await timer.measure("source_git_credentials", () =>
-      prepareSourceGitContext(source, credentials, credentialDir, signal),
+      prepareSourceGitContext(source, credentials, credentialDir, signal, phase.home.env),
     );
     const { commit: resolvedCommit, resolvedRef } = await timer.measure("source_ref_resolve", () =>
       resolveSourceRef(source, gitContext),
@@ -537,7 +566,10 @@ export async function runSourceSync(
       timer,
     );
   } finally {
-    await shredCredentialDir(credentialDir);
+    await shredCredentialDir(credentialDir).catch((error) => {
+      phase.lease.poison();
+      throw error;
+    });
   }
 }
 
@@ -815,6 +847,7 @@ export async function prepareSourceGitContext(
   credentials: SourceCredentials,
   credentialDir: string,
   signal?: AbortSignal,
+  phaseEnv?: { readonly HOME: string; readonly XDG_CONFIG_HOME: string },
 ): Promise<SourceGitContext> {
   const scheme = sourceUrlScheme(source.url);
   if (scheme === "ssh") {
@@ -828,6 +861,7 @@ export async function prepareSourceGitContext(
     // remain authoritative even if an internal caller supplies extra env.
     ...credentials.env,
     ...baseCommandEnv(),
+    ...phaseEnv,
     GIT_TERMINAL_PROMPT: "0",
   };
 
@@ -1245,7 +1279,13 @@ export async function createDeterministicArchive(
     );
     try {
       await assertSafeZstdTarArchive(archivePath, {
-        env: baseCommandEnv(),
+        env: {
+          ...baseCommandEnv(),
+          ...(git.context.env.HOME ? { HOME: git.context.env.HOME } : {}),
+          ...(git.context.env.XDG_CONFIG_HOME
+            ? { XDG_CONFIG_HOME: git.context.env.XDG_CONFIG_HOME }
+            : {}),
+        },
         ...(git.context.signal ? { signal: git.context.signal } : {}),
         sourceArchiveMaxDecompressedBytes: expandedLimit,
       });
@@ -1338,38 +1378,43 @@ export async function handleSourceArchiveRestoreRequest(
   }
   const workspace = workspaceForRun(runId);
   try {
-    await rm(workspace.root, { recursive: true, force: true });
-    await mkdir(workspace.sourceRoot, { recursive: true });
-    const bytes = new Uint8Array(await request.arrayBuffer());
-    const archivePath = join(workspace.root, "restore-source.tar.zst");
-    await writeFile(archivePath, bytes);
-    const context: CommandContext = { env: baseCommandEnv() };
-    await assertSafeZstdTarArchive(archivePath, context);
-    await runRequiredCommand(
-      [
-        "tar",
-        "-x",
-        "--zstd",
-        "-f",
-        archivePath,
-        "--no-same-owner",
-        "--keep-old-files",
-        "-C",
-        workspace.sourceRoot,
-      ],
-      { cwd: RUN_ROOT, context },
-    );
-    await rm(archivePath, { force: true });
-    // Record the source root as the state moduleDir default; a template/raw
-    // dispatch overwrites module-info.json before plan, but this keeps the state
-    // GET route resolvable if the dispatch omits it.
-    await writeModuleInfo(workspace, workspace.sourceRoot);
-    return Response.json({
-      runId,
-      artifact: "source-archive-restore",
-      digest: await digestBytes(bytes),
-      sizeBytes: bytes.byteLength,
-    });
+    const phase = await enterCommandPhaseHome(request.signal);
+    try {
+      await rm(workspace.root, { recursive: true, force: true });
+      await mkdir(workspace.sourceRoot, { recursive: true });
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const archivePath = join(workspace.root, "restore-source.tar.zst");
+      await writeFile(archivePath, bytes);
+      const context: CommandContext = { env: { ...baseCommandEnv(), ...phase.home.env } };
+      await assertSafeZstdTarArchive(archivePath, context);
+      await runRequiredCommand(
+        [
+          "tar",
+          "-x",
+          "--zstd",
+          "-f",
+          archivePath,
+          "--no-same-owner",
+          "--keep-old-files",
+          "-C",
+          workspace.sourceRoot,
+        ],
+        { cwd: RUN_ROOT, context },
+      );
+      await rm(archivePath, { force: true });
+      // Record the source root as the state moduleDir default; a template/raw
+      // dispatch overwrites module-info.json before plan, but this keeps the state
+      // GET route resolvable if the dispatch omits it.
+      await writeModuleInfo(workspace, workspace.sourceRoot);
+      return Response.json({
+        runId,
+        artifact: "source-archive-restore",
+        digest: await digestBytes(bytes),
+        sizeBytes: bytes.byteLength,
+      });
+    } finally {
+      await phase.cleanup();
+    }
   } catch (error) {
     return Response.json(
       {
@@ -1385,9 +1430,14 @@ export async function gitRevParseHead(
   cwd: string,
   context: CommandContext,
 ): Promise<string | undefined> {
-  const result = await runCommand(["git", "rev-parse", "HEAD"], {
-    cwd,
-    context,
-  });
-  return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
+  const phase = await enterCommandPhaseHome(context.signal);
+  try {
+    const result = await runCommand(["git", "rev-parse", "HEAD"], {
+      cwd,
+      context: { ...context, env: { ...context.env, ...phase.home.env } },
+    });
+    return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
+  } finally {
+    await phase.cleanup();
+  }
 }

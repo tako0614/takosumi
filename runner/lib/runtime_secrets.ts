@@ -87,9 +87,12 @@ export async function prepareRuntimeSecretFiles(
   workspace: RunWorkspace,
   dispatch: RuntimeSecretFilesDispatch | undefined,
   fileSystemOverrides: Partial<RuntimeSecretFileSystem> = {},
+  borrowedPhase?: { poison(): void },
 ): Promise<PreparedRuntimeSecretFiles> {
   if (!dispatch) return { context, cleanup: async () => {} };
-  const phaseLease = await enterSensitiveFilePhase(context.signal);
+  const ownedPhase = borrowedPhase ? undefined : await enterSensitiveFilePhase(context.signal);
+  const releasePhase = () => ownedPhase?.release();
+  const poisonPhase = () => { borrowedPhase?.poison(); ownedPhase?.poison(); };
   const fileSystem = {
     ...NODE_RUNTIME_SECRET_FILE_SYSTEM,
     ...fileSystemOverrides,
@@ -130,16 +133,16 @@ export async function prepareRuntimeSecretFiles(
             true,
             fileSystem,
           );
-          phaseLease.release();
+          releasePhase();
         } catch (error) {
           // A command may remove its own file before cleanup can verify it.
           // Only a genuinely remaining sandbox must keep later builds out.
           try {
             await lstat(preparedRuntimeDir);
-            phaseLease.poison();
+            poisonPhase();
           } catch (checkError) {
-            if (isMissingPath(checkError)) phaseLease.release();
-            else phaseLease.poison();
+            if (isMissingPath(checkError)) releasePhase();
+            else poisonPhase();
           }
           throw error;
         }
@@ -163,12 +166,12 @@ export async function prepareRuntimeSecretFiles(
     if (cleanupFailed && runtimeDir !== undefined) {
       try {
         await lstat(runtimeDir);
-        phaseLease.poison();
+        poisonPhase();
       } catch (checkError) {
-        if (isMissingPath(checkError)) phaseLease.release();
-        else phaseLease.poison();
+        if (isMissingPath(checkError)) releasePhase();
+        else poisonPhase();
       }
-    } else phaseLease.release();
+    } else releasePhase();
     throw new Error("runtime secret sandbox setup failed");
   }
 }

@@ -125,6 +125,14 @@ Stack と ProviderConnection / CredentialRecipe / ProviderBinding の経路で�
 `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` を空にすると、runner は Run ごとの作業領域に
 provider を展開します。共有しない代わりに、Run のあいだの取り違えが起きません。
 
+Runner の command phase ごとに private な `HOME` を作り、暗黙の設定を使う場合は
+`XDG_CONFIG_HOME` も新しい `HOME/.config` に向けます。1 回の `sourceBuild` の
+command 群は同じ HOME を使い、後続 phase は別の HOME を使います。宣言済み provider
+の `XDG_CONFIG_HOME` と build command の明示的な設定指定は維持します。
+`TAKOSUMI_SOURCE_BUILD_CACHE_DIR` の `bun` / `npm` / `xdg` と provider cache
+はこの HOME の削除対象になりません。同一 UID や共有 cache の隔離、runner の再起動時に
+新しい filesystem が得られることは保証しません。
+
 Runner commandのGitは、親のglobal／system Git configを読みません。SSH sourceも
 暗黙のSSH configを使わず、Connectionから渡されたkeyと`known_hosts`で確認します。
 Git HTTPSの独自CAは既存の`GIT_SSL_CAINFO`で指定します。

@@ -44,9 +44,21 @@ Git HTTPS custom trust can use the existing explicit `GIT_SSL_CAINFO` input;
 the existing `SSL_CERT_FILE` and `SSL_CERT_DIR` passthrough is retained. Ambient
 Git/SSH config is not a source-credential input.
 
-These command defaults do not isolate processes sharing a UID, other tools'
-HOME configuration, or operator-configured dependency/provider caches. The
-selected substrate still supplies the isolation and teardown described above.
+Each command phase now gets a fresh private HOME outside its Run workspace,
+with a fresh `XDG_CONFIG_HOME` when the selected provider input has not
+explicitly declared one. All commands in one `sourceBuild` share its HOME;
+the next source sync, compatibility, backup, Plan, Apply, or release command
+phase gets another. The Runner removes a source-build HOME only after the
+dedicated child proves descendant drain. An unconfirmed drain retains that
+directory and poisons later command phases. A failed HOME cleanup also poisons
+later phases without replacing a completed Run result.
+
+Explicit provider `XDG_CONFIG_HOME` inputs and explicit config arguments in
+build commands remain selected inputs. The configured source-build dependency
+cache and provider cache remain shared where configured; neither is placed in
+phase HOME. This process-local default does not isolate processes sharing a UID,
+shared caches, or a runner filesystem reused across boots. The selected
+substrate still supplies tenant isolation and teardown evidence.
 
 ## Worker relay memory and artifact limits
 
