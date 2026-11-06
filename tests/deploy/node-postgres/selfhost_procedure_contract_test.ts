@@ -214,7 +214,9 @@ test("node-postgres compose applies both schemas and passes only declared servic
     .filter((key) => key !== "TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME");
   for (const key of serviceSettings) {
     expect(accounts.environment?.[key]).toBeDefined();
-    if (key !== "TAKOSUMI_ACCOUNTS_DATABASE_URL") {
+    if (key === "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT") {
+      expect(accounts.environment?.[key]).toStartWith(`\u0024{${key}:?`);
+    } else if (key !== "TAKOSUMI_ACCOUNTS_DATABASE_URL") {
       expect(accounts.environment?.[key]).toStartWith(`\u0024{${key}:-`);
     }
   }
