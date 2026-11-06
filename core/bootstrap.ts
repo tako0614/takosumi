@@ -1477,6 +1477,9 @@ export async function createTakosumiService(
     observability: context.adapters.observability,
     metricTags,
   });
+  // Profile persistence is part of startup. Observe its failure before exposing
+  // handlers instead of leaving a rejected constructor-started seed unhandled.
+  await opentofuController.listRunnerProfiles();
   // RunGroups (Core Specification §19 / §24) are retired (TASK-0118 9.1): no
   // flow creates or approves one. The service only reads a row written before
   // the retirement; status is computed from its member runs at read time.
