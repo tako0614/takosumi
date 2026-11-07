@@ -15,15 +15,16 @@ production surfaceのdeployはこのrepositoryのentrypointを使います。共
 `takos-control`の`engineering.policy.json`→`deploy` が正本 (正とする情報) です。
 
 ```bash
-bun run deploy
+bun run deploy -- --contract
+bun run deploy -- <surface> [surface-specific arguments]
 ```
 
-`prepare`はproductionを変更せず、以下のartifactとgateを一つのimmutable
-candidateへ束ねます。`promote`だけが登録済み固定adapterを呼び、remote readback
-まで完了させます。この文書にあるproduct check、evidence generator、
-materializer helperはcandidate/adapter内部の部品であり、単独ではrelease
-authorityになりません。adapterがないsurfaceはfail closedにし、raw deployへ
-fallbackしません。
+`--contract`は副作用なしでsurfaceと義務を表示します。実行するsurfaceを選び、
+そのsurfaceのcommandと引数を使います。共通の`prepare`／`promote` commandはありません。
+[Platform Worker](./platform-worker-deploy.md)と[Runner image](./runner-image-release.md)は
+それぞれの手順でbuild、公開後のreadback、戻し方を定めています。
+この文書にあるproduct check、evidence generator、materializer helperはその入力であり、
+単独ではrelease authorityになりません。未登録surfaceは拒否し、raw deployへfallbackしません。
 
 ## Artifact Matrix
 
@@ -43,11 +44,12 @@ Takosumi does not require one universal npm, OCI, Worker, or container artifact
 format for the control plane. The operator exposes one logical Takosumi origin
 and selects a composition that binds storage, queue/dispatch, assets, and
 runner ports. `deploy/platform` is the Cloudflare reference adapter;
-`deploy/node-postgres` is another composition. Realized config and secrets live
-in operator-owned state outside source repositories. The official
-`app.takosumi.com` deployment, Cloud wrapper, hosted docs overlay, and realized
-Cloudflare revisions are Takosumi hosted service artifacts documented under
-`takosumi-cloud/docs/operations`.
+`deploy/node-postgres` is another composition. The official `app.takosumi.com`
+platform uses the same OSS reference composition; its Worker deployment is
+covered by [Platform Worker deploy](./platform-worker-deploy.md).
+Hosted Marketplace and RP composition belong to `takosumi-hosted`, whose README
+and `docs/` describe those product boundaries. Realized config, secrets, and
+deployment records remain in operator-owned state outside source repositories.
 
 Capsule application artifacts are not Takosumi platform release artifacts. If a
 Git-hosted OpenTofu module needs a prebuilt Worker bundle, container image,
@@ -59,32 +61,28 @@ deployable app artifact on behalf of the module.
 
 ## Candidate inputs
 
-The deploy entrypoint runs the owning product gate first:
+Use the owning product gate for the software candidate:
 
 ```bash
 cd takosumi
 bun run check
-bun test
-bun run check:dashboard
 ```
 
 `bun run check` is the package-level Takosumi software gate and includes the
 supported reference-distribution builds. It is candidate evidence, not a
-production-promotion command. The deploy entrypoint must not replace it with raw
-`tsc --noEmit`, and the selected fixed adapter adds its own build/deployment
-verification.
+production-promotion command. Surface-specific runbooks define the applicable
+deployment build, readback, and reversal checks; the deploy entrypoint does not
+run the repository-wide gate before every surface command.
 
 If docs or public contract changed:
 
 ```bash
 cd takosumi
 bun run docs:build
-cd ..
-bun run check:architecture
-bun run check:architecture:strict
-bun run check:design-docs
-bun run check:legacy-names
 ```
+
+Cross-repository validation follows the owning `takos-control` procedure; it is
+not a set of package scripts run from the workspace parent directory.
 
 If runner, dispatch, lease/ownership, storage, or binding config changed, add
 staging evidence through the selected adapters and the platform hardening
@@ -127,8 +125,8 @@ approved config/vault workflow before enabling the platform setting. Official
 Cloud operator helpers and their private file layout are not an OSS contract;
 they live in the Cloud operations docs.
 
-The registered adapter validates release activation evidence during
-`prepare`:
+When release activation is enabled, validate its evidence before using that
+composition:
 
 ```bash
 cd takosumi
