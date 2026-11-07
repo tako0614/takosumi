@@ -48,6 +48,7 @@ Every version has exactly three root fields:
 | `takosumi.com/v2.3` | `modules`, optional `defaultModule` | v2.2 + optional `sourceBuild`               |
 | `takosumi.com/v2.4` | `modules`        | v2.3 + runtime OIDC binding delivery        |
 | `takosumi.com/v2.5` | `modules`        | v2.4 + explicit context ID inputs; no Workspace-scoped naming |
+| `takosumi.com/v2.6` | `modules`        | v2.5 + explicit pairwise owner-subject variable delivery |
 
 Every object is closed. Fields not listed in this document, `$schema`, and the
 retired `schemaVersion: takosumi.install-ux/v1` are rejected.
@@ -61,7 +62,8 @@ and
 and
 [`repository-manifest-v2.4.schema.json`](/schemas/repository-manifest-v2.4.schema.json)
 and
-[`repository-manifest-v2.5.schema.json`](/schemas/repository-manifest-v2.5.schema.json).
+[`repository-manifest-v2.5.schema.json`](/schemas/repository-manifest-v2.5.schema.json)
+and [`repository-manifest-v2.6.schema.json`](/schemas/repository-manifest-v2.6.schema.json).
 It is a structural schema, not a claim of JSON Schema/parser equivalence. The
 canonical parser additionally fails closed on constraints that require
 cross-field or value-aware inspection: uniqueness across related declarations,
@@ -167,7 +169,7 @@ valid.
 ### Context ID inputs in v2.5
 
 v2.5 retains the v2.4 provided-Interface, `sourceBuild`, and runtime binding shapes.
-Only v2.5 accepts `source: { "kind": "workspace_id" }` and
+v2.5 and v2.6 accept `source: { "kind": "workspace_id" }` and
 `source: { "kind": "capsule_id" }`. These entries contain only `name`, `source`,
 `label`, and optional `type: "string"`. They contain no ID value. The target
 must be an exact root `string` variable proven by the scan. Dotted paths,
@@ -231,7 +233,14 @@ absent/non-string variables, and requirement kinds outside operator policy.
 Git/OpenTofu app may request without naming a product or provider. The selected
 module must contain exactly one `identity.oidc` and exactly one
 `http.endpoint`. OIDC delivery normally uses variables, with exactly four slots:
-`accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`. In v2.4 and v2.5 it can also use
+`accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`. In v2.6 only, the repository may explicitly add
+`ownerSubject` as a fifth variable slot, for example `"ownerSubject": "oidc_owner_sub"`.
+Takosumi derives it for the current installing Principal and exact public client;
+it is never a raw Principal, Workspace ID, caller input, or first-claim grant.
+The compiler records the accepted API version with the projection. Plan checks
+that version against its pinned source, and Plan/Apply pin the exact subject and
+source identity. Existing four-slot manifests and digests remain unchanged.
+ In v2.4 through v2.6 it can also use
 `bindings`, with exactly four slots: `issuerUrl`, `clientId`, `ownerSubject`, and
 `redirectUri`. The endpoint delivers
 `url` to a distinct string variable. OIDC scopes must be unique, include
@@ -242,8 +251,8 @@ grants no capability.
 With variable delivery, at Plan the endpoint `url` variable must resolve to a
 canonical exact HTTPS origin with no path, query, fragment, or credentials.
 Takosumi derives the redirect URI from that origin and the reviewed
-`callbackPath`, then pins the exact four variables and authority digest in the
-private Plan sidecar. With binding delivery (v2.4 and v2.5), the four values are never
+`callbackPath`, then pins the exact declared variables and authority digest in the
+private Plan sidecar. With binding delivery (v2.4 through v2.6), the four values are never
 written to the plan, state, or logs; they are passed to the runner only at
 Apply. Plan and `apply_check` do not mutate Accounts. Only final Apply may idempotently register
 the Capsule-bound public client, and retirement after terminal destroy is also

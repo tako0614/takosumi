@@ -231,7 +231,15 @@ required and is usable only with immutable accepted repository provenance.
 Manual/operator presentation projections do not opt a Capsule into dynamic
 registration. The OIDC projection names exactly the four non-secret string
 variables `accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`; the endpoint
-projection names one distinct public-origin variable. Scopes must include
+projection names one distinct public-origin variable. A v2.6 manifest may explicitly add
+`ownerSubject` as a fifth module-variable slot. Its compiler-owned accepted marker
+records `apiVersion: "takosumi.com/v2.6"`, retained through adoption and checked
+against the pinned initial SourceSnapshot. The materializer derives this pairwise
+subject for the current installing Principal and exact client, checks current
+registration metadata, and pins subject, source identity, and exact five values
+through Plan/Apply. No raw Principal, Workspace ID, first-claim fallback, or
+caller-provided subject is accepted. The old four-slot shape and digest remain
+unchanged; runtime binding delivery remains its separate four-slot profile. Scopes must include
 `openid` and remain within an explicit operator allowlist.
 
 Takosumi does not infer or auto-register an Accounts OIDC client from a product
@@ -239,7 +247,7 @@ name, provider, ProviderBinding, hostname convention, Git metadata, or provider
 output. Read-only Plan must receive a Plan-known canonical HTTPS origin from the
 exact endpoint variable; there is no fallback. It derives the redirect URI from
 that origin and the reviewed callback, derives the Capsule-bound client
-identity, and pins the value-free authority digest and exact four delivered
+identity, and pins the value-free authority digest and exact declared delivered
 variables in the private Plan sidecar. Plan and `apply_check` never write
 Accounts. Final Apply alone may idempotently register the client after re-reading
 the current Capsule, InstallConfig, projections, scope policy, execution epoch,

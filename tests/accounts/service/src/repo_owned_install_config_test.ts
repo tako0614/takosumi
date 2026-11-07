@@ -309,6 +309,103 @@ test("repository adoption carries an explicitly allowed generic OIDC capability"
   ]);
 });
 
+test("v2.6 repository adoption preserves compiler-owned ownerSubject provenance", async () => {
+  const variableNames = [
+    "public_url",
+    "takosumi_accounts_url",
+    "takosumi_accounts_issuer_url",
+    "takosumi_accounts_client_id",
+    "takosumi_accounts_redirect_uri",
+    "oidc_owner_sub",
+  ];
+  const oidcDocument = {
+    apiVersion: "takosumi.com/v2.6",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: variableNames.map((name) => ({
+            name,
+            source: {
+              kind: name === "public_url" ? "user" as const : "module_default" as const,
+            },
+            type: "string" as const,
+            ...(name === "public_url" ? { required: true } : {}),
+            label: { ja: name, en: name },
+          })),
+          requires: [
+            {
+              kind: "http.endpoint" as const,
+              deliver: { variables: { url: "public_url" } },
+            },
+            {
+              kind: "identity.oidc" as const,
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid", "profile"],
+              deliver: {
+                variables: {
+                  accountsUrl: "takosumi_accounts_url",
+                  issuerUrl: "takosumi_accounts_issuer_url",
+                  clientId: "takosumi_accounts_client_id",
+                  redirectUri: "takosumi_accounts_redirect_uri",
+                  ownerSubject: "oidc_owner_sub",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+  const result = await adopt(
+    baseConfig({
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    }),
+    {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: oidcDocument,
+      }),
+      compatibilityReport: {
+        ...compatibilityReport,
+        rootModuleVariables: variableNames,
+        rootModuleVariableDeclarations: variableNames.map((name) => ({
+          name,
+          type: "string",
+          hasDefault: name !== "public_url",
+        })),
+        rootModuleOutputs: [],
+      },
+      reviewedVariables: { public_url: "https://staging.example.test" },
+    },
+  );
+
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") return;
+  expect(result.installExperience?.repositoryInstallUx).toEqual({ status: "accepted", apiVersion: "takosumi.com/v2.6" });
+  expect(result.installExperience?.projections).toEqual([
+    { kind: "public_endpoint", variables: { url: "public_url" } },
+    {
+      kind: "oidc_client",
+      variables: {
+        accountsUrl: "takosumi_accounts_url",
+        issuerUrl: "takosumi_accounts_issuer_url",
+        clientId: "takosumi_accounts_client_id",
+        redirectUri: "takosumi_accounts_redirect_uri",
+                  ownerSubject: "oidc_owner_sub",
+      },
+      callbackPath: "/auth/oidc/callback",
+      scopes: ["openid", "profile"],
+    },
+  ]);
+});
+
 describe("repo-owned repository presentation", () => {
   test("uses neutral repository defaults when no catalog listing exists", async () => {
     const snapshotWithPresentation: SourceSnapshot = {

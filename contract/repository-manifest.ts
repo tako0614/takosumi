@@ -35,6 +35,8 @@ export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 =
   "takosumi.com/v2.4" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 =
   "takosumi.com/v2.5" as const;
+export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6 =
+  "takosumi.com/v2.6" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_KIND = "Repository" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_PATH =
   ".well-known/takosumi.json" as const;
@@ -117,6 +119,8 @@ export type RepositoryRuntimeDelivery<K extends string> =
 /** OIDC slots delivered to ordinary OpenTofu module variables. */
 export type RepositoryOidcVariableSlot =
   "issuerUrl" | "accountsUrl" | "clientId" | "redirectUri";
+/** v2.6 explicitly permits an additional client-specific owner subject. */
+export type RepositoryOidcVariableSlotV2_6 = RepositoryOidcVariableSlot | "ownerSubject";
 /**
  * OIDC slots delivered to runtime bindings by the v2.4 profile. Earlier
  * manifest versions use the legacy variable-slot set for bindings instead.
@@ -143,9 +147,10 @@ type RepositoryOidcTargetRecord<AllowedSlot extends RepositoryOidcSlot> =
  */
 export type RepositoryOidcDelivery<
   BindingSlot extends RepositoryOidcSlot = RepositoryOidcSlot,
+  VariableSlot extends RepositoryOidcSlot = RepositoryOidcVariableSlot,
 > =
   | {
-      readonly variables: RepositoryOidcTargetRecord<RepositoryOidcVariableSlot>;
+      readonly variables: RepositoryOidcTargetRecord<VariableSlot>;
       readonly bindings?: never;
     }
   | {
@@ -198,19 +203,20 @@ type RepositoryNonOidcRuntimeRequirement =
 
 /**
  * Requirement view parameterized by the binding slots available in one
- * manifest version. Variables always retain their four ordinary OIDC slots.
+ * manifest version. The fifth variable slot is available only in v2.6.
  */
 export type RepositoryRuntimeRequirementFor<
   BindingSlot extends RepositoryOidcSlot,
+  VariableSlot extends RepositoryOidcSlot = RepositoryOidcVariableSlot,
 > =
   | (RepositoryIdentityOidcRequirement & {
-      readonly deliver: RepositoryOidcDelivery<BindingSlot>;
+      readonly deliver: RepositoryOidcDelivery<BindingSlot, VariableSlot>;
     })
   | RepositoryNonOidcRuntimeRequirement;
 
 /** Aggregate parser-output view for callers without a version discriminator. */
 export type RepositoryRuntimeRequirement =
-  RepositoryRuntimeRequirementFor<RepositoryOidcSlot>;
+  RepositoryRuntimeRequirementFor<RepositoryOidcSlot, RepositoryOidcVariableSlotV2_6>;
 
 /** Public output types that a Capsule Interface may consume. */
 export type RepositoryInterfaceOutputType =
@@ -280,11 +286,12 @@ export interface RepositoryInstallUxModule {
 export type RepositoryInstallUxModuleFor<
   BindingSlot extends RepositoryOidcSlot,
   InputSource extends RepositoryInstallUxInputSource = RepositoryLegacyInstallUxInputSource,
+  VariableSlot extends RepositoryOidcSlot = RepositoryOidcVariableSlot,
 > = Omit<RepositoryInstallUxModule, "requires" | "inputs"> & {
   readonly inputs: readonly (Omit<RepositoryInstallUxInput, "source"> & {
     readonly source: InputSource;
   })[];
-  readonly requires?: readonly RepositoryRuntimeRequirementFor<BindingSlot>[];
+  readonly requires?: readonly RepositoryRuntimeRequirementFor<BindingSlot, VariableSlot>[];
 };
 
 export type RepositoryInstallUxModuleV1 = Omit<
@@ -351,6 +358,15 @@ export type RepositoryInstallUxModuleV2_5 =
     readonly sourceBuild?: SourceBuildConfig;
   };
 
+/** v2.6 retains v2.5 and opts into pairwise owner-subject variable delivery. */
+export type RepositoryInstallUxModuleV2_6 = RepositoryInstallUxModuleFor<
+  RepositoryOidcBindingSlot, RepositoryInstallUxV25InputSource, RepositoryOidcVariableSlotV2_6
+> & { readonly sourceBuild?: SourceBuildConfig };
+
+export interface RepositoryManifestInstallV2_6 {
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_6>>;
+}
+
 export interface RepositoryManifestInstallV2_3 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_3>>;
   /** @see RepositoryManifestInstallV2_1.defaultModule */
@@ -373,7 +389,8 @@ export type RepositoryManifestInstall =
   | RepositoryManifestInstallV2_2
   | RepositoryManifestInstallV2_3
   | RepositoryManifestInstallV2_4
-  | RepositoryManifestInstallV2_5;
+  | RepositoryManifestInstallV2_5
+  | RepositoryManifestInstallV2_6;
 
 export interface RepositoryManifestDocumentV1 {
   readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION;
@@ -417,6 +434,12 @@ export interface RepositoryManifestDocumentV2_5 {
   readonly install: RepositoryManifestInstallV2_5;
 }
 
+export interface RepositoryManifestDocumentV2_6 {
+  readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6;
+  readonly kind: typeof TAKOSUMI_REPOSITORY_MANIFEST_KIND;
+  readonly install: RepositoryManifestInstallV2_6;
+}
+
 export type RepositoryManifestDocument =
   | RepositoryManifestDocumentV1
   | RepositoryManifestDocumentV2
@@ -424,7 +447,8 @@ export type RepositoryManifestDocument =
   | RepositoryManifestDocumentV2_2
   | RepositoryManifestDocumentV2_3
   | RepositoryManifestDocumentV2_4
-  | RepositoryManifestDocumentV2_5;
+  | RepositoryManifestDocumentV2_5
+  | RepositoryManifestDocumentV2_6;
 
 export type RepositoryManifestInterfaceApiVersion =
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
@@ -432,9 +456,10 @@ export type RepositoryManifestInterfaceApiVersion =
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4
-  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5;
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6;
 
-/** v2.1 through v2.5 retain the full v2 provided-Interface wire. */
+/** v2.1 through v2.6 retain the full v2 provided-Interface wire. */
 export function isRepositoryManifestInterfaceCapableApiVersion(
   apiVersion: RepositoryManifestDocument["apiVersion"] | string,
 ): apiVersion is RepositoryManifestInterfaceApiVersion {
@@ -444,7 +469,8 @@ export function isRepositoryManifestInterfaceCapableApiVersion(
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6
   );
 }
 
@@ -485,10 +511,11 @@ export function parseRepositoryManifestText(
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6,
   ] as const);
   if (!apiVersion) {
     return invalid(
-      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5}`,
+      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6}`,
     );
   }
   if (value.kind !== TAKOSUMI_REPOSITORY_MANIFEST_KIND) {
@@ -531,14 +558,19 @@ export function parseRepositoryManifestText(
       apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
         apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
         apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
-        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 ||
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6,
       apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
         apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
-        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 ||
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6,
       apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
-        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
-      // Deliberate compatibility window; do not inherit into a future version.
-      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 ||
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6,
+      // Explicitly re-admitted in v2.6; future versions must choose again.
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 ||
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6,
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6,
     );
     if (typeof parsed === "string") return invalid(parsed);
     modules[modulePath] = parsed;
@@ -582,6 +614,7 @@ function parseModule(
   allowSourceBuild: boolean,
   allowRuntimeOidcBindings: boolean,
   allowContextInputs: boolean,
+  allowOwnerSubjectVariables: boolean,
 ): RepositoryInstallUxModule | string {
   const prefix = `install.modules.${JSON.stringify(modulePath)}`;
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
@@ -618,6 +651,7 @@ function parseModule(
     prefix,
     allowConsumedInterfaces,
     allowRuntimeOidcBindings,
+    allowOwnerSubjectVariables,
   );
   if (typeof requires === "string") return requires;
   const features = parseFeatures(value.features, prefix, inputNames);
@@ -1207,6 +1241,7 @@ function parseRequirements(
   prefix: string,
   allowConsumedInterfaces: boolean,
   allowRuntimeOidcBindings: boolean,
+  allowOwnerSubjectVariables: boolean,
 ): readonly RepositoryRuntimeRequirement[] | string | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return `${prefix}.requires must be an array`;
@@ -1224,6 +1259,7 @@ function parseRequirements(
       entryPrefix,
       allowConsumedInterfaces,
       allowRuntimeOidcBindings,
+      allowOwnerSubjectVariables,
     );
     if (typeof parsed === "string") return parsed;
     // Only a generated secret is plural: an app may need several, but one
@@ -1263,6 +1299,7 @@ function parseRequirement(
   prefix: string,
   allowConsumedInterfaces: boolean,
   allowRuntimeOidcBindings: boolean,
+  allowOwnerSubjectVariables: boolean,
 ): RepositoryRuntimeRequirement | string {
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   switch (value.kind) {
@@ -1278,6 +1315,7 @@ function parseRequirement(
         value.deliver,
         `${prefix}.deliver`,
         allowRuntimeOidcBindings,
+        allowOwnerSubjectVariables,
       );
       if (typeof deliver === "string") return deliver;
       const callbackPath = rootRelativePath(value.callbackPath);
@@ -1398,7 +1436,8 @@ function parseOidcDelivery(
   value: unknown,
   prefix: string,
   allowRuntimeOidcBindings: boolean,
-): RepositoryOidcDelivery | string {
+  allowOwnerSubjectVariables: boolean,
+): RepositoryOidcDelivery<RepositoryOidcSlot, RepositoryOidcVariableSlotV2_6> | string {
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   const keys = exactKeys(value, ["variables", "bindings"]);
   if (keys) return `${prefix}.${keys}`;
@@ -1411,7 +1450,8 @@ function parseOidcDelivery(
     const variables = parseTargets(
       value.variables,
       `${prefix}.variables`,
-      ["issuerUrl", "accountsUrl", "clientId", "redirectUri"] as const,
+      ["issuerUrl", "accountsUrl", "clientId", "redirectUri",
+        ...(allowOwnerSubjectVariables ? ["ownerSubject"] as const : [])] as const,
       variableName,
       "a valid OpenTofu variable name",
     );

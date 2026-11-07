@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { capsuleScopeRef } from "../../../contract/capsules.ts";
+import { deriveCapsulePublicOidcClientIdentity, derivePublicOidcClientId } from "../../../deploy/platform/accounts_oidc_client_registration.ts";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { OidcClientRecord } from "../../../accounts/service/src/store.ts";
@@ -1207,4 +1209,96 @@ describe("Takosumi repository Accounts OIDC materializer", () => {
     expect(revoked).toEqual([clientId, clientId]);
     expect(accounts.findOidcClient(clientId)).toBeUndefined();
   });
+});
+
+
+test("v2.6 delivers the registered client pairwise owner without Accounts writes", async () => {
+  const base = repositoryOidcInstallConfig();
+  const config: InstallConfig = {
+    ...base, installExperience: {
+      ...base.installExperience,
+      repositoryInstallUx: { status: "accepted", apiVersion: "takosumi.com/v2.6" },
+      projections: base.installExperience!.projections!.map((projection) =>
+        projection.kind === "oidc_client"
+          ? { ...projection, variables: { ...projection.variables, ownerSubject: "oidc_owner_sub" } }
+          : projection),
+    },
+  };
+  const capsule = oidcCapsule();
+  const clientId = await derivePublicOidcClientId(PAIRWISE_SECRET, [
+    "takosumi-accounts-repository-oidc-client-v1", capsuleScopeRef(capsule), capsule.id,
+  ]);
+  const identity = await deriveCapsulePublicOidcClientIdentity({
+    capsule, installingPrincipalId: "tsub_owner", clientId,
+    publicOrigin: "https://staging.example.test", callbackPath: "/auth/oidc/callback",
+    pairwiseSubjectSecret: PAIRWISE_SECRET,
+  });
+  const registered: OidcClientRecord = {
+    clientId, capsuleId: capsule.id, namespacePath: "identity.oidc",
+    issuerUrl: "https://app.takosumi.com", redirectUris: [identity.redirectUri],
+    allowedScopes: ["openid", "profile"], subjectMode: "pairwise",
+    tokenEndpointAuthMethod: "none", createdAt: NOW.getTime(), updatedAt: NOW.getTime(),
+  };
+  let writes = 0;
+  let currentConfig = config;
+  let currentCapsule = capsule;
+  let currentRegistration = registered;
+  const materializer = createOidcMaterializer({ config: () => currentConfig, capsule: () => currentCapsule, accounts: {
+    async findOidcClient(id) { return id === clientId ? currentRegistration : undefined; },
+    async findOidcClientForCapsule(id) { return id === capsule.id ? currentRegistration : undefined; },
+    async saveOidcClient() { writes += 1; throw new Error("unexpected write"); },
+  } });
+  const plan = await materializer.materialize({ phase: "plan", ...call(config) });
+  expect(plan!.variables.oidc_owner_sub).toBe(identity.ownerSubject);
+  expect(identity.ownerSubject).not.toBe("tsub_owner");
+  expect(identity.ownerSubject).not.toBe(capsule.workspaceId);
+  expect(await materializer.materialize({ phase: "apply_check", ...call(config),
+    expectedDigest: plan!.digest, plannedVariables: plan!.variables })).toEqual(plan);
+  const applyCheck = (candidate = currentConfig, candidateCapsule = currentCapsule) => materializer.materialize({
+    phase: "apply_check", ...call(candidate, candidateCapsule), expectedDigest: plan!.digest,
+    plannedVariables: plan!.variables,
+  });
+  // Caller-supplied identities and Plan sidecar substitutions never become authority.
+  for (const owner of ["tsub_owner", capsule.workspaceId, "tsub_other_pairwise_owner"]) {
+    await expect(materializer.materialize({ phase: "apply_check", ...call(config),
+      expectedDigest: plan!.digest,
+      plannedVariables: { ...plan!.variables, oidc_owner_sub: owner },
+    })).rejects.toThrow(/planned module variable values changed/);
+    await expect(materializer.materialize({ phase: "plan", ...call(config),
+      variables: { ...call(config).variables, oidc_owner_sub: owner },
+    })).rejects.toThrow(/reviewed public URL input/);
+  }
+  await expect(materializer.materialize({ phase: "apply_check", ...call(config),
+    expectedDigest: `sha256:${"0".repeat(64)}`, plannedVariables: plan!.variables,
+  })).rejects.toThrow(/changed since Plan/);
+  const drifts: readonly ((value: InstallConfig) => InstallConfig)[] = [
+    (value) => ({ ...value, internal: { ...value.internal!, sourceSnapshotId: "snap_other" } }),
+    (value) => ({ ...value, internal: { ...value.internal!, repositoryInstallUxDigest: `sha256:${"c".repeat(64)}` } }),
+    (value) => ({ ...value, installExperience: { ...value.installExperience,
+      repositoryInstallUx: { status: "accepted" } } }),
+    (value) => ({ ...value, installExperience: { ...value.installExperience,
+      projections: value.installExperience!.projections!.map((projection) => projection.kind === "oidc_client"
+        ? { ...projection, callbackPath: "/other/callback" } : projection) } }),
+    (value) => ({ ...value, installExperience: { ...value.installExperience,
+      projections: value.installExperience!.projections!.map((projection) => projection.kind === "oidc_client"
+        ? { ...projection, variables: { ...projection.variables, ownerSubject: "other_owner_sub" } } : projection) } }),
+  ];
+  for (const drift of drifts) {
+    currentConfig = drift(config);
+    await expect(applyCheck()).rejects.toThrow();
+  }
+  currentConfig = config;
+  currentCapsule = { ...capsule, installingPrincipalId: "tsub_other_owner" };
+  await expect(applyCheck()).rejects.toThrow(/changed since Plan/);
+  currentCapsule = capsule;
+  for (const drift of [
+    { ...registered, clientId: "tko_other_client" },
+    { ...registered, capsuleId: "cap_other" },
+    { ...registered, redirectUris: ["https://other.example.test/auth/oidc/callback"] },
+    { ...registered, allowedScopes: ["openid"] },
+  ]) {
+    currentRegistration = drift;
+    await expect(applyCheck()).rejects.toThrow();
+  }
+  expect(writes).toBe(0);
 });
