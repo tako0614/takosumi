@@ -207,6 +207,31 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example/token" \
 
 長期間使い回すためのものではないので、実行のたびに取得する前提で組んでください。
 
+### アプリで共有するデータ
+
+個人の `oauth2` Binding は個人別のままです。アプリの owner/member が同じ private data を使う場合は、
+別の配送 `oauth2.app-data.v1` を requirement に明示し、提供側の権限で承認した現在の Link を使います。
+同じ Workspace にいることや、Capsule ID を知っていることだけでは承認されません。
+承認者と提供appの現在の所有rowを照合し、契約版とprovider ownership epochを承認に記録します。
+この記録のない旧Linkを共有data権限へ昇格しません。
+
+要求は `{ "permission": "object.read", "dataScope": "app-shared.v1" }` のように共有data用途を明示します。
+Host が認証済みの本人・app client・現在の owner/member を照合し、最大60秒の token を発行します。
+本人の pairwise `sub` と Binding ID は利用者ごとに別のまま、検証済み UserInfo の `takosumi.app_data`
+が共有 namespace を表します。用途は `token_use: "interface_app_data"`、契約は
+`contract: "takosumi.interface-app-data/v1"` です。namespace の値を利用者が指定する欄はありません。
+
+受け手は、固定した信頼済み issuer の HTTPS UserInfo で毎回有効性を確認し、用途、契約版、
+提供者、audience、permission、consumer と namespace の拘束を照合します。現在の role・ownership epoch・
+Link・個人Bindingが失効した token は使えません。通常の `interface_oauth` を共有data tokenとして扱ったり、
+旧方式へ自動で戻ったりしません。これは既存Storage receiverが自動対応するという意味ではなく、
+受け手のownerによる明示採用が必要です。
+
+提供appのowner移譲では旧tokenと承認epochを無効にし、連携の再選択・承認が必要です。
+利用appのowner移譲後も namespace は同じアプリに残り、新ownerがデータを引き継ぎます。旧epochのtokenは無効です。
+提供Interfaceの identity を変える場合は別namespaceとなるため、必要なデータの移行・切替を明示して扱います。
+既存の保存先やデータを、このtoken発行で移動することはありません。
+
 ## 通らないときに見る順序
 
 1. Interface の `status.phase` が `Resolved` か

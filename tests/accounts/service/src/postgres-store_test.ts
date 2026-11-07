@@ -672,3 +672,41 @@ test("PostgresAccountsStore consumes authorization codes with DELETE RETURNING m
     expiresAt: 2_000,
   });
 });
+
+test("Postgres app-data access-token evidence survives JSONB writer-reader projection without database execution", async () => {
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  const authority = { contract: "takosumi.interface-app-data/v1" as const, namespace_id: `appd_${"a".repeat(64)}`,
+    consumer_capsule_id: "consumer", provider_capsule_id: "provider", ownership_epoch: 0, provider_ownership_epoch: 0, app_role: "member" as const,
+    interface_link_id: "link", interface_link_generation: 1, interface_binding_generation: 2, interface_generation: 1 };
+  const sourceClient = { clientId: "consumer-client", scope: "openid profile capsules:read" };
+  const record = { clientId: "https://storage.example.test/objects", audience: "https://storage.example.test/objects",
+    scope: "object.read", subject: "pairwise_member", takosumiSubject: "tsub_owner" as const,
+    capsuleId: "provider", workspaceId: "internal_partition", role: "interface-runtime", interfaceId: "if_storage",
+    interfaceBindingId: "ifb_member", interfaceResolvedRevision: 1, expiresAt: Date.now() + 60_000,
+    appDataAuthority: authority, appDataClient: sourceClient };
+  await store.saveAccessToken("taksrv_plain_secret", record);
+  const saved = client.calls[0]!;
+  expect(saved.sql).toContain("accounts_v1.oauth_access_tokens");
+  expect(saved.sql).toContain("hosted_metadata");
+  expect(saved.args).not.toContain("taksrv_plain_secret");
+  expect(String(saved.args[0])).toStartWith("sha256:");
+  const metadata = JSON.parse(saved.args[14] as string);
+  expect(metadata).toEqual({ appDataAuthority: authority, appDataClient: sourceClient });
+  client.queuedRows.push([{ client_id: record.clientId, audience: record.audience, scope: record.scope,
+    subject: record.subject, takosumi_subject: record.takosumiSubject, capsule_id: record.capsuleId,
+    workspace_id: record.workspaceId, role: record.role, interface_id: record.interfaceId,
+    interface_binding_id: record.interfaceBindingId, interface_resolved_revision: "1",
+    expires_at: new Date(record.expiresAt), hosted_metadata: metadata }]);
+  expect(await store.findAccessToken("taksrv_plain_secret")).toEqual(record);
+  const calls = client.calls.length;
+  await expect(store.saveRefreshToken("taksrv_plain_secret", record)).rejects.toThrow(/access-token/);
+  expect(client.calls).toHaveLength(calls);
+  // Existing shared-account evidence retains its independent whitelist.
+  await store.saveAccessToken("taksrv_plain_secret", { clientId: "hosted", scope: "openid", subject: "tsub_owner",
+    oidcProfile: "shared-account", issuer: "https://accounts.example.test", identityGeneration: 1,
+    sid: "fixture_session", issuerSessionId: "fixture_issuer_session", authTime: 1, expiresAt: record.expiresAt });
+  const shared = JSON.parse(client.calls.at(-1)!.args[14] as string);
+  expect(shared).toMatchObject({ oidcProfile: "shared-account", identityGeneration: 1, sid: "fixture_session" });
+  expect(shared.appDataAuthority).toBeUndefined();
+});

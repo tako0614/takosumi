@@ -1233,6 +1233,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       required: ["permission"],
       properties: {
         permission: { type: "string", minLength: 1, maxLength: 256 },
+        dataScope: { const: "app-shared.v1" },
       },
       additionalProperties: false,
     },
@@ -1248,6 +1249,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         access_token: { type: "string", minLength: 1 },
+        token_use: { const: "interface_app_data" },
         token_type: { const: "Bearer" },
         expires_in: { type: "integer", minimum: 1, maximum: 60 },
         expires_at: { type: "string", format: "date-time" },
@@ -1320,6 +1322,9 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
             kind: { enum: ["requester_manages_provider", "provider_approved"] },
             approvedBy: { type: "string", minLength: 1 },
             approvedAt: { type: "string", format: "date-time" },
+            appDataAuthority: { type: "object", required: ["contract", "providerOwnershipEpoch"],
+              properties: { contract: { const: "takosumi.interface-app-data/v1" },
+                providerOwnershipEpoch: { type: "integer", minimum: 0 } }, additionalProperties: false },
           },
           additionalProperties: false,
         },
