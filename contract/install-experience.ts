@@ -22,6 +22,7 @@ export interface OidcClientProjection {
   readonly accountsUrlVariable?: string;
   readonly clientIdVariable?: string;
   readonly redirectUriVariable?: string;
+  readonly ownerSubjectVariable?: string;
   readonly callbackPath: string;
   readonly scopes?: readonly string[];
 }
@@ -88,6 +89,9 @@ export function installExperienceOidcClient(
       accountsUrlVariable: projection.variables.accountsUrl,
       clientIdVariable: projection.variables.clientId,
       redirectUriVariable: projection.variables.redirectUri,
+      ...(projection.variables.ownerSubject !== undefined
+        ? { ownerSubjectVariable: projection.variables.ownerSubject }
+        : {}),
       callbackPath: projection.callbackPath,
       scopes: projection.scopes,
     };

@@ -10,6 +10,7 @@ export interface RepositoryAccountsOidcModuleVariableProfile {
   readonly issuerUrlVariable: string;
   readonly clientIdVariable: string;
   readonly redirectUriVariable: string;
+  readonly ownerSubjectVariable?: string;
   readonly callbackPath: string;
   readonly scopes: readonly string[];
 }
@@ -56,12 +57,15 @@ export function accountsOidcModuleVariableProfile(
   const grant = oidc[0]!;
   const endpoint = endpoints[0]!;
   const names = Object.keys(grant.variables).sort();
+  const ownerSubjectRequested = names.includes("ownerSubject");
   if (
-    names.length !== 4 ||
+    (ownerSubjectRequested &&
+      installConfig.installExperience?.repositoryInstallUx?.apiVersion !== "takosumi.com/v2.6") ||
     !sameStrings(names, [
       "accountsUrl",
       "clientId",
       "issuerUrl",
+      ...(ownerSubjectRequested ? ["ownerSubject"] : []),
       "redirectUri",
     ]) ||
     typeof endpoint.variables.url !== "string" ||
@@ -76,6 +80,7 @@ export function accountsOidcModuleVariableProfile(
     issuerUrlVariable: grant.variables.issuerUrl!,
     clientIdVariable: grant.variables.clientId!,
     redirectUriVariable: grant.variables.redirectUri!,
+    ...(ownerSubjectRequested ? { ownerSubjectVariable: grant.variables.ownerSubject! } : {}),
     callbackPath: grant.callbackPath,
     scopes: grant.scopes ?? [],
   };
@@ -85,9 +90,10 @@ export function accountsOidcModuleVariableProfile(
     profile.issuerUrlVariable,
     profile.clientIdVariable,
     profile.redirectUriVariable,
+    ...(profile.ownerSubjectVariable !== undefined ? [profile.ownerSubjectVariable] : []),
   ];
   if (
-    variableNames.some((name) => !MODULE_VARIABLE.test(name)) ||
+    variableNames.some((name) => typeof name !== "string" || !MODULE_VARIABLE.test(name)) ||
     new Set(variableNames).size !== variableNames.length
   ) {
     invalid("repository OIDC variable names are invalid or duplicate");

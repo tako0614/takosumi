@@ -10,6 +10,8 @@ import type {
   RepositoryManifestDocumentV2_2,
   RepositoryManifestDocumentV2_3,
   RepositoryManifestDocumentV2_4,
+  RepositoryManifestDocumentV2_5,
+  RepositoryManifestDocumentV2_6,
   RepositoryRuntimeDelivery,
   RepositoryRuntimeRequirement,
 } from "../../contract/repository-manifest.ts";
@@ -286,7 +288,7 @@ const invalidV1VariableOwnerSubject = {
   kind: "Repository",
   install: { modules: { ".": invalidVariableModule } },
 } as const;
-// @ts-expect-error variables never carry the ownerSubject binding slot.
+// @ts-expect-error legacy variables do not carry the ownerSubject slot.
 const rejectedV1VariableOwnerSubject: RepositoryManifestDocumentV1 =
   invalidV1VariableOwnerSubject;
 
@@ -295,7 +297,7 @@ const invalidV2VariableOwnerSubject = {
   kind: "Repository",
   install: { modules: { ".": invalidVariableModule } },
 } as const;
-// @ts-expect-error variables never carry the ownerSubject binding slot.
+// @ts-expect-error legacy variables do not carry the ownerSubject slot.
 const rejectedV2VariableOwnerSubject: RepositoryManifestDocumentV2 =
   invalidV2VariableOwnerSubject;
 
@@ -304,7 +306,7 @@ const invalidV21VariableOwnerSubject = {
   kind: "Repository",
   install: { modules: { ".": invalidVariableModule } },
 } as const;
-// @ts-expect-error variables never carry the ownerSubject binding slot.
+// @ts-expect-error legacy variables do not carry the ownerSubject slot.
 const rejectedV21VariableOwnerSubject: RepositoryManifestDocumentV2_1 =
   invalidV21VariableOwnerSubject;
 
@@ -313,7 +315,7 @@ const invalidV22VariableOwnerSubject = {
   kind: "Repository",
   install: { modules: { ".": invalidVariableModule } },
 } as const;
-// @ts-expect-error variables never carry the ownerSubject binding slot.
+// @ts-expect-error legacy variables do not carry the ownerSubject slot.
 const rejectedV22VariableOwnerSubject: RepositoryManifestDocumentV2_2 =
   invalidV22VariableOwnerSubject;
 
@@ -322,7 +324,7 @@ const invalidV23VariableOwnerSubject = {
   kind: "Repository",
   install: { modules: { ".": invalidVariableModule } },
 } as const;
-// @ts-expect-error variables never carry the ownerSubject binding slot.
+// @ts-expect-error legacy variables do not carry the ownerSubject slot.
 const rejectedV23VariableOwnerSubject: RepositoryManifestDocumentV2_3 =
   invalidV23VariableOwnerSubject;
 
@@ -331,7 +333,7 @@ const invalidV24VariableOwnerSubject = {
   kind: "Repository",
   install: { modules: { ".": invalidVariableModule } },
 } as const;
-// @ts-expect-error variables never carry the ownerSubject binding slot.
+// @ts-expect-error legacy variables do not carry the ownerSubject slot.
 const rejectedV24VariableOwnerSubject: RepositoryManifestDocumentV2_4 =
   invalidV24VariableOwnerSubject;
 
@@ -368,6 +370,24 @@ const rejectedEndpointBothDeliverySurfaces: RepositoryRuntimeDelivery<
 const rejectedByVersionedDocumentUnion: RepositoryManifestDocument =
   invalidV23BindingOwnerSubject;
 
-// @ts-expect-error the discriminated document union must reject ownerSubject in variables.
+// @ts-expect-error the discriminated document union must reject ownerSubject in legacy variables.
 const rejectedVariableOwnerSubjectByVersionedDocumentUnion: RepositoryManifestDocument =
   invalidV24VariableOwnerSubject;
+
+
+const v26OwnerVariableDocument = {
+  apiVersion: "takosumi.com/v2.6", kind: "Repository",
+  install: { modules: { ".": invalidVariableModule } },
+} as const satisfies RepositoryManifestDocumentV2_6;
+const v26FourVariableDocument = {
+  apiVersion: "takosumi.com/v2.6", kind: "Repository",
+  install: { modules: { ".": legacyVariableModule } },
+} as const satisfies RepositoryManifestDocumentV2_6;
+const v26BindingDocument = {
+  apiVersion: "takosumi.com/v2.6", kind: "Repository",
+  install: { modules: { ".": v24BindingModule } },
+} as const satisfies RepositoryManifestDocumentV2_6;
+const v25OwnerVariableDocument = { ...v26OwnerVariableDocument, apiVersion: "takosumi.com/v2.5" } as const;
+// @ts-expect-error v2.5 variables retain their published four slots.
+const rejectedV25OwnerVariables: RepositoryManifestDocumentV2_5 = v25OwnerVariableDocument;
+const v26UnionDocument: RepositoryManifestDocument = v26OwnerVariableDocument;

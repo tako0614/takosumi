@@ -1174,7 +1174,10 @@ function mergeInstallExperience(
         ? { projections: [...projections.values()] }
         : {}),
       ...(proposed.features ? { features: proposed.features } : {}),
-      repositoryInstallUx: { status: "accepted" },
+      repositoryInstallUx: { status: "accepted",
+        ...(proposed.repositoryInstallUx?.apiVersion === "takosumi.com/v2.6"
+          ? { apiVersion: proposed.repositoryInstallUx.apiVersion } : {}),
+      },
     },
   };
 }

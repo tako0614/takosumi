@@ -95,3 +95,15 @@ test("rejects an empty versioned patch", () => {
     parseInstallConfigPatchV1({ kind: INSTALL_CONFIG_PATCH_V1_KIND }),
   ).toThrow(/at least one mutable field/u);
 });
+
+
+test("v2.6 ownerSubject and accepted provenance remain compiler-owned patch refusals", () => {
+  expect(() => parseInstallConfigPatchV1({ ...patch(), installExperience: {
+    projections: [], repositoryInstallUx: { status: "accepted", apiVersion: "takosumi.com/v2.6" },
+  } })).toThrow(/unknown field repositoryInstallUx/);
+  expect(() => parseInstallConfigPatchV1({ ...patch(), installExperience: {
+    projections: [{ kind: "oidc_client", callbackPath: "/auth/callback", variables: {
+      issuerUrl: "issuer", accountsUrl: "accounts", clientId: "client", redirectUri: "redirect", ownerSubject: "owner",
+    } }],
+  } })).toThrow(/unknown field ownerSubject/);
+});

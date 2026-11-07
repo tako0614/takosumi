@@ -116,7 +116,8 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
       grant.issuerUrlVariable !== exact.issuerUrlVariable ||
       grant.accountsUrlVariable !== exact.accountsUrlVariable ||
       grant.clientIdVariable !== exact.clientIdVariable ||
-      grant.redirectUriVariable !== exact.redirectUriVariable
+      grant.redirectUriVariable !== exact.redirectUriVariable ||
+      grant.ownerSubjectVariable !== exact.ownerSubjectVariable
     ) {
       invalid("Accounts OIDC module-variable grant is not exact");
     }
@@ -159,6 +160,13 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
       redirectUri: derived.redirectUri,
       callbackPath,
       scopes,
+      // Preserve the legacy four-slot digest byte-for-byte. The explicit new
+      // projection additionally pins its subject and reviewed source identity.
+      ...(exact.ownerSubjectVariable !== undefined ? {
+        ownerSubject: derived.ownerSubject,
+        sourceSnapshotId: currentConfig.internal!.sourceSnapshotId,
+        repositoryInstallUxDigest: currentConfig.internal!.repositoryInstallUxDigest,
+      } : {}),
     });
     if (call.expectedDigest !== undefined && call.expectedDigest !== digest) {
       invalid(
@@ -170,6 +178,8 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
       [exact.issuerUrlVariable]: issuer,
       [exact.clientIdVariable]: derived.clientId,
       [exact.redirectUriVariable]: derived.redirectUri,
+      ...(exact.ownerSubjectVariable !== undefined
+        ? { [exact.ownerSubjectVariable]: derived.ownerSubject } : {}),
     };
     if (call.phase !== "plan") {
       assertExactPlannedVariables(call.plannedVariables, variables);

@@ -6,6 +6,7 @@ import { credentialProseFixtures, credentialSpanFixtures } from "../helpers/cred
 import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-manifest-v2.1.schema.json" with { type: "json" };
 import repositoryManifestV2_2Schema from "../../docs/public/schemas/repository-manifest-v2.2.schema.json" with { type: "json" };
 import repositoryManifestV2_3Schema from "../../docs/public/schemas/repository-manifest-v2.3.schema.json" with { type: "json" };
+import repositoryManifestV2_6Schema from "../../docs/public/schemas/repository-manifest-v2.6.schema.json" with { type: "json" };
 import repositoryManifestV2_4Schema from "../../docs/public/schemas/repository-manifest-v2.4.schema.json" with { type: "json" };
 
 import {
@@ -158,7 +159,7 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
   ).toEqual({
     ok: false,
     error:
-      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, takosumi.com/v2.3, takosumi.com/v2.4, or takosumi.com/v2.5",
+      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, takosumi.com/v2.3, takosumi.com/v2.4, takosumi.com/v2.5, or takosumi.com/v2.6",
   });
   expect(
     parseRepositoryManifestText(
@@ -980,4 +981,32 @@ test("the published v2.4 schema and parser agree on binding-delivered OIDC owner
     error:
       'install.modules.".".requires[0].deliver.bindings.contains unsupported field ownerSubject',
   });
+});
+
+
+test("v2.6 admits ownerSubject variables only through the explicit version", () => {
+  const document = {
+    apiVersion: "takosumi.com/v2.6", kind: "Repository",
+    install: { modules: { ".": { inputs: [], requires: [{
+      kind: "identity.oidc", callbackPath: "/auth/oidc/callback", scopes: ["openid"],
+      deliver: { variables: { accountsUrl: "accounts_url", issuerUrl: "issuer_url",
+        clientId: "client_id", redirectUri: "redirect_uri", ownerSubject: "oidc_owner_sub" } },
+    }] } } },
+  };
+  const ajv = new Ajv2020({ strict: false });
+  ajv.addSchema(repositoryManifestV2_1Schema);
+  const validate = ajv.compile(repositoryManifestV2_6Schema);
+  expect(validate(document)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(true);
+  const oldFour = structuredClone(document);
+  delete (oldFour.install.modules["."].requires[0]!.deliver.variables as Partial<typeof document.install.modules["."]["requires"][0]["deliver"]["variables"]>).ownerSubject;
+  expect(validate(oldFour)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(oldFour)).ok).toBe(true);
+  const unknown = structuredClone(document);
+  Object.assign(unknown.install.modules["."].requires[0]!.deliver.variables, { owner: "extra_owner" });
+  expect(validate(unknown)).toBe(false);
+  expect(parseRepositoryManifestText(JSON.stringify(unknown)).ok).toBe(false);
+  for (const apiVersion of ["takosumi.com/v2.4", "takosumi.com/v2.5"]) {
+    expect(parseRepositoryManifestText(JSON.stringify({ ...document, apiVersion })).ok).toBe(false);
+  }
 });

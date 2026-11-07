@@ -3135,7 +3135,10 @@ export class RunEngine {
       (snapshot.repositoryManifest?.status !== "present" ||
         !installConfig.internal?.repositoryInstallUxDigest ||
         snapshot.repositoryManifest.digest !==
-          installConfig.internal.repositoryInstallUxDigest)
+          installConfig.internal.repositoryInstallUxDigest ||
+        (installConfig.installExperience?.repositoryInstallUx?.apiVersion !== undefined &&
+          installConfig.installExperience.repositoryInstallUx.apiVersion !==
+            snapshot.repositoryManifest.document.apiVersion))
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -3327,7 +3330,10 @@ export class RunEngine {
         if (
           !expectedDigest ||
           snapshot.repositoryManifest?.status !== "present" ||
-          snapshot.repositoryManifest.digest !== expectedDigest
+          snapshot.repositoryManifest.digest !== expectedDigest ||
+          (installConfig.installExperience?.repositoryInstallUx?.apiVersion !== undefined &&
+            installConfig.installExperience.repositoryInstallUx.apiVersion !==
+              snapshot.repositoryManifest.document.apiVersion)
         ) {
           throw new OpenTofuControllerError(
             "failed_precondition",
@@ -12660,6 +12666,7 @@ function requireValidModuleVariableProfile(installConfig: InstallConfig): {
     profile.issuerUrlVariable,
     profile.clientIdVariable,
     profile.redirectUriVariable,
+    ...(profile.ownerSubjectVariable !== undefined ? [profile.ownerSubjectVariable] : []),
   ];
   const additionalInputNames: readonly string[] = [];
   const publicNames = [...sourceNames, ...targetNames, ...additionalInputNames];
@@ -12730,7 +12737,9 @@ function requireValidModuleVariableMaterialization(
     ) &&
     isBoundedNonSecretString(
       result.variables[profile.redirectUriVariable],
-    );
+    ) &&
+    (profile.ownerSubjectVariable === undefined ||
+      isBoundedNonSecretString(result.variables[profile.ownerSubjectVariable]));
   if (!valid) {
     throw moduleVariableMaterializationError(
       "host returned an invalid or secret-shaped public OIDC value",

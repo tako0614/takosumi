@@ -64,7 +64,7 @@ test("v2.5 accepts explicit current-context sources without literal identities",
 });
 
 test("published older versions and unknown future versions do not inherit context sources", () => {
-  for (const version of ["v1", "v2", "v2.1", "v2.2", "v2.3", "v2.4", "v2.6"]) {
+  for (const version of ["v1", "v2", "v2.1", "v2.2", "v2.3", "v2.4", "v2.7"]) {
     const parsed = parseRepositoryManifestText(
       JSON.stringify(contextDocument(`takosumi.com/${version}`)),
     );
@@ -185,4 +185,12 @@ test("published v2.5 schema accepts only the bounded context declaration shape",
     expect(validate(document)).toBe(false);
     expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
   }
+});
+
+
+test("v2.6 deliberately retains v2.5 context data without scoped-name or owner authority", () => {
+  expect(parseRepositoryManifestText(JSON.stringify(contextDocument("takosumi.com/v2.6"))).ok).toBe(true);
+  const document = contextDocument("takosumi.com/v2.6");
+  document.install.modules["."].inputs[0]!.source.kind = "workspace_scoped_capsule_name";
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
 });

@@ -37,6 +37,7 @@ import {
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6,
 } from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
 
@@ -209,7 +210,7 @@ export function compileRepositoryInstallUx(
     );
   }
 
-  // `sourceBuild` is admitted by v2.3, v2.4, and v2.5. Keep this runtime check in addition to
+  // `sourceBuild` is admitted by v2.3 through v2.6. Keep this runtime check in addition to
   // the closed parser so manually constructed documents cannot smuggle it into
   // an older API version and accidentally widen the execution contract.
   const moduleWithSourceBuild = module as typeof module & {
@@ -219,18 +220,20 @@ export function compileRepositoryInstallUx(
     input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 &&
     input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
     input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 &&
+    input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6 &&
     moduleWithSourceBuild.sourceBuild !== undefined
   ) {
     return invalid(
       "repository_install_ux_source_build_version_unsupported",
-      "Repository-owned sourceBuild requires takosumi.com/v2.3, v2.4, or v2.5.",
+      "Repository-owned sourceBuild requires takosumi.com/v2.3, v2.4, v2.5, or v2.6.",
     );
   }
   let sourceBuild: InstallConfig["sourceBuild"];
   if (
     input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
     input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
-    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
+    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 ||
+    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6
   ) {
     const parsedSourceBuild = parseRepositorySourceBuild(
       moduleWithSourceBuild.sourceBuild,
@@ -478,7 +481,10 @@ export function compileRepositoryInstallUx(
               })),
             }
           : {}),
-        repositoryInstallUx: { status: "accepted" },
+        repositoryInstallUx: { status: "accepted",
+          ...(input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6
+            ? { apiVersion: input.document.apiVersion } : {}),
+        },
       },
       variableMapping,
       ...(Object.keys(installContextVariableMapping).length > 0
@@ -535,7 +541,7 @@ function compileInterfaceDeclarations(
   if (!isRepositoryManifestInterfaceCapableApiVersion(input.apiVersion)) {
     return invalid(
       "repository_install_ux_interface_version_unsupported",
-      "Repository-owned Interface declarations require takosumi.com/v2 through v2.5.",
+      "Repository-owned Interface declarations require takosumi.com/v2 through v2.6.",
     );
   }
 
@@ -910,18 +916,20 @@ function validateInputDeclaration(
 ): CompileRepositoryInstallUxResult | undefined {
   if (
     input.source.kind === "workspace_scoped_capsule_name" &&
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
+    (apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 ||
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6)
   ) {
     return invalid(
       "repository_install_ux_context_input_invalid",
-      "workspace_scoped_capsule_name is not admitted by takosumi.com/v2.5.",
+      "workspace_scoped_capsule_name is not admitted by takosumi.com/v2.5 or v2.6.",
     );
   }
   if (isContextSourceKind(input.source.kind)) {
-    if (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5) {
+    if (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 &&
+      apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6) {
       return invalid(
         "repository_install_ux_context_input_invalid",
-        "Current-context input sources require takosumi.com/v2.5.",
+        "Current-context input sources require takosumi.com/v2.5 or v2.6.",
       );
     }
     if (
@@ -1026,7 +1034,8 @@ function validateRequirement(
     const targets = deliveryTargets(requirement.deliver);
     if (
       (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
-        apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5) ||
+        apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 &&
+        apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6) ||
       deliversToVariables(requirement.deliver) ||
       Object.keys(targets).length !== 1 ||
       !Object.prototype.hasOwnProperty.call(targets, "value") ||
@@ -1036,7 +1045,7 @@ function validateRequirement(
     ) {
       return invalid(
         "repository_install_ux_requirement_disallowed",
-        "Generated runtime secrets require takosumi.com/v2.4 or v2.5 binding delivery with exactly 32 bytes and hex encoding.",
+        "Generated runtime secrets require takosumi.com/v2.4, v2.5, or v2.6 binding delivery with exactly 32 bytes and hex encoding.",
       );
     }
   }
@@ -1046,24 +1055,27 @@ function validateRequirement(
     const targetVariables = Object.values(targets);
     const requestedScopes = requirement.scopes ?? [];
     if (deliversToVariables(requirement.deliver)) {
+      const ownerSubjectRequested = targetNames.includes("ownerSubject");
       if (
-        targetNames.length !== 4 ||
+        (ownerSubjectRequested && apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6) ||
         !sameStrings(targetNames, [
           "accountsUrl",
           "clientId",
           "issuerUrl",
+          ...(ownerSubjectRequested ? ["ownerSubject"] : []),
           "redirectUri",
         ]) ||
         new Set(targetVariables).size !== targetVariables.length
       ) {
         return invalid(
           "repository_install_ux_requirement_target_invalid",
-          "An identity.oidc requirement must deliver accountsUrl, issuerUrl, clientId, and redirectUri to module variables.",
+          "An identity.oidc requirement must deliver accountsUrl, issuerUrl, clientId, and redirectUri to module variables; only v2.6 may also deliver ownerSubject.",
         );
       }
     } else if (
       (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
-        apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5) ||
+        apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 &&
+        apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6) ||
       targetNames.length !== 4 ||
       !sameStrings(targetNames, [
         "clientId",
@@ -1075,7 +1087,7 @@ function validateRequirement(
     ) {
       return invalid(
         "repository_install_ux_requirement_version_unsupported",
-        "Binding-delivered identity.oidc requires takosumi.com/v2.4 or v2.5 and exact issuerUrl, clientId, ownerSubject, and redirectUri slots.",
+        "Binding-delivered identity.oidc requires takosumi.com/v2.4, v2.5, or v2.6 and exact issuerUrl, clientId, ownerSubject, and redirectUri slots.",
       );
     }
     if (
@@ -1442,11 +1454,12 @@ function compileRuntimeBindingMaterialization(
 
   if (generatedSecrets.length === 0 && !oidcClient) return undefined;
   // All currently supported private materialization declarations are closed
-  // under v2.4 and v2.5. Keep this guard for manually constructed documents
+  // under v2.4, v2.5, and v2.6. Keep this guard for manually constructed documents
   // and prevent a future API version from silently inheriting this profile.
   if (
     apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
-    apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
+    apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 &&
+    apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_6
   ) {
     return undefined;
   }

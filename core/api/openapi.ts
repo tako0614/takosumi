@@ -743,6 +743,7 @@ function policySchemas(): Record<string, Record<string, unknown>> {
                 "takosumi.com/v2.3",
                 "takosumi.com/v2.4",
                 "takosumi.com/v2.5",
+                "takosumi.com/v2.6",
               ],
             },
           },
@@ -2274,7 +2275,10 @@ export function capsuleAndInstallConfigSchemas(): Record<
             repositoryInstallUx: {
               type: "object",
               required: ["status"],
-              properties: { status: { const: "accepted" } },
+              properties: {
+                status: { const: "accepted" },
+                apiVersion: { const: "takosumi.com/v2.6" },
+              },
               additionalProperties: false,
             },
           },
@@ -4131,27 +4135,6 @@ export function workspaceProjectAndCapsuleRequestSchemas(): Record<
                   },
                 ],
               },
-            },
-            features: {
-              type: "array",
-              maxItems: 32,
-              items: {
-                type: "object",
-                required: ["id", "label", "optional", "inputs"],
-                properties: {
-                  id: { type: "string" },
-                  label: ref("LocalizedText"),
-                  optional: { type: "boolean" },
-                  inputs: { type: "array", items: { type: "string" } },
-                },
-                additionalProperties: false,
-              },
-            },
-            repositoryInstallUx: {
-              type: "object",
-              required: ["status"],
-              properties: { status: { const: "accepted" } },
-              additionalProperties: false,
             },
           },
           additionalProperties: false,

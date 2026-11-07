@@ -2714,6 +2714,122 @@ test("Capsule Run pins generic repository OIDC variables before Apply mutation",
   expect(runner.applyJobs).toHaveLength(1);
 });
 
+test("v2.6 Capsule Run pins ownerSubject variables before Apply mutation", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    requiredProviders: [],
+    providerInstallation: [],
+  });
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
+    environment: "preview",
+    name: "generic-git-app",
+    installConfig: {
+      workspaceId: "ws_test001",
+      internal: {
+        reason: "per_install_overrides",
+        sourceSnapshotId: "snap_fixture",
+        repositoryInstallUxDigest: `sha256:${"a".repeat(64)}`,
+      },
+      variableMapping: {
+        public_url: "https://staging.example.test",
+      },
+      installExperience: {
+        projections: [
+          { kind: "public_endpoint", variables: { url: "public_url" } },
+          {
+            kind: "oidc_client",
+            variables: {
+              accountsUrl: "takosumi_accounts_url",
+              issuerUrl: "takosumi_accounts_issuer_url",
+              clientId: "takosumi_accounts_client_id",
+              redirectUri: "takosumi_accounts_redirect_uri",
+              ownerSubject: "oidc_owner_sub",
+            },
+            callbackPath: "/auth/oidc/callback",
+            scopes: ["openid", "profile"],
+          },
+        ],
+        repositoryInstallUx: { status: "accepted", apiVersion: "takosumi.com/v2.6" },
+      },
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    },
+  });
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: `sha256:${"a".repeat(64)}`,
+      document: {
+        apiVersion: "takosumi.com/v2.6",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
+      },
+    },
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    installingPrincipalId: "tsub_owner",
+  });
+  const unavailableController = controllerWith(store, runner);
+  await expect(
+    unavailableController.createCapsulePlan(seeded.capsule.id),
+  ).rejects.toThrow(/host materializer is unavailable/i);
+  expect(runner.planJobs).toHaveLength(0);
+  const phases: string[] = [];
+  let writes = 0;
+  const digest = `sha256:${"7".repeat(64)}`;
+  const variables = {
+    oidc_owner_sub: "tsub_pairwise_owner",
+    takosumi_accounts_url: "https://app.takosumi.com",
+    takosumi_accounts_issuer_url: "https://app.takosumi.com",
+    takosumi_accounts_client_id: "tko_public_client",
+    takosumi_accounts_redirect_uri:
+      "https://staging.example.test/auth/oidc/callback",
+  } as const;
+  const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
+    async materialize(input) {
+      phases.push(input.phase);
+      if (input.phase === "apply") writes += 1;
+      expect(input.variables).toEqual({
+        public_url: "https://staging.example.test",
+      });
+      expect(input.resolvedProviderBindings).toEqual([]);
+      if (input.phase !== "plan") {
+        expect(input.expectedDigest).toBe(digest);
+        expect(input.plannedVariables).toEqual(variables);
+      }
+      return { digest, variables };
+    },
+    async retire() {},
+  };
+  const controller = controllerWith(store, runner, {
+    moduleVariableMaterializer,
+  });
+
+  const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(planRun.status).toBe("succeeded");
+  expect(phases).toEqual(["plan", "plan"]);
+  expect(writes).toBe(0);
+  expect(runner.planJobs[0]?.variables).toMatchObject(variables);
+  expect(JSON.stringify(planRun)).not.toContain("tko_public_client");
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toBe("succeeded");
+  expect(phases).toEqual(["plan", "plan", "apply_check", "apply"]);
+  expect(writes).toBe(1);
+  expect(runner.applyJobs).toHaveLength(1);
+});
+
 test("failed provider destroy retains the current OIDC client without re-entering registration", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -13219,4 +13335,24 @@ test("a claimed ApplyRun completes after draining without changing its lease", a
   } finally {
     releaseExecution.resolve();
   }
+});
+
+
+test("v2.6 marked repository Plan refuses a different snapshot API before materialization", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const digest = `sha256:${"a".repeat(64)}`;
+  const seeded = await seedRunnableCapsuleModel(store, { environment: "preview",
+    installConfig: { internal: { reason: "per_install_overrides",
+      sourceSnapshotId: "snap_fixture", repositoryInstallUxDigest: digest },
+      installExperience: { repositoryInstallUx: { status: "accepted", apiVersion: "takosumi.com/v2.6" } } },
+  });
+  await store.putSourceSnapshot({ ...seeded.snapshot, repositoryManifest: {
+    status: "present", digest, document: { apiVersion: "takosumi.com/v2.5", kind: "Repository",
+      install: { modules: { ".": { inputs: [] } } } },
+  } });
+  await expect(controllerWith(store, runner).createCapsulePlan(seeded.capsule.id))
+    .rejects.toThrow(/repository_install_ux_snapshot_mismatch/);
+  expect(runner.planJobs).toHaveLength(0);
+  expect(runner.applyJobs).toHaveLength(0);
 });

@@ -468,6 +468,7 @@ export type InstallConfigInstallProjection =
         readonly accountsUrl?: string;
         readonly clientId?: string;
         readonly redirectUri?: string;
+        readonly ownerSubject?: string;
       };
       /** Explicit application callback path; Takosumi never assumes one. */
       readonly callbackPath: string;
@@ -495,6 +496,8 @@ export interface InstallConfigInstallFeature {
 
 export interface InstallConfigRepositoryInstallUxState {
   readonly status: "accepted";
+  /** Compiler-owned provenance; older accepted projections omit it. */
+  readonly apiVersion?: "takosumi.com/v2.6";
 }
 
 export interface InstallConfigInstallExperience {
@@ -1022,6 +1025,13 @@ export type PublicInstallConfig = Omit<
 export const INSTALL_CONFIG_PATCH_V1_KIND =
   "takosumi.install-config-patch@v1" as const;
 
+/** Mutable presentation excludes compiler-owned pairwise subject delivery. */
+type InstallConfigPatchProjection =
+  | Exclude<InstallConfigInstallProjection, { readonly kind: "oidc_client" }>
+  | (Omit<Extract<InstallConfigInstallProjection, { readonly kind: "oidc_client" }>, "variables"> & {
+      readonly variables: Omit<Extract<InstallConfigInstallProjection, { readonly kind: "oidc_client" }>["variables"], "ownerSubject">;
+    });
+
 /**
  * Versioned mutable subset accepted by the operator InstallConfig patch API.
  * Identity, ownership, Git source selection, runner choice, Store metadata,
@@ -1031,7 +1041,7 @@ export interface InstallConfigPatchV1 {
   readonly kind: typeof INSTALL_CONFIG_PATCH_V1_KIND;
   readonly variableMapping?: Readonly<Record<string, JsonValue>>;
   readonly variablePresentation?: readonly InstallConfigVariablePresentation[];
-  readonly installExperience?: InstallConfigInstallExperience;
+  readonly installExperience?: { readonly projections?: readonly InstallConfigPatchProjection[] };
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
   readonly lifecycleActions?: readonly InstallConfigLifecycleAction[];
