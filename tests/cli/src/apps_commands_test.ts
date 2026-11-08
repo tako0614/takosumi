@@ -104,7 +104,9 @@ test("apps install never falls back on non-404 errors", async () => {
       "--workspace", "ws_legacy", "--url", "https://takosumi.example.test", "--token", "account-pat",
     ], { stdout: quietIo.stdout, stderr: (line) => stderr.push(line) })).toBe(1);
     expect(requests).toBe(1);
-    expect(stderr).toEqual(["denied"]);
+    expect(JSON.parse(stderr[0]!)).toMatchObject({ kind: "install_attempt_key", idempotencyKey: expect.any(String) });
+    expect(stderr[1]).toBe("denied");
+    expect(stderr).toHaveLength(2);
   } finally {
     globalThis.fetch = originalFetch;
   }

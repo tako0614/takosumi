@@ -6428,6 +6428,12 @@ test("parseOptions: --key=value carries a flag-like value verbatim", () => {
   expect(options.json).toEqual(true);
 });
 
+test("parseOptions: inline values preserve every equals sign and empty values", () => {
+  expect(parseOptions(["--idempotency-key=attempt=a==", "--reason=--flag=value", "--empty="])).toEqual({
+    idempotencyKey: "attempt=a==", reason: "--flag=value", empty: "",
+  });
+});
+
 test("parseOptions: a value-bearing flag followed by --flag is boolean", () => {
   // Documented limitation: `--reason --json` cannot tell that --reason wanted
   // a value, so it stays boolean. Both flags are still parsed (no swallowing

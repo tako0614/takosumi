@@ -127,6 +127,9 @@ export async function runAppInstall(args: string[], io: CliIo): Promise<number> 
     ...(Object.keys(capsule).length > 0 ? { capsule } : {}),
   };
   try {
+    // Retain this before dispatch: a lost create response must not strand the
+    // generated key. It is an intent reference, not proof of acceptance.
+    io.stderr(JSON.stringify({ kind: "install_attempt_key", idempotencyKey }));
     let response: unknown;
     try {
       response = await requestDeployControlApi({
@@ -270,6 +273,7 @@ export function appsInstallHelpText(): string {
     "         --app-name <name>, --environment <name>, --workspace <id>",
     "--workspace is used only when an older server returns 404.",
     "--idempotency-key <key> reuses this attempt key for a manual retry.",
+    "The key is printed as JSON to stderr before sending; retain it with the same request.",
     "--url <Takosumi origin> --token <Accounts PAT> --json",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN",
   ];
@@ -279,6 +283,7 @@ export function appsInstallHelpText(): string {
     "          --app-name <name>、--environment <name>、--workspace <id>",
     "--workspace は旧サーバーが 404 を返した場合だけ使います。",
     "--idempotency-key <key> は手動再試行で同じ試行キーを使います。",
+    "送信前にキーを標準エラーへJSONで出力します。同じ要求と一緒に保持してください。",
     "--url <Takosumi origin> --token <Accounts PAT> --json",
     "環境変数: TAKOSUMI_ACCOUNT_TOKEN",
   ].join("\n");

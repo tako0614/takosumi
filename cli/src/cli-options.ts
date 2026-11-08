@@ -31,7 +31,9 @@ export function parseOptions(args: string[]): Record<string, string | boolean> {
     if (arg === "--") break;
     if (!arg.startsWith("--")) continue;
 
-    const [rawKey, inlineValue] = arg.slice(2).split("=", 2);
+    const equal = arg.indexOf("=");
+    const rawKey = arg.slice(2, equal < 0 ? undefined : equal);
+    const inlineValue = equal < 0 ? undefined : arg.slice(equal + 1);
     const key = rawKey.replace(/-([a-z])/g, (_, letter: string) =>
       letter.toUpperCase(),
     );
