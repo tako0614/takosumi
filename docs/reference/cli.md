@@ -22,6 +22,53 @@ Run の実行中だけ渡ります（[認証情報](../concepts/credentials.md)�
 開くリンクの形式は[Source と Capsule](../concepts/sources.md#画面と外部リンク)にあります。
 `takosumi deploy` / `takosumi plan` で手元のファイルを送る方法は廃止しました。
 
+## アプリのGit版更新を確認・実行する
+
+`apps update`は、既存revision coordinatorで指定refの保存Planを作り、変更内容を表示します。承認・Applyは行いません。
+Accountsの個人PATに独立した`read`と`write` scopeが必要です。`--token`を省くと`TAKOSUMI_ACCOUNT_TOKEN`を使い、
+operator用の`TAKOSUMI_DEPLOY_CONTROL_TOKEN`へはfallbackしません。
+1回のコマンド内では選択したURLと資格を固定し、各routeの現在の認可はserverで確認します。
+
+```bash
+export TAKOSUMI_ACCOUNT_TOKEN='<Accounts PAT with read and write>'
+takosumi apps update cap_example --ref release/v2 --idempotency-key update-example-01 \
+  --url https://takosumi.example.com --json
+```
+
+`--ref`と`--idempotency-key`は必須です。応答を失った場合も同じ本人・接続先・app・ref・keyを保持して再実行します。
+不明な操作を新keyでやり直しません。reconcileは返却された同じcoordinatorだけを進めます。`--ref=release=v2`も値全体を保ちます。
+最初の明確な受付拒否は`refused`、作成後のreconcile競合・読取失敗などは元coordinatorを保持した`unconfirmed`で、いずれもexit 1です。
+
+`review_required`は更新完了ではありません。表示されたapp、`planRunId`、ref、source snapshot、Plan digest、変更数、
+resource actions、policyを確認します。`reviewUrl`でも同じ保存Planを開けます。欠けた変更数は`null`で、0とは扱いません。
+実行を決めた場合だけ、返却されたPlan IDで別のコマンドを使います。
+
+```bash
+takosumi apps apply cap_example --plan plan_example --yes \
+  --url https://takosumi.example.com --json
+```
+
+`--yes`はこの保存Planを実行する明示確認です。削除があるか変更数が不明なら`--allow-destroy`も必要です。
+実行前reviewは標準エラーへJSONを1行、`--json`の最終結果は標準出力へ1 objectとして返します。
+CLIは現在appと保存Plan、全pageの履歴を照合し、既存のlinked Applyがあれば再作成せず読みます。
+承認待ちの場合だけ既存approveを呼び、Planを再読してから通常applyを呼びます。
+現在の本人・app権限、資格種別、epoch、policy、state/Plan guard、apply-onceは既存serverが判定します。
+手元のPlan IDや`--yes`だけで権限が得られるわけではありません。
+
+Apply Runの作成応答だけでは成功にしません。既定で最大120秒観測し、Runが`succeeded`になった場合だけexit 0です。
+`--timeout-ms <1..120000>`は観測budgetであり、観測終了はserverのRun取消ではありません。
+承認・Apply応答が不明な場合は別の最大5秒で同じPlanとlinked Applyを読むだけで、POSTを自動再送しません。
+`pending`や`indeterminate`はexit 1で元IDを保持します。以後の読取は次を使います（`read` scopeが必要です）。
+
+```bash
+takosumi apps apply cap_example --plan plan_example --observe-only \
+  --url https://takosumi.example.com --json
+```
+
+`--observe-only`は承認もApplyも作りません。linked Applyが無いことは、元要求に効果が無かった証明ではありません。
+`--yes`と`--observe-only`は同時指定できません。
+failed/cancelled/expiredのRunも新Planで盲目的に再実行せず、保存Runとアプリ状態を確認します。
+
 ## CLI を用意する
 
 CLI はこのリポジトリの `cli/` にあり、Bun で直接動かします。package manager からの

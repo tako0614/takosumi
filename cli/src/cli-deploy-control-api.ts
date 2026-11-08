@@ -25,7 +25,9 @@ export async function requestDeployControlApi(input: {
   readonly allowEmpty?: boolean;
   readonly auth?: "deploy-control" | "accounts";
   readonly extraHeaders?: Readonly<Record<string, string>>;
+  readonly signal?: AbortSignal;
 }): Promise<unknown> {
+  input.signal?.throwIfAborted();
   // `takosumi-client` is value-free self-identification read only by the
   // server's legacy Workspace telemetry (TASK-0118 Phase 9).
   const headers = new Headers({
@@ -47,7 +49,7 @@ export async function requestDeployControlApi(input: {
     headers.set(name, value);
   }
 
-  const init: RequestInit = { method: input.method ?? "GET", headers };
+  const init: RequestInit = { method: input.method ?? "GET", headers, ...(input.signal ? { signal: input.signal } : {}) };
   if (input.body !== undefined) {
     headers.set("content-type", "application/json");
     init.body = JSON.stringify(input.body);
