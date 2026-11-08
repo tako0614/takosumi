@@ -436,7 +436,9 @@ async function resolveOidcAuthorizationSubject(input: {
       subject: pairwiseSubject,
       takosumiSubject: input.sessionSubject,
       capsuleId: liveGrant.capsuleId,
-      workspaceId: liveGrant.workspaceId,
+      // Persist only the requested restriction. The independently resolved
+      // legacy Workspace role remains a current public claim, not a new fence.
+      workspaceId: input.requestedWorkspaceId,
       role: liveGrant.role,
     },
   };
@@ -1053,7 +1055,7 @@ async function handleTokenUncached(input: {
           subject: record.subject,
           takosumiSubject: record.takosumiSubject,
           capsuleId: liveGrant.capsuleId,
-          workspaceId: liveGrant.workspaceId,
+          workspaceId: record.workspaceId,
           role: liveGrant.role,
           expiresAt: record.oidcProfile === "shared-account" ? Math.min(Date.now()+HOSTED_REFRESH_IDLE_MS,record.familyExpiresAt!) : Date.now() + REFRESH_TOKEN_TTL_MS,
         });
@@ -1073,6 +1075,7 @@ async function handleTokenUncached(input: {
         takosumiSubject: record.takosumiSubject,
         capsuleId: liveGrant.capsuleId,
         workspaceId: liveGrant.workspaceId,
+        workspaceConstraintId: record.workspaceId,
         role: liveGrant.role,
         appRole: liveGrant.appRole,
         nonce: record.nonce,
@@ -1242,7 +1245,7 @@ async function handleRefreshToken(input: {
       subject: record.subject,
       takosumiSubject: record.takosumiSubject,
       capsuleId: liveGrant.capsuleId,
-      workspaceId: liveGrant.workspaceId,
+      workspaceId: record.workspaceId,
       role: liveGrant.role,
       expiresAt: record.oidcProfile === "shared-account" ? Math.min(Date.now()+HOSTED_REFRESH_IDLE_MS,record.familyExpiresAt!) : Date.now() + REFRESH_TOKEN_TTL_MS,
     });
@@ -1261,6 +1264,7 @@ async function handleRefreshToken(input: {
       takosumiSubject: record.takosumiSubject,
       capsuleId: liveGrant.capsuleId,
       workspaceId: liveGrant.workspaceId,
+      workspaceConstraintId: record.workspaceId,
       role: liveGrant.role,
       appRole: liveGrant.appRole,
       refreshToken: newRefreshToken,
@@ -1297,6 +1301,8 @@ async function issueTokenResponse(input: {
   takosumiSubject?: TakosumiSubject;
   capsuleId?: string;
   workspaceId?: string;
+  /** Exact saved grant restriction, separate from the live legacy claim. */
+  workspaceConstraintId: string | undefined;
   role?: string;
   appRole?: AppRole;
   nonce?: string;
@@ -1360,7 +1366,7 @@ async function issueTokenResponse(input: {
     subject: input.subject,
     takosumiSubject: input.takosumiSubject,
     capsuleId: input.capsuleId,
-    workspaceId: input.workspaceId,
+    workspaceId: input.workspaceConstraintId,
     role: input.role,
     expiresAt: (issuedAt + expiresIn) * 1000,
   });

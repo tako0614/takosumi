@@ -96,6 +96,17 @@ async function expectPerAppDecisions(operations: ControlPlaneOperations): Promis
   expect(await outcome(await decide(operations, "dual", "change_settings", {
     session: { credential: "oauth-access-token", appIds: [capsule.id], workspaceId: workspace.id },
   }))).toBe("app:member");
+  // Unrequested legacy claims are not saved restrictions. Only a verified
+  // owned-app decision may enter the same current membership intersection.
+  expect(await outcome(await decide(operations, "dual", "change_settings", {
+    session: { credential: "oauth-access-token", appIds: [capsule.id] },
+  }))).toBe("app:member");
+  expect(await outcome(await decide(operations, "app_owner", "view", {
+    session: { credential: "oauth-access-token", appIds: [capsule.id] },
+  }))).toBe("403:app_access_denied");
+  expect(await outcome(await decide(operations, "ws_owner", "view", {
+    capsuleId: unowned.id, session: { credential: "oauth-access-token", appIds: [unowned.id] },
+  }))).toBe("403:forbidden");
   // A Capsule the backfill has not reached keeps the Workspace decision.
   const reasons: string[] = [];
   expect(await outcome(await decide(operations, "ws_admin", "change_settings", {
@@ -106,6 +117,9 @@ async function expectPerAppDecisions(operations: ControlPlaneOperations): Promis
 }
 
 async function expectWorkspaceFallback(operations: ControlPlaneOperations): Promise<void> {
+  expect(await outcome(await decide(operations, "ws_owner", "view", {
+    session: { credential: "oauth-access-token", appIds: [capsule.id] },
+  }))).toBe("403:forbidden");
   const reasons: string[] = [];
   const diagnostics = recordingDiagnostics(reasons);
   expect(await outcome(await decide(operations, "ws_owner", "uninstall", { diagnostics }))).toBe("workspace:ownership_schema_unavailable");
