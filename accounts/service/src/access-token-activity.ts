@@ -1,6 +1,10 @@
+import { isInterfaceAppDataAuthority, type InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import type { AccountsStore, TokenRecord } from "./store.ts";
 
 export interface InterfaceOAuthActivityEvidence {
+  readonly appDataAuthority?: InterfaceAppDataAuthority;
+  readonly accountSubject?: string;
+  readonly appDataClient?: { readonly clientId: string; readonly scope: string };
   /**
    * Compatibility evidence (TASK-0118 Phase 9): a token of a Capsule-owned
    * Interface is identified by `capsuleId` alone; Core still compares a
@@ -63,7 +67,9 @@ export async function validateActiveAccessTokenRecord(input: {
       nonEmpty(record.interfaceBindingId) &&
       typeof record.interfaceResolvedRevision === "number" &&
       Number.isSafeInteger(record.interfaceResolvedRevision) &&
-      record.interfaceResolvedRevision > 0);
+      record.interfaceResolvedRevision > 0 &&
+      (record.appDataAuthority === undefined || (isInterfaceAppDataAuthority(record.appDataAuthority) &&
+        nonEmpty(record.takosumiSubject) && nonEmpty(record.appDataClient?.clientId) && nonEmpty(record.appDataClient?.scope))));
   let interfaceEvidenceCurrent = !interfaceRuntime;
   if (
     interfaceRuntime &&
@@ -75,6 +81,8 @@ export async function validateActiveAccessTokenRecord(input: {
         (await input.interfaceOAuthActivityValidator({
           ...(nonEmpty(record!.workspaceId) ? { workspaceId: record!.workspaceId! } : {}),
           ...(record!.capsuleId ? { capsuleId: record!.capsuleId } : {}),
+          ...(record!.appDataAuthority ? { appDataAuthority: record!.appDataAuthority,
+            accountSubject: record!.takosumiSubject!, appDataClient: record!.appDataClient! } : {}),
           interfaceId: record!.interfaceId!,
           bindingId: record!.interfaceBindingId!,
           interfaceResolvedRevision: record!.interfaceResolvedRevision!,

@@ -2062,3 +2062,212 @@ test("composed Interface links and late app ownership are decided per app (revie
   assert.equal(ownerMade.status, 201);
   assert.equal((await ownerMade.json()).metadata.createdUnder, "app");
 });
+
+async function composedAppDataFixture(options: { customCoreValidator?: boolean } = {}) {
+  const { oidcClientActivationDigest } = await import("../../../../accounts/service/src/oidc-activation.ts");
+  const { capsuleScopeRef } = await import("../../../../contract/capsules.ts");
+  const now = Date.now();
+  const instant = new Date(now).toISOString();
+  const control = new InMemoryOpenTofuControlStore();
+  const scopes = ["openid", "profile", "capsules:read"];
+  const requirement = { key: "documents", interface: { type: "storage.object", version: "1" },
+    permissions: ["object.read", "object.write"], delivery: { type: "oauth2.app-data.v1" } } as const;
+  const seeded = await seedCapsuleModel(control, { workspaceId: "ws_app_data_http", capsuleId: "cap_data_consumer",
+    sourceId: "src_data_consumer", snapshotId: "snap_data_consumer", name: "data consumer", installConfigId: "cfg_data_consumer", installConfig: {
+      requiredInterfaces: [requirement], variableMapping: { oidc_client_id: "client_data_consumer" },
+      installExperience: { projections: [{ kind: "oidc_client", variables: { clientId: "oidc_client_id" },
+        callbackPath: "/auth/callback", scopes }] },
+    } });
+  const provider = await seedCapsuleModel(control, { workspaceId: seeded.workspace.id, capsuleId: "cap_data_provider",
+    sourceId: "src_data_provider", snapshotId: "snap_data_provider", name: "data provider", installConfigId: "cfg_data_provider" });
+  await control.putCapsule({ ...seeded.capsule, status: "active" });
+  await control.putCapsule({ ...provider.capsule, status: "active" });
+  const store = new InMemoryAccountsStore();
+  const { buildComposedApp } = await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({ config: testConfig(), store: store as unknown as PostgresAccountsStore,
+    opentofuControlStore: control,
+    createAccountsHandler: operations => createAccountsHandler({ issuer: testConfig().issuer, store, controlPlaneOperations: operations,
+      // Existing synthetic resource-server credential fixture, never an operator credential.
+      clients: [{ clientId: "resource-server", clientSecret: "resource-secret",
+        redirectUris: ["https://resource.example.test/callback"], tokenEndpointAuthMethod: "client_secret_post" }],
+      ...(options.customCoreValidator ? { interfaceOAuthActivityValidator: async () => true } : {}) }),
+    runtimeEnv: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN },
+    // Resource custody and ingress identity remain synthetic; no provider or SSO operation.
+    interfaceOAuth2ResourceAuthorizer: () => true,
+  });
+  const owner = "tsub_app_data_owner";
+  const member = "tsub_app_data_member";
+  for (const capsuleId of [seeded.capsule.id, provider.capsule.id]) {
+    assert.equal(await created.operations.appOwnership.initializeOwnershipIfMissing({ capsuleId, ownerAccountId: owner,
+      ownershipEpoch: 0, managementEpoch: 0, managementState: "active", storageRoot: `fixture/${capsuleId}` }), true);
+  }
+  assert.equal(await created.operations.appOwnership.putMember({ capsuleId: seeded.capsule.id, accountId: member,
+    status: "active", addedBy: owner, createdAt: instant, updatedAt: instant }), true);
+  await store.saveOidcClient({ clientId: "client_data_consumer", capsuleId: seeded.capsule.id, namespacePath: "identity.oidc",
+    issuerUrl: testConfig().issuer, redirectUris: ["https://consumer.example.test/auth/callback"], allowedScopes: scopes,
+    subjectMode: "pairwise", tokenEndpointAuthMethod: "none", createdAt: now, updatedAt: now,
+    activationDigest: await oidcClientActivationDigest({ scopeRef: capsuleScopeRef(seeded.capsule), capsuleId: seeded.capsule.id,
+      executionAuthorityEpoch: await created.operations.capsules.getCapsuleExecutionAuthorityEpoch(seeded.capsule.id),
+      installConfig: seeded.installConfig }),
+  });
+  for (const [token, subject, principal] of [["fixture_data_owner", owner, "pairwise_data_owner"],
+    ["fixture_data_member", member, "pairwise_data_member"]] as const) {
+    await store.saveAccount({ subject, createdAt: now, updatedAt: now });
+    await store.saveAccessToken(token, { clientId: "client_data_consumer", scope: scopes.join(" "), subject: principal,
+      takosumiSubject: subject, capsuleId: seeded.capsule.id, expiresAt: now + 60_000 });
+  }
+  const iface = await created.operations.interfaces.create({ workspaceId: seeded.workspace.id, name: "data-provider",
+    ownerRef: { kind: "Capsule", id: provider.capsule.id }, spec: { type: "storage.object", version: "1", document: {},
+      inputs: { endpoint: { source: "literal", value: "https://storage.example.test/objects" } },
+      access: { visibility: "private", resourceUriInput: "endpoint" } } });
+  const [link] = await created.operations.interfaces.ensureCapsuleInterfaceLinks({ workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id, requirements: [requirement], selections: [{ requirementKey: "documents",
+      interfaceId: iface.metadata.id, selection: "explicit" }] }, { actorAccountId: owner, roles: [], requestId: "fixture" },
+    { assertCurrent: async () => undefined, mayApproveProvider: async ({ capsuleId }) =>
+      (await created.operations.appAccess.resolveAppAccess(owner, capsuleId))?.role === "owner" });
+  assert.equal(link!.state, "active");
+  for (const principalId of ["pairwise_data_owner", "pairwise_data_member"]) {
+    await created.operations.interfaces.ensureCapsuleRequiredInterfaces({ workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id, principalId, requirements: [requirement] });
+  }
+  const issue = async (token: string, permission = "object.read", extra: Record<string, unknown> = {}) =>
+    await created.app.fetch(new Request(`http://localhost/api/v1/interfaces/${iface.metadata.id}/token`, {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ permission, dataScope: "app-shared.v1", ...extra }),
+    }));
+  const userInfo = async (token: string) => await created.app.fetch(new Request(`${testConfig().issuer}/oauth/userinfo`, {
+    headers: { authorization: `Bearer ${token}` },
+  }));
+  const introspect = async (token: string, resource = "https://storage.example.test/objects") =>
+    await created.app.fetch(new Request(`${testConfig().issuer}/oauth/introspect`, { method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token, client_id: "resource-server", client_secret: "resource-secret", resource }),
+    }));
+  return { created, store, owner, member, seeded, provider, iface, link, issue, userInfo, introspect, now, scopes };
+}
+
+test("composed app-data HTTP producer keeps member subjects distinct and shares one verified namespace", async () => {
+  const { created, store, owner, member, seeded, provider, iface, link, issue, userInfo, introspect } = await composedAppDataFixture();
+  const a = await issue("fixture_data_owner", "object.write");
+  assert.equal(a.status, 200, await a.clone().text());
+  const aToken = await a.json() as { access_token: string; token_use: string };
+  assert.equal(aToken.token_use, "interface_app_data");
+  const b = await issue("fixture_data_member");
+  assert.equal(b.status, 200, await b.clone().text());
+  const bToken = await b.json() as { access_token: string };
+  const aInfoResponse = await userInfo(aToken.access_token);
+  const bInfoResponse = await userInfo(bToken.access_token);
+  assert.equal(aInfoResponse.status, 200, await aInfoResponse.clone().text());
+  assert.equal(bInfoResponse.status, 200, await bInfoResponse.clone().text());
+  const ai = await aInfoResponse.json() as Record<string, any>;
+  const bi = await bInfoResponse.json() as Record<string, any>;
+  assert.equal(ai.sub, "pairwise_data_owner"); assert.equal(bi.sub, "pairwise_data_member");
+  assert.notEqual(ai.takosumi.interface_binding_id, bi.takosumi.interface_binding_id);
+  assert.equal(ai.token_use, "interface_app_data"); assert.equal(bi.token_use, "interface_app_data");
+  assert.equal(ai.takosumi.app_data.namespace_id, bi.takosumi.app_data.namespace_id);
+  assert.equal(ai.takosumi.app_data.ownership_epoch, 0);
+  assert.equal(ai.takosumi.app_data.app_role, "owner"); assert.equal(bi.takosumi.app_data.app_role, "member");
+  assert.equal(JSON.stringify([ai, bi]).includes(owner), false);
+  assert.equal(JSON.stringify([ai, bi]).includes(member), false);
+  assert.equal(ai.takosumi.workspace_id, undefined);
+  const introspected = await introspect(bToken.access_token);
+  assert.equal(introspected.status, 200, await introspected.clone().text());
+  const ii = await introspected.json() as Record<string, any>;
+  assert.equal(ii.active, true); assert.equal(ii.token_use, "interface_app_data");
+  assert.deepEqual(ii.takosumi.app_data, bi.takosumi.app_data);
+  assert.equal(JSON.stringify(ii).includes(member), false);
+  assert.equal((await (await introspect(bToken.access_token, "https://wrong.example.test")).json() as { active: boolean }).active, false);
+  // A strict reference receiver uses only trusted, current UserInfo and exact
+  // provider/app/audience/permission pins. It does not impersonate Storage v1.
+  const objects = new Map<string, string>();
+  let effects = 0;
+  const receive = async (token: string, permission: string, value?: string) => {
+    const response = await userInfo(token); if (response.status !== 200) return undefined;
+    const claims = await response.json() as Record<string, any>;
+    const { isInterfaceAppDataAuthority } = await import("../../../../contract/runtime-interfaces.ts");
+    if (!isInterfaceAppDataAuthority(claims.takosumi?.app_data) || claims.token_use !== "interface_app_data" || claims.aud !== "https://storage.example.test/objects" || claims.scope !== permission ||
+      claims.takosumi?.capsule_id !== provider.capsule.id || claims.takosumi?.interface_id !== iface.metadata.id ||
+      claims.takosumi?.app_data?.contract !== "takosumi.interface-app-data/v1" ||
+      claims.takosumi.app_data.consumer_capsule_id !== seeded.capsule.id ||
+      claims.takosumi.app_data.provider_capsule_id !== provider.capsule.id ||
+      claims.takosumi.app_data.namespace_id !== ai.takosumi.app_data.namespace_id) return undefined;
+    const key = `${claims.takosumi.app_data.namespace_id}/document`;
+    if (value !== undefined) { objects.set(key, value); effects += 1; }
+    return objects.get(key);
+  };
+  assert.equal(await receive(aToken.access_token, "object.write", "shared-content"), "shared-content");
+  assert.equal(await receive(bToken.access_token, "object.read"), "shared-content");
+  assert.equal(await receive(bToken.access_token, "object.write", "wrong-permission"), undefined);
+  assert.equal(effects, 1);
+  const missingCanonical = await store.findAccessToken("fixture_data_member");
+  await store.saveAccessToken("fixture_data_no_canonical", { ...missingCanonical!, takosumiSubject: undefined });
+  assert.equal((await issue("fixture_data_no_canonical")).status, 401);
+  await store.saveAccessToken("fixture_data_wrong_app", { ...missingCanonical!, capsuleId: provider.capsule.id });
+  assert.equal((await issue("fixture_data_wrong_app")).status, 404);
+  assert.equal((await issue("fixture_data_member", "object.delete")).status, 404);
+  const forged = await issue("fixture_data_member", "object.read", { accountSubject: owner, namespace_id: "chosen" });
+  assert.equal(forged.status, 400);
+  await store.savePersonalAccessToken("fixture_data_owner_personal", {
+    tokenId: "pat_data_owner_personal", tokenPrefix: "takpat_fixture", subject: owner,
+    name: "personal owner", scopes: ["read", "write"], appIds: [seeded.capsule.id],
+    createdAt: Date.now(), expiresAt: Date.now() + 60_000,
+  });
+  assert.equal((await issue("fixture_data_owner_personal")).status, 403);
+  assert.equal(effects, 1);
+  assert.equal(await created.operations.appOwnership.deleteMember(seeded.capsule.id, member), true);
+  assert.equal((await issue("fixture_data_member")).status, 412);
+  assert.equal((await userInfo(bToken.access_token)).status, 401);
+  assert.equal((await (await introspect(bToken.access_token)).json() as { active: boolean }).active, false);
+  assert.equal(await receive(bToken.access_token, "object.read"), undefined);
+  assert.equal(effects, 1);
+  await created.operations.interfaces.revokeCapsuleInterfaceLink(seeded.capsule.id, "documents", link!.generation);
+  assert.equal((await userInfo(aToken.access_token)).status, 401);
+  assert.equal((await (await introspect(aToken.access_token)).json() as { active: boolean }).active, false);
+  assert.equal(await receive(aToken.access_token, "object.write", "revoked-link"), undefined);
+  assert.equal(effects, 1);
+});
+
+
+test("composed app-data source-client revocation invalidates issuer and UserInfo with unchanged app grants", async () => {
+  const f = await composedAppDataFixture();
+  const issued = await f.issue("fixture_data_member");
+  assert.equal(issued.status, 200, await issued.clone().text());
+  const token = (await issued.json() as { access_token: string }).access_token;
+  assert.equal((await f.userInfo(token)).status, 200);
+  assert.equal((await f.created.operations.appAccess.resolveAppAccess(f.member, f.seeded.capsule.id))?.role, "member");
+  assert.equal((await f.created.operations.interfaces.listCapsuleInterfaceLinks(f.seeded.capsule.id))[0]!.state, "active");
+  assert.equal((await (await f.introspect(token)).json() as { active: boolean }).active, true);
+  await f.store.revokeOidcClient("client_data_consumer");
+  assert.equal((await f.issue("fixture_data_member")).status, 412);
+  assert.equal((await f.userInfo(token)).status, 401);
+  assert.equal((await (await f.introspect(token)).json() as { active: boolean }).active, false);
+  assert.equal((await f.created.operations.appAccess.resolveAppAccess(f.member, f.seeded.capsule.id))?.role, "member");
+  assert.equal((await f.created.operations.interfaces.listCapsuleInterfaceLinks(f.seeded.capsule.id))[0]!.state, "active");
+});
+
+
+test("composed app-data custom activity hooks cannot bypass canonical link revocation", async () => {
+  const f = await composedAppDataFixture({ customCoreValidator: true });
+  const issued = await f.issue("fixture_data_member");
+  assert.equal(issued.status, 200, await issued.clone().text());
+  const token = (await issued.json() as { access_token: string }).access_token;
+  assert.equal((await f.userInfo(token)).status, 200);
+  await f.created.operations.interfaces.revokeCapsuleInterfaceLink(f.seeded.capsule.id, "documents", f.link!.generation);
+  assert.equal((await f.userInfo(token)).status, 401);
+  assert.equal((await (await f.introspect(token)).json() as { active: boolean }).active, false);
+});
+
+
+test("composed app-data Binding revoke denies UserInfo and introspection while member and link remain active", async () => {
+  const f = await composedAppDataFixture();
+  const response = await f.issue("fixture_data_member");
+  assert.equal(response.status, 200);
+  const token = (await response.json() as { access_token: string }).access_token;
+  assert.equal((await f.userInfo(token)).status, 200);
+  const row = (await f.store.findAccessToken(token))!;
+  await f.created.operations.interfaces.revokeBinding(f.iface.metadata.id, row.interfaceBindingId!);
+  assert.equal((await f.userInfo(token)).status, 401);
+  assert.equal((await (await f.introspect(token)).json() as { active: boolean }).active, false);
+  assert.equal((await f.created.operations.appAccess.resolveAppAccess(f.member, f.seeded.capsule.id))?.role, "member");
+  assert.equal((await f.created.operations.interfaces.listCapsuleInterfaceLinks(f.seeded.capsule.id))[0]!.state, "active");
+});

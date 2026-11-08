@@ -552,6 +552,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * keeps the Workspace decision for an app without an ownership row.
    */
   readonly authorizeInterfaceApp?: RegisterInterfaceRoutesOptions["authorizeInterfaceApp"];
+  readonly resolveInterfaceAppDataPrincipal?: RegisterInterfaceRoutesOptions["resolveInterfaceAppDataPrincipal"];
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
   /**
@@ -1538,6 +1539,8 @@ export async function createTakosumiService(
   }
   interfaceService = new InterfaceService({
     stores: interfaceStores,
+    appAccess,
+    appOwnership: appOwnershipStore,
     capsules: capsulesService,
     captureLinkWriteAuthority: (workspaceId) => workspacesService.captureManagementAuthority(workspaceId),
     resolver: new OutputBackedInterfaceInputResolver({
@@ -1857,6 +1860,8 @@ export async function createTakosumiService(
       ...(options.authorizeInterfaceApp
         ? { authorizeInterfaceApp: options.authorizeInterfaceApp }
         : {}),
+      ...(options.resolveInterfaceAppDataPrincipal
+        ? { resolveInterfaceAppDataPrincipal: options.resolveInterfaceAppDataPrincipal } : {}),
     },
     metricsRouteOptions: metricsScrapeToken
       ? {

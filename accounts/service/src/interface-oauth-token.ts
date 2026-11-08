@@ -1,3 +1,4 @@
+import { isInterfaceAppDataAuthority, type InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { isValidInterfacePermissionToken } from "takosumi-contract";
 import { base64UrlEncodeBytes } from "./encoding.ts";
@@ -6,6 +7,8 @@ import type { AccountsStore } from "./store.ts";
 export const INTERFACE_OAUTH_ACCESS_TOKEN_MAX_TTL_SECONDS = 60;
 
 export interface IssueInterfaceOAuthAccessTokenInput {
+  readonly appDataAuthority?: InterfaceAppDataAuthority;
+  readonly appDataPrincipal?: { readonly accountSubject: string; readonly clientId: string; readonly scope: string };
   readonly store: AccountsStore;
   /** Pairwise Accounts subject named by the Principal InterfaceBinding. */
   readonly subject: string;
@@ -67,6 +70,20 @@ export async function issueInterfaceOAuthAccessToken(
     throw new RangeError("token expiry exceeds the safe integer range");
   }
 
+  const appDataAuthority = input.appDataAuthority;
+  const appDataPrincipal = input.appDataPrincipal;
+  if (appDataAuthority !== undefined) {
+    if (!isInterfaceAppDataAuthority(appDataAuthority) || !appDataPrincipal ||
+      appDataAuthority.provider_capsule_id !== capsuleId ||
+      (input.takosumiSubject !== undefined && input.takosumiSubject !== appDataPrincipal.accountSubject)) {
+      throw new TypeError("app-data authority and authenticated Principal must match");
+    }
+    requiredText(appDataPrincipal.accountSubject, "accountSubject", 512);
+    requiredText(appDataPrincipal.clientId, "clientId", 512);
+    requiredText(appDataPrincipal.scope, "source scope", 2_048);
+  } else if (appDataPrincipal !== undefined) {
+    throw new TypeError("app-data Principal requires explicit app-data authority");
+  }
   const accessToken = generateInterfaceOAuthAccessToken();
   await input.store.saveAccessToken(accessToken, {
     // Interface OAuth tokens are owned by their exact resource URI rather than
@@ -75,6 +92,9 @@ export async function issueInterfaceOAuthAccessToken(
     audience,
     scope: permission,
     subject,
+    ...(appDataAuthority ? { appDataAuthority,
+      appDataClient: { clientId: appDataPrincipal!.clientId, scope: appDataPrincipal!.scope },
+      takosumiSubject: appDataPrincipal!.accountSubject as TakosumiSubject } : {}),
     ...(input.takosumiSubject
       ? { takosumiSubject: input.takosumiSubject }
       : {}),

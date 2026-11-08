@@ -1,3 +1,4 @@
+import type { InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import { hashSessionId } from "./session-hash-salt.ts";
 import { HostedIdentityRecords } from "./hosted-identity-records.ts";
 import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
@@ -60,6 +61,9 @@ export interface AuthorizationCodeRecord {
 }
 
 export interface TokenRecord {
+  /** Short-lived app-data evidence, absent from ordinary code/refresh grants. */
+  appDataAuthority?: InterfaceAppDataAuthority;
+  appDataClient?: { readonly clientId: string; readonly scope: string };
   identityGeneration?: number;
   oidcProfile?: "shared-account";
   issuer?: string;

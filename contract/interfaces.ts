@@ -132,6 +132,11 @@ export interface InterfaceLink {
     readonly kind: "requester_manages_provider" | "provider_approved";
     readonly approvedBy: string;
     readonly approvedAt: string;
+    /** Written only by an app-data-aware provider approval, never inferred from legacy metadata. */
+    readonly appDataAuthority?: {
+      readonly contract: "takosumi.interface-app-data/v1";
+      readonly providerOwnershipEpoch: number;
+    };
   };
   readonly revoked?: {
     readonly revokedBy: string;
@@ -324,10 +329,13 @@ export interface CreateInterfaceBindingRequest {
 
 export interface IssueInterfaceTokenRequest {
   readonly permission: string;
+  /** Selects a separately approved app-data delivery; carries no caller-chosen identity. */
+  readonly dataScope?: "app-shared.v1";
 }
 
 /** OAuth-style response for an invocation-time Principal credential. */
 export interface IssueInterfaceTokenResponse {
+  readonly token_use?: "interface_app_data";
   readonly access_token: string;
   readonly token_type: "Bearer";
   readonly expires_in: number;

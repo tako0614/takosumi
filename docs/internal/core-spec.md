@@ -1112,6 +1112,78 @@ brokerage. The binding does not infer a provider or
 schedule a Workspace-wide reconciliation. Runtime handlers fail closed when
 the Interface, revision, Workspace, or binding evidence does not match.
 
+### Explicit app-shared data delegation
+
+`oauth2.app-data.v1` is a separate, opt-in Principal Binding delivery. It is
+selected by the consumer requirement and an approved active InterfaceLink.
+Provider authority must be proven for automatic approval; sharing an internal
+Workspace alone cannot auto-approve this delivery. Both creation and provider
+review require the approver's current AppAccess to match an explicit provider
+ownership row. Approval records a source-owned `appDataAuthority` marker with
+exact contract and `providerOwnershipEpoch`, rechecked before persistence.
+Existing unmarked approvals never acquire this authority from a new handler. A hand-written Binding or
+legacy row without its exact materialized required-Interface Link is insufficient.
+The consumer asks for `{ "permission": "object.read", "dataScope": "app-shared.v1" }`.
+Ordinary permission-only requests select ordinary `oauth2` and never gain this authority.
+`SubjectRef Capsule` and ServiceAccount workload identity are not used by this flow.
+
+The host resolves the exact authenticated request's canonical account, app-bound
+client, scopes and pairwise subject. These private values are not HTTP input or
+public ActorContext fields. Core reuses its AppAccess resolver and ownership
+store, requiring a current owner/member and an explicit active ownership row
+(epoch zero is valid). It checks the selected Link, individual Principal Binding,
+permission, Interface revision and owner-authoritative resource before and after
+the asynchronous issuer. The Accounts composition also validates the source OIDC
+client/activation/grant and account existence. Missing ports or authority deny issuance.
+
+The existing opaque, hashed, access-only token lasts at most 60 seconds. Each
+UserInfo/introspection call repeats source-grant and mandatory canonical Core
+checks, including membership, role, ownership epoch, current Link and Binding,
+resource audience and permission. A host extension can narrow this app-data
+check but cannot replace it. The personal pairwise `sub` remains distinct from
+the shared namespace and from other members' Binding IDs. The private canonical
+account is retained for revalidation and never emitted in public claims.
+
+The response identifies `token_use: "interface_app_data"`. Authenticated UserInfo
+and introspection include `takosumi.app_data` with the closed contract below:
+
+| Field | Meaning |
+| --- | --- |
+| `contract` | Exact `takosumi.interface-app-data/v1` |
+| `namespace_id` | `appd_` plus a domain-separated SHA-256 of consumer Capsule and provider Interface identity |
+| `consumer_capsule_id` | Verified consuming app identity |
+| `provider_capsule_id` | Current Interface owner; must match the outer `takosumi.capsule_id` |
+| `ownership_epoch` | Current consumer ownership epoch, a non-negative integer |
+| `provider_ownership_epoch` | Provider epoch fixed by its app-data approval, checked against the current ownership row |
+| `app_role` | Current `owner` or `member` |
+| `interface_link_id`, `interface_link_generation` | Exact selected active Link and positive generation |
+| `interface_binding_generation` | Positive generation of this person's separate Binding |
+| `interface_generation` | Positive generation of the current Interface |
+
+Outer `sub`, exact `aud` and single `scope`, `interface_id`, individual
+`interface_binding_id`, and `interface_resolved_revision` remain mandatory.
+A receiver obtains current evidence from its pinned trusted issuer over HTTPS,
+checks token use, contract, provider/audience/permission and app/namespace pins,
+and confines all keys to that verified namespace. An arbitrary JSON object,
+namespace digest, Capsule ID, Workspace ID or owner metadata is not authority.
+The new profile omits the legacy public Workspace claim. An ordinary Interface
+token cannot be upgraded by interpreting its metadata as this contract.
+
+Provider ownership transfer invalidates the approval marker and old tokens.
+The provider must give fresh consent through normal Link revocation, selection
+and approval before new app-data tokens can be issued. Same provider Interface
+identity retains the namespace after that consent.
+
+Namespace identity is stable across consumer ownership transfer: the new owner
+inherits the app's existing data; the old epoch's tokens are invalid. A different
+provider Interface identity selects a different namespace and needs explicit
+data migration/cutover if existing content must move. No existing storage root
+or Binding-scoped objects are renamed or migrated by token issuance. Legacy
+receivers, including a Binding-isolated storage contract, must reject the new
+token use until their owner explicitly adopts this separate data authority.
+This producer contract does not itself qualify a Storage/Office receiver or a
+live issuer, client registration, provider or deployment.
+
 ## Takoform and external Form Hosts
 
 The Takoform API specification owns the Host API contract and exact identity

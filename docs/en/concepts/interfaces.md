@@ -218,6 +218,37 @@ The token you get back behaves as follows.
 
 It is not something to reuse over a long period, so design for fetching one per execution.
 
+### Data shared by one app
+
+Personal `oauth2` Bindings remain personal. For an app's owners and members to
+share private data, its requirement explicitly selects `oauth2.app-data.v1`
+and a current Link approved with provider authority. A common Workspace or a
+raw Capsule ID does not approve this capability. Approval checks the current
+provider ownership row and approver AppAccess, and records the exact contract
+and provider ownership epoch. An unmarked legacy approval is not upgraded.
+
+Request `{ "permission": "object.read", "dataScope": "app-shared.v1" }`. The host
+checks the authenticated person, app client and current owner/member access.
+The token lasts at most 60 seconds. Members retain distinct pairwise `sub` and
+Binding IDs; authenticated UserInfo supplies their common namespace in
+`takosumi.app_data`, with `token_use: "interface_app_data"` and exact contract
+`takosumi.interface-app-data/v1`. Callers cannot choose a namespace in this request.
+
+Receivers fetch current UserInfo from their pinned trusted HTTPS issuer for
+each operation and match token use, contract, provider, audience, permission,
+consumer and namespace constraints. Role, ownership epoch, Link and individual
+Binding revocation invalidate the token. Ordinary `interface_oauth` metadata
+cannot confer this authority, and a receiver must explicitly support the new
+profile rather than falling back to its legacy path. This does not imply that
+an existing Storage receiver supports shared data.
+
+Provider ownership transfer invalidates old tokens and requires a fresh Link
+selection and approval. The namespace stays with the consuming app across ownership transfer, so its new owner
+inherits the app's data and old-epoch tokens are invalid. Changing the provider
+Interface identity selects another namespace and requires explicit migration
+or cutover when content must move. Issuance does not rename existing storage
+roots or migrate Binding-scoped objects.
+
 ## What to check when a call does not go through
 
 1. Whether the Interface's `status.phase` is `Resolved`

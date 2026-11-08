@@ -1,3 +1,7 @@
+import { INTERFACE_APP_DATA_DELIVERY, INTERFACE_APP_DATA_SCOPE, INTERFACE_APP_DATA_CONTRACT,
+  isInterfaceAppDataAuthority, type InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
+import type { AppAccess, AppAccessResolver } from "takosumi-contract/app-access";
+import type { AppOwnershipStore } from "../app-ownership/store.ts";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type {
   ActorContext,
@@ -129,7 +133,16 @@ export class LiteralInterfaceInputResolver implements InterfaceInputResolver {
   }
 }
 
+/** Private authenticated member context supplied by the host, never an HTTP body. */
+export interface InterfaceAppDataPrincipal {
+  readonly accountSubject: string;
+  readonly clientId: string;
+  readonly scope: string;
+}
+
 export interface InterfacePrincipalOAuth2IssueInput {
+  readonly appDataAuthority?: InterfaceAppDataAuthority;
+  readonly appDataPrincipal?: InterfaceAppDataPrincipal;
   readonly issuedAt: string;
   readonly workspaceId: string;
   readonly interfaceId: string;
@@ -149,6 +162,8 @@ export interface InterfacePrincipalOAuth2IssueInput {
  * Phase 9); a Workspace-owned Interface still needs its Workspace.
  */
 export interface InterfacePrincipalOAuth2ActivityEvidence {
+  readonly appDataAuthority?: InterfaceAppDataAuthority;
+  readonly accountSubject?: string;
   /** Compatibility evidence: checked when present, never required with a Capsule. */
   readonly workspaceId?: string;
   readonly capsuleId?: string;
@@ -226,6 +241,8 @@ export class SameWorkspaceInterfaceLinkApprovalPolicy implements InterfaceLinkAp
 }
 
 export interface InterfaceServiceOptions {
+  readonly appAccess?: AppAccessResolver;
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly stores: InterfaceStores;
   readonly capsules?: {
     getCapsule(id: string): Promise<Capsule>;
@@ -321,6 +338,8 @@ export type InterfaceBindingServiceMaterialization =
 
 export class InterfaceService {
   readonly #stores: InterfaceStores;
+  readonly #appAccess?: AppAccessResolver;
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #capsules?: InterfaceServiceOptions["capsules"];
   readonly #linkApprovalPolicy: InterfaceLinkApprovalPolicy;
   readonly #captureLinkWriteAuthority?: InterfaceServiceOptions["captureLinkWriteAuthority"];
@@ -342,6 +361,8 @@ export class InterfaceService {
 
   constructor(options: InterfaceServiceOptions) {
     this.#stores = options.stores;
+    this.#appAccess = options.appAccess;
+    this.#appOwnership = options.appOwnership;
     this.#capsules = options.capsules;
     this.#captureLinkWriteAuthority = options.captureLinkWriteAuthority;
     this.#linkApprovalPolicy = options.linkApprovalPolicy ?? new SameWorkspaceInterfaceLinkApprovalPolicy();
@@ -356,6 +377,7 @@ export class InterfaceService {
     this.#oauth2ResourceAuthorizer = options.oauth2ResourceAuthorizer;
     this.#bindingDeliveryHandlers = createBindingDeliveryHandlerRegistry({
       credentialIssuerConfigured: options.credentialIssuer !== undefined,
+      appDataConfigured: !!options.appAccess && !!options.appOwnership && !!options.capsules,
       oauth2ResourceAuthorizer: options.oauth2ResourceAuthorizer,
       additional: options.bindingDeliveryHandlers,
     });
@@ -818,6 +840,10 @@ export class InterfaceService {
     const requestedBy = actor?.actorAccountId ?? "system";
     let approval = await this.#linkApprovalPolicy.evaluate({ consumerWorkspaceId: input.workspaceId, providerWorkspaceId: iface.metadata.workspaceId, requestedBy });
     const providerApp = { capsuleId: iface.metadata.ownerRef.id, workspaceId: iface.metadata.workspaceId };
+    const appDataConsent = input.requirement.delivery.type === INTERFACE_APP_DATA_DELIVERY
+      ? await this.#appDataProviderConsent(providerApp.capsuleId, requestedBy) : undefined;
+    if (input.requirement.delivery.type === INTERFACE_APP_DATA_DELIVERY &&
+      (!suppliedFence?.mayApproveProvider || !appDataConsent)) approval = undefined;
     if (approval && suppliedFence?.mayApproveProvider && !(await suppliedFence.mayApproveProvider(providerApp))) {
       approval = undefined;
     }
@@ -847,7 +873,8 @@ export class InterfaceService {
       selection: input.selection,
       generation: (current?.generation ?? 0) + (liveCurrent ? 2 : 1),
       requestedBy,
-      ...(approval ? { approval: { kind: approval.kind, approvedBy: requestedBy, approvedAt: now } } : {}),
+      ...(approval ? { approval: { kind: approval.kind, approvedBy: requestedBy, approvedAt: now,
+        ...(appDataConsent ? { appDataAuthority: appDataConsent } : {}) } } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -877,7 +904,9 @@ export class InterfaceService {
       // since the check above no longer approves. A brand-new link then waits
       // as pending_approval; a replacement (or one with prepared Bindings)
       // keeps the current link, as without approval.
-      if (approvalRestsOnCaller && next.state === "active" && !(await suppliedFence!.mayApproveProvider!(providerApp))) {
+      if (approvalRestsOnCaller && next.state === "active" &&
+        (!(await suppliedFence!.mayApproveProvider!(providerApp)) ||
+          (appDataConsent !== undefined && (await this.#appDataProviderConsent(providerApp.capsuleId, requestedBy))?.providerOwnershipEpoch !== appDataConsent.providerOwnershipEpoch))) {
         if (liveCurrent || preparedSubjects.length > 0) {
           throw new InterfaceServiceError("interface_link_approval_required", "The provider app must approve this Interface link; the current link is kept. Remove the current link and select the provider again to send an approval request to the provider app's owner and members");
         }
@@ -1006,14 +1035,23 @@ export class InterfaceService {
     await this.#assertLinkAwaitsDecision(link);
     const approvedPermissions = decision === "approve" ? approvedLinkPermissions(link, input.approvedPermissions) : [];
     const decidedBy = actor?.actorAccountId ?? "system";
+    const appDataConsent = decision === "approve" && link.deliveryType === INTERFACE_APP_DATA_DELIVERY
+      ? await this.#appDataProviderConsent(providerCapsuleId, decidedBy) : undefined;
+    if (decision === "approve" && link.deliveryType === INTERFACE_APP_DATA_DELIVERY && !appDataConsent) {
+      throw new InterfaceServiceError("failed_precondition", "Provider app-data approval authority is unavailable");
+    }
     const now = this.#now();
     const next: InterfaceLink = decision === "approve"
-      ? { ...link, state: "active", generation: link.generation + 1, approvedPermissions, approval: { kind: "provider_approved", approvedBy: decidedBy, approvedAt: now }, updatedAt: now }
+      ? { ...link, state: "active", generation: link.generation + 1, approvedPermissions, approval: { kind: "provider_approved", approvedBy: decidedBy, approvedAt: now,
+          ...(appDataConsent ? { appDataAuthority: appDataConsent } : {}) }, updatedAt: now }
       : { ...link, state: "declined", generation: link.generation + 1, approvedPermissions: [], declined: { declinedBy: decidedBy, declinedAt: now }, updatedAt: now };
     const authority = await writeFence.assertCurrent();
     // The fences again after the caller's authority was re-checked: an
     // uninstall scheduled meanwhile must not be approved into.
     await this.#assertLinkAwaitsDecision(link);
+    if (appDataConsent && (await this.#appDataProviderConsent(providerCapsuleId, decidedBy))?.providerOwnershipEpoch !== appDataConsent.providerOwnershipEpoch) {
+      throw new InterfaceServiceError("conflict", "Provider app-data approval authority changed");
+    }
     if (!(await this.#stores.links.compareAndSet(next, link.generation, authority))) throw new InterfaceServiceError("conflict", "Interface link changed concurrently");
     if ((await this.#capsules.getCapsule(link.consumerCapsuleId)).status === "destroyed") {
       await this.revokeCapsuleInterfaceLinks(provider.workspaceId, link.consumerCapsuleId);
@@ -1561,12 +1599,15 @@ export class InterfaceService {
     principal: {
       readonly workspaceId: string;
       readonly subjectId: string;
+      readonly appDataPrincipal?: InterfaceAppDataPrincipal;
       /** Set for a Workspace-free runtime principal (TASK-0118 9.1). */
       readonly consumer?: InterfaceRuntimeConsumer;
     },
     actor?: ActorContext,
   ): Promise<IssueInterfaceTokenResponse> {
     const permission = normalizeIssueTokenRequest(request);
+    const appDataRequested = request.dataScope === INTERFACE_APP_DATA_SCOPE;
+    const deliveryType = appDataRequested ? INTERFACE_APP_DATA_DELIVERY : "oauth2";
     const workspaceId = requireText(principal.workspaceId, "workspaceId");
     const subjectId = requireText(principal.subjectId, "subjectId");
     if (!this.#credentialIssuer) {
@@ -1589,7 +1630,7 @@ export class InterfaceService {
     ).find(
       (candidate) =>
         candidate.metadata.workspaceId === workspaceId &&
-        candidate.spec.delivery.type === "oauth2" &&
+        candidate.spec.delivery.type === deliveryType &&
         candidate.spec.delivery.credentialRef === undefined &&
         candidate.spec.delivery.options === undefined,
     );
@@ -1627,6 +1668,14 @@ export class InterfaceService {
       );
     }
 
+    const appDataPrincipal = appDataRequested ? principal.appDataPrincipal : undefined;
+    if (appDataRequested && (!principal.consumer || !appDataPrincipal ||
+      !appDataPrincipal.accountSubject || !appDataPrincipal.clientId || !appDataPrincipal.scope)) {
+      throw new InterfaceServiceError("failed_precondition", "Authenticated app-data member context is unavailable");
+    }
+    const appDataAuthority = appDataRequested
+      ? await this.#currentAppDataAuthority(iface, binding, permission, principal.consumer!.capsuleId, appDataPrincipal!.accountSubject)
+      : undefined;
     const issuedAt = this.#now();
     const issuedAtMillis = Date.parse(issuedAt);
     if (!Number.isFinite(issuedAtMillis)) {
@@ -1637,6 +1686,7 @@ export class InterfaceService {
     }
     const issued = await this.#credentialIssuer.issuePrincipalOAuth2Token({
       issuedAt,
+      ...(appDataAuthority ? { appDataAuthority, appDataPrincipal: appDataPrincipal! } : {}),
       workspaceId,
       interfaceId: iface.metadata.id,
       interfaceGeneration: iface.metadata.generation,
@@ -1717,7 +1767,7 @@ export class InterfaceService {
       currentBinding.spec.subjectRef.kind !== "Principal" ||
       currentBinding.spec.subjectRef.id !== subjectId ||
       !currentBinding.spec.permissions.includes(permission) ||
-      currentBinding.spec.delivery.type !== "oauth2" ||
+      currentBinding.spec.delivery.type !== deliveryType ||
       currentBinding.spec.delivery.credentialRef !== undefined ||
       currentBinding.spec.delivery.options !== undefined
     ) {
@@ -1726,6 +1776,13 @@ export class InterfaceService {
         "Interface authorization changed during credential issuance",
       );
     }
+    if (appDataAuthority) {
+      const currentAuthority = await this.#currentAppDataAuthority(currentInterface, currentBinding!, permission,
+        principal.consumer!.capsuleId, appDataPrincipal!.accountSubject);
+      if (await stableJsonDigest(currentAuthority) !== await stableJsonDigest(appDataAuthority)) {
+        throw new InterfaceServiceError("conflict", "App-data authorization changed during credential issuance");
+      }
+    }
     await this.#recordActivity({
       actor,
       workspaceId,
@@ -1733,6 +1790,10 @@ export class InterfaceService {
       targetType: "interface_binding",
       targetId: binding.metadata.id,
       metadata: {
+        ...(appDataAuthority ? { dataScope: INTERFACE_APP_DATA_SCOPE,
+          consumerCapsuleId: appDataAuthority.consumer_capsule_id, namespaceId: appDataAuthority.namespace_id,
+          ownershipEpoch: appDataAuthority.ownership_epoch, interfaceLinkId: appDataAuthority.interface_link_id,
+          interfaceLinkGeneration: appDataAuthority.interface_link_generation } : {}),
         interfaceId: iface.metadata.id,
         bindingId: binding.metadata.id,
         permission,
@@ -1742,6 +1803,7 @@ export class InterfaceService {
     });
     return {
       access_token: accessToken,
+      ...(appDataAuthority ? { token_use: "interface_app_data" as const } : {}),
       token_type: "Bearer",
       expires_in: Math.ceil((expiresAtMillis - issuedAtMillis) / 1_000),
       expires_at: expiresAt,
@@ -1827,9 +1889,15 @@ export class InterfaceService {
         binding.spec.subjectRef.kind === "Principal" &&
         binding.spec.subjectRef.id === subjectId &&
         binding.spec.permissions.includes(input.permission) &&
-        binding.spec.delivery.type === "oauth2" &&
+        binding.spec.delivery.type === (input.appDataAuthority ? INTERFACE_APP_DATA_DELIVERY : "oauth2") &&
         binding.spec.delivery.credentialRef === undefined &&
         binding.spec.delivery.options === undefined;
+      if (input.appDataAuthority) {
+        if (!isInterfaceAppDataAuthority(input.appDataAuthority) || !input.accountSubject || !bindingCurrent || !binding) return false;
+        const current = await this.#currentAppDataAuthority(iface, binding, input.permission,
+          input.appDataAuthority.consumer_capsule_id, input.accountSubject);
+        if (await stableJsonDigest(current) !== await stableJsonDigest(input.appDataAuthority)) return false;
+      }
       return (
         bindingCurrent &&
         binding !== undefined && await this.#bindingLinkActive(binding, iface, input.permission) &&
@@ -1838,6 +1906,56 @@ export class InterfaceService {
     } catch {
       return false;
     }
+  }
+
+  async #verifiedAppAccess(capsuleId: string, accountSubject: string): Promise<AppAccess | undefined> {
+    if (!this.#appOwnership || !this.#appAccess || !this.#capsules) return undefined;
+    const before = await this.#appOwnership.getOwnership(capsuleId);
+    const access = await this.#appAccess.resolveAppAccess(accountSubject, capsuleId);
+    const after = await this.#appOwnership.getOwnership(capsuleId);
+    const capsule = await this.#capsules.getCapsule(capsuleId);
+    if (!before || !after || !access || capsule.id !== capsuleId || before.capsuleId !== capsuleId || after.capsuleId !== capsuleId ||
+      !["active", "stale"].includes(capsule.status) || (capsule.uninstall && capsule.uninstall.phase !== "cancelled") ||
+      before.managementState !== "active" || after.managementState !== "active" ||
+      before.ownerAccountId !== after.ownerAccountId || before.ownershipEpoch !== after.ownershipEpoch ||
+      access.capsuleId !== capsuleId || access.ownerAccountId !== after.ownerAccountId ||
+      access.ownershipEpoch !== after.ownershipEpoch || !Number.isSafeInteger(after.ownershipEpoch) || after.ownershipEpoch < 0 ||
+      (access.role !== "owner" && access.role !== "member")) return undefined;
+    return access;
+  }
+
+  async #appDataProviderConsent(providerCapsuleId: string, accountSubject: string): Promise<{
+    readonly contract: typeof INTERFACE_APP_DATA_CONTRACT; readonly providerOwnershipEpoch: number;
+  } | undefined> {
+    const access = await this.#verifiedAppAccess(providerCapsuleId, accountSubject);
+    return access ? { contract: INTERFACE_APP_DATA_CONTRACT, providerOwnershipEpoch: access.ownershipEpoch } : undefined;
+  }
+
+  async #currentAppDataAuthority(iface: Interface, binding: InterfaceBinding, permission: string,
+    consumerCapsuleId: string, accountSubject: string): Promise<InterfaceAppDataAuthority> {
+    const deny = (): never => { throw new InterfaceServiceError("not_found", "App-data authority not found"); };
+    if (!this.#appAccess || !this.#appOwnership || !this.#capsules || iface.metadata.ownerRef.kind !== "Capsule" ||
+      binding.spec.delivery.type !== INTERFACE_APP_DATA_DELIVERY) return deny();
+    const source = binding.metadata.materializedFrom;
+    if (source?.source !== "capsule_required_interface" || !source.linkId || source.capsuleId !== consumerCapsuleId) return deny();
+    const link = await this.#stores.links.getCurrent({ consumerCapsuleId, requirementKey: source.requirementKey });
+    if (!link || link.id !== source.linkId || link.state !== "active" || !link.approval ||
+      link.deliveryType !== INTERFACE_APP_DATA_DELIVERY || link.providerInterfaceId !== iface.metadata.id ||
+      link.providerCapsuleId !== iface.metadata.ownerRef.id ||
+      !(await this.#bindingLinkActive(binding, iface, permission))) return deny();
+    const access = await this.#verifiedAppAccess(consumerCapsuleId, accountSubject);
+    const provider = await this.#appOwnership.getOwnership(iface.metadata.ownerRef.id);
+    const consent = link.approval.appDataAuthority;
+    if (!access || !provider || provider.capsuleId !== iface.metadata.ownerRef.id || provider.managementState !== "active" ||
+      !Number.isSafeInteger(provider.ownershipEpoch) || provider.ownershipEpoch < 0 ||
+      consent?.contract !== INTERFACE_APP_DATA_CONTRACT || consent.providerOwnershipEpoch !== provider.ownershipEpoch) return deny();
+    const namespace = await stableJsonDigest({ contract: INTERFACE_APP_DATA_CONTRACT,
+      consumerCapsuleId, providerInterfaceId: iface.metadata.id });
+    return { contract: INTERFACE_APP_DATA_CONTRACT, namespace_id: `appd_${namespace.slice("sha256:".length)}`,
+      consumer_capsule_id: consumerCapsuleId, provider_capsule_id: iface.metadata.ownerRef.id,
+      ownership_epoch: access.ownershipEpoch, provider_ownership_epoch: provider.ownershipEpoch, app_role: access.role, interface_link_id: link.id,
+      interface_link_generation: link.generation, interface_binding_generation: binding.metadata.generation,
+      interface_generation: iface.metadata.generation };
   }
 
   async update(
@@ -2523,7 +2641,7 @@ export class InterfaceService {
     // The durable owner/resource claim is written only after the Binding row
     // exists. Until #refreshBinding wins that CAS, OAuth delivery is not Ready.
     const initialReadiness =
-      request.delivery.type === "oauth2" && readiness.ready
+      isOAuth2Delivery(request.delivery.type) && readiness.ready
         ? { ready: false, reason: "OAuthResourceClaimPending" }
         : readiness;
     const record: InterfaceBinding = {
@@ -2949,7 +3067,7 @@ export class InterfaceService {
         current.spec.subjectRef,
         this.#bindingDeliveryHandlers,
       );
-      if (readiness.ready && current.spec.delivery.type === "oauth2") {
+      if (readiness.ready && isOAuth2Delivery(current.spec.delivery.type)) {
         const resource = resolvedOAuth2Resource(iface);
         const claim = resource
           ? await this.#claimOAuth2Resource(
@@ -3739,7 +3857,10 @@ function normalizeIssueTokenRequest(
   request: IssueInterfaceTokenRequest,
 ): string {
   const raw = requireRecord(request, "Interface token request");
-  assertOnlyKeys(raw, ["permission"], "Interface token request");
+  assertOnlyKeys(raw, ["permission", "dataScope"], "Interface token request");
+  if (raw.dataScope !== undefined && raw.dataScope !== INTERFACE_APP_DATA_SCOPE) {
+    throw new InterfaceServiceError("invalid_argument", "dataScope is unsupported");
+  }
   validatePermissionToken(raw.permission, "permission");
   return requireText(raw.permission, "permission");
 }
@@ -3784,6 +3905,7 @@ async function bindingReadiness(
 
 function createBindingDeliveryHandlerRegistry(input: {
   readonly credentialIssuerConfigured: boolean;
+  readonly appDataConfigured?: boolean;
   readonly oauth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
   readonly additional?: InterfaceBindingDeliveryHandlerRegistry;
 }): ReadonlyMap<string, InterfaceBindingDeliveryHandler> {
@@ -3798,7 +3920,7 @@ function createBindingDeliveryHandlerRegistry(input: {
       ? { ready: true, reason: "Resolved" }
       : { ready: false, reason: "UnsupportedDeliveryConfiguration" },
   );
-  handlers.set("oauth2", async ({ iface, delivery, subjectRef }) => {
+  const oauth2Handler: InterfaceBindingDeliveryHandler = async ({ iface, delivery, subjectRef }) => {
     if (
       subjectRef.kind !== "Principal" ||
       delivery.credentialRef !== undefined ||
@@ -3825,7 +3947,10 @@ function createBindingDeliveryHandlerRegistry(input: {
       return { ready: false, reason: "OAuthResourceUnauthorized" };
     }
     return { ready: true, reason: "Resolved" };
-  });
+  };
+  handlers.set("oauth2", oauth2Handler);
+  handlers.set(INTERFACE_APP_DATA_DELIVERY, (input_) => input.appDataConfigured
+    ? oauth2Handler(input_) : { ready: false, reason: "AppDataAuthorityUnavailable" });
   // Final Plan v1alpha1 deliberately reserves this exact public token for a
   // future ServiceAccount workload identity implementation. A generic host
   // handler may add another namespaced delivery token, but it must not make
@@ -4307,4 +4432,8 @@ function bindingBelongsToLink(binding: InterfaceBinding, link: InterfaceLink): b
 
 function isMissingInterfaceOwner(error: unknown): boolean {
   return (error instanceof InterfaceServiceError || error instanceof OpenTofuControllerError) && error.code === "not_found";
+}
+
+function isOAuth2Delivery(type: string): boolean {
+  return type === "oauth2" || type === INTERFACE_APP_DATA_DELIVERY;
 }

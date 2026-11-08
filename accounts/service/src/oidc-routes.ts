@@ -1472,12 +1472,13 @@ async function handleUserInfoUncached(input: {
       scope: record.scope,
     };
     if (record.role === "interface-runtime") {
-      body.token_use = "interface_oauth";
+      body.token_use = record.appDataAuthority ? "interface_app_data" : "interface_oauth";
       // The Workspace is compatibility evidence: a Capsule-owned Interface's
       // token is complete without it (TASK-0118 Phase 9).
       body.takosumi = {
-        ...(record.workspaceId ? { workspace_id: record.workspaceId } : {}),
+        ...(!record.appDataAuthority && record.workspaceId ? { workspace_id: record.workspaceId } : {}),
         ...(record.capsuleId ? { capsule_id: record.capsuleId } : {}),
+        ...(record.appDataAuthority ? { app_data: record.appDataAuthority } : {}),
         interface_id: record.interfaceId,
         interface_binding_id: record.interfaceBindingId,
         interface_resolved_revision: record.interfaceResolvedRevision,
@@ -1895,7 +1896,7 @@ function introspectionBody(
   const interfaceOAuth = record.role === "interface-runtime";
   return {
     active: true,
-    token_use: interfaceOAuth ? "interface_oauth" : ordinaryTokenUse,
+    token_use: interfaceOAuth ? (record.appDataAuthority ? "interface_app_data" : "interface_oauth") : ordinaryTokenUse,
     client_id: record.clientId,
     sub: record.subject,
     aud: record.audience ?? record.clientId,
@@ -1903,8 +1904,9 @@ function introspectionBody(
     ...(interfaceOAuth
       ? {
           takosumi: {
-            ...(record.workspaceId ? { workspace_id: record.workspaceId } : {}),
+            ...(!record.appDataAuthority && record.workspaceId ? { workspace_id: record.workspaceId } : {}),
             ...(record.capsuleId ? { capsule_id: record.capsuleId } : {}),
+            ...(record.appDataAuthority ? { app_data: record.appDataAuthority } : {}),
             interface_id: record.interfaceId,
             interface_binding_id: record.interfaceBindingId,
             interface_resolved_revision: record.interfaceResolvedRevision,

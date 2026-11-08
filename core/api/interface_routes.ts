@@ -10,7 +10,7 @@ import type {
   IssueInterfaceTokenRequest,
   UpdateInterfaceRequest,
 } from "takosumi-contract";
-import { isValidInterfacePermissionToken } from "takosumi-contract";
+import { INTERFACE_APP_DATA_SCOPE, isValidInterfacePermissionToken } from "takosumi-contract";
 import { TAKOSUMI_INTERNAL_ACTOR_HEADER } from "takosumi-contract/reference/compat";
 import { decodeActorContext } from "takosumi-contract/internal/rpc";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
@@ -26,6 +26,10 @@ import { parsePageQuery } from "./page_query.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 
 export interface RegisterInterfaceRoutesOptions {
+  /** Private exact-request member identity; never read from request JSON or ActorContext claims. */
+  readonly resolveInterfaceAppDataPrincipal?: (input: {
+    readonly request: Request; readonly actor: ActorContext; readonly consumerCapsuleId: string;
+  }) => Promise<import("../domains/interfaces/service.ts").InterfaceAppDataPrincipal | undefined>;
   readonly service: InterfaceService;
   readonly getInterfaceBearerToken?: () => string | undefined;
   readonly authorizeInterfaceBearer?: (input: {
@@ -391,12 +395,19 @@ export function registerInterfaceRoutes(
         iface.metadata,
       );
       if (!scoped.ok) return scoped.response;
+      const appDataPrincipal = body.dataScope === INTERFACE_APP_DATA_SCOPE && consumer.consumer && options.resolveInterfaceAppDataPrincipal
+        ? await options.resolveInterfaceAppDataPrincipal({ request: c.req.raw, actor: runtimeActor,
+            consumerCapsuleId: consumer.consumer.capsuleId }) : undefined;
+      if (body.dataScope === INTERFACE_APP_DATA_SCOPE && !appDataPrincipal) {
+        throw new InterfaceServiceError("failed_precondition", "Authenticated app-data member context is unavailable");
+      }
       const issued = await options.service.issueToken(
         iface.metadata.id,
         body as unknown as IssueInterfaceTokenRequest,
         {
           workspaceId: iface.metadata.workspaceId,
           subjectId: runtimeActor.actorAccountId,
+          ...(appDataPrincipal ? { appDataPrincipal } : {}),
           ...(consumer.consumer ? { consumer: consumer.consumer } : {}),
         },
         scoped.actor,

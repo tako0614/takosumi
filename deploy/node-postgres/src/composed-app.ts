@@ -1,3 +1,4 @@
+import { resolveInterfaceAppDataPrincipal, validateInterfaceAppDataSource } from "../../../accounts/service/src/interface-app-data.ts";
 /**
  * Composed Takosumi reference app (Bun + Postgres profile).
  *
@@ -268,7 +269,7 @@ export async function buildComposedApp(
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   // The authenticated bearer's app limit for each Interface request, keyed by
   // the request object the Interface routes hand to every callback.
-  const interfaceBearers = new WeakMap<Request, { readonly appIds?: readonly string[] }>();
+  const interfaceBearers = new WeakMap<Request, { readonly token?: string; readonly appIds?: readonly string[] }>();
   const created = await createTakosumiService({
     runtimeEnv,
     ...(input.onActivityRecorded ? { onActivityRecorded: input.onActivityRecorded } : {}),
@@ -352,10 +353,23 @@ export async function buildComposedApp(
         }
       : {}),
     secretCrypto,
+    resolveInterfaceAppDataPrincipal: async ({ request, actor, consumerCapsuleId }) => {
+      const bearer = interfaceBearers.get(request);
+      if (!bearer?.token || bearer.appIds?.length !== 1 || bearer.appIds[0] !== consumerCapsuleId) return undefined;
+      return await resolveInterfaceAppDataPrincipal({ store: input.store, operations: controlPlaneOperations,
+        token: bearer.token, consumerCapsuleId, subjectId: actor.actorAccountId });
+    },
     interfaceCredentialIssuer: {
       issuePrincipalOAuth2Token: async (tokenInput) => {
+        const sourceCurrent = () => tokenInput.appDataAuthority ? validateInterfaceAppDataSource({
+          store: input.store, operations: controlPlaneOperations, authority: tokenInput.appDataAuthority,
+          accountSubject: tokenInput.appDataPrincipal?.accountSubject, client: tokenInput.appDataPrincipal,
+        }) : Promise.resolve(true);
+        if (!(await sourceCurrent())) throw new Error("App-data source grant is not current");
         const issued = await issueInterfaceOAuthAccessToken({
           store: input.store,
+          ...(tokenInput.appDataAuthority ? { appDataAuthority: tokenInput.appDataAuthority,
+            appDataPrincipal: tokenInput.appDataPrincipal! } : {}),
           subject: tokenInput.subjectId,
           workspaceId: tokenInput.workspaceId,
           ...(tokenInput.interfaceOwnerRef.kind === "Capsule"
@@ -368,6 +382,7 @@ export async function buildComposedApp(
           interfaceRevision: tokenInput.interfaceResolvedRevision,
           now: Date.parse(tokenInput.issuedAt),
         });
+        if (!(await sourceCurrent())) throw new Error("App-data source grant changed during issuance");
         return {
           accessToken: issued.accessToken,
           expiresAt: new Date(issued.expiresAt).toISOString(),
@@ -383,6 +398,7 @@ export async function buildComposedApp(
       });
       if (!result.ok) return undefined;
       interfaceBearers.set(request, {
+        token,
         ...(result.auth.appIds !== undefined ? { appIds: result.auth.appIds } : {}),
       });
       const runtimePrincipal = result.auth.credential === "oauth-access-token";

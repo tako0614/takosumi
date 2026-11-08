@@ -134,3 +134,42 @@ export interface InterfaceBinding {
   readonly spec: InterfaceBindingSpec;
   readonly status: InterfaceBindingStatus;
 }
+
+
+/** Explicit app-shared data delegation; never implied by ordinary oauth2. */
+export const INTERFACE_APP_DATA_DELIVERY = "oauth2.app-data.v1" as const;
+export const INTERFACE_APP_DATA_SCOPE = "app-shared.v1" as const;
+export const INTERFACE_APP_DATA_CONTRACT = "takosumi.interface-app-data/v1" as const;
+
+/** Authenticated issuer evidence. Parsing this object alone does not authenticate it. */
+export interface InterfaceAppDataAuthority {
+  readonly contract: typeof INTERFACE_APP_DATA_CONTRACT;
+  readonly namespace_id: string;
+  readonly consumer_capsule_id: string;
+  readonly provider_capsule_id: string;
+  readonly ownership_epoch: number;
+  readonly provider_ownership_epoch: number;
+  readonly app_role: "owner" | "member";
+  readonly interface_link_id: string;
+  readonly interface_link_generation: number;
+  readonly interface_binding_generation: number;
+  readonly interface_generation: number;
+}
+
+export function isInterfaceAppDataAuthority(value: unknown): value is InterfaceAppDataAuthority {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = ["contract", "namespace_id", "consumer_capsule_id", "provider_capsule_id", "ownership_epoch",
+    "provider_ownership_epoch", "app_role", "interface_link_id", "interface_link_generation", "interface_binding_generation", "interface_generation"];
+  const text = (field: string) => typeof record[field] === "string" && (record[field] as string).length > 0 &&
+    (record[field] as string).length <= 512 && !/\s/u.test(record[field] as string);
+  return Object.keys(record).length === keys.length && Object.keys(record).every(key => keys.includes(key)) &&
+    record.contract === INTERFACE_APP_DATA_CONTRACT && typeof record.namespace_id === "string" &&
+    /^appd_[0-9a-f]{64}$/u.test(record.namespace_id) &&
+    ["consumer_capsule_id", "provider_capsule_id", "interface_link_id"].every(text) &&
+    (record.app_role === "owner" || record.app_role === "member") &&
+    ["ownership_epoch", "provider_ownership_epoch"].every(key => typeof record[key] === "number" &&
+      Number.isSafeInteger(record[key]) && (record[key] as number) >= 0) &&
+    ["interface_link_generation", "interface_binding_generation", "interface_generation"].every(key =>
+      typeof record[key] === "number" && Number.isSafeInteger(record[key]) && (record[key] as number) > 0);
+}

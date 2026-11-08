@@ -1,3 +1,4 @@
+import { validateInterfaceAppDataSource } from "./interface-app-data.ts";
 import {
   type AccountsJsonWebKey,
   buildOidcDiscoveryDocument,
@@ -671,7 +672,7 @@ export function createAccountsHandler(
     (options.controlPlaneOperations
       ? () => Promise.resolve(options.controlPlaneOperations)
       : undefined);
-  const interfaceOAuthActivityValidator =
+  const coreInterfaceOAuthActivityValidator =
     options.interfaceOAuthActivityValidator ??
     (resolveControlPlaneOperations
       ? async (evidence: InterfaceOAuthActivityEvidence) => {
@@ -683,6 +684,21 @@ export function createAccountsHandler(
             : false;
         }
       : undefined);
+  const interfaceOAuthActivityValidator = coreInterfaceOAuthActivityValidator
+    ? async (evidence: InterfaceOAuthActivityEvidence) => {
+        if (evidence.appDataAuthority) {
+          const operations = await resolveControlPlaneOperations?.();
+          if (!operations?.interfaces || !(await validateInterfaceAppDataSource({ store: options.store, operations,
+            authority: evidence.appDataAuthority, accountSubject: evidence.accountSubject,
+            client: evidence.appDataClient })) ||
+            !(await operations.interfaces.validatePrincipalOAuth2TokenEvidence(evidence))) return false;
+          // A host extension may narrow app-data access, never replace Core's
+          // live Binding, Link, ownership and member checks.
+          return options.interfaceOAuthActivityValidator
+            ? await options.interfaceOAuthActivityValidator(evidence) : true;
+        }
+        return await coreInterfaceOAuthActivityValidator(evidence);
+      } : undefined;
   // Validate extension-contributed PAT authority once at composition time;
   // request handlers still pass the raw declaration so they cannot widen it.
   personalAccessTokenSelfServiceScopes(
