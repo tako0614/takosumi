@@ -22,6 +22,25 @@ Run の実行中だけ渡ります（[認証情報](../concepts/credentials.md)�
 開くリンクの形式は[Source と Capsule](../concepts/sources.md#画面と外部リンク)にあります。
 `takosumi deploy` / `takosumi plan` で手元のファイルを送る方法は廃止しました。
 
+## 初回導入の試行キーを保持する
+
+`apps install --git <url>`は初回導入の試行を受け付ける補助コマンドです。Plan・承認・Applyの完了は意味しません。
+送信前に、試行キーを標準エラーへ1行のJSON（`kind: "install_attempt_key"`、`idempotencyKey`）で出力します。
+`--json`の標準出力は従来どおりserver responseの1 objectです。キーの出力自体は受付成功の証拠ではありません。
+
+```bash
+export TAKOSUMI_ACCOUNT_TOKEN='<Accounts PAT with read and write>'
+takosumi apps install --git https://git.example.com/team/app.git \
+  --ref main --idempotency-key initial-app-01 --url https://takosumi.example.com --json
+```
+
+`--idempotency-key`を省くとキーを自動生成します。出力したキーを、選択した接続先・本人・Git URL・ref・path・名前・環境と一緒に保持してください。
+応答喪失などで受付結果が不明な場合は、同じ本人・接続先・要求を保ち、同じキーを`--idempotency-key`に指定して手動再送します。
+`--idempotency-key=initial=app=01`も全体を保持します。応答喪失などで受付結果が不明な場合、CLIはPOSTを自動再送しません。
+既存の互換動作として、`--workspace`指定時に新routeが未提供と分かる404を返した場合だけ、同じkeyと要求を旧Workspace routeへ送ります。
+同じkeyと同じ要求は既存attemptを返し、同じkeyで要求が異なる場合は409です。
+期限切れattemptも同じkeyでは新規に置き換えません。元attemptと現在の状態を確認し、不明なまま新keyで始め直さないでください。
+
 ## アプリのGit版更新を確認・実行する
 
 `apps update`は、既存revision coordinatorで指定refの保存Planを作り、変更内容を表示します。承認・Applyは行いません。

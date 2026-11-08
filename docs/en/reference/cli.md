@@ -25,6 +25,25 @@ screen from a Git URL is in
 [Sources and Capsules](../concepts/sources.md#the-screen-and-links-from-outside).
 Sending local files with `takosumi deploy` / `takosumi plan` is retired.
 
+## Retain the first install attempt key
+
+`apps install --git <url>` is a helper that submits a first install attempt. It does not complete Plan, approval, or Apply.
+Before sending, the CLI writes one JSON line to stderr with `kind: "install_attempt_key"` and `idempotencyKey`.
+With `--json`, stdout remains the server response as one object. Printing a key does not prove that the server accepted the request.
+
+```bash
+export TAKOSUMI_ACCOUNT_TOKEN='<Accounts PAT with read and write>'
+takosumi apps install --git https://git.example.com/team/app.git \
+  --ref main --idempotency-key initial-app-01 --url https://takosumi.example.com --json
+```
+
+Omitting `--idempotency-key` generates a key. Retain the printed key together with the selected target, account, Git URL, ref, path, names, and environment.
+If a lost response leaves acceptance unknown, manually retry with the same account, target, request, and `--idempotency-key`.
+Inline values such as `--idempotency-key=initial=app=01` remain intact. The CLI does not automatically resend a POST when a lost response leaves acceptance unknown.
+Existing legacy compatibility remains: with `--workspace`, a recognized route-missing 404 triggers a POST with the same key and request to the old Workspace route.
+The same key and request return the existing attempt; changing the request with that key returns 409.
+An expired attempt is not replaced by a new one under the same key. Inspect the original attempt and current state before starting with a new key.
+
 ## Review and execute an app Git update
 
 `apps update` prepares the requested Git ref through the existing revision coordinator and displays its saved Plan. It never approves or applies it.
