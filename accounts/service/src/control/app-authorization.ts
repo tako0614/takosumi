@@ -280,6 +280,7 @@ async function decideOwnedApp(
       workspaceId: input.workspaceId,
       capsuleId: input.capsuleId,
       appAction: input.action,
+      ownedAppAccess: access,
       ...(input.assertActive ? { assertActive: input.assertActive } : {}),
       ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     });

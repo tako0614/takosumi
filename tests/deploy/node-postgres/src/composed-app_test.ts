@@ -2063,13 +2063,17 @@ test("composed Interface links and late app ownership are decided per app (revie
   assert.equal((await ownerMade.json()).metadata.createdUnder, "app");
 });
 
-async function composedAppDataFixture(options: { customCoreValidator?: boolean; invocationSource?: boolean } = {}) {
+async function composedAppDataFixture(options: {
+  customCoreValidator?: boolean;
+  invocationSource?: boolean;
+  actualPkce?: boolean;
+} = {}) {
   const { oidcClientActivationDigest } = await import("../../../../accounts/service/src/oidc-activation.ts");
   const { capsuleScopeRef } = await import("../../../../contract/capsules.ts");
   const now = Date.now();
   const instant = new Date(now).toISOString();
   const control = new InMemoryOpenTofuControlStore();
-  const scopes = ["openid", "profile", "capsules:read"];
+  const scopes = ["openid", "profile", "capsules:read", ...(options.actualPkce ? ["offline_access"] : [])];
   const requirement = options.invocationSource
     ? { key: "documents", interface: { type: "mcp.server", version: "1" },
       permissions: ["mcp.invoke"], delivery: { type: "oauth2" } }
@@ -2089,17 +2093,25 @@ async function composedAppDataFixture(options: { customCoreValidator?: boolean; 
   const { buildComposedApp } = await import("../../../../deploy/node-postgres/src/composed-app.ts");
   const created = await buildComposedApp({ config: testConfig(), store: store as unknown as PostgresAccountsStore,
     opentofuControlStore: control,
-    createAccountsHandler: operations => createAccountsHandler({ issuer: testConfig().issuer, store, controlPlaneOperations: operations,
+    createAccountsHandler: async operations => {
+      const handlerOptions = { issuer: testConfig().issuer, store, controlPlaneOperations: operations,
       // Existing synthetic resource-server credential fixture, never an operator credential.
       clients: [{ clientId: "resource-server", clientSecret: "resource-secret",
-        redirectUris: ["https://resource.example.test/callback"], tokenEndpointAuthMethod: "client_secret_post" }],
-      ...(options.customCoreValidator ? { interfaceOAuthActivityValidator: async () => true } : {}) }),
+        redirectUris: ["https://resource.example.test/callback"], tokenEndpointAuthMethod: "client_secret_post" as const,
+        ...(options.actualPkce ? { allowedScopes: scopes } : {}) }],
+      ...(options.customCoreValidator ? { interfaceOAuthActivityValidator: async () => true } : {}) };
+      if (!options.actualPkce) return createAccountsHandler(handlerOptions);
+      const { createEphemeralAccountsHandler } = await import("../../../../accounts/service/src/mod.ts");
+      return await createEphemeralAccountsHandler(handlerOptions);
+    },
     runtimeEnv: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN },
     // Resource custody and ingress identity remain synthetic; no provider or SSO operation.
-    interfaceOAuth2ResourceAuthorizer: () => true,
+    interfaceOAuth2ResourceAuthorizer: input => !options.actualPkce ||
+      (input.resource === "https://storage.example.test/objects" && input.ownerRef.kind === "Capsule" && input.ownerRef.id === provider.capsule.id),
   });
   const owner = "tsub_app_data_owner";
   const member = "tsub_app_data_member";
+  if (options.actualPkce) await control.putWorkspace({ ...seeded.workspace, ownerUserId: owner });
   for (const capsuleId of [seeded.capsule.id, provider.capsule.id]) {
     assert.equal(await created.operations.appOwnership.initializeOwnershipIfMissing({ capsuleId, ownerAccountId: owner,
       ownershipEpoch: 0, managementEpoch: 0, managementState: "active", storageRoot: `fixture/${capsuleId}` }), true);
@@ -2116,10 +2128,14 @@ async function composedAppDataFixture(options: { customCoreValidator?: boolean; 
   for (const [token, subject, principal] of [["fixture_data_owner", owner, "pairwise_data_owner"],
     ["fixture_data_member", member, "pairwise_data_member"]] as const) {
     await store.saveAccount({ subject, createdAt: now, updatedAt: now });
-    await store.saveAccessToken(token, { clientId: "client_data_consumer", scope: scopes.join(" "), subject: principal,
-      takosumiSubject: subject, capsuleId: seeded.capsule.id, expiresAt: now + 60_000 });
+    if (options.actualPkce) {
+      await store.saveAccountSession({ sessionId: `sess_${token}`, subject, createdAt: now, expiresAt: now + 60_000 });
+    } else {
+      await store.saveAccessToken(token, { clientId: "client_data_consumer", scope: scopes.join(" "), subject: principal,
+        takosumiSubject: subject, capsuleId: seeded.capsule.id, expiresAt: now + 60_000 });
+    }
   }
-  const iface = await created.operations.interfaces.create({ workspaceId: seeded.workspace.id, name: "data-provider",
+  const iface = await created.operations.interfaces.create({ workspaceId: provider.capsule.workspaceId, name: "data-provider",
     ownerRef: { kind: "Capsule", id: provider.capsule.id }, spec: { type: requirement.interface.type, version: "1", document: {},
       inputs: { endpoint: { source: "literal", value: "https://storage.example.test/objects" } },
       access: { visibility: "private", resourceUriInput: "endpoint" } } });
@@ -2129,7 +2145,7 @@ async function composedAppDataFixture(options: { customCoreValidator?: boolean; 
     { assertCurrent: async () => undefined, mayApproveProvider: async ({ capsuleId }) =>
       (await created.operations.appAccess.resolveAppAccess(owner, capsuleId))?.role === "owner" });
   assert.equal(link!.state, "active");
-  for (const principalId of ["pairwise_data_owner", "pairwise_data_member"]) {
+  for (const principalId of (options.actualPkce ? [] : ["pairwise_data_owner", "pairwise_data_member"])) {
     await created.operations.interfaces.ensureCapsuleRequiredInterfaces({ workspaceId: seeded.workspace.id,
       capsuleId: seeded.capsule.id, principalId, requirements: [requirement] });
   }
@@ -2146,8 +2162,201 @@ async function composedAppDataFixture(options: { customCoreValidator?: boolean; 
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ token, client_id: "resource-server", client_secret: "resource-secret", resource }),
     }));
-  return { created, store, owner, member, seeded, provider, iface, link, issue, userInfo, introspect, now, scopes };
+  return { created, store, control, owner, member, seeded, provider, iface, link, issue, userInfo, introspect, now, scopes };
 }
+
+async function actualAppPkce(f: Awaited<ReturnType<typeof composedAppDataFixture>>, person: "owner" | "member", workspaceId?: string, clientId = "client_data_consumer") {
+  const verifier = crypto.randomUUID().replaceAll("-", "").repeat(2);
+  const { base64UrlEncodeBytes } = await import("../../../../accounts/service/src/encoding.ts");
+  const challenge = base64UrlEncodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+  const redirectUri = clientId === "resource-server" ? "https://resource.example.test/callback" : "https://consumer.example.test/auth/callback";
+  const params = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri,
+    response_type: "code", scope: f.scopes.join(" "), code_challenge: challenge, code_challenge_method: "S256" });
+  if (workspaceId !== undefined) params.set("workspace_id", workspaceId);
+  const authorize = await f.created.app.fetch(new Request(`${testConfig().issuer}/oauth/authorize?${params}`, {
+    headers: { cookie: `takosumi_session=sess_fixture_data_${person}` },
+  }));
+  assert.equal(authorize.status, 302, await authorize.clone().text());
+  const code = new URL(authorize.headers.get("location")!).searchParams.get("code");
+  assert.ok(code);
+  const response = await f.created.app.fetch(new Request(`${testConfig().issuer}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code, client_id: clientId,
+      ...(clientId === "resource-server" ? { client_secret: "resource-secret" } : {}),
+      redirect_uri: redirectUri, code_verifier: verifier }),
+  }));
+  assert.equal(response.status, 200, await response.clone().text());
+  const tokens = await response.json() as { access_token: string; refresh_token: string; id_token: string };
+  assert.ok(tokens.access_token); assert.ok(tokens.refresh_token);
+  return tokens;
+}
+
+async function actualAppRefresh(f: Awaited<ReturnType<typeof composedAppDataFixture>>, refreshToken: string) {
+  const response = await f.created.app.fetch(new Request(`${testConfig().issuer}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", client_id: "client_data_consumer", refresh_token: refreshToken }),
+  }));
+  assert.equal(response.status, 200, await response.clone().text());
+  return await response.json() as { access_token: string; refresh_token: string; id_token: string };
+}
+
+test("actual app PKCE keeps legacy Workspace claims separate from runtime constraints", async () => {
+  const f = await composedAppDataFixture({ actualPkce: true });
+  const owner = await actualAppPkce(f, "owner");
+  const member = await actualAppPkce(f, "member");
+  for (const tokens of [owner, member]) {
+    const row = (await f.store.findAccessToken(tokens.access_token))!;
+    assert.equal(row.capsuleId, f.seeded.capsule.id);
+    assert.equal(row.workspaceId, undefined);
+    assert.equal((await f.store.findRefreshToken(tokens.refresh_token))?.workspaceId, undefined);
+    const listed = await f.created.app.fetch(new Request(`${testConfig().issuer}/api/v1/interfaces?permission=object.read`, {
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    }));
+    assert.equal(listed.status, 200, await listed.clone().text());
+    assert.deepEqual((await listed.json() as any).interfaces.map((i: any) => i.metadata.id), [f.iface.metadata.id]);
+    assert.equal((await f.issue(tokens.access_token)).status, 200);
+  }
+  const ownerInfo = await (await f.userInfo(owner.access_token)).json() as any;
+  assert.equal(ownerInfo.takosumi.workspace_id, f.seeded.workspace.id);
+  assert.equal(ownerInfo.takosumi.role, "owner");
+  assert.equal(ownerInfo.takosumi.app_role, "owner");
+  assert.equal((await (await f.userInfo(member.access_token)).json() as any).takosumi.workspace_id, undefined);
+  assert.notEqual((await f.store.findAccessToken(owner.access_token))?.subject, (await f.store.findAccessToken(member.access_token))?.subject);
+  let current = owner;
+  for (let rotation = 0; rotation < 2; rotation++) {
+    current = await actualAppRefresh(f, current.refresh_token);
+    assert.equal((await f.store.findAccessToken(current.access_token))?.workspaceId, undefined);
+    assert.equal((await f.store.findRefreshToken(current.refresh_token))?.workspaceId, undefined);
+    assert.equal((await f.issue(current.access_token)).status, 200);
+    assert.equal((await (await f.userInfo(current.access_token)).json() as any).takosumi.workspace_id, f.seeded.workspace.id);
+  }
+});
+
+test("saved OAuth Workspace constraints survive code exchange and rotation", async () => {
+  const f = await composedAppDataFixture({ actualPkce: true });
+  // Historical rows use this same saved field. Its value must be inherited
+  // without inferring whether an older issuer obtained it from a claim.
+  let current = await actualAppPkce(f, "owner", f.seeded.workspace.id);
+  let issued = 0;
+  const save = f.store.saveAccessToken.bind(f.store);
+  f.store.saveAccessToken = (token, row) => { if (row.role === "interface-runtime") issued++; return save(token, row); };
+  for (let rotation = 0; rotation < 3; rotation++) {
+    assert.equal((await f.store.findAccessToken(current.access_token))?.workspaceId, f.seeded.workspace.id);
+    assert.equal((await f.store.findRefreshToken(current.refresh_token))?.workspaceId, f.seeded.workspace.id);
+    const denied = await f.created.app.fetch(new Request(`${testConfig().issuer}/api/v1/interfaces?workspaceId=ws_foreign&permission=object.read`, {
+      headers: { authorization: `Bearer ${current.access_token}` },
+    }));
+    assert.equal(denied.status, 403, await denied.clone().text());
+    assert.equal(issued, 0);
+    current = await actualAppRefresh(f, current.refresh_token);
+  }
+});
+
+test("actual app PKCE cannot turn a Workspace claim or unrelated Binding into authority", async () => {
+  const f = await composedAppDataFixture({ actualPkce: true });
+  const tokens = await actualAppPkce(f, "owner");
+  const subject = (await f.store.findAccessToken(tokens.access_token))!.subject;
+  // A real but unrelated Principal Binding in the same internal partition
+  // is insufficient without this consumer's exact active required Link.
+  const unrelated = await f.created.operations.interfaces.create({ workspaceId: f.seeded.workspace.id,
+    name: "not-linked", ownerRef: { kind: "Capsule", id: f.provider.capsule.id }, spec: {
+      type: "storage.object", version: "1", document: {},
+      inputs: { endpoint: { source: "literal", value: "https://storage.example.test/objects" } },
+      access: { visibility: "private", resourceUriInput: "endpoint" },
+    } });
+  await f.created.operations.interfaces.createBinding(unrelated.metadata.id, {
+    subjectRef: { kind: "Principal", id: subject }, permissions: ["object.read"], delivery: { type: "oauth2.app-data.v1" },
+  });
+  for (const path of [`/api/v1/interfaces?workspaceId=${f.seeded.workspace.id}&permission=object.read`,
+    `/api/v1/interfaces/${unrelated.metadata.id}?permission=object.read`]) {
+    const response = await f.created.app.fetch(new Request(`${testConfig().issuer}${path}`, {
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    }));
+    assert.equal(response.status, path.includes("?") && path.includes("workspaceId") ? 400 : 404, await response.clone().text());
+  }
+  let issued = 0;
+  const save = f.store.saveAccessToken.bind(f.store);
+  f.store.saveAccessToken = (token, row) => { if (row.role === "interface-runtime") issued++; return save(token, row); };
+  const response = await f.created.app.fetch(new Request(`${testConfig().issuer}/api/v1/interfaces/${unrelated.metadata.id}/token`, {
+    method: "POST", headers: { authorization: `Bearer ${tokens.access_token}`, "content-type": "application/json" },
+    body: JSON.stringify({ permission: "object.read", dataScope: "app-shared.v1" }),
+  }));
+  assert.equal(response.status, 404, await response.clone().text());
+  assert.equal((await f.issue("invalid-bearer")).status, 401);
+  assert.equal(issued, 0);
+});
+
+test("actual app PKCE rechecks membership, Link, Binding and client before app-data issuance", async () => {
+  for (const mode of ["member", "link", "binding", "client"] as const) {
+    const f = await composedAppDataFixture({ actualPkce: true });
+    const source = await actualAppPkce(f, "member");
+    const response = await f.issue(source.access_token);
+    assert.equal(response.status, 200, mode);
+    const token = (await response.json() as { access_token: string }).access_token;
+    const row = (await f.store.findAccessToken(token))!;
+    assert.equal((await f.userInfo(token)).status, 200, mode);
+    if (mode === "member") await f.created.operations.appOwnership.deleteMember(f.seeded.capsule.id, f.member);
+    if (mode === "link") await f.created.operations.interfaces.revokeCapsuleInterfaceLink(f.seeded.capsule.id, "documents", f.link!.generation);
+    if (mode === "binding") await f.created.operations.interfaces.revokeBinding(f.iface.metadata.id, row.interfaceBindingId!);
+    if (mode === "client") await f.store.revokeOidcClient("client_data_consumer");
+    let issued = 0;
+    const save = f.store.saveAccessToken.bind(f.store);
+    f.store.saveAccessToken = (value, record) => { if (record.role === "interface-runtime") issued++; return save(value, record); };
+    const denied = await f.issue(source.access_token);
+    assert.ok(denied.status >= 400 && denied.status < 500, `${mode}: ${denied.status}`);
+    assert.equal(issued, 0, mode);
+    assert.equal((await f.userInfo(token)).status, 401, mode);
+    assert.equal((await (await f.introspect(token)).json() as { active: boolean }).active, false, mode);
+  }
+});
+
+test("actual app PKCE child credentials retain the current ownership epoch", async () => {
+  const f = await composedAppDataFixture({ actualPkce: true });
+  const source = await actualAppPkce(f, "member");
+  const token = (await (await f.issue(source.access_token)).json() as { access_token: string }).access_token;
+  assert.equal((await f.userInfo(token)).status, 200);
+  const ownership = (await f.created.operations.appOwnership.getOwnership(f.seeded.capsule.id))!;
+  assert.equal(await f.created.operations.appOwnership.putOwnership({ ...ownership,
+    ownershipEpoch: ownership.ownershipEpoch + 1 }, ownership.ownershipEpoch), true);
+  assert.equal((await f.userInfo(token)).status, 401);
+  // A current member may obtain new authority; the old child never upgrades.
+  const fresh = await f.issue(source.access_token);
+  assert.equal(fresh.status, 200, await fresh.clone().text());
+  const info = await (await f.userInfo((await fresh.json() as { access_token: string }).access_token)).json() as any;
+  assert.equal(info.takosumi.app_data.ownership_epoch, ownership.ownershipEpoch + 1);
+});
+
+test("actual app PKCE preserves the own-app control Workspace membership intersection", async () => {
+  const f = await composedAppDataFixture({ actualPkce: true });
+  const owner = await actualAppPkce(f, "owner");
+  const member = await actualAppPkce(f, "member");
+  const read = async (token: string, path: string) => await f.created.app.fetch(new Request(`${testConfig().issuer}${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+  }));
+  const own = await read(owner.access_token, `/api/v1/capsules/${f.seeded.capsule.id}`);
+  assert.equal(own.status, 200, await own.clone().text());
+  // Current app access alone does not replace the retained control membership
+  // intersection; that requirement is independent from the Interface path.
+  assert.equal((await read(member.access_token, `/api/v1/capsules/${f.seeded.capsule.id}`)).status, 403);
+  assert.equal((await read(owner.access_token, `/api/v1/capsules/${f.provider.capsule.id}`)).status, 403);
+  assert.equal((await read(owner.access_token, `/api/v1/workspaces/${f.seeded.workspace.id}/capsules`)).status, 403);
+  await f.control.putWorkspace({ ...f.seeded.workspace, ownerUserId: "other_workspace_owner" });
+  assert.equal((await read(owner.access_token, `/api/v1/capsules/${f.seeded.capsule.id}`)).status, 403);
+  assert.equal((await f.issue(owner.access_token)).status, 200);
+});
+
+test("actual Workspace-only OAuth keeps its explicit legacy fence", async () => {
+  const f = await composedAppDataFixture({ actualPkce: true });
+  const tokens = await actualAppPkce(f, "owner", f.seeded.workspace.id, "resource-server");
+  const row = (await f.store.findAccessToken(tokens.access_token))!;
+  assert.equal(row.capsuleId, undefined);
+  assert.equal(row.workspaceId, f.seeded.workspace.id);
+  const response = await f.created.app.fetch(new Request(`${testConfig().issuer}/api/v1/interfaces?workspaceId=ws_foreign`, {
+    headers: { authorization: `Bearer ${tokens.access_token}` },
+  }));
+  assert.equal(response.status, 403, await response.clone().text());
+  assert.equal((await f.issue(tokens.access_token)).status, 404);
+});
 
 test("composed app-data HTTP producer keeps member subjects distinct and shares one verified namespace", async () => {
   const { created, store, owner, member, seeded, provider, iface, link, issue, userInfo, introspect } = await composedAppDataFixture();

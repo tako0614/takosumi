@@ -874,6 +874,22 @@ is stale/denied without deleting the Apply-repairable client. `updatedAt` is
 ordinary audit time only, not activation authority. The registration carries
 no client secret in InstallConfig, state, Outputs, or the Run sidecar.
 
+For Capsule authorization-code grants, a validated explicit `workspace_id`
+request is saved as the Workspace restriction on the code and inherited by
+access tokens and every refresh rotation. Without that request, an independently
+resolved legacy Workspace role may still appear in current ID token, UserInfo
+and introspection claims; it does not become a stored runtime restriction.
+The app-bound runtime therefore uses its current app Link and individual
+Principal Binding witness. Existing saved Workspace values remain restrictions:
+no old record is reclassified by guessing how it was issued. Workspace-only
+clients retain their existing explicit fence. Public claims remain live-grant
+projections; they are not substitutes for the authenticated request's saved
+constraint or its current app-data authority checks.
+For retained control routes, an unconstrained OAuth token enters the existing
+Workspace membership intersection only after a current owned-app role/epoch/action
+decision and exact token-app/Capsule-partition match. It cannot open an ownership
+fallback, a Workspace-wide request or another app, and does not replace membership.
+
 The Accounts schema change is additive and protected, but its promotion order
 is substrate-specific. For PostgreSQL, apply migration 043, then migration 044,
 before promoting the feature Worker: 043 adds the nullable `activation_digest`

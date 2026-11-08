@@ -94,7 +94,7 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import { appActionAllowed, type AppAction } from "takosumi-contract/app-access";
+import { appActionAllowed, type AppAccess, type AppAction } from "takosumi-contract/app-access";
 import type { AccountsStore } from "../store.ts";
 import {
   installedAppRevisionDelegates,
@@ -665,6 +665,8 @@ export async function canAccessWorkspace(input: {
   readonly workspace?: Workspace;
   readonly capsuleId?: string;
   readonly appAction?: AppAction;
+  /** Passed only after the owned-app fence, current role, epoch and action checks. */
+  readonly ownedAppAccess?: AppAccess;
   readonly assertActive?: () => void;
   readonly diagnostics?: RequestPhaseObserver;
 }): Promise<boolean> {
@@ -699,8 +701,18 @@ export async function canAccessWorkspace(input: {
     input.assertActive?.();
     return capsule.workspaceId === input.workspaceId;
   }
-  // The OAuth compatibility path is limited to an issuance-bound Workspace.
-  if (input.session.appIds !== undefined && !input.session.workspaceId) return false;
+  // An unconstrained app OAuth grant may reach the existing membership
+  // intersection only after the owned-app decision, for its exact own app.
+  // Missing ownership/schema and Workspace-wide callers cannot supply it.
+  if (input.session.appIds !== undefined && !input.session.workspaceId) {
+    if (!isInstalledAppToken(input.session) || input.session.appIds.length !== 1 ||
+      !input.capsuleId || input.session.appIds[0] !== input.capsuleId ||
+      input.ownedAppAccess?.capsuleId !== input.capsuleId ||
+      !appActionAllowed(input.ownedAppAccess.role, input.appAction ?? "view")) return false;
+    const capsule = await input.operations.capsules.getCapsule(input.capsuleId);
+    input.assertActive?.();
+    if (capsule.id !== input.capsuleId || capsule.workspaceId !== input.workspaceId) return false;
+  }
 
   const workspace =
     input.workspace ??
