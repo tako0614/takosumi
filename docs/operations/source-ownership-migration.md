@@ -11,6 +11,15 @@ group ごとの CAS（観測した行と件数を同じ D1 batch で再確認し
 Source ごとに snapshot 行数、distinct archive 数、総 byte 数、live / destroyed アプリ数、
 foreign archive 参照数を計測し、dry-run の group と照合する。
 
+比較 guard は通常、観測した行を JSON の小さい chunk にして bind する。
+保存された physical row 自体は 2 MB 以内でも、その JSON 列を再符号化すると一つの
+bind 値の 2 MB 制限を超える場合がある。その行だけは全 physical 列を直接 bind して
+`IS` で比較し、NULL を含む同じ行の一致を確かめる。表ごとの件数 guard と全行の比較は
+同じ DB batch の書込み前に残す。この処理は有効な行の比較方法を変えるだけで、
+移行後に書く JSON の上限、Worker の resource 制限や batch の実行期限を緩めない。
+[D1 の limits](https://developers.cloudflare.com/d1/platform/limits/)を超える group を
+複数の DB commit に分けて原子性を失う回避は行わない。
+
 D1 の archive 棚卸し例（実行結果は operator の管理領域へ保存する）:
 
 ```sql

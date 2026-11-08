@@ -578,7 +578,7 @@ test("D1 dry-run inventories 1,201 snapshots through bounded keyset pages", asyn
   expect(result?.inventory.snapshotCount).toBe(1_201);
 });
 
-test("D1 refuses an oversized physical guard bound before any mutation", async () => {
+test("D1 fences a valid physical row without overflowing its JSON guard bind", async () => {
   const db = new InterleavedD1();
   const store = await fixture(db, ["cap_a"]);
   const snapshot: SourceSnapshot = { id: "snap_large", origin: "git", workspaceId, sourceId, url,
@@ -593,10 +593,79 @@ test("D1 refuses an oversized physical guard bound before any mutation", async (
     values (?, ?, ?, ?)`).bind(snapshot.id, sourceId, JSON.stringify(snapshot), t0).run();
   const group = await store.readGroup(sourceId);
   const mutation = await prepareSourceOwnershipMigration(group!, new ObjectKeyArtifactReferenceAllocator(), t0);
-  await expect(store.commitGroup(mutation!)).rejects.toThrow(
-    "source_snapshots:snap_large guard needs",
-  );
+  expect(await store.commitGroup(mutation!)).toBe("committed");
+  expect((await store.getSource(sourceId))?.ownerCapsuleId).toBe("cap_a");
+  const saved = await db.prepare("select record_json from source_snapshots where id = ?")
+    .bind(snapshot.id).first<{ record_json: string }>();
+  expect(saved?.record_json).toBe(JSON.stringify(snapshot));
+});
+
+test("D1 rolls back when a large physical row changes after inventory", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a"]);
+  const snapshot: SourceSnapshot = { id: "snap_large", origin: "git", workspaceId, sourceId, url,
+    ref: "main", path: ".", resolvedCommit: "a".repeat(40),
+    archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_large/source.tar.zst`,
+    archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+    fetchedByRunId: "ssr_old", fetchedAt: t0, legacyMetadata: "\\".repeat(900_000) } as SourceSnapshot;
+  await db.prepare("insert into source_snapshots (id, source_id, record_json, fetched_at) values (?, ?, ?, ?)")
+    .bind(snapshot.id, sourceId, JSON.stringify(snapshot), t0).run();
+  const group = await store.readGroup(sourceId);
+  const mutation = await prepareSourceOwnershipMigration(group!, new ObjectKeyArtifactReferenceAllocator(), t0);
+  db.beforeNextBatch = async () => {
+    await db.prepare("update source_snapshots set fetched_at = ? where id = ?")
+      .bind("2026-10-02T00:00:00.000Z", snapshot.id).run();
+  };
+  expect(await store.commitGroup(mutation!)).toBe("conflict");
   expect((await store.getSource(sourceId))?.ownerCapsuleId).toBeUndefined();
+  expect((await db.prepare("select fetched_at from source_snapshots where id = ?")
+    .bind(snapshot.id).first<{ fetched_at: string }>())?.fetched_at).toBe("2026-10-02T00:00:00.000Z");
+});
+
+test("D1 fences normal chunks on both sides of a large physical row", async () => {
+  for (const changed of [false, true]) {
+    const db = new InterleavedD1();
+    const store = await fixture(db, ["cap_a"]);
+    for (const id of ["snap_a", "snap_m", "snap_z"]) {
+      const snapshot: SourceSnapshot = { id, origin: "git", workspaceId, sourceId, url,
+        ref: "main", path: ".", resolvedCommit: "a".repeat(40),
+        archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/${id}/source.tar.zst`,
+        archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+        fetchedByRunId: "ssr_old", fetchedAt: t0,
+        ...(id === "snap_m" ? { legacyMetadata: "\\".repeat(900_000) } : {}) };
+      await db.prepare("insert into source_snapshots (id, source_id, record_json, fetched_at) values (?, ?, ?, ?)")
+        .bind(id, sourceId, JSON.stringify(snapshot), t0).run();
+    }
+    const group = await store.readGroup(sourceId);
+    const mutation = await prepareSourceOwnershipMigration(group!, new ObjectKeyArtifactReferenceAllocator(), t0);
+    if (changed) db.beforeNextBatch = async () => {
+      await db.prepare("update source_snapshots set fetched_at = ? where id = ?")
+        .bind("2026-10-02T00:00:00.000Z", "snap_z").run();
+    };
+    expect(await store.commitGroup(mutation!)).toBe(changed ? "conflict" : "committed");
+    expect((await store.getSource(sourceId))?.ownerCapsuleId).toBe(changed ? undefined : "cap_a");
+  }
+});
+
+test("D1 large-row fence compares nullable physical columns in the same transaction", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, []);
+  const run: SourceSyncRun = { id: "ssr_large", kind: "source_sync", workspaceId, sourceId, url,
+    ref: "main", path: ".", archiveRef: "archive", status: "succeeded", createdAt: t0, updatedAt: t0 };
+  await store.putSourceSyncRun(run);
+  await db.prepare("update runs set run_json = ? where id = ?")
+    .bind(JSON.stringify({ ...run, legacyMetadata: "\\".repeat(900_000) }), run.id).run();
+  expect((await db.prepare("select run_group_id from runs where id = ?")
+    .bind(run.id).first<{ run_group_id: string | null }>())?.run_group_id).toBeNull();
+  const group = await store.readGroup(sourceId);
+  const mutation = await prepareSourceOwnershipMigration(group!, new ObjectKeyArtifactReferenceAllocator(), "2026-10-28T00:00:00.000Z");
+  expect(mutation?.action).toBe("retire");
+  db.beforeNextBatch = async () => {
+    await db.prepare("update runs set run_group_id = ? where id = ?").bind("late_group", run.id).run();
+  };
+  expect(await store.commitGroup(mutation!)).toBe("conflict");
+  expect((await store.getSource(sourceId))?.status).toBe("active");
+  expect((await store.getSource(sourceId))?.autoSync).toBe(true);
 });
 
 test("D1 rolls back the whole migration when the observed Source changes before batch", async () => {
