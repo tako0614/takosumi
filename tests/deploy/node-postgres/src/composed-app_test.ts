@@ -2063,15 +2063,18 @@ test("composed Interface links and late app ownership are decided per app (revie
   assert.equal((await ownerMade.json()).metadata.createdUnder, "app");
 });
 
-async function composedAppDataFixture(options: { customCoreValidator?: boolean } = {}) {
+async function composedAppDataFixture(options: { customCoreValidator?: boolean; invocationSource?: boolean } = {}) {
   const { oidcClientActivationDigest } = await import("../../../../accounts/service/src/oidc-activation.ts");
   const { capsuleScopeRef } = await import("../../../../contract/capsules.ts");
   const now = Date.now();
   const instant = new Date(now).toISOString();
   const control = new InMemoryOpenTofuControlStore();
   const scopes = ["openid", "profile", "capsules:read"];
-  const requirement = { key: "documents", interface: { type: "storage.object", version: "1" },
-    permissions: ["object.read", "object.write"], delivery: { type: "oauth2.app-data.v1" } } as const;
+  const requirement = options.invocationSource
+    ? { key: "documents", interface: { type: "mcp.server", version: "1" },
+      permissions: ["mcp.invoke"], delivery: { type: "oauth2" } }
+    : { key: "documents", interface: { type: "storage.object", version: "1" },
+      permissions: ["object.read", "object.write"], delivery: { type: "oauth2.app-data.v1" } };
   const seeded = await seedCapsuleModel(control, { workspaceId: "ws_app_data_http", capsuleId: "cap_data_consumer",
     sourceId: "src_data_consumer", snapshotId: "snap_data_consumer", name: "data consumer", installConfigId: "cfg_data_consumer", installConfig: {
       requiredInterfaces: [requirement], variableMapping: { oidc_client_id: "client_data_consumer" },
@@ -2117,7 +2120,7 @@ async function composedAppDataFixture(options: { customCoreValidator?: boolean }
       takosumiSubject: subject, capsuleId: seeded.capsule.id, expiresAt: now + 60_000 });
   }
   const iface = await created.operations.interfaces.create({ workspaceId: seeded.workspace.id, name: "data-provider",
-    ownerRef: { kind: "Capsule", id: provider.capsule.id }, spec: { type: "storage.object", version: "1", document: {},
+    ownerRef: { kind: "Capsule", id: provider.capsule.id }, spec: { type: requirement.interface.type, version: "1", document: {},
       inputs: { endpoint: { source: "literal", value: "https://storage.example.test/objects" } },
       access: { visibility: "private", resourceUriInput: "endpoint" } } });
   const [link] = await created.operations.interfaces.ensureCapsuleInterfaceLinks({ workspaceId: seeded.workspace.id,
@@ -2270,4 +2273,239 @@ test("composed app-data Binding revoke denies UserInfo and introspection while m
   assert.equal((await (await f.introspect(token)).json() as { active: boolean }).active, false);
   assert.equal((await f.created.operations.appAccess.resolveAppAccess(f.member, f.seeded.capsule.id))?.role, "member");
   assert.equal((await f.created.operations.interfaces.listCapsuleInterfaceLinks(f.seeded.capsule.id))[0]!.state, "active");
+});
+
+test("M2 invocation retains the authenticated parent grant privately and revalidates revocation", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  const response = await f.created.app.fetch(new Request(`http://localhost/api/v1/interfaces/${f.iface.metadata.id}/token`, {
+    method: "POST", headers: { authorization: "Bearer fixture_data_member", "content-type": "application/json" },
+    body: JSON.stringify({ permission: "mcp.invoke" }),
+  }));
+  assert.equal(response.status, 200, await response.clone().text());
+  const issued = await response.json() as { access_token: string };
+  const row = (await f.store.findAccessToken(issued.access_token))!;
+  const provenance = (row as any).invocationSource;
+  assert.ok(provenance, "actual Node producer must capture authenticated source provenance");
+  assert.equal(provenance.source.kind, "oauth-access-token");
+  assert.equal(provenance.source.accountSubject, f.member);
+  assert.equal(provenance.source.subjectId, "pairwise_data_member");
+  assert.equal(provenance.source.capsuleId, f.seeded.capsule.id);
+  assert.equal(provenance.source.clientId, "client_data_consumer");
+  const { sha256Text } = await import("../../../../accounts/service/src/encoding.ts");
+  assert.equal(provenance.source.tokenHash, await sha256Text("fixture_data_member"));
+  assert.equal(JSON.stringify(row).includes("fixture_data_member"), false);
+  const userInfo = await f.userInfo(issued.access_token);
+  assert.equal(userInfo.status, 200);
+  const claims = await userInfo.json() as any;
+  assert.equal(claims.token_use, "interface_oauth");
+  assert.equal(claims.sub, "pairwise_data_member");
+  assert.equal(claims.invocationSource, undefined);
+  assert.equal(JSON.stringify(claims).includes(f.member), false);
+  assert.equal(JSON.stringify(claims).includes(provenance.source.tokenHash), false);
+  // M2 evidence does not turn an invocation into an Office service or login.
+  assert.equal((await f.issue(issued.access_token)).status, 401);
+  await f.store.deleteToken("fixture_data_member");
+  assert.equal((await f.userInfo(issued.access_token)).status, 401);
+  assert.equal((await (await f.introspect(issued.access_token)).json() as any).active, false);
+});
+
+async function m2Invocation(f: Awaited<ReturnType<typeof composedAppDataFixture>>) {
+  return await f.created.app.fetch(new Request(`http://localhost/api/v1/interfaces/${f.iface.metadata.id}/token`, {
+    method: "POST", headers: { authorization: "Bearer fixture_data_member", "content-type": "application/json" },
+    body: JSON.stringify({ permission: "mcp.invoke" }),
+  }));
+}
+
+test("M2 capture refuses a parent lost after authentication and never downgrades to legacy", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  const lookup = f.store.findAccessTokenByHash.bind(f.store);
+  f.store.findAccessTokenByHash = async hash => { await f.store.deleteToken("fixture_data_member"); return lookup(hash); };
+  let issues = 0;
+  const save = f.store.saveAccessToken.bind(f.store);
+  f.store.saveAccessToken = (token, row) => { issues++; return save(token, row); };
+  assert.equal((await m2Invocation(f)).status, 412);
+  assert.equal(issues, 0);
+});
+
+test("M2 active proof denies changed parent identity, credential, app, scope and private grant fields", async () => {
+  const mutations: Record<string, (row: any) => any> = {
+    canonical: row => ({ ...row, takosumiSubject: "tsub_other" }),
+    pairwise: row => ({ ...row, subject: "other_pairwise" }),
+    client: row => ({ ...row, clientId: "other_client" }),
+    app: row => ({ ...row, capsuleId: "other_app" }),
+    scope: row => ({ ...row, scope: "openid" }),
+    expiry: row => ({ ...row, expiresAt: row.expiresAt + 1 }),
+    kind: row => ({ ...row, role: "interface-runtime" }),
+    workspace: row => ({ ...row, workspaceId: "other_workspace" }),
+    role: row => ({ ...row, role: "owner" }),
+  };
+  for (const [label, mutate] of Object.entries(mutations)) {
+    const f = await composedAppDataFixture({ invocationSource: true });
+    const response = await m2Invocation(f); assert.equal(response.status, 200, label);
+    const token = (await response.json() as any).access_token;
+    assert.equal((await f.userInfo(token)).status, 200, label);
+    await f.store.saveAccessToken("fixture_data_member", mutate((await f.store.findAccessToken("fixture_data_member"))!));
+    assert.equal((await f.userInfo(token)).status, 401, label);
+  }
+});
+
+test("M2 current source rejects client revocation, activation change, canonical alias and authentication fence", async () => {
+  for (const mode of ["client", "activation", "alias", "fence", "missing-hash-reader"] as const) {
+    const f = await composedAppDataFixture({ invocationSource: true });
+    const response = await m2Invocation(f); assert.equal(response.status, 200, mode);
+    const token = (await response.json() as any).access_token;
+    if (mode === "client") await f.store.revokeOidcClient("client_data_consumer");
+    if (mode === "activation") {
+      const client = (await f.store.findOidcClient("client_data_consumer"))!;
+      await f.store.saveOidcClient({ ...client, activationDigest: "changed" });
+    }
+    if (mode === "alias") f.store.findCanonicalAccount = async () => await f.store.findAccount(f.owner);
+    if (mode === "fence") f.store.isAccountAuthenticationFenced = async () => true;
+    if (mode === "missing-hash-reader") (f.store as any).findAccessTokenByHash = undefined;
+    assert.equal((await f.userInfo(token)).status, 401, mode);
+    assert.equal((await (await f.introspect(token)).json() as any).active, false, mode);
+  }
+});
+
+test("M2 parent revocation during async issuance discards the new credential", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  const save = f.store.saveAccessToken.bind(f.store);
+  let child: string | undefined;
+  f.store.saveAccessToken = async (token, row) => {
+    await save(token, row);
+    if (row.invocationSource) { child = token; await f.store.deleteToken("fixture_data_member"); }
+  };
+  assert.equal((await m2Invocation(f)).status, 412);
+  assert.ok(child);
+  assert.equal(await f.store.findAccessToken(child), undefined);
+});
+
+test("M2 TTL is bounded by the original parent and control bearer elevation stays forbidden", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  const parent = (await f.store.findAccessToken("fixture_data_member"))!;
+  parent.expiresAt = Date.now() + 2_500;
+  await f.store.saveAccessToken("fixture_data_member", parent);
+  const response = await m2Invocation(f); assert.equal(response.status, 200);
+  const issued = await response.json() as any;
+  assert.ok(issued.expires_in >= 1 && issued.expires_in <= 2);
+  assert.ok(Date.parse(issued.expires_at) <= parent.expiresAt);
+  assert.equal((await f.issue(issued.access_token)).status, 401);
+});
+
+test("M2 custom activity hooks cannot bypass the actual upstream Link or Binding", async () => {
+  for (const mode of ["link", "binding"] as const) {
+    const f = await composedAppDataFixture({ invocationSource: true, customCoreValidator: true });
+    const response = await m2Invocation(f); assert.equal(response.status, 200);
+    const token = (await response.json() as any).access_token;
+    const row = (await f.store.findAccessToken(token))!;
+    if (mode === "link") await f.created.operations.interfaces.revokeCapsuleInterfaceLink(f.seeded.capsule.id, "documents", f.link!.generation);
+    else await f.created.operations.interfaces.revokeBinding(f.iface.metadata.id, row.interfaceBindingId!);
+    assert.equal((await f.userInfo(token)).status, 401);
+    assert.equal((await (await f.introspect(token)).json() as any).active, false);
+  }
+});
+
+test("M2 private generation, Link and parent locators are authenticated against live source", async () => {
+  for (const mode of ["hash", "interface-generation", "binding-generation", "link-generation", "link-id"] as const) {
+    const f = await composedAppDataFixture({ invocationSource: true });
+    const response = await m2Invocation(f); assert.equal(response.status, 200);
+    const token = (await response.json() as any).access_token;
+    const row = structuredClone((await f.store.findAccessToken(token))!);
+    const proof = row.invocationSource!;
+    if (mode === "hash") (proof.source as any).tokenHash = `sha256:${"a".repeat(43)}`;
+    if (mode === "interface-generation") (proof as any).interfaceGeneration++;
+    if (mode === "binding-generation") (proof as any).bindingGeneration++;
+    if (mode === "link-generation") (proof.link as any).generation++;
+    if (mode === "link-id") (proof.link as any).id = "foreign-link";
+    await f.store.saveAccessToken(token, row);
+    assert.equal((await f.userInfo(token)).status, 401, mode);
+  }
+});
+
+test("M2 record with lost private metadata cannot become a legacy invocation", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  const response = await m2Invocation(f); assert.equal(response.status, 200);
+  const token = (await response.json() as any).access_token;
+  const find = f.store.findAccessToken.bind(f.store);
+  f.store.findAccessToken = tokenValue => {
+    const row = find(tokenValue);
+    if (tokenValue !== token || !row) return row;
+    const { invocationSource: _missing, ...lostMetadata } = row;
+    return lostMetadata;
+  };
+  assert.equal((await f.userInfo(token)).status, 401);
+});
+
+test("M2 source comes from actual authentication and does not permit caller provenance or token exchange", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  const response = await m2Invocation(f); assert.equal(response.status, 200);
+  const token = (await response.json() as any).access_token;
+  const row = (await f.store.findAccessToken(token))!;
+  assert.equal(row.role, "interface-runtime-source-v1");
+  assert.equal(row.takosumiSubject, undefined);
+  let effects = 0;
+  const save = f.store.saveAccessToken.bind(f.store);
+  f.store.saveAccessToken = (value, record) => { effects++; return save(value, record); };
+  const forged = await f.created.app.fetch(new Request(`http://localhost/api/v1/interfaces/${f.iface.metadata.id}/token`, {
+    method: "POST", headers: { authorization: "Bearer fixture_data_member", "content-type": "application/json" },
+    body: JSON.stringify({ permission: "mcp.invoke", invocationSource: row.invocationSource, accountSubject: f.owner }),
+  }));
+  assert.equal(forged.status, 400);
+  const exchange = await f.created.app.fetch(new Request(`${testConfig().issuer}/oauth/token`, { method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:token-exchange", subject_token: token,
+      client_id: "client_data_consumer", resource: "https://storage.example.test/objects" }),
+  }));
+  // This composition has no OIDC flow; rejection precedes grant dispatch.
+  assert.equal(exchange.status, 503);
+  assert.equal((await exchange.json() as any).error.code, "feature_unavailable");
+  assert.equal(effects, 0);
+});
+
+test("M2 retains the actual source grant without inventing an A management-role requirement", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  await f.created.operations.appOwnership.deleteMember(f.seeded.capsule.id, f.member);
+  assert.equal(await f.created.operations.appAccess.resolveAppAccess(f.member, f.seeded.capsule.id), undefined);
+  // The source permits ordinary app sign-in, and the exact MCP Principal
+  // Binding remains granted. Office shared-data membership is a later M1 gate.
+  const response = await m2Invocation(f);
+  assert.equal(response.status, 200, await response.clone().text());
+  const token = (await response.json() as any).access_token;
+  assert.ok((await f.store.findAccessToken(token))!.invocationSource);
+  assert.equal((await f.userInfo(token)).status, 200);
+  assert.equal((await f.issue(token)).status, 401);
+});
+
+test("M2 tracks the existing refresh-chain access revocation without copying a bearer", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  const parent = (await f.store.findAccessToken("fixture_data_member"))!;
+  await f.store.saveRefreshToken("synthetic_refresh_root", { ...parent });
+  await f.store.linkAccessTokenToRefreshChain("synthetic_refresh_root", "fixture_data_member");
+  const response = await m2Invocation(f); assert.equal(response.status, 200);
+  const token = (await response.json() as any).access_token;
+  assert.equal((await f.userInfo(token)).status, 200);
+  await f.store.revokeRefreshChain("synthetic_refresh_root");
+  assert.equal(await f.store.findAccessToken("fixture_data_member"), undefined);
+  assert.equal((await f.userInfo(token)).status, 401);
+});
+
+test("M2 rejects an expired parent or changed capture Binding before issuing", async () => {
+  const f = await composedAppDataFixture({ invocationSource: true });
+  const initial = await m2Invocation(f); assert.equal(initial.status, 200);
+  const row = (await f.store.findAccessToken((await initial.json() as any).access_token))!;
+  const proof = row.invocationSource!;
+  let effects = 0;
+  const save = f.store.saveAccessToken.bind(f.store);
+  f.store.saveAccessToken = (value, record) => { effects++; return save(value, record); };
+  await assert.rejects(() => f.created.operations.interfaces.issueToken(f.iface.metadata.id, { permission: "mcp.invoke" }, {
+    workspaceId: f.iface.metadata.workspaceId, subjectId: proof.source.subjectId,
+    consumer: { capsuleId: proof.source.capsuleId }, invocationSource: proof.source,
+    invocationSourceBinding: { id: row.interfaceBindingId!, generation: proof.bindingGeneration + 1 },
+  }), /Binding changed/);
+  assert.equal(effects, 0);
+  const parent = (await f.store.findAccessToken("fixture_data_member"))!;
+  parent.expiresAt = Date.now() + 500;
+  await save("fixture_data_member", parent);
+  assert.ok([401, 412].includes((await m2Invocation(f)).status));
+  assert.equal(effects, 0);
 });

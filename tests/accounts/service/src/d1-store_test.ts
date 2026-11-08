@@ -840,3 +840,32 @@ function numberValue(value: D1Value): number {
   }
   return value;
 }
+
+test("M2 D1 and memory preserve private hash references and enforce access-only evidence", async () => {
+  const { syntheticInvocationRecord } = await import("../../../helpers/interface-invocation-provenance.ts");
+  const { InMemoryAccountsStore } = await import("../../../../accounts/service/src/store.ts");
+  const record = await syntheticInvocationRecord();
+  for (const store of [new D1AccountsStore(new MemoryD1Database()), new InMemoryAccountsStore()]) {
+    await store.saveAccessToken("synthetic_child", record);
+    expect(await store.findAccessTokenByHash!(await sha256Text("synthetic_child"))).toEqual(record);
+    await expect(async () => await store.saveRefreshToken("synthetic_child", record)).toThrow(/access-token/);
+    await expect(async () => await store.saveAccessToken("synthetic_child", { ...record,
+      invocationSource: { ...record.invocationSource!, unexpected: true } as any })).toThrow(/access-token/);
+    await expect(async () => await store.saveAccessToken("synthetic_child", { ...record, invocationSource: undefined })).toThrow(/access-token/);
+    await expect(async () => await store.saveAccessToken("synthetic_child", { ...record, takosumiSubject: "tsub_person" })).toThrow(/access-token/);
+    await store.deleteToken("synthetic_child");
+    expect(await store.findAccessTokenByHash!(await sha256Text("synthetic_child"))).toBeUndefined();
+  }
+});
+
+test("M2 D1 and memory detach private provenance before an asynchronous store boundary", async () => {
+  const { syntheticInvocationRecord } = await import("../../../helpers/interface-invocation-provenance.ts");
+  const { InMemoryAccountsStore } = await import("../../../../accounts/service/src/store.ts");
+  for (const store of [new D1AccountsStore(new MemoryD1Database()), new InMemoryAccountsStore()]) {
+    const record = await syntheticInvocationRecord();
+    const pending = store.saveAccessToken("synthetic_child", record);
+    (record.invocationSource!.source as any).accountSubject = "changed-after-call";
+    await pending;
+    expect((await store.findAccessTokenByHash!(await sha256Text("synthetic_child")))!.invocationSource!.source.accountSubject).toBe("tsub_person");
+  }
+});

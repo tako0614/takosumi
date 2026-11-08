@@ -1,3 +1,4 @@
+import { isInterfaceInvocationSource, isInterfaceInvocationProvenance, type InterfaceInvocationSource, type InterfaceInvocationProvenance } from "../../../contract/internal-interface-invocation-source.ts";
 import { INTERFACE_APP_DATA_DELIVERY, INTERFACE_APP_DATA_SCOPE, INTERFACE_APP_DATA_CONTRACT,
   isInterfaceAppDataAuthority, type InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import type { AppAccess, AppAccessResolver } from "takosumi-contract/app-access";
@@ -141,6 +142,7 @@ export interface InterfaceAppDataPrincipal {
 }
 
 export interface InterfacePrincipalOAuth2IssueInput {
+  readonly invocationSource?: InterfaceInvocationProvenance;
   readonly appDataAuthority?: InterfaceAppDataAuthority;
   readonly appDataPrincipal?: InterfaceAppDataPrincipal;
   readonly issuedAt: string;
@@ -162,6 +164,7 @@ export interface InterfacePrincipalOAuth2IssueInput {
  * Phase 9); a Workspace-owned Interface still needs its Workspace.
  */
 export interface InterfacePrincipalOAuth2ActivityEvidence {
+  readonly invocationSource?: InterfaceInvocationProvenance;
   readonly appDataAuthority?: InterfaceAppDataAuthority;
   readonly accountSubject?: string;
   /** Compatibility evidence: checked when present, never required with a Capsule. */
@@ -1600,12 +1603,16 @@ export class InterfaceService {
       readonly workspaceId: string;
       readonly subjectId: string;
       readonly appDataPrincipal?: InterfaceAppDataPrincipal;
+      readonly invocationSource?: InterfaceInvocationSource;
+      readonly invocationSourceBinding?: { readonly id: string; readonly generation: number };
       /** Set for a Workspace-free runtime principal (TASK-0118 9.1). */
       readonly consumer?: InterfaceRuntimeConsumer;
     },
     actor?: ActorContext,
   ): Promise<IssueInterfaceTokenResponse> {
     const permission = normalizeIssueTokenRequest(request);
+    const capturedSource = principal.invocationSource === undefined ? undefined : structuredClone(principal.invocationSource);
+    const capturedBinding = principal.invocationSourceBinding === undefined ? undefined : { ...principal.invocationSourceBinding };
     const appDataRequested = request.dataScope === INTERFACE_APP_DATA_SCOPE;
     const deliveryType = appDataRequested ? INTERFACE_APP_DATA_DELIVERY : "oauth2";
     const workspaceId = requireText(principal.workspaceId, "workspaceId");
@@ -1639,6 +1646,9 @@ export class InterfaceService {
         "not_found",
         "Interface token grant not found",
       );
+    }
+    if (capturedBinding && (!capturedSource || capturedBinding.id !== binding.metadata.id || capturedBinding.generation !== binding.metadata.generation)) {
+      throw new InterfaceServiceError("failed_precondition", "Invocation source Binding changed during capture");
     }
     const resource = resolvedOAuth2Resource(iface);
     if (!resource) {
@@ -1676,6 +1686,23 @@ export class InterfaceService {
     const appDataAuthority = appDataRequested
       ? await this.#currentAppDataAuthority(iface, binding, permission, principal.consumer!.capsuleId, appDataPrincipal!.accountSubject)
       : undefined;
+    if (capturedSource && (!isInterfaceInvocationSource(capturedSource) || appDataRequested ||
+      capturedSource.subjectId !== subjectId || capturedSource.capsuleId !== principal.consumer?.capsuleId)) {
+      throw new InterfaceServiceError("failed_precondition", "Invocation source does not match authenticated Principal");
+    }
+    // Only the current app-bound, exact required-Link producer qualifies for M2.
+    // Calls without a capture port keep the legacy profile. A captured source
+    // must never fall back to that profile when its Link proof is unavailable.
+    const origin = binding.metadata.materializedFrom;
+    const sourceLink = capturedSource && origin?.source === "capsule_required_interface" && origin.linkId
+      ? await this.#stores.links.getCurrent({ consumerCapsuleId: capturedSource.capsuleId, requirementKey: origin.requirementKey }) : undefined;
+    const invocationSource: InterfaceInvocationProvenance | undefined = sourceLink && capturedSource && origin?.source === "capsule_required_interface" &&
+      sourceLink.id === origin.linkId && sourceLink.state === "active" && sourceLink.providerInterfaceId === iface.metadata.id
+      ? { source: capturedSource, interfaceGeneration: iface.metadata.generation, bindingGeneration: binding.metadata.generation,
+        link: { id: sourceLink.id, generation: sourceLink.generation } } : undefined;
+    if (capturedSource && !invocationSource) {
+      throw new InterfaceServiceError("failed_precondition", "Authenticated invocation Link source is not current");
+    }
     const issuedAt = this.#now();
     const issuedAtMillis = Date.parse(issuedAt);
     if (!Number.isFinite(issuedAtMillis)) {
@@ -1685,6 +1712,7 @@ export class InterfaceService {
       );
     }
     const issued = await this.#credentialIssuer.issuePrincipalOAuth2Token({
+      ...(invocationSource ? { invocationSource } : {}),
       issuedAt,
       ...(appDataAuthority ? { appDataAuthority, appDataPrincipal: appDataPrincipal! } : {}),
       workspaceId,
@@ -1775,6 +1803,12 @@ export class InterfaceService {
         "conflict",
         "Interface authorization changed during credential issuance",
       );
+    }
+    if (invocationSource?.link) {
+      const currentLink = await this.#stores.links.get(invocationSource.link.id);
+      if (currentLink?.state !== "active" || currentLink.generation !== invocationSource.link.generation) {
+        throw new InterfaceServiceError("conflict", "Invocation source Link changed during issuance");
+      }
     }
     if (appDataAuthority) {
       const currentAuthority = await this.#currentAppDataAuthority(currentInterface, currentBinding!, permission,
@@ -1892,6 +1926,17 @@ export class InterfaceService {
         binding.spec.delivery.type === (input.appDataAuthority ? INTERFACE_APP_DATA_DELIVERY : "oauth2") &&
         binding.spec.delivery.credentialRef === undefined &&
         binding.spec.delivery.options === undefined;
+      if (input.invocationSource) {
+        const proof = input.invocationSource;
+        if (!isInterfaceInvocationProvenance(proof) || input.appDataAuthority || !bindingCurrent || !binding ||
+          proof.source.subjectId !== subjectId || proof.source.accountSubject !== input.accountSubject ||
+          proof.interfaceGeneration !== iface.metadata.generation || proof.bindingGeneration !== binding.metadata.generation) return false;
+        const origin = binding.metadata.materializedFrom;
+        if (origin?.source !== "capsule_required_interface" || origin.capsuleId !== proof.source.capsuleId ||
+          !proof.link || proof.link.id !== origin.linkId) return false;
+        const link = await this.#stores.links.getCurrent({ consumerCapsuleId: origin.capsuleId, requirementKey: origin.requirementKey });
+        if (!link || link.state !== "active" || link.id !== proof.link.id || link.generation !== proof.link.generation) return false;
+      }
       if (input.appDataAuthority) {
         if (!isInterfaceAppDataAuthority(input.appDataAuthority) || !input.accountSubject || !bindingCurrent || !binding) return false;
         const current = await this.#currentAppDataAuthority(iface, binding, input.permission,

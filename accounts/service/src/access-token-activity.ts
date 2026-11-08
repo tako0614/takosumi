@@ -1,7 +1,9 @@
 import { isInterfaceAppDataAuthority, type InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
+import { INTERFACE_INVOCATION_SOURCE_ROLE, isInterfaceOAuthRole, isInterfaceInvocationProvenance, type InterfaceInvocationProvenance } from "../../../contract/internal-interface-invocation-source.ts";
 import type { AccountsStore, TokenRecord } from "./store.ts";
 
 export interface InterfaceOAuthActivityEvidence {
+  readonly invocationSource?: InterfaceInvocationProvenance;
   readonly appDataAuthority?: InterfaceAppDataAuthority;
   readonly accountSubject?: string;
   readonly appDataClient?: { readonly clientId: string; readonly scope: string };
@@ -55,19 +57,23 @@ export async function validateActiveAccessTokenRecord(input: {
   input.assertActive?.();
   const { record } = input;
   const now = input.now ?? Date.now();
-  const interfaceRuntime = record?.role === "interface-runtime";
+  const interfaceRuntime = record !== undefined && isInterfaceOAuthRole(record.role);
   // The Interface owner is named by its Capsule, or by its Workspace for a
   // Workspace-owned Interface. Either one completes the evidence; Core then
   // checks it against the live Interface and Binding.
   const interfaceEvidenceComplete =
     !interfaceRuntime ||
-    (nonEmpty(record.audience) &&
+    (record !== undefined && nonEmpty(record.audience) &&
       (nonEmpty(record.workspaceId) || nonEmpty(record.capsuleId)) &&
       nonEmpty(record.interfaceId) &&
       nonEmpty(record.interfaceBindingId) &&
       typeof record.interfaceResolvedRevision === "number" &&
       Number.isSafeInteger(record.interfaceResolvedRevision) &&
       record.interfaceResolvedRevision > 0 &&
+      (record.role === INTERFACE_INVOCATION_SOURCE_ROLE ? (isInterfaceInvocationProvenance(record.invocationSource) &&
+        record.appDataAuthority === undefined && record.appDataClient === undefined && record.takosumiSubject === undefined &&
+        record.subject === record.invocationSource.source.subjectId && record.expiresAt <= record.invocationSource.source.expiresAt)
+        : record.invocationSource === undefined) &&
       (record.appDataAuthority === undefined || (isInterfaceAppDataAuthority(record.appDataAuthority) &&
         nonEmpty(record.takosumiSubject) && nonEmpty(record.appDataClient?.clientId) && nonEmpty(record.appDataClient?.scope))));
   let interfaceEvidenceCurrent = !interfaceRuntime;
@@ -81,6 +87,8 @@ export async function validateActiveAccessTokenRecord(input: {
         (await input.interfaceOAuthActivityValidator({
           ...(nonEmpty(record!.workspaceId) ? { workspaceId: record!.workspaceId! } : {}),
           ...(record!.capsuleId ? { capsuleId: record!.capsuleId } : {}),
+          ...(record!.invocationSource ? { invocationSource: structuredClone(record!.invocationSource),
+            accountSubject: record!.invocationSource.source.accountSubject } : {}),
           ...(record!.appDataAuthority ? { appDataAuthority: record!.appDataAuthority,
             accountSubject: record!.takosumiSubject!, appDataClient: record!.appDataClient! } : {}),
           interfaceId: record!.interfaceId!,

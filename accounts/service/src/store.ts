@@ -1,4 +1,6 @@
+import { prepareInterfaceInvocationAccessRecord } from "../../../contract/internal-interface-invocation-source.ts";
 import type { InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
+import type { InterfaceInvocationProvenance } from "../../../contract/internal-interface-invocation-source.ts";
 import { hashSessionId } from "./session-hash-salt.ts";
 import { HostedIdentityRecords } from "./hosted-identity-records.ts";
 import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
@@ -61,6 +63,8 @@ export interface AuthorizationCodeRecord {
 }
 
 export interface TokenRecord {
+  /** Access-only private source evidence; never public claims or chain authority. */
+  invocationSource?: InterfaceInvocationProvenance;
   /** Short-lived app-data evidence, absent from ordinary code/refresh grants. */
   appDataAuthority?: InterfaceAppDataAuthority;
   appDataClient?: { readonly clientId: string; readonly scope: string };
@@ -895,6 +899,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   }
 
   saveAccessToken(token: string, record: TokenRecord): void {
+    record = prepareInterfaceInvocationAccessRecord(record, true);
     this.#accessTokens.set(token, record);
   }
 
@@ -912,6 +917,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   }
 
   saveRefreshToken(token: string, record: TokenRecord): void {
+    record = prepareInterfaceInvocationAccessRecord(record, false);
     this.#refreshTokens.set(token, record);
   }
 

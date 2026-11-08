@@ -26,6 +26,9 @@ import { parsePageQuery } from "./page_query.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 
 export interface RegisterInterfaceRoutesOptions {
+  /** Private source provenance captured from this exact authenticated Request. */
+  readonly resolveInterfaceInvocationSource?: (input: { readonly request: Request; readonly actor: ActorContext;
+    readonly consumerCapsuleId: string }) => Promise<import("../../contract/internal-interface-invocation-source.ts").InterfaceInvocationSource | undefined>;
   /** Private exact-request member identity; never read from request JSON or ActorContext claims. */
   readonly resolveInterfaceAppDataPrincipal?: (input: {
     readonly request: Request; readonly actor: ActorContext; readonly consumerCapsuleId: string;
@@ -401,6 +404,18 @@ export function registerInterfaceRoutes(
       if (body.dataScope === INTERFACE_APP_DATA_SCOPE && !appDataPrincipal) {
         throw new InterfaceServiceError("failed_precondition", "Authenticated app-data member context is unavailable");
       }
+      const sourceBinding = body.dataScope === undefined && consumer.consumer && options.resolveInterfaceInvocationSource
+        ? (await options.service.listAuthorizedBindingsForPrincipal(iface.metadata.id, runtimeActor.actorAccountId, permission, consumer.consumer))
+          .find(binding => binding.spec.delivery.type === "oauth2" && binding.spec.delivery.credentialRef === undefined &&
+            binding.spec.delivery.options === undefined) : undefined;
+      const capturesSource = sourceBinding?.metadata.materializedFrom?.source === "capsule_required_interface" &&
+        sourceBinding.metadata.materializedFrom.linkId !== undefined;
+      const invocationSourceBinding = capturesSource && sourceBinding
+        ? { id: sourceBinding.metadata.id, generation: sourceBinding.metadata.generation } : undefined;
+      const invocationSource = capturesSource
+        ? await options.resolveInterfaceInvocationSource!({ request: c.req.raw, actor: runtimeActor,
+          consumerCapsuleId: consumer.consumer!.capsuleId }) : undefined;
+      if (capturesSource && !invocationSource) throw new InterfaceServiceError("failed_precondition", "Authenticated invocation source is unavailable");
       const issued = await options.service.issueToken(
         iface.metadata.id,
         body as unknown as IssueInterfaceTokenRequest,
@@ -408,6 +423,8 @@ export function registerInterfaceRoutes(
           workspaceId: iface.metadata.workspaceId,
           subjectId: runtimeActor.actorAccountId,
           ...(appDataPrincipal ? { appDataPrincipal } : {}),
+          ...(invocationSource ? { invocationSource } : {}),
+          ...(invocationSourceBinding ? { invocationSourceBinding } : {}),
           ...(consumer.consumer ? { consumer: consumer.consumer } : {}),
         },
         scoped.actor,

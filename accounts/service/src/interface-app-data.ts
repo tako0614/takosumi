@@ -1,3 +1,4 @@
+import { isInterfaceOAuthRole } from "../../../contract/internal-interface-invocation-source.ts";
 import { isInterfaceAppDataAuthority, type InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "./store.ts";
@@ -38,7 +39,7 @@ export async function resolveInterfaceAppDataPrincipal(input: {
 }): Promise<SourcePrincipal | undefined> {
   try {
     const record = await input.store.findAccessToken(input.token);
-    if (!record || record.expiresAt <= Date.now() || record.role === "runtime" || record.role === "interface-runtime" ||
+    if (!record || record.expiresAt <= Date.now() || record.role === "runtime" || isInterfaceOAuthRole(record.role) ||
       !record.takosumiSubject || record.subject !== input.subjectId || record.capsuleId !== input.consumerCapsuleId) return undefined;
     const principal = { accountSubject: record.takosumiSubject, clientId: record.clientId, scope: record.scope };
     return await currentSource({ ...input, principal }) ? principal : undefined;

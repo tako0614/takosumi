@@ -1,3 +1,4 @@
+import { isInterfaceOAuthRole } from "../../../contract/internal-interface-invocation-source.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { clearAccountSessionCookie } from "./account-session.ts";
 import { errorJson, json } from "./http-helpers.ts";
@@ -217,7 +218,7 @@ async function resolvePresentedCredentials(
   if (
     accessToken?.takosumiSubject &&
     accessToken.expiresAt > now &&
-    accessToken.role !== "interface-runtime" &&
+    !isInterfaceOAuthRole(accessToken.role) &&
     accessToken.role !== "runtime"
   ) {
     presented.push({

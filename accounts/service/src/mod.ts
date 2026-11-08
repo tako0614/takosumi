@@ -1,4 +1,5 @@
 import { validateInterfaceAppDataSource } from "./interface-app-data.ts";
+import { validateInterfaceInvocationSource } from "./interface-invocation-source.ts";
 import {
   type AccountsJsonWebKey,
   buildOidcDiscoveryDocument,
@@ -686,6 +687,14 @@ export function createAccountsHandler(
       : undefined);
   const interfaceOAuthActivityValidator = coreInterfaceOAuthActivityValidator
     ? async (evidence: InterfaceOAuthActivityEvidence) => {
+        if (evidence.invocationSource) {
+          const operations = await resolveControlPlaneOperations?.();
+          if (!operations?.interfaces || !(await validateInterfaceInvocationSource({ store: options.store, operations,
+            source: evidence.invocationSource.source })) ||
+            !(await operations.interfaces.validatePrincipalOAuth2TokenEvidence(evidence)) ||
+            !(await validateInterfaceInvocationSource({ store: options.store, operations, source: evidence.invocationSource.source }))) return false;
+          return options.interfaceOAuthActivityValidator ? await options.interfaceOAuthActivityValidator(evidence) : true;
+        }
         if (evidence.appDataAuthority) {
           const operations = await resolveControlPlaneOperations?.();
           if (!operations?.interfaces || !(await validateInterfaceAppDataSource({ store: options.store, operations,

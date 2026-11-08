@@ -1,3 +1,4 @@
+import { isInterfaceOAuthRole } from "../../../contract/internal-interface-invocation-source.ts";
 import type {
   TakosumiAccountsPatScope,
   TakosumiSubject,
@@ -443,7 +444,7 @@ export async function requireAccountsBearer(input: {
     }
   }
 
-  const interfaceOAuth = accessRecord?.role === "interface-runtime" || accessRecord?.oidcProfile === "shared-account";
+  const interfaceOAuth = isInterfaceOAuthRole(accessRecord?.role) || accessRecord?.oidcProfile === "shared-account";
   const oauthAccessTokenCandidate =
     accessRecord?.takosumiSubject && !interfaceOAuth
       ? {

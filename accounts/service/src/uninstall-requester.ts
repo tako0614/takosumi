@@ -1,3 +1,4 @@
+import { isInterfaceOAuthRole } from "../../../contract/internal-interface-invocation-source.ts";
 /** Current Accounts grant check for a previously scheduled Capsule uninstall. */
 import type { CapsuleUninstallRequester } from "takosumi-contract/capsules";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
@@ -54,7 +55,7 @@ export async function validateUninstallRequester(
       return record?.takosumiSubject === subject &&
         record.expiresAt > now &&
         record.role !== "runtime" &&
-        record.role !== "interface-runtime" &&
+        !isInterfaceOAuthRole(record.role) &&
         oauthAccessTokenHasScope(record.scope, "write") &&
         (!record.workspaceId || record.workspaceId === workspaceId);
     }
