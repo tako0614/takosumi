@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import {
   chmod,
   link,
@@ -26,6 +26,72 @@ export interface OwnerPrivateReadOptions {
   readonly sourceRoots: readonly string[];
   readonly maxBytes: number;
   readonly label?: string;
+}
+
+/** An approval is authority, so aliases, mutable snapshots and unsafe ancestors are refused. */
+export async function readOwnerPrivateApprovalTextFile(
+  file: string,
+  options: OwnerPrivateReadOptions,
+): Promise<string> {
+  const owner = process.getuid?.();
+  if (owner === undefined || process.geteuid?.() !== owner ||
+    !isAbsolute(file) || options.sourceRoots.length === 0 ||
+    !Number.isSafeInteger(options.maxBytes) || options.maxBytes <= 0) {
+    throw new Error("private approval requires a protected POSIX account invocation");
+  }
+  const target = resolve(file);
+  const parent = dirname(target);
+  await assertApprovalAncestors(parent, owner);
+  await assertOutsideSourceCheckouts(target, options.sourceRoots);
+  const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await handle.stat({ bigint: true });
+    const pathBefore = await lstat(target, { bigint: true });
+    const privateMode = before.mode & 0o777n;
+    if (!before.isFile() || before.uid !== BigInt(owner) || before.nlink !== 1n ||
+      (privateMode !== 0o600n && privateMode !== 0o400n) ||
+      before.size <= 0n || before.size > BigInt(options.maxBytes) ||
+      !sameApprovalSnapshot(before, pathBefore)) {
+      throw new Error("private approval file custody is invalid");
+    }
+    // Bound allocation before reading, including growth after the initial stat.
+    const bytes = Buffer.alloc(Number(before.size) + 1);
+    let count = 0;
+    while (count < bytes.length) {
+      const read = await handle.read(bytes, count, bytes.length - count, count);
+      if (read.bytesRead === 0) break;
+      count += read.bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    const pathAfter = await lstat(target, { bigint: true });
+    if (count !== Number(before.size) || !sameApprovalSnapshot(before, after) ||
+      !sameApprovalSnapshot(after, pathAfter)) {
+      throw new Error("private approval changed during read");
+    }
+    await assertApprovalAncestors(parent, owner);
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, count));
+  } finally {
+    await handle.close();
+  }
+}
+
+function sameApprovalSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return right.isFile() && ["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"]
+    .every(key => left[key as keyof BigIntStats] === right[key as keyof BigIntStats]);
+}
+
+async function assertApprovalAncestors(directory: string, owner: number): Promise<void> {
+  const root = parse(directory).root;
+  let current = root;
+  for (const part of ["", ...relative(root, directory).split(sep).filter(Boolean)]) {
+    if (part) current = join(current, part);
+    const info = await lstat(current);
+    if (!info.isDirectory() || info.isSymbolicLink() ||
+      (info.uid !== 0 && info.uid !== owner) || (info.mode & 0o022) !== 0 ||
+      (current === directory && (info.uid !== owner || (info.mode & 0o777) !== PRIVATE_DIRECTORY_MODE))) {
+      throw new Error("private approval directory custody is invalid");
+    }
+  }
 }
 
 export interface NewOwnerPrivateEvidenceTargetOptions {

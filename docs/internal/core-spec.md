@@ -412,8 +412,14 @@ Current Capsule lifecycle code does not release historical public-host
 reservation rows or perform unrelated bulk OIDC-client cleanup; physical
 retirement of those historical rows waits for operator inventory.
 
-The state-only recovery Core primitive is dormant and operator-only. It has no
-public route or operator authorization entrypoint. Its Worker R2 adapter can
+The state-only recovery Core primitive is operator-only and has no public route
+or default service mount. The explicit [local Bun/Postgres command](../operations/local-state-recovery.md)
+uses a protected, purpose-specific single-case approval matched to the actual
+Unix OS account, selected target label, fixed command timestamp and exact
+already-staged artifact digests. It calls the existing local verifier and ledger
+primitive without staging or runner dispatch. A shared/root UID is account
+privilege, not personal identity; the target label is not a cross-host proof.
+The Worker/R2 authorization entrypoint remains dormant. Its Worker R2 adapter can
 stage operator-selected, bounded OpenTofu state bytes and verify an opaque
 handle against an immutable encrypted generation-1 object. It does not accept
 an arbitrary URL or object key, overwrite an occupied coordinate, or infer
@@ -456,8 +462,9 @@ lineage read to the Plan dispatch contract.
 Portable tests exercise local encrypted staging, the actual Core recovery
 commit and byte-identical state delivery to a captured runner transport. This
 does not qualify a live runner, a complete resource inventory, or an operator
-recovery entrypoint. Neither the local adapter nor the R2 adapter authorizes
-recovery, mounts a route, or repairs an existing environment by itself.
+recovery entrypoint or genuine artifact provenance. The local command is a
+separate OS-account/case authorization boundary; neither artifact adapter alone
+authorizes recovery, mounts a route, or repairs an existing environment.
 
 ## Capsule InstallConfig re-adoption
 
