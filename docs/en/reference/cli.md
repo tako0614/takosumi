@@ -25,6 +25,52 @@ screen from a Git URL is in
 [Sources and Capsules](../concepts/sources.md#the-screen-and-links-from-outside).
 Sending local files with `takosumi deploy` / `takosumi plan` is retired.
 
+## Review and execute an app Git update
+
+`apps update` prepares the requested Git ref through the existing revision coordinator and displays its saved Plan. It never approves or applies it.
+Use a personal Accounts PAT with independent `read` and `write` scopes. Without `--token`, these commands use `TAKOSUMI_ACCOUNT_TOKEN`,
+never the operator's `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
+Each invocation retains its selected URL and credential; the server checks current authorization on every route.
+
+```bash
+export TAKOSUMI_ACCOUNT_TOKEN='<Accounts PAT with read and write>'
+takosumi apps update cap_example --ref release/v2 --idempotency-key update-example-01 \
+  --url https://takosumi.example.com --json
+```
+
+Both `--ref` and `--idempotency-key` are required. After a lost response, retain the same identity, target, app, ref and key for a manual retry.
+Do not repeat an unknown operation with a new key. Reconciliation advances only the same returned coordinator. Inline `--ref=release=v2` retains its complete value.
+An initial definite admission rejection is `refused`; post-create reconcile conflicts or read failures retain the coordinator as `unconfirmed`. Both exit 1.
+
+`review_required` is not update completion. Review the app, `planRunId`, ref, source snapshot, Plan digest, change counts, resource actions and policy.
+`reviewUrl` opens that saved Plan. Missing counts are `null`, never zero. Only after deciding to execute it, use the returned Plan ID separately:
+
+```bash
+takosumi apps apply cap_example --plan plan_example --yes \
+  --url https://takosumi.example.com --json
+```
+
+`--yes` confirms this saved Plan. Deletes or unknown counts additionally require `--allow-destroy`.
+Pre-execution review is one JSON line on stderr; `--json` writes one final result object on stdout.
+The CLI checks the current app, saved Plan and every history page. It observes an existing linked Apply instead of creating another.
+Only a parked approval invokes approve, followed by a fresh Plan read before ordinary apply.
+The server still checks current identity, app authority, credential kind, epoch, policy, state/Plan guards and apply-once.
+A local Plan ID or `--yes` does not grant authority.
+
+A created Apply Run is not completion. Observation lasts up to 120 seconds by default; exit 0 requires that Run to succeed.
+`--timeout-ms <1..120000>` selects the observation budget and does not cancel the server Run.
+After an uncertain approval or Apply response, separately bounded reads take at most five seconds to inspect the same Plan and linked Apply; no POST is automatically repeated.
+`pending` and `indeterminate` exit 1 and retain the original IDs. Continue with read-only observation (`read` scope):
+
+```bash
+takosumi apps apply cap_example --plan plan_example --observe-only \
+  --url https://takosumi.example.com --json
+```
+
+Observation never approves or creates an Apply. Not finding a linked Apply does not prove the original request had no effect.
+`--yes` and `--observe-only` cannot be combined.
+Failed, cancelled or expired Runs also need inspection of the saved Run and app state, rather than a blind new Plan.
+
 ## Setting up the CLI
 
 The CLI lives in this repository's `cli/` and runs directly on Bun. It is not yet
