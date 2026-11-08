@@ -321,6 +321,31 @@ export async function readD1SourceOwnershipGroup(
   return group;
 }
 
+/** Compare a valid physical row without JSON-encoding its already encoded columns. */
+function physicalRowFence(db: D1Database, table: Table, row: PhysicalRow): D1PreparedStatement {
+  const columns = Object.keys(row);
+  // D1 permits at most 100 columns and 100 bound parameters per statement.
+  // Bind id once, along with every other physical column (including NULL).
+  if (columns.length === 0 || columns.length > 100 || !columns.includes("id") ||
+    typeof row.id !== "string" || !columns.every((name) => /^[a-z_]+$/u.test(name))) {
+    throw new Error("D1 Source ownership invalid physical row fence");
+  }
+  for (const name of columns) {
+    const value = row[name];
+    if (typeof value === "string" && encoder.encode(value).byteLength > D1_ROW_MAX_BYTES) {
+      throw new Error(`D1 Source ownership ${table}:${row.id} ${name} exceeds 2 MB bound value limit`);
+    }
+    if (value !== null && typeof value !== "string" &&
+      !(typeof value === "number" && Number.isFinite(value))) {
+      throw new Error("D1 Source ownership invalid physical row value");
+    }
+  }
+  return db.prepare(`select case when exists (select 1 from ${table} t where
+    ${columns.map((name) => `t.${name} is ?`).join(" and ")}) then 1
+    else json_extract('source_ownership_conflict', '$') end as guard`)
+    .bind(...columns.map((name) => row[name]));
+}
+
 function fence(db: D1Database, observed: ObservedTable): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [db.prepare(`select case when
     (select count(*) from ${observed.table} where ${observed.where}) = ?
@@ -333,14 +358,16 @@ function fence(db: D1Database, observed: ObservedTable): D1PreparedStatement[] {
       const next = [...chunk, candidate];
       const nextBytes = encoder.encode(JSON.stringify(next)).byteLength;
       if (nextBytes > D1_GUARD_BIND_MAX_BYTES) {
-        if (chunk.length === 0) throw new Error(
-          `D1 Source ownership ${observed.table}:${candidate.id} guard needs ${nextBytes} bytes; cannot fit one 2 MB D1 bound value`,
-        );
+        if (chunk.length === 0) {
+          statements.push(physicalRowFence(db, observed.table, candidate));
+          i++;
+        }
         break;
       }
       chunk.push(candidate);
       i++;
     }
+    if (chunk.length === 0) continue;
     const columns = Object.keys(chunk[0]!);
     if (!columns.every((name) => /^[a-z_]+$/u.test(name))) throw new Error("D1 Source ownership unexpected column");
     const mismatch = columns.map((name) =>
