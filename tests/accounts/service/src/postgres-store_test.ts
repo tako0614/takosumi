@@ -710,3 +710,42 @@ test("Postgres app-data access-token evidence survives JSONB writer-reader proje
   expect(shared).toMatchObject({ oidcProfile: "shared-account", identityGeneration: 1, sid: "fixture_session" });
   expect(shared.appDataAuthority).toBeUndefined();
 });
+
+test("M2 Postgres private evidence survives access JSONB projection and rejects refresh or mixed profiles", async () => {
+  const { syntheticInvocationRecord } = await import("../../../helpers/interface-invocation-provenance.ts");
+  const { sha256Text } = await import("../../../../accounts/service/src/encoding.ts");
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  const record = await syntheticInvocationRecord();
+  await store.saveAccessToken("synthetic_child", record);
+  const saved = client.calls[0]!;
+  const metadata = JSON.parse(saved.args[14] as string);
+  expect(metadata).toEqual({ invocationSource: record.invocationSource });
+  expect(JSON.stringify(saved.args)).not.toContain("synthetic_child");
+  expect(JSON.stringify(saved.args)).not.toContain("synthetic_parent_only");
+  client.queuedRows.push([{ client_id: record.clientId, audience: record.audience, scope: record.scope,
+    subject: record.subject, takosumi_subject: record.takosumiSubject, capsule_id: record.capsuleId,
+    workspace_id: record.workspaceId, role: record.role, interface_id: record.interfaceId,
+    interface_binding_id: record.interfaceBindingId, interface_resolved_revision: 1,
+    expires_at: new Date(record.expiresAt), hosted_metadata: metadata }]);
+  expect(await store.findAccessTokenByHash(await sha256Text("synthetic_child"))).toEqual(record);
+  const before = client.calls.length;
+  await expect(store.saveRefreshToken("synthetic_child", record)).rejects.toThrow(/access-token/);
+  await expect(store.saveAccessToken("synthetic_child", { ...record, appDataClient: { clientId: "wrong", scope: "openid" } })).rejects.toThrow(/access-token/);
+  await expect(store.saveAccessToken("synthetic_child", { ...record,
+    invocationSource: { ...record.invocationSource!, unexpected: true } as any })).rejects.toThrow(/access-token/);
+  await expect(store.saveAccessToken("synthetic_child", { ...record, invocationSource: undefined })).rejects.toThrow(/access-token/);
+  await expect(store.saveAccessToken("synthetic_child", { ...record, takosumiSubject: "tsub_person" })).rejects.toThrow(/access-token/);
+  expect(client.calls).toHaveLength(before);
+});
+
+test("M2 Postgres detaches provenance before hashing and writing", async () => {
+  const { syntheticInvocationRecord } = await import("../../../helpers/interface-invocation-provenance.ts");
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  const record = await syntheticInvocationRecord();
+  const pending = store.saveAccessToken("synthetic_child", record);
+  (record.invocationSource!.source as any).accountSubject = "changed-after-call";
+  await pending;
+  expect(JSON.parse(client.calls[0]!.args[14] as string).invocationSource.source.accountSubject).toBe("tsub_person");
+});

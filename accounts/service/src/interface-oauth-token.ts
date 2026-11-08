@@ -1,4 +1,5 @@
 import { isInterfaceAppDataAuthority, type InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
+import { INTERFACE_INVOCATION_SOURCE_ROLE, isInterfaceInvocationProvenance, type InterfaceInvocationProvenance } from "../../../contract/internal-interface-invocation-source.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { isValidInterfacePermissionToken } from "takosumi-contract";
 import { base64UrlEncodeBytes } from "./encoding.ts";
@@ -7,6 +8,7 @@ import type { AccountsStore } from "./store.ts";
 export const INTERFACE_OAUTH_ACCESS_TOKEN_MAX_TTL_SECONDS = 60;
 
 export interface IssueInterfaceOAuthAccessTokenInput {
+  readonly invocationSource?: InterfaceInvocationProvenance;
   readonly appDataAuthority?: InterfaceAppDataAuthority;
   readonly appDataPrincipal?: { readonly accountSubject: string; readonly clientId: string; readonly scope: string };
   readonly store: AccountsStore;
@@ -55,7 +57,7 @@ export async function issueInterfaceOAuthAccessToken(
     input.interfaceRevision,
     "interfaceRevision",
   );
-  const ttlSeconds = positiveSafeInteger(
+  let ttlSeconds = positiveSafeInteger(
     input.ttlSeconds ?? INTERFACE_OAUTH_ACCESS_TOKEN_MAX_TTL_SECONDS,
     "ttlSeconds",
   );
@@ -65,6 +67,16 @@ export async function issueInterfaceOAuthAccessToken(
     );
   }
   const issuedAt = nonNegativeSafeInteger(input.now ?? Date.now(), "now");
+  const invocationSource = input.invocationSource === undefined ? undefined : structuredClone(input.invocationSource);
+  if (invocationSource !== undefined) {
+    if (!isInterfaceInvocationProvenance(invocationSource) || input.appDataAuthority || input.appDataPrincipal ||
+      invocationSource.source.subjectId !== subject ||
+      input.takosumiSubject !== undefined) {
+      throw new TypeError("Invocation provenance must match its authenticated Principal");
+    }
+    ttlSeconds = Math.min(ttlSeconds, Math.floor((invocationSource.source.expiresAt - issuedAt) / 1_000));
+    if (ttlSeconds < 1) throw new RangeError("Invocation parent grant has insufficient lifetime");
+  }
   const expiresAt = issuedAt + ttlSeconds * 1_000;
   if (!Number.isSafeInteger(expiresAt)) {
     throw new RangeError("token expiry exceeds the safe integer range");
@@ -92,6 +104,7 @@ export async function issueInterfaceOAuthAccessToken(
     audience,
     scope: permission,
     subject,
+    ...(invocationSource ? { invocationSource } : {}),
     ...(appDataAuthority ? { appDataAuthority,
       appDataClient: { clientId: appDataPrincipal!.clientId, scope: appDataPrincipal!.scope },
       takosumiSubject: appDataPrincipal!.accountSubject as TakosumiSubject } : {}),
@@ -100,7 +113,7 @@ export async function issueInterfaceOAuthAccessToken(
       : {}),
     ...(capsuleId ? { capsuleId } : {}),
     workspaceId,
-    role: "interface-runtime",
+    role: invocationSource ? INTERFACE_INVOCATION_SOURCE_ROLE : "interface-runtime",
     interfaceId,
     interfaceBindingId,
     interfaceResolvedRevision,

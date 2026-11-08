@@ -1,3 +1,4 @@
+import { prepareInterfaceInvocationAccessRecord } from "../../../contract/internal-interface-invocation-source.ts";
 import { HostedIdentityRecords } from "./hosted-identity-records.ts";
 import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
 import { D1IdentityRecordRepository } from "./d1-identity-records.ts";
@@ -937,6 +938,7 @@ export class D1AccountsStore implements AccountsStore {
   }
 
   async saveAccessToken(token: string, record: TokenRecord): Promise<void> {
+    record = prepareInterfaceInvocationAccessRecord(record, true);
     await this.#put("access_tokens", await hashSecret(token), record);
   }
 
@@ -951,6 +953,7 @@ export class D1AccountsStore implements AccountsStore {
   }
 
   async saveRefreshToken(token: string, record: TokenRecord): Promise<void> {
+    record = prepareInterfaceInvocationAccessRecord(record, false);
     await this.#put("refresh_tokens", await hashSecret(token), record);
   }
 

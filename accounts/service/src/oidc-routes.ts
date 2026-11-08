@@ -1,3 +1,4 @@
+import { isInterfaceOAuthRole } from "../../../contract/internal-interface-invocation-source.ts";
 import { InterfaceServiceError } from "../../../core/domains/interfaces/service.ts";
 import {
   TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES,
@@ -1471,7 +1472,7 @@ async function handleUserInfoUncached(input: {
       aud: audience,
       scope: record.scope,
     };
-    if (record.role === "interface-runtime") {
+    if (isInterfaceOAuthRole(record.role)) {
       body.token_use = record.appDataAuthority ? "interface_app_data" : "interface_oauth";
       // The Workspace is compatibility evidence: a Capsule-owned Interface's
       // token is complete without it (TASK-0118 Phase 9).
@@ -1710,7 +1711,7 @@ async function handleIntrospectUncached(input: {
   if (accessRecord) {
     if (auth.client.profile === "shared-account" && accessRecord.oidcProfile !== "shared-account") return json({active:false});
     if (!(await hostedGrantIsActive({store:input.store,record:accessRecord,client:auth.client,issuer:input.issuer}))) return json({active:false});
-    const interfaceOAuth = accessRecord.role === "interface-runtime";
+    const interfaceOAuth = isInterfaceOAuthRole(accessRecord.role);
     // Ordinary OAuth tokens remain client-owned. Interface invocation tokens
     // are resource-owned: a confidential Accounts client may introspect them
     // only when it supplies the exact resource audience it is serving.
@@ -1893,7 +1894,7 @@ function introspectionBody(
   if (record.expiresAt < Date.now()) {
     return { active: false };
   }
-  const interfaceOAuth = record.role === "interface-runtime";
+  const interfaceOAuth = isInterfaceOAuthRole(record.role);
   return {
     active: true,
     token_use: interfaceOAuth ? (record.appDataAuthority ? "interface_app_data" : "interface_oauth") : ordinaryTokenUse,

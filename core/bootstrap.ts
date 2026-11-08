@@ -553,6 +553,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly authorizeInterfaceApp?: RegisterInterfaceRoutesOptions["authorizeInterfaceApp"];
   readonly resolveInterfaceAppDataPrincipal?: RegisterInterfaceRoutesOptions["resolveInterfaceAppDataPrincipal"];
+  readonly resolveInterfaceInvocationSource?: RegisterInterfaceRoutesOptions["resolveInterfaceInvocationSource"];
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
   /**
@@ -1862,6 +1863,7 @@ export async function createTakosumiService(
         : {}),
       ...(options.resolveInterfaceAppDataPrincipal
         ? { resolveInterfaceAppDataPrincipal: options.resolveInterfaceAppDataPrincipal } : {}),
+      ...(options.resolveInterfaceInvocationSource ? { resolveInterfaceInvocationSource: options.resolveInterfaceInvocationSource } : {}),
     },
     metricsRouteOptions: metricsScrapeToken
       ? {

@@ -1184,6 +1184,48 @@ token use until their owner explicitly adopts this separate data authority.
 This producer contract does not itself qualify a Storage/Office receiver or a
 live issuer, client registration, provider or deployment.
 
+### Private provenance of an app-bound invocation
+
+The Node composition captures source evidence from the exact Request's successful
+Accounts OAuth authentication. M2 currently supports an app-bound OAuth access
+token and an exact materialized required-Interface Link. It does not infer a
+canonical person from public `sub`, Actor fields, owner metadata or caller JSON.
+The internal `takosumi.interface-invocation-source/v1` record binds the canonical
+account, credential kind, existing access-token hash, client-local subject,
+source app/client/scope/expiry/activation and any existing Workspace/role
+restriction. Core adds the current Interface/Binding generations and Link identity
+and generation. The hash references the existing Accounts ledger; the parent
+bearer is never copied into the child record, public claims or audit.
+
+An M2 access record uses the private `interface-runtime-source-v1` discriminator
+and stores its canonical account only inside the private provenance. Its public
+profile remains `interface_oauth`, with the same individual `sub`, audience,
+permission and Interface/Binding evidence. Missing or malformed private evidence
+cannot downgrade this record into a legacy invocation or an account/control
+bearer. Stores enforce access-only, unmixed evidence using existing JSON/JSONB
+storage; no new schema or refresh token is introduced.
+
+Before and after asynchronous issuance, Accounts rereads the parent by its exact
+hash and validates the captured fields, current canonical account and authentication
+fence, registered client/activation, and the source's current OIDC grant. The
+child lifetime is the shorter of 60 seconds and the parent's remaining whole
+seconds; less than one second is refused. UserInfo/introspection repeat the source
+and mandatory Core Link/Binding/Interface checks. Custom hooks can narrow these
+checks only. The source's existing sign-in policy remains authoritative: M2
+does not add a management-role requirement to an A app that permits ordinary
+user sign-in. Office B shared-data membership is a separate downstream condition.
+
+Calls without the private capture capability and old records keep their legacy
+profile and acquire no M2 proof. In the configured Node producer, failure to
+validate an authenticated app-bound source or its required Link refuses issuance;
+it never retries as a legacy token. Partial persistence also fails closed.
+
+M2 proves source provenance only. It does not authenticate Office B as a service,
+authorize an Agent-to-Office-to-Storage exchange, satisfy Office tool policy, or
+change Storage's closed eleven-field app-data profile. A future explicit private
+exchange still needs independently authenticated Office service custody and both
+current grants; that M1 producer and exchange remain unimplemented here.
+
 ## Takoform and external Form Hosts
 
 The Takoform API specification owns the Host API contract and exact identity

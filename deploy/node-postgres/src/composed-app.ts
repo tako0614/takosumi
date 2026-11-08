@@ -1,4 +1,6 @@
 import { resolveInterfaceAppDataPrincipal, validateInterfaceAppDataSource } from "../../../accounts/service/src/interface-app-data.ts";
+import { captureInterfaceInvocationSource, validateInterfaceInvocationSource, type AuthenticatedInvocationSource } from "../../../accounts/service/src/interface-invocation-source.ts";
+import { InterfaceServiceError } from "../../../core/domains/interfaces/service.ts";
 /**
  * Composed Takosumi reference app (Bun + Postgres profile).
  *
@@ -269,7 +271,8 @@ export async function buildComposedApp(
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   // The authenticated bearer's app limit for each Interface request, keyed by
   // the request object the Interface routes hand to every callback.
-  const interfaceBearers = new WeakMap<Request, { readonly token?: string; readonly appIds?: readonly string[] }>();
+  const interfaceBearers = new WeakMap<Request, { readonly token?: string; readonly appIds?: readonly string[];
+    readonly source?: AuthenticatedInvocationSource }>();
   const created = await createTakosumiService({
     runtimeEnv,
     ...(input.onActivityRecorded ? { onActivityRecorded: input.onActivityRecorded } : {}),
@@ -353,6 +356,16 @@ export async function buildComposedApp(
         }
       : {}),
     secretCrypto,
+    resolveInterfaceInvocationSource: async ({ request, actor, consumerCapsuleId }) => {
+      const source = interfaceBearers.get(request)?.source;
+      if (!source) throw new InterfaceServiceError("failed_precondition", "Authenticated invocation source is unavailable");
+      if (source.capsuleId !== consumerCapsuleId || source.subjectId !== actor.actorAccountId) {
+        throw new InterfaceServiceError("failed_precondition", "Authenticated invocation source changed");
+      }
+      const captured = await captureInterfaceInvocationSource({ store: input.store, operations: controlPlaneOperations, authenticated: source });
+      if (!captured) throw new InterfaceServiceError("failed_precondition", "Authenticated invocation source is not current");
+      return captured;
+    },
     resolveInterfaceAppDataPrincipal: async ({ request, actor, consumerCapsuleId }) => {
       const bearer = interfaceBearers.get(request);
       if (!bearer?.token || bearer.appIds?.length !== 1 || bearer.appIds[0] !== consumerCapsuleId) return undefined;
@@ -361,6 +374,12 @@ export async function buildComposedApp(
     },
     interfaceCredentialIssuer: {
       issuePrincipalOAuth2Token: async (tokenInput) => {
+        const invocationCurrent = () => tokenInput.invocationSource ? validateInterfaceInvocationSource({
+          store: input.store, operations: controlPlaneOperations, source: tokenInput.invocationSource.source,
+        }) : Promise.resolve(true);
+        if (!(await invocationCurrent()) || (tokenInput.invocationSource && tokenInput.invocationSource.source.expiresAt - Date.now() < 1_000)) {
+          throw new InterfaceServiceError("failed_precondition", "Invocation parent grant is not current or has insufficient lifetime");
+        }
         const sourceCurrent = () => tokenInput.appDataAuthority ? validateInterfaceAppDataSource({
           store: input.store, operations: controlPlaneOperations, authority: tokenInput.appDataAuthority,
           accountSubject: tokenInput.appDataPrincipal?.accountSubject, client: tokenInput.appDataPrincipal,
@@ -368,6 +387,7 @@ export async function buildComposedApp(
         if (!(await sourceCurrent())) throw new Error("App-data source grant is not current");
         const issued = await issueInterfaceOAuthAccessToken({
           store: input.store,
+          ...(tokenInput.invocationSource ? { invocationSource: tokenInput.invocationSource } : {}),
           ...(tokenInput.appDataAuthority ? { appDataAuthority: tokenInput.appDataAuthority,
             appDataPrincipal: tokenInput.appDataPrincipal! } : {}),
           subject: tokenInput.subjectId,
@@ -383,6 +403,10 @@ export async function buildComposedApp(
           now: Date.parse(tokenInput.issuedAt),
         });
         if (!(await sourceCurrent())) throw new Error("App-data source grant changed during issuance");
+        if (!(await invocationCurrent())) {
+          await input.store.deleteToken(issued.accessToken);
+          throw new InterfaceServiceError("failed_precondition", "Invocation parent grant changed during issuance");
+        }
         return {
           accessToken: issued.accessToken,
           expiresAt: new Date(issued.expiresAt).toISOString(),
@@ -397,8 +421,14 @@ export async function buildComposedApp(
         scope: requiredScope,
       });
       if (!result.ok) return undefined;
+      const grant = result.auth.uninstallRequester.grant;
+      const source: AuthenticatedInvocationSource | undefined = result.auth.credential === "oauth-access-token" &&
+        grant?.kind === "oauth-access-token" && result.auth.oauthClientId && result.auth.principalSubject && result.auth.appIds?.length === 1
+        ? { kind: "oauth-access-token", tokenHash: grant.tokenHash, accountSubject: result.auth.subject,
+          subjectId: result.auth.principalSubject, clientId: result.auth.oauthClientId, capsuleId: result.auth.appIds[0]! } : undefined;
       interfaceBearers.set(request, {
         token,
+        ...(source ? { source } : {}),
         ...(result.auth.appIds !== undefined ? { appIds: result.auth.appIds } : {}),
       });
       const runtimePrincipal = result.auth.credential === "oauth-access-token";
