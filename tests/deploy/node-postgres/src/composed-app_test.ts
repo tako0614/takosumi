@@ -2436,6 +2436,24 @@ test("M2 record with lost private metadata cannot become a legacy invocation", a
   assert.equal((await f.userInfo(token)).status, 401);
 });
 
+test("M2 read-time validation rejects a source record mixed with shared-account metadata", async () => {
+  for (const endpoint of ["userinfo", "introspection"] as const) {
+    const f = await composedAppDataFixture({ invocationSource: true });
+    const response = await m2Invocation(f); assert.equal(response.status, 200);
+    const token = (await response.json() as any).access_token;
+    assert.equal((await f.userInfo(token)).status, 200);
+    const find = f.store.findAccessToken.bind(f.store);
+    // Simulate malformed persisted metadata on read, outside guarded writers.
+    f.store.findAccessToken = tokenValue => {
+      const row = find(tokenValue);
+      return tokenValue === token && row ? { ...row, oidcProfile: "shared-account" } : row;
+    };
+    if (endpoint === "userinfo") assert.equal((await f.userInfo(token)).status, 401);
+    else assert.equal((await (await f.introspect(token)).json() as any).active, false);
+    assert.equal(await find(token), undefined, "mixed record must be rejected and removed by active validation");
+  }
+});
+
 test("M2 source comes from actual authentication and does not permit caller provenance or token exchange", async () => {
   const f = await composedAppDataFixture({ invocationSource: true });
   const response = await m2Invocation(f); assert.equal(response.status, 200);

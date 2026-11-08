@@ -71,7 +71,7 @@ export async function validateActiveAccessTokenRecord(input: {
       Number.isSafeInteger(record.interfaceResolvedRevision) &&
       record.interfaceResolvedRevision > 0 &&
       (record.role === INTERFACE_INVOCATION_SOURCE_ROLE ? (isInterfaceInvocationProvenance(record.invocationSource) &&
-        record.appDataAuthority === undefined && record.appDataClient === undefined && record.takosumiSubject === undefined &&
+        record.oidcProfile === undefined && record.appDataAuthority === undefined && record.appDataClient === undefined && record.takosumiSubject === undefined &&
         record.subject === record.invocationSource.source.subjectId && record.expiresAt <= record.invocationSource.source.expiresAt)
         : record.invocationSource === undefined) &&
       (record.appDataAuthority === undefined || (isInterfaceAppDataAuthority(record.appDataAuthority) &&
