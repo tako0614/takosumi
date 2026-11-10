@@ -114,6 +114,7 @@ const CONTRACT_PACKAGE = {
 const { RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE } = await import(
   "./runner-image-release-contract.ts"
 );
+const { OSS_GITHUB_RELEASE_CONTRACT_SURFACE } = await import("./oss-github-release-contract.ts");
 const { AUTH_STAGING_RELEASE_SURFACES } = await import(
   "./auth-staging-release-contract.ts"
 );
@@ -162,6 +163,7 @@ const CONTRACT = {
     platformContract(PLATFORM_STAGING),
     platformContract(PLATFORM_PRODUCTION),
     ...AUTH_STAGING_RELEASE_SURFACES,
+    OSS_GITHUB_RELEASE_CONTRACT_SURFACE,
     ...CONTROL_SCHEMA_SURFACES.map(({ surface, target, environment }) => ({
       surface,
       target,
@@ -307,7 +309,7 @@ if (process.argv[2] === "--lineage-selftest") {
   process.stdout.write(
     `${JSON.stringify(
       await runLineageSelfTest(corpusRoot, lineageClass, {
-        // The only identity this repository publishes as a git tag. No corpus
+        // The package publication identity used by this historical corpus. No corpus
         // checkout carries it, which is why every case is refused for the
         // published-identity class — exactly what that class owes.
         tag:
@@ -332,6 +334,11 @@ if (!requested || !known.includes(requested)) {
 }
 
 const selected = requested;
+
+if (selected === OSS_GITHUB_RELEASE_CONTRACT_SURFACE.surface) {
+  const { runOssGitHubRelease } = await import("./oss-github-release.ts");
+  process.exit(await runOssGitHubRelease(process.argv.slice(3)));
+}
 
 if (AUTH_STAGING_RELEASE_SURFACES.some((entry) => entry.surface === selected)) {
   const { runAuthStagingRelease, runAuthStagingAccountsSchema } = await import("./auth-staging-release.ts");

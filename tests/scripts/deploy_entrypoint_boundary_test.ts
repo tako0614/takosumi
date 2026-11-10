@@ -44,6 +44,7 @@ test("OSS deploy entrypoint owns the official platform Worker without a Cloud wr
     expect.objectContaining({ surface: "takosumi-auth-staging-code", target: "cloudflare-worker:takosumi-auth-staging", triggers: [] }),
     expect.objectContaining({ surface: "takosumi-auth-staging-topology", target: "cloudflare-worker-domain:auth-staging.takos.jp", triggers: ["irreversible", "authority"] }),
     expect.objectContaining({ surface: "takosumi-accounts-d1-schema-staging", triggers: ["irreversible", "authority"] }),
+    expect.objectContaining({ surface: "takosumi-oss-github-release", target: "github-release:tako0614/takosumi", triggers: ["published-identity"] }),
     expect.objectContaining({
       surface: "takosumi-control-d1-schema-staging",
       triggers: ["irreversible", "authority"],

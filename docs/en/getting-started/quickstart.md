@@ -24,7 +24,7 @@ To check only the API, without the dashboard or runner, follow
 ## 1. Get the repository
 
 ```bash
-git clone https://github.com/tako0614/takosumi.git
+git clone --branch v2.0.0 --single-branch https://github.com/tako0614/takosumi.git
 cd takosumi
 bun install
 ```
@@ -103,7 +103,7 @@ provider for local testing and does not require a real account.
 While signed in, open:
 
 ```text
-https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic
+https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=v2.0.0&path=examples/opentofu-basic
 ```
 
 Adding takes three screens: the prefilled page, **Set up the service**, and
