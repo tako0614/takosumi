@@ -1,104 +1,123 @@
-# Takosumi v1 release
+# Takosumi OSS source release
 
-This runbook covers the Takosumi OSS source/module release. The current
-supported product is one Git/OpenTofu/Terraform Stack flow with arbitrary
-providers and generic Interfaces. It does not publish a
-Takosumi Form Host, Form Registry, FormActivation, TargetPool, or SpacePolicy
-surface. Takosumi hosted service release and commercial readiness are separate external
-Host decisions.
-
-This procedure is evidence and failure handling, not release authorization.
-The release owner stops at the first missing, stale, mutable, or unreviewed
-item.
+This runbook covers immutable signed Git tags and GitHub source/module Releases.
+The filename is retained for existing links; the procedure is not tied to v1 or v2.
+It does not release a Hosted service, npm package, OCI image, desktop/mobile app,
+or a Takoserver/provider runtime. Those are separate owning surfaces.
 
 ## Release shape
 
-A release consists of:
+One stable software version consists of an annotated signed Git tag on one exact
+reviewed main commit and a non-draft GitHub Release for that tag, without uploaded
+assets. The root package stays private. Consumers use the tag or GitHub source
+archive; the local quickstart builds its Runner from that checkout.
 
-- one immutable signed Git tag on an exact reviewed commit;
-- one GitHub Release for that tag; and
-- one private receipt binding the commit, checks, approvals, and readback.
+The operator owns instance configuration, storage, credentials and deployment.
+Cloudflare Apply/Destroy still needs separately qualified digest authorities.
+The Bun/PostgreSQL reference composition needs a separately integrated Runner.
+OSS publication does not imply Hosted availability, capacity, billing or support.
 
-Takosumi is consumed as source modules composed into an operator host. Do not
-publish an npm service package, duplicate platform bundle, or generated Cloud
-application artifact from this repository. A Cloud deployment records its own
-immutable revision and the exact OSS commit it composes.
+## Prepare one candidate
 
-## Candidate gates
-
-Before signing, use a fresh worktree and require:
-
-1. clean status and exact `origin/main` candidate;
-2. an unreused tag/release name and a verified signing key;
-3. the protected workflow result for that exact commit;
-4. `bun run check`, focused tests, docs build, and `git diff --check` passing;
-5. security, runner-sandbox, rollback, and backup/restore reviews with human
-   acceptance; and
-6. release notes checked for secrets, customer identifiers, private paths,
-   provider account data, and unsupported availability claims.
-
-The current contract gate is [Core Spec](../internal/core-spec.md), with
-conformance evidence in [Core Conformance](../internal/core-conformance.md).
-Historical `final-plan.md` or Form Host runbooks are not release authority.
+Use the owning entrypoint to discover the surface without side effects:
 
 ```bash
-set -euo pipefail
-
-TAG=v1.0.0
-git fetch --prune origin main --tags
-test -z "$(git status --porcelain)"
-CANDIDATE="$(git rev-parse HEAD)"
-test "$CANDIDATE" = "$(git rev-parse origin/main)"
-REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}")"
-test -z "$REMOTE_TAG"
-test "$(bun -e 'console.log(require("./package.json").version)')" = "${TAG#v}"
-git config --get user.signingkey >/dev/null
-
-bun install --frozen-lockfile
-bun run check
-bun test
-bun run test:scripts
-bun run docs:build:all
-git diff --exit-code
-git diff --check
+bun run deploy -- --contract
 ```
 
-A failed network/authentication check is an abort, not proof that a tag or
-release is absent. Generated or formatted diffs require a reviewed fix and a
-new candidate.
+The surface is `takosumi-oss-github-release`, targeting only `tako0614/takosumi`.
+Its environment must explicitly be `production` because it creates public,
+consumer-pinned identities. This does not authorize any production runtime change.
 
-## Private receipt and publication
+Before publication:
 
-Create a private receipt containing the candidate SHA, protected workflow URL,
-check results, security/rollback approvals, release-note digest, and explicit
-`go`/`no-go`. Never copy tokens, raw Outputs, provider credentials, customer
-data, or private operator paths into the repository or public release.
+1. Finish source review and normal integration. Use one clean checkout of the
+   exact current remote main commit; fetch only main with `git fetch --no-tags
+   origin main`. Do not fetch/overwrite unrelated local provider tags.
+2. Match the stable tag to the private root `package.json` version. Keep public
+   notes at `docs/releases/<tag>.md` in that commit. Notes contain only public
+   source references, no operator-private paths, keys or customer data.
+3. Retain the existing successful main-push run of `.github/workflows/quality.yml`
+   for that exact commit. The entrypoint verifies the repository, full commit,
+   branch, event, workflow, conclusion and every required job through GitHub.
+   It reuses that complete owner check; do not repeat full tests, build or docs
+   at publication time. A PR run, older same-tree commit or caller-written
+   attestation does not qualify the new exact main commit.
+4. Independently review the release diff, security and Runner sandbox changes,
+   backup limitations and rollback/upgrade guidance. Record the actual review
+   outcome; do not invent human acceptance or actual-environment qualification.
+5. Use the existing configured Git signing key and trusted verification setup.
+   Do not create a new key/account. Both the local and remote selected tag and
+   GitHub Release must be absent. An authentication/network failure does not
+   establish absence. The entrypoint requires authenticated repository write
+   access before interpreting a Release 404.
 
-Only after the receipt says `go`:
+The root version and CHANGELOG are the software version; contract packages and
+Runner artifacts have independent release identities. A successful candidate
+Runner proof is not a published OCI image and is not a new prerequisite here.
+
+## Publish through the owning entrypoint
+
+The release owner makes the final publication decision after candidate checks
+and independent review. Replace the two example values below with the exact
+main SHA and its existing successful main quality run ID:
 
 ```bash
-git tag -s "$TAG" "$CANDIDATE" -m "Takosumi $TAG"
-git verify-tag "$TAG"
-test "$(git rev-list -n 1 "$TAG")" = "$CANDIDATE"
-git push origin "refs/tags/$TAG"
-
-gh release create "$TAG" --verify-tag \
-  --title "Takosumi $TAG" --notes-file "$PUBLIC_RELEASE_NOTES"
+bun run deploy -- takosumi-oss-github-release publish \
+  --environment production --tag v2.0.0 \
+  --commit <full-main-commit> --ci-run <existing-main-quality-run-id>
 ```
 
-Never move, delete, force-update, or reuse a published tag. Fix defects
-forward through a new patch release.
+This is the only publication entrypoint. It signs one local annotated tag,
+verifies it, pushes that exact ref without force, fetches only that remote tag
+and verifies the signed object/commit, creates the Release once with notes read
+from the immutable Git commit, and checks the public Release identity. It never
+rebuilds source, edits existing Releases, uploads assets, or invokes schema,
+credential, provider, Hosted, npm, OCI or mobile publication helpers.
 
-## Independent readback and reversal
+Retain stdout in operator-private storage. Its result identifies the source,
+tag object, public URL, existing CI run and notes digest without exposing the
+signing key or credentials. Private records do not belong in this repository.
 
-Fetch the tag from the remote, verify its signature and resolved commit, and
-read the GitHub Release as non-draft. Record those immutable URLs in the
-receipt. If a composed host was deployed, its owner performs separate
-authenticated smoke/readback against that host and records its deployment
-revision; OSS publication does not imply Cloud capacity, billing, SLA, or
-support readiness.
+## Failure, readback and forward repair
 
-Before publication, abort on any failed gate, missing approval, evidence drift,
-or candidate mismatch. After publication, keep the tag immutable; stop
-promotion, roll the composed host to its prior revision when possible, repair
-through protected `main`, and issue a new signed patch release.
+Preflight rejection leaves public targets untouched. Once signing or any
+publication step is attempted, failure is `indeterminate` with its last stage;
+inspect the exact identity rather than automatically retrying any mutation.
+The local tag may already exist even if no remote publication happened.
+
+```bash
+bun run deploy -- takosumi-oss-github-release verify \
+  --environment production --tag v2.0.0 \
+  --commit <full-release-commit> --ci-run <existing-main-quality-run-id>
+```
+
+`verify` performs no tag/Release publication. It may fetch the selected tag into
+`FETCH_HEAD` only, verifies the trusted signature and exact commit, and checks
+Release tag/title/notes/non-draft state and the empty asset inventory.
+The source identity is the signed tag header (`object`, `type commit`, internal
+version name) and its exact commit. GitHub treats `target_commitish` as unused
+when a tag already exists, so that metadata is not an identity guard.
+It returns `published` only for a complete match, or a nonzero result for
+`absent`, `tag-only`, unavailable or mismatched state. It can inspect an older
+released main commit after main advances; it does not require rewriting refs.
+
+Never move, force-update, delete or reuse a published tag/version. A partial
+publication is not an automatic retry/resume permit. Halt promotion and let the
+release owner decide forward repair through a new reviewed version. Runtime
+rollback remains a separate operator action and must obey the upgrade cautions.
+
+## Upgrade and backup cautions
+
+Read [v2.0.0 notes](../releases/v2.0.0.md), the [CHANGELOG](../../CHANGELOG.md),
+[backup/restore](./backup-restore-drills.md), [rollback](./rollback-sop.md), and
+[generated secrets](./secret-rotation.md) before upgrading an existing instance.
+
+The backup API is only a partial ledger export, with no importer. Failed
+pre-destroy export does not prevent scheduled destruction. Operators must
+independently back up and verify restore of all databases, objects and keys.
+Existing migrations are forward-only; reverting an image does not undo data or
+schema changes. Drain old execution contexts before accepting new-mode uninstall
+reservations. Do not mix incompatible readers or roll back with new reservations
+or generated-secret/manifest changes pending; use the documented forward repair.
+Source publication itself performs no instance migration or drain.

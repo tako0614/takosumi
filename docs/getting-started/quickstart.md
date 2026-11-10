@@ -22,7 +22,7 @@ dashboard や runner なしで API だけ確認する場合は、[API だけ動�
 ## 1. リポジトリを取得する
 
 ```bash
-git clone https://github.com/tako0614/takosumi.git
+git clone --branch v2.0.0 --single-branch https://github.com/tako0614/takosumi.git
 cd takosumi
 bun install
 ```
@@ -99,7 +99,7 @@ curl https://app.takosumi.test/.well-known/openid-configuration
 サインインしたまま、次の URL を開きます。
 
 ```text
-https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic
+https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=v2.0.0&path=examples/opentofu-basic
 ```
 
 追加は、入力済みの画面、**サービスを設定**、**追加前の確認** の 3 画面で進みます。

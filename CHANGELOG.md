@@ -4,9 +4,13 @@ All notable user-visible changes to the Takosumi source/module release live here
 Takosumi handlers are consumed in-process by the operator platform worker. The
 self-hosted Takos distribution worker consumes Takosumi contracts and the
 external self-hoster/operator control plane; there is no npm-published service
-package for the v1 GA line.
+package for this source/module release.
 
-## Unreleased
+## 2.0.0
+
+This major source release changes uninstall scheduling and Workspace-route authorization.
+Read [the v2.0.0 release and upgrade notes](docs/releases/v2.0.0.md) before updating.
+
 
 - **Platform extensions are decided by account and app (TASK-0118 P9.1-e):**
   an extension route may declare `appContext` and receive the caller's live
