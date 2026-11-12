@@ -51,7 +51,12 @@ const REQUEST_ID_ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
  * inbound `x-request-id` / `x-correlation-id` header, otherwise mint a UUID.
  */
 export function requestIdFromContext(c: Context): string {
-  const header = c.req.header("x-request-id") ?? c.req.header("x-correlation-id");
+  return requestIdFromRequest(c.req.raw);
+}
+
+/** The same envelope request-ID rules for a host handling the actual Request. */
+export function requestIdFromRequest(request: Request): string {
+  const header = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id");
   if (header && isValidRequestIdShape(header)) return header;
   return crypto.randomUUID();
 }
@@ -89,11 +94,7 @@ function unclassifiedRequestExceptionResponse(
   request: Request,
   error: unknown,
 ): Response {
-  const header = request.headers.get("x-request-id") ??
-    request.headers.get("x-correlation-id");
-  const requestId = header && isValidRequestIdShape(header)
-    ? header
-    : crypto.randomUUID();
+  const requestId = requestIdFromRequest(request);
   const diagnostics = safeErrorDiagnostics(error);
   log.error("api.unhandled_exception", {
     requestId,

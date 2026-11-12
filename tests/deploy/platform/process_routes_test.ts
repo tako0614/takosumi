@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { D1AccountsStore } from "../../../accounts/service/src/mod.ts";
 import {
   applyD1AccountsMigrationBatch,
@@ -16,9 +16,10 @@ const TOKEN = "process-route-token";
 function platformEnv(options: { readonly token?: string } = {}) {
   const assetRequests: string[] = [];
   const token = Object.hasOwn(options, "token") ? options.token : TOKEN;
+  const controlDb = new SqliteFakeD1();
   return {
     env: {
-      TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+      TAKOSUMI_CONTROL_DB: controlDb,
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_ENVIRONMENT: "test",
       ...(token === undefined ? {} : { TAKOSUMI_DEPLOY_CONTROL_TOKEN: token }),
@@ -32,6 +33,7 @@ function platformEnv(options: { readonly token?: string } = {}) {
       },
     } as never,
     assetRequests,
+    controlDb,
   };
 }
 
@@ -97,23 +99,64 @@ test("platform discovery leaves only GET and HEAD methods mounted", async () => 
 
 test("platform preserves Core inventory bearer semantics", async () => {
   for (const path of ["/capabilities", "/openapi.json"]) {
-    const wrong = platformEnv();
-    const wrongResponse = await worker.fetch(
-      new Request(`https://app.takosumi.test${path}`, {
-        headers: { authorization: "Bearer wrong-token" },
-      }),
-      wrong.env,
-    );
-    expect(wrongResponse.status, path).toBe(401);
-    expect(wrong.assetRequests).toEqual([]);
+    for (const method of ["GET", "HEAD"] as const) {
+      const wrong = platformEnv();
+      const wrongResponse = await worker.fetch(
+        new Request(`https://app.takosumi.test${path}`, {
+          method,
+          headers: { authorization: "Bearer wrong-token" },
+        }),
+        wrong.env,
+      );
+      expect(wrongResponse.status, path).toBe(401);
+      expect(wrong.assetRequests).toEqual([]);
 
-    const unconfigured = platformEnv({ token: undefined });
-    const unconfiguredResponse = await worker.fetch(
-      new Request(`https://app.takosumi.test${path}`),
-      unconfigured.env,
-    );
-    expect(unconfiguredResponse.status, path).toBe(404);
-    expect(unconfigured.assetRequests).toEqual([]);
+      const unconfigured = platformEnv({ token: undefined });
+      const prepare = spyOn(unconfigured.controlDb, "prepare");
+      try {
+        const unconfiguredResponse = await worker.fetch(
+          new Request(`https://app.takosumi.test${path}`, { method }),
+          unconfigured.env,
+        );
+        expect(unconfiguredResponse.status, path).toBe(404);
+        expect(unconfiguredResponse.headers.get("content-type")).toMatch(/application\/json/u);
+        if (method === "HEAD") expect(await unconfiguredResponse.text()).toBe("");
+        expect(unconfigured.assetRequests).toEqual([]);
+        expect(prepare).not.toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+      }
+    }
+  }
+});
+
+test("disabled platform inventory preserves Core request-ID validation before bootstrap", async () => {
+  const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const ulid = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+  const cases: readonly [HeadersInit, string | undefined][] = [
+    [{ "x-request-id": uuid, "x-correlation-id": ulid }, uuid],
+    [{ "x-correlation-id": ulid }, ulid],
+    [{ "x-request-id": "invalid", "x-correlation-id": uuid }, undefined],
+    [{ "x-request-id": "", "x-correlation-id": uuid }, undefined],
+    [{ "x-request-id": "a".repeat(65) }, undefined],
+  ];
+  for (const path of ["/capabilities", "/openapi.json"]) {
+    for (const [headers, expectedId] of cases) {
+      const unconfigured = platformEnv({ token: undefined });
+      const prepare = spyOn(unconfigured.controlDb, "prepare");
+      try {
+        const response = await worker.fetch(new Request(`https://app.takosumi.test${path}`, { headers }), unconfigured.env);
+        expect(response.status).toBe(404);
+        const body = await response.json() as { error: { code: string; message: string; requestId: string } };
+        expect(body.error).toMatchObject({ code: "not_found", message: `${path === "/capabilities" ? "capabilities" : "openapi"} inventory disabled` });
+        if (expectedId) expect(body.error.requestId).toBe(expectedId);
+        else expect(body.error.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu);
+        expect(prepare).not.toHaveBeenCalled();
+        expect(unconfigured.assetRequests).toEqual([]);
+      } finally {
+        prepare.mockRestore();
+      }
+    }
   }
 });
 
