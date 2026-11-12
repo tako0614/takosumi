@@ -78,6 +78,20 @@ Issuer cookies are host-only, Secure, HttpOnly, SameSite=Lax; their idle limit i
 12 hours and absolute limit seven days. Each RP owns its opaque cookie and
 encrypted token custody. An RP cookie never becomes an issuer cookie.
 
+The Hosted handler accepts only `__Host-takosumi_session` as its browser session
+cookie. Its request-lifetime restrictive policy excludes a selected legacy
+carrier before routing, including callback
+rotation. Duplicate values of the selected session cookie name fail closed,
+even when their values agree. A persisted Hosted session also refuses the
+legacy carrier at the shared session/Bearer guards and revocation helpers,
+before refreshing, deleting or revoking server-side session state. Explicit
+Bearer and compatibility session headers keep their precedence; non-Hosted
+sessions retain their single legacy cookie. Cookie transport does not replace
+the existing lifetime, generation, canonical-account, Origin or grant checks.
+The policy carries no authenticated identity. The actual Request, headers and
+body remain intact, preserving private references bound by a genuine producer;
+header-only session guards use that same Request.
+
 ## Common Workspace HTTP contract
 
 The optional profile mounts `/api/v1/account/shared-workspaces`. A registered
