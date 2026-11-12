@@ -35,10 +35,11 @@ test("the default InstallConfig is generic service-side DB configuration", () =>
           "capsules:read",
           "capsules:write",
         ],
-        allowedInterfacePermissions: ["ui.open", "mcp.invoke"],
-        allowedInterfaceDeliveryTypes: ["none", "oauth2"],
+        allowedInterfacePermissions: ["ui.open", "mcp.invoke", "storage.object.list", "storage.object.read", "storage.object.write", "storage.object.delete"],
+        allowedInterfaceDeliveryTypes: ["none", "oauth2", "oauth2.app-data.v1"],
         allowedInterfaceBindingProfiles: [
           { permissions: ["ui.open"], deliveryType: "none" },
+          { permissions: ["storage.object.list", "storage.object.read", "storage.object.write", "storage.object.delete"], deliveryType: "oauth2.app-data.v1" },
           { permissions: ["mcp.invoke"], deliveryType: "oauth2" },
         ],
       },
