@@ -67,6 +67,15 @@ const CREDENTIAL_PROVIDER_ATTRIBUTES = new Set([
   "password",
 ]);
 
+const MAX_HCL_BLOCK_NESTING_DEPTH = 256;
+
+class HclBlockScanBudgetExceeded extends Error {
+  readonly code = "hcl_block_scan_budget_exceeded";
+  constructor() {
+    super(`HCL block nesting exceeds the fixed ${MAX_HCL_BLOCK_NESTING_DEPTH}-level compatibility budget.`);
+  }
+}
+
 export class StaticHclCapsuleCompatibilityAnalyzer implements CapsuleCompatibilityAnalyzer {
   async analyze(
     input: CapsuleCompatibilityAnalysisInput,
@@ -112,6 +121,22 @@ export function analyzeOpenTofuCapsuleFiles(
   const hclFiles = configuration.files.filter(
     (file) => openTofuConfigurationFileKind(file.path) === "hcl",
   );
+  const blockDepthBudgetFile = hclFiles.find(file => exceedsHclBlockNestingBudget(file.text));
+  if (blockDepthBudgetFile) {
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "hcl_block_scan_budget_exceeded",
+      message: new HclBlockScanBudgetExceeded().message,
+      path: blockDepthBudgetFile.path,
+      suggestion: "Reduce structural block/object nesting before compatibility review.",
+    });
+    return {
+      level: "unsupported", findings,
+      providerPackages: [], rootProviderRequirements: [], resources: [], dataSources: [], provisioners: [],
+      rootModuleVariables: [], rootModuleVariableDeclarations: [], rootModuleOutputs: [],
+    };
+  }
   const rootModuleOutputs = collectRootModuleOutputDeclarations(hclFiles);
   for (const output of rootModuleOutputs) {
     if (output.sensitive === null || output.ephemeral === null) {
@@ -968,6 +993,56 @@ interface BlockRange extends NamedBlock {
   readonly end: number;
 }
 
+// Return the first offset after a whole quoted template. Quotes inside a
+// ${...}/%{...} expression start another template rather than ending this one.
+// Keep the scan iterative so nested templates do not recurse on the JS stack.
+function quotedHclTemplateEnd(text: string, start: number): number {
+  const expressionDepths = [0];
+  for (let index = start + 1; index < text.length; index += 1) {
+    const frame = expressionDepths.length - 1;
+    const depth = expressionDepths[frame]!;
+    const char = text[index];
+    if (depth === 0) {
+      if (char === "\\") { index += 1; continue; }
+      if (char === '"') {
+        expressionDepths.pop();
+        if (expressionDepths.length === 0) return index + 1;
+      } else if (char === "$" || char === "%") {
+        if (text[index + 1] === char && text[index + 2] === "{") {
+          index += 2;
+        } else if (text[index + 1] === "{") {
+          expressionDepths[frame] = 1;
+          index += 1;
+        }
+      }
+      continue;
+    }
+    if (char === '"') {
+      expressionDepths.push(0);
+    } else if (char === "#" || (char === "/" && text[index + 1] === "/")) {
+      const end = text.indexOf("\n", index);
+      if (end === -1) return text.length;
+      index = end;
+    } else if (char === "/" && text[index + 1] === "*") {
+      const end = text.indexOf("*/", index + 2);
+      if (end === -1) return text.length;
+      index = end + 1;
+    } else if (char === "<" && text[index + 1] === "<") {
+      const heredoc = /^<<-?(\w+)\r?\n/u.exec(text.slice(index));
+      if (!heredoc) continue;
+      const bodyStart = index + heredoc[0].length;
+      const terminator = new RegExp(`(?:^|\\n)[ \\t]*${heredoc[1]}[ \\t]*(?:\\r?\\n|$)`, "u").exec(text.slice(bodyStart));
+      if (!terminator) return text.length;
+      index = bodyStart + terminator.index + terminator[0].length - 1;
+    } else if (char === "{") {
+      expressionDepths[frame] = depth + 1;
+    } else if (char === "}") {
+      expressionDepths[frame] = depth - 1;
+    }
+  }
+  return text.length;
+}
+
 // HCL comments (`#` / `//` line, `/* */` block) and heredoc bodies can carry
 // brace characters and decoy keywords (e.g. a commented-out `provisioner`), so
 // a naive regex + brace-counting scan can be evaded by a crafted-but-valid
@@ -988,12 +1063,7 @@ function maskHclCommentsAndHeredocs(text: string): string {
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i];
     if (char === '"') {
-      // Skip a double-quoted string literal (honoring backslash escapes).
-      i += 1;
-      while (i < text.length && text[i] !== '"') {
-        if (text[i] === "\\") i += 1;
-        i += 1;
-      }
+      i = quotedHclTemplateEnd(text, i) - 1;
       continue;
     }
     if (char === "#" || (char === "/" && text[i + 1] === "/")) {
@@ -1014,18 +1084,40 @@ function maskHclCommentsAndHeredocs(text: string): string {
     if (heredoc) {
       const tag = heredoc[1]!;
       const bodyStart = i + heredoc[0].length;
-      const terminator = new RegExp(`\\n[ \\t]*${tag}\\b`).exec(
+      const terminator = new RegExp(`(?:^|\\n)[ \\t]*${tag}[ \\t]*(?:\\r?\\n|$)`, "u").exec(
         text.slice(bodyStart),
       );
       const bodyEnd = terminator
-        ? bodyStart + terminator.index + 1
+        ? bodyStart + terminator.index
         : text.length;
       mask(bodyStart, bodyEnd);
-      i = bodyEnd - 1;
+      i = terminator ? bodyEnd + terminator[0].length - 1 : text.length;
       continue;
     }
   }
   return out.join("");
+}
+
+// Comments/heredocs are already masked. Quoted text (including escaped
+// quotes) remains available for attribute readers but contributes no structural
+// brace or nesting work. This also keeps braces in block labels out of ranges.
+function* structuralHclBraces(masked: string): Generator<readonly [number, "{" | "}"]> {
+  for (let index = 0; index < masked.length; index += 1) {
+    const char = masked[index];
+    if (char === '"') { index = quotedHclTemplateEnd(masked, index) - 1; continue; }
+    if (char === "{" || char === "}") yield [index, char];
+  }
+}
+
+function exceedsHclBlockNestingBudget(text: string): boolean {
+  let depth = 0;
+  for (const [, brace] of structuralHclBraces(maskHclCommentsAndHeredocs(text))) {
+    if (brace === "{") {
+      depth += 1;
+      if (depth > MAX_HCL_BLOCK_NESTING_DEPTH) return true;
+    } else if (depth > 0) depth -= 1;
+  }
+  return false;
 }
 
 function matchNamedBlocks(text: string, blockType: string): NamedBlock[] {
@@ -1034,44 +1126,42 @@ function matchNamedBlocks(text: string, blockType: string): NamedBlock[] {
 
 function matchNamedBlockRanges(text: string, blockType: string): BlockRange[] {
   const masked = maskHclCommentsAndHeredocs(text);
-  const blocks: BlockRange[] = [];
   const pattern = new RegExp(
     `\\b${blockType}\\b\\s+"([^"]+)"(?:\\s+"[^"]+")?\\s*\\{`,
     "g",
   );
+  const candidates: Array<{
+    readonly name: string;
+    readonly start: number;
+    readonly open: number;
+    end?: number;
+  }> = [];
   for (const match of masked.matchAll(pattern)) {
-    const start = match.index!;
-    const block = readBlock(masked, match.index! + match[0].length - 1);
-    if (block !== undefined) {
-      blocks.push({ name: match[1]!, body: block.body, start, end: block.end });
-    }
+    candidates.push({ name: match[1]!, start: match.index!, open: match.index! + match[0].length - 1 });
   }
-  return blocks;
-}
-
-function readBlockBody(
-  text: string,
-  openBraceIndex: number,
-): string | undefined {
-  return readBlock(text, openBraceIndex)?.body;
-}
-
-function readBlock(
-  text: string,
-  openBraceIndex: number,
-): { readonly body: string; readonly end: number } | undefined {
-  let depth = 0;
-  for (let index = openBraceIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "{") {
-      depth += 1;
+  const candidatesByOpen = new Map(candidates.map(candidate => [candidate.open, candidate]));
+  const openings: number[] = [];
+  // Resolve each candidate's closing brace once, rather than restarting a walk
+  // for each header. Keep the bound here for standalone declaration consumers.
+  for (const [index, brace] of structuralHclBraces(masked)) {
+    if (brace === "{") {
+      if (openings.length >= MAX_HCL_BLOCK_NESTING_DEPTH) throw new HclBlockScanBudgetExceeded();
+      openings.push(index);
       continue;
     }
-    if (char !== "}") continue;
-    depth -= 1;
-    if (depth === 0) {
-      return { body: text.slice(openBraceIndex + 1, index), end: index + 1 };
-    }
+    const open = openings.pop();
+    if (open === undefined) continue;
+    const candidate = candidatesByOpen.get(open);
+    if (candidate) candidate.end = index + 1;
   }
-  return undefined;
+  const blocks: BlockRange[] = [];
+  for (const candidate of candidates) {
+    const end = candidate.end;
+    if (end === undefined) continue;
+    blocks.push({
+      name: candidate.name, start: candidate.start, end,
+      get body() { return masked.slice(candidate.open + 1, end - 1); },
+    });
+  }
+  return blocks;
 }
