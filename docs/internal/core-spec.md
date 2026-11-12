@@ -166,6 +166,16 @@ while reading their pipes. Exceeding it stops the command group. Profiles cannot
 raise these ceilings. Compressed archives are size-checked before reading and
 remain subject to the 50 MiB streaming cap during reads, relay uploads and restore.
 
+Compatibility analysis resolves named HCL block ranges with one forward brace
+scan instead of rescanning each block body. This range scan has a fixed
+256-level block/object nesting ceiling outside quoted templates; comments and
+heredoc data do not contribute braces. Exceeding the ceiling returns an
+`unsupported` finding with code `hcl_block_scan_budget_exceeded`, preserving
+existing configuration diagnostics and returning no partial declaration metadata.
+Standalone root declaration readers also refuse over-budget input. This bound
+does not replace the configuration reader's 1 MiB/file and 4 MiB/total byte limits
+or qualify the whole HCL parser's runtime cost.
+
 Plan, Apply, Destroy, and Refresh are guarded Run operations, not separate
 ledgers. OpenTofu Outputs remain ordinary module values; an Interface may
 explicitly reference a Capsule output, but no reserved output name becomes a
