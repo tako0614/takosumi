@@ -295,9 +295,11 @@ Takosumi 自身の識別子（Takosumi Mobile の bundle id・package・scheme�
 形は公開の JSON Schema（[v2.4](/schemas/repository-manifest-v2.4.schema.json)）で確かめられます。
 ただし Takosumi の検査はこれより厳しいので、Schema に通っても追加できないことがあります。
 
-標準の設定で頼める利用許可は、画面を開く `ui.open`（`delivery` は `none`）と、MCP を呼ぶ
-`mcp.invoke`（`delivery` は `oauth2`）だけです。運用している Takosumi が設定を変えている
-場合は、その範囲に従います。
+画面を開く場合は `ui.open`（`delivery` は `none`）、MCP を呼ぶ場合は `mcp.invoke`（`delivery` は
+`oauth2`）を使います。標準設定は、共有データ用の Storage 4 権限と `oauth2.app-data.v1` の
+[正確な組](../reference/repository-manifest.md)も受け入れます。
+これは利用権限の発行ではなく、現在の Link 承認と実行時の本人・アプリ確認は別に必要です。
+運用している Takosumi が設定を変えている場合は、その範囲に従います。
 
 ## 関連
 

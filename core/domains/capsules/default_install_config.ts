@@ -48,16 +48,31 @@ export function defaultCapsuleInstallConfig(
           "capsules:read",
           "capsules:write",
         ],
-        // A repository may propose an installer-scoped launcher or MCP binding,
-        // but the proposal is still compiled into the reviewed InstallConfig;
-        // it never grants a Workspace-wide or operator credential.
+        // A repository may propose an installer-scoped launcher, MCP binding,
+        // or explicit app-shared storage requirement. These profiles admit
+        // metadata compiled into the reviewed InstallConfig; current Link
+        // approval and runtime authority remain required. Admission never
+        // grants a Workspace-wide or operator credential.
         allowedInterfacePermissions: [
           UI_SURFACE_OPEN_PERMISSION,
           MCP_SERVER_INVOKE_PERMISSION,
+          "storage.object.list",
+          "storage.object.read",
+          "storage.object.write",
+          "storage.object.delete",
         ],
-        allowedInterfaceDeliveryTypes: ["none", "oauth2"],
+        allowedInterfaceDeliveryTypes: ["none", "oauth2", "oauth2.app-data.v1"],
         allowedInterfaceBindingProfiles: [
           { permissions: [UI_SURFACE_OPEN_PERMISSION], deliveryType: "none" },
+          {
+            permissions: [
+              "storage.object.list",
+              "storage.object.read",
+              "storage.object.write",
+              "storage.object.delete",
+            ],
+            deliveryType: "oauth2.app-data.v1",
+          },
           {
             permissions: [MCP_SERVER_INVOKE_PERMISSION],
             deliveryType: "oauth2",

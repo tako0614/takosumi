@@ -308,9 +308,12 @@ You can check the shape against the public JSON Schema
 ([v2.4](/schemas/repository-manifest-v2.4.schema.json)). Takosumi checks more than the schema
 does, so a file that passes the schema can still be rejected.
 
-With the standard settings, the only permissions a repository can ask for are `ui.open` to open
-a screen (with `delivery` `none`) and `mcp.invoke` to call an MCP server (with `delivery`
-`oauth2`). If the people who run the Takosumi changed those settings, their settings apply.
+Use `ui.open` to open a screen (with `delivery` `none`) and `mcp.invoke` to call an MCP
+server (with `delivery` `oauth2`). The standard settings also admit the exact shared-data
+profile of all four Storage permissions with `oauth2.app-data.v1`; see
+[Repository manifest](../reference/repository-manifest.md). Admission does not issue access:
+current Link approval and runtime identity/app checks remain necessary. If the people who
+run the Takosumi changed those settings, their settings apply.
 
 ## Related
 
