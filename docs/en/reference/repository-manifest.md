@@ -353,11 +353,16 @@ public JSON `document`, optional `inputs`, and `access`.
   `permissions` with 1–16 unique tokens, and `delivery` containing only `type`. Missing operator permission/delivery allowlists reject
   the request.
 
-The generic default InstallConfig permits only `ui.open` with `none` and
-`mcp.invoke` with `oauth2`, both scoped to the installing Principal. These are
-one-shot binding proposals compiled through the reviewed install plan; they do
-not grant Workspace-wide or operator authority. Any other permission or
-delivery type requires an explicit operator-owned InstallConfig policy.
+The generic default InstallConfig permits `ui.open` with `none`, `mcp.invoke`
+with `oauth2`, and all four permissions `storage.object.list`,
+`storage.object.read`, `storage.object.write`, and `storage.object.delete`
+with `oauth2.app-data.v1`. These are exact permission/delivery profiles;
+recombinations and permission subsets are rejected. Proposals pass through the
+reviewed install plan and do not grant Workspace-wide or operator authority.
+Shared-data access separately requires current Link approval and runtime
+identity/app checks described in [Interfaces](../concepts/interfaces.md).
+The operator-owned InstallConfig remains the policy ceiling; other profiles
+require explicit permission.
 
 Accepted proposals merge by stable key into existing
 `InstallConfig.interfaceBlueprints` and `outputAllowlist`; conflicts fail

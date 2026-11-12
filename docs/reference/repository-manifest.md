@@ -304,10 +304,13 @@ v2〜v2.4 では、Capsule が提供する汎用（generic）の Interface を�
   だけを持つ `delivery` の 4 つだけです。運用している人が permission と delivery の許可の一覧を明示して
   いないと拒否されます。
 
-標準（generic default）の InstallConfig が許可するのは、追加した本人に対する、permission の `ui.open` と
-delivery の `none`、permission の `mcp.invoke` と delivery の `oauth2` の組だけです。これは追加の計画（install plan）の確認を通った、1 回限りの Binding の提案で、
-Workspace 全体や運用者の権限を与えるものではありません。ほかの permission や delivery は、運用している
-人の InstallConfig で明示的に許可する必要があります。
+標準（generic default）の InstallConfig は、`ui.open` と `none`、`mcp.invoke` と `oauth2`、
+および `storage.object.list`・`storage.object.read`・`storage.object.write`・`storage.object.delete` の
+4 権限すべてと `oauth2.app-data.v1` の組を許可します。permission と delivery はこの正確な組で照合され、
+別の組み合わせや権限の部分集合は許可しません。提案は追加の計画（install plan）の確認を通り、
+Workspace 全体や運用者の権限を与えるものではありません。共有データの利用には、別途
+[現在の Link 承認と実行時の本人・アプリ確認](../concepts/interfaces.md#アプリで共有するデータ)が必要です。
+運用している人の InstallConfig が上限であり、ほかの組は明示的な許可が必要です。
 
 採用された提案は、既存の `InstallConfig.interfaceBlueprints` と `outputAllowlist` に、変わらない key で
 まとめられます。衝突したときは上書きせずに失敗します。追加した Principal を正確に特定し、Interface と
