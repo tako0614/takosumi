@@ -204,13 +204,9 @@ export async function readJsonObject(
   ) {
     throw new RequestBodyTooLargeError(options.maxBytes);
   }
-  const rawBody = await request.text();
-  if (
-    options.maxBytes !== undefined &&
-    new TextEncoder().encode(rawBody).byteLength > options.maxBytes
-  ) {
-    throw new RequestBodyTooLargeError(options.maxBytes);
-  }
+  const rawBody = options.maxBytes === undefined
+    ? await request.text()
+    : await readJsonTextWithCap(request, options.maxBytes);
   if (rawBody.trim() === "") return {};
   let value: unknown;
   try {
@@ -222,4 +218,27 @@ export async function readJsonObject(
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+async function readJsonTextWithCap(request: Request, maxBytes: number): Promise<string> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      bytes += value.byteLength;
+      if (bytes > maxBytes) throw new RequestBodyTooLargeError(maxBytes);
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch (error) {
+    // Refuse immediately even if upstream cancellation rejects or never settles.
+    void reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 }

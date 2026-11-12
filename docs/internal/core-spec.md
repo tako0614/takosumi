@@ -1152,6 +1152,14 @@ Hosts may explicitly reject all Interface bearers when the HTTP family is
 unused; there is no unauthenticated development fallback. Configured operator
 and scoped-actor paths retain their existing Workspace, app and Binding fences.
 
+Interface JSON request limits count incoming bytes, including a UTF-8 BOM,
+before decoding or parsing. An oversized declared Content-Length is rejected
+before reading; absent or understated lengths still use the endpoint's existing
+byte ceiling. The reader cancels at the first chunk that exceeds that ceiling,
+does not read later chunks, and returns `413` / `payload_too_large` before the
+protected operation. Cancellation failure cannot delay or replace this refusal.
+Within the ceiling, ordinary JSON and streaming UTF-8 decoding are preserved.
+
 Interfaces are provider-neutral declarations owned by a Workspace or Capsule.
 They use a closed `apiVersion`/`kind`/`metadata`/`spec`/`status` envelope and
 carry endpoint and input-resolution metadata, not provider account IDs,
