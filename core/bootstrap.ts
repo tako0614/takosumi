@@ -303,7 +303,7 @@ function assertDurableDeployControlStoreOrWarn(input: {
   });
 }
 
-function assertInterfaceApiAuthOrWarn(input: {
+function assertInterfaceApiAuth(input: {
   readonly environment?: string;
   readonly exposed: boolean;
   readonly bearerTokenPresent: boolean;
@@ -315,22 +315,11 @@ function assertInterfaceApiAuthOrWarn(input: {
     input.scopedAuthorizerPresent
   )
     return;
-  const strict =
-    input.environment === "production" || input.environment === "staging";
-  if (strict) {
-    throw new Error(
-      `${input.environment} runtime exposes the Interface API but no ` +
-        `TAKOSUMI_DEPLOY_CONTROL_TOKEN or scoped Interface authorizer is ` +
-        `configured; /api/v1/interfaces would be unauthenticated.`,
-    );
-  }
-  log.warn("service.interface.unauthenticated_routes", {
-    environment: input.environment ?? "unknown",
-    hint:
-      "Interface API routes are exposed without authentication. Set " +
-      "TAKOSUMI_DEPLOY_CONTROL_TOKEN or inject authorizeInterfaceBearer " +
-      "before exposing this host.",
-  });
+  throw new Error(
+    `${input.environment ?? "unknown"} runtime exposes the Interface API but no ` +
+      `TAKOSUMI_DEPLOY_CONTROL_TOKEN or scoped Interface authorizer is ` +
+      `configured; /api/v1/interfaces would be unauthenticated.`,
+  );
 }
 
 function assertDurableInterfaceStoresOrWarn(input: {
@@ -1813,7 +1802,7 @@ export async function createTakosumiService(
         : "OpenTofu restore failed",
     );
   });
-  assertInterfaceApiAuthOrWarn({
+  assertInterfaceApiAuth({
     environment: runtimeConfig.environment,
     exposed: role === "takosumi-api",
     bearerTokenPresent: Boolean(deployControlToken),

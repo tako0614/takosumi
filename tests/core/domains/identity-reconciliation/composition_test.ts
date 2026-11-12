@@ -23,7 +23,7 @@ test("ordinary Core composition leaves identity reconciliation absent and reads 
   const store = new InMemoryOpenTofuControlStore();
   let inventories = 0;
   store.captureIdentityReconciliationInventory = async () => { inventories++; throw new Error("Private feature is absent"); };
-  const created = await createTakosumiService({ runtimeEnv, opentofuControlStore: store });
+  const created = await createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, opentofuControlStore: store });
   expect(created.operations.identityReconciliation).toBeUndefined();
   expect(inventories).toBe(0);
 });
@@ -31,11 +31,11 @@ test("ordinary Core composition leaves identity reconciliation absent and reads 
 test("private memory composition pairs the actual Principal store and rejects a structural substitute", async () => {
   const interfaces = createInMemoryInterfaceStores();
   const store = new InMemoryOpenTofuControlStore();
-  const created = await createTakosumiService({ runtimeEnv, opentofuControlStore: store, interfaceStores: interfaces, identityReconciliationAuthority: authority });
+  const created = await createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, opentofuControlStore: store, interfaceStores: interfaces, identityReconciliationAuthority: authority });
   expect(created.operations.identityReconciliation).toBeDefined();
   expect((await store.captureIdentityReconciliationInventory(["root_a", "root_b"])).principalReferences).toEqual([]);
   const substitute = { ...interfaces, bindings: { ...interfaces.bindings, get: interfaces.bindings.get.bind(interfaces.bindings), create: interfaces.bindings.create.bind(interfaces.bindings), listByInterface: interfaces.bindings.listByInterface.bind(interfaces.bindings), compareAndSet: interfaces.bindings.compareAndSet.bind(interfaces.bindings) } };
-  await expect(createTakosumiService({ runtimeEnv, opentofuControlStore: new InMemoryOpenTofuControlStore(), interfaceStores: substitute, identityReconciliationAuthority: authority })).rejects.toThrow("actual complete Principal inventory");
+  await expect(createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, opentofuControlStore: new InMemoryOpenTofuControlStore(), interfaceStores: substitute, identityReconciliationAuthority: authority })).rejects.toThrow("actual complete Principal inventory");
   expect(await store.listWorkspaceMembers("any")).toEqual([]);
 });
 
@@ -44,7 +44,7 @@ test("private PostgreSQL composition proves the exact actual SqlClient and refus
   try {
     const store = new SqlOpenTofuControlStore({ client: local });
     const same = createSqlInterfaceStores(local);
-    const created = await createTakosumiService({ runtimeEnv, sqlClient: local, opentofuControlStore: store, interfaceStores: same, identityReconciliationAuthority: authority });
+    const created = await createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, sqlClient: local, opentofuControlStore: store, interfaceStores: same, identityReconciliationAuthority: authority });
     expect(created.operations.identityReconciliation).toBeDefined();
     const external = createSqlInterfaceStores(foreign);
     const retained = {
@@ -59,12 +59,12 @@ test("private PostgreSQL composition proves the exact actual SqlClient and refus
     const mutate = store.commitIdentityReconciliation.bind(store);
     store.captureIdentityReconciliationInventory = async (ids) => { scans++; return await capture(ids); };
     store.commitIdentityReconciliation = async (input) => { writes++; return await mutate(input); };
-    await expect(createTakosumiService({ runtimeEnv, sqlClient: local, opentofuControlStore: store, interfaceStores: external, identityReconciliationAuthority: authority })).rejects.toThrow("actual same-database Principal inventory");
+    await expect(createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, sqlClient: local, opentofuControlStore: store, interfaceStores: external, identityReconciliationAuthority: authority })).rejects.toThrow("actual same-database Principal inventory");
     expect(scans).toBe(0);
     expect(writes).toBe(0);
     expect(await external.bindings.get(retained.metadata.id)).toEqual(retained);
     const structural = { ...same, bindings: { ...same.bindings, usesDatabase: () => true } };
-    await expect(createTakosumiService({ runtimeEnv, sqlClient: local, opentofuControlStore: store, interfaceStores: structural as typeof same, identityReconciliationAuthority: authority })).rejects.toThrow("actual same-database Principal inventory");
+    await expect(createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, sqlClient: local, opentofuControlStore: store, interfaceStores: structural as typeof same, identityReconciliationAuthority: authority })).rejects.toThrow("actual same-database Principal inventory");
   } finally { await local.close(); await foreign.close(); }
 });
 
@@ -76,9 +76,9 @@ test("private D1 composition rejects another actual handle while the ordinary ov
   const appOwnershipStore = new D1AppOwnershipStore(local, store);
   const same = createD1InterfaceStores(local);
   const external = createD1InterfaceStores(foreign);
-  const created = await createTakosumiService({ runtimeEnv, opentofuControlStore: store, appOwnershipStore, interfaceStores: same, identityReconciliationAuthority: authority });
+  const created = await createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, opentofuControlStore: store, appOwnershipStore, interfaceStores: same, identityReconciliationAuthority: authority });
   expect(created.operations.identityReconciliation).toBeDefined();
-  await expect(createTakosumiService({ runtimeEnv, opentofuControlStore: store, appOwnershipStore, interfaceStores: external, identityReconciliationAuthority: authority })).rejects.toThrow("actual same-database Principal inventory");
-  const ordinary = await createTakosumiService({ runtimeEnv, opentofuControlStore: store, appOwnershipStore, interfaceStores: external });
+  await expect(createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, opentofuControlStore: store, appOwnershipStore, interfaceStores: external, identityReconciliationAuthority: authority })).rejects.toThrow("actual same-database Principal inventory");
+  const ordinary = await createTakosumiService({ authorizeInterfaceBearer: () => undefined, runtimeEnv, opentofuControlStore: store, appOwnershipStore, interfaceStores: external });
   expect(ordinary.operations.identityReconciliation).toBeUndefined();
 });

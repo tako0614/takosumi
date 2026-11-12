@@ -373,6 +373,7 @@ function operation(input: {
             ),
           }),
       ...(input.auth === "none" ? {} : { "401": errorResponse() }),
+      ...(input.tag === "interfaces" ? { "503": errorResponse() } : {}),
       ...(input.auth === "internal-service" ? { "403": errorResponse() } : {}),
       ...(input.requestSchema || input.requestBody
         ? { "400": errorResponse() }
@@ -4878,6 +4879,7 @@ function errorSchemas(): Record<string, Record<string, unknown>> {
                 "failed_precondition",
                 "resource_exhausted",
                 "not_implemented",
+                "unavailable",
                 "internal_error",
               ],
             },

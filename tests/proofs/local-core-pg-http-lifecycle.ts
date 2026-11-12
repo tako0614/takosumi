@@ -907,6 +907,7 @@ async function runCoreHostChild(): Promise<void> {
       }),
     );
     const { operations } = await createTakosumiService({
+      authorizeInterfaceBearer: () => undefined,
       role: "takosumi-api",
       runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
       sqlClient: client.client,

@@ -533,6 +533,7 @@ async function proveLocalRunnerPrivateFiles(providerRoot: string): Promise<Proof
       baseUrl: `http://127.0.0.1:${runnerIngress.port}`,
     });
     const serviceFor = (client: SqlClient) => createTakosumiService({
+      authorizeInterfaceBearer: () => undefined,
       role: "takosumi-api",
       runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
       sqlClient: client,

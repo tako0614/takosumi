@@ -374,6 +374,7 @@ const runner: OpenTofuRunner = {
 
 async function compose(backend: "memory" | "postgres" | "d1") {
   const common = {
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api" as const,
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuRunner: runner,

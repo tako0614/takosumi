@@ -347,6 +347,7 @@ output "endpoint" {
     materializationAuthority: store,
   });
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,
@@ -467,6 +468,7 @@ output "endpoint" {
   // ApplyRun id.
   if (!replayApply) throw new Error("replay fixture ApplyRun was not admitted");
   const replayService = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,
@@ -585,6 +587,7 @@ output "endpoint" {
     destroy: () => Promise.resolve({}),
   };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,
@@ -769,6 +772,7 @@ output "endpoint" {
     destroy: () => Promise.resolve({}),
   };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,
@@ -995,6 +999,7 @@ output "endpoint" {
     },
   };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: storeWithHistoricalHost,

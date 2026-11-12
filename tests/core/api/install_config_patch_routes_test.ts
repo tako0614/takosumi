@@ -331,6 +331,7 @@ test("internal InstallConfig PATCH rejects compiled and re-adopted rows for ever
     return await putInstallConfig(config);
   };
   const { app, operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,
@@ -443,6 +444,7 @@ test("internal InstallConfig PATCH rejects an immutable migration-restore receip
   };
   await store.putInstallConfig(restored);
   const { app } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,
@@ -479,6 +481,7 @@ test("internal InstallConfig PATCH rejects an immutable migration-restore receip
 test("Workspace-scoped bearer cannot patch a shared InstallConfig", async () => {
   let workspaceId: string | undefined;
   const { app, operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     workspaceMutationsFrozen: false,
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
@@ -580,6 +583,7 @@ test("Workspace-scoped bearer cannot patch a shared InstallConfig", async () => 
 test("operator PATCH updates only an unattached shared template and rejects active or destroyed references", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const { app, operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,

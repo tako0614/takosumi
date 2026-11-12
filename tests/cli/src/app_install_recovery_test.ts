@@ -27,6 +27,7 @@ test("lost install ACK retains a pre-dispatch key and manual replay returns the 
   const plans = new InMemoryGitInstallPlanStore(ledger);
   ledger.attachGitInstallPlanStore(plans);
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api", runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: ledger, gitInstallPlanStore: plans,
   });

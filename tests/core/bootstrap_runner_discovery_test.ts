@@ -40,6 +40,7 @@ test("service startup waits for configured runner profile persistence", async ()
   };
   let settled = false;
   const startup = createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,
@@ -69,6 +70,7 @@ test("service startup rejects a failed runner profile write", async () => {
     | { status: "rejected"; error: unknown };
   let observed: Outcome | undefined;
   const startup = createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,
@@ -99,6 +101,7 @@ async function discovery(
   >,
 ) {
   const { app } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     ...runner,

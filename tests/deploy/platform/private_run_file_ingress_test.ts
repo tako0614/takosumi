@@ -15,7 +15,7 @@ const AUTHORITY = { runId: "private_plan", executionAuthorityEpoch: 3, leaseToke
 async function fixture() {
   const db = new SqliteFakeD1();
   const bucket = new FakeR2Bucket();
-  const env = { TAKOSUMI_CONTROL_DB: db, R2_ARTIFACTS: bucket, TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_SECRET_STORE_PASSPHRASE: PASSPHRASE, TAKOSUMI_PRIVATE_RUN_FILES: JSON.stringify(CONFIG) } as unknown as CloudflareWorkerEnv;
+  const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token", TAKOSUMI_CONTROL_DB: db, R2_ARTIFACTS: bucket, TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_SECRET_STORE_PASSPHRASE: PASSPHRASE, TAKOSUMI_PRIVATE_RUN_FILES: JSON.stringify(CONFIG) } as unknown as CloudflareWorkerEnv;
   const core = await createWorkerServiceApp(env, "takosumi-api", { privateRunFiles: CONFIG, operatorInstallConfigs: [] });
   await db.prepare(`insert into workspaces (id,handle,record_json,created_at,updated_at) values (?,?,'{}','2026-10-15','2026-10-15')`).bind(SCOPE.workspaceId, "private-workspace").run();
   await db.prepare(`insert into capsules (id,space_id,project_id,name,slug,install_config_id,environment,status,record_json,created_at,updated_at,execution_authority_epoch) values (?,?,?,?,?,?,?,'active','{}','2026-10-15','2026-10-15',?)`).bind(SCOPE.capsuleId,SCOPE.workspaceId,"private_project","private-capsule","private-capsule","private_install",SCOPE.environment,AUTHORITY.executionAuthorityEpoch).run();

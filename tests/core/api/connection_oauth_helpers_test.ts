@@ -321,6 +321,7 @@ test("OAuth helpers are absent until state secret and provider config exist", ()
 
 test("Core does not install vendor OAuth helpers from runtime env", async () => {
   const created = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     runtimeEnv: {
       TAKOSUMI_ENVIRONMENT: "test",
       TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",

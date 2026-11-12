@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { TAKOSUMI_INTERNAL_ACTOR_HEADER } from "../../../contract/internal-crypto.ts";
 import { createApiApp } from "../../../core/api/app.ts";
 import { createInMemoryAppContext } from "../../../core/app_context.ts";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
@@ -55,6 +56,76 @@ const headers = {
   "content-type": "application/json",
   authorization: "Bearer interface-token",
 };
+
+for (const mode of ["omitted", "unavailable"] as const) {
+  test(`unconfigured Interface authentication refuses reads and writes before service access: ${mode}`, async () => {
+    const service = new InterfaceService({ stores: createInMemoryInterfaceStores() });
+    const list = spyOn(service, "list");
+    const create = spyOn(service, "create");
+    try {
+      const api = await createApiApp({
+        role: "takosumi-api",
+        registerOpenApiRoute: false,
+        registerDeployControlInternalRoutes: false,
+        registerInterfaceRoutes: true,
+        interfaceRouteOptions: {
+          service,
+          ...(mode === "unavailable" ? { getInterfaceBearerToken: () => undefined } : {}),
+        },
+        requestCorrelation: false,
+      });
+      const read = await api.request("/api/v1/interfaces?workspaceId=ws_1");
+      const write = await api.request("/api/v1/interfaces", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: "ws_1", name: "mcp", ownerRef: { kind: "Workspace", id: "ws_1" },
+          spec: {
+            type: "mcp.server", version: "2025-11-25", document: { transport: "streamable-http" },
+            inputs: { endpoint: { source: "literal", value: "https://mcp.example.test/mcp" } },
+            access: { visibility: "workspace" },
+          },
+        }),
+      });
+      expect({ read: read.status, write: write.status, list: list.mock.calls.length, create: create.mock.calls.length }).toEqual({
+        read: 503, write: 503, list: 0, create: 0,
+      });
+      for (const response of [read, write]) {
+        expect((await response.json()).error).toMatchObject({
+          code: "unavailable", message: "Interface API authentication is not configured",
+        });
+      }
+    } finally {
+      list.mockRestore();
+      create.mockRestore();
+    }
+  });
+}
+
+for (const environment of [undefined, "local", "development", "test", "staging"] as const) {
+  test(`API bootstrap refuses unconfigured Interface authentication: ${environment ?? "unset"}`, async () => {
+    await expect(createTakosumiService({
+      role: "takosumi-api",
+      runtimeConfig: environment ? { environment } : {},
+      runtimeEnv: {},
+      context: createInMemoryAppContext({ runtimeEnv: { TAKOSUMI_DEV_MODE: "1" } }),
+      gitInstallPlanStore: declaredDurableGitInstallPlanStore(),
+    })).rejects.toThrow("runtime exposes the Interface API but no TAKOSUMI_DEPLOY_CONTROL_TOKEN or scoped Interface authorizer is configured");
+  });
+}
+
+test("an explicit reject-only Interface authorizer permits API startup and never grants operator access", async () => {
+  let decisions = 0;
+  const { app } = await createTakosumiService({
+    role: "takosumi-api", runtimeConfig: { environment: "test" }, runtimeEnv: {},
+    context: createInMemoryAppContext({ runtimeEnv: { TAKOSUMI_DEV_MODE: "1" } }),
+    authorizeInterfaceBearer: () => { decisions += 1; return undefined; },
+  });
+  const response = await app.request("/api/v1/interfaces?workspaceId=ws_1", {
+    headers: { authorization: "Bearer fixture-denied", [TAKOSUMI_INTERNAL_ACTOR_HEADER]: "not-authority" },
+  });
+  expect(response.status).toBe(401);
+  expect(decisions).toBe(1);
+});
 
 test("Interface CRUD is bearer protected and desired writes use ETag", async () => {
   const api = await app();

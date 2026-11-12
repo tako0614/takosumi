@@ -66,6 +66,7 @@ async function compose(backend: Backend) {
     sourceCredentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
   });
   const operations = (await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,

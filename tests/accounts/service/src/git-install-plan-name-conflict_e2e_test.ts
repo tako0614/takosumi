@@ -64,6 +64,7 @@ const runner: OpenTofuRunner = {
 
 async function compose(backend: Backend) {
   const common = {
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api" as const,
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuRunner: runner,

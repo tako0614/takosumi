@@ -8,6 +8,7 @@ function baseEnv(
   extra: Record<string, unknown> = {},
 ): CloudflareWorkerEnv {
   return {
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token",
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     TAKOSUMI_ENVIRONMENT: "test",
     TAKOSUMI_DEV_MODE: "1",
