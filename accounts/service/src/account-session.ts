@@ -46,6 +46,23 @@ export type AccountsBearerSubject = {
   readonly oauthClientId?: string;
 };
 
+type AccountSessionCredential = {
+  readonly sessionId: string;
+  readonly source: "header" | "hosted-cookie" | "legacy-cookie";
+};
+
+// Restrictive service policy for this actual Request's lifetime. It carries
+// no authenticated identity and leaves private Request-bound references intact.
+const hostedSessionCookieRequests = new WeakSet<Request>();
+
+function sessionCredentialMatchesPolicy(
+  credential: AccountSessionCredential | null,
+  session: AccountSessionRecord,
+): boolean {
+  return credential !== null &&
+    !(session.policy === "hosted" && credential.source === "legacy-cookie");
+}
+
 export async function requireAccountSession(input: {
   request: Request;
   store: AccountsStore;
@@ -53,7 +70,8 @@ export async function requireAccountSession(input: {
   | { ok: true; subject: TakosumiSubject; sessionId: string }
   | { ok: false; response: Response }
 > {
-  const sessionId = extractAccountSessionId(input.request);
+  const credential = extractAccountSessionCredential(input.request);
+  const sessionId = credential?.sessionId;
   // This guard accepts sessions only, so the lexical check validates the
   // canonical format minted by this service; it does not route among
   // credential kinds. Multi-kind account/control authentication resolves
@@ -62,6 +80,9 @@ export async function requireAccountSession(input: {
     return { ok: false, response: bearerChallenge("invalid_session") };
   }
   const session = await input.store.findAccountSession(sessionId);
+  if (session && !sessionCredentialMatchesPolicy(credential, session)) {
+    return { ok: false, response: bearerChallenge("invalid_session") };
+  }
   if (!session || session.expiresAt <= Date.now() || (session.policy === "hosted" && (!session.absoluteExpiresAt || session.absoluteExpiresAt <= Date.now() || !Number.isSafeInteger(session.authTime)))) {
     if (session) await input.store.deleteAccountSession(sessionId);
     return { ok: false, response: bearerChallenge("invalid_session") };
@@ -85,8 +106,8 @@ export async function requireAccountSession(input: {
  * Extract the bearer session_id from a request. Accepts (in order):
  *   1. The `Authorization: Bearer ...` header (non-cookie session clients).
  *   2. The `x-takosumi-account-session` header (compat with non-cookie clients).
- *   3. The `takosumi_session` HttpOnly cookie (Set by the server on
- *      OAuth callback / passkey complete — the canonical browser path).
+ *   3. The `__Host-takosumi_session` HttpOnly cookie, then the non-hosted
+ *      `takosumi_session` cookie. The selected cookie name must be unique.
  *
  * Cookie sources are preferred for new browser flows because the cookie
  * is `HttpOnly` / `Secure` / `SameSite=Lax`; clients must not write
@@ -95,26 +116,49 @@ export async function requireAccountSession(input: {
  * the account session on the top-level `/oauth/authorize` navigation.
  */
 export function extractAccountSessionId(request: Request): string | null {
+  return extractAccountSessionCredential(request)?.sessionId ?? null;
+}
+
+function extractAccountSessionCredential(request: Request): AccountSessionCredential | null {
   const bearer = bearerToken(request.headers.get("authorization"));
-  if (bearer) return bearer;
+  if (bearer) return { sessionId: bearer, source: "header" };
   const headerSession = request.headers.get("x-takosumi-account-session");
-  if (headerSession) return headerSession;
-  return readSessionCookie(request.headers.get("cookie"));
+  if (headerSession) return { sessionId: headerSession, source: "header" };
+  const credential = readSessionCookie(request.headers.get("cookie"));
+  return credential?.source === "legacy-cookie" && hostedSessionCookieRequests.has(request)
+    ? null
+    : credential;
 }
 
 export const ACCOUNT_SESSION_COOKIE_NAME = "takosumi_session";
 export const HOSTED_ACCOUNT_SESSION_COOKIE_NAME = "__Host-takosumi_session";
 
-function readSessionCookie(header: string | null): string | null {
+function readSessionCookie(header: string | null): AccountSessionCredential | null {
   if (!header) return null;
+  const parts = header.split(";");
   for (const expected of [HOSTED_ACCOUNT_SESSION_COOKIE_NAME, ACCOUNT_SESSION_COOKIE_NAME]) {
-    for (const part of header.split(";")) {
+    const matches = parts.filter((part) => {
       const idx = part.indexOf("=");
-      if (idx === -1 || part.slice(0,idx).trim() !== expected) continue;
-      try { return decodeURIComponent(part.slice(idx+1).trim()); } catch { return null; }
-    }
+      return idx !== -1 && part.slice(0, idx).trim() === expected;
+    });
+    if (matches.length === 0) continue;
+    if (matches.length !== 1) return null;
+    const part = matches[0]!;
+    try {
+      const sessionId = decodeURIComponent(part.slice(part.indexOf("=") + 1).trim());
+      return sessionId ? {
+        sessionId,
+        source: expected === HOSTED_ACCOUNT_SESSION_COOKIE_NAME ? "hosted-cookie" : "legacy-cookie",
+      } : null;
+    } catch { return null; }
   }
   return null;
+}
+
+/** Apply Hosted cookie selection without copying or mutating the actual Request. */
+export function applyHostedAccountSessionCookiePolicy(request: Request): Request {
+  hostedSessionCookieRequests.add(request);
+  return request;
 }
 
 /**
@@ -325,16 +369,28 @@ export async function handleAccountSessionMeDelete(input: {
   secureCookie: boolean;
   hostedPolicy?: boolean;
 }): Promise<Response> {
-  const sessionId = extractAccountSessionId(input.request);
+  const credential = extractAccountSessionCredential(input.request);
+  const sessionId = input.hostedPolicy && credential?.source === "legacy-cookie"
+    ? null
+    : credential?.sessionId;
+  let hostedPolicy = input.hostedPolicy;
   if (sessionId && sessionId.startsWith("sess_")) {
     try {
       const session = await input.store.findAccountSession(sessionId);
-      if (session?.policy === "hosted" || sessionId.startsWith("sess_h_")) {
-        if (!input.store.revokeHostedOidcSessionGrants) throw new Error("hosted session revocation unavailable");
-        const anchor = await resolveHostedSessionAnchor(input.store,sessionId,session);
-        if (anchor) await input.store.revokeHostedOidcSessionGrants(anchor,Date.now());
+      hostedPolicy ||= session?.policy === "hosted";
+      // Retired records can retain a Hosted anchor. Recovery through that
+      // anchor accepts only the Host cookie or an explicit header carrier.
+      const carrierAllowed = session
+        ? sessionCredentialMatchesPolicy(credential, session)
+        : credential?.source === "hosted-cookie" || credential?.source === "header";
+      if (carrierAllowed) {
+        if (session?.policy === "hosted" || sessionId.startsWith("sess_h_")) {
+          if (!input.store.revokeHostedOidcSessionGrants) throw new Error("hosted session revocation unavailable");
+          const anchor = await resolveHostedSessionAnchor(input.store,sessionId,session);
+          if (anchor) await input.store.revokeHostedOidcSessionGrants(anchor,Date.now());
+        }
+        await input.store.deleteAccountSession(sessionId);
       }
-      await input.store.deleteAccountSession(sessionId);
     } catch {
       return errorJson(
         "session_revocation_unavailable",
@@ -345,7 +401,7 @@ export async function handleAccountSessionMeDelete(input: {
       );
     }
   }
-  const cookie = clearAccountSessionCookie(input.secureCookie, input.hostedPolicy || sessionId?.startsWith("sess_h_"));
+  const cookie = clearAccountSessionCookie(input.secureCookie, hostedPolicy || sessionId?.startsWith("sess_h_"));
   return new Response(null, {
     status: 204,
     headers: {
@@ -378,7 +434,10 @@ export async function requireAccountsBearer(input: {
   const headerToken =
     bearerToken(input.request.headers.get("authorization")) ??
     input.request.headers.get("x-takosumi-account-session");
-  const token = headerToken ?? extractAccountSessionId(input.request);
+  const credential: AccountSessionCredential | null = headerToken != null
+    ? { sessionId: headerToken, source: "header" }
+    : extractAccountSessionCredential(input.request);
+  const token = credential?.sessionId;
   if (!token) {
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
@@ -413,6 +472,9 @@ export async function requireAccountsBearer(input: {
   assertActive?.();
   const [sessionRecord, accessRecord, personalAccessTokenRecord] =
     bearerCandidates;
+  if (sessionRecord && !sessionCredentialMatchesPolicy(credential, sessionRecord)) {
+    return { ok: false, response: bearerChallenge("invalid_token") };
+  }
 
   let sessionSubject: TakosumiSubject | undefined;
   if (sessionRecord) {
@@ -679,7 +741,8 @@ export async function handleHostedGlobalLogout(input: {
   if (input.request.headers.get("origin") !== new URL(input.issuer).origin) {
     return errorJson("csrf_failed", "Origin must exactly match the Accounts issuer.", 403, input.request);
   }
-  const sessionId = extractAccountSessionId(input.request);
+  const credential = extractAccountSessionCredential(input.request);
+  const sessionId = credential?.source === "legacy-cookie" ? null : credential?.sessionId;
   if (sessionId && sessionId.startsWith("sess_h_")) {
     if (!input.store.revokeHostedOidcSessionGrants) return errorJson("session_revocation_unavailable", "Session revocation unavailable.", 503, input.request);
     const anchor = await resolveHostedSessionAnchor(input.store,sessionId);

@@ -120,6 +120,7 @@ import {
 import { createAccountsHttpApp } from "./http-app.ts";
 import { constantTimeEqual } from "./encoding.ts";
 import {
+  applyHostedAccountSessionCookiePolicy,
   extractAccountSessionId,
   handleHostedGlobalLogout,
   handleAccountSessionMeDelete,
@@ -910,7 +911,7 @@ export function createAccountsHandler(
     if (options.hostedSessionPolicy && (url.pathname === "/api/v1/account/identity-credentials/unlink" || url.pathname === "/api/v1/account/identity-merges" || url.pathname.startsWith("/api/v1/account/identity-merges/"))) {
       const limited = identityFlowLimiter.consume(request);
       if (limited) return withPrivateNoStoreHeaders(limited);
-      const auth = await requireAccountSession({request:request.clone(),store});
+      const auth = await requireAccountSession({request,store});
       if (!auth.ok) return withPrivateNoStoreHeaders(auth.response);
       const session = await store.findAccountSession(auth.sessionId);
       return (await handleIdentityMergeRequest({request,store,session,issuerOrigin:issuer,reconciler:options.identityMergeReconciler,retryCapability:options.identityMergeRetry})) ?? errorJson("not_found","not found",404,request);
@@ -1033,7 +1034,7 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH) {
       const session = await requireAccountSession({
-        request: request.clone(),
+        request,
         store,
       });
       if (!session.ok) return session.response;
@@ -1063,7 +1064,7 @@ export function createAccountsHandler(
     if (privacyRequestRoute) {
       if (!privacyRequestRoute.action && request.method === "GET") {
         const session = await requireAccountSession({
-          request: request.clone(),
+          request,
           store,
         });
         if (!session.ok) return session.response;
@@ -1241,7 +1242,10 @@ export function createAccountsHandler(
   return async (request: Request): Promise<Response> => {
     let response: Response;
     try {
-      response = await app.fetch(request);
+      const sessionRequest = options.hostedSessionPolicy
+        ? applyHostedAccountSessionCookiePolicy(request)
+        : request;
+      response = await app.fetch(sessionRequest);
     } catch (error) {
       if (!(error instanceof RequestBodyReadError)) throw error;
       response = errorJson(error.code, error.message, error.status, request);
