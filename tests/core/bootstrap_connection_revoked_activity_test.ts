@@ -35,6 +35,7 @@ async function harness() {
     revoke: async (id: string) => await store.deleteConnection(id),
   } as unknown as ConnectionVault;
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test" },
     opentofuControlStore: store,
     opentofuConnectionVault: vault,

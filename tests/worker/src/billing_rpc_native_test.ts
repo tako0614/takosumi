@@ -110,14 +110,14 @@ test("workerd direct billing service binding transfers seven plain DTO calls and
         {
           name: "caller", compatibilityDate: "2026-07-17",
           modules: [{ type: "ESModule", path: "billing-rpc-caller.mjs", contents: bundle }],
-          bindings: { TAKOSUMI_BILLING_REQUIRED: "1", TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+          bindings: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token", TAKOSUMI_BILLING_REQUIRED: "1", TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
           d1Databases: { TAKOSUMI_CONTROL_DB: "native-billing-control" },
           serviceBindings: { TAKOSUMI_BILLING: { name: "host", entrypoint: "PrivateBilling" } },
         },
         {
           name: "incomplete-caller", compatibilityDate: "2026-07-17",
           modules: [{ type: "ESModule", path: "billing-rpc-incomplete-caller.mjs", contents: bundle }],
-          bindings: { TAKOSUMI_BILLING_REQUIRED: "1", TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+          bindings: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token", TAKOSUMI_BILLING_REQUIRED: "1", TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
           d1Databases: { TAKOSUMI_CONTROL_DB: "native-billing-incomplete-control" },
           serviceBindings: { TAKOSUMI_BILLING: { name: "host", entrypoint: "IncompleteBilling" } },
         },

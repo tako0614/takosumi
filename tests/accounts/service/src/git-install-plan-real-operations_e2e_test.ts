@@ -37,6 +37,7 @@ test("composed install routes create owned Source, sync, and Capsule authority w
     }],
   };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,

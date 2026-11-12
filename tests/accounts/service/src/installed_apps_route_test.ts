@@ -32,6 +32,7 @@ async function fixture(withSelector = true, sourceUrl = "https://reader:private-
     });
   }
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api", runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: ledger, interfaceStores: createInMemoryInterfaceStores(),
   });

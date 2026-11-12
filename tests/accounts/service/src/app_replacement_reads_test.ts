@@ -51,6 +51,7 @@ async function fixture() {
     status: "active", currentStateGeneration: 1, updatedAt: NOW,
   });
   const { operations: core } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: ledger,

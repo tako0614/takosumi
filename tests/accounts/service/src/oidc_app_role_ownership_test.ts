@@ -26,7 +26,7 @@ async function fixture(subject = OWNER) {
   } });
   await ledger.putCapsule({ ...seeded.capsule, status: "active" });
   await ledger.putWorkspace({ ...seeded.workspace, ownerUserId: OWNER });
-  const { operations: core } = await createTakosumiService({ role: "takosumi-api",
+  const { operations: core } = await createTakosumiService({ authorizeInterfaceBearer: () => undefined, role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" }, opentofuControlStore: ledger,
     interfaceStores: createInMemoryInterfaceStores({ workspaceManagementAuthority: ledger }),
   });

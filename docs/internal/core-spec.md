@@ -1141,6 +1141,17 @@ provider state and cannot become Interface inputs.
 
 ## Interfaces and InterfaceBindings
 
+Every exposed Interface management API requires a configured operator bearer
+or a scoped Interface bearer authorizer, including local/development/test and
+unspecified environments. Core refuses API-role startup without either port.
+The lower-level route composition also returns `503` / `unavailable` before
+service access when both are absent, including when a token supplier later
+returns no token. Request metadata or an actor header cannot replace this
+authentication. Non-API roles that do not mount these routes need no such port.
+Hosts may explicitly reject all Interface bearers when the HTTP family is
+unused; there is no unauthenticated development fallback. Configured operator
+and scoped-actor paths retain their existing Workspace, app and Binding fences.
+
 Interfaces are provider-neutral declarations owned by a Workspace or Capsule.
 They use a closed `apiVersion`/`kind`/`metadata`/`spec`/`status` envelope and
 carry endpoint and input-resolution metadata, not provider account IDs,

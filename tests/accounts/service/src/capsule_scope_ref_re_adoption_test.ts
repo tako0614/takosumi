@@ -157,6 +157,7 @@ async function fixture(mode: "re-adoption" | "configuration" = "re-adoption") {
       updatedAt: NOW,
     };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,

@@ -98,6 +98,7 @@ test("service creation exposes host configs without durable InstallConfig writes
   };
 
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: durable,
     operatorInstallConfigs: [operator],
@@ -123,6 +124,7 @@ test("a host can replace the generic default policy without adding an app catalo
   };
 
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: durable,
     operatorInstallConfigs: [hostDefault],

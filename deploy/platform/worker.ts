@@ -1,4 +1,5 @@
 import { runSourceMaintenanceSchedule } from "../../worker/src/source_maintenance_schedule.ts";
+import { disabledInventoryResponse } from "../../core/api/inventory_response.ts";
 import {
   attachInvocationWaitUntil,
   runOwnNotificationDispatch,
@@ -886,6 +887,12 @@ const platformWorker = {
       return Response.json({ error: "not found" }, { status: 404 });
     }
     if (isPlatformCoreProcessRoute(request, url)) {
+      if (
+        !env.TAKOSUMI_DEPLOY_CONTROL_TOKEN &&
+        (url.pathname === "/capabilities" || url.pathname === "/openapi.json")
+      ) {
+        return disabledInventoryResponse(request, url.pathname === "/capabilities" ? "capabilities" : "openapi");
+      }
       const service = await cachedDeployControlService(env);
       return service.app.fetch(
         request,

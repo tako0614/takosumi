@@ -143,6 +143,7 @@ async function harness() {
   await store.putCompatibilityCheckRun(compatibilityRun);
 
   const service = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,

@@ -45,7 +45,7 @@ test("private Control composition pins configured and unconfigured identities be
 });
 
 test("deferred actual service creation uses its frozen reader even if the caller mutates composition", async () => {
-  const env = { TAKOSUMI_CONTROL_DB: new SqliteFakeD1(), TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" } as unknown as CloudflareWorkerEnv;
+  const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token", TAKOSUMI_CONTROL_DB: new SqliteFakeD1(), TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" } as unknown as CloudflareWorkerEnv;
   let readsA = 0, readsB = 0;
   const readerA = privateIdentityReader(() => { readsA++; });
   const readerB = privateIdentityReader(() => { readsB++; });
@@ -69,7 +69,7 @@ test("actual failed Control bootstrap retries retain the original authority pin 
       return super.prepare(query);
     }
   }
-  const env = { TAKOSUMI_CONTROL_DB: new FailOnceD1(), TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" } as unknown as CloudflareWorkerEnv;
+  const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token", TAKOSUMI_CONTROL_DB: new FailOnceD1(), TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" } as unknown as CloudflareWorkerEnv;
   const reader = privateIdentityReader();
   const first = cachedDeployControlService(env, { identityReconciliationAuthority: reader });
   expect(cachedDeployControlService(env, { identityReconciliationAuthority: reader })).toBe(first);

@@ -56,6 +56,7 @@ for (const method of ["PATCH", "DELETE"] as const) {
     });
     let readsBeforeAuth = 0;
     const { app } = await createTakosumiService({
+      authorizeInterfaceBearer: () => undefined,
       role: "takosumi-api",
       runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
       opentofuControlStore: store,
@@ -125,6 +126,7 @@ async function scopedApp(
     });
   }
   const { app } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: store,

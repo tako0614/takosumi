@@ -22,6 +22,7 @@ async function fixture(credential: "pat" | "session" | "shared" = "pat") {
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, { capsuleId: CAPSULE });
   const { operations: core } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api", runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: ledger,
     interfaceStores: createInMemoryInterfaceStores({ workspaceManagementAuthority: ledger }),

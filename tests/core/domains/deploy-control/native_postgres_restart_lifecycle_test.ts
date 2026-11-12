@@ -820,6 +820,7 @@ test.skipIf(!NATIVE_POSTGRES_OPT_IN)(
       const firstService = await runNativePostgresPhase(
         "core.bootstrap.first",
         () => createTakosumiService({
+          authorizeInterfaceBearer: () => undefined,
           role: "takosumi-api",
           runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
           sqlClient: firstClient!.client,
@@ -971,6 +972,7 @@ test.skipIf(!NATIVE_POSTGRES_OPT_IN)(
       const failedService = await runNativePostgresPhase(
         "core.bootstrap.first",
         () => createTakosumiService({
+          authorizeInterfaceBearer: () => undefined,
           role: "takosumi-api",
           runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
           sqlClient: firstClient!.client,
@@ -1182,6 +1184,7 @@ test.skipIf(!NATIVE_POSTGRES_OPT_IN)(
       const freshService = await runNativePostgresPhase(
         "core.bootstrap.restarted",
         () => createTakosumiService({
+          authorizeInterfaceBearer: () => undefined,
           role: "takosumi-api",
           runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
           sqlClient: restartedClient!.client,

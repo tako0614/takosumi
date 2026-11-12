@@ -20,6 +20,7 @@ import {
   type PublicSessionOpenApiEndpoint,
 } from "./openapi.ts";
 import { apiError, requestIdFromContext } from "./errors.ts";
+import { disabledInventoryResponse } from "./inventory_response.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import {
   type ReadinessRouteProbes,
@@ -198,15 +199,7 @@ function authorizeInventoryRoute(
 ): Response | undefined {
   const expected = options.getOpenApiBearerToken?.();
   if (!expected) {
-    return c.json(
-      apiError(
-        "not_found",
-        `${surface} inventory disabled`,
-        undefined,
-        requestIdFromContext(c),
-      ),
-      404,
-    );
+    return disabledInventoryResponse(c.req.raw, surface);
   }
   const presented = bearerTokenFromAuthorization(
     c.req.header("authorization") ?? "",

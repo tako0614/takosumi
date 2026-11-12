@@ -678,7 +678,20 @@ async function authorize(
   options: RegisterInterfaceRoutesOptions,
 ): Promise<InterfaceAuthResult> {
   const configured = options.getInterfaceBearerToken?.();
-  if (!configured && !options.authorizeInterfaceBearer) return { ok: true };
+  if (!configured && !options.authorizeInterfaceBearer) {
+    return {
+      ok: false,
+      response: c.json(
+        apiError(
+          "unavailable",
+          "Interface API authentication is not configured",
+          undefined,
+          requestIdFromContext(c),
+        ),
+        503,
+      ),
+    };
+  }
   const bearer = bearerToken(c.req.header("authorization"));
   if (!bearer) return { ok: false, response: unauthorized(c) };
   if (configured && constantTimeEqualsString(configured, bearer)) {

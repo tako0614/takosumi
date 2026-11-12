@@ -78,6 +78,7 @@ async function fixture(options: { readonly owned?: boolean; readonly legacy?: bo
     });
   }
   const { operations: core } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: ledger,

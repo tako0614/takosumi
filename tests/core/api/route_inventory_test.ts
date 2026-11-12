@@ -2,13 +2,17 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import Ajv2020 from "ajv/dist/2020.js";
+import { createApiApp } from "../../../core/api/app.ts";
 import { createApiCapabilitiesDescription } from "../../../core/api/capabilities.ts";
+import { createInMemoryInterfaceStores, InterfaceService } from "../../../core/domains/interfaces/mod.ts";
 import {
   capsuleAndInstallConfigSchemas,
   capsuleSchemas,
   createTakosumiOpenApiDocument,
   sourceSchemas,
   TAKOSUMI_OPENAPI_VERSION,
+  type OpenApiHttpMethod,
   workspaceProjectAndCapsuleRequestSchemas,
 } from "../../../core/api/openapi.ts";
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
@@ -34,6 +38,39 @@ const ALL_MOUNTED: RouteFamilyMountedFlags = {
 function toOpenApiPath(path: string): string {
   return path.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, "{$1}");
 }
+
+test("Interface authentication unavailable status is declared for every operation", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const endpoints = mountedEndpoints(ALL_MOUNTED).filter((endpoint) => endpoint.tag === "interfaces");
+  assert.ok(endpoints.length > 0);
+  for (const endpoint of endpoints) {
+    const method = endpoint.method.toLowerCase() as OpenApiHttpMethod;
+    const operation = openapi.paths[toOpenApiPath(endpoint.path)]?.[method];
+    assert.deepEqual(operation?.responses["503"], {
+      description: "JSON response",
+      content: {
+        "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } },
+      },
+    }, `${endpoint.method} ${endpoint.path}`);
+  }
+});
+
+test("Interface authentication unavailable body satisfies the published error schema", async () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const api = await createApiApp({
+    role: "takosumi-api",
+    registerOpenApiRoute: false,
+    registerDeployControlInternalRoutes: false,
+    registerInterfaceRoutes: true,
+    interfaceRouteOptions: { service: new InterfaceService({ stores: createInMemoryInterfaceStores() }) },
+    requestCorrelation: false,
+  });
+  const response = await api.request("/api/v1/interfaces?workspaceId=fixture");
+  assert.equal(response.status, 503);
+  const validate = new Ajv2020().compile(openapi.components.schemas.ErrorResponse);
+  assert.equal(validate(await response.json()), true, JSON.stringify(validate.errors));
+  assert.equal(validate({ error: { code: "fixture_unknown_error", message: "fixture", requestId: "fixture" } }), false);
+});
 
 /**
  * The all-mounted process /capabilities inventory and /openapi.json paths must

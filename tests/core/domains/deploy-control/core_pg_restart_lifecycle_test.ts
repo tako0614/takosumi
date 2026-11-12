@@ -84,6 +84,7 @@ function createCoreService(
   runnerOptions: { readonly failApply?: boolean } = {},
 ) {
   return createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     sqlClient,

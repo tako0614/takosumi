@@ -18,6 +18,7 @@ function baseEnv(
   accountsDb: SqliteFakeD1,
 ): CloudflareWorkerEnv {
   return {
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token",
     TAKOSUMI_CONTROL_DB: controlDb,
     TAKOSUMI_ACCOUNTS_DB: accountsDb,
     TAKOSUMI_ENVIRONMENT: "test",

@@ -181,6 +181,7 @@ test("internal Workspace creation is frozen by default and opens only with an ex
 
 test("Core's exposed membership mutation facade is frozen without touching the store", async () => {
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
   });

@@ -428,6 +428,7 @@ async function createConnectionItemFixture(suffix: string) {
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
   });
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -711,6 +712,7 @@ test("account public generic-env registration retains the original Workspace aut
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
   });
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -874,6 +876,7 @@ test("account OAuth state carries no Workspace and a Workspace-scoped connection
   );
   if (!oauthHelpers?.fixture) throw new Error("fixture OAuth helper is missing");
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -1003,6 +1006,7 @@ test(pauseBeforeVerification
   );
   if (!oauthHelpers?.fixture) throw new Error("fixture OAuth helper is missing");
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -1150,6 +1154,7 @@ test("account Workspace inventory follows real active membership pagination", as
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -3546,6 +3551,7 @@ test("default service coordination returns 409 while provider Apply holds the Ca
   });
   const applyJobs: OpenTofuApplyJob[] = [];
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -3627,6 +3633,7 @@ test("queued Apply prevents abandonment before acquiring the Capsule lifecycle l
   };
   const applyJobs: OpenTofuApplyJob[] = [];
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -3693,6 +3700,7 @@ test("no-state Capsule DELETE rejects any runtime effect but permits pre-dispatc
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -3798,6 +3806,7 @@ test("compatibility check refuses a repository-relative modulePath for a path-sc
   const deployStore = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -3967,6 +3976,7 @@ test("repository preflight resolves the sole indexed module before exact compati
     updatedAt: "2026-06-06T00:00:00.000Z",
   };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -4280,6 +4290,7 @@ test("the repository module index owns module choice over historical Store profi
     order: 30,
   });
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -4470,6 +4481,7 @@ test("historical profile rows cannot override an explicit indexed module path", 
     updatedAt: "2026-08-16T00:00:00.000Z",
   };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -4535,6 +4547,7 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
   const foreignCookie = seedSession(accountStore, "foreign_install_modules");
   const deployStore = new InMemoryOpenTofuControlStore();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -4745,6 +4758,7 @@ test("repository compilation accepts exact indexed module authority while manife
   const deployStore = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -4991,6 +5005,7 @@ terraform {
     },
   };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -5066,6 +5081,7 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
   const deployStore = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -5216,6 +5232,7 @@ test("a Workspace session cannot mutate lifecycle actions through the retired Ca
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -5283,6 +5300,7 @@ test("retired Capsule config PATCH cannot drop public_endpoint metadata", async 
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -5362,6 +5380,7 @@ test("account session control routes execute plan and apply through the real Ope
   );
   const runner = recordingRunner();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -5664,6 +5683,7 @@ test("authenticated repository Interface review persists exact proposals and app
   const deployStore = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
@@ -6097,6 +6117,7 @@ output "launch_url" { value = var.public_url }
     updatedAt: "2026-08-25T00:00:00.000Z",
     };
   const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,

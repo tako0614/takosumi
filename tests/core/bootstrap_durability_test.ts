@@ -25,6 +25,7 @@ test("durable service startup refuses an omitted ownership authority before read
   const store = new CloudflareD1OpenTofuControlStore(db);
   db.prepare = () => { throw new Error("startup must refuse before touching D1"); };
   await expect(createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api", context: localContext(),
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" }, opentofuControlStore: store,
   })).rejects.toThrow("durable control store requires an AppOwnershipStore");
@@ -33,6 +34,7 @@ test("durable service startup refuses an omitted ownership authority before read
 test("durable service startup refuses an unrelated in-memory ownership authority", async () => {
   const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
   await expect(createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api", context: localContext(),
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" }, opentofuControlStore: store,
     appOwnershipStore: new InMemoryAppOwnershipStore(new InMemoryOpenTofuControlStore()),
@@ -50,6 +52,7 @@ test("durable service startup shares the explicitly supplied D1 ownership author
   const store = new CloudflareD1OpenTofuControlStore(db);
   const appOwnershipStore = new D1AppOwnershipStore(db, store);
   const service = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api", context: localContext(),
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" }, opentofuControlStore: store,
     appOwnershipStore,
@@ -99,6 +102,7 @@ test("production deploy ledger rejects ephemeral storage even when dev mode is r
 test("production Git install-plan coordinator rejects its implicit in-memory fallback", async () => {
   await expect(
     createTakosumiService({
+      authorizeInterfaceBearer: () => undefined,
       role: "takosumi-api",
       runtimeConfig: {
         environment: "production",
@@ -116,6 +120,7 @@ test("production Git install-plan coordinator rejects its implicit in-memory fal
 test("production Git install-plan coordinator rejects an injected in-memory store", async () => {
   await expect(
     createTakosumiService({
+      authorizeInterfaceBearer: () => undefined,
       role: "takosumi-api",
       runtimeConfig: {
         environment: "production",
@@ -174,6 +179,7 @@ test("service startup projects fixed operator connections without reconciling ru
   };
 
   await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     context: localContext(),
@@ -208,6 +214,7 @@ test("composed Capsule abandonment retires its owned Source after the ledger com
     type: "personal", ownerUserId: "user_one", createdAt: now, updatedAt: now,
   });
   const service = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     context: localContext(),
@@ -256,6 +263,7 @@ test("composed daily sweep requires an explicit retirement mark for a legacy orp
     createdAt, updatedAt: createdAt,
   });
   const service = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api", runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     context: localContext(), opentofuControlStore: store,
   });

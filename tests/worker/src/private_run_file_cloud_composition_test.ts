@@ -126,6 +126,7 @@ test("opt-in Cloud composition serves an authenticated read through local D1 and
 
 function baseEnv(extra: Record<string, unknown> = {}): CloudflareWorkerEnv {
   return {
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token",
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     R2_ARTIFACTS: new FakeR2Bucket(),
     TAKOSUMI_ENVIRONMENT: "test",
