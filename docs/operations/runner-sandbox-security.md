@@ -44,6 +44,28 @@ Git HTTPS custom trust can use the existing explicit `GIT_SSL_CAINFO` input;
 the existing `SSL_CERT_FILE` and `SSL_CERT_DIR` passthrough is retained. Ambient
 Git/SSH config is not a source-credential input.
 
+HTTPS source sync and stable-tag discovery require Git 2.37 or newer. They
+reject HTTP redirects and pass the complete validated public DNS address set
+to Git through `http.curloptResolve`, preserving the original hostname and TLS
+verification. The same non-expiring pin covers ref lookup and both shallow
+fetch attempts. Literal IP URLs need no DNS pin and also refuse redirects.
+Use the final repository URL rather than relying on a forge redirect. The
+reference image checks the Git minimum at build time; each HTTPS operation
+also refuses an unsupported runtime before any remote Git command.
+For hostname URLs, the Linux x64/arm64 runtime must expose its Git HTTPS
+helper's one dynamically linked libcurl through `ldd`. A bounded, credential-free
+Bun child reads that actual library's runtime version and IPv6 feature through
+`curl_version_info`; libcurl 7.59 or newer and support for every resolved address
+family are required. Static/unknown linkage, an unsupported ABI, unavailable
+native inspection, and failed inspection refuse before remote execution.
+Git build headers and a separate `curl` executable are not capability evidence.
+Bun's experimental FFI is confined to this read-only child; a crash or timeout
+fails the check and leaves the Runner process intact. No network probe is used.
+
+This HTTPS transport pin does not pin SSH destinations. SSH retains its
+existing preflight and minted host-key controls and requires substrate egress
+or source-host controls for connection-time address enforcement.
+
 Each command phase now gets a fresh private HOME outside its Run workspace,
 with a fresh `XDG_CONFIG_HOME` when the selected provider input has not
 explicitly declared one. All commands in one `sourceBuild` share its HOME;
