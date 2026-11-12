@@ -158,6 +158,14 @@ archive and its intermediate tar. A reused legacy archive still receives the
 normal byte/digest and extraction validation at restore; the fresh worktree
 budget check does not certify stored legacy bytes.
 
+Source archives have a fixed 50,000-entry ceiling, including directories and
+the archive root. The fresh-tree walk and restore validation enforce the same
+ceiling; Git tree metadata also rejects a file count that already exceeds it.
+Git tree and tar listing commands share a 32 MiB stdout/stderr budget, enforced
+while reading their pipes. Exceeding it stops the command group. Profiles cannot
+raise these ceilings. Compressed archives are size-checked before reading and
+remain subject to the 50 MiB streaming cap during reads, relay uploads and restore.
+
 Plan, Apply, Destroy, and Refresh are guarded Run operations, not separate
 ledgers. OpenTofu Outputs remain ordinary module values; an Interface may
 explicitly reference a Capsule output, but no reserved output name becomes a

@@ -51,6 +51,8 @@ export const BASE_COMMAND_ENV_NAMES = [
 // Default cap for the produced source archive when the runner profile does not
 // pin `resourceLimits.maxSourceArchiveBytes`. Source repos are small modules.
 export const DEFAULT_SOURCE_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
+export const DEFAULT_SOURCE_ARCHIVE_MAX_ENTRIES = 50_000;
+export const SOURCE_ARCHIVE_METADATA_MAX_BYTES = 32 * 1024 * 1024;
 export const DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES =
   10 * DEFAULT_SOURCE_ARCHIVE_MAX_BYTES;
 // Raw `tofu show -json tfplan` can embed large provider payloads such as

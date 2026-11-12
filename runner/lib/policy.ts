@@ -14,6 +14,8 @@ import type { CommandContext, TarVerboseEntry } from "./types.ts";
 import {
   RUN_ROOT,
   DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
+  DEFAULT_SOURCE_ARCHIVE_MAX_ENTRIES,
+  SOURCE_ARCHIVE_METADATA_MAX_BYTES,
   INTERNAL_NAME_SUFFIXES,
 } from "./constants.ts";
 import { runCommand } from "./exec.ts";
@@ -183,13 +185,21 @@ export function assertSafeCredentialFileMode(mode: number): void {
 // source_sync archive format. Reuses the shared
 // per-entry validators (escape quoting, duplicate normalized paths, file/dir
 // only, decompressed-size cap).
+export function sourceArchiveEntryLimit(context: CommandContext): number {
+  const requested = context.sourceArchiveMaxEntries ?? DEFAULT_SOURCE_ARCHIVE_MAX_ENTRIES;
+  if (!Number.isSafeInteger(requested) || requested < 1) {
+    throw new Error("source archive entry limit is invalid");
+  }
+  return Math.min(requested, DEFAULT_SOURCE_ARCHIVE_MAX_ENTRIES);
+}
+
 export async function assertSafeZstdTarArchive(
   archivePath: string,
   context: CommandContext,
 ): Promise<void> {
   const verbose = await runCommand(
     ["tar", "-t", "-v", "--quoting-style=escape", "--zstd", "-f", archivePath],
-    { cwd: RUN_ROOT, context },
+    { cwd: RUN_ROOT, context, outputLimitBytes: SOURCE_ARCHIVE_METADATA_MAX_BYTES },
   );
   if (verbose.exitCode !== 0) {
     throw new Error(
@@ -197,9 +207,14 @@ export async function assertSafeZstdTarArchive(
     );
   }
   const seenPaths = new Set<string>();
+  const entryLimit = sourceArchiveEntryLimit(context);
+  let entries = 0;
   let decompressedBytes = 0;
   for (const line of verbose.stdout.split(/\r?\n/)) {
     if (!line) continue;
+    if (++entries > entryLimit) {
+      throw new Error("source archive entry limit exceeded");
+    }
     const entry = parseTarVerboseLine(line);
     if (!entry) {
       throw new Error(
