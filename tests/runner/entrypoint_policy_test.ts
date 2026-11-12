@@ -255,7 +255,7 @@ test("resolved-host policy accepts public addresses through an injected runner r
         return ["203.0.113.10", "2001:db8::10"];
       },
     ),
-  ).resolves.toBeUndefined();
+  ).resolves.toEqual(["203.0.113.10", "2001:db8::10"]);
   expect(seen).toEqual(["git.example.test"]);
 });
 
@@ -275,6 +275,14 @@ test("resolved-host policy rejects any private answer and unresolved names", asy
       async () => [],
     ),
   ).rejects.toThrow("could not be resolved for SSRF validation");
+});
+
+test("resolved-host policy returns an immutable validated snapshot", async () => {
+  const answer = ["203.0.113.10", "203.0.113.10", "2001:db8::10"];
+  const validated = await assertResolvedHostNotBlocked("git.example.test", "source host", async () => answer);
+  answer[0] = "10.0.0.1";
+  expect(validated).toEqual(["203.0.113.10", "2001:db8::10"]);
+  expect(Object.isFrozen(validated)).toBe(true);
 });
 
 test("resolved-host policy rejects internal names before invoking a resolver", async () => {

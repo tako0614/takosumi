@@ -16,6 +16,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
+import { isIP } from "node:net";
 import type {
   JsonRecord,
   OpenTofuModuleSource,
@@ -48,6 +49,7 @@ import {
 import { redactCredentialOutput } from "./redaction.ts";
 import { readResponseBytesWithCap, runRequiredCommand, runCommand } from "./exec.ts";
 import { enterCommandPhaseHome } from "./phase_home.ts";
+import { readGitCurlRuntime } from "./git_curl_runtime.ts";
 import {
   assertSourceUrlPolicy,
   normalizeSourceSubtreePath,
@@ -186,13 +188,14 @@ async function runStableSemverTagResolutionInPhase(
   if (sourceUrlScheme(url) !== "https") {
     throw new Error("stable tag resolution requires a public HTTPS Git URL");
   }
-  await assertResolvedHostNotBlocked(sourceUrlHost(url), "source URL host");
+  const addresses = await assertResolvedHostNotBlocked(sourceUrlHost(url), "source URL host");
+  // Discovery can be the first operation on a fresh runner filesystem.
+  await mkdir(RUN_ROOT, { recursive: true, mode: 0o700 });
+  const transportEnv = await httpsSourceTransportEnv(url, addresses, signal, phaseEnv);
   const context: CommandContext = {
-    env: { ...baseCommandEnv(), ...phaseEnv, GIT_TERMINAL_PROMPT: "0" },
+    env: { ...baseCommandEnv(), ...phaseEnv, ...transportEnv, GIT_TERMINAL_PROMPT: "0" },
     ...(signal ? { signal } : {}),
   };
-  // Tag discovery can be the first operation on a fresh runner filesystem.
-  await mkdir(RUN_ROOT, { recursive: true, mode: 0o700 });
   const result = await runCommand(["git", "ls-remote", "--tags", "--", url], {
     cwd: RUN_ROOT,
     context,
@@ -443,14 +446,14 @@ async function runSourceSyncInPhase(
     // network, resolve the source host and reject if ANY resolved address is
     // private/loopback/link-local. This fails closed when the host cannot be
     // resolved.
-    await timer.measure("source_host_policy", () =>
+    const addresses = await timer.measure("source_host_policy", () =>
       assertResolvedHostNotBlocked(
         sourceUrlHost(source.url),
         "source URL host",
       ),
     );
     const gitContext = await timer.measure("source_git_credentials", () =>
-      prepareSourceGitContext(source, credentials, credentialDir, signal, phase.home.env),
+      prepareSourceGitContext(source, credentials, credentialDir, signal, phase.home.env, addresses),
     );
     const { commit: resolvedCommit, resolvedRef } = await timer.measure("source_ref_resolve", () =>
       resolveSourceRef(source, gitContext),
@@ -855,8 +858,12 @@ export async function prepareSourceGitContext(
   credentialDir: string,
   signal?: AbortSignal,
   phaseEnv?: { readonly HOME: string; readonly XDG_CONFIG_HOME: string },
+  resolvedAddresses?: readonly string[],
 ): Promise<SourceGitContext> {
   const scheme = sourceUrlScheme(source.url);
+  const transportEnv = scheme === "https" && resolvedAddresses
+    ? await httpsSourceTransportEnv(source.url, resolvedAddresses, signal, phaseEnv)
+    : {};
   if (scheme === "ssh") {
     literalSshCredentialPath(credentialDir);
     for (const file of credentials.files) {
@@ -864,11 +871,12 @@ export async function prepareSourceGitContext(
     }
   }
   const env: Record<string, string> = {
-    // Minted source values feed askpass, never the URL. Runner-owned controls
-    // remain authoritative even if an internal caller supplies extra env.
-    ...credentials.env,
+    // Keep the wire credential allowlist at this internal boundary too, so
+    // helper/loader selection cannot differ from the credential-free probe.
+    ...Object.fromEntries(Object.entries(credentials.env).filter(([name]) => SOURCE_CREDENTIAL_ENV_NAMES.has(name))),
     ...baseCommandEnv(),
     ...phaseEnv,
+    ...transportEnv,
     GIT_TERMINAL_PROMPT: "0",
   };
 
@@ -947,6 +955,67 @@ export async function prepareSourceGitContext(
       ...(signal ? { signal } : {}),
     },
   };
+}
+
+async function httpsSourceTransportEnv(
+  url: string,
+  resolvedAddresses: readonly string[],
+  signal?: AbortSignal,
+  phaseEnv?: { readonly HOME: string; readonly XDG_CONFIG_HOME: string },
+): Promise<Record<string, string>> {
+  assertSourceUrlPolicy(url);
+  const parsed = new URL(url);
+  const addresses = await assertResolvedHostNotBlocked(
+    parsed.hostname, "source URL host", async () => resolvedAddresses,
+  );
+  const env = { ...baseCommandEnv(), ...phaseEnv };
+  const version = await runCommand(["git", "--version"], {
+    cwd: phaseEnv?.HOME ?? env.HOME ?? RUN_ROOT,
+    context: { env, timeoutMs: 5_000, ...(signal ? { signal } : {}) },
+    outputLimitBytes: 1024,
+  });
+  const match = /^git version (\d+)\.(\d+)(?:\.|\s|$)/u.exec(version.stdout.trim());
+  if (
+    version.exitCode !== 0 || !match ||
+    Number(match[1]) < 2 || (Number(match[1]) === 2 && Number(match[2]) < 37)
+  ) {
+    throw new Error("HTTPS sources require Git 2.37 or newer for address pinning");
+  }
+  const entries: Array<readonly [string, string]> = [["http.followRedirects", "false"]];
+  const host = parsed.hostname.replace(/^\[|\]$/g, "");
+  // Literal URLs already name their immutable network address. Older curl
+  // versions do not support IPv6 literals in the HOST part of a resolve rule.
+  if (!isIP(host)) {
+    const runtime = await readGitCurlRuntime(
+      { env, ...(signal ? { signal } : {}) },
+      phaseEnv?.HOME ?? env.HOME ?? RUN_ROOT,
+    );
+    if (
+      !isRecord(runtime) || !Number.isInteger(runtime.versionNumber) ||
+      (runtime.versionNumber as number) < 0x073b00 || (runtime.versionNumber as number) > 0xffffff ||
+      typeof runtime.ipv6 !== "boolean" ||
+      (addresses.some(address => isIP(address) === 6) && !runtime.ipv6)
+    ) {
+      throw new Error("HTTPS address pinning requires verified Git-linked libcurl 7.59 or newer with support for the resolved address families");
+    }
+    entries.push([
+      "http.curloptResolve",
+      `${parsed.hostname}:${parsed.port || "443"}:${addresses.map(address =>
+        isIP(address) === 6 ? `[${address}]` : address
+      ).join(",")}`,
+    ]);
+  }
+  const transportEnv: Record<string, string> = {
+    // These per-process controls outrank minted/ambient config inputs. Keep
+    // pins non-expiring for every ls-remote and both shallow-fetch attempts.
+    GIT_CONFIG_PARAMETERS: "",
+    GIT_CONFIG_COUNT: String(entries.length),
+  };
+  entries.forEach(([key, value], index) => {
+    transportEnv[`GIT_CONFIG_KEY_${index}`] = key;
+    transportEnv[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
+  return transportEnv;
 }
 
 export function sourceUrlScheme(url: string): "https" | "ssh" {

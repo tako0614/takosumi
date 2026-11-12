@@ -6,6 +6,7 @@
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import { isAbsolute, normalize } from "node:path";
 import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import {
   assertHostNotBlocked,
   BlockedHostError,
@@ -296,30 +297,34 @@ export async function assertResolvedHostNotBlocked(
   host: string,
   label: string,
   resolveAddresses: HostAddressResolver = resolveHostAddresses,
-): Promise<void> {
+): Promise<readonly string[]> {
   const literal =
     host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-  // IP literals are already fully covered by assertHostLiteralNotBlocked.
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(literal) || literal.includes(":")) {
-    return;
+  if (isIP(literal)) {
+    assertHostLiteralNotBlocked(literal, label);
+    return Object.freeze([literal]);
   }
   const lower = literal.toLowerCase();
   if (lower === "localhost" || INTERNAL_NAME_SUFFIXES.test(lower)) {
     throw new Error(`${label} is an internal-only name: ${host}`);
   }
-  const addresses = await resolveAddresses(literal);
+  const addresses = [...await resolveAddresses(literal)];
   if (addresses.length === 0) {
     throw new Error(
       `${label} could not be resolved for SSRF validation: ${host}`,
     );
   }
   for (const addr of addresses) {
+    if (!isIP(addr)) {
+      throw new Error(`${label} resolved to an invalid IP address: ${host}`);
+    }
     if (isBlockedIpv4Literal(addr) || isBlockedIpv6Literal(addr)) {
       throw new Error(
         `${label} resolves to a blocked address (${addr}): ${host}`,
       );
     }
   }
+  return Object.freeze([...new Set(addresses)]);
 }
 
 /**

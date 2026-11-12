@@ -15,6 +15,7 @@ ARG NODE_SHA256=14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647
 # xz-utils extracts the pinned Node runtime used by app-owned provider CLIs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git unzip openssh-client xz-utils zstd \
+    && dpkg --compare-versions "$(git --version | cut -d ' ' -f 3)" ge 2.37.0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
