@@ -8,6 +8,8 @@ import {
   chmod,
   lstat,
   mkdir,
+  mkdtemp,
+  opendir,
   readFile,
   readdir,
   rm,
@@ -29,6 +31,8 @@ import {
   CAPSULE_COMPATIBILITY_MAX_FILE_BYTES,
   DEFAULT_SOURCE_ARCHIVE_MAX_BYTES,
   DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
+  DEFAULT_SOURCE_ARCHIVE_MAX_ENTRIES,
+  SOURCE_ARCHIVE_METADATA_MAX_BYTES,
   SOURCE_CREDENTIAL_ENV_NAMES,
 } from "./constants.ts";
 import {
@@ -42,7 +46,7 @@ import {
   shredCredentialDir,
 } from "./util.ts";
 import { redactCredentialOutput } from "./redaction.ts";
-import { runRequiredCommand, runCommand } from "./exec.ts";
+import { readResponseBytesWithCap, runRequiredCommand, runCommand } from "./exec.ts";
 import { enterCommandPhaseHome } from "./phase_home.ts";
 import {
   assertSourceUrlPolicy,
@@ -51,6 +55,7 @@ import {
   assertSafeCredentialFileName,
   assertSafeCredentialFileMode,
   assertSafeZstdTarArchive,
+  sourceArchiveEntryLimit,
   assertResolvedHostNotBlocked,
   assertSafeGitSelector,
 } from "./policy.ts";
@@ -415,9 +420,11 @@ async function runSourceSyncInPhase(
   const archiveRef = stringField(request, "archiveRef");
   if (!archiveRef) throw new Error("archiveRef is required");
   assertSafeArchiveObjectKey(archiveRef);
-  const maxArchiveBytes =
+  const maxArchiveBytes = Math.min(
     positiveIntegerLimitFromProfile(runnerProfile, "maxSourceArchiveBytes") ??
-    DEFAULT_SOURCE_ARCHIVE_MAX_BYTES;
+      DEFAULT_SOURCE_ARCHIVE_MAX_BYTES,
+    DEFAULT_SOURCE_ARCHIVE_MAX_BYTES,
+  );
   const maxDecompressedBytes = Math.min(
     positiveIntegerLimitFromProfile(runnerProfile, "maxSourceDecompressedBytes") ??
       DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
@@ -525,10 +532,10 @@ async function runSourceSyncInPhase(
     }
     const archivePath = sourceArchivePath(workspace);
     await timer.measure("source_archive", () =>
-      createDeterministicArchive(subtree, archivePath, gitContext, maxDecompressedBytes),
+      createDeterministicArchive(subtree, archivePath, gitContext, maxDecompressedBytes, maxArchiveBytes),
     );
     const archiveBytes = await timer.measure("source_archive_read", () =>
-      readFile(archivePath),
+      readSourceArchiveBytes(archivePath, maxArchiveBytes),
     );
     if (archiveBytes.byteLength > maxArchiveBytes) {
       throw new Error(
@@ -1167,13 +1174,18 @@ export async function assertTrackedSourceSnapshotArchiveable(input: {
       "--",
       pathspec,
     ],
-    { cwd: input.repositoryRoot, context: input.git.context },
+    { cwd: input.repositoryRoot, context: input.git.context, outputLimitBytes: SOURCE_ARCHIVE_METADATA_MAX_BYTES },
   );
   if (tree.exitCode !== 0) {
     throw new Error(SOURCE_SNAPSHOT_TREE_METADATA_SCAN_FAILED);
   }
+  const entryLimit = sourceArchiveEntryLimit(input.git.context);
+  // The archive also contains its root; directory entries are counted by the
+  // filesystem walk before archive creation or reuse.
+  let entries = 1;
   for (const record of tree.stdout.split("\0")) {
     if (record.length === 0) continue;
+    if (++entries > entryLimit) throw new Error("source archive entry limit exceeded");
     const separator = record.indexOf("\t");
     if (separator <= 0) {
       throw new Error(SOURCE_SNAPSHOT_TREE_METADATA_SCAN_FAILED);
@@ -1202,34 +1214,54 @@ async function assertArchiveTreeFitsBudget(
   directory: string,
   maxBytes: number,
   signal?: AbortSignal,
+  entryLimit = DEFAULT_SOURCE_ARCHIVE_MAX_ENTRIES,
 ): Promise<number> {
-  signal?.throwIfAborted();
-  if ((await lstat(directory)).isSymbolicLink()) {
-    throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK);
-  }
   let bytes = 0;
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  let entries = 0;
+  const countEntry = () => {
+    if (++entries > entryLimit) throw new Error("source archive entry limit exceeded");
+  };
+  const visit = async (path: string): Promise<void> => {
     signal?.throwIfAborted();
-    // `.git` is excluded by the tar invocation and is not part of the source
-    // snapshot payload. Do not inspect it or let its internal metadata affect
-    // archive eligibility.
-    if (entry.name === ".git") continue;
-    if (entry.isSymbolicLink()) {
+    if ((await lstat(path)).isSymbolicLink()) {
       throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK);
     }
-    if (entry.isDirectory()) {
-      bytes += await assertArchiveTreeFitsBudget(join(directory, entry.name), maxBytes - bytes, signal);
-    } else if (entry.isFile()) {
-      const file = await lstat(join(directory, entry.name));
-      if (!file.isFile()) throw new Error(SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED);
-      if (file.size > maxBytes - bytes) throw new Error(SOURCE_SNAPSHOT_EXPANDED_BUDGET_EXCEEDED);
-      bytes += file.size;
-    } else {
-      throw new Error(SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED);
+    countEntry();
+    for await (const entry of await opendir(path)) {
+      signal?.throwIfAborted();
+      // Match tar's exclusion, including nested .git metadata.
+      if (entry.name === ".git") continue;
+      if (entry.isSymbolicLink()) throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK);
+      if (entry.isDirectory()) {
+        await visit(join(path, entry.name));
+      } else if (entry.isFile()) {
+        countEntry();
+        const file = await lstat(join(path, entry.name));
+        if (!file.isFile()) throw new Error(SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED);
+        if (file.size > maxBytes - bytes) throw new Error(SOURCE_SNAPSHOT_EXPANDED_BUDGET_EXCEEDED);
+        bytes += file.size;
+      } else {
+        throw new Error(SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED);
+      }
     }
-  }
+  };
+  await visit(directory);
   signal?.throwIfAborted();
   return bytes;
+}
+
+async function assertSourceArchiveSize(archivePath: string, maxBytes: number): Promise<void> {
+  const file = await lstat(archivePath);
+  if (!file.isFile()) throw new Error(SOURCE_SNAPSHOT_ARCHIVE_VALIDATION_FAILED);
+  if (file.size > maxBytes) {
+    throw new Error(`source archive ${file.size} bytes exceeds limit ${maxBytes}`);
+  }
+}
+
+async function readSourceArchiveBytes(archivePath: string, maxBytes: number): Promise<Uint8Array<ArrayBuffer>> {
+  await assertSourceArchiveSize(archivePath, maxBytes);
+  // Keep enforcing the cap if the file grows after stat, before materializing it.
+  return readResponseBytesWithCap(new Response(Bun.file(archivePath)), maxBytes, "source archive");
 }
 
 // Build a deterministic tar of the subtree (sorted entries, numeric owners,
@@ -1240,12 +1272,18 @@ export async function createDeterministicArchive(
   archivePath: string,
   git: SourceGitContext,
   maxDecompressedBytes = DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
+  maxArchiveBytes = DEFAULT_SOURCE_ARCHIVE_MAX_BYTES,
 ): Promise<void> {
   const expandedLimit = Math.min(maxDecompressedBytes, DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES);
   if (!Number.isSafeInteger(expandedLimit) || expandedLimit < 1) {
     throw new Error(SOURCE_SNAPSHOT_EXPANDED_BUDGET_EXCEEDED);
   }
-  await assertArchiveTreeFitsBudget(subtree, expandedLimit, git.context.signal);
+  const compressedLimit = Math.min(maxArchiveBytes, DEFAULT_SOURCE_ARCHIVE_MAX_BYTES);
+  if (!Number.isSafeInteger(compressedLimit) || compressedLimit < 1) {
+    throw new Error("source archive compressed limit is invalid");
+  }
+  const entryLimit = sourceArchiveEntryLimit(git.context);
+  await assertArchiveTreeFitsBudget(subtree, expandedLimit, git.context.signal, entryLimit);
   try {
     await runRequiredCommand(
       [
@@ -1277,6 +1315,7 @@ export async function createDeterministicArchive(
       ],
       { cwd: RUN_ROOT, context: git.context },
     );
+    await assertSourceArchiveSize(archivePath, compressedLimit);
     try {
       await assertSafeZstdTarArchive(archivePath, {
         env: {
@@ -1288,6 +1327,7 @@ export async function createDeterministicArchive(
         },
         ...(git.context.signal ? { signal: git.context.signal } : {}),
         sourceArchiveMaxDecompressedBytes: expandedLimit,
+        sourceArchiveMaxEntries: entryLimit,
       });
     } catch {
       git.context.signal?.throwIfAborted();
@@ -1328,7 +1368,7 @@ export async function handleSourceArchiveArtifactRequest(
   const archivePath = sourceArchivePath(workspace);
   if (request.method === "GET") {
     try {
-      const bytes = await readFile(archivePath);
+      const bytes = await readSourceArchiveBytes(archivePath, DEFAULT_SOURCE_ARCHIVE_MAX_BYTES);
       return new Response(bytes, {
         headers: {
           "content-type": "application/zstd",
@@ -1343,8 +1383,8 @@ export async function handleSourceArchiveArtifactRequest(
     }
   }
   if (request.method === "PUT") {
+    const bytes = await readResponseBytesWithCap(request, DEFAULT_SOURCE_ARCHIVE_MAX_BYTES, "source archive");
     await mkdir(workspace.root, { recursive: true });
-    const bytes = new Uint8Array(await request.arrayBuffer());
     await writeFile(archivePath, bytes);
     return Response.json({
       runId,
@@ -1378,15 +1418,18 @@ export async function handleSourceArchiveRestoreRequest(
   }
   const workspace = workspaceForRun(runId);
   try {
+    const bytes = await readResponseBytesWithCap(request, DEFAULT_SOURCE_ARCHIVE_MAX_BYTES, "source archive");
     const phase = await enterCommandPhaseHome(request.signal);
+    let archiveDirectory: string | undefined;
     try {
-      await rm(workspace.root, { recursive: true, force: true });
-      await mkdir(workspace.sourceRoot, { recursive: true });
-      const bytes = new Uint8Array(await request.arrayBuffer());
-      const archivePath = join(workspace.root, "restore-source.tar.zst");
-      await writeFile(archivePath, bytes);
+      await mkdir(RUN_ROOT, { recursive: true });
+      archiveDirectory = await mkdtemp(join(RUN_ROOT, ".source-restore-"));
+      const archivePath = join(archiveDirectory, "source.tar.zst");
+      await writeFile(archivePath, bytes, { mode: 0o600 });
       const context: CommandContext = { env: { ...baseCommandEnv(), ...phase.home.env } };
       await assertSafeZstdTarArchive(archivePath, context);
+      await rm(workspace.root, { recursive: true, force: true });
+      await mkdir(workspace.sourceRoot, { recursive: true });
       await runRequiredCommand(
         [
           "tar",
@@ -1401,7 +1444,6 @@ export async function handleSourceArchiveRestoreRequest(
         ],
         { cwd: RUN_ROOT, context },
       );
-      await rm(archivePath, { force: true });
       // Record the source root as the state moduleDir default; a template/raw
       // dispatch overwrites module-info.json before plan, but this keeps the state
       // GET route resolvable if the dispatch omits it.
@@ -1413,7 +1455,11 @@ export async function handleSourceArchiveRestoreRequest(
         sizeBytes: bytes.byteLength,
       });
     } finally {
-      await phase.cleanup();
+      try {
+        if (archiveDirectory) await rm(archiveDirectory, { recursive: true, force: true });
+      } finally {
+        await phase.cleanup();
+      }
     }
   } catch (error) {
     return Response.json(

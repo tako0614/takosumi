@@ -39,11 +39,12 @@ export async function readResponseBytesWithCap(
   response: Pick<Request, "headers" | "body">,
   maxBytes: number,
   label: string,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const declared = response.headers.get("content-length");
   if (declared !== null) {
     const parsed = Number.parseInt(declared, 10);
     if (Number.isFinite(parsed) && parsed > maxBytes) {
+      await response.body?.cancel().catch(() => {});
       throw new Error(`${label} declares ${parsed} bytes, cap is ${maxBytes}`);
     }
   }
@@ -179,6 +180,8 @@ export async function runCommand(
   options: {
     readonly cwd: string;
     readonly context?: CommandContext;
+    /** Combined stdout/stderr byte budget, enforced while reading the pipes. */
+    readonly outputLimitBytes?: number;
     /**
      * Invoked the instant the child process exists.
      *
@@ -194,6 +197,10 @@ export async function runCommand(
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const signal = options.context?.signal;
+  const outputLimit = options.outputLimitBytes;
+  if (outputLimit !== undefined && (!Number.isSafeInteger(outputLimit) || outputLimit < 0)) {
+    return { exitCode: 1, stdout: "", stderr: "invalid command output limit" };
+  }
   if (signal?.aborted) {
     return { exitCode: 130, stdout: "", stderr: "command aborted" };
   }
@@ -227,8 +234,45 @@ export async function runCommand(
     pid: subprocess.pid,
     exited: subprocess.exited,
   });
-  const stdoutPromise = new Response(subprocess.stdout).text();
-  const stderrPromise = new Response(subprocess.stderr).text();
+  let outputBytes = 0;
+  let outputFailure: string | undefined;
+  const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
+  const failOutput = (message: string) => {
+    if (outputFailure) return;
+    outputFailure = message;
+    killProcessGroup(subprocess.pid);
+    killProcess(subprocess.pid);
+    for (const reader of readers) void reader.cancel().catch(() => {});
+  };
+  const readOutput = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+    if (outputLimit === undefined) return new Response(stream).text();
+    const reader = stream.getReader();
+    readers.add(reader);
+    const decoder = new TextDecoder();
+    const parts: string[] = [];
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        outputBytes += value.byteLength;
+        if (outputBytes > outputLimit) {
+          failOutput(`command output exceeds ${outputLimit} bytes`);
+          return "";
+        }
+        parts.push(decoder.decode(value, { stream: true }));
+      }
+      parts.push(decoder.decode());
+      return parts.join("");
+    } catch {
+      failOutput("command output read failed");
+      return "";
+    } finally {
+      readers.delete(reader);
+      reader.releaseLock();
+    }
+  };
+  const stdoutPromise = readOutput(subprocess.stdout);
+  const stderrPromise = readOutput(subprocess.stderr);
   type Termination =
     | { readonly kind: "exit"; readonly exitCode: number }
     | { readonly kind: "timeout"; readonly exitCode: 124 }
@@ -309,11 +353,11 @@ export async function runCommand(
           ? "command aborted"
           : undefined;
     return {
-      exitCode: termination.exitCode,
-      stdout,
-      stderr: terminationDiagnostic
+      exitCode: outputFailure ? 1 : termination.exitCode,
+      stdout: outputFailure ? "" : stdout,
+      stderr: outputFailure ?? (terminationDiagnostic
         ? [stderr, terminationDiagnostic].filter(Boolean).join("\n")
-        : stderr,
+        : stderr),
     };
   } finally {
     if (timeout) clearTimeout(timeout);

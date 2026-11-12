@@ -166,6 +166,8 @@ export interface CommandContext {
   readonly timeoutMs?: number;
   readonly sourceArchiveMaxBytes?: number;
   readonly sourceArchiveMaxDecompressedBytes?: number;
+  /** Internal lower limit; never raises the fixed source archive ceiling. */
+  readonly sourceArchiveMaxEntries?: number;
 }
 
 export interface RenewableCredentialProjection {

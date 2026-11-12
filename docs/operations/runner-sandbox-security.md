@@ -83,6 +83,14 @@ apply to plaintext artifacts:
 they cannot raise the hard maxima. Plan JSON remains separately capped at
 2 MiB.
 
+Source archives also have a fixed ceiling of 50,000 entries, counting regular
+files, directories and the archive root. Git tree and tar listing commands
+have a combined stdout/stderr limit of 32 MiB; the Runner stops their process
+group on overflow. Source profiles cannot raise these limits. Generated archives
+are size-checked before reading, and relay uploads and restore bodies use a
+bounded reader before writing or clearing the workspace. Oversized declarations
+are rejected without reading their body; stream overflow cancels further reads.
+
 Container responses are rejected from `Content-Length` before body allocation
 when the declared length exceeds the cap. Missing, invalid, or forged smaller
 lengths do not bypass enforcement: the relay reads the stream with a bounded
