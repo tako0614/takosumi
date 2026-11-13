@@ -49,10 +49,12 @@ import {
   isRefreshChainRetentionPhase,
   MAX_REFRESH_CHAIN_RETENTION_ROWS,
   nextRefreshChainRetentionPhase,
+  refreshChainRetentionNow,
   type RefreshChainRetentionPageInput,
   type RefreshChainRetentionPageResult,
   type RefreshChainRetentionPhase,
 } from "./refresh-chain-retention.ts";
+import { deleteD1RefreshRetentionCandidate } from "./refresh-chain-retention-d1.ts";
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
@@ -1423,6 +1425,7 @@ export class D1AccountsStore implements AccountsStore {
     input: RefreshChainRetentionPageInput,
   ): Promise<RefreshChainRetentionPageResult> {
     assertRefreshChainRetentionPageInput(input);
+    const now = refreshChainRetentionNow(input);
     const phase = input.cursor?.phase ?? "chain_links";
     if (!isRefreshChainRetentionPhase(phase)) {
       throw new TypeError("invalid refresh-chain retention cursor phase");
@@ -1452,11 +1455,17 @@ export class D1AccountsStore implements AccountsStore {
       );
     }
 
-    for (const row of result.results) {
-      await this.#delete(config.bucket, row.key);
-    }
     const counts = emptyRefreshChainPruneResult();
-    counts[config.count] = result.results.length;
+    for (const row of result.results) {
+      if (await deleteD1RefreshRetentionCandidate(this.#db, {
+        phase,
+        bucket: config.bucket,
+        key: row.key,
+        timestampField: config.timestampField,
+        at: Number(row.retention_at),
+        now,
+      })) counts[config.count] += 1;
+    }
     const last = result.results.at(-1);
     if (result.results.length === input.limit && last) {
       return {

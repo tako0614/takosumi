@@ -21,6 +21,8 @@ export interface RefreshChainRetentionCursor {
 }
 
 export interface RefreshChainRetentionPageInput {
+  /** Evaluation time shared by every page; adapters must retain live dependencies. */
+  readonly now?: number;
   readonly chainBefore: number;
   readonly consumedCodeBefore: number;
   /** Maximum rows deleted by this page across all phases. */
@@ -67,6 +69,14 @@ export const DEFAULT_AUTHORIZATION_CODE_RETENTION_MS = 5 * 60 * 1_000;
 export const DEFAULT_REFRESH_CHAIN_RETENTION_MAX_ROWS = 100;
 export const DEFAULT_REFRESH_CHAIN_RETENTION_PAGE_SIZE = 25;
 export const MAX_REFRESH_CHAIN_RETENTION_ROWS = 1_000;
+/** Probe at most this many family links before conservatively retaining a root. */
+export const MAX_REFRESH_CHAIN_RETENTION_DEPENDENCIES = 25;
+
+export function refreshChainRetentionNow(
+  input: Pick<RefreshChainRetentionPageInput, "now">,
+): number {
+  return finiteTimestamp(input.now ?? Date.now(), "now");
+}
 
 const ZERO_COUNTS: RefreshChainPruneResult = {
   chainLinks: 0,
@@ -118,6 +128,7 @@ export async function runRefreshChainRetention(
   while (scanned < maxRows && !done) {
     const limit = Math.min(pageSize, maxRows - scanned);
     const page = await store.pruneRefreshChainPage({
+      now,
       chainBefore: now - refreshTokenTtlMs,
       consumedCodeBefore: now - authorizationCodeTtlMs,
       limit,

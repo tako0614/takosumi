@@ -15,6 +15,10 @@ import type {
   RefreshChainRetentionPhase,
 } from "./refresh-chain-retention.ts";
 import { sha256Text } from "./encoding.ts";
+import {
+  MAX_REFRESH_CHAIN_RETENTION_DEPENDENCIES,
+  refreshChainRetentionNow,
+} from "./refresh-chain-retention.ts";
 import type { FinancialSourceRegistration, FinancialSourceReceiptRecord } from "./financial-source-contract.ts";
 import type {
   FinancialSourceParentScope, FinancialSourceParentHead, FinancialSourceParentVector,
@@ -267,18 +271,18 @@ export interface AccountsBearerCredentialCandidates {
  */
 export interface RefreshChainPruneResult {
   /**
-   * refresh_chain_links rows removed (older than the refresh-token lifetime
-   * cutoff). The matching refresh_chain_links_by_root / _by_child index
+   * refresh_chain_links rows removed (past the age cutoff with no possibly-live
+   * endpoint). The matching refresh_chain_links_by_root / _by_child index
    * entries are removed with them.
    */
   chainLinks: number;
-  /** refresh_chain_access_tokens rows removed (refresh-token lifetime). */
+  /** Expired refresh_chain_access_tokens rows actually removed. */
   chainAccessTokens: number;
-  /** revoked_refresh_roots rows removed (refresh-token lifetime). */
+  /** Old revoked_refresh_roots with no possibly-live family, actually removed. */
   revokedRoots: number;
-  /** consumed_authorization_codes rows removed (auth-code lifetime). */
+  /** Old consumed_authorization_codes with no live issued closure, removed. */
   consumedCodes: number;
-  /** auth_code_token_links rows removed (auth-code lifetime). */
+  /** Old auth_code_token_links with no possibly-live dependencies, removed. */
   authCodeTokenLinks: number;
 }
 
@@ -584,6 +588,9 @@ export interface AccountsStore
    * Bounded retention page for refresh-chain / authorization-code tracking
    * state. The timestamp+primary-key cursor and limit are mandatory so no
    * operator tick can materialize or delete an unbounded set.
+   * Age is candidate selection only: actual stored expiry and bounded live
+   * dependencies must permit deletion. Retained rows consume scanned budget
+   * and advance the cursor, which the operator resumes across slices.
    */
   pruneRefreshChainPage(
     input: RefreshChainRetentionPageInput,
@@ -647,6 +654,8 @@ export class InMemoryAccountsStore implements AccountsStore {
   // / consumed_authorization_codes / auth_code_token_links).
   readonly #refreshChainChildren = new Map<string, string>();
   readonly #refreshChainRoots = new Map<string, string>();
+  readonly #refreshChainMembers = new Map<string, Set<string>>();
+  readonly #refreshChainTokenEdges = new Map<string, number>();
   // revoked-root -> revokedAt ms. Read by isRefreshRootRevoked (defense in
   // depth on the refresh path) and pruned by pruneRefreshChainPage.
   readonly #revokedRefreshChainRoots = new Map<string, number>();
@@ -1075,6 +1084,15 @@ export class InMemoryAccountsStore implements AccountsStore {
     const root = this.#refreshChainRoots.get(parentToken) ?? parentToken;
     this.#refreshChainRoots.set(parentToken, root);
     this.#refreshChainRoots.set(childToken, root);
+    let members = this.#refreshChainMembers.get(root);
+    if (!members) {
+      members = new Set();
+      this.#refreshChainMembers.set(root, members);
+    }
+    for (const token of [parentToken, childToken]) {
+      members.add(token);
+      this.#refreshChainTokenEdges.set(token, (this.#refreshChainTokenEdges.get(token) ?? 0) + 1);
+    }
     return true;
   }
 
@@ -1092,11 +1110,8 @@ export class InMemoryAccountsStore implements AccountsStore {
       revokedAt,
     );
     const tokens = new Set<string>();
-    let cursor: string | undefined = root;
-    while (cursor) {
-      tokens.add(cursor);
-      cursor = this.#refreshChainChildren.get(cursor);
-    }
+    tokens.add(root);
+    for (const token of this.#refreshChainMembers.get(root) ?? []) tokens.add(token);
     tokens.add(rootToken);
     // Cascade-delete every refresh token in the chain. Mirrors the
     // postgres path which deletes the matching oauth_refresh_tokens
@@ -1212,6 +1227,7 @@ export class InMemoryAccountsStore implements AccountsStore {
     input: RefreshChainRetentionPageInput,
   ): RefreshChainRetentionPageResult {
     assertInMemoryRetentionInput(input);
+    const now = refreshChainRetentionNow(input);
     const phase = input.cursor?.phase ?? "chain_links";
     const cursor = decodeInMemoryRetentionCursor(input.cursor?.after);
     const cutoff =
@@ -1232,16 +1248,26 @@ export class InMemoryAccountsStore implements AccountsStore {
       authCodeTokenLinks: 0,
     };
     for (const candidate of candidates) {
+      if (this.#retentionCandidateHasLiveDependency(phase, candidate.key, now)) continue;
       if (phase === "chain_links") {
         const child = this.#refreshChainChildren.get(candidate.key);
+        const root = this.#refreshChainRoots.get(candidate.key) ?? candidate.key;
         this.#refreshChainChildren.delete(candidate.key);
         this.#refreshChainLinkCreatedAt.delete(candidate.key);
         this.#removeRefreshChainRetentionCandidate(
           "chain_links",
           candidate.key,
         );
-        this.#refreshChainRoots.delete(candidate.key);
-        if (child !== undefined) this.#refreshChainRoots.delete(child);
+        for (const token of child === undefined ? [candidate.key] : [candidate.key, child]) {
+          const edges = (this.#refreshChainTokenEdges.get(token) ?? 1) - 1;
+          if (edges > 0) this.#refreshChainTokenEdges.set(token, edges);
+          else {
+            this.#refreshChainTokenEdges.delete(token);
+            this.#refreshChainRoots.delete(token);
+            this.#refreshChainMembers.get(root)?.delete(token);
+          }
+        }
+        if (this.#refreshChainMembers.get(root)?.size === 0) this.#refreshChainMembers.delete(root);
         counts.chainLinks += 1;
       } else if (phase === "chain_access_tokens") {
         const [root, accessToken] = splitRefreshChainAccessKey(candidate.key);
@@ -1296,6 +1322,51 @@ export class InMemoryAccountsStore implements AccountsStore {
       done: nextPhase === undefined,
       ...(nextPhase ? { cursor: { phase: nextPhase } } : {}),
     };
+  }
+
+  #retentionRecordIsLive(record: { readonly expiresAt: number } | undefined, now: number): boolean {
+    return record !== undefined && (!Number.isFinite(record.expiresAt) || record.expiresAt > now);
+  }
+
+  #retentionRootHasLiveTokens(root: string, now: number): boolean {
+    const members = this.#refreshChainMembers.get(root);
+    const access = this.#refreshChainAccessTokens.get(root);
+    // Individual expired links are still collected. A large family is revisited
+    // after those bounded pages have reduced its dependency set.
+    if ((members?.size ?? 0) > 2 * MAX_REFRESH_CHAIN_RETENTION_DEPENDENCIES ||
+        (access?.size ?? 0) > MAX_REFRESH_CHAIN_RETENTION_DEPENDENCIES) return true;
+    if (this.#retentionRecordIsLive(this.#refreshTokens.get(root), now)) return true;
+    for (const token of members ?? []) {
+      if (this.#retentionRecordIsLive(this.#refreshTokens.get(token), now)) return true;
+    }
+    for (const token of access ?? []) {
+      if (this.#retentionRecordIsLive(this.#accessTokens.get(token), now)) return true;
+    }
+    return false;
+  }
+
+  #retentionCandidateHasLiveDependency(phase: RefreshChainRetentionPhase, key: string, now: number): boolean {
+    if (phase === "chain_links") {
+      const child = this.#refreshChainChildren.get(key);
+      return this.#retentionRecordIsLive(this.#refreshTokens.get(key), now) ||
+        (child !== undefined && this.#retentionRecordIsLive(this.#refreshTokens.get(child), now));
+    }
+    if (phase === "chain_access_tokens") {
+      return this.#retentionRecordIsLive(this.#accessTokens.get(splitRefreshChainAccessKey(key)[1]), now);
+    }
+    if (phase === "revoked_roots") return this.#retentionRootHasLiveTokens(key, now);
+    if (this.#retentionRecordIsLive(this.#authorizationCodes.get(key), now)) return true;
+    const entry = this.#authorizationCodeTokens.get(key);
+    if (!entry) return false;
+    if (entry.access.size > MAX_REFRESH_CHAIN_RETENTION_DEPENDENCIES ||
+        entry.refresh.size > MAX_REFRESH_CHAIN_RETENTION_DEPENDENCIES) return true;
+    for (const token of entry.access) {
+      if (this.#retentionRecordIsLive(this.#accessTokens.get(token), now)) return true;
+    }
+    for (const root of entry.refresh) {
+      if (this.#retentionRootHasLiveTokens(root, now)) return true;
+    }
+    return false;
   }
 
   #refreshChainRetentionCandidatesAfter(

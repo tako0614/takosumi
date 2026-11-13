@@ -45,6 +45,10 @@ import {
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
 import {
+  advanceD1RefreshRetentionCheckpoint,
+  readD1RefreshRetentionCheckpoint,
+} from "../../accounts/service/src/refresh-chain-retention-d1.ts";
+import {
   CONTROL_DISPATCH_RESOURCE_KEYS,
   controlInventoryResourceKey,
   isRunGetReadRequest,
@@ -1193,10 +1197,17 @@ export async function runScheduledAccountsRefreshChainRetention(
     if (schemaMode !== "predeployed") {
       await store.initialize();
     }
+    const checkpoint = await readD1RefreshRetentionCheckpoint(env.TAKOSUMI_ACCOUNTS_DB);
     const result = await runRefreshChainRetention(store, {
       maxRows: 100,
       pageSize: 25,
+      ...(checkpoint.cursor ? { cursor: checkpoint.cursor } : {}),
     });
+    await advanceD1RefreshRetentionCheckpoint(
+      env.TAKOSUMI_ACCOUNTS_DB,
+      checkpoint,
+      result.done ? undefined : result.cursor,
+    );
     console.log(
       JSON.stringify({
         event: "accounts_refresh_chain_retention",

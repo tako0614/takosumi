@@ -164,6 +164,18 @@ test("Postgres refresh-chain retention follows the same timestamp+key cursor con
   try {
     await db.exec(`
       CREATE SCHEMA accounts_v1;
+      CREATE TABLE accounts_v1.oauth_refresh_tokens (
+        token_hash text PRIMARY KEY,
+        expires_at timestamptz NOT NULL
+      );
+      CREATE TABLE accounts_v1.oauth_access_tokens (
+        token_hash text PRIMARY KEY,
+        expires_at timestamptz NOT NULL
+      );
+      CREATE TABLE accounts_v1.authorization_codes (
+        code_hash text PRIMARY KEY,
+        expires_at timestamptz NOT NULL
+      );
       CREATE TABLE accounts_v1.refresh_chain_links (
         parent_token_hash text PRIMARY KEY,
         child_token_hash text NOT NULL,

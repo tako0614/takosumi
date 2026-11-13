@@ -28,10 +28,12 @@ import {
   isRefreshChainRetentionPhase,
   MAX_REFRESH_CHAIN_RETENTION_ROWS,
   nextRefreshChainRetentionPhase,
+  refreshChainRetentionNow,
   type RefreshChainRetentionPageInput,
   type RefreshChainRetentionPageResult,
   type RefreshChainRetentionPhase,
 } from "../refresh-chain-retention.ts";
+import { postgresRefreshRetentionLiveDependencySql } from "./refresh-chain-retention-guards.ts";
 
 type DrizzleQuery = {
   toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
@@ -465,6 +467,7 @@ export async function pruneRefreshChainPage(
   input: RefreshChainRetentionPageInput,
 ): Promise<RefreshChainRetentionPageResult> {
   assertRefreshChainRetentionPageInput(input);
+  const now = refreshChainRetentionNow(input);
   const phase = input.cursor?.phase ?? "chain_links";
   if (!isRefreshChainRetentionPhase(phase)) {
     throw new TypeError("invalid refresh-chain retention cursor phase");
@@ -483,7 +486,7 @@ export async function pruneRefreshChainPage(
   );
   const counts = emptyRefreshChainPruneResult();
   for (const row of rows) {
-    const deleted = await deleteRetentionCandidate(client, phase, row);
+    const deleted = await deleteRetentionCandidate(client, phase, row, now);
     if (deleted) incrementRetentionCount(counts, phase);
   }
   const last = rows.at(-1);
@@ -605,46 +608,54 @@ async function deleteRetentionCandidate(
   client: PostgresQueryClient,
   phase: RefreshChainRetentionPhase,
   row: RetentionKeyRow,
+  now: number,
 ): Promise<boolean> {
+  const liveDependency = postgresRefreshRetentionLiveDependencySql(phase);
+  const parameters = [row.key_a, toDate(now), row.retention_at];
   let result;
   if (phase === "chain_links") {
     result = await runQuery(
       client,
-      `DELETE FROM accounts_v1.refresh_chain_links
-        WHERE parent_token_hash = $1 RETURNING parent_token_hash`,
-      [row.key_a],
+      `DELETE FROM accounts_v1.refresh_chain_links AS candidate
+        WHERE parent_token_hash = $1 AND created_at = $3
+          AND NOT (${liveDependency}) RETURNING parent_token_hash`,
+      parameters,
     );
   } else if (phase === "chain_access_tokens") {
     result = await runQuery(
       client,
-      `DELETE FROM accounts_v1.refresh_chain_access_tokens
-        WHERE root_token_hash = $1 AND access_token_hash = $2
+      `DELETE FROM accounts_v1.refresh_chain_access_tokens AS candidate
+        WHERE root_token_hash = $1 AND access_token_hash = $4
+          AND created_at = $3 AND NOT (${liveDependency})
         RETURNING root_token_hash`,
-      [row.key_a, requiredRetentionKey(row.key_b)],
+      [...parameters, requiredRetentionKey(row.key_b)],
     );
   } else if (phase === "revoked_roots") {
     result = await runQuery(
       client,
-      `DELETE FROM accounts_v1.revoked_refresh_roots
-        WHERE root_token_hash = $1 RETURNING root_token_hash`,
-      [row.key_a],
+      `DELETE FROM accounts_v1.revoked_refresh_roots AS candidate
+        WHERE root_token_hash = $1 AND revoked_at = $3
+          AND NOT (${liveDependency}) RETURNING root_token_hash`,
+      parameters,
     );
   } else if (phase === "consumed_codes") {
     result = await runQuery(
       client,
-      `DELETE FROM accounts_v1.consumed_authorization_codes
-        WHERE code_hash = $1 RETURNING code_hash`,
-      [row.key_a],
+      `DELETE FROM accounts_v1.consumed_authorization_codes AS candidate
+        WHERE code_hash = $1 AND consumed_at = $3
+          AND NOT (${liveDependency}) RETURNING code_hash`,
+      parameters,
     );
   } else {
     result = await runQuery(
       client,
-      `DELETE FROM accounts_v1.auth_code_token_links
-        WHERE code_hash = $1 AND access_token_hash = $2
-          AND refresh_root_hash = $3
+      `DELETE FROM accounts_v1.auth_code_token_links AS candidate
+        WHERE code_hash = $1 AND access_token_hash = $4
+          AND refresh_root_hash = $5 AND created_at = $3
+          AND NOT (${liveDependency})
         RETURNING code_hash`,
       [
-        row.key_a,
+        ...parameters,
         requiredRetentionKey(row.key_b),
         requiredRetentionKey(row.key_c),
       ],
