@@ -110,3 +110,47 @@ version `4` compatibility window. Both migrations require the owning operator's
 protected-target backup, rehearsal, review and explicit mutation approval.
 No request handler applies either protected migration. Failure repairs forward;
 disabling hosted mode retains additive metadata and all original records.
+
+## Refresh-chain retention
+
+`runRefreshChainRetention` scans candidates in bounded timestamp-and-key pages.
+The refresh/code age cutoffs select candidates; they do not authorize deletion
+of live replay or revocation evidence. Each adapter checks the stored actual
+token/code expiry at the slice's evaluation time, including lifetimes issued
+under earlier, longer configuration. A present record with an unknown expiry
+is retained. Issuance settings and the shared-account fixed family limits are
+unchanged; retention does not infer historical lifetimes from current Worker
+bindings or environment variables.
+
+Refresh links remain while either endpoint token may be valid. Access links
+remain while their access token may be valid. Revoked roots, code-to-token
+links and consumed-code markers also retain their bounded live-family closure.
+Code consumption removes the original code row, so its absence alone cannot
+authorize removal of the marker that triggers replay revocation. Expired
+prefixes may be collected while surviving links retain the original root and
+revocation cascade.
+
+Each root/code dependency group probes a fixed number of indexed links plus
+an overflow witness. Oversized or incomplete groups are retained conservatively
+while individual expired links are collected. The candidate `scanned` budget
+includes retained rows; it is distinct from the additional bounded dependency
+lookups. Deletion rechecks the candidate timestamp and dependencies atomically,
+and reported counts include only actual deleted rows.
+
+Keep and resume the returned opaque cursor until `done` is true, then begin a
+new cycle. Restarting every slice at the first retained row can starve later
+expired candidates. The platform scheduler persists this progress in one
+private D1 `maintenance_cursors` document and uses a generation compare/update
+so overlapping stale ticks cannot rewind a newer cycle. A failed slice does
+not advance the checkpoint. After a checkpoint error, the next tick reads
+the actual persisted generation: an acknowledgement can be lost after the
+write committed. Do not reset or assume the old position locally. A range may
+repeat idempotently; this does not claim that earlier deletions were rolled back.
+No new schema, request-time DDL, HTTP field or credential input is required.
+
+The D1 implementation uses the existing binding's
+[`batch`](https://developers.cloudflare.com/d1/worker-api/d1-database/)
+and checks actual affected-row evidence from its
+[`D1Result`](https://developers.cloudflare.com/d1/worker-api/return-object/).
+SQLite-backed D1, local workerd/D1 and PGlite fixtures remain separate from
+qualification of an operator's live database, configuration or cron schedule.
