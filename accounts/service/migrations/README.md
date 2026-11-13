@@ -154,3 +154,7 @@ and checks actual affected-row evidence from its
 [`D1Result`](https://developers.cloudflare.com/d1/worker-api/return-object/).
 SQLite-backed D1, local workerd/D1 and PGlite fixtures remain separate from
 qualification of an operator's live database, configuration or cron schedule.
+
+Passkey challenge admission/expiry uses existing migration 022 tables or the
+existing D1 document schema. See the [bounded challenge contract](../../../docs/internal/passkey-challenge-limits.md).
+No applied SQL is changed and no request-time DDL is added in predeployed mode.

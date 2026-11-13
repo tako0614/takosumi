@@ -116,7 +116,7 @@ test("parallel passkey challenges use distinct store keys instead of clobbering"
   expect(firstBody.challenge).not.toBe(secondBody.challenge);
 
   const firstStored = await store.consumePasskeyChallenge(
-    passkeyChallengeKey({
+    await passkeyChallengeKey({
       intent: "register",
       subject: "tsub_member",
       sessionId: "sess_member",
@@ -125,7 +125,7 @@ test("parallel passkey challenges use distinct store keys instead of clobbering"
     Date.now(),
   );
   const secondStored = await store.consumePasskeyChallenge(
-    passkeyChallengeKey({
+    await passkeyChallengeKey({
       intent: "register",
       subject: "tsub_member",
       sessionId: "sess_member",

@@ -1,4 +1,9 @@
 import { hashSessionId } from "./session-hash-salt.ts";
+import type {
+  PasskeyChallengeAdmissionInput,
+  PasskeyChallengeSweepInput,
+  PasskeyChallengeSweepResult,
+} from "./passkey-challenge-policy.ts";
 import { HostedIdentityRecords } from "./hosted-identity-records.ts";
 import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
 import { PostgresIdentityRecordRepository } from "./postgres/identity-records.ts";
@@ -183,6 +188,14 @@ export class PostgresAccountsStore implements AccountsStore {
     subject: TakosumiSubject,
   ): Promise<readonly PasskeyCredentialRecord[]> {
     return passkeys.listPasskeyCredentialsForSubject(this.#client, subject);
+  }
+
+  admitPasskeyChallenge(input: PasskeyChallengeAdmissionInput): Promise<boolean> {
+    return passkeys.admitPasskeyChallenge(this.#client, input);
+  }
+
+  prunePasskeyChallenges(input: PasskeyChallengeSweepInput): Promise<PasskeyChallengeSweepResult> {
+    return passkeys.prunePasskeyChallenges(this.#client, input);
   }
 
   savePasskeyChallenge(
