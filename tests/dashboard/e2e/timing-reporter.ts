@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestResult, TestStep } from "@playwright/test/reporter";
 
-const ROOT = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
+const ROOT = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../.."));
 const SOURCE = join(ROOT, "tests/dashboard/e2e");
 const sourceNames = new Map(readdirSync(SOURCE).filter((name) => name.endsWith(".ts"))
   .map((name) => [join(SOURCE, name), name]));

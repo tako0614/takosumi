@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, resolve, join } from "node:path";
 import type { FullConfig, FullResult, Suite, TestCase, TestResult, TestStep } from "@playwright/test/reporter";
-import DashboardTimingReporter, { dashboardTimingReporters, projectDashboardStep } from "../../scripts/dashboard-browser-e2e/timing-reporter.ts";
+import DashboardTimingReporter, { dashboardTimingReporters, projectDashboardStep } from "../dashboard/e2e/timing-reporter.ts";
 
 const source = { file: resolve(import.meta.dir, "../dashboard/e2e/dashboard_test.ts"), line: 41, column: 3 };
 const poison = "https://private.example/?token=secret-payload Bearer secret-header body attachment error";

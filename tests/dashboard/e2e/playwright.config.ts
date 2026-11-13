@@ -2,7 +2,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
 import { resolvePortableOrigin, resolvePortablePort } from "./portable-origin.ts";
-import { dashboardTimingReporters } from "../../../scripts/dashboard-browser-e2e/timing-reporter.ts";
+import { dashboardTimingReporters } from "./timing-reporter.ts";
 import {
   resolveExternalStorageState,
   validateExpectedWorkerVersionId,
