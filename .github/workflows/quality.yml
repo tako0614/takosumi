@@ -107,13 +107,14 @@ jobs:
       - name: Install locked docs dependencies
         run: npm ci --prefix docs --no-audit --no-fund
 
+      - name: Prepare private timing output
+        run: mkdir -m 700 "${RUNNER_TEMP}/takosumi-test-timings"
+
       - name: Run test phase shard
         env:
           TAKOSUMI_TEST_SHARD: ${{ matrix.shard }}/6
           TAKOSUMI_TEST_TIMINGS_OUTPUT: ${{ runner.temp }}/takosumi-test-timings/timings.json
-        run: |
-          mkdir -m 700 "${RUNNER_TEMP}/takosumi-test-timings"
-          bun run check --only tests
+        run: bun run check --only tests
 
       # These are actual per-file measurements, not automatically adopted weights.
       # Preserve partial output and its nonzero provenance when tests fail.
