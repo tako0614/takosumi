@@ -17,6 +17,27 @@ The service binding alone does not enable the profile. Partial configuration,
 a different environment, malformed origin or missing RPC methods fails closed.
 The origin is operator configuration; public request headers cannot select it.
 
+`GET /auth/oidc/login` additionally requires
+`HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER` and
+`HOSTED_OIDC_LOGIN_IP_RATE_LIMITER`, each implementing Cloudflare's
+`limit({ key }): Promise<{ success: boolean }>` binding port. Admission runs
+after the existing origin/credential guards, before the private RPC. Missing,
+throwing or malformed bindings return unavailable without entering the RP.
+A refusal returns 429 with `Cache-Control: no-store` and `Retry-After: 60`.
+Callback/session/logout and the stock profile remain outside this gate.
+
+The reference template uses 60 requests/minute across the location and
+10 requests/minute per client cohort. Its numeric namespace IDs are placeholders:
+choose distinct unused IDs in the owning operator-private config. These are
+staging examples, not production traffic policy. The limiter is approximate
+and local to each Cloudflare location, not a strict worldwide storage quota.
+Its client key uses ingress `CF-Connecting-IP` (IPv4 or IPv6 /64); invalid or
+missing values share an `unknown` cohort. Shared IPs can group different users.
+No address becomes identity or is forwarded to the private RP. See the
+[Cloudflare binding contract](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).
+Existing pending/expired attempt retention and independent maintenance remain
+separate; this gate does not qualify deployed bindings or repair old rows.
+
 The private service implements:
 
 | RPC | Responsibility |
@@ -45,8 +66,10 @@ as `subject` and `primaryAccountId`; `expiresAt: 0` means the RP does not expose
 its expiry through that mirror. It creates no issuer session. Its DELETE
 operation invokes the private RP logout under the same Origin check.
 Identity/membership RPC waits are bounded at five seconds, and browser auth
-route waits at forty seconds; failures return a generic unavailable result
+route waits, including login admission, at forty seconds; failures return a generic unavailable result
 without retrying. A wait deadline does not roll back the private RP operation.
+An admission result arriving after that deadline cannot start another limiter
+check or a new private RP call.
 If a callback fails, start a fresh login attempt rather than replaying its
 single-use authorization code.
 

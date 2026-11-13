@@ -49,6 +49,25 @@ binding = "TAKOSUMI_VERSION_METADATA"
 [observability]
 enabled = true
 
+# Optional shared-account staging login admission. These numeric namespace IDs
+# are REFERENCE placeholders, not deployed IDs. Choose unused account-unique
+# IDs in the operator-private config; keep the two namespaces distinct.
+# Stock OSS does not call these bindings. Limits are approximate per location,
+# not a worldwide quota; tune the staging examples for actual traffic/shared IPs.
+[[ratelimits]]
+name = "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER"
+namespace_id = "1001"
+[ratelimits.simple]
+limit = 60
+period = 60
+
+[[ratelimits]]
+name = "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER"
+namespace_id = "1002"
+[ratelimits.simple]
+limit = 10
+period = 60
+
 # Accounts plane store (session / OIDC / PAT / billing support data).
 [[d1_databases]]
 binding = "TAKOSUMI_ACCOUNTS_DB"
