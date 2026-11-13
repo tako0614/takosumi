@@ -2,6 +2,14 @@ import { prepareInterfaceInvocationAccessRecord } from "../../../contract/intern
 import type { InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import type { InterfaceInvocationProvenance } from "../../../contract/internal-interface-invocation-source.ts";
 import { hashSessionId } from "./session-hash-salt.ts";
+import {
+  passkeyChallengeAdmissionPolicy,
+  passkeyChallengeSweepLimit,
+  passkeyChallengeWindowStart,
+  type PasskeyChallengeAdmissionInput,
+  type PasskeyChallengeSweepInput,
+  type PasskeyChallengeSweepResult,
+} from "./passkey-challenge-policy.ts";
 import { HostedIdentityRecords } from "./hosted-identity-records.ts";
 import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
 import { MemoryIdentityRecordRepository } from "./memory-identity-records.ts";
@@ -606,14 +614,18 @@ export interface AccountsStore
    */
   isRefreshRootRevoked(token: string): boolean | Promise<boolean>;
   /**
-   * Persists a WebAuthn ceremony challenge under `key` with an absolute
-   * `expiresAt` (ms-since-epoch). Backs store-based challenge storage so the
-   * WebAuthn options -> complete round trip works across multiple
-   * isolates/replicas (e.g. the Cloudflare Workers reference distribution),
-   * where a module-local Map breaks: the isolate serving /options may differ
-   * from the one serving /complete. `key` is opaque (the caller composes it,
-   * e.g. subject + intent). Overwrites any existing value for the same key.
+   * Bounded HTTP issuance. A successful admission owns its cleanup work and
+   * atomically spends the shared window budget with the challenge insertion.
+   * False refuses issuance without saving a challenge. Required at composition
+   * when passkeys are enabled; no fallback to the legacy unbounded save port.
    */
+  admitPasskeyChallenge?(
+    input: PasskeyChallengeAdmissionInput,
+  ): boolean | Promise<boolean>;
+  prunePasskeyChallenges?(
+    input: PasskeyChallengeSweepInput,
+  ): PasskeyChallengeSweepResult | Promise<PasskeyChallengeSweepResult>;
+  /** Legacy trusted exact-key save with overwrite, retained for compatibility. */
   savePasskeyChallenge(
     key: string,
     challenge: string,
@@ -688,6 +700,10 @@ export class InMemoryAccountsStore implements AccountsStore {
     string,
     { challenge: string; expiresAt: number }
   >();
+  #passkeyChallengeSweep: Iterator<[
+    string, { challenge: string; expiresAt: number },
+  ]> | undefined;
+  #passkeyWindowStart = -1;
 
   readonly #hosted = new HostedIdentityRecords(new MemoryIdentityRecordRepository(this.#accounts, this.#accountSessions, this.#upstreamIdentities, (subjects, now) => {
     for (const [key, value] of this.#accountSessions) if (subjects.includes(value.subject)) this.#accountSessions.delete(key);
@@ -1435,6 +1451,50 @@ export class InMemoryAccountsStore implements AccountsStore {
     if (position >= 0) index.splice(position, 1);
   }
 
+  admitPasskeyChallenge(input: PasskeyChallengeAdmissionInput): boolean {
+    const policy = passkeyChallengeAdmissionPolicy(input);
+    if (policy.windowStart < this.#passkeyWindowStart) return false;
+    this.prunePasskeyChallenges({ now: input.now });
+    if (this.#passkeyChallenges.has(input.key)) {
+      throw new Error("duplicate passkey challenge");
+    }
+    const quota = this.#passkeyChallenges.get(policy.key);
+    if (quota && (quota.expiresAt !== policy.expiresAt ||
+      !/^[0-9]{1,3}$/.test(quota.challenge))) return false;
+    const count = quota ? Number(quota.challenge) : 0;
+    if (quota && count < 1) return false;
+    if (count >= policy.limit) return false;
+    this.#passkeyChallenges.set(policy.key, {
+      challenge: String(count + 1), expiresAt: policy.expiresAt,
+    });
+    this.#passkeyChallenges.set(input.key, {
+      challenge: input.challenge, expiresAt: input.expiresAt,
+    });
+    return true;
+  }
+
+  prunePasskeyChallenges(input: PasskeyChallengeSweepInput): PasskeyChallengeSweepResult {
+    const limit = passkeyChallengeSweepLimit(input);
+    this.#passkeyWindowStart = Math.max(this.#passkeyWindowStart, passkeyChallengeWindowStart(input.now));
+    this.#passkeyChallengeSweep ??= this.#passkeyChallenges.entries();
+    let scanned = 0;
+    let deleted = 0;
+    while (scanned < limit) {
+      const next = this.#passkeyChallengeSweep.next();
+      if (next.done) {
+        this.#passkeyChallengeSweep = undefined;
+        break;
+      }
+      scanned++;
+      const [key, record] = next.value;
+      if (Number.isFinite(record.expiresAt) && record.expiresAt <= input.now) {
+        this.#passkeyChallenges.delete(key);
+        deleted++;
+      }
+    }
+    return { scanned, deleted };
+  }
+
   savePasskeyChallenge(
     key: string,
     challenge: string,
@@ -1449,7 +1509,7 @@ export class InMemoryAccountsStore implements AccountsStore {
     // Single-shot: delete regardless of expiry so an expired challenge cannot
     // be replayed and stale rows do not accumulate.
     this.#passkeyChallenges.delete(key);
-    if (entry.expiresAt <= now) return undefined;
+    if (!Number.isFinite(entry.expiresAt) || !Number.isFinite(now) || entry.expiresAt <= now) return undefined;
     return entry.challenge;
   }
 }

@@ -8,6 +8,14 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { bigint, jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { PasskeyCredentialRecord } from "../store.ts";
 import {
+  passkeyChallengeAdmissionPolicy,
+  passkeyChallengeSweepLimit,
+  passkeyChallengeWindowStart,
+  type PasskeyChallengeAdmissionInput,
+  type PasskeyChallengeSweepInput,
+  type PasskeyChallengeSweepResult,
+} from "../passkey-challenge-policy.ts";
+import {
   millis,
   passkeyCredentialFromRow,
   type PasskeyCredentialRow,
@@ -154,6 +162,85 @@ export async function listPasskeyCredentialsForSubject(
   return rows.map(passkeyCredentialFromRow);
 }
 
+/** The permanent private row fences old windows before any quota GC/save. */
+function windowBarrier(parameter: number): string {
+  return `observed_window AS (
+    INSERT INTO accounts_v1.passkey_challenges(challenge_key, challenge, expires_at)
+    VALUES ('passkey:window:v1', $${parameter}::text, 'infinity')
+    ON CONFLICT(challenge_key) DO UPDATE SET challenge = excluded.challenge
+      WHERE CASE WHEN accounts_v1.passkey_challenges.challenge ~ '^[0-9]{1,16}$'
+        THEN accounts_v1.passkey_challenges.challenge::bigint <= $${parameter}::bigint
+        ELSE false END
+    RETURNING challenge_key
+  )`;
+}
+
+export async function admitPasskeyChallenge(
+  client: PostgresQueryClient,
+  input: PasskeyChallengeAdmissionInput,
+): Promise<boolean> {
+  const policy = passkeyChallengeAdmissionPolicy(input);
+  // The quota's unique row serializes increments across pooled connections.
+  // The dependent INSERT and quota increment are one atomic statement; a
+  // failed challenge insert cannot spend quota without saving the challenge.
+  const result = await runQuery(client, `
+    WITH ${windowBarrier(8)}, expired AS (
+      DELETE FROM accounts_v1.passkey_challenges WHERE challenge_key IN (
+        SELECT challenge_key FROM accounts_v1.passkey_challenges
+        WHERE EXISTS (SELECT 1 FROM observed_window) AND expires_at <= $7
+        ORDER BY expires_at, challenge_key
+        LIMIT 64 FOR UPDATE SKIP LOCKED
+      ) AND expires_at <= $7 RETURNING challenge_key
+    ), admitted AS (
+      INSERT INTO accounts_v1.passkey_challenges
+        (challenge_key, challenge, expires_at)
+      SELECT $1, '1', $2 FROM observed_window, (SELECT COUNT(*) FROM expired) AS sweep
+      ON CONFLICT (challenge_key) DO UPDATE
+        SET challenge = (accounts_v1.passkey_challenges.challenge::integer + 1)::text
+        WHERE accounts_v1.passkey_challenges.expires_at = $2
+          AND CASE
+            WHEN accounts_v1.passkey_challenges.challenge ~ '^[0-9]{1,3}$'
+            THEN accounts_v1.passkey_challenges.challenge::integer >= 1
+              AND accounts_v1.passkey_challenges.challenge::integer < $3
+            ELSE false
+          END
+      RETURNING challenge_key
+    )
+    INSERT INTO accounts_v1.passkey_challenges
+      (challenge_key, challenge, expires_at)
+    SELECT $4, $5, $6 FROM admitted
+    RETURNING challenge_key
+  `, [policy.key, toDate(policy.expiresAt), policy.limit,
+    input.key, input.challenge, toDate(input.expiresAt), toDate(input.now), String(policy.windowStart)]);
+  if (result.rows.length > 1) throw new Error("invalid passkey admission result");
+  return result.rows.length === 1;
+}
+
+export async function prunePasskeyChallenges(
+  client: PostgresQueryClient,
+  input: PasskeyChallengeSweepInput,
+): Promise<PasskeyChallengeSweepResult> {
+  const limit = passkeyChallengeSweepLimit(input);
+  const result = await runQuery<{ scanned: number; deleted: number }>(client, `
+    WITH ${windowBarrier(3)}, candidates AS MATERIALIZED (
+      SELECT challenge_key FROM accounts_v1.passkey_challenges
+      WHERE EXISTS (SELECT 1 FROM observed_window) AND expires_at <= $1
+      ORDER BY expires_at, challenge_key LIMIT $2
+    ), removed AS (
+      DELETE FROM accounts_v1.passkey_challenges
+      WHERE challenge_key IN (SELECT challenge_key FROM candidates)
+        AND expires_at <= $1 RETURNING challenge_key
+    )
+    SELECT (SELECT COUNT(*)::integer FROM candidates) AS scanned,
+      (SELECT COUNT(*)::integer FROM removed) AS deleted
+  `, [toDate(input.now), limit, String(passkeyChallengeWindowStart(input.now))]);
+  const row = result.rows[0];
+  if (result.rows.length !== 1 || !row || !Number.isInteger(row.scanned) ||
+    !Number.isInteger(row.deleted) || row.deleted < 0 || row.deleted > row.scanned ||
+    row.scanned > limit) throw new Error("invalid passkey sweep result");
+  return { scanned: row.scanned, deleted: row.deleted };
+}
+
 export async function savePasskeyChallenge(
   client: PostgresQueryClient,
   key: string,
@@ -195,6 +282,7 @@ export async function consumePasskeyChallenge(
       }),
   );
   if (row === undefined) return undefined;
-  if (millis(row.expires_at) <= now) return undefined;
+  const expiry = millis(row.expires_at);
+  if (!Number.isFinite(expiry) || !Number.isFinite(now) || expiry <= now) return undefined;
   return row.challenge;
 }
