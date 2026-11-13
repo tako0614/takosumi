@@ -27,11 +27,18 @@ export interface SharedAuthRpc {
   ): Promise<SharedAuthWorkspace>;
 }
 
+/** Operator-supplied, approximate per-location admission, never identity. */
+export interface SharedAuthLoginRateLimiter {
+  limit(input: { readonly key: string }): Promise<{ readonly success: boolean }>;
+}
+
 export interface SharedAuthEnvironment {
   readonly TAKOSUMI_SHARED_AUTH_PROFILE?: string;
   readonly TAKOSUMI_SHARED_AUTH_ORIGIN?: string;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   readonly HOSTED?: unknown;
+  readonly HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER?: SharedAuthLoginRateLimiter;
+  readonly HOSTED_OIDC_LOGIN_IP_RATE_LIMITER?: SharedAuthLoginRateLimiter;
 }
 
 const SHARED_AUTH_PATHS = new Set([
@@ -239,6 +246,49 @@ function csrfValid(request: Request, origin: string): boolean {
     request.method === "OPTIONS" || request.headers.get("origin") === origin;
 }
 
+function hostedOidcLoginClientKey(value: string | null): string {
+  if (value === null || value.length > 45) return "unknown";
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(value);
+  if (ipv4) {
+    const octets = ipv4.slice(1).map(Number);
+    return octets.every((octet) => octet <= 255)
+      ? `ipv4:${octets.join(".")}` : "unknown";
+  }
+  try {
+    const canonical = new URL(`http://[${value}]/`).hostname.slice(1, -1);
+    const halves = canonical.split("::");
+    if (halves.length > 2) return "unknown";
+    const left = halves[0] ? halves[0].split(":") : [];
+    const right = halves[1] ? halves[1].split(":") : [];
+    if (canonical.includes("::") ? left.length + right.length >= 8 : left.length !== 8) return "unknown";
+    const hextets = [...left, ...Array(8 - left.length - right.length).fill("0"), ...right];
+    if (hextets.some((part) => !/^[0-9a-f]{1,4}$/iu.test(part))) return "unknown";
+    return `ipv6:${hextets.slice(0, 4).map((part) => Number.parseInt(part, 16).toString(16)).join(":")}::/64`;
+  } catch {
+    return "unknown";
+  }
+}
+
+async function hostedOidcLoginAllowed(
+  request: Request,
+  env: SharedAuthEnvironment,
+  waitActive: () => boolean,
+): Promise<boolean> {
+  const global = env.HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER;
+  const client = env.HOSTED_OIDC_LOGIN_IP_RATE_LIMITER;
+  if (!global || typeof global.limit !== "function" || !client || typeof client.limit !== "function") {
+    throw new TypeError("shared login admission is unavailable");
+  }
+  async function allowed(limiter: SharedAuthLoginRateLimiter, key: string): Promise<boolean> {
+    const result = await limiter.limit({ key });
+    if (!result || typeof result.success !== "boolean") throw new TypeError("invalid shared login admission");
+    return result.success;
+  }
+  if (!(await allowed(global, "hosted-oidc-login:global")) || !waitActive()) return false;
+  // Evaluated at public ingress; never forward or use this header as identity.
+  return await allowed(client, hostedOidcLoginClientKey(request.headers.get("cf-connecting-ip")));
+}
+
 export async function handleSharedAuthRouteRequest(
   request: Request,
   env: SharedAuthEnvironment,
@@ -277,9 +327,22 @@ export async function handleSharedAuthRouteRequest(
         status: 403, headers: { "cache-control": "no-store" },
       });
     }
+    let waitActive = true;
     const response = await boundedRpc(
-      () => selected.rpc.fetchSharedAuth(requestForRpc(request, true)), 40_000,
-    );
+      async () => {
+        if (request.method === "GET" && url.pathname === "/auth/oidc/login") {
+          const allowed = await hostedOidcLoginAllowed(request, env, () => waitActive);
+          // A late limiter result must not begin a new private operation after
+          // the existing browser-route wait has already returned unavailable.
+          if (!waitActive) throw new Error("shared login admission expired");
+          if (!allowed) return Response.json({ error: "rate_limited" }, {
+            status: 429,
+            headers: { "cache-control": "no-store", "retry-after": "60" },
+          });
+        }
+        return await selected.rpc.fetchSharedAuth(requestForRpc(request, true));
+      }, 40_000,
+    ).finally(() => { waitActive = false; });
     if (!(response instanceof Response)) return sharedAuthUnavailableResponse();
     const headers = new Headers(response.headers);
     // Only the gateway's profile-OFF branch may mark route absence. A bound RP
