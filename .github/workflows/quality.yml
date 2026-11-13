@@ -158,8 +158,23 @@ jobs:
           name: dashboard-dist-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: dashboard/dist
 
+      - name: Prepare private dashboard timings
+        run: mkdir -m 700 "${RUNNER_TEMP}/takosumi-dashboard-timings"
+
       - name: Run dashboard browser phase
+        env:
+          TAKOSUMI_DASHBOARD_TIMINGS_DIR: ${{ runner.temp }}/takosumi-dashboard-timings
         run: bun run check --only dashboard-browser
+
+      - name: Save dashboard case and step timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # pinned: v7.0.1
+        with:
+          name: dashboard-timings-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/takosumi-dashboard-timings/
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
 
   docs-browser:
     name: docs browser
