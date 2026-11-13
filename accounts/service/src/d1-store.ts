@@ -1,5 +1,7 @@
 import { prepareInterfaceInvocationAccessRecord } from "../../../contract/internal-interface-invocation-source.ts";
 import { HostedIdentityRecords } from "./hosted-identity-records.ts";
+import { admitD1PasskeyChallenge, pruneD1PasskeyChallenges } from "./passkey-challenge-d1.ts";
+import type { PasskeyChallengeAdmissionInput, PasskeyChallengeSweepInput, PasskeyChallengeSweepResult } from "./passkey-challenge-policy.ts";
 import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
 import { D1IdentityRecordRepository } from "./d1-identity-records.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
@@ -1490,6 +1492,16 @@ export class D1AccountsStore implements AccountsStore {
     };
   }
 
+  async admitPasskeyChallenge(input: PasskeyChallengeAdmissionInput): Promise<boolean> {
+    await this.initialize();
+    return await admitD1PasskeyChallenge(this.#db, input);
+  }
+
+  async prunePasskeyChallenges(input: PasskeyChallengeSweepInput): Promise<PasskeyChallengeSweepResult> {
+    await this.initialize();
+    return await pruneD1PasskeyChallenges(this.#db, input);
+  }
+
   async savePasskeyChallenge(
     key: string,
     challenge: string,
@@ -1514,7 +1526,7 @@ export class D1AccountsStore implements AccountsStore {
       key,
     );
     if (taken === undefined) return undefined;
-    if (taken.expiresAt <= now) return undefined;
+    if (!Number.isFinite(taken.expiresAt) || !Number.isFinite(now) || taken.expiresAt <= now) return undefined;
     return taken.challenge;
   }
 

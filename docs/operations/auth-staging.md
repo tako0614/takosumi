@@ -171,7 +171,8 @@ secret set is derived exactly from those descriptors and the issuer/client
 secrets; there are no fixed global provider credential slots or implicit fallbacks.
 They require actual stage provider registration and secret custody; no production
 descriptor or guessed console origin is a fallback. Optional passkeys pin the
-same stage RP ID/origin. The issuer and product cookies remain separate and
+same stage RP ID/origin and require the [bounded challenge store ports](../internal/passkey-challenge-limits.md).
+The issuer and product cookies remain separate and
 host-only; authenticated E2E must verify cookie attributes, current claims,
 revocation, client separation and existing Workspace authority.
 

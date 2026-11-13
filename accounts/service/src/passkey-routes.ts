@@ -32,8 +32,15 @@ import {
 import {
   type PasskeyChallengeIntent,
   passkeyChallengeKey,
+  legacyPasskeyChallengeKey,
 } from "./passkey-challenge-store.ts";
 import { consoleErrorRedacted } from "./redacted-log.ts";
+import {
+  PASSKEY_CHALLENGE_TTL_MS,
+  PASSKEY_SUBJECT_MAX_BYTES,
+  PASSKEY_SESSION_MAX_BYTES,
+  passkeyComponentWithinBytes,
+} from "./passkey-challenge-policy.ts";
 
 /**
  * Server-minted passkey challenge handling. Browsers must NOT pick their own
@@ -43,7 +50,7 @@ import { consoleErrorRedacted } from "./redacted-log.ts";
  * require the client to echo back the SAME bytes on `complete`. Including the
  * challenge in the key lets independent ceremonies proceed concurrently.
  *
- * The challenge is persisted in the `AccountsStore` (via `savePasskeyChallenge`
+ * The challenge is persisted in the `AccountsStore` (via bounded `admitPasskeyChallenge`
  * / `consumePasskeyChallenge`), NOT a module-local Map. The previous Map was
  * wrong on the Cloudflare Workers (D1) reference distribution, which is
  * multi-isolate with no request affinity: the `/options` and `/complete`
@@ -53,8 +60,6 @@ import { consoleErrorRedacted } from "./redacted-log.ts";
  * guarantees as `authorization_codes`. TTL is 5 minutes (matches the WebAuthn
  * `timeout` default).
  */
-const CHALLENGE_TTL_MS = 5 * 60 * 1000;
-
 function mintChallenge(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -71,15 +76,36 @@ async function issueChallenge(input: {
   subject: string;
   sessionId: string | null;
   intent: PasskeyChallengeIntent;
-}): Promise<string> {
+}): Promise<{ ok: true; challenge: string } | { ok: false; response: Response }> {
+  if (
+    !passkeyComponentWithinBytes(input.subject, PASSKEY_SUBJECT_MAX_BYTES) ||
+    (input.sessionId !== null &&
+      !passkeyComponentWithinBytes(input.sessionId, PASSKEY_SESSION_MAX_BYTES))
+  ) return { ok: false, response: errorJson("invalid_request", "invalid request", 400) };
+  if (!input.store.admitPasskeyChallenge || !input.store.prunePasskeyChallenges) {
+    return { ok: false, response: errorJson("passkey_challenge_unavailable", "passkey challenge unavailable", 503) };
+  }
   const challenge = mintChallenge();
-  const key = passkeyChallengeKey({ ...input, challenge });
-  await input.store.savePasskeyChallenge(
-    key,
-    challenge,
-    Date.now() + CHALLENGE_TTL_MS,
-  );
-  return challenge;
+  const key = await passkeyChallengeKey({ ...input, challenge });
+  const now = Date.now();
+  try {
+    // Admission includes its own bounded cleanup reservation. A shared/stale
+    // sweep must not authorize multiple new writes against the same progress.
+    const admitted = await input.store.admitPasskeyChallenge({
+      key, challenge, now, expiresAt: now + PASSKEY_CHALLENGE_TTL_MS,
+    });
+    if (!admitted) {
+      const response = errorJson("rate_limited", "too many passkey challenges", 429);
+      // Refusal may be quota or a concurrent cleanup reservation; no write was
+      // accepted. Clients can request a fresh ceremony after this short delay.
+      response.headers.set("Retry-After", "1");
+      return { ok: false, response };
+    }
+    return { ok: true, challenge };
+  } catch (error) {
+    consoleErrorRedacted("passkey_challenge_issuance_failed", error);
+    return { ok: false, response: errorJson("passkey_challenge_unavailable", "passkey challenge unavailable", 503) };
+  }
 }
 
 type ConsumeResult =
@@ -93,11 +119,22 @@ async function consumeChallenge(input: {
   intent: PasskeyChallengeIntent;
   presented: string;
 }): Promise<ConsumeResult> {
-  const key = passkeyChallengeKey({ ...input, challenge: input.presented });
+  if (
+    !passkeyComponentWithinBytes(input.subject, PASSKEY_SUBJECT_MAX_BYTES) ||
+    (input.sessionId !== null &&
+      !passkeyComponentWithinBytes(input.sessionId, PASSKEY_SESSION_MAX_BYTES)) ||
+    !/^[A-Za-z0-9_-]{43}$/.test(input.presented)
+  ) return { ok: false, error: "unknown_challenge" };
+  const context = { ...input, challenge: input.presented };
+  const key = await passkeyChallengeKey(context);
   // Single-shot read+delete in the store with internal expiry handling
   // (mirrors consumeAuthorizationCode). `undefined` covers unknown AND expired;
   // either way we fail closed.
-  const stored = await input.store.consumePasskeyChallenge(key, Date.now());
+  const now = Date.now();
+  const current = await input.store.consumePasskeyChallenge(key, now);
+  const stored = current === undefined
+    ? await input.store.consumePasskeyChallenge(legacyPasskeyChallengeKey(context), now)
+    : current;
   if (stored === undefined || stored !== input.presented) {
     return { ok: false, error: "unknown_challenge" };
   }
@@ -122,12 +159,14 @@ export async function handlePasskeyRegisterOptions(input: {
   if (!account) return errorJson("invalid_session", "invalid session", 401);
 
   const sessionId = session.sessionId;
-  const challenge = await issueChallenge({
+  const issued = await issueChallenge({
     store: input.store,
     subject,
     sessionId,
     intent: "register",
   });
+  if (!issued.ok) return issued.response;
+  const challenge = issued.challenge;
   return json(
     createPasskeyRegistrationOptions({
       rp: {
@@ -273,19 +312,23 @@ export async function handlePasskeyAuthenticateOptions(input: {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const subject = takosumiSubjectValue(body.subject);
-  if (!subject) return errorJson("invalid_request", "invalid request", 400);
+  if (!subject || !passkeyComponentWithinBytes(subject, PASSKEY_SUBJECT_MAX_BYTES)) {
+    return errorJson("invalid_request", "invalid request", 400);
+  }
 
   // Agent 6 item 2 + 3: server-mint challenge keyed by (subject,
   // sessionId, intent). For authenticate, sessionId is normally null
   // (this is the pre-login flow), but if the caller is already signed in
   // and registering a step-up, we still bind to the existing session.
   const sessionId = extractAccountSessionId(input.request);
-  const challenge = await issueChallenge({
+  const issued = await issueChallenge({
     store: input.store,
     subject,
     sessionId,
     intent: "authenticate",
   });
+  if (!issued.ok) return issued.response;
+  const challenge = issued.challenge;
   return json(
     createPasskeyAuthenticationOptions({
       rpId: input.passkeys.rpId,

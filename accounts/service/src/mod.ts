@@ -664,6 +664,10 @@ export function createAccountsHandler(
   const baseStore = options.store;
   const upstreamOAuth = options.upstreamOAuth ? {...options.upstreamOAuth, hostedSessionPolicy: options.hostedSessionPolicy ?? options.upstreamOAuth.hostedSessionPolicy} : undefined;
   const passkeys = options.passkeys ? {...options.passkeys, hostedSessionPolicy: options.hostedSessionPolicy ?? options.passkeys.hostedSessionPolicy} : undefined;
+  if (passkeys && (typeof options.store.admitPasskeyChallenge !== "function" ||
+    typeof options.store.prunePasskeyChallenges !== "function")) {
+    throw new TypeError("passkeys require bounded challenge admission and retention store ports");
+  }
   const isProductionIssuer = isHttpsIssuer(issuer);
   const loginEmailAllowlist = options.loginEmailAllowlist;
   const privacyRetentionPolicyRef = options.privacyRetentionPolicyRef
@@ -726,6 +730,9 @@ export function createAccountsHandler(
   const authorizeLimiter = createInMemoryRateLimiter(60);
   const tokenLimiter = createInMemoryRateLimiter(120);
   const accountTokensLimiter = createInMemoryRateLimiter(10);
+  // Best-effort per-IP guard; the durable store separately bounds issuance
+  // across replicas. Operators still own edge-side admission configuration.
+  const passkeyOptionsLimiter = createInMemoryRateLimiter(60);
   const notificationPushersLimiter = createNotificationPusherRateLimiter();
   // A complete dual-proof/context flow includes reads, two explicit legs and
   // provider rotations. Keep its bounded budget separate from token issuance.
@@ -1144,6 +1151,8 @@ export function createAccountsHandler(
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       if (!passkeys) return passkeysNotConfigured();
+      const limited = passkeyOptionsLimiter.consume(request);
+      if (limited) return limited;
       return await handlePasskeyRegisterOptions({
         request,
         store,
@@ -1164,6 +1173,8 @@ export function createAccountsHandler(
     if (url.pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       if (!passkeys) return passkeysNotConfigured();
+      const limited = passkeyOptionsLimiter.consume(request);
+      if (limited) return limited;
       return await handlePasskeyAuthenticateOptions({
         request,
         store,

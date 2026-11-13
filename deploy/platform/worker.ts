@@ -943,6 +943,10 @@ const platformWorker = {
       context,
     );
     await schedulePlatformSideEffect(
+      runScheduledAccountsPasskeyChallengeRetention(env),
+      context,
+    );
+    await schedulePlatformSideEffect(
       runScheduledInterfaceMaterializationIntentDrain(env),
       context,
     );
@@ -1171,6 +1175,23 @@ async function runScheduledCapsuleUninstallFinalize(
         errorName: error instanceof Error ? error.name : "unknown",
       }),
     );
+  }
+}
+
+/** A bounded passkey slice independent of refresh-chain retention failures. */
+export async function runScheduledAccountsPasskeyChallengeRetention(
+  env: Pick<CloudflareWorkerEnv, "TAKOSUMI_ACCOUNTS_DB" | "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE">,
+): Promise<{ scanned: number; deleted: number; failures: number }> {
+  const schemaMode = resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE);
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, { schemaMode });
+  try {
+    if (schemaMode !== "predeployed") await store.initialize();
+    const result = await store.prunePasskeyChallenges({ now: Date.now() });
+    return { ...result, failures: 0 };
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "passkey_challenge_retention_failed",
+      errorName: error instanceof Error ? error.name : "unknown" }));
+    return { scanned: 0, deleted: 0, failures: 1 };
   }
 }
 
