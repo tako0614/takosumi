@@ -2,6 +2,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
 import { resolvePortableOrigin, resolvePortablePort } from "./portable-origin.ts";
+import { dashboardTimingReporters } from "./timing-reporter.ts";
 import {
   resolveExternalStorageState,
   validateExpectedWorkerVersionId,
@@ -104,7 +105,7 @@ export default defineConfig({
   retries: 0,
   timeout: 45_000,
   expect: { timeout: 10_000 },
-  reporter: "line",
+  reporter: dashboardTimingReporters(mode, process.env.TAKOSUMI_DASHBOARD_TIMINGS_DIR),
   projects: [
     {
       name: mode,
