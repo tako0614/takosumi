@@ -110,7 +110,22 @@ jobs:
       - name: Run test phase shard
         env:
           TAKOSUMI_TEST_SHARD: ${{ matrix.shard }}/6
-        run: bun run check --only tests
+          TAKOSUMI_TEST_TIMINGS_OUTPUT: ${{ runner.temp }}/takosumi-test-timings/timings.json
+        run: |
+          mkdir -m 700 "${RUNNER_TEMP}/takosumi-test-timings"
+          bun run check --only tests
+
+      # These are actual per-file measurements, not automatically adopted weights.
+      # Preserve partial output and its nonzero provenance when tests fail.
+      - name: Save measured shard timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # pinned: v7.0.1
+        with:
+          name: test-timings-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/takosumi-test-timings/
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
 
   dashboard-browser:
     name: dashboard browser
