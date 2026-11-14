@@ -22,6 +22,7 @@ mock.module("react/jsx-dev-runtime", () => ({
 }));
 mock.module("lucide-solid", () => ({
   AlertCircle: noop,
+  ChevronDown: noop,
   CheckCircle2: noop,
   ExternalLink: noop,
   Loader2: noop,
