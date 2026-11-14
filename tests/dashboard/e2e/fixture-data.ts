@@ -465,6 +465,8 @@ export interface InstallAttemptFixtureOptions {
   readonly takenNames?: readonly string[];
   /** Reconcile rounds each working phase takes before it moves on. */
   readonly roundsPerPhase?: number;
+  /** Hold source reading for UI observations without consuming reconcile rounds. */
+  readonly holdSourceReading?: () => boolean;
   /** Fail the attempt when it reaches this phase. */
   readonly failAt?: { readonly phase: AttemptPhase; readonly code: string; readonly message?: string };
 }
@@ -722,6 +724,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
   };
 
   const advance = (attempt: StoredAttempt) => {
+    if (attempt.phase === "syncing_source" && options.holdSourceReading?.()) return;
     attempt.rounds += 1;
     if (attempt.rounds < rounds) return;
     switch (attempt.phase) {
