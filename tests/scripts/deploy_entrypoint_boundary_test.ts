@@ -26,6 +26,7 @@ test("OSS deploy entrypoint owns the official platform Worker without a Cloud wr
     }[];
   };
   expect(contract.surfaces).toEqual([
+    expect.objectContaining({ surface: "takosumi-platform-staging-login-admission", target: "cloudflare-worker:takosumi-staging", triggers: ["authority"] }),
     expect.objectContaining({
       surface: "takosumi-platform-staging-code",
       target: "cloudflare-worker:takosumi-staging",
