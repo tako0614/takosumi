@@ -228,9 +228,22 @@ async function watch(request: Client, run: PublicRun, scope: Scope, signal: Abor
   return current;
 }
 
+function writeTerminalApply(io: CliIo, options: CliOptions, appId: string | undefined, planId: string | undefined, run: PublicRun): number {
+  write(io, options, { status: run.status === "succeeded" ? "succeeded" : "failed", appId, planRunId: planId,
+    runId: run.id, runStatus: run.status, runUrl: runUrl(options, run.id),
+    code: run.errorCode && TOKEN.test(run.errorCode) ? run.errorCode : undefined,
+    note: run.status !== "succeeded" ? "A failed or stopped Apply may have effects. Do not repeat it as a new Plan." : undefined });
+  return run.status === "succeeded" ? 0 : 1;
+}
+
+function applyPlanIdentity(plan: PublicRun): string {
+  return canonicalJson([plan.id, plan.capsuleId, plan.workspaceId, plan.origin, plan.planDigest, plan.applyExpected, plan.sourceSnapshotId, plan.baseStateGeneration]);
+}
+
 export async function runAppApply(args: string[], io: CliIo): Promise<number> {
   let options: CliOptions = {}; let appId: string | undefined; let planId: string | undefined;
   let scope: Scope | undefined; let lastRun: PublicRun | undefined; let lastPlan: PublicRun | undefined; let mutationAttempted = false;
+  let expectedPlanIdentity: string | undefined;
   try {
     const parsed = argumentsFor(args, "apply");
     if (parsed.help) { io.stdout(applyHelp()); return 0; }
@@ -242,6 +255,8 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       const request = client(options, signal);
       let plan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}`), selectedApp, selectedPlan));
       lastPlan = plan;
+      const initialIdentity = applyPlanIdentity(plan);
+      expectedPlanIdentity = initialIdentity;
       scope = { appId: selectedApp, planId: selectedPlan, workspaceId: plan.workspaceId };
       const existing = await linkedApply(request, scope);
       if (existing) { lastRun = existing; return await watch(request, existing, scope, signal); }
@@ -258,13 +273,13 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       }
       signal.throwIfAborted();
       io.stderr(JSON.stringify({ status: "applying_reviewed_plan", appId: selectedApp, plan: projection, reviewUrl: runUrl(options, plan.id) }));
-      const initialIdentity = canonicalJson([plan.id, plan.capsuleId, plan.workspaceId, plan.origin, plan.planDigest, plan.applyExpected, plan.sourceSnapshotId, plan.baseStateGeneration]);
       if (plan.status === "waiting_approval") {
         mutationAttempted = true;
         await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}/approve`, "POST", {});
-        plan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}`), selectedApp, selectedPlan));
+        const approvedPlan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}`), selectedApp, selectedPlan));
+        if (approvedPlan.status !== "succeeded" || approvedPlan.policyStatus !== "pass" || initialIdentity !== applyPlanIdentity(approvedPlan)) throw new Refusal("approved_plan_changed");
+        plan = approvedPlan;
         lastPlan = plan;
-        if (plan.status !== "succeeded" || plan.policyStatus !== "pass" || initialIdentity !== canonicalJson([plan.id, plan.capsuleId, plan.workspaceId, plan.origin, plan.planDigest, plan.applyExpected, plan.sourceSnapshotId, plan.baseStateGeneration])) throw new Refusal("approved_plan_changed");
         const raced = await linkedApply(request, scope);
         if (raced) { lastRun = raced; return await watch(request, raced, scope, signal); }
       }
@@ -272,31 +287,29 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       lastRun = applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}/apply`, "POST", {}), selectedApp), scope);
       return await watch(request, lastRun, scope, signal);
     });
-    write(io, options, { status: lastRun.status === "succeeded" ? "succeeded" : "failed", appId, planRunId: planId,
-      runId: lastRun.id, runStatus: lastRun.status, runUrl: runUrl(options, lastRun.id),
-      code: lastRun.errorCode && TOKEN.test(lastRun.errorCode) ? lastRun.errorCode : undefined,
-      note: lastRun.status !== "succeeded" ? "A failed or stopped Apply may have effects. Do not repeat it as a new Plan." : undefined });
-    return lastRun.status === "succeeded" ? 0 : 1;
+    return writeTerminalApply(io, options, appId, planId, lastRun);
   } catch (error) {
     // An uncertain mutation is never followed by another mutation. Fresh,
     // separately bounded reads can observe its exact linked Apply only.
+    // Keep recovery evidence local: a late response from the aborted command
+    // must not change its result while a fresh readback is being refused.
+    let observedRun = lastRun; let observedPlan = lastPlan; let readbackConfirmed = false;
     if (scope && mutationAttempted) {
-      try { lastRun = await within(5_000, async signal => {
+      try { observedRun = await within(5_000, async signal => {
         const request = client(options, signal);
-        const observedPlan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(scope!.planId)}`), scope!.appId, scope!.planId));
-        if (observedPlan.workspaceId !== scope!.workspaceId || observedPlan.planDigest !== lastPlan?.planDigest ||
-          canonicalJson(observedPlan.origin) !== canonicalJson(lastPlan?.origin)) throw new Refusal("observed_plan_changed");
-        lastPlan = observedPlan;
+        const freshPlan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(scope!.planId)}`), scope!.appId, scope!.planId));
+        if (freshPlan.workspaceId !== scope!.workspaceId || applyPlanIdentity(freshPlan) !== expectedPlanIdentity) throw new Refusal("observed_plan_changed");
+        observedPlan = freshPlan;
         const observed = await linkedApply(request, scope!);
         if (!observed) return undefined;
         return applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(observed.id)}`), scope!.appId, observed.id), scope!);
-      }); } catch { /* unavailable readback is not proof of no effect */ }
+      }); readbackConfirmed = true; } catch { /* unavailable readback is not proof of no effect */ }
     }
-    const success = lastRun?.status === "succeeded";
-    write(io, options, { status: success ? "succeeded" : lastRun && !SETTLED.has(lastRun.status) ? "pending" : mutationAttempted || options.observeOnly === true ? "indeterminate" : "refused",
-      appId, planRunId: planId, lastObservedPlanStatus: lastPlan?.status, runId: lastRun?.id, runStatus: lastRun?.status, code: errorCode(error),
+    if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
+    write(io, options, { status: observedRun && !SETTLED.has(observedRun.status) ? "pending" : mutationAttempted || options.observeOnly === true ? "indeterminate" : "refused",
+      appId, planRunId: planId, lastObservedPlanStatus: observedPlan?.status, runId: observedRun?.id, runStatus: observedRun?.status, code: errorCode(error),
       recovery: "Use apps apply with the same app/plan and --observe-only for readback; no new Plan, key, approval or Apply is created by observation." });
-    return success ? 0 : error instanceof Refusal && ["app_id_required", "unknown_option", "option_value_required", "invalid_boolean_option", "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes", "saved_plan_and_explicit_confirmation_required"].includes(error.code) ? 2 : 1;
+    return error instanceof Refusal && ["app_id_required", "unknown_option", "option_value_required", "invalid_boolean_option", "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes", "saved_plan_and_explicit_confirmation_required"].includes(error.code) ? 2 : 1;
   }
 }
 
