@@ -1138,7 +1138,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByLabel("Region").fill("us-west-2");
     await page.getByLabel("Region").press("Enter");
     // Nothing else to press: the Plan is made once the setting is in.
-    await expect(installReview(page).getByRole("heading", { name: "What this app will create in your cloud" })).toBeVisible();
+    await expect(installReview(page).getByRole("heading", { name: "Review installation" })).toBeVisible();
     const addButton = page.getByRole("button", { name: "Allow and install", exact: true });
     await expect(addButton).toBeDisabled();
     // The connection choice is an answer; the setting travels only with the

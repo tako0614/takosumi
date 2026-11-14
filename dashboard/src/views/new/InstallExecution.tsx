@@ -696,31 +696,11 @@ export default function InstallExecution(props: Props) {
               </Badge>
             </div>
 
-            <Show when={isReviewRun(current().type) && summary()}>
-              <dl class="iv-change-counts" aria-label={t("installStore.changes")}>
-                <div>
-                  <dt>{t("installStore.createCount")}</dt>
-                  <dd>{summary()?.add ?? 0}</dd>
-                </div>
-                <div>
-                  <dt>{t("installStore.updateCount")}</dt>
-                  <dd>{summary()?.change ?? 0}</dd>
-                </div>
-                <div>
-                  <dt>{t("installStore.deleteCount")}</dt>
-                  <dd>{summary()?.destroy ?? 0}</dd>
-                </div>
-              </dl>
-            </Show>
-
             <Show when={props.showPolicyReasons && isReviewRun(current().type) ? current().policyReasons : undefined}>
               {(reasons) => <PolicyReasonList reasons={reasons()} />}
             </Show>
 
             <Show when={reviewedPlanRunId()}>
-              <section data-testid="install-plan-resources">
-                <PlanResourceList resources={current().planResources ?? []} sortByAction />
-              </section>
               <section class="iv-sheet-block" data-testid="install-plan-cost" aria-labelledby="iv-cost-title">
                 <h3 id="iv-cost-title">{t("installStore.costTitle")}</h3>
                 <Show when={costState()} fallback={<Spinner size={16} />}>
@@ -736,6 +716,34 @@ export default function InstallExecution(props: Props) {
               </section>
             </Show>
 
+            <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId())}>
+              <details class="iv-disclosure" data-testid="install-resource-details"
+                open={(props.purpose ?? "install") !== "install" || destructive() || (summary()?.change ?? 0) > 0}>
+                <summary>{t("installStore.resourceDetails")}</summary>
+                <Show when={isReviewRun(current().type) && summary()}>
+                  <dl class="iv-change-counts" aria-label={t("installStore.changes")}>
+                    <div>
+                      <dt>{t("installStore.createCount")}</dt>
+                      <dd>{summary()?.add ?? 0}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("installStore.updateCount")}</dt>
+                      <dd>{summary()?.change ?? 0}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("installStore.deleteCount")}</dt>
+                      <dd>{summary()?.destroy ?? 0}</dd>
+                    </div>
+                  </dl>
+                </Show>
+
+                <Show when={reviewedPlanRunId()}>
+                  <section data-testid="install-plan-resources">
+                    <PlanResourceList resources={current().planResources ?? []} sortByAction />
+                  </section>
+                </Show>
+              </details>
+            </Show>
             <Show when={current().status === "waiting_approval" ? props.blockedReason : undefined}>
               {(reason) => (
                 <p class="iv-apply-reason" id="iv-approve-outdated" role="status">{reason()}</p>
@@ -800,6 +808,7 @@ export default function InstallExecution(props: Props) {
                   {t(copy().allow)}
                 </Button>
                 {discardButton()}
+                <Show when={(props.purpose ?? "install") !== "install"}>
                 <Button
                   href={`/runs/${encodeURIComponent(current().id)}`}
                   variant="ghost"
@@ -807,6 +816,7 @@ export default function InstallExecution(props: Props) {
                 >
                   {t("installStore.runDetails")}
                 </Button>
+                </Show>
               </div>
             </Show>
 
@@ -953,6 +963,9 @@ export default function InstallExecution(props: Props) {
 
       <details class="iv-advanced" onToggle={(event) => setLogsOpen(event.currentTarget.open)}>
         <summary>{t("installStore.logs")}</summary>
+        <Show when={(props.purpose ?? "install") === "install" && planReady() ? runLatest() : undefined}>
+          {(current) => <Button href={`/runs/${encodeURIComponent(current().id)}`} variant="ghost" icon={<ExternalLink size={16} />}>{t("installStore.runDetails")}</Button>}
+        </Show>
         <Show when={logs.loading && !logLatest()}><Spinner size={16} /></Show>
         <Show when={logs.error}><p role="alert">{fetchFailedMessage(logs.error, t)}</p></Show>
         <Show when={!logs.error && logLatest()}>{(value) => <pre class="iv-log-lines" data-testid="install-run-logs">{
