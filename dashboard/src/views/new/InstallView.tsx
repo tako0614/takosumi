@@ -16,7 +16,7 @@
  */
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { Navigate, useLocation, useNavigate } from "@solidjs/router";
-import { ArrowLeft, ChevronDown, ExternalLink, PackagePlus } from "lucide-solid";
+import { ArrowLeft, ChevronDown, ExternalLink } from "lucide-solid";
 import { matchingInstalledApps, type GitInstallPlan, type GitInstallPlanResponse } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
@@ -394,6 +394,10 @@ function AppInstallPage(props: { readonly principalId: string }) {
     const text = listed()?.description?.[locale()]?.trim();
     return text && text !== title() ? text : undefined;
   };
+  const publisher = () => {
+    const publisher = listed()?.publisher;
+    return publisher?.displayName?.trim() || publisher?.handle?.trim();
+  };
   const version = () => {
     const current = plan();
     if (!current) return versionLabel(ref()) ?? (ref() === "HEAD" ? "HEAD" : undefined);
@@ -473,73 +477,77 @@ function AppInstallPage(props: { readonly principalId: string }) {
   return (
     <main class="iv-page iv-configure-page" data-install-state={stage()}>
       <a class="iv-back-link" href="/new"><ArrowLeft size={18} aria-hidden="true" />{t("installStore.back")}</a>
-      <header class="iv-app-detail" data-testid="install-app-header">
-        <AppFace name={title()} iconUrl={listed()?.iconUrl} class="iv-app-icon" />
-        <div>
-          <h1>{title() || t("common.loading")}</h1>
-          <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
+      <article class="iv-app-surface" aria-labelledby="iv-app-title">
+        <header class="iv-app-detail" data-testid="install-app-header">
+          <AppFace name={title()} iconUrl={listed()?.iconUrl} class="iv-app-icon" monogramFrameClass="iv-app-monogram" />
+          <div class="iv-app-intro">
+            <h1 id="iv-app-title">{title() || t("common.loading")}</h1>
+            <Show when={publisher()}>{(name) => <span class="iv-app-publisher">{name()}</span>}</Show>
+            <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
+          </div>
+        </header>
 
-        </div>
-      </header>
+        <Show when={handoff()}>
+          {(context) => (
+            <aside class="iv-handoff" role="status">
+              <strong>{appHandoffProductLabel(context().product)} {t("installStore.title")}</strong>
+              <p>{context().returnUri}</p>
+            </aside>
+          )}
+        </Show>
 
-      <Show when={handoff()}>
-        {(context) => (
-          <aside class="iv-handoff" role="status">
-            <strong>{appHandoffProductLabel(context().product)} {t("installStore.title")}</strong>
-            <p>{context().returnUri}</p>
-          </aside>
-        )}
-      </Show>
+        <Show when={listingFailed()}>
+          <div class="iv-error" role="alert">{t("installStore.listingUnavailable")}</div>
+        </Show>
 
-      <Show when={listingFailed()}>
-        <div class="iv-error" role="alert">{t("installStore.listingUnavailable")}</div>
-      </Show>
-
-      <Show when={completed()} fallback={
-        <Switch>
-          <Match when={stage() === "candidate" || stage() === "starting"}>
-            <section class="iv-workbench iv-start" data-testid="install-start">
-              <Show when={attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
-              <form
-                class="iv-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  install();
-                }}
-              >
-                <Show when={existingApps().length > 0}>
-                  <div class="iv-existing-apps" data-testid="install-existing-apps">
-                    <p class="iv-muted">{installedLabel()}</p>
-                    <div class="iv-action-row">
-                      <For each={existingApps()}>{(app) => (
-                        <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${app.name}`}>
-                          {t("installStore.open")}<Show when={existingApps().length > 1}> · {app.name}</Show>
-                        </Button>
-                      )}</For>
+        <Show when={completed()} fallback={
+          <Switch>
+            <Match when={stage() === "candidate" || stage() === "starting"}>
+              <section class="iv-workbench iv-start" data-testid="install-start">
+                <Show when={attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
+                <form
+                  class="iv-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    install();
+                  }}
+                >
+                  <Show when={existingApps().length > 0}>
+                    <div class="iv-existing-apps" data-testid="install-existing-apps">
+                      <p class="iv-muted">{installedLabel()}</p>
+                      <div class="iv-action-row">
+                        <For each={existingApps()}>{(app) => (
+                          <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${app.name}`}>
+                            {t("installStore.open")}<Show when={existingApps().length > 1}> · {app.name}</Show>
+                          </Button>
+                        )}</For>
+                      </div>
                     </div>
-                  </div>
-                </Show>
-                <Show when={installedApps.error || (!installedApps.loading && installedApps()?.complete === false)}>
-                  <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
-                  <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
-                </Show>
-                <details class="iv-choice iv-version-choice" data-testid="install-source-fields">
-                  <summary><span>{t("installStore.versionLabel")}</span><strong>{ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong><ChevronDown size={16} aria-hidden="true" /></summary>
-                  <div class="iv-choice-content">
-                  <FormField
-                    label={t("installStore.sourceRef")}
-                    hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
-                  >
-                    <Input
-                      value={ref()}
-                      placeholder={fromStore() ? t("installStore.sourceRefStable") : undefined}
-                      spellcheck={false}
-                      onInput={(event) => setRef(event.currentTarget.value)}
-                    />
-                  </FormField>
-
-                </div>
-                </details>
+                  </Show>
+                  <Show when={installedApps.error || (!installedApps.loading && installedApps()?.complete === false)}>
+                    <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
+                    <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
+                  </Show>
+                  <details class="iv-choice iv-version-choice" data-testid="install-source-fields">
+                    <summary>
+                      <span>{t("installStore.versionLabel")}</span>
+                      <strong>{ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong>
+                      <ChevronDown size={16} aria-hidden="true" />
+                    </summary>
+                    <div class="iv-choice-content">
+                      <FormField
+                        label={t("installStore.sourceRef")}
+                        hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
+                      >
+                        <Input
+                          value={ref()}
+                          placeholder={fromStore() ? t("installStore.sourceRefStable") : undefined}
+                          spellcheck={false}
+                          onInput={(event) => setRef(event.currentTarget.value)}
+                        />
+                      </FormField>
+                    </div>
+                  </details>
                   <Show when={sourceConnections().length > 0}>
                     <FormField label={t("installStore.sourceAuth")}>
                       <Select value={sourceAuth()} onChange={(event) => setSourceAuth(event.currentTarget.value)}>
@@ -552,106 +560,108 @@ function AppInstallPage(props: { readonly principalId: string }) {
                       </Select>
                     </FormField>
                   </Show>
-                <div class="iv-action-row iv-start-actions">
-                  <Button
-                    type="submit"
-                    variant={existingApps().length > 0 ? "secondary" : "primary"}
-                    size="lg"
-                    busy={attempt.mutating() === "start"}
-                    disabled={!gitUrl() || installedApps.state !== "ready" || (store() !== undefined && listing.loading)}
-                    icon={<PackagePlus size={18} />}
-                  >
-                    {existingApps().length > 0 ? t("installStore.installAnother") : t("installStore.install")}
-                  </Button>
-
-                </div>
-                <p class="iv-start-hint">{existingApps().length > 0 ? t("installStore.installAnotherHint") : t("installStore.startHint")}</p>
-              </form>
-            </section>
-          </Match>
-          <Match when={stage() === "loading"}>
-            <section class="iv-workbench iv-centered" role="status" aria-live="polite" data-testid="install-loading">
-              <Spinner size={24} />
-              <h2 data-stage-heading tabindex="-1">{t("common.loading")}</h2>
-            </section>
-          </Match>
-          <Match when={onScreen()}>
-            <InstallScreen
-              attempt={attempt}
-              workspaceId={plan()?.workspaceId || currentWorkspaceId() || undefined}
-              fromStore={fromStore()}
-              onDone={(capsuleId) => void finish(capsuleId)}
-            />
-          </Match>
-          <Match when={true}>
-            <AttemptProblem
-              attempt={attempt}
-              onReinstall={() => {
-                const current = plan();
-                navigate(
-                  `${location.pathname}${current ? leaveSearch(current) : withInstallAttempt(location.search, undefined)}`,
-                  { replace: true },
-                );
-              }}
-            />
-          </Match>
-        </Switch>
-      }>
-        {(done) => (<>
-          <section class="iv-workbench iv-centered" role="status" data-testid="install-complete">
-            <h2 data-stage-heading tabindex="-1">{t("installStore.completeTitle")}</h2>
-            <p>{handoff() ? t("installStore.completeHint") : t("installStore.completeOpenHint")}</p>
-            <div class="iv-action-row">
-              <Show
-                when={handoff()}
-                fallback={
-                  <Show when={done().url} fallback={<Show when={!done().settled}><Spinner size={18} /></Show>}>
-                    {(url) => (
+                  <div class="iv-decision">
+                    <div class="iv-action-row">
                       <Button
-                        href={url()}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        variant="primary"
-                        icon={<ExternalLink size={16} />}
+                        type="submit"
+                        variant={existingApps().length > 0 ? "secondary" : "primary"}
+                        size="lg"
+                        busy={attempt.mutating() === "start"}
+                        disabled={!gitUrl() || installedApps.state !== "ready" || (store() !== undefined && listing.loading)}
                       >
-                        {t("installStore.open")}
+                        {existingApps().length > 0 ? t("installStore.installAnother") : t("installStore.install")}
+                      </Button>
+                    </div>
+                    <p class="iv-start-hint">{existingApps().length > 0 ? t("installStore.installAnotherHint") : t("installStore.startHint")}</p>
+                  </div>
+                </form>
+              </section>
+            </Match>
+            <Match when={stage() === "loading"}>
+              <section class="iv-workbench iv-centered" role="status" aria-live="polite" data-testid="install-loading">
+                <Spinner size={24} />
+                <h2 data-stage-heading tabindex="-1">{t("common.loading")}</h2>
+              </section>
+            </Match>
+            <Match when={onScreen()}>
+              <InstallScreen
+                attempt={attempt}
+                workspaceId={plan()?.workspaceId || currentWorkspaceId() || undefined}
+                fromStore={fromStore()}
+                storeModulePath={listed()?.source.path ?? (listed() ? "." : undefined)}
+                onDone={(capsuleId) => void finish(capsuleId)}
+              />
+            </Match>
+            <Match when={true}>
+              <AttemptProblem
+                attempt={attempt}
+                onReinstall={() => {
+                  const current = plan();
+                  navigate(
+                    `${location.pathname}${current ? leaveSearch(current) : withInstallAttempt(location.search, undefined)}`,
+                    { replace: true },
+                  );
+                }}
+              />
+            </Match>
+          </Switch>
+        }>
+          {(done) => (<>
+            <section class="iv-workbench iv-centered" role="status" data-testid="install-complete">
+              <h2 data-stage-heading tabindex="-1">{t("installStore.completeTitle")}</h2>
+              <p>{handoff() ? t("installStore.completeHint") : t("installStore.completeOpenHint")}</p>
+              <div class="iv-action-row">
+                <Show
+                  when={handoff()}
+                  fallback={
+                    <Show when={done().url} fallback={<Show when={!done().settled}><Spinner size={18} /></Show>}>
+                      {(url) => (
+                        <Button
+                          href={url()}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          variant="primary"
+                          icon={<ExternalLink size={16} />}
+                        >
+                          {t("installStore.open")}
+                        </Button>
+                      )}
+                    </Show>
+                  }
+                >
+                  <Show when={createAppHandoffConnectHref(handoff(), done().url)} fallback={
+                    <Show when={!done().settled}><Spinner size={18} /></Show>
+                  }>
+                    {(href) => (
+                      <Button href={href()} variant="primary">
+                        {t("run.appHandoff.open", { app: appHandoffProductLabel(handoff()!.product) })}
                       </Button>
                     )}
                   </Show>
-                }
-              >
-                <Show when={createAppHandoffConnectHref(handoff(), done().url)} fallback={
-                  <Show when={!done().settled}><Spinner size={18} /></Show>
-                }>
-                  {(href) => (
-                    <Button href={href()} variant="primary">
-                      {t("run.appHandoff.open", { app: appHandoffProductLabel(handoff()!.product) })}
-                    </Button>
-                  )}
                 </Show>
-              </Show>
-              <Button
-                href={appPageHref(done().capsuleId)}
-                variant={done().settled && !done().url ? "primary" : "secondary"}
-              >
-                {t("installStore.manageApp")}
-              </Button>
-            </div>
-          </section>
-          <Show when={!handoff() && done().url}>
-            {(url) => <AppPhoneSection url={url()} appName={title()} />}
-          </Show>
-        </>)}
-      </Show>
-      <details class="iv-app-about">
-        <summary>{t("installStore.aboutApp")}</summary>
-          <Show when={gitUrl()}>
+                <Button
+                  href={appPageHref(done().capsuleId)}
+                  variant={done().settled && !done().url ? "primary" : "secondary"}
+                >
+                  {t("installStore.manageApp")}
+                </Button>
+              </div>
+            </section>
+            <Show when={!handoff() && done().url}>
+              {(url) => <AppPhoneSection url={url()} appName={title()} />}
+            </Show>
+          </>)}
+        </Show>
+        <Show when={gitUrl()}>
+          <details class="iv-app-about">
+            <summary>{t("installStore.provenance")}<ChevronDown size={16} aria-hidden="true" /></summary>
             <p class="iv-provenance" data-testid="install-provenance">
-              <span>{t("installStore.provenance")}</span> <code>{repositoryLabel(gitUrl())}</code>
+              <code>{repositoryLabel(gitUrl())}</code>
               <Show when={version()}>{(text) => <> · <code>{text()}</code></>}</Show>
             </p>
-          </Show>
-      </details>
+          </details>
+        </Show>
+      </article>
     </main>
   );
 }

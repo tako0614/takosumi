@@ -1600,7 +1600,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       // One primary Install plus "choose again"; no second form behind it.
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toHaveCount(1);
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeVisible();
-      await expect(page.getByRole("link", { name: "選び直す", exact: true })).toBeVisible();
+      await expect(page.getByRole("link", { name: "ストアに戻る", exact: true })).toBeVisible();
       await expect(page.getByTestId("install-provenance")).toContainText("github.com/example/service");
       await expect(page.getByTestId("install-configuration")).toHaveCount(0);
       // Store defaults are a compact Latest choice; editing is deliberate.
