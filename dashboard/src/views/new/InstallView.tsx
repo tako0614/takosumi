@@ -16,7 +16,7 @@
  */
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { Navigate, useLocation, useNavigate } from "@solidjs/router";
-import { ArrowLeft, ExternalLink, PackagePlus } from "lucide-solid";
+import { ArrowLeft, ChevronDown, ExternalLink, PackagePlus } from "lucide-solid";
 import { matchingInstalledApps, type GitInstallPlan, type GitInstallPlanResponse } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
@@ -396,11 +396,11 @@ function AppInstallPage(props: { readonly principalId: string }) {
   };
   const version = () => {
     const current = plan();
-    if (!current) return versionLabel(ref());
+    if (!current) return versionLabel(ref()) ?? (ref() === "HEAD" ? "HEAD" : undefined);
     const resolved = attempt.resolvedVersion();
     return resolved && resolved.commit === current.source.ref
       ? `${resolved.tag} · ${resolved.commit.slice(0, 7)}`
-      : versionLabel(current.source.ref);
+      : versionLabel(current.source.ref) ?? current.source.ref;
   };
 
   const install = () => {
@@ -472,17 +472,13 @@ function AppInstallPage(props: { readonly principalId: string }) {
 
   return (
     <main class="iv-page iv-configure-page" data-install-state={stage()}>
+      <a class="iv-back-link" href="/new"><ArrowLeft size={18} aria-hidden="true" />{t("installStore.back")}</a>
       <header class="iv-app-detail" data-testid="install-app-header">
         <AppFace name={title()} iconUrl={listed()?.iconUrl} class="iv-app-icon" />
         <div>
           <h1>{title() || t("common.loading")}</h1>
           <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
-          <Show when={gitUrl()}>
-            <p class="iv-provenance" data-testid="install-provenance">
-              <span>{t("installStore.provenance")}</span> <code>{repositoryLabel(gitUrl())}</code>
-              <Show when={version()}>{(text) => <> · <code>{text()}</code></>}</Show>
-            </p>
-          </Show>
+
         </div>
       </header>
 
@@ -527,23 +523,9 @@ function AppInstallPage(props: { readonly principalId: string }) {
                   <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
                   <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
                 </Show>
-                <div class="iv-action-row iv-start-actions">
-                  <Button
-                    type="submit"
-                    variant={existingApps().length > 0 ? "secondary" : "primary"}
-                    size="lg"
-                    busy={attempt.mutating() === "start"}
-                    disabled={!gitUrl() || installedApps.state !== "ready" || (store() !== undefined && listing.loading)}
-                    icon={<PackagePlus size={18} />}
-                  >
-                    {existingApps().length > 0 ? t("installStore.installAnother") : t("installStore.install")}
-                  </Button>
-                  <Button variant="ghost" href="/new" icon={<ArrowLeft size={16} />}>
-                    {t("installStore.back")}
-                  </Button>
-                </div>
-                <p class="iv-start-hint">{existingApps().length > 0 ? t("installStore.installAnotherHint") : t("installStore.startHint")}</p>
-                <div class="iv-fields iv-source-fields" data-testid="install-source-fields">
+                <details class="iv-choice iv-version-choice" data-testid="install-source-fields">
+                  <summary><span>{t("installStore.versionLabel")}</span><strong>{ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong><ChevronDown size={16} aria-hidden="true" /></summary>
+                  <div class="iv-choice-content">
                   <FormField
                     label={t("installStore.sourceRef")}
                     hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
@@ -555,6 +537,9 @@ function AppInstallPage(props: { readonly principalId: string }) {
                       onInput={(event) => setRef(event.currentTarget.value)}
                     />
                   </FormField>
+
+                </div>
+                </details>
                   <Show when={sourceConnections().length > 0}>
                     <FormField label={t("installStore.sourceAuth")}>
                       <Select value={sourceAuth()} onChange={(event) => setSourceAuth(event.currentTarget.value)}>
@@ -567,7 +552,20 @@ function AppInstallPage(props: { readonly principalId: string }) {
                       </Select>
                     </FormField>
                   </Show>
+                <div class="iv-action-row iv-start-actions">
+                  <Button
+                    type="submit"
+                    variant={existingApps().length > 0 ? "secondary" : "primary"}
+                    size="lg"
+                    busy={attempt.mutating() === "start"}
+                    disabled={!gitUrl() || installedApps.state !== "ready" || (store() !== undefined && listing.loading)}
+                    icon={<PackagePlus size={18} />}
+                  >
+                    {existingApps().length > 0 ? t("installStore.installAnother") : t("installStore.install")}
+                  </Button>
+
                 </div>
+                <p class="iv-start-hint">{existingApps().length > 0 ? t("installStore.installAnotherHint") : t("installStore.startHint")}</p>
               </form>
             </section>
           </Match>
@@ -645,6 +643,15 @@ function AppInstallPage(props: { readonly principalId: string }) {
           </Show>
         </>)}
       </Show>
+      <details class="iv-app-about">
+        <summary>{t("installStore.aboutApp")}</summary>
+          <Show when={gitUrl()}>
+            <p class="iv-provenance" data-testid="install-provenance">
+              <span>{t("installStore.provenance")}</span> <code>{repositoryLabel(gitUrl())}</code>
+              <Show when={version()}>{(text) => <> · <code>{text()}</code></>}</Show>
+            </p>
+          </Show>
+      </details>
     </main>
   );
 }

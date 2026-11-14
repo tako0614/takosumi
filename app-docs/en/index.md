@@ -13,12 +13,12 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 1. Sign in to the [dashboard](https://app.takosumi.com/) and select a workspace.
 2. Choose an app in the **Store**. Git URLs and app install links open the same app page.
 3. Check the description and source, then press **Install**. Nothing is created in your cloud yet.
-   Install opens **Install options**, and everything from here happens on that one screen.
-   While Takosumi reads the Git version it says **Reading the repository**; then it shows the version
-   and configuration. Change the app name or optional settings under **Customize configuration**.
-   Required inputs and missing connections remain visible. Store apps use the latest stable release, and the screen shows the exact version
-   that was read. Another version can be entered as a tag, branch or commit in the **Version** field,
-   before pressing Install or on the screen afterwards.
+   Stay on this app page throughout. **About this app** shows its repository and pinned version.
+   An unspecified Store version displays **Latest** and resolves the latest stable release when you start.
+   Open **Version** to choose a tag, branch or commit. Reopening a saved attempt shows its saved version;
+   it does not automatically switch to a newer release.
+   Open **Configuration** to change connections, the app name or optional settings.
+   Missing required inputs, missing connections and invalid answers open their fields automatically.
 4. If a connection is missing, use **Connect** on that connection's row to create and verify it on
    the same screen. A connection with only one candidate is chosen for you; declared setting defaults
    are filled in. The configuration named by the Store, or the only available configuration, is chosen

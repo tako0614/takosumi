@@ -17,7 +17,7 @@
  * complete sheet on its own and prepares the install again after a change.
  */
 import { createEffect, createMemo, createResource, createSignal, For, Match, Show, Suspense, Switch } from "solid-js";
-import { ExternalLink, PlugZap } from "lucide-solid";
+import { ChevronDown, ExternalLink, PlugZap } from "lucide-solid";
 import type {
   GitInstallPlanConnectionRequirement,
   GitInstallPlanInterfaceRequirement,
@@ -53,6 +53,7 @@ import {
   selectedInterfaceCandidate,
   sheetVariables,
   variableInitialText,
+  versionLabel,
   type ApplyBlock,
   type InstallProgress,
 } from "./install-attempt.ts";
@@ -241,19 +242,9 @@ function PlanPreview(props: { readonly attempt: InstallAttempt }) {
   const block = () => props.attempt.view().applyBlock;
   return (
     <section class="iv-execution" data-testid="install-plan-preview" data-apply-block={block() ?? ""} aria-label={t("installStore.reviewTitle")}>
-      <details class="iv-disclosure" data-testid="install-planned-resources" ref={(element) => revealWhen(element, () => props.attempt.sheet()?.resources.some((resource) => !resource.allowed))}>
-        <summary>{t("installStore.resourceDetails")}</summary>
-        <Show when={props.attempt.sheet()} fallback={<p class="iv-muted">{t("installStore.plannedPending")}</p>}>
-          {(sheet) => (
-            <>
-              <PlannedResources resources={sheet().resources} />
-              <p class="iv-muted">{t("installStore.plannedHint")}</p>
-            </>
-          )}
-        </Show>
-      </details>
+
       <section class="iv-sheet-block" data-testid="install-cost-pending" aria-labelledby="iv-cost-pending-title">
-        <h3 id="iv-cost-pending-title">{t("installStore.costTitle")}</h3>
+        <h3 class="iv-visually-hidden" id="iv-cost-pending-title">{t("installStore.costTitle")}</h3>
         <p class="iv-muted">{t("installStore.costPending")}</p>
       </section>
       <Show when={block()}>
@@ -278,6 +269,17 @@ function PlanPreview(props: { readonly attempt: InstallAttempt }) {
         </Button>
         <StopButton attempt={props.attempt} />
       </div>
+      <details class="iv-disclosure" data-testid="install-planned-resources" ref={(element) => revealWhen(element, () => props.attempt.sheet()?.resources.some((resource) => !resource.allowed))}>
+        <summary>{t("installStore.resourceDetails")}</summary>
+        <Show when={props.attempt.sheet()} fallback={<p class="iv-muted">{t("installStore.plannedPending")}</p>}>
+          {(sheet) => (
+            <>
+              <PlannedResources resources={sheet().resources} />
+              <p class="iv-muted">{t("installStore.plannedHint")}</p>
+            </>
+          )}
+        </Show>
+      </details>
     </section>
   );
 }
@@ -745,10 +747,17 @@ export function InstallScreen(props: {
     if (typed !== undefined) return typed;
     const ref = plan()?.source.ref ?? "";
     const resolved = attempt().resolvedVersion();
+    if (attempt().latestSelected()) return "";
     if (resolved && resolved.commit === ref) return resolved.tag;
-    return ref === "HEAD" ? "" : ref;
+    return ref === "HEAD" && !props.fromStore ? "" : ref;
   };
   const versionText = () => attempt().versionDraft() ?? versionShown();
+  const connectionNames = () => [...new Set(rows().map((row) => selectedCandidate(row)?.displayName).filter(Boolean)
+    .concat(summary()?.connections.map((row) => row.displayName) ?? []))].join(", ");
+
+
+  const linkedAppNames = () => interfaces().map((row) => selectedInterfaceCandidate(row)?.capsuleName).filter(Boolean)
+    .concat(summary()?.interfaces.filter((row) => row.choice.kind === "interface").map((row) => row.displayName || (row.choice.kind === "interface" ? row.choice.interfaceId : "")) ?? []).join(", ");
 
   const reviewAction = () => {
     const action = props.attempt.response()?.userAction;
@@ -766,7 +775,7 @@ export function InstallScreen(props: {
       data-install-state={view().applyBlock ?? "review"}
       aria-labelledby="iv-sheet-title"
     >
-      <div class="iv-section-head">
+      <div class="iv-section-head iv-visually-hidden">
         <h2 id="iv-sheet-title" data-stage-heading tabindex="-1">{t("installStore.sheetTitle")}</h2>
       </div>
       <ProgressLine attempt={props.attempt} />
@@ -778,8 +787,10 @@ export function InstallScreen(props: {
         </aside>
       </Show>
 
-      <section class="iv-sheet-block" aria-label={t("installStore.basicsTitle")} data-testid="install-basics">
-        <div class="iv-fields">
+      <div class="iv-choices" data-testid="install-basics" role="group" aria-label={t("installStore.basicsTitle")}>
+        <details class="iv-choice iv-version-choice" data-testid="install-version-choice">
+          <summary><span>{t("installStore.versionLabel")}</span><strong>{versionText() ? versionLabel(versionText()) ?? t("installStore.defaultBranch") : t(props.fromStore ? "installStore.latest" : "installStore.defaultBranch")}</strong><ChevronDown size={16} aria-hidden="true" /></summary>
+          <div class="iv-choice-content">
           <FormField
             label={t("installStore.sourceRef")}
             hint={props.fromStore ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
@@ -800,21 +811,23 @@ export function InstallScreen(props: {
               }}
             />
           </FormField>
-          <Show when={moduleAction()} fallback={
-            <Show when={sheet()?.modulePath ?? summary()?.modulePath}>
-              {(path) => (
-                <div class="iv-configuration-summary" data-testid="install-selected-configuration">
-                  <span>{t("installStore.configuration")}</span>
-                  <strong>{path() === "." ? t("installStore.defaultConfiguration") : path()}</strong>
-                </div>
-              )}
-            </Show>
-          }>
-            {(action) => <ModuleChoice attempt={props.attempt} action={action()} />}
-          </Show>
-        </div>
-      </section>
-
+          </div>
+        </details>
+        <details class="iv-choice iv-configuration-choice" data-testid="install-configuration-choice" ref={(element) => revealWhen(element, () => {
+          const check = settingsCheck();
+          // Read each source even while another field needs attention: a late
+          // error must reopen a disclosure the person closed in the meantime.
+          return [moduleAction(), nameError(), proposedName(), missingRows() > 0,
+            rowKeys().map((key) => Boolean(rowErrors()[key])).some(Boolean), check && !check.ok,
+            interfaces().some((row) => row.linkStoreUnavailable ||
+              (row.choice?.kind !== "later" && !selectedInterfaceCandidate(row)) ||
+              (selectedInterfaceCandidate(row) && interfaces().some((other) => other.requirementKey !== row.requirementKey &&
+                other.choice?.kind === "interface" && other.choice.interfaceId === selectedInterfaceCandidate(row)?.id))),
+            view().applyBlock === "interfaces", resubmitting()].some(Boolean);
+        })}>
+          <summary><span>{t("installStore.configuration")}</span><strong data-testid="install-selected-configuration">{(sheet()?.modulePath ?? summary()?.modulePath ?? ".") === "." ? t("installStore.defaultConfiguration") : sheet()?.modulePath ?? summary()?.modulePath}</strong><Show when={connectionNames()}>{(names) => <span class="iv-choice-context">{names()}</span>}</Show><ChevronDown size={16} aria-hidden="true" /></summary>
+          <div class="iv-choice-content iv-configuration-content">
+            <Show when={moduleAction()}>{(action) => <ModuleChoice attempt={props.attempt} action={action()} />}</Show>
       <details class="iv-disclosure" data-testid="install-customization" ref={(element) => revealWhen(element, () => {
         const check = settingsCheck();
         return nameError() || proposedName() || (check && !check.ok && check.invalid.some((name) => optionalNames().includes(name)));
@@ -900,7 +913,7 @@ export function InstallScreen(props: {
       </details>
 
       <Show when={rows().length > 0 || (summary()?.connections.length ?? 0) > 0}>
-        <details class="iv-disclosure" data-testid="install-connections" ref={(element) => revealWhen(element, () => missingRows() > 0 || rowKeys().some((key) => Boolean(rowErrors()[key])))}>
+        <details class="iv-disclosure" data-testid="install-connections" ref={(element) => revealWhen(element, () => [missingRows() > 0, rowKeys().map((key) => Boolean(rowErrors()[key])).some(Boolean)].some(Boolean))}>
           <summary>
             {t("installStore.cloudConnection")}
             <span class="iv-disclosure-value">{rows().map((row) => selectedCandidate(row)).filter(Boolean).map((connection) => connection!.displayName).concat(summary()?.connections.map((connection) => connection.displayName) ?? []).join(", ")}</span>
@@ -964,6 +977,11 @@ export function InstallScreen(props: {
         </section>
       </Show>
 
+          </div>
+        </details>
+      </div>
+
+      <Show when={linkedAppNames()}>{(names) => <p class="iv-linked-apps">{t("installStore.interfaces.title")}: {names()}</p>}</Show>
       <Show when={reviewAction()} fallback={<PlanPreview attempt={props.attempt} />}>
         {(action) => <PlanReview attempt={props.attempt} action={action()} onDone={props.onDone} />}
       </Show>

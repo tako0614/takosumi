@@ -161,7 +161,15 @@ class SourceRefRequiredError extends Error {
 
 async function resolveStoreVersion(workspaceId: string | undefined, url: string): Promise<ResolvedStoreVersion> {
   try {
-    return await resolveStableSourceTag(workspaceId, url);
+    const resolved = await resolveStableSourceTag(workspaceId, url);
+    if (!isImmutableSourceRevision(resolved.commit)) {
+      throw new ControlApiError(
+        502,
+        "invalid_stable_source_tag_response",
+        "Stable source tag resolution did not return an immutable commit.",
+      );
+    }
+    return resolved;
   } catch (cause) {
     if (!workspaceId && isMissingControlRoute(cause)) {
       throw new SourceRefRequiredError();
@@ -283,7 +291,19 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [versionDraft, setVersionDraftSignal] = createSignal<string>();
   /** Typed settings not yet left (Enter or blur); a choice counts at once. */
   const [settingsEditing, setSettingsEditing] = createSignal<ReadonlySet<string>>(new Set());
-  const [resolvedVersion, setResolvedVersion] = createSignal<ResolvedStoreVersion>();
+  // A pinned ref alone does not say that the person selected the Store default.
+  const [acceptedLatest, setAcceptedLatest] = createSignal<{
+    readonly attemptId: string;
+    readonly version: ResolvedStoreVersion;
+  }>();
+  const resolvedVersion = createMemo(() => {
+    const current = response()?.installPlan;
+    const latest = acceptedLatest();
+    return current && latest?.attemptId === current.id && latest.version.commit === current.source.ref
+      ? latest.version
+      : undefined;
+  });
+  const latestSelected = () => resolvedVersion() !== undefined;
   /** The last sheet the coordinator asked for, kept while it moves past it. */
   const [sheet, setSheet] = createSignal<ProvideInputs>();
   /** Committed choices on a GET-only reopen; never treated as live candidates. */
@@ -337,7 +357,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * beside it that could leave the first behind.
    */
   let pendingReplan:
-    | { readonly workspaceId?: string; readonly request: CreateGitInstallAttemptRequest; readonly name: string; readonly refText?: string }
+    | {
+        readonly workspaceId?: string;
+        readonly request: CreateGitInstallAttemptRequest;
+        readonly name: string;
+        readonly refText?: string;
+        readonly latest?: ResolvedStoreVersion;
+      }
     | undefined;
 
   const now = options.pacing?.now ?? (() => Date.now());
@@ -553,6 +579,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         epoch += 1;
         halt();
         setResponse(undefined);
+        setAcceptedLatest(undefined);
         forgetSession();
         setError(undefined);
         options.onLeft(held.installPlan);
@@ -562,6 +589,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       epoch += 1;
       halt();
       setResponse(undefined);
+      setAcceptedLatest(undefined);
       setLoadFailed(false);
       setError(undefined);
       forgetSession();
@@ -711,7 +739,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const adoptNewAttempt = (
     created: GitInstallPlanResponse,
     expected: number,
-    adoptOptions: { readonly keepAnswers?: boolean } = {},
+    adoptOptions: { readonly keepAnswers?: boolean; readonly latest?: ResolvedStoreVersion } = {},
   ): boolean => {
     if (disposed || expected !== epoch ||
       (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceSelection)) return false;
@@ -737,6 +765,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setPlanVersion(undefined);
     unconfirmedPlanVersion = undefined;
     attemptBaseVersion = untrack(editVersion);
+    setAcceptedLatest(adoptOptions.latest
+      ? { attemptId: created.installPlan.id, version: adoptOptions.latest }
+      : undefined);
     setResponse(created);
     // An idempotent start may return the attempt after it already reached
     // its sheet. Adopt that sheet just as a later GET or PATCH response.
@@ -770,25 +801,14 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       if (!stillStartingHere()) return;
       legacyWorkspaceContext = workspaceId;
       legacyWorkspaceSelection = selectedWorkspace;
-      let ref = candidate.ref.trim();
-      if (startOptions.fromStore && !ref) {
-        // A Store listing installs the newest released version unless the
-        // person chose one; the exact commit read is shown afterwards.
-        const resolved = await resolveStoreVersion(workspaceId, candidate.url);
-        if (!stillStartingHere()) return;
-        if (!isImmutableSourceRevision(resolved.commit)) {
-          throw new ControlApiError(
-            502,
-            "invalid_stable_source_tag_response",
-            "Stable source tag resolution did not return an immutable commit.",
-          );
-        }
-        ref = resolved.commit;
-        if (expected === epoch) setResolvedVersion({ tag: resolved.tag, commit: resolved.commit });
-      }
+      const ref = candidate.ref.trim();
+      // A Store listing installs the newest released version unless the person chose one.
+      const latest = startOptions.fromStore && !ref
+        ? await resolveStoreVersion(workspaceId, candidate.url)
+        : undefined;
       if (!stillStartingHere()) return;
-      const created = await postAttempt(workspaceId, attemptCreateRequest({ ...candidate, ref }));
-      adoptNewAttempt(created, expected);
+      const created = await postAttempt(workspaceId, attemptCreateRequest({ ...candidate, ref: latest?.commit ?? ref }));
+      adoptNewAttempt(created, expected, { latest });
     } catch (cause) {
       if (!disposed) setError(installErrorMessage(cause));
     } finally {
@@ -1062,13 +1082,16 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const current = response();
     if (!current || locked()) return;
     const next = text.trim();
-    const shown = refDraft() ?? current.installPlan.source.ref;
-    if (next === shown || (next === "" && shown === "HEAD")) return;
-    const resolved = resolvedVersion();
-    if (resolved && next === resolved.tag && current.installPlan.source.ref === resolved.commit) {
-      setRefDraft(undefined);
-      return;
-    }
+    const pending = refDraft();
+    const currentRef = current.installPlan.source.ref;
+    if (next === pending) return;
+    // The Store default edits as a blank value. Typing an explicit ref, even
+    // its pinned commit, is a new selection; clearing an explicit Store HEAD
+    // selects the latest release rather than the same default branch again.
+    const unchanged = latestSelected()
+      ? next === ""
+      : next === currentRef || (next === "" && currentRef === "HEAD" && !options.fromStore?.());
+    if (pending === undefined && unchanged) return;
     setRefDraft(next);
     edited();
   };
@@ -1167,23 +1190,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         const typed = nameDraft()?.trim();
         const name = typed && appNameValue(typed) ? typed : (currentName() ?? plan.capsule.name);
         const refText = refDraft();
-        let ref = refText ?? plan.source.ref;
-        if (refText === "" && options.fromStore?.()) {
-          const resolved = await resolveStoreVersion(planWorkspaceId, plan.source.url);
-          if (disposed) return false;
-          if (!isImmutableSourceRevision(resolved.commit)) {
-            throw new ControlApiError(
-              502,
-              "invalid_stable_source_tag_response",
-              "Stable source tag resolution did not return an immutable commit.",
-            );
-          }
-          ref = resolved.commit;
-          setResolvedVersion({ tag: resolved.tag, commit: resolved.commit });
-        }
+        const selectedLatest = refText === "" && options.fromStore?.()
+          ? await resolveStoreVersion(planWorkspaceId, plan.source.url)
+          : refText === undefined ? resolvedVersion() : undefined;
+        if (disposed) return false;
         const request = replanRequest(plan, {
           name,
-          ref,
+          ref: selectedLatest?.commit ?? refText ?? plan.source.ref,
           ...(retained ? { modulePath: retained.modulePath } : {}),
           providerBindings: reviewed ? reviewed.connections.map(({ displayName: _label, autoSelected: _automatic, ...binding }) => binding)
             : retained ? retainedBindings(rows) : (plan.options.providerBindings ?? []),
@@ -1197,7 +1210,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
           if (disposed) return false;
           replanDiscarded = plan.id;
         }
-        replacement = { workspaceId: planWorkspaceId, request, name, ...(refText !== undefined ? { refText } : {}) };
+        replacement = { workspaceId: planWorkspaceId, request, name, refText, latest: selectedLatest };
       }
       if (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceSelection) return false;
       clearCaches(replacement.workspaceId);
@@ -1205,7 +1218,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       pendingReplan = replacement;
       const created = await postAttempt(replacement.workspaceId, replacement.request);
       const latestLinkedRows = retained ? withInterfaceOverrides(retained.interfaces, interfaceOverrides()) : [];
-      if (!adoptNewAttempt(created, expected, { keepAnswers: true })) return false;
+      if (!adoptNewAttempt(created, expected, { keepAnswers: true, latest: replacement.latest })) return false;
       pendingReplan = undefined;
       replanDiscarded = undefined;
       // A start sent again as it was may carry older connections than the
@@ -1355,7 +1368,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       epoch += 1;
       setResponse(undefined);
       forgetSession();
-      setResolvedVersion(undefined);
+      setAcceptedLatest(undefined);
       options.onLeft(discarded.installPlan);
       return true;
     } catch (cause) {
@@ -1389,9 +1402,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const workspaceId = legacyWorkspaceContext;
       if (disposed || (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceSelection)) return false;
       clearCaches(workspaceId);
+      const latestVersion = resolvedVersion();
       const expected = ++epoch;
       const created = await postAttempt(workspaceId, restartRequest(discarded.installPlan));
-      return adoptNewAttempt(created, expected);
+      return adoptNewAttempt(created, expected, { latest: latestVersion });
     } catch (cause) {
       if (!disposed) setError(installErrorMessage(cause));
       return false;
@@ -1449,6 +1463,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setVersionDraft,
     commitVersion,
     resolvedVersion,
+    latestSelected,
     sheet,
     reviewSummary,
     editReviewSummary,

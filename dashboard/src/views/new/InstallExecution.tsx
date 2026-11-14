@@ -634,6 +634,35 @@ export default function InstallExecution(props: Props) {
     </Show>
   );
 
+  const resourceDetails = (current: () => NonNullable<ReturnType<typeof runLatest>>) => (<>
+              <details class="iv-disclosure" data-testid="install-resource-details"
+                open={(props.purpose ?? "install") !== "install" || destructive() || (summary()?.change ?? 0) > 0}>
+                <summary>{t("installStore.resourceDetails")}</summary>
+                <Show when={isReviewRun(current().type) && summary()}>
+                  <dl class="iv-change-counts" aria-label={t("installStore.changes")}>
+                    <div>
+                      <dt>{t("installStore.createCount")}</dt>
+                      <dd>{summary()?.add ?? 0}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("installStore.updateCount")}</dt>
+                      <dd>{summary()?.change ?? 0}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("installStore.deleteCount")}</dt>
+                      <dd>{summary()?.destroy ?? 0}</dd>
+                    </div>
+                  </dl>
+                </Show>
+
+                <Show when={reviewedPlanRunId()}>
+                  <section data-testid="install-plan-resources">
+                    <PlanResourceList resources={current().planResources ?? []} sortByAction />
+                  </section>
+                </Show>
+              </details>
+            </>);
+
   return (
     <section class="iv-execution" aria-labelledby="iv-review-title">
       <Show when={run.loading && !run.error && !runLatest()}>
@@ -670,7 +699,7 @@ export default function InstallExecution(props: Props) {
       <Show when={runLatest()}>
         {(current) => (
           <>
-            <div class="iv-review-head">
+            <div classList={{ "iv-review-head": true, "iv-visually-hidden": isInstall() && planReady() }}>
               <div>
                 <h2 id="iv-review-title">
                   {isApplyRun(current().type)
@@ -702,7 +731,7 @@ export default function InstallExecution(props: Props) {
 
             <Show when={reviewedPlanRunId()}>
               <section class="iv-sheet-block" data-testid="install-plan-cost" aria-labelledby="iv-cost-title">
-                <h3 id="iv-cost-title">{t("installStore.costTitle")}</h3>
+                <h3 classList={{ "iv-visually-hidden": isInstall() }} id="iv-cost-title">{t("installStore.costTitle")}</h3>
                 <Show when={costState()} fallback={<Spinner size={16} />}>
                   {(state) => (
                     <>
@@ -716,34 +745,7 @@ export default function InstallExecution(props: Props) {
               </section>
             </Show>
 
-            <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId())}>
-              <details class="iv-disclosure" data-testid="install-resource-details"
-                open={(props.purpose ?? "install") !== "install" || destructive() || (summary()?.change ?? 0) > 0}>
-                <summary>{t("installStore.resourceDetails")}</summary>
-                <Show when={isReviewRun(current().type) && summary()}>
-                  <dl class="iv-change-counts" aria-label={t("installStore.changes")}>
-                    <div>
-                      <dt>{t("installStore.createCount")}</dt>
-                      <dd>{summary()?.add ?? 0}</dd>
-                    </div>
-                    <div>
-                      <dt>{t("installStore.updateCount")}</dt>
-                      <dd>{summary()?.change ?? 0}</dd>
-                    </div>
-                    <div>
-                      <dt>{t("installStore.deleteCount")}</dt>
-                      <dd>{summary()?.destroy ?? 0}</dd>
-                    </div>
-                  </dl>
-                </Show>
-
-                <Show when={reviewedPlanRunId()}>
-                  <section data-testid="install-plan-resources">
-                    <PlanResourceList resources={current().planResources ?? []} sortByAction />
-                  </section>
-                </Show>
-              </details>
-            </Show>
+            <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId()) && (!isInstall() || destructive() || (summary()?.change ?? 0) > 0)}>{resourceDetails(current)}</Show>
             <Show when={current().status === "waiting_approval" ? props.blockedReason : undefined}>
               {(reason) => (
                 <p class="iv-apply-reason" id="iv-approve-outdated" role="status">{reason()}</p>
@@ -819,6 +821,8 @@ export default function InstallExecution(props: Props) {
                 </Show>
               </div>
             </Show>
+
+            <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId()) && isInstall() && !destructive() && (summary()?.change ?? 0) === 0}>{resourceDetails(current)}</Show>
 
             <Show
               when={

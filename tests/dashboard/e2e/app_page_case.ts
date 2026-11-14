@@ -455,7 +455,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const review = versionSection.getByTestId("app-review");
       await expect(review.getByRole("heading", { name: "What the update changes" })).toBeVisible();
       await expect(review.getByTestId("install-plan-resources")).toContainText("Cloudflare R2 Bucket");
-      await expect(review.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs for this app.");
+      await expect(review.getByTestId("install-plan-cost")).toContainText("Cloud charges may apply. No cost estimate is available.");
       await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
       await capture(page, "app-update-review");
       // A clean Plan waits for consent: no Apply across Run poll intervals.
