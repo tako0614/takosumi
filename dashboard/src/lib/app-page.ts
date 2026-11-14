@@ -218,6 +218,8 @@ export function appPrimaryActionLabel(action: CapsuleAppAction): MessageKey | un
 /** One screen the page may open, with the native clients it declares. */
 export interface OpenableAppScreen {
   readonly name?: string;
+  /** Display metadata retained for the Home icon, never a launch target. */
+  readonly icon?: string;
   readonly url: string;
   readonly interfaceId: string;
   /** The server-verified `clients` (lib/open-routing.ts re-checks them). */
@@ -236,6 +238,7 @@ export function openableScreens(
     .filter((screen) => /^https?:\/\//iu.test(screen.url) && isSafeLinkHref(screen.url))
     .map((screen) => ({
       ...(screen.title ? { name: screen.title } : {}),
+      ...(screen.icon ? { icon: screen.icon.kind === "image" ? screen.icon.url : screen.icon.glyph } : {}),
       url: screen.url,
       interfaceId: screen.interfaceId,
       ...(screen.clients ? { clients: screen.clients } : {}),

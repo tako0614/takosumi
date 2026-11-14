@@ -66,7 +66,7 @@ describe("Notifications", () => {
       );
       setLocale("ja");
       expect(describeActivityEvent(event, "アプリ").title).toBe(
-        "「アプリ」の新しい版があります",
+        "「アプリ」の新しいバージョンがあります",
       );
     } finally {
       setLocale(previousLocale);

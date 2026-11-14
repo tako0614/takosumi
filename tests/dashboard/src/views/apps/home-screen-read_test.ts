@@ -56,10 +56,11 @@ for (const runtime of ["react/jsx-dev-runtime", "react/jsx-runtime", "solid-js/j
   mock.module(runtime, () => ({ Fragment: fragment, jsxDEV: jsx, jsx, jsxs: jsx }));
 }
 mock.module("lucide-solid", () => Object.fromEntries(
-  ["Plus", "Settings2", "Sparkles", "ChevronDown", "ExternalLink", "Smartphone"].map((name) => [name, () => null]),
+  ["Plus", "Search", "Settings2", "Sparkles", "X", "ChevronDown", "ExternalLink", "Smartphone"].map((name) => [name, () => null]),
 ));
 mock.module(resolve(root, "dashboard/src/components/ui/index.ts"), () => ({
   Button: (props: Props) => jsx("button", props),
+  Input: (props: Props) => jsx("input", props),
   Toast: (props: Props) => jsx("div", { ...props, role: "alert" }),
 }));
 mock.module(resolve(root, "dashboard/src/views/account/components/auth/Page.tsx"), () => ({

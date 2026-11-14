@@ -52,7 +52,7 @@ describe("Home", () => {
     expect(ui).toContain('return t("app.open.aria", { name });');
     expect(home).toContain("const pageHref = () => appPageHref(props.app.inst.id);");
     expect(home).toContain("href={pageHref()} aria-label={name()}");
-    expect(home).toContain('t("apps.manageAria", { name: name() })');
+    expect(home).toContain('"apps.settingsAria" : "apps.manageAria"');
     expect(home).not.toContain("currentStateVersions");
     expect(home).not.toContain("installConfigs");
     expect(home).not.toContain("window.open");
@@ -75,7 +75,7 @@ describe("Home", () => {
     expect(home).toContain('<span class="av-tile-captions" id={captionId}>');
     expect(css).toContain(".av-tile-waiting .av-tile-icon {");
     // A shared app still says who shared it.
-    expect(home).toContain('t("app.sharing.sharedBy", { name: props.app.ownerDisplayName ?? "" })');
+    expect(home).toContain('t("app.sharing.sharedBy", { name: props.app.ownerDisplayName })');
   });
 
   test("keeps the app count and the find-apps entry", () => {

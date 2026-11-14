@@ -392,7 +392,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   };
   const description = () => {
     const text = listed()?.description?.[locale()]?.trim();
-    return text && text !== title() ? text : t("installStore.appDescription");
+    return text && text !== title() ? text : undefined;
   };
   const version = () => {
     const current = plan();
@@ -476,7 +476,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
         <AppFace name={title()} iconUrl={listed()?.iconUrl} class="iv-app-icon" />
         <div>
           <h1>{title() || t("common.loading")}</h1>
-          <p>{description()}</p>
+          <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
           <Show when={gitUrl()}>
             <p class="iv-provenance" data-testid="install-provenance">
               <span>{t("installStore.provenance")}</span> <code>{repositoryLabel(gitUrl())}</code>

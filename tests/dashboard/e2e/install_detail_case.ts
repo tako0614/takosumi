@@ -307,6 +307,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(provenance).toContainText(sourceCommit.slice(0, 7));
       await expect(provenance).not.toContainText(sourceCommit);
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+      // A Git link has no publisher description: avoid the generic install boilerplate.
+      await expect(page.locator('[data-testid="install-app-header"] > div > p:not(.iv-provenance)')).toHaveCount(0);
       await expect(page.getByRole("link", { name: "Choose again", exact: true })).toHaveAttribute("href", "/new");
       await expect(page.getByTestId("install-start")).toContainText("Nothing is created in your cloud yet");
       await captureInstallState(page, "app-not-installed");
@@ -321,7 +323,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page).toHaveURL(/[?&]installPlan=gip_[0-9a-f]{16}/u);
       await expect(planPreview(page).getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
       await expect(page.getByTestId("install-apply-reason")).toHaveText("You can allow it once reading finishes");
-      await expect(planPreview(page).getByTestId("install-planned-resources")).toContainText("Shown here once the repository is read.");
+      await expect(planPreview(page).getByTestId("install-planned-resources")).toContainText("Shown after reading the repository.");
       await expect(planPreview(page).getByTestId("install-cost-pending")).toContainText("Not known yet.");
       await captureInstallState(page, "app-reading");
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
@@ -418,7 +420,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
       // The form that held focus is gone; focus returns to the row toggle.
       await expect(toggle).toBeFocused();
-      await expect(page.getByTestId("install-connections")).toContainText("Connected. Ready to install.");
+      await expect(page.getByTestId("install-connections")).not.toContainText("Ready to install");
       expect(f.mutations.filter((m) => m === "POST /api/v1/connections")).toHaveLength(1);
       expect(f.mutations.filter((m) => m === "POST /api/v1/connections/conn_inline_fixture/test")).toHaveLength(1);
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("chosen.example.com");
@@ -481,7 +483,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       // The OAuth connection arrives verified: chosen for the row without a test.
       await expect(row).toHaveAttribute("data-connection-state", "connected");
       await expect(form).toHaveCount(0);
-      await expect(page.getByTestId("install-connections")).toContainText("Connected. Ready to install.");
+      await expect(page.getByTestId("install-connections")).not.toContainText("Ready to install");
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("oauth-chosen.example.net");
       await expect(sheet.getByLabel("Custom domain", { exact: false })).toHaveValue("custom.example.org");
       await waitForPlan(page);
@@ -540,7 +542,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(preview.getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Fill in the required settings");
       const planned = preview.getByTestId("install-planned-resources");
-      await expect(planned.getByRole("heading", { name: "What this app will create (planned)" })).toBeVisible();
+      await expect(planned.getByRole("heading", { name: "Planned resources" })).toBeVisible();
       await expect(planned.locator('li[data-resource-type="cloudflare_workers_script"]')).toBeVisible();
       await expect(planned.locator('li[data-resource-type="cloudflare_d1_database"]')).toContainText("×2");
       await expect(preview.getByTestId("install-cost-pending")).toContainText("Not known yet.");

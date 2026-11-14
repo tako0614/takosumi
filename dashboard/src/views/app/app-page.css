@@ -32,9 +32,10 @@
 .ap-open-change:hover, .ap-open-change:focus-visible { color: var(--tg-fg); }
 
 /* In-page jump links to each section. */
-.ap-jump { display: flex; flex-wrap: wrap; gap: var(--tg-s-1) var(--tg-s-4); padding-bottom: var(--tg-s-2); border-bottom: 1px solid var(--tg-line); font-size: var(--tg-fs-sm); }
-.ap-jump a { color: var(--tg-fg-muted); text-decoration: none; padding: var(--tg-s-1) 0; }
-.ap-jump a:hover, .ap-jump a:focus-visible { color: var(--tg-fg); text-decoration: underline; }
+.ap-jump { display: flex; flex-wrap: wrap; gap: var(--tg-s-1); padding-bottom: var(--tg-s-2); border-bottom: 1px solid var(--tg-line); font-size: var(--tg-fs-sm); }
+.ap-jump a { display: inline-flex; align-items: center; min-height: 44px; padding-inline: var(--tg-s-3); border-radius: var(--tg-r-md); color: var(--tg-fg-muted); text-decoration: none; }
+.ap-jump a:hover, .ap-jump a:active { color: var(--tg-fg); background: var(--tg-bg-subtle); }
+.ap-jump a:focus-visible { color: var(--tg-fg); outline: 2px solid var(--tg-accent); outline-offset: 2px; }
 
 /* Section cards. */
 .ap-section { display: grid; gap: var(--tg-s-4); min-width: 0; scroll-margin-top: calc(var(--tg-topbar-h, 3.5rem) + var(--tg-s-4)); overflow: visible; }

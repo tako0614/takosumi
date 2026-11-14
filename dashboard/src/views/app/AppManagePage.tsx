@@ -1195,6 +1195,9 @@ export default function AppManagePage(props: {
                   <a href="#settings">{t("app.settings.title")}</a>
                   <a href="#links">{t("app.links.title")}</a>
                   <a href="#created">{t("app.created.title")}</a>
+                  <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined}>
+                    <a href="#phone">{t("app.phone.title")}</a>
+                  </Show>
                   <a href="#history">{t("app.history.title")}</a>
                   <Show when={sharingAvailable()}><a href="#sharing">{t("app.sharing.title")}</a></Show>
                   <Show when={isOwner() && !view().uninstall.scheduled}>
@@ -1246,21 +1249,6 @@ export default function AppManagePage(props: {
                   continueRevision,
                 }}
               />
-
-              {/* Wherever Open is offered, the same screen can go to a phone,
-                  and on a phone this is where it chooses how the screen opens. */}
-              <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined}>
-                {(screen) => (
-                  <AppPhoneSection
-                    url={screen().url}
-                    appName={displayName()}
-                    capsuleId={capsuleId()}
-                    interfaceId={screen().interfaceId}
-                    clients={screen().clients}
-                    missing={missingScreenId !== undefined && missingScreenId === screen().interfaceId}
-                  />
-                )}
-              </Show>
 
               <Show when={managed()}>
                 <AppVersionSection
@@ -1322,6 +1310,21 @@ export default function AppManagePage(props: {
                   usageFailed={Boolean(usage.error)}
                   hosted={settledValue(hosted) ?? []}
                 />
+              </Show>
+
+              {/* Wherever Open is offered, the same screen can go to a phone,
+                  and on a phone this is where it chooses how the screen opens. */}
+              <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined}>
+                {(screen) => (
+                  <AppPhoneSection
+                    url={screen().url}
+                    appName={displayName()}
+                    capsuleId={capsuleId()}
+                    interfaceId={screen().interfaceId}
+                    clients={screen().clients}
+                    missing={missingScreenId !== undefined && missingScreenId === screen().interfaceId}
+                  />
+                )}
               </Show>
 
               <AppHistorySection
