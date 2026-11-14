@@ -2,8 +2,9 @@
 
 Put an install link in a README or on a website, and readers can open the app install screen with
 the source already filled in. The link only fills in the form. **Opening it creates nothing.**
-Pressing **Install** reads the Git version. The person checks the app name, connections, and settings,
-then reviews the planned changes under **What this install does**. They choose **Allow and install** to apply them.
+Pressing **Install** reads the Git version and shows the version and configuration. The person checks
+required connections, inputs and the cost, then chooses **Allow and install** to apply the changes.
+The app name and optional settings are under **Customize configuration**; the resource list is under **Resource details**.
 
 Get the repository into the shape described in
 [Prepare a repository](./prepare-repository.md) first.
@@ -81,7 +82,7 @@ After the person presses **Install**, Takosumi checks the repository and compare
 what it found:
 
 - The scan confirms `path`: Takosumi uses that module without a selection screen, even if other modules exist.
-- If the scan cannot confirm `path` but finds installable modules, **Choose a module** opens so
+- If the scan cannot confirm `path` but finds installable modules, **Choose a configuration** opens so
   the person can choose one of the scanned modules.
 - No installable module can be identified: the screen says "No installable module could be
   identified in this version."
@@ -172,8 +173,8 @@ The first screen is the same one shown in the
 1. Someone who is not signed in sees the sign-in screen with context for the app they are installing.
    After signing in, they return to the install screen.
 2. The install screen shows the app name, **Source and version**, and the steps that follow.
-3. Pressing **Install** pins `ref` to a commit and checks the repository. The person sets the app
-   name, connections, and settings, reviews the planned changes, and then chooses
+3. Pressing **Install** pins `ref` to a commit and checks the repository. The person checks the
+   version, configuration, required connections and settings, and cost, then chooses
    **Allow and install** to apply them. From the Store, manually entered Git URLs use
    **Install from a Git repository** and **Continue** before the install screen. An existing app
    also offers **Open** and **Install another**.

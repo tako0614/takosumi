@@ -13,20 +13,21 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 1. Sign in to the [dashboard](https://app.takosumi.com/) and select a workspace.
 2. Choose an app in the **Store**. Git URLs and app install links open the same app page.
 3. Check the description and source, then press **Install**. Nothing is created in your cloud yet.
-   Install opens **What this install does**, and everything from here happens on that one screen.
-   While Takosumi reads the Git version it says **Reading the repository**; then it shows what the
-   app will create (planned), the connections it needs, its settings, and its name and version, all
-   visible at once. Store apps use the latest stable release, and the screen shows the exact version
+   Install opens **Install options**, and everything from here happens on that one screen.
+   While Takosumi reads the Git version it says **Reading the repository**; then it shows the version
+   and configuration. Change the app name or optional settings under **Customize configuration**.
+   Required inputs and missing connections remain visible. Store apps use the latest stable release, and the screen shows the exact version
    that was read. Another version can be entered as a tag, branch or commit in the **Version** field,
    before pressing Install or on the screen afterwards.
 4. If a connection is missing, use **Connect** on that connection's row to create and verify it on
-   the same screen. A connection with only one candidate is chosen for you. The app name and settings
-   can be changed here too; declared defaults are filled in. When the repository holds several apps,
-   the module is chosen on the same screen. Typed settings, the name and the version count once you
+   the same screen. A connection with only one candidate is chosen for you; declared setting defaults
+   are filled in. The configuration named by the Store, or the only available configuration, is chosen
+   automatically. Choose a configuration only when the repository has no unambiguous selection.
+   Typed settings, the name and the version count once you
    leave the field (or press Enter); while you type, checking and allowing wait.
-5. Once nothing is missing, Takosumi says **Checking what will be created** and shows what the app
-   will create in your cloud (the create, update, replace and delete list) and a cost estimate on its
-   own. This check creates nothing in your cloud. When the cost can't be estimated, it says so.
+5. Once nothing is missing, Takosumi says **Checking what will be created** and shows a cost estimate.
+   Open **Resource details** to see what will be created. Details open automatically for changes to
+   existing resources or deletions. This check creates nothing in your cloud. When the cost can't be estimated, it says so.
    **Allow and install** is shown from the start; until it can be pressed, the reason is shown beside
    it (for example "Choose a connection to check it", "Fill in the required settings", "Checking…").
    Nothing is applied until you press **Allow and install**; changes that delete or replace something
