@@ -240,6 +240,9 @@ function connectionRows(page: Page): Locator {
 }
 
 async function expandDetails(page: Page, testId: string) {
+  if (["install-customization", "install-connections"].includes(testId)) {
+    await expandDetails(page, "install-configuration-choice");
+  }
   const details = page.getByTestId(testId);
   if (!(await details.evaluate((element) => (element as HTMLDetailsElement).open))) {
     await details.locator(":scope > summary").click();
@@ -249,7 +252,7 @@ async function expandDetails(page: Page, testId: string) {
 async function openInstallSheet(page: Page): Promise<Locator> {
   await page.getByRole("button", { name: "Install", exact: true }).click();
   const sheet = installSheet(page);
-  await expect(sheet.getByRole("heading", { name: "Install options", exact: true })).toBeVisible();
+  await expect(sheet).toBeVisible();
   return sheet;
 }
 
@@ -260,7 +263,6 @@ async function openInstallSheet(page: Page): Promise<Locator> {
 async function waitForPlan(page: Page): Promise<Locator> {
   const review = planReview(page);
   await expect(review.getByRole("button", { name: "Allow and install", exact: true })).toBeVisible({ timeout: 15_000 });
-  await expect(review.getByRole("heading", { name: "Review installation", exact: true })).toBeVisible();
   return review;
 }
 
@@ -473,7 +475,11 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect.poll(() => testing).toBe(true);
       await connections.locator(":scope > summary").click();
       await expect(connections).not.toHaveAttribute("open", "");
+      const configuration = page.getByTestId("install-configuration-choice");
+      await configuration.locator(":scope > summary").click();
+      await expect(configuration).not.toHaveAttribute("open", "");
       release();
+      await expect(configuration).toHaveAttribute("open", "");
       await expect(connections.locator('[role="alert"]').first()).toBeVisible();
       await expect(connections.locator(":scope > summary")).toContainText("Existing account");
       expect(f.mutations).not.toContain(applyMutation);
@@ -614,7 +620,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.goto(sourceUrl);
       await openInstallSheet(page);
       const review = await waitForPlan(page);
-      await expect(page.getByTestId("install-version")).toBeVisible();
+      await expect(page.getByTestId("install-version")).not.toBeVisible();
+      await expect(page.getByTestId("install-version-choice").locator(":scope > summary")).toContainText("0123456");
+      await expect(page.getByTestId("install-configuration-choice")).not.toHaveAttribute("open");
       await expect(page.getByTestId("install-selected-configuration")).toContainText("Default");
       await expect(page.getByTestId("install-app-name")).not.toBeVisible();
       await expect(page.getByTestId("install-optional-settings").locator("input").first()).not.toBeVisible();
@@ -633,6 +641,10 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.keyboard.press("Enter");
       await expect(review.getByTestId("install-plan-resources")).toBeVisible();
       expect(f.mutations).not.toContain(applyMutation);
+      await expandDetails(page, "install-version-choice");
+      await expect(page.getByTestId("install-version")).toBeVisible();
+      await page.getByTestId("install-version").focus();
+      await page.keyboard.press("Tab");
       expect(f.attempts.log.creates).toHaveLength(1);
     });
     test("two decisions: Install, then Allow and install; the install finishes on the same screen", async ({ page, context }) => {
@@ -655,7 +667,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const review = await waitForPlan(page);
       await expect(installSheet(page).getByTestId("install-basics")).toBeVisible();
       await expect(review.getByTestId("install-plan-resources")).toContainText("Cloudflare Workers Script");
-      await expect(review.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs for this app.");
+      await expect(review.getByTestId("install-plan-cost")).toContainText("Cloud charges may apply. No cost estimate is available.");
       await captureInstallState(page, "app-two-step-review");
       expect(f.mutations).not.toContain(applyMutation);
       // Decision 2.
@@ -770,7 +782,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         await expect(costBlock.getByRole("heading", { name: "Cost estimate", exact: true })).toBeVisible();
         const expectedCost = {
           rated_zero: "The estimate is $0.00.",
-          not_applicable: "Takosumi doesn't calculate costs for this app.",
+          not_applicable: "Cloud charges may apply. No cost estimate is available.",
           unrated: "Usage measured; no price policy is configured.",
           unavailable: "Couldn't load the cost estimate. Treat the cost as unknown.",
         }[cost];

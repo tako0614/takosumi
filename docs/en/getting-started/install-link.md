@@ -4,7 +4,7 @@ Put an install link in a README or on a website, and readers can open the app in
 the source already filled in. The link only fills in the form. **Opening it creates nothing.**
 Pressing **Install** reads the Git version and shows the version and configuration. The person checks
 required connections, inputs and the cost, then chooses **Allow and install** to apply the changes.
-The app name and optional settings are under **Customize configuration**; the resource list is under **Resource details**.
+Open **Configuration** for connections, the app name and optional settings; the resource list is under **Resource details**.
 
 Get the repository into the shape described in
 [Prepare a repository](./prepare-repository.md) first.
@@ -160,7 +160,7 @@ once decoded behaves the same way.
 
 ## Check before you share
 
-Open the link yourself. On the first install screen, **Source and version** should show the intended repository.
+Open the link yourself. On the app page, open **About this app**; **Source and version** should show the intended repository.
 If the link specifies `ref`, check that version too. Choose **Install** to check the required connections,
 settings, and planned changes.
 Check the link's `path` against the `sourcePath` rules above.
@@ -172,7 +172,7 @@ The first screen is the same one shown in the
 
 1. Someone who is not signed in sees the sign-in screen with context for the app they are installing.
    After signing in, they return to the install screen.
-2. The install screen shows the app name, **Source and version**, and the steps that follow.
+2. The app page shows its name, description and a compact version choice. **About this app** contains the repository and pinned version.
 3. Pressing **Install** pins `ref` to a commit and checks the repository. The person checks the
    version, configuration, required connections and settings, and cost, then chooses
    **Allow and install** to apply them. From the Store, manually entered Git URLs use

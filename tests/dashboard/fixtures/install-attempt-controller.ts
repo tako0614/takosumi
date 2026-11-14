@@ -99,6 +99,11 @@ function withoutWorkspace(response: GitInstallPlanResponse): GitInstallPlanRespo
   return { ...response, installPlan: { ...response.installPlan, workspaceId: "" } };
 }
 
+function withSourceRef(response: GitInstallPlanResponse, ref: string): GitInstallPlanResponse {
+  const plan = response.installPlan;
+  return { ...response, installPlan: { ...plan, source: { ...plan.source, ref } } };
+}
+
 const requirement = {
   provider: "registry.opentofu.org/cloudflare/cloudflare",
   moduleLocalName: "cloudflare",
@@ -409,6 +414,10 @@ describe("install attempt controller", () => {
     const starts = calls.filter(({ name }) => name === "createGitInstallAttempt");
     expect(starts).toHaveLength(1);
     expect(starts[0]!.args.slice(0, 2)).toEqual(["ws_alpha", { mode: "attempt", source: { url: URL_ } }]);
+    expect(page.attempt.latestSelected()).toBe(false);
+    page.attempt.setVersionDraft("");
+    page.attempt.commitVersion();
+    expect(page.attempt.outdated()).toBe(false);
     expect(page.attemptId()).toBe(ID);
     expect(reconciles).toBe(2);
     expect(calls.some(({ name }) => /apply|approve/u.test(name))).toBe(false);
@@ -582,7 +591,7 @@ describe("install attempt controller", () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
     reset({
       resolveStableSourceTag: async () => ({ tag: "v1.4.2", commit }),
-      createGitInstallAttempt: async () => withoutWorkspace(respond(inputs(), 0)),
+      createGitInstallAttempt: async () => withoutWorkspace(withSourceRef(respond(inputs(), 0), commit)),
     });
     setCurrentWorkspaceId("");
     try {
@@ -592,6 +601,7 @@ describe("install attempt controller", () => {
       expect(calls.map(({ name }) => name)).toEqual(["resolveStableSourceTag", "createGitInstallAttempt"]);
       expect(calls[0]!.args).toEqual([undefined, URL_]);
       expect(calls[1]!.args[1]).toMatchObject({ source: { ref: commit } });
+      expect(page.attempt.latestSelected()).toBe(true);
       expect(page.attempt.resolvedVersion()).toEqual({ tag: "v1.4.2", commit });
       page.dispose();
     } finally {
@@ -1050,16 +1060,44 @@ describe("install attempt controller", () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
     reset({
       resolveStableSourceTag: async () => ({ tag: "v1.4.2", commit }),
-      createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, 0),
-      reconcileGitInstallPlan: async () => respond(inputs(), 1),
+      createGitInstallAttempt: async () => withSourceRef(respond({ kind: "wait", phase: "syncing_source" }, 0), commit),
+      reconcileGitInstallPlan: async () => withSourceRef(respond(inputs(), 1), commit),
     });
     const page = mount();
     await page.attempt.start(candidate, { fromStore: true });
     await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
     const start = calls.find(({ name }) => name === "createGitInstallAttempt");
     expect(start?.args[1]).toEqual({ mode: "attempt", source: { url: URL_, ref: commit } });
+    expect(page.attempt.latestSelected()).toBe(true);
     expect(page.attempt.resolvedVersion()).toEqual({ tag: "v1.4.2", commit });
+    page.attempt.setVersionDraft("");
+    page.attempt.commitVersion();
+    expect(page.attempt.outdated()).toBe(false);
+    expect(page.attempt.refDraft()).toBeUndefined();
     page.dispose();
+  });
+
+  test("opening a different Store attempt at the same commit does not inherit Latest", async () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const other = "gip_00000000000000b2";
+    reset({
+      resolveStableSourceTag: async () => ({ tag: "v1.4.2", commit }),
+      createGitInstallAttempt: async () => withSourceRef(respond(inputs(), 0), commit),
+      getGitInstallPlan: async () => withSourceRef(respond(inputs(), 0, undefined, other), commit),
+    });
+    const page = mount(undefined, { fromStore: true });
+    try {
+      await page.attempt.start(candidate, { fromStore: true });
+      expect(page.attempt.latestSelected()).toBe(true);
+      calls.length = 0;
+      page.setAttemptId(other);
+      await until(() => page.attempt.response()?.installPlan.id === other, "the other attempt");
+      expect(page.attempt.latestSelected()).toBe(false);
+      expect(page.attempt.resolvedVersion()).toBeUndefined();
+      expect(calls.map(({ name }) => name)).toEqual(["getGitInstallPlan"]);
+    } finally {
+      page.dispose();
+    }
   });
   // --- Two decisions: the Plan is made on its own ---------------------------
 
@@ -1293,11 +1331,11 @@ describe("install attempt controller", () => {
     readonly planFails?: () => boolean;
   }) {
     const ids = [ID, "gip_00000000000000b2", "gip_00000000000000b3", "gip_00000000000000b4"];
-    const attempts = new Map<string, { generation: number; phase: string; action: GitInstallPlanUserAction; interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] }>();
+    const attempts = new Map<string, { generation: number; phase: string; action: GitInstallPlanUserAction; ref: string; interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] }>();
     let creates = 0;
     const read = (id: string) => {
       const attempt = attempts.get(id)!;
-      const response = respond(attempt.action, attempt.generation, attempt.phase, id);
+      const response = withSourceRef(respond(attempt.action, attempt.generation, attempt.phase, id), attempt.ref);
       return { ...response, installPlan: { ...response.installPlan, options: { ...(attempt.interfaceLinks !== undefined ? { interfaceLinks: attempt.interfaceLinks } : {}) } } };
     };
     const handlers = {
@@ -1305,8 +1343,9 @@ describe("install attempt controller", () => {
         creates += 1;
         if (config.failCreate?.(creates)) throw new api.ControlApiError(503, "unavailable", "unavailable");
         const id = ids[attempts.size]!;
-        const links = (request as { options?: { interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] } } | undefined)?.options?.interfaceLinks;
-        attempts.set(id, { generation: 0, phase: "syncing_source", action: { kind: "wait", phase: "syncing_source" }, ...(links !== undefined ? { interfaceLinks: links } : {}) });
+        const body = request as { source?: { ref?: string }; options?: { interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] } } | undefined;
+        const links = body?.options?.interfaceLinks;
+        attempts.set(id, { generation: 0, phase: "syncing_source", action: { kind: "wait", phase: "syncing_source" }, ref: body?.source?.ref ?? "HEAD", ...(links !== undefined ? { interfaceLinks: links } : {}) });
         return read(id);
       },
       reconcileGitInstallPlan: async (id: never) => {
@@ -1377,6 +1416,61 @@ describe("install attempt controller", () => {
     connections: [{ ...requirement, selectedConnectionId: "conn_a" }],
     variables: [{ name: "domain", type: "string", required: false, sensitive: false }],
     missing: [],
+  });
+
+  test("a settings replan keeps the pinned Latest selection, but explicitly entering its commit changes it", async () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const server = coordinator({ sheet: settingSheet });
+    reset({ ...server.handlers, resolveStableSourceTag: async () => ({ tag: "v1.4.2", commit }) });
+    const page = mount(undefined, { fromStore: true, settleMs: 5 });
+    try {
+      await page.attempt.start(candidate, { fromStore: true });
+      await until(() => page.attempt.view().stage === "review", "the latest release Plan");
+      page.attempt.setDraft("domain", "changed.example.com");
+      await until(() => server.creates() === 2 && page.attempt.view().stage === "review", "the settings replacement Plan");
+      expect(page.attempt.latestSelected()).toBe(true);
+      expect(page.attempt.resolvedVersion()).toEqual({ tag: "v1.4.2", commit });
+      page.attempt.changeVersion(commit);
+      await until(() => server.creates() === 3 && page.attempt.view().stage === "review", "the explicitly pinned Plan");
+      expect(page.attempt.latestSelected()).toBe(false);
+      expect(page.attempt.resolvedVersion()).toBeUndefined();
+      expect(named("resolveStableSourceTag")).toHaveLength(1);
+      const starts = named("createGitInstallAttempt");
+      expect(starts).toHaveLength(3);
+      for (const { args } of starts) expect(args[1]).toMatchObject({ source: { ref: commit } });
+    } finally {
+      page.dispose();
+    }
+  });
+
+  test("clearing explicit Store HEAD resolves Latest and a lost POST retries that pinned selection", async () => {
+    const commit = "abcdef0123456789abcdef0123456789abcdef01";
+    const server = coordinator({ sheet: settingSheet, failCreate: (count) => count === 2 });
+    reset({ ...server.handlers, resolveStableSourceTag: async () => ({ tag: "v2.0.0", commit }) });
+    const page = mount(undefined, { fromStore: true, settleMs: 5 });
+    try {
+      await page.attempt.start({ ...candidate, ref: "HEAD" }, { fromStore: true });
+      await until(() => page.attempt.view().stage === "review", "the explicit HEAD Plan");
+      expect(page.attempt.latestSelected()).toBe(false);
+      expect(named("resolveStableSourceTag")).toHaveLength(0);
+      page.attempt.setVersionDraft("");
+      page.attempt.commitVersion();
+      await until(() => page.attempt.view().progress === "replanPaused" && page.attempt.mutating() === undefined, "the unknown replacement outcome");
+      expect(page.attempt.latestSelected()).toBe(false);
+      expect(page.attempt.resolvedVersion()).toBeUndefined();
+      page.attempt.resume();
+      await until(() => page.attemptId() !== ID && page.attempt.view().stage === "review", "the resolved replacement Plan");
+      const starts = named("createGitInstallAttempt");
+      expect(starts).toHaveLength(3);
+      expect(starts[1]!.args[1]).toMatchObject({ source: { ref: commit } });
+      expect(starts[2]!.args).toEqual(starts[1]!.args);
+      expect(named("resolveStableSourceTag")).toHaveLength(1);
+      expect(named("discardGitInstallAttempt")).toHaveLength(1);
+      expect(page.attempt.latestSelected()).toBe(true);
+      expect(page.attempt.resolvedVersion()).toEqual({ tag: "v2.0.0", commit });
+    } finally {
+      page.dispose();
+    }
   });
 
   test("a confirmation whose answer was lost but went through still dates its Plan: a later edit prepares again", async () => {

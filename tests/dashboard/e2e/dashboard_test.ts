@@ -1125,8 +1125,11 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByRole("heading", { name: "Noise Service" })).toHaveCount(0);
     await page.getByRole("button", { name: "Readiness Service", exact: true }).click();
     await expect(page.getByTestId("install-app-header")).toContainText("Synthetic fixture: input and activation gated.");
+    await expect(page.getByTestId("install-source-fields").locator(":scope > summary")).toContainText("Latest");
+    await expect(page.getByTestId("install-source-fields").locator("input")).not.toBeVisible();
     await prepareInlineFixture(page);
     const sheet = page.getByTestId("install-configuration");
+    await expect(sheet.getByTestId("install-version-choice").locator(":scope > summary")).toContainText("Latest");
     const connectionDetails = sheet.getByTestId("install-connections");
     await expect(connectionDetails.locator(":scope > summary")).toHaveText("Cloud connection");
     await expect(connectionDetails).toHaveAttribute("open", "");
@@ -1140,7 +1143,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByLabel("Region").fill("us-west-2");
     await page.getByLabel("Region").press("Enter");
     // Nothing else to press: the Plan is made once the setting is in.
-    await expect(installReview(page).getByRole("heading", { name: "Review installation" })).toBeVisible();
+    await expect(installReview(page).getByRole("button", { name: "Allow and install", exact: true })).toBeVisible();
     const addButton = page.getByRole("button", { name: "Allow and install", exact: true });
     await expect(addButton).toBeDisabled();
     // The connection choice is an answer; the setting travels only with the
@@ -1161,7 +1164,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     })]);
 
     // Billing is disabled here: provider pricing is explained, never "$0.00".
-    await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs for this app.");
+    await expect(page.getByTestId("install-plan-cost")).toContainText("Cloud charges may apply. No cost estimate is available.");
     await expect(page.locator("body")).not.toContainText("$0.00");
 
     await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
