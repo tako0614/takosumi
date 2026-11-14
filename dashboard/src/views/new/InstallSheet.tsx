@@ -787,7 +787,7 @@ export function InstallScreen(props: {
         </aside>
       </Show>
 
-      <div class="iv-choices" data-testid="install-basics">
+      <div class="iv-choices" data-testid="install-basics" role="group" aria-label={t("installStore.basicsTitle")}>
         <details class="iv-choice iv-version-choice" data-testid="install-version-choice">
           <summary><span>{t("installStore.versionLabel")}</span><strong>{versionText() ? versionLabel(versionText()) ?? t("installStore.defaultBranch") : t(props.fromStore ? "installStore.latest" : "installStore.defaultBranch")}</strong><ChevronDown size={16} aria-hidden="true" /></summary>
           <div class="iv-choice-content">
