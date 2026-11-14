@@ -27,7 +27,7 @@ const OTHER = "acct_launcher_other";
 const STRANGER = "acct_launcher_stranger";
 const NOW = "2026-10-30T00:00:00.000Z";
 
-async function fixture(options: { readonly delegate?: boolean; readonly endlessAppPages?: boolean } = {}) {
+async function fixture(options: { readonly delegate?: boolean; readonly endlessAppPages?: boolean; readonly extraOwnSurfaces?: number } = {}) {
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, {
     workspaceId: WORKSPACE, capsuleId: MINE, sourceId: "src_launcher", snapshotId: "snap_launcher", installConfigId: "cfg_launcher",
@@ -73,6 +73,23 @@ async function fixture(options: { readonly delegate?: boolean; readonly endlessA
         delivery: { type: "none" },
       });
     }
+  }
+  const extraSurfaces: string[] = [];
+  for (let index = 0; index < (options.extraOwnSurfaces ?? 0); index++) {
+    const iface = await core.interfaces.create({
+      workspaceId: WORKSPACE,
+      name: `additional-launcher-${index}`,
+      ownerRef: { kind: "Capsule", id: MINE },
+      spec: {
+        type: "interface.ui.surface", version: "1", document: { launcher: true },
+        inputs: { url: { source: "literal", value: `https://additional-${index}.example.test` } },
+        access: { visibility: "workspace" },
+      },
+    });
+    extraSurfaces.push(iface.metadata.id);
+    await core.interfaces.createBinding(iface.metadata.id, {
+      subjectRef: { kind: "Principal", id: OWNER }, permissions: ["ui.open"], delivery: { type: "none" },
+    });
   }
   const baseOperations = core as unknown as ControlPlaneOperations;
   // An account with more apps than one account read enumerates.
@@ -139,14 +156,80 @@ async function fixture(options: { readonly delegate?: boolean; readonly endlessA
       status: response!.status,
       code: body.error?.code,
       owners: (body.interfaces ?? []).map((iface) => iface.metadata.ownerRef.id).sort(),
+      ids: (body.interfaces ?? []).map((iface) => iface.metadata.id),
       nextCursor: body.nextCursor,
       incomplete: body.incomplete,
     };
   }
-  return { headers, list, surfaces, core };
+  return { headers, list, surfaces, extraSurfaces, core, ledger };
 }
 
 describe("account launcher", () => {
+  test("launcher candidate pages keep a covered app's later authorized screen reachable", async () => {
+    const h = await fixture({ extraOwnSurfaces: 50 });
+    const query = `?capsuleId=${MINE}&limit=1`;
+    const owner = await h.list(h.headers.session(OWNER), query);
+    expect(owner.status).toBe(200);
+    expect(owner.ids).toHaveLength(51);
+    expect(new Set(owner.ids).size).toBe(51);
+    expect(owner.ids).toContain(h.extraSurfaces[49]!);
+    expect(owner.nextCursor).toBeUndefined();
+    expect(owner.incomplete).toBeUndefined();
+    // App membership cannot substitute for the exact Principal Binding.
+    expect((await h.list(h.headers.session(MEMBER), query)).ids).toEqual([h.surfaces[MINE]!]);
+  });
+
+  for (const mode of ["repeated", "endless"] as const) {
+    test(`launcher candidate pages bound ${mode} continuation and report partial data`, async () => {
+      const h = await fixture();
+      const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+      let reads = 0;
+      h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) => {
+        expect([filter.workspaceId, subject, permission, capsuleId]).toEqual([WORKSPACE, OWNER, "ui.open", MINE]);
+        reads++;
+        const page = await read(filter, subject, permission, { limit: params.limit }, capsuleId);
+        return { ...page, nextCursor: mode === "repeated" ? "repeated-fixture-cursor" : `fixture-page-${reads}` };
+      };
+      const result = await h.list(h.headers.session(OWNER), `?capsuleId=${MINE}&limit=1`);
+      expect(result.status).toBe(200);
+      expect(result.incomplete).toBe(true);
+      expect(result.ids).toEqual([h.surfaces[MINE]!]);
+      expect(reads).toBe(mode === "repeated" ? 2 : 5);
+    });
+  }
+
+  test("launcher candidate pages reserve every covered app's first page within the old request bound", async () => {
+    const h = await fixture({ extraOwnSurfaces: 50 });
+    const base = await h.ledger.getCapsule(MINE);
+    expect(base).toBeDefined();
+    for (let index = 0; index < 48; index++) {
+      const id = `cap_launcher_window_${index}`;
+      await h.ledger.putCapsule({ ...base!, id, name: id, slug: id });
+      expect(await h.core.appOwnership.initializeOwnershipIfMissing({
+        capsuleId: id, ownerAccountId: OWNER, ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: `apps/${id}`,
+      })).toBe(true);
+      const iface = await h.core.interfaces.create({
+        workspaceId: WORKSPACE, name: `window-launcher-${index}`, ownerRef: { kind: "Capsule", id },
+        spec: {
+          type: "interface.ui.surface", version: "1", document: { launcher: true },
+          inputs: { url: { source: "literal", value: `https://window-${index}.example.test` } },
+          access: { visibility: "workspace" },
+        },
+      });
+      await h.core.interfaces.createBinding(iface.metadata.id, {
+        subjectRef: { kind: "Principal", id: OWNER }, permissions: ["ui.open"], delivery: { type: "none" },
+      });
+    }
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    let reads = 0;
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (...args) => { reads++; return await read(...args); };
+    const result = await h.list(h.headers.session(OWNER), "?limit=50");
+    expect(result.status).toBe(200);
+    expect(new Set(result.owners).size).toBe(50);
+    expect(reads).toBe(50);
+    expect(result.incomplete).toBe(true);
+  });
+
   const cases: readonly { readonly name: string; readonly credential: (h: Awaited<ReturnType<typeof fixture>>) => Record<string, string>; readonly expected: readonly string[] | "deny" }[] = [
     // Disabled apps are not launchable; apps the caller does not manage are never listed.
     { name: "app owner and member of another app", credential: (h) => h.headers.session(OWNER), expected: [MINE, SHARED].sort() },
