@@ -1,6 +1,37 @@
 import type { TakosumiAccountsAuthProvider } from "@takosjp/takosumi-accounts-contract";
 
+import { authLanguage, authPage, escapeAuthHtml as escapeHtml } from "../../../accounts/service/src/auth-page.ts";
+
 const stagingIssuer = "https://auth-staging.takos.jp";
+const portalCopy = {
+  en: {
+    title: "Sign in to Takos",
+    stage: "Staging",
+    notFound: "Not found",
+    method: "Use a GET request to open sign-in.",
+    invalid: "This sign-in link is invalid. Start sign-in again from Takosumi Hosted or Takoserver.",
+    unavailable: "Sign-in is temporarily unavailable. Try again later from your application.",
+    fresh: "Confirm a fresh sign-in to continue to your application.",
+    choose: "Choose your sign-in provider to continue to your application.",
+    start: "Start sign-in from Takosumi Hosted or Takoserver. This staging issuer provides the configured sign-in methods below.",
+    githubFresh: "GitHub cannot confirm fresh credential entry for this request. Use Google to confirm your sign-in.",
+    provider: (label: string) => `Continue with ${label}`,
+  },
+  ja: {
+    title: "Takos にサインイン",
+    stage: "ステージング",
+    notFound: "ページが見つかりません。",
+    method: "サインイン画面は GET で開いてください。",
+    invalid: "このサインインリンクは無効です。Takosumi Hosted または Takoserver からやり直してください。",
+    unavailable: "現在サインインできません。時間をおいて、元のアプリからやり直してください。",
+    fresh: "アプリに戻る前に、もう一度本人確認をしてください。",
+    choose: "続けるには、サインイン方法を選んでください。",
+    start: "Takosumi Hosted または Takoserver からサインインを始めてください。この環境では以下の方法が使えます。",
+    githubFresh: "GitHub ではこの操作に必要な再認証を確認できません。Google でサインインしてください。",
+    provider: (label: string) => `${label} で続ける`,
+  },
+} as const;
+
 const providerBodyLimit = 16 * 1024;
 const returnLimit = 8192;
 const controlCharacters = /[\u0000-\u001f\u007f]/u;
@@ -13,23 +44,25 @@ export async function handleStagingLoginPortal(input: {
 }): Promise<Response | null> {
   const url = new URL(input.request.url);
   if (url.pathname !== "/sign-in") return null;
+  const language = authLanguage(input.request);
+  const copy = portalCopy[language];
   const host = input.request.headers.get("host");
   if (input.issuer !== stagingIssuer || url.origin !== stagingIssuer ||
     url.username || url.password || url.hash ||
     (host !== null && host !== "auth-staging.takos.jp" && host !== "auth-staging.takos.jp:443")) {
-    return portalResponse(input.request, "Not found", 404);
+    return portalResponse(input.request, copy.notFound, 404);
   }
   if (input.request.method !== "GET" && input.request.method !== "HEAD") {
-    return portalResponse(input.request, "Use a GET request to open sign-in.", 405, { allow: "GET, HEAD" });
+    return portalResponse(input.request, copy.method, 405, { allow: "GET, HEAD" });
   }
 
   let continuation: { returnTo?: string; fresh: boolean; maxAge?: string };
   try {
     continuation = validateContinuation(url);
   } catch {
-    return portalResponse(input.request, "This sign-in link is invalid. Start sign-in again from Takosumi Hosted or Takoserver.", 400);
+    return portalResponse(input.request, copy.invalid, 400);
   }
-  if (!input.accountsHandler) return unavailable(input.request);
+  if (!input.accountsHandler) return portalResponse(input.request, copy.unavailable, 503);
 
   try {
     // The configured issuer and public in-process route are the only inputs.
@@ -38,12 +71,12 @@ export async function handleStagingLoginPortal(input: {
       headers: { accept: "application/json" },
     }));
     const providers = await readProviders(providerResponse);
-    if (providers.length === 0) return unavailable(input.request);
+    if (providers.length === 0) return portalResponse(input.request, copy.unavailable, 503);
     const choices = providers.map((provider) => {
       const label = escapeHtml(provider.label);
       if (!continuation.returnTo) return `<li>${label}</li>`;
       if (continuation.fresh && provider.id === "github") {
-        return `<li><button type="button" disabled>${label}</button><p>GitHub cannot confirm fresh credential entry for this request. Use Google to confirm your sign-in.</p></li>`;
+        return `<li><button class="auth-button" type="button" disabled>${label}</button><p class="auth-hint">${copy.githubFresh}</p></li>`;
       }
       const target = new URL("/oauth/upstream/authorize", stagingIssuer);
       target.searchParams.set("provider", provider.id);
@@ -52,16 +85,12 @@ export async function handleStagingLoginPortal(input: {
         target.searchParams.set("prompt", "login");
         target.searchParams.set("max_age", continuation.maxAge ?? "0");
       }
-      return `<li><a href="${escapeHtml(target.pathname + target.search)}">Continue with ${label}</a></li>`;
+      return `<li><a class="auth-button" href="${escapeHtml(target.pathname + target.search)}">${escapeHtml(copy.provider(provider.label))}</a></li>`;
     }).join("");
-    const explanation = continuation.returnTo
-      ? continuation.fresh
-        ? "Confirm a fresh sign-in to continue to your application."
-        : "Choose your sign-in provider to continue to your application."
-      : "Start sign-in from Takosumi Hosted or Takoserver. This staging issuer provides the configured sign-in methods below.";
-    return portalResponse(input.request, explanation, 200, {}, `<ul>${choices}</ul>`);
+    const explanation = continuation.returnTo ? (continuation.fresh ? copy.fresh : copy.choose) : copy.start;
+    return portalResponse(input.request, explanation, 200, {}, `<ul class="auth-providers">${choices}</ul>`);
   } catch {
-    return unavailable(input.request);
+    return portalResponse(input.request, copy.unavailable, 503);
   }
 }
 
@@ -166,23 +195,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;")
-    .replace(/"/gu, "&quot;").replace(/'/gu, "&#39;");
-}
-
-function unavailable(request: Request): Response {
-  return portalResponse(request, "Sign-in is temporarily unavailable. Try again later from your application.", 503);
-}
-
 function portalResponse(request: Request, message: string, status: number, extraHeaders: Record<string, string> = {}, choices = ""): Response {
+  const language = authLanguage(request);
+  const copy = portalCopy[language];
   const nonce = crypto.randomUUID();
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Takos staging sign-in</title><style nonce="${nonce}">body{font-family:system-ui,sans-serif;margin:3rem auto;padding:0 1.25rem;max-width:32rem;line-height:1.6;color:#202620;background:#f5f7f4}main{background:white;padding:1.5rem;border:1px solid #d8e0d5;border-radius:.75rem}h1{font-size:1.65rem;margin-top:0}ul{list-style:none;padding:0}li{margin-top:1rem}a,button{display:block;box-sizing:border-box;width:100%;padding:.7rem 1rem;border:1px solid #687b62;border-radius:.4rem;text-align:center;font:inherit}a{color:#203e23;text-decoration:none}a:focus-visible{outline:3px solid #355a36;outline-offset:3px}button:disabled{color:#626b5f;border-color:#c8d0c5;background:#edf0eb}li p{font-size:.9rem}small{color:#55604f}</style></head><body><main><small>Staging · auth-staging.takos.jp</small><h1>Sign in to Takos</h1><p>${escapeHtml(message)}</p>${choices}<noscript><p>This page works without JavaScript.</p></noscript></main></body></html>`;
+  const html = authPage({ language, nonce, title: copy.title, badge: copy.stage,
+    body: `<p class="auth-summary">${escapeHtml(message)}</p>${choices}` });
   return new Response(request.method === "HEAD" ? null : html, {
     status,
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
+      "content-language": language,
       "x-content-type-options": "nosniff",
       "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
       "referrer-policy": "no-referrer",

@@ -92,12 +92,20 @@ test("hosted consent is browser-bound, single-use, exact-Origin and excludes sil
   const f=await fixture(); const url=f.authorizeUrl();url.searchParams.set("prompt","none");
   const silent=await f.handler(new Request(url,{headers:{cookie:f.cookie}}));expect(new URL(silent.headers.get("location")!).searchParams.get("error")).toBe("consent_required");
   url.searchParams.delete("prompt");
-  const page=await f.handler(new Request(url,{headers:{cookie:f.cookie}}));
+  const page=await f.handler(new Request(url,{headers:{cookie:f.cookie,"accept-language":"ja-JP,en;q=0.8"}}));
+  expect(page.headers.get("content-language")).toBe("ja");
   // A no-referrer page makes the browser POST `Origin: null`, which the exact-Origin check refuses.
   expect(page.headers.get("referrer-policy")).toBe("same-origin");
   // form-action also applies to the 302 that answers the POST; it must allow exactly the RP's redirect origin.
   expect(page.headers.get("content-security-policy")).toContain(`form-action 'self' ${new URL(url.searchParams.get("redirect_uri")!).origin};`);
-  const tx=(await page.text()).match(/name="consent_transaction" value="([^"]+)"/)![1]!;
+  const html = await page.text();
+  expect(html).toContain("サインインを続ける");
+  expect(html).toContain("メールアドレスを見る");
+  expect(html).toContain("許可して続ける");
+  const styleNonce = /<style nonce="([^"]+)">/u.exec(html)?.[1];
+  expect(styleNonce).toBeTruthy();
+  expect(page.headers.get("content-security-policy")).toContain(`style-src 'nonce-${styleNonce}';`);
+  const tx=html.match(/name="consent_transaction" value="([^"]+)"/)![1]!;
   const post=(origin:string,cookie=f.cookie)=>f.handler(new Request(url,{method:"POST",headers:{origin,cookie,"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({approve:"yes",consent_transaction:tx})}));
   expect((await post("https://attacker.example.test")).status).toBe(403);
   expect((await post("null")).status).toBe(403);

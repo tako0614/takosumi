@@ -496,32 +496,32 @@ function uploadMetadata(target: AuthStagingTarget, plan: AuthStagingPlan, secret
 const exactKeys = (value: Record<string, unknown>, keys: readonly string[]) =>
   Object.keys(value).sort().join() === [...keys].sort().join();
 
-/**
- * Provider readback of the uploaded Version's placement, observed 2026-10-22 as
- * `resources.script.placement = {mode:"targeted", target:[{id, region, type:"region"}]}`.
- * That field is not in the API reference, so this exact observed shape is
- * required before activation; anything else stops with the predecessor serving.
- * Returns the provider's target id, which the script settings then echo.
+/** An uploaded Version must name exactly the configured region before activation.
+ * Cloudflare has returned both a numeric target ID and a region-only target;
+ * serving settings must independently agree with the observed representation.
  */
-export function uploadedPlacementTarget(version: unknown): number {
+export function uploadedPlacementTarget(version: unknown): number | string {
   const script = record(version) && record(version.resources) && record(version.resources.script) ? version.resources.script : undefined;
   const placement = script?.placement;
   const entry = record(placement) && Array.isArray(placement.target) && placement.target.length === 1 ? placement.target[0] : undefined;
-  if (!record(placement) || !exactKeys(placement, ["mode", "target"]) || placement.mode !== AUTH_STAGING_PLACEMENT.mode ||
-      !record(entry) || !exactKeys(entry, ["id", "region", "type"]) || entry.type !== "region" ||
-      entry.region !== AUTH_STAGING_PLACEMENT.region || typeof entry.id !== "number" || !Number.isSafeInteger(entry.id) || entry.id < 1) {
-    throw new Error("auth_staging_placement_invalid");
+  if (record(placement) && exactKeys(placement, ["mode", "target"]) && placement.mode === AUTH_STAGING_PLACEMENT.mode &&
+      record(entry) && entry.type === "region" && entry.region === AUTH_STAGING_PLACEMENT.region) {
+    if (exactKeys(entry, ["region", "type"])) return entry.region;
+    if (exactKeys(entry, ["id", "region", "type"]) && typeof entry.id === "number" && Number.isSafeInteger(entry.id) && entry.id > 0) return entry.id;
   }
-  return entry.id;
+  throw new Error("auth_staging_placement_invalid");
 }
 
 /** After activation the serving script settings must name exactly that target. */
-export function assertAuthStagingPlacement(value: unknown, target: number): void {
+export function assertAuthStagingPlacement(value: unknown, target: number | string): void {
   const placement = record(value) ? value.placement : undefined;
-  if (!record(placement) || !exactKeys(placement, ["mode", "target"]) || placement.mode !== AUTH_STAGING_PLACEMENT.mode ||
-      !Array.isArray(placement.target) || placement.target.length !== 1 || placement.target[0] !== target) {
-    throw new Error("auth_staging_placement_invalid");
+  if (record(placement) && placement.mode === AUTH_STAGING_PLACEMENT.mode) {
+    if (typeof target === "string" && target === AUTH_STAGING_PLACEMENT.region &&
+        exactKeys(placement, ["mode", "region"]) && placement.region === target) return;
+    if (typeof target === "number" && exactKeys(placement, ["mode", "target"]) &&
+        Array.isArray(placement.target) && placement.target.length === 1 && placement.target[0] === target) return;
   }
+  throw new Error("auth_staging_placement_invalid");
 }
 
 function assertPlanClosure(plan: AuthStagingPlan, target: AuthStagingTarget): void {
