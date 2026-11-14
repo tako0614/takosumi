@@ -14,7 +14,8 @@
  *   launcher permission (the InterfaceService projection), as before.
  *
  * Pages walk the apps in id order: one page covers up to `limit` apps (default
- * 20, at most 50); the opaque `nextCursor` resumes after the last app.
+ * 20, at most 50); the opaque `nextCursor` resumes unfinished candidate
+ * keysets as well as the outer app position. Each response is in app id order.
  * Candidate reads are bounded, with `incomplete` marking a partial window.
  */
 import type { Capsule } from "takosumi-contract/install-configs";
@@ -42,6 +43,7 @@ const LAUNCHER_SURFACE_PAGE_LIMIT = 5;
 const LAUNCHER_READ_CONCURRENCY = 8;
 /** Distinguishes launcher cursors from other keyset cursors. */
 const LAUNCHER_CURSOR_MARK = "ui-surfaces";
+const LAUNCHER_SURFACE_CURSOR_MARK = "ui-surfaces:surface";
 /**
  * Candidate apps one page may decide for a restricted credential (a
  * delegate app's token decides each of its user's apps); the page ends
@@ -79,12 +81,34 @@ export async function handleAccountUiSurfaces(
   const page = parseControlPageParams(ctx.url);
   if (!page.ok) return page.response;
   let after: string | undefined;
+  const pending = new Map<string, string>();
   if (page.params.cursor !== undefined) {
     const cursor = decodeCursor(page.params.cursor);
-    if (!cursor || cursor.createdAt !== LAUNCHER_CURSOR_MARK) {
+    if (cursor?.createdAt === LAUNCHER_CURSOR_MARK) {
+      after = cursor.id;
+    } else if (cursor?.createdAt === LAUNCHER_SURFACE_CURSOR_MARK) {
+      try {
+        const value = JSON.parse(cursor.id) as { after?: unknown; pending?: unknown; capsuleId?: unknown } | null;
+        if (!value || typeof value.after !== "string" || !value.after ||
+          value.capsuleId !== (capsuleId ?? null) || !Array.isArray(value.pending) ||
+          value.pending.length === 0 || value.pending.length > LAUNCHER_MAX_APPS) throw new Error();
+        after = value.after;
+        let previous: string | undefined;
+        for (const entry of value.pending) {
+          if (!Array.isArray(entry) || entry.length !== 2 ||
+            typeof entry[0] !== "string" || !entry[0] || entry[0] > after ||
+            (previous !== undefined && entry[0] <= previous) || typeof entry[1] !== "string") throw new Error();
+          const position = decodeCursor(entry[1]);
+          if (!position?.createdAt || !position.id) throw new Error();
+          pending.set(entry[0], entry[1]);
+          previous = entry[0];
+        }
+      } catch {
+        return errorJson("invalid_request", "cursor is malformed", 400);
+      }
+    } else {
       return errorJson("invalid_request", "cursor is malformed", 400);
     }
-    after = cursor.id;
   }
   const limit = Math.min(page.params.limit ?? LAUNCHER_DEFAULT_APPS, LAUNCHER_MAX_APPS);
   const resolved = await resolveAccountAppScope(ctx, {
@@ -95,7 +119,12 @@ export async function handleAccountUiSurfaces(
   const candidates = [...resolved.scope.capsules.values()]
     .filter((capsule) => launchable(capsule) && (capsuleId === undefined || capsule.id === capsuleId))
     .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
-    .filter((capsule) => after === undefined || capsule.id > after);
+    .filter((capsule) => pending.has(capsule.id) || after === undefined || capsule.id > after);
+  // Cursor positions never supply app scope. Drop apps that disappeared or
+  // ceased being launchable/visible through this request's current credential.
+  const currentIds = new Set(candidates.map((capsule) => capsule.id));
+  for (const id of pending.keys()) if (!currentIds.has(id)) pending.delete(id);
+  const continuations = new Map(pending);
   // Decide only the apps this page returns (a restricted credential re-runs
   // the per-app decision for each), within a bounded number of decisions.
   const window: Capsule[] = [];
@@ -103,6 +132,8 @@ export async function handleAccountUiSurfaces(
   const maxDecisions = limit * LAUNCHER_DECISIONS_PER_PAGE_FACTOR;
   while (examined < candidates.length && window.length < limit && examined < maxDecisions) {
     const capsule = candidates[examined++]!;
+    if (!pending.has(capsule.id)) after = capsule.id;
+    continuations.delete(capsule.id);
     if (await accountAppAllowed(ctx, capsule)) window.push(capsule);
   }
   const perApp: Interface[][] = window.map(() => []);
@@ -117,11 +148,15 @@ export async function handleAccountUiSurfaces(
       if (index >= window.length) return;
       const capsule = window[index]!;
       const surfaces = new Map<string, Interface>();
-      const seenCursors = new Set<string>();
-      let cursor: string | undefined;
+      let cursor = pending.get(capsule.id);
+      const seenCursors = new Set<string>(cursor ? [cursor] : []);
       for (let page = 0; page < LAUNCHER_SURFACE_PAGE_LIMIT; page++) {
         if (page > 0) {
-          if (remainingExtraPages === 0) { surfacesIncomplete = true; break; }
+          if (remainingExtraPages === 0) {
+            surfacesIncomplete = true;
+            if (cursor) continuations.set(capsule.id, cursor);
+            break;
+          }
           remainingExtraPages--;
         }
         ctx.assertActive?.();
@@ -136,12 +171,16 @@ export async function handleAccountUiSurfaces(
           if (isLauncherSurface(iface, capsule)) surfaces.set(iface.metadata.id, iface);
         }
         if (candidates.nextCursor === undefined) break;
-        if (!candidates.nextCursor || seenCursors.has(candidates.nextCursor) || page + 1 === LAUNCHER_SURFACE_PAGE_LIMIT) {
+        if (!candidates.nextCursor || seenCursors.has(candidates.nextCursor)) {
           surfacesIncomplete = true;
           break;
         }
         seenCursors.add(candidates.nextCursor);
         cursor = candidates.nextCursor;
+        if (page + 1 === LAUNCHER_SURFACE_PAGE_LIMIT) {
+          surfacesIncomplete = true;
+          continuations.set(capsule.id, cursor);
+        }
       }
       perApp[index] = [...surfaces.values()];
     }
@@ -149,13 +188,24 @@ export async function handleAccountUiSurfaces(
   await Promise.all(
     Array.from({ length: Math.min(LAUNCHER_READ_CONCURRENCY, window.length) }, worker),
   );
-  const lastExamined = examined > 0 ? candidates[examined - 1] : undefined;
+  // Carry only bounded keyset positions, never rows or authorization. Apps
+  // already completed before `after` must not be delivered again on resumption.
+  const nextCursor = continuations.size > 0
+    ? encodeCursor({
+      createdAt: LAUNCHER_SURFACE_CURSOR_MARK,
+      id: JSON.stringify({
+        after,
+        pending: [...continuations].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0),
+        capsuleId: capsuleId ?? null,
+      }),
+    })
+    : examined < candidates.length && after
+    ? encodeCursor({ createdAt: LAUNCHER_CURSOR_MARK, id: after })
+    : undefined;
   return json(
     {
       interfaces: perApp.flat(),
-      ...(examined < candidates.length && lastExamined
-        ? { nextCursor: encodeCursor({ createdAt: LAUNCHER_CURSOR_MARK, id: lastExamined.id }) }
-        : {}),
+      ...(nextCursor === undefined ? {} : { nextCursor }),
       // Either the account read or a covered app's candidate read was bounded.
       ...(resolved.scope.complete && !surfacesIncomplete ? {} : { incomplete: true }),
     },
