@@ -175,6 +175,101 @@ test("lost Apply ACK is reconciled by exact linked Run reads with only one Apply
   expect(JSON.stringify(r.result)).not.toContain("private-must-not-print");
 });
 
+for (const status of ["succeeded", "failed", "cancelled", "expired"]) {
+  test(`terminal Apply readback after lost ACK preserves the ${status} Run result`, async () => {
+    let posted = false;
+    const terminal = { ...apply, status, ...(status !== "succeeded" ? { errorCode: "fixture_terminal_code" } : {}) };
+    const r = await invoke(applyArgs, req => {
+      const path = new URL(req.url).pathname;
+      if (req.method === "POST") { posted = true; throw Error("synthetic lost ACK"); }
+      if (path.endsWith("/runs")) return Response.json({ runs: posted ? [terminal] : [] });
+      if (path === `/api/v1/runs/${apply.id}`) return Response.json({ run: terminal });
+      return normal(req);
+    });
+    expect(r.code).toBe(status === "succeeded" ? 0 : 1);
+    expect(r.result).toEqual({
+      status: status === "succeeded" ? "succeeded" : "failed", appId: "cap_owned", planRunId: plan.id,
+      runId: apply.id, runStatus: status, runUrl: `${origin}/runs/${apply.id}`,
+      ...(status !== "succeeded" ? { code: "fixture_terminal_code",
+        note: "A failed or stopped Apply may have effects. Do not repeat it as a new Plan." } : {}),
+    });
+    expect(r.calls.filter(c => c.method === "POST")).toHaveLength(1);
+    expect(r.calls.at(-1)!.url).toBe(`${origin}/api/v1/runs/${apply.id}`);
+  });
+}
+
+test("terminal Apply readback rejects changed evidence and current authorization refusal", async () => {
+  for (const change of ["plan", "run", "authorization"] as const) {
+    let posted = false;
+    const r = await invoke(applyArgs, req => {
+      const path = new URL(req.url).pathname;
+      if (req.method === "POST") { posted = true; throw Error("synthetic lost ACK"); }
+      if (posted && path === `/api/v1/runs/${plan.id}`) {
+        if (change === "authorization") return Response.json({ error: { code: "forbidden" } }, { status: 403 });
+        return Response.json({ run: change === "plan" ? { ...plan, planDigest: "different" } : plan });
+      }
+      if (path.endsWith("/runs")) return Response.json({ runs: posted ? [apply] : [] });
+      if (path === `/api/v1/runs/${apply.id}`) return Response.json({ run: { ...apply, planRunId: "other_plan" } });
+      return normal(req);
+    });
+    expect(r.code).toBe(1);
+    expect(r.result.status).toBe("indeterminate");
+    expect(r.result.runStatus).toBeUndefined();
+    expect(r.calls.filter(c => c.method === "POST")).toHaveLength(1);
+  }
+});
+
+test("late Apply response cannot replace refused fresh readback with success", async () => {
+  let posted = false; let finish: (() => void) | undefined;
+  const r = await invoke([...applyArgs, "--timeout-ms", "15"], async req => {
+    const path = new URL(req.url).pathname;
+    if (req.method === "POST") {
+      posted = true;
+      return new Response(new ReadableStream({ start(controller) { finish = () => {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ run: apply }))); controller.close();
+      }; } }));
+    }
+    if (posted && path === `/api/v1/runs/${plan.id}`) {
+      finish?.();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      return Response.json({ error: { code: "forbidden" } }, { status: 403 });
+    }
+    return normal(req);
+  });
+  expect(r.code).toBe(1);
+  expect(r.result.status).toBe("indeterminate");
+  expect(r.result.runStatus).toBeUndefined();
+  expect(r.calls.filter(c => c.method === "POST")).toHaveLength(1);
+});
+
+for (const late of [false, true]) {
+  test(`changed approval Plan cannot replace pinned recovery intent (${late ? "late" : "immediate"})`, async () => {
+    let approved = false; let planReads = 0; let finish: (() => void) | undefined;
+    const changed = { ...plan, planDigest: `sha256:${"b".repeat(64)}` };
+    const r = await invoke([...applyArgs, "--timeout-ms", "15"], async req => {
+      const path = new URL(req.url).pathname;
+      if (path.endsWith("/approve")) { approved = true; return Response.json({ run: plan }); }
+      if (path === `/api/v1/runs/${plan.id}`) {
+        planReads++;
+        if (!approved) return Response.json({ run: { ...plan, status: "waiting_approval" } });
+        if (late && planReads === 2) return new Response(new ReadableStream({ start(controller) { finish = () => {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ run: changed }))); controller.close();
+        }; } }));
+        if (late) { finish?.(); await new Promise(resolve => setTimeout(resolve, 0)); }
+        return Response.json({ run: changed });
+      }
+      if (path.endsWith("/runs")) return Response.json({ runs: approved ? [apply] : [] });
+      if (path === `/api/v1/runs/${apply.id}`) return Response.json({ run: apply });
+      return normal(req);
+    });
+    expect(r.code).toBe(1);
+    expect(r.result.status).toBe("indeterminate");
+    expect(r.result.runStatus).toBeUndefined();
+    expect(r.calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname)).toEqual([`/api/v1/runs/${plan.id}/approve`]);
+    expect(planReads).toBe(3);
+  });
+}
+
 test("missing ACK without linked Run stays indeterminate; observe-only never writes", async () => {
   const lost = await invoke(applyArgs, req => { if (req.method === "POST") throw Error("lost"); return normal(req); });
   expect(lost.code).toBe(1); expect(lost.result.status).toBe("indeterminate");
