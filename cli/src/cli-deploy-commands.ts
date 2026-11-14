@@ -5,13 +5,9 @@ import { optionalStringOption } from "./cli-options.ts";
 import { parseJson } from "./cli-util.ts";
 import type { CliIo } from "./cli-io.ts";
 import { API_V1_PREFIX } from "takosumi-contract/api-surface";
+import { RUN_TYPES, RUN_PROGRESS_PHASE, type PublicRun } from "takosumi-contract/runs";
 
-interface RunRecord {
-  readonly id: string;
-  readonly status: string;
-  readonly type: string;
-  readonly policyStatus?: string;
-}
+type RunRecord = Pick<PublicRun, "id" | "status" | "type">;
 
 export async function runDeployLogs(
   args: string[],
@@ -221,6 +217,18 @@ function invalidRunLogsResponse(): Error {
 
 const STATUS_READ_TIMEOUT_MS = 30_000;
 
+function parseRunStatusResponse(value: unknown, runId: string): RunRecord {
+  // Canonical routes wrap the Run. Retain the old flat projection, but never
+  // fall back to it when a present canonical envelope is malformed.
+  const run = isRecord(value) && Object.hasOwn(value, "run") ? value.run : value;
+  if (!isRecord(run) || run.id !== runId ||
+    !RUN_TYPES.some(type => type === run.type) ||
+    typeof run.status !== "string" || !Object.hasOwn(RUN_PROGRESS_PHASE, run.status)) {
+    throw new Error("Takosumi returned an invalid Run status response");
+  }
+  return { id: runId, type: run.type as RunRecord["type"], status: run.status as RunRecord["status"] };
+}
+
 export async function runDeployStatus(
   args: string[],
   io: CliIo,
@@ -242,14 +250,14 @@ export async function runDeployStatus(
   let run: RunRecord;
   try {
     // The race observes a late fetch/response.text() rejection after timeout.
-    run = (await Promise.race([
+    run = parseRunStatusResponse(await Promise.race([
       requestDeployControl({
         options: flags,
         path: `${API_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
         signal: controller.signal,
       }),
       deadline,
-    ])) as RunRecord;
+    ]), runId);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
