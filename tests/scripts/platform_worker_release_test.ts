@@ -25,6 +25,7 @@ import {
   readPlatformContainer,
   remoteBranchContainsCommit,
   runPlatformWorkerCodeRelease,
+  runPlatformWorkerLoginAdmissionRelease,
   selectRecoveredVersion,
   secretNames,
   type PlatformReleaseCommand,
@@ -485,29 +486,46 @@ async function exerciseCodeLane(options: {
   readonly routeDrift?: CodeRouteDrift;
   readonly containerDrift?: boolean;
   readonly uploadFails?: boolean;
+  readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
+  readonly loginSmokeFails?: boolean;
+  readonly unrelatedBindingDrift?: boolean;
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-code-lane-test-"));
   const configPath = join(directory, "wrangler.toml");
-  const source = codeConfigSource();
+  const sharedSource = codeConfigSource().replace("[vars]\n", '[vars]\nTAKOSUMI_SHARED_AUTH_PROFILE = "shared-account"\nTAKOSUMI_SHARED_AUTH_ORIGIN = "https://app-staging.takosumi.com"\n');
+  const rateSource = '\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER"\nnamespace_id = "2026111401"\n[ratelimits.simple]\nlimit = 60\nperiod = 60\n\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER"\nnamespace_id = "2026111402"\n[ratelimits.simple]\nlimit = 10\nperiod = 60\n';
+  const source = options.loginAdmission
+    ? sharedSource + (options.loginAdmission === "missing" ? "" : rateSource)
+    : codeConfigSource();
   writeFileSync(configPath, source, { mode: 0o600 });
   const pins = platformExecutionEvidenceReleasePins(CODE_BUNDLE, STATUS_CONTAINER_IMAGE);
   const finalSource = injectPlatformExecutionEvidencePins(source, pins);
   const tag = `tks-stg-code-${"1".repeat(32)}`;
   const message = `takosumi-platform-staging-code ${pins.controllerArtifactDigest}`;
-  const predecessor = codeVersionSource(source, CODE_PREDECESSOR_ID, {
+  const predecessorSource = options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "already-present" ? sharedSource : source;
+  const predecessor = JSON.parse(codeVersionSource(predecessorSource, CODE_PREDECESSOR_ID, {
     tag: "predecessor",
     message: "predecessor",
-  });
-  const deployed = codeVersionSource(finalSource, CODE_DEPLOYED_ID, {
+  }));
+  const deployed = JSON.parse(codeVersionSource(finalSource, CODE_DEPLOYED_ID, {
     tag,
     message,
-  });
+  }));
+  const rateBindings = [
+    { name: "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER", type: "ratelimit", namespace_id: "2026111401", simple: { limit: 60, period: 60 } },
+    { name: "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER", type: "ratelimit", namespace_id: "2026111402", simple: { limit: 10, period: 60 } },
+  ];
+  if (options.loginAdmission && options.loginAdmission !== "missing") deployed.resources.bindings.push(...rateBindings);
+  if (options.loginAdmission === "normal" || options.loginAdmission === "already-present") predecessor.resources.bindings.push(...rateBindings);
+  if (options.loginAdmission === "partial") predecessor.resources.bindings.push(rateBindings[0]);
+  if (options.unrelatedBindingDrift) predecessor.resources.bindings.find((binding: { name: string }) => binding.name === "HOSTED").service = "foreign-service";
   const container = statusContainerSource();
   let activated = false;
   let uploadCount = 0;
   let activationCount = 0;
   let buildCount = 0;
   let gateCount = 0;
+  let loginSmokeCount = 0;
   let topologySnapshot = 0;
   let uploadArgs: readonly string[] = [];
   let activationArgs: readonly string[] = [];
@@ -555,7 +573,7 @@ async function exerciseCodeLane(options: {
     if (argv[1] === "versions" && argv[2] === "view") {
       return {
         exitCode: 0,
-        stdout: argv[3] === CODE_DEPLOYED_ID ? deployed : predecessor,
+        stdout: JSON.stringify(argv[3] === CODE_DEPLOYED_ID ? deployed : predecessor),
         stderr: "",
       };
     }
@@ -577,7 +595,7 @@ async function exerciseCodeLane(options: {
   const cleanNativeRead = codeNativeRead(source);
   let error: unknown;
   try {
-    await runPlatformWorkerCodeRelease(
+    await (options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
       ["apply", "--config", configPath],
       "staging",
       {
@@ -604,6 +622,11 @@ async function exerciseCodeLane(options: {
           return cleanNativeRead(path);
         },
         publicReadback: async () => undefined,
+        loginStartReadback: async (versionId) => {
+          expect(versionId).toBe(CODE_DEPLOYED_ID);
+          loginSmokeCount++;
+          if (options.loginSmokeFails) throw new Error("synthetic login unavailable");
+        },
         nonce: () => "1".repeat(32),
       },
     );
@@ -618,6 +641,7 @@ async function exerciseCodeLane(options: {
     activationCount,
     buildCount,
     gateCount,
+    loginSmokeCount,
     topologySnapshot,
     uploadArgs,
     activationArgs,
@@ -680,6 +704,26 @@ test("routine code Version matcher accepts the observed shape and only three pri
       CODE_SECRETS,
     )
   ).toThrow("platform_worker_code_binding_mismatch");
+});
+
+test("login admission rate-limit bindings have an exact preserved provider tuple", () => {
+  const source = codeConfigSource() + '\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER"\nnamespace_id = "2026111401"\n[ratelimits.simple]\nlimit = 60\nperiod = 60\n\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER"\nnamespace_id = "2026111402"\n[ratelimits.simple]\nlimit = 10\nperiod = 60\n';
+  const version = JSON.parse(codeVersionSource(source, CODE_PREDECESSOR_ID, { tag: "predecessor", message: "predecessor" }));
+  version.resources.bindings.push(
+    { name: "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER", type: "ratelimit", namespace_id: "2026111401", simple: { limit: 60, period: 60 } },
+    { name: "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER", type: "ratelimit", namespace_id: "2026111402", simple: { limit: 10, period: 60 } },
+  );
+  expect(() => assertPlatformWorkerCodeVersionMatchesConfig(JSON.stringify(version), source, "takosumi-hosted-staging", CODE_SECRETS, { allowPriorPins: true })).not.toThrow();
+  for (const change of [
+    (binding: Record<string, any>) => binding.namespace_id = "2026111409",
+    (binding: Record<string, any>) => binding.simple.limit = 61,
+    (binding: Record<string, any>) => binding.simple.period = 10,
+    (binding: Record<string, any>) => binding.simple.future = true,
+  ]) {
+    const changed = structuredClone(version);
+    change(changed.resources.bindings.at(-2));
+    expect(() => assertPlatformWorkerCodeVersionMatchesConfig(JSON.stringify(changed), source, "takosumi-hosted-staging", CODE_SECRETS, { allowPriorPins: true })).toThrow();
+  }
 });
 
 test("routine code Version matcher accepts only canonical root asset base path", () => {
@@ -898,6 +942,37 @@ test("routine code publishes once and refuses production", async () => {
   await expect(
     runPlatformWorkerCodeRelease(["apply", "--config", "/private/config"], "production"),
   ).rejects.toThrow("platform_worker_code_action_invalid");
+});
+
+test("login admission dedicated transition adds only both ports, then normal code preserves them", async () => {
+  for (const loginAdmission of ["transition", "normal"] as const) {
+    const result = await exerciseCodeLane({ loginAdmission });
+    expect(result).toMatchObject({ error: undefined, uploadCount: 1, activationCount: 1, buildCount: 1, gateCount: 1, loginSmokeCount: 1 });
+    expect((Bun.TOML.parse(result.uploadConfigSource) as Record<string, unknown>).ratelimits).toEqual([
+      { name: "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER", namespace_id: "2026111401", simple: { limit: 60, period: 60 } },
+      { name: "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER", namespace_id: "2026111402", simple: { limit: 10, period: 60 } },
+    ]);
+    expect(result.activationArgs).not.toContain("--containers-rollout");
+  }
+});
+
+test("login admission refuses missing composition, partial predecessors and unrelated drift before upload", async () => {
+  for (const options of [
+    { loginAdmission: "missing" }, { loginAdmission: "partial" }, { loginAdmission: "already-present" },
+    { loginAdmission: "transition", unrelatedBindingDrift: true },
+  ] as const) {
+    const result = await exerciseCodeLane(options);
+    expect(result.error).toBeDefined();
+    expect(result.uploadCount).toBe(0);
+    expect(result.activationCount).toBe(0);
+    expect(result.loginSmokeCount).toBe(0);
+  }
+});
+
+test("login admission failed post-activation smoke stays incomplete without a second mutation", async () => {
+  const result = await exerciseCodeLane({ loginAdmission: "transition", loginSmokeFails: true });
+  expect(result.error).toBeDefined();
+  expect(result).toMatchObject({ uploadCount: 1, activationCount: 1, loginSmokeCount: 1 });
 });
 
 test("routine code refuses every route drift before upload and after activation", async () => {

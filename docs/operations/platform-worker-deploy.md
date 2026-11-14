@@ -295,6 +295,43 @@ history before recovery. Historical rollback remains owned by
 `takosumi-platform-staging`; this lane creates no plan, journal, archive, or
 parallel restore mechanism.
 
+### Add the missing shared-login admission bindings in staging
+
+Shared-account login requires both `HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER`
+and `HOSTED_OIDC_LOGIN_IP_RATE_LIMITER`. Normal staging code publication checks
+this composition before building, verifies both exact typed bindings against
+the serving Version, and performs one fresh anonymous login-start GET after
+activation. The GET follows no redirect and accepts only the expected Version
+redirecting to the staging issuer's authorization endpoint. It does not prove
+SSO completion, and does not print or retain cookies, state or the Location URL.
+
+If the existing staging Version has neither binding, the operator selects two
+unused, distinct positive-integer namespace strings in its private config.
+Cloudflare counters are shared by namespace and key across Workers within a
+location and are approximate, rather than a strict worldwide cap. Keep the
+existing config and source pin, then add only the two `[[ratelimits]]` entries:
+global `limit=60, period=60`, and IP `limit=10, period=60`. Namespace IDs in the
+reference template are examples; the operator chooses the real IDs.
+
+After independent review of the source and that exact config delta, use:
+
+```sh
+bun run deploy -- takosumi-platform-staging-login-admission apply \
+  --config /absolute/operator-private/wrangler.staging.toml
+```
+
+This dedicated integration surface reuses the staging publication pipeline.
+Only its predecessor comparison removes exactly these two entries; every other
+TOML value must remain equal, and either existing admission binding refuses the
+transition. The new Version and final readback require the complete config,
+including both exact namespaces and limits. Secrets, databases, Runner,
+topology and non-Version settings retain the existing preservation guards.
+After adoption, use the ordinary staging-code surface, which preserves both
+bindings exactly. Keep the predecessor Version for the existing historical
+rollback owner; restoring it also restores its former fail-closed login503.
+Any upload, activation or final-smoke ambiguity remains incomplete; no mutation
+is retried. Production and other targets are outside this surface.
+
 ### Optional private Run file machine ingress
 
 The source supports an optional `TAKOSUMI_PRIVATE_RUN_FILES` nonsecret JSON
