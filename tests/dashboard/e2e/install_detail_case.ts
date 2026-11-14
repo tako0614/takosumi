@@ -370,6 +370,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(waiting).toBeDisabled();
       await expect(waiting).toHaveAttribute("aria-describedby", "iv-apply-reason");
       await page.getByRole("dialog", { name: "Configuration" }).getByRole("button", { name: "Close", exact: true }).click();
+      await expect(page.getByTestId("install-configuration-choice")).toBeFocused();
       await waiting.focus();
       await expect(waiting).toBeFocused();
       await waiting.click({ force: true });
