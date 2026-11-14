@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { Interface } from "takosumi-contract";
-import { decodeCursor } from "takosumi-contract/pagination";
+import { decodeCursor, encodeCursor } from "takosumi-contract/pagination";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
@@ -165,6 +165,178 @@ async function fixture(options: { readonly delegate?: boolean; readonly endlessA
 }
 
 describe("account launcher", () => {
+  test("inner resume keeps a sixth page reachable without redelivering completed apps", async () => {
+    const h = await fixture({ extraOwnSurfaces: 5 });
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    let reads = 0;
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) => {
+      expect(subject).toBe(OWNER);
+      expect(permission).toBe("ui.open");
+      reads++;
+      // Exercise the real store keyset and current Binding join with six small pages.
+      return await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId);
+    };
+    const credential = h.headers.session(OWNER);
+    const first = await h.list(credential, "?limit=2");
+    expect(first.status).toBe(200);
+    expect(first.ids).toHaveLength(6);
+    expect(first.owners).toEqual([...Array(5).fill(MINE), SHARED]);
+    expect(first.incomplete).toBe(true);
+    expect(reads).toBe(6); // Five pages for MINE; the reserved first read for SHARED.
+    expect(first.nextCursor).toBeString();
+    reads = 0;
+    const second = await h.list(credential, `?limit=2&cursor=${first.nextCursor}`);
+    expect(second.status).toBe(200);
+    expect(second.owners).toEqual([MINE]);
+    expect(second.incomplete).toBeUndefined();
+    expect(second.nextCursor).toBeUndefined();
+    expect(reads).toBe(1);
+    const delivered = [...first.ids, ...second.ids];
+    expect(new Set(delivered).size).toBe(7);
+    expect([...delivered].sort()).toEqual([h.surfaces[MINE]!, ...h.extraSurfaces, h.surfaces[SHARED]!].sort());
+  });
+
+  test("inner resume round-trips fifty app keysets through normal GET and a changed page limit", async () => {
+    const h = await fixture();
+    const base = await h.ledger.getCapsule(MINE);
+    const appIds = [MINE, SHARED];
+    for (let index = 0; index < 48; index++) {
+      const id = `cap_${String(index).padStart(20, "0")}`;
+      appIds.push(id);
+      await h.ledger.putCapsule({ ...base!, id, name: id, slug: id });
+      expect(await h.core.appOwnership.initializeOwnershipIfMissing({
+        capsuleId: id, ownerAccountId: OWNER, ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: `apps/${id}`,
+      })).toBe(true);
+    }
+    for (const [index, capsuleId] of appIds.entries()) {
+      for (let ordinal = 0; ordinal < (index < 2 ? 1 : 2); ordinal++) {
+        const iface = await h.core.interfaces.create({
+          workspaceId: WORKSPACE, name: `resume-${index}-${ordinal}`, ownerRef: { kind: "Capsule", id: capsuleId },
+          spec: {
+            type: "interface.ui.surface", version: "1", document: { launcher: true },
+            inputs: { url: { source: "literal", value: `https://resume-${index}-${ordinal}.example.test` } },
+            access: { visibility: "workspace" },
+          },
+        });
+        await h.core.interfaces.createBinding(iface.metadata.id, {
+          subjectRef: { kind: "Principal", id: OWNER }, permissions: ["ui.open"], delivery: { type: "none" },
+        });
+      }
+    }
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    let reads = 0;
+    let active = 0;
+    let peak = 0;
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) => {
+      reads++;
+      peak = Math.max(peak, ++active);
+      try { return await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId); }
+      finally { active--; }
+    };
+    const credential = h.headers.session(OWNER);
+    const first = await h.list(credential, "?limit=50");
+    expect([first.status, reads, first.ids.length, new Set(first.owners).size]).toEqual([200, 50, 50, 50]);
+    expect(first.incomplete).toBe(true);
+    expect(first.nextCursor).toBeString();
+    const payload = JSON.parse(decodeCursor(first.nextCursor)!.id) as { pending: unknown[] };
+    expect(payload.pending).toHaveLength(50);
+    console.info(JSON.stringify({ observation: "launcher-inner-resume", apps: 50, cursorBytes: new TextEncoder().encode(first.nextCursor!).byteLength }));
+    reads = 0;
+    const second = await h.list(credential, `?limit=1&cursor=${first.nextCursor}`);
+    expect([second.status, reads, second.ids.length]).toEqual([200, 1, 1]);
+    expect(second.nextCursor).toBeString();
+    reads = 0;
+    const third = await h.list(credential, `?limit=50&cursor=${second.nextCursor}`);
+    expect([third.status, reads, third.ids.length]).toEqual([200, 49, 49]);
+    expect(third.nextCursor).toBeUndefined();
+    expect(third.incomplete).toBeUndefined();
+    const delivered = [...first.ids, ...second.ids, ...third.ids];
+    expect(delivered).toHaveLength(100);
+    expect(new Set(delivered).size).toBe(100);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(8);
+  });
+
+  test("inner resume joins its pending keyset back to the outer app cursor", async () => {
+    const h = await fixture({ extraOwnSurfaces: 5 });
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) =>
+      await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId);
+    const credential = h.headers.session(OWNER);
+    const first = await h.list(credential, "?limit=1");
+    expect(first.ids).toHaveLength(5);
+    expect(first.nextCursor).toBeString();
+    const second = await h.list(credential, `?limit=1&cursor=${first.nextCursor}`);
+    expect(second.owners).toEqual([MINE]);
+    expect(second.nextCursor).toBeString();
+    const third = await h.list(credential, `?limit=1&cursor=${second.nextCursor}`);
+    expect(third.owners).toEqual([SHARED]);
+    expect(third.nextCursor).toBeUndefined();
+    expect(new Set([...first.ids, ...second.ids, ...third.ids]).size).toBe(7);
+  });
+
+  test("inner resume rechecks the current Principal Binding and current app scope", async () => {
+    const h = await fixture({ extraOwnSurfaces: 5 });
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    const subjects: string[] = [];
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) => {
+      subjects.push(subject);
+      return await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId);
+    };
+    const query = `?capsuleId=${MINE}&limit=1`;
+    const first = await h.list(h.headers.session(OWNER), query);
+    expect(first.nextCursor).toBeString();
+    const remaining = [h.surfaces[MINE]!, ...h.extraSurfaces].find((id) => !first.ids.includes(id))!;
+    const bindings = await h.core.interfaces.listBindings(remaining);
+    const binding = bindings.find((item) => item.spec.subjectRef.id === OWNER)!;
+    await h.core.interfaces.revokeBinding(remaining, binding.metadata.id);
+    const continuation = `${query}&cursor=${first.nextCursor}`;
+    const second = await h.list(h.headers.session(OWNER), continuation);
+    expect(second.status).toBe(200);
+    expect(second.ids).toEqual([]);
+    expect(second.nextCursor).toBeUndefined();
+    // Replaying a position cannot supply app scope to another Principal or PAT.
+    subjects.length = 0;
+    expect((await h.list(h.headers.session(STRANGER), continuation)).ids).toEqual([]);
+    expect((await h.list(h.headers.pat(OWNER, { appIds: [SHARED] }), continuation)).ids).toEqual([]);
+    expect(subjects).toEqual([]);
+    const denied = await h.list(h.headers.pat(OWNER, { workspaceId: WORKSPACE }), continuation);
+    expect([denied.status, denied.code]).toEqual([403, "app_access_denied"]);
+    const capsule = await h.ledger.getCapsule(MINE);
+    await h.ledger.putCapsule({ ...capsule!, status: "disabled" });
+    expect((await h.list(h.headers.session(OWNER), continuation)).ids).toEqual([]);
+    expect(subjects).toEqual([]);
+  });
+
+  test("inner resume rejects malformed store positions and changed filter without candidate reads", async () => {
+    const h = await fixture({ extraOwnSurfaces: 5 });
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    let reads = 0;
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) => {
+      reads++;
+      return await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId);
+    };
+    const credential = h.headers.session(OWNER);
+    const first = await h.list(credential, `?capsuleId=${MINE}&limit=1`);
+    expect(first.nextCursor).toBeString();
+    const decoded = decodeCursor(first.nextCursor)!;
+    const payload = JSON.parse(decoded.id) as { after: string; pending: [string, string][]; capsuleId: string | null };
+    reads = 0;
+    const badPayloads = [null, {}, { ...payload, after: "" }, { ...payload, pending: [] },
+      { ...payload, pending: [["", payload.pending[0]![1]]] },
+      { ...payload, pending: [[MINE, "not-a-keyset"]] },
+      { ...payload, pending: [[MINE, encodeCursor({ createdAt: "", id: "" })]] },
+      { ...payload, pending: [payload.pending[0], payload.pending[0]] },
+      { ...payload, pending: Array(51).fill(payload.pending[0]) }];
+    for (const value of badPayloads) {
+      const cursor = encodeCursor({ createdAt: decoded.createdAt, id: JSON.stringify(value) });
+      expect((await h.list(credential, `?capsuleId=${MINE}&cursor=${cursor}`)).status).toBe(400);
+    }
+    expect((await h.list(credential, `?cursor=${first.nextCursor}`)).status).toBe(400);
+    expect((await h.list(credential, `?capsuleId=${SHARED}&cursor=${first.nextCursor}`)).status).toBe(400);
+    expect(reads).toBe(0);
+  });
+
   test("launcher candidate pages keep a covered app's later authorized screen reachable", async () => {
     const h = await fixture({ extraOwnSurfaces: 50 });
     const query = `?capsuleId=${MINE}&limit=1`;
