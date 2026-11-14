@@ -235,15 +235,9 @@ function ModuleChoice(props: { readonly attempt: InstallAttempt; readonly action
 function PlanPreview(props: { readonly attempt: InstallAttempt }) {
   const block = () => props.attempt.view().applyBlock;
   return (
-    <section class="iv-execution" data-testid="install-plan-preview" data-apply-block={block() ?? ""} aria-labelledby="iv-preview-title">
-      <div class="iv-review-head">
-        <div>
-          <h3 id="iv-preview-title">{t("installStore.reviewTitle")}</h3>
-          <p>{t("installStore.reviewHint")}</p>
-        </div>
-      </div>
+    <section class="iv-execution" data-testid="install-plan-preview" data-apply-block={block() ?? ""} aria-label={t("installStore.reviewTitle")}>
       <section class="iv-sheet-block" data-testid="install-planned-resources" aria-labelledby="iv-planned-title">
-        <h4 id="iv-planned-title">{t("installStore.plannedTitle")}</h4>
+        <h3 id="iv-planned-title">{t("installStore.plannedTitle")}</h3>
         <Show when={props.attempt.sheet()} fallback={<p class="iv-muted">{t("installStore.plannedPending")}</p>}>
           {(sheet) => (
             <>
@@ -254,7 +248,7 @@ function PlanPreview(props: { readonly attempt: InstallAttempt }) {
         </Show>
       </section>
       <section class="iv-sheet-block" data-testid="install-cost-pending" aria-labelledby="iv-cost-pending-title">
-        <h4 id="iv-cost-pending-title">{t("installStore.costTitle")}</h4>
+        <h3 id="iv-cost-pending-title">{t("installStore.costTitle")}</h3>
         <p class="iv-muted">{t("installStore.costPending")}</p>
       </section>
       <Show when={block()}>
@@ -769,7 +763,6 @@ export function InstallScreen(props: {
     >
       <div class="iv-section-head">
         <h2 id="iv-sheet-title" data-stage-heading tabindex="-1">{t("installStore.sheetTitle")}</h2>
-        <p>{t("installStore.sheetHint")}</p>
       </div>
       <ProgressLine attempt={props.attempt} />
       <ScreenError attempt={props.attempt} />
@@ -862,9 +855,9 @@ export function InstallScreen(props: {
       <Show when={rows().length > 0 || (summary()?.connections.length ?? 0) > 0}>
         <section class="iv-sheet-block" aria-labelledby="iv-connections-title" data-testid="install-connections">
           <h3 id="iv-connections-title">{t("installStore.cloudConnection")}</h3>
-          <p class="iv-muted">
-            {missingRows() === 0 ? t("installStore.cloudConnected") : t("installStore.providerHint")}
-          </p>
+          <Show when={missingRows() > 0}>
+            <p class="iv-muted">{t("installStore.providerHint")}</p>
+          </Show>
           <For each={rowKeys()}>
             {(key) => (
               <Show when={requirementFor(key)}>

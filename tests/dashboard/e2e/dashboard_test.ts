@@ -1482,7 +1482,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByTestId("install-provenance")).toContainText(
       "github.com/example/service",
     );
-    await expect(page.getByLabel(/^Version \(tag, branch or commit; optional\)|^版（tag・branch・commit。省略可）/u)).toHaveValue(
+    await expect(page.getByLabel(/^Version \(optional\)|^バージョン（省略可）/u)).toHaveValue(
       "0123456789abcdef0123456789abcdef01234567",
     );
 
@@ -1588,6 +1588,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     if (mode === "portable") {
       await page.getByRole("button", { name: "Example Service", exact: true }).click();
       await expect(page.getByRole("heading", { level: 1 })).toHaveText("Example Service");
+      await expect(page.getByTestId("install-app-header")).toContainText("サービスの説明");
+      await expect(page.getByRole("textbox", { name: "バージョン（省略可）" })).toBeVisible();
       await expect(page.getByRole("heading", { level: 2, name: "Example Service" })).toHaveCount(0);
       await expect(page.getByTestId("install-steps")).toHaveCount(0);
       // One primary Install plus "choose again"; no second form behind it.

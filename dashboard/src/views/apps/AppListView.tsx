@@ -4,8 +4,8 @@
  * Apps that can be opened come first, in name order. Tapping one opens its
  * screen: in a new tab on a computer, and on a phone the way this device
  * chose or the app declares (its verified native app, the web, or the app
- * page's chooser; lib/open-routing.ts). The small "Manage" link under it
- * opens the app page.
+ * page's chooser; lib/open-routing.ts). The small "Settings" link under it
+ * opens the app page at its settings.
  * Apps that cannot be opened yet (installing, never applied, failed, being
  * removed, stopped) still get a tile, drawn muted with a status mark, and
  * tapping it opens the app page, where the app is kept. Nothing is folded
@@ -17,13 +17,14 @@
 import {
   createMemo,
   createResource,
+  createSignal,
   createUniqueId,
   For,
   Match,
   Show,
   Switch,
 } from "solid-js";
-import { Plus, Settings2, Sparkles } from "lucide-solid";
+import { Plus, Search, Settings2, Sparkles, X } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import IncomingOwnershipTransfers from "./IncomingOwnershipTransfers.tsx";
 import AppFace from "../../components/AppFace.tsx";
@@ -39,7 +40,7 @@ import {
   listAuthorizedUiSurfaces,
 } from "../../lib/ui-surface-interfaces.ts";
 import { locale, type MessageKey, t } from "../../i18n/index.ts";
-import { Button, Toast } from "../../components/ui/index.ts";
+import { Button, Input, Toast } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { appPageHref } from "../../lib/app-links.ts";
 import { screenOpenRoute } from "../../lib/open-choice-state.ts";
@@ -89,6 +90,7 @@ async function loadHomeApps(): Promise<{ readonly apps: readonly HomeApp[]; read
     const readApp = async (entry: AccessibleApp): Promise<HomeApp> => {
       let surfaces: HomeApp["surfaces"] = [];
       let category: string | undefined;
+      let iconUrl = entry.iconUrl;
       let state = homeState(entry);
       // A launcher URL must come from the app's authorized screen projection.
       // The value-free apps list itself is never an external URL authority.
@@ -97,12 +99,13 @@ async function loadHomeApps(): Promise<{ readonly apps: readonly HomeApp[]; read
         if (view.incomplete?.includes("screens")) surfacesFailed = true;
         surfaces = openableScreens(view.screens);
         category = view.screens[0]?.category;
+        iconUrl ??= view.iconUrl;
         if (state === "ready" && view.state === "installed" && view.version.updateAvailable) state = "update_available";
       } catch { surfacesFailed = true; }
       return {
         inst: { id: entry.capsuleId, name: entry.name },
         displayName: typeof entry.displayName === "string" ? entry.displayName : entry.displayName?.[locale()],
-        iconUrl: entry.iconUrl,
+        iconUrl,
         ...(category ? { category } : {}),
         role: entry.role,
         ownerDisplayName: entry.ownerDisplayName,
@@ -146,6 +149,14 @@ function homeState(app: AccessibleApp): AppState {
 function Inner() {
   const [home, { refetch }] = createResource(() => ({ workspaceId: currentWorkspaceId(), locale: locale() }), loadHomeApps);
   const apps = createMemo(() => sortHomeApps(home.error ? [] : home.latest?.apps ?? [], homeAppName, locale()));
+  const [query, setQuery] = createSignal("");
+  let searchInput: HTMLInputElement | undefined;
+  const matches = createMemo(() => {
+    const term = query().trim().toLocaleLowerCase(locale());
+    return apps().filter((app) => [homeAppName(app), app.inst.name, app.ownerDisplayName ?? ""]
+      .some((text) => text.toLocaleLowerCase(locale()).includes(term)));
+  });
+  const clearSearch = () => { setQuery(""); searchInput?.focus(); };
   return (
     <>
     <IncomingOwnershipTransfers appNames={new Map(apps().map((app) => [app.inst.id, app.displayName ?? app.inst.name]))} onChanged={async () => { await refetch(); }} />
@@ -164,6 +175,23 @@ function Inner() {
               <h1>{t("apps.sectionYours")}</h1>
               <span class="av-section-head-count">{apps().length}</span>
             </div>
+            <div class="av-home-search" role="search" aria-label={t("apps.search")}>
+              <Search size={18} aria-hidden="true" />
+              <Input
+                ref={searchInput}
+                type="search"
+                aria-label={t("apps.search")}
+                placeholder={t("apps.search")}
+                value={query()}
+                onInput={(event) => setQuery(event.currentTarget.value)}
+                onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
+              />
+              <Show when={query()}>
+                <button type="button" aria-label={t("apps.clearSearch")} onClick={clearSearch}>
+                  <X size={18} aria-hidden="true" />
+                </button>
+              </Show>
+            </div>
             <Show when={home.latest?.surfacesFailed}>
               <Toast tone="error">
                 {t("apps.listIncomplete")}
@@ -177,8 +205,11 @@ function Inner() {
                 </Button>
               </Toast>
             </Show>
+            <Show when={matches().length === 0}>
+              <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
+            </Show>
             <ul class="av-launcher">
-              <For each={apps()}>
+              <For each={matches()}>
                 {(app) => (
                   <li
                     data-testid="home-app"
@@ -230,7 +261,7 @@ function kindClass(kind: string | undefined): string {
 /**
  * One app tile: the icon (or a kind-tinted monogram) with the name under it.
  * An app that opens links to its first authorized screen and keeps a small
- * "Manage" link to its page; every other app links to its page. The status
+ * settings link to its page; every other app links to its page. The status
  * mark's words are the link's accessible description.
  */
 function HomeAppTile(props: { readonly app: HomeApp }) {
@@ -248,6 +279,7 @@ function HomeAppTile(props: { readonly app: HomeApp }) {
     return surface ? screenOpenRoute(props.app.inst.id, surface) : undefined;
   };
   const pageHref = () => appPageHref(props.app.inst.id);
+  const settingsAvailable = () => props.app.state === "ready" || props.app.state === "update_available";
   const tileClass = () => (homeAppWaiting(props.app) ? "av-tile av-tile-waiting" : "av-tile");
 
   const body = () => (
@@ -268,6 +300,7 @@ function HomeAppTile(props: { readonly app: HomeApp }) {
           {(state) => <span class={`av-tile-dot av-tile-dot-${state().kind}`} aria-hidden="true" />}
         </Show>
       </span>
+      <span class="av-tile-label">
       <span class="av-tile-name">{name()}</span>
       <Show when={describedBy()}>
         <span class="av-tile-captions" id={captionId}>
@@ -275,10 +308,11 @@ function HomeAppTile(props: { readonly app: HomeApp }) {
             {(state) => <span class={`av-tile-state av-tile-state-${state().kind}`}>{t(state().label)}</span>}
           </Show>
           <Show when={shared()}>
-            <span class="av-tile-state">{t("app.sharing.sharedBy", { name: props.app.ownerDisplayName ?? "" })}</span>
+            <span class="av-tile-state">{props.app.ownerDisplayName ? t("app.sharing.sharedBy", { name: props.app.ownerDisplayName }) : t("apps.shared")}</span>
           </Show>
         </span>
       </Show>
+      </span>
     </>
   );
 
@@ -304,15 +338,15 @@ function HomeAppTile(props: { readonly app: HomeApp }) {
               {body()}
             </a>
             <span class="av-tile-actions">
-              {/* Every open tile repeats the same visible "Manage"; the
-                  accessible name says which app it manages (WCAG 2.4.4). */}
+              {/* Healthy apps go straight to settings; an app needing attention
+                  opens its overview so its next action stays visible. */}
               <a
                 class="av-tile-manage"
-                href={pageHref()}
-                aria-label={t("apps.manageAria", { name: name() })}
+                href={settingsAvailable() ? appPageHref(props.app.inst.id, "settings") : pageHref()}
+                aria-label={t(settingsAvailable() ? "apps.settingsAria" : "apps.manageAria", { name: name() })}
               >
                 <Settings2 size={13} aria-hidden="true" />
-                <span>{t("apps.manage")}</span>
+                <span>{t(settingsAvailable() ? "app.settings.title" : "apps.manage")}</span>
               </a>
             </span>
           </>

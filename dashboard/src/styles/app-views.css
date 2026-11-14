@@ -375,6 +375,50 @@
   font-size: var(--tg-fs-xs);
   color: var(--tg-fg-subtle);
 }
+.av-home-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  max-width: 28rem;
+  margin-bottom: var(--tg-s-5);
+  color: var(--tg-fg-muted);
+}
+.av-home-search > svg {
+  position: absolute;
+  left: var(--tg-s-3);
+  pointer-events: none;
+}
+.av-home-search input {
+  min-height: 44px;
+  padding-inline: var(--tg-s-7);
+}
+.av-home-search input::-webkit-search-cancel-button { display: none; }
+.av-home-search button {
+  position: absolute;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--tg-r-md);
+  background: transparent;
+  color: var(--tg-fg-muted);
+  cursor: pointer;
+}
+.av-home-search button:hover, .av-home-search button:active {
+  color: var(--tg-fg);
+  background: var(--tg-bg-hi);
+}
+.av-home-search button:focus-visible {
+  outline: 2px solid var(--tg-accent);
+  outline-offset: 2px;
+}
+.av-search-empty {
+  margin-block: var(--tg-s-5);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
 .av-launcher {
   list-style: none;
   margin: 0;
@@ -525,6 +569,12 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.av-tile-label {
+  display: grid;
+  gap: var(--tg-s-1);
+  min-width: 0;
+  width: 100%;
+}
 .av-tile-actions {
   display: flex;
   align-items: center;
@@ -538,7 +588,8 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-height: 28px;
+  min-height: 44px;
+  min-width: 44px;
   padding: 0 var(--tg-s-2);
   border: 0;
   border-radius: var(--tg-r-full);
@@ -550,6 +601,10 @@
 }
 .av-tile-manage:hover {
   background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+}
+.av-tile-manage:active {
+  background: var(--tg-bg-hi);
   color: var(--tg-fg);
 }
 .av-tile-manage:focus-visible {
@@ -1033,11 +1088,39 @@
  * Coarse-pointer only: raise the sub-40px view-local controls to a comfortable
  * tap size. Desktop (fine pointer) keeps the compact sizing. */
 @media (pointer: coarse) {
-  .av-tile-manage,
   .av-service-row-delete,
   .legal-lang button,
   .legal-sign-in,
   .legal-nav-link {
     min-height: 40px;
   }
+}
+
+/* On a phone, give names and shared-owner labels the width of a row.
+ * The icon/name still opens the app; the separate settings target stays visible. */
+@media (max-width: 640px) {
+  .av-home-search { max-width: none; }
+  .av-launcher { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .av-launcher > li { border-bottom: 1px solid var(--tg-line); }
+  .av-launcher > li:last-child { border-bottom: 0; }
+  .av-tile-wrap { flex-direction: row; max-width: none; gap: var(--tg-s-2); }
+  .av-tile {
+    flex: 1;
+    flex-direction: row;
+    min-width: 0;
+    max-width: none;
+    padding: var(--tg-s-4) 0;
+    text-align: left;
+    transform: none;
+  }
+  .av-tile-face, .av-tile-add .av-tile-icon, .av-tile-skel {
+    width: var(--tg-s-8);
+    flex: none;
+  }
+  .av-tile-name { display: block; overflow: visible; }
+  .av-tile-actions { flex: none; margin: 0; }
+  .av-tile-captions { align-items: flex-start; }
+  .av-tile-manage { font-size: var(--tg-fs-sm); }
+  .av-tile:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+  .av-tile:focus-visible .av-tile-icon { outline: none; }
 }

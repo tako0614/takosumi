@@ -1359,7 +1359,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // Only the app with an authorized screen opens; it keeps a link to its page.
       const office = tile(PORTABLE_EXPECTATIONS.appName);
       await expect(office.getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in a new tab` })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
-      await expect(office.getByRole("link", { name: `Manage ${PORTABLE_EXPECTATIONS.appName}` })).toHaveAttribute("href", "/apps/cap_repository_office");
+      await expect(office.getByRole("link", { name: `Settings for ${PORTABLE_EXPECTATIONS.appName}` })).toHaveAttribute("href", "/apps/cap_repository_office#settings");
       await expect(office.locator(".av-tile-icon")).toHaveCSS("opacity", "1");
       // Every other tile opens the app page; the state is its description.
       await expect(tile("Object Storage").getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
@@ -1375,6 +1375,75 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await capture(page, "home-mixed");
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
+    });
+
+    test("Home keeps app icons, searches locally and goes straight to settings", async ({ page, baseURL }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      const errors = pageErrors(page);
+      const reads: string[] = [];
+      const mutations: string[] = [];
+      page.on("request", (request) => {
+        if (!new URL(request.url()).pathname.startsWith("/api/v1/")) return;
+        (request.method() === "GET" ? reads : mutations).push(request.url());
+      });
+      const iconUrl = `${baseURL}/__e2e/home-icon.svg`;
+      const brokenIcon = `${baseURL}/__e2e/missing-icon.svg`;
+      await page.route(iconUrl, (route) => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#264b69"/><path d="M18 16h28v32H18z" fill="#ffffff"/></svg>' }));
+      await page.route(brokenIcon, (route) => route.fulfill({ status: 404, body: "missing" }));
+      await page.route("**/api/v1/capsules/*/app", async (route) => {
+        const response = await route.fetch();
+        const { app } = await response.json();
+        if (app.capsuleId === CAPSULE_ID) {
+          app.screens[0].icon = { kind: "image", url: iconUrl };
+        } else {
+          // A broken publisher image must still leave the screen's glyph visible.
+          app.iconUrl = brokenIcon;
+          app.screens[0].icon = { kind: "glyph", glyph: "📚" };
+        }
+        await route.fulfill({ response, json: { app } });
+      });
+      await page.goto("/");
+      const tiles = page.getByTestId("home-app");
+      const office = tiles.filter({ hasText: PORTABLE_EXPECTATIONS.appName });
+      const shared = tiles.filter({ hasText: "Beta Office" });
+      await expect(office.locator("img")).toHaveAttribute("src", iconUrl);
+      await expect(office.locator("img")).toHaveJSProperty("naturalWidth", 64);
+      await expect(office.locator("img")).toHaveAttribute("referrerpolicy", "no-referrer");
+      await expect(shared.locator(".av-tile-emoji")).toHaveText("📚");
+      await expect(shared.locator("img")).toHaveCount(0);
+      const search = page.getByRole("searchbox", { name: "アプリを検索" });
+      const readCount = reads.length;
+      await search.fill("  repository  ");
+      await expect(tiles).toHaveCount(1);
+      await search.fill("hanako");
+      await expect(tiles).toHaveCount(1);
+      await expect(shared).toBeVisible();
+      await search.fill("見つからない名前");
+      await expect(tiles).toHaveCount(0);
+      await expect(page.getByRole("status")).toContainText("該当するアプリがありません");
+      await page.getByRole("button", { name: "検索をクリア" }).click();
+      await expect(search).toBeFocused();
+      await expect(tiles).toHaveCount(2);
+      expect(reads.length).toBe(readCount);
+      await search.blur();
+      for (const width of [320, 390, 768, 1440]) {
+        await page.setViewportSize({ width, height: 844 });
+        await expectNoHorizontalOverflow(page, `Home at ${width}px`);
+        const settings = office.getByRole("link", { name: `${PORTABLE_EXPECTATIONS.appName} の設定` });
+        const box = await settings.boundingBox();
+        expect(box!.height).toBeGreaterThanOrEqual(44);
+        await page.screenshot({ path: test.info().outputPath(`home-clarity-${width}.png`), fullPage: true, animations: "disabled" });
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+      await page.screenshot({ path: test.info().outputPath("home-clarity-light-390.png"), fullPage: true, animations: "disabled" });
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+      await office.getByRole("link", { name: `${PORTABLE_EXPECTATIONS.appName} の設定` }).click();
+      await expect(page).toHaveURL(/#settings$/u);
+      await expect(page.locator("#settings")).toBeInViewport();
+      expect(await page.locator("#settings").evaluate((settings) => Boolean(settings.compareDocumentPosition(document.getElementById("phone")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+      expect(mutations).toEqual([]);
+      expect(errors).toEqual([]);
     });
 
     test("use on your phone: QR code, share and copy of the screen Open offers, and both phones' steps", async ({ page }) => {
@@ -1410,7 +1479,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // It sits after the problems and before Version, beside the one primary Open.
       expect(await page.evaluate(() => {
         const ids = [...document.querySelectorAll("[data-testid=app-page] > section[id]")].map((node) => node.id);
-        return ids.indexOf("phone") >= 0 && ids.indexOf("phone") < ids.indexOf("version");
+        return ids.indexOf("phone") >= 0 && ids.indexOf("phone") > ids.indexOf("settings");
       })).toBe(true);
       await expect(phone.locator(".tg-btn-primary")).toHaveCount(0);
 

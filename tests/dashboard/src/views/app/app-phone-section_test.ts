@@ -22,13 +22,13 @@ const run = read("views/runs/RunView.tsx");
 const indexHtml = readFileSync(resolve(root, "../index.html"), "utf8");
 
 describe("use on your phone", () => {
-  test("the app page shows it after the problems, for the screen Open offers or the URL names", () => {
+  test("the app page keeps phone guidance after settings, for the screen Open offers or the URL names", () => {
     const attention = page.indexOf("<AppAttentionSection");
     const phone = page.indexOf("<AppPhoneSection");
-    const version = page.indexOf("<AppVersionSection");
+    const settings = page.indexOf("<AppSettingsSection");
     expect(attention).toBeGreaterThan(0);
     expect(phone).toBeGreaterThan(attention);
-    expect(version).toBeGreaterThan(phone);
+    expect(phone).toBeGreaterThan(settings);
     expect(page).toContain('view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined');
     // The chooser is for the screen the URL (`?open=`) or Open named, else the primary one.
     expect(page).toContain("list.find((screen) => screen.interfaceId === wanted) ?? list[0]");

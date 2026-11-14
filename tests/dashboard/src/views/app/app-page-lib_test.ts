@@ -311,6 +311,15 @@ describe("what the page does with the server's view", () => {
       .toEqual([{ url: "https://a.example/", interfaceId: "if_a", clients }]);
   });
 
+  test("screen icons survive the Home projection without becoming launch URLs", () => {
+    const screen = { interfaceId: "if_icon", name: "app.launcher", url: "https://app.example/" };
+    expect(openableScreens([{ ...screen, icon: { kind: "image", url: "https://images.example/icon.svg" } }]))
+      .toEqual([{ url: screen.url, interfaceId: screen.interfaceId, icon: "https://images.example/icon.svg" }]);
+    expect(openableScreens([{ ...screen, icon: { kind: "glyph", glyph: "📚" } }]))
+      .toEqual([{ url: screen.url, interfaceId: screen.interfaceId, icon: "📚" }]);
+    expect(openableScreens([{ ...screen, url: "javascript:alert(1)", icon: { kind: "glyph", glyph: "📚" } }])).toEqual([]);
+  });
+
   test("a refreshed first history page keeps the older pages it still reaches", () => {
     const r = (id: string) => run({ id, type: "apply", status: "succeeded", createdAt: "2026-10-01T00:00:00.000Z" });
     const older = { startCursor: "c1", runs: [r("run_3"), r("run_4")], nextCursor: "c2" };
