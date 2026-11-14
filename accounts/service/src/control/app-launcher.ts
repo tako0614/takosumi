@@ -14,8 +14,8 @@
  *   launcher permission (the InterfaceService projection), as before.
  *
  * Pages walk the apps in id order: one page covers up to `limit` apps (default
- * 20, at most 50) and returns every launcher candidate of those apps; the
- * opaque `nextCursor` resumes after the last app.
+ * 20, at most 50); the opaque `nextCursor` resumes after the last app.
+ * Candidate reads are bounded, with `incomplete` marking a partial window.
  */
 import type { Capsule } from "takosumi-contract/install-configs";
 import type { Interface } from "takosumi-contract";
@@ -35,8 +35,10 @@ import {
 
 const LAUNCHER_DEFAULT_APPS = 20;
 const LAUNCHER_MAX_APPS = 50;
-/** Launcher candidates read per app; an app rarely declares more than a few. */
-const LAUNCHER_SURFACES_PER_APP = 50;
+/** Launcher candidates in one store page. */
+const LAUNCHER_SURFACES_PER_PAGE = 50;
+/** Match the app view's bounded candidate-page window. */
+const LAUNCHER_SURFACE_PAGE_LIMIT = 5;
 const LAUNCHER_READ_CONCURRENCY = 8;
 /** Distinguishes launcher cursors from other keyset cursors. */
 const LAUNCHER_CURSOR_MARK = "ui-surfaces";
@@ -104,21 +106,44 @@ export async function handleAccountUiSurfaces(
     if (await accountAppAllowed(ctx, capsule)) window.push(capsule);
   }
   const perApp: Interface[][] = window.map(() => []);
+  // Reserve one read for every covered app. Continuations use only the spare
+  // reads within the existing maximum of 50 candidate reads per request.
+  let remainingExtraPages = LAUNCHER_MAX_APPS - window.length;
+  let surfacesIncomplete = false;
   let next = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
       const index = next++;
       if (index >= window.length) return;
       const capsule = window[index]!;
-      ctx.assertActive?.();
-      const candidates = await interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage(
-        { workspaceId: capsule.workspaceId, phase: "Resolved" },
-        ctx.session.subject,
-        UI_SURFACE_OPEN_PERMISSION,
-        { limit: LAUNCHER_SURFACES_PER_APP },
-        capsule.id,
-      );
-      perApp[index] = candidates.items.filter((iface) => isLauncherSurface(iface, capsule));
+      const surfaces = new Map<string, Interface>();
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      for (let page = 0; page < LAUNCHER_SURFACE_PAGE_LIMIT; page++) {
+        if (page > 0) {
+          if (remainingExtraPages === 0) { surfacesIncomplete = true; break; }
+          remainingExtraPages--;
+        }
+        ctx.assertActive?.();
+        const candidates = await interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage(
+          { workspaceId: capsule.workspaceId, phase: "Resolved" },
+          ctx.session.subject,
+          UI_SURFACE_OPEN_PERMISSION,
+          { limit: LAUNCHER_SURFACES_PER_PAGE, ...(cursor ? { cursor } : {}) },
+          capsule.id,
+        );
+        for (const iface of candidates.items) {
+          if (isLauncherSurface(iface, capsule)) surfaces.set(iface.metadata.id, iface);
+        }
+        if (candidates.nextCursor === undefined) break;
+        if (!candidates.nextCursor || seenCursors.has(candidates.nextCursor) || page + 1 === LAUNCHER_SURFACE_PAGE_LIMIT) {
+          surfacesIncomplete = true;
+          break;
+        }
+        seenCursors.add(candidates.nextCursor);
+        cursor = candidates.nextCursor;
+      }
+      perApp[index] = [...surfaces.values()];
     }
   };
   await Promise.all(
@@ -131,9 +156,8 @@ export async function handleAccountUiSurfaces(
       ...(examined < candidates.length && lastExamined
         ? { nextCursor: encodeCursor({ createdAt: LAUNCHER_CURSOR_MARK, id: lastExamined.id }) }
         : {}),
-      // The caller manages more apps than one account read enumerates; the
-      // launcher covers the first ones in the resolver's order.
-      ...(resolved.scope.complete ? {} : { incomplete: true }),
+      // Either the account read or a covered app's candidate read was bounded.
+      ...(resolved.scope.complete && !surfacesIncomplete ? {} : { incomplete: true }),
     },
     200,
     { "cache-control": "no-store" },
