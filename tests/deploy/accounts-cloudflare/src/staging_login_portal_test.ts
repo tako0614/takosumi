@@ -49,6 +49,23 @@ test("stage login uses only configured public providers and preserves the entire
   expect(html).not.toContain("client_secret");
 });
 
+test("Japanese browser preferences localize the portal and failed sign-in without changing the continuation", async () => {
+  const headers = { "accept-language": "en-US;q=0.5, ja-JP;q=0.9" };
+  const renderJapanese = (url: URL) => handleStagingLoginPortal({
+    request: new Request(url, { headers }), issuer,
+    accountsHandler: () => Response.json({ providers: descriptors }),
+  });
+  const response = await renderJapanese(signInUrl());
+  expect(response?.headers.get("content-language")).toBe("ja");
+  const html = await response!.text();
+  expect(html).toContain('lang="ja"');
+  expect(html).toContain("Google で続ける");
+  expect(links(html)[0]?.searchParams.get("return_to")).toBe(returnTo);
+  const invalid = await renderJapanese(signInUrl("https://example.test/oauth/authorize"));
+  expect(invalid?.status).toBe(400);
+  expect(await invalid!.text()).toContain("このサインインリンクは無効です");
+});
+
 test("provider discovery is an in-process public request with no caller authority or forwarded host", async () => {
   let actualRequest: Request | undefined;
   const response = await handleStagingLoginPortal({
@@ -167,7 +184,7 @@ test("freshness makes Google explicit and disables GitHub without inventing auth
     expect(targets[0]?.searchParams.get("provider")).toBe("google");
     expect(targets[0]?.searchParams.get("prompt")).toBe("login");
     expect(targets[0]?.searchParams.get("max_age")).toBe("0");
-    expect(html).toContain('<button type="button" disabled>GitHub</button>');
+    expect(html).toMatch(/<button\b[^>]*\bdisabled>GitHub<\/button>/u);
     expect(html).toContain("GitHub cannot confirm fresh credential entry");
     expect(html).not.toContain("auth_time");
     expect(html).not.toContain("reauthenticatedAt");
