@@ -240,6 +240,11 @@ function connectionRows(page: Page): Locator {
 }
 
 async function expandDetails(page: Page, testId: string) {
+  if (testId === "install-configuration-choice") {
+    const trigger = page.getByTestId(testId);
+    if (await trigger.getAttribute("aria-expanded") !== "true") await trigger.click();
+    return;
+  }
   if (["install-customization", "install-connections"].includes(testId)) {
     await expandDetails(page, "install-configuration-choice");
   }
@@ -270,16 +275,16 @@ async function expectNoHorizontalOverflow(page: Page, label: string): Promise<vo
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${label} must not overflow horizontally`).toBeLessThanOrEqual(1);
 }
 
-/** A box starts below the sticky top bar and ends above the mobile tab bar. */
-async function expectBetweenChrome(page: Page, target: Locator, label: string): Promise<void> {
-  const box = (await target.boundingBox())!;
-  const topbar = (await page.locator("header.topbar").boundingBox())!;
-  expect(box, `${label} has a layout box`).not.toBeNull();
-  expect(box.y, `${label} starts below the sticky top bar`).toBeGreaterThanOrEqual(topbar.y + topbar.height - 1);
-  const tabs = page.locator(".mobile-tabs");
-  const tabsBox = await tabs.isVisible() ? await tabs.boundingBox() : null;
-  const bottom = tabsBox ? tabsBox.y : page.viewportSize()!.height;
-  expect(box.y + box.height, `${label} ends above the bottom navigation`).toBeLessThanOrEqual(bottom + 1);
+/** The opened form scrolls into view inside the editor, below its sticky header. */
+async function expectInsideConfiguration(page: Page, target: Locator): Promise<void> {
+  const dialog = page.getByRole("dialog", { name: "Configuration" });
+  await expect.poll(async () => {
+    const box = await target.boundingBox();
+    const panel = await dialog.boundingBox();
+    const header = await dialog.locator("header").boundingBox();
+    return Boolean(box && panel && header &&
+      box.y >= header.y + header.height - 1 && box.y + box.height <= panel.y + panel.height + 1);
+  }).toBe(true);
 }
 
 /** Desktop 1440×900 and mobile 390×844 captures of one install state. */
@@ -319,7 +324,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       // A Git link has no publisher description: avoid the generic install boilerplate.
       await expect(page.locator('[data-testid="install-app-header"] > div > p:not(.iv-provenance)')).toHaveCount(0);
       await expect(page.getByRole("link", { name: "Back to Store", exact: true })).toHaveAttribute("href", "/new");
-      await expect(page.getByTestId("install-start")).toContainText("Nothing is created in your cloud yet");
+      await expect(page.getByTestId("install-start")).not.toContainText("Nothing is created in your cloud yet");
       await captureInstallState(page, "app-not-installed");
       await page.waitForTimeout(500);
       expect(f.mutations).toEqual([]);
@@ -364,6 +369,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const waiting = planPreview(page).getByRole("button", { name: "Allow and install", exact: true });
       await expect(waiting).toBeDisabled();
       await expect(waiting).toHaveAttribute("aria-describedby", "iv-apply-reason");
+      await page.getByRole("dialog", { name: "Configuration" }).getByRole("button", { name: "Close", exact: true }).click();
       await waiting.focus();
       await expect(waiting).toBeFocused();
       await waiting.click({ force: true });
@@ -404,8 +410,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(methods.length).toBeGreaterThan(0);
       for (const method of methods) expect(method).toMatch(/^Cloudflare\b/u);
       await expect(form.locator("#connection-field-CLOUDFLARE_API_TOKEN")).toBeVisible();
-      // It lands between the sticky top bar and the bottom tabs, not behind either.
-      await expectBetweenChrome(page, form.getByText("Connect account", { exact: true }), "inline connection form heading");
+      await expectInsideConfiguration(page, form.getByText("Connect account", { exact: true }));
       await expectNoHorizontalOverflow(page, "inline connection form at 390px");
       expect(await form.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
       await captureInstallState(page, "app-inline-connect");
@@ -476,10 +481,10 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await connections.locator(":scope > summary").click();
       await expect(connections).not.toHaveAttribute("open", "");
       const configuration = page.getByTestId("install-configuration-choice");
-      await configuration.locator(":scope > summary").click();
-      await expect(configuration).not.toHaveAttribute("open", "");
+      await page.getByRole("dialog", { name: "Configuration" }).getByRole("button", { name: "Close", exact: true }).click();
+      await expect(configuration).toHaveAttribute("aria-expanded", "false");
       release();
-      await expect(configuration).toHaveAttribute("open", "");
+      await expect(configuration).toHaveAttribute("aria-expanded", "true");
       await expect(connections.locator('[role="alert"]').first()).toBeVisible();
       await expect(connections.locator(":scope > summary")).toContainText("Existing account");
       expect(f.mutations).not.toContain(applyMutation);
@@ -596,6 +601,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Fill in the required settings");
       const planned = preview.getByTestId("install-planned-resources");
       await expect(planned.locator("li").first()).not.toBeVisible();
+      const editor = page.getByRole("dialog", { name: "Configuration" });
+      if (await editor.isVisible()) await editor.getByRole("button", { name: "Close", exact: true }).click();
       await expandDetails(page, "install-planned-resources");
       await expect(planned.locator('li[data-resource-type="cloudflare_workers_script"]')).toBeVisible();
       await expect(planned.locator('li[data-resource-type="cloudflare_d1_database"]')).toContainText("×2");
@@ -603,6 +610,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.waitForTimeout(1_500);
       expect(f.continued()).toBeUndefined();
       // Typed text counts once its field is left (Enter here).
+      await expandDetails(page, "install-configuration-choice");
       await secret.fill("fixture-secret-value");
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Checked once you finish typing");
       await page.waitForTimeout(1_200);
@@ -622,8 +630,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const review = await waitForPlan(page);
       await expect(page.getByTestId("install-version")).not.toBeVisible();
       await expect(page.getByTestId("install-version-choice").locator(":scope > summary")).toContainText("0123456");
-      await expect(page.getByTestId("install-configuration-choice")).not.toHaveAttribute("open");
-      await expect(page.getByTestId("install-selected-configuration")).toContainText("Default");
+      await expect(page.getByTestId("install-configuration-choice")).toHaveAttribute("aria-expanded", "false");
+      await expect(page.getByTestId("install-selected-configuration")).toContainText("Selected");
       await expect(page.getByTestId("install-app-name")).not.toBeVisible();
       await expect(page.getByTestId("install-optional-settings").locator("input").first()).not.toBeVisible();
       await expect(review.getByTestId("install-plan-resources")).not.toBeVisible();
@@ -646,6 +654,21 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.getByTestId("install-version").focus();
       await page.keyboard.press("Tab");
       expect(f.attempts.log.creates).toHaveLength(1);
+      await page.getByTestId("install-version-choice").locator(":scope > summary").click();
+      const configuration = page.getByTestId("install-configuration-choice");
+      const allow = review.getByRole("button", { name: "Allow and install", exact: true });
+      const editor = page.getByRole("dialog", { name: "Configuration" });
+      for (const width of [375, 1024]) {
+        await page.setViewportSize({ width, height: 900 });
+        await configuration.focus();
+        const before = await allow.boundingBox();
+        await configuration.press("Enter");
+        await expect(editor).toBeVisible();
+        expect(await allow.boundingBox()).toEqual(before);
+        await page.keyboard.press("Escape");
+        await expect(editor).not.toBeVisible();
+        await expect(configuration).toBeFocused();
+      }
     });
     test("two decisions: Install, then Allow and install; the install finishes on the same screen", async ({ page, context }) => {
       const f = await detailFixture(page, base);
@@ -816,6 +839,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const sheet = await openInstallSheet(page);
       await expect(sheet).toHaveAttribute("data-install-state", "connections");
       const attemptId = new URL(page.url()).searchParams.get("installPlan");
+      await page.getByRole("dialog", { name: "Configuration" }).getByRole("button", { name: "Close", exact: true }).click();
       await planPreview(page).getByRole("button", { name: "Stop installing", exact: true }).click();
       await expect(installSheet(page)).toHaveCount(0);
       await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
@@ -891,7 +915,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     });
     test("a repository with several modules asks which one before the sheet", async ({ page }) => {
       const f = await detailFixture(page, base, false, false, "not_applicable", {
-        modules: [{ path: "apps/web", providers: [cloudflare] }, { path: "apps/api", providers: [] }],
+        modules: [{ path: "apps/web", providers: [cloudflare], recommended: true }, { path: "apps/api", providers: [] }],
       });
       await page.goto(`/new?git=${encodeURIComponent("https://github.com/example/cloudflare-service.git")}&name=cloudflare-service`);
       await page.getByRole("button", { name: "Install", exact: true }).click();
@@ -899,7 +923,13 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const chooser = installSheet(page).getByTestId("install-module-chooser");
       await expect(chooser.getByRole("heading", { name: "Choose a configuration" })).toBeVisible();
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Choose a configuration to continue");
-      await chooser.getByRole("combobox").selectOption("apps/api");
+      const useConfiguration = chooser.getByRole("button", { name: "Use this configuration" });
+      await expect(useConfiguration).toBeDisabled();
+      const recommended = chooser.getByRole("radio", { name: /apps\/web.*Publisher recommendation/u });
+      await expect(recommended).not.toBeChecked();
+      await chooser.getByRole("radio", { name: "apps/api", exact: true }).check();
+      expect(f.attempts.log.answers).toHaveLength(0);
+      await useConfiguration.click();
       await waitForPlan(page);
       await expect(chooser).toHaveCount(0);
       expect(f.attempts.log.answers).toContainEqual({ expectedGeneration: expect.any(Number), modulePath: "apps/api" });

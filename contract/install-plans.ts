@@ -327,6 +327,8 @@ export interface GitInstallPlanModuleCandidate {
   readonly path: string;
   /** Canonical provider source addresses the module uses. */
   readonly providers: readonly string[];
+  /** Optional publisher recommendation for an exact scanned candidate. */
+  readonly recommended?: true;
 }
 
 /** A Provider Connection offered for one requirement. Never carries values. */

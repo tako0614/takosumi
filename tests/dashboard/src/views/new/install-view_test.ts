@@ -212,7 +212,6 @@ describe("attempt-driven install page", () => {
     const candidate = between(view, '<Match when={stage() === "candidate" || stage() === "starting"}>', "</Match>");
     expect(candidate.match(/variant="primary"/gu)).toHaveLength(1);
     expect(candidate).toContain('t("installStore.install")');
-    expect(candidate).toContain('t("installStore.startHint")');
     expect(candidate).toContain('label={t("installStore.sourceRef")}');
     expect(view).toContain('data-testid="install-provenance"');
     expect(view).toContain('if (installedApps.state !== "ready") return;');

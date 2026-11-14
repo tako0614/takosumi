@@ -108,9 +108,9 @@ manifest. This endpoint checks account-session authentication, Source Workspace
 access, and the exact SourceSnapshot-to-Source relationship.
 
 The optional `install.defaultModule` field published in v2.1 through v2.3
-continues to parse and must name an exact `install.modules` key, but it is only
-a compatibility presentation hint. It never skips explicit user selection when
-the scan finds multiple modules and is not execution-module authority.
+continues to parse and must name an exact `install.modules` key. The install
+screen marks the matching scanned candidate as the publisher recommendation.
+When the scan finds multiple modules, the installer still chooses one.
 
 With or without a manifest, and for every manifest version, the scan follows only
 tracked regular files and vendored local module edges (`./` and `../`) inside the

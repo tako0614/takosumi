@@ -1167,6 +1167,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByTestId("install-plan-cost")).toContainText("Cloud charges may apply. No cost estimate is available.");
     await expect(page.locator("body")).not.toContainText("$0.00");
 
+    await page.getByRole("dialog", { name: "Configuration" }).getByRole("button", { name: "Close", exact: true }).click();
     await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
     await expect(addButton).toBeEnabled();
     await addButton.click();

@@ -3346,6 +3346,7 @@ test("install attempt asks for connections when no single candidate exists and v
 
 test("install attempt asks to choose among scanned modules and restarts analysis for the choice", async () => {
   const fixture = attemptFixture({
+    repositoryManifest: repositoryManifest(["apps/a", "apps/a-unscanned"], "apps/a"),
     repositoryModules: {
       status: "ready",
       scopePath: ".",
@@ -3372,7 +3373,7 @@ test("install attempt asks to choose among scanned modules and restarts analysis
   expect(paused.userAction).toEqual({
     kind: "choose_module",
     modules: [
-      { path: "apps/a", providers: [CLOUDFLARE] },
+      { path: "apps/a", providers: [CLOUDFLARE], recommended: true },
       { path: "apps/b", providers: [] },
     ],
   });
@@ -5641,6 +5642,7 @@ function providerConnection(
 
 function repositoryManifest(
   modulePaths: readonly string[],
+  defaultModule?: string,
 ): NonNullable<SourceSnapshot["repositoryManifest"]> {
   return {
     status: "present",
@@ -5649,6 +5651,7 @@ function repositoryManifest(
       apiVersion: "takosumi.com/v2.1",
       kind: "Repository",
       install: {
+        ...(defaultModule !== undefined ? { defaultModule } : {}),
         modules: Object.fromEntries(
           modulePaths.map((modulePath) => [modulePath, { inputs: [] }]),
         ),
