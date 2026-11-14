@@ -146,7 +146,7 @@ export const ja = {
   "installStore.costPending": "まだ分かりません。",
   "installStore.completeOpenHint": "アプリを開くか、アプリのページで管理できます。",
   "installStore.plannedTitle": "作られるもの（予定）",
-  "installStore.plannedHint": "接続先と設定がそろうと、正確な内容と料金を確認します。",
+  "installStore.plannedHint": "接続先と設定がそろうと、作成されるリソースと料金の目安を確認できます。",
   "installStore.plannedEmpty": "事前に数えられるリソースはありません。正確な内容は「内容を確認」で表示します。",
   "installStore.plannedNotAllowed": "ポリシーで許可されていません",
   "installStore.nameHint": "半角小文字・数字・ハイフンで入力します。",
