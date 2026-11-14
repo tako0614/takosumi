@@ -567,9 +567,25 @@ test("authority and code uploads carry the issuer placement and read it back fro
   }
 });
 
+test("code publication accepts the provider's named-region readback without a numeric id", async () => {
+  const region = AUTH_STAGING_PLACEMENT.region;
+  const h = harness({ active: true,
+    versionPlacement: { mode: "targeted", target: [{ region, type: "region" }] },
+    placement: () => ({ mode: "targeted", region }),
+  });
+  expect(await h.execute("code")).toMatchObject({ status: "ready", version: uploadedVersion });
+  expect(h.counts().publicCalls).toBe(1);
+  const wrongServingRegion = harness({ active: true,
+    versionPlacement: { mode: "targeted", target: [{ region, type: "region" }] },
+    placement: () => ({ mode: "targeted", region: "aws:us-east-1" }),
+  });
+  await expect(wrongServingRegion.execute("code")).rejects.toMatchObject({ recovery: { reason: "auth_staging_placement_invalid" } });
+  expect(wrongServingRegion.counts().publicCalls).toBe(0);
+});
+
 test("serving settings that do not name the uploaded placement target are incomplete, never ready", async () => {
   for (const action of ["authority", "code"] as const) {
-    for (const placement of [() => ({}), () => ({ mode: "smart" }), () => ({ mode: "targeted", target: [31] }), () => ({ mode: "targeted", target: [30, 31] }), () => ({ mode: "targeted", target: [30], hint: "apac" }), () => ({ mode: "targeted", region: AUTH_STAGING_PLACEMENT.region })]) {
+    for (const placement of [() => ({}), () => ({ mode: "smart" }), () => ({ mode: "targeted", target: [31] }), () => ({ mode: "targeted", target: [30, 31] }), () => ({ mode: "targeted", target: [30], hint: "apac" }), () => ({ mode: "targeted", region: "aws:us-east-1" })]) {
       const h = harness({ active: true, placement });
       await expect(h.execute(action)).rejects.toMatchObject({ recovery: { reason: "auth_staging_placement_invalid" } });
       expect(h.counts().publicCalls).toBe(0);
