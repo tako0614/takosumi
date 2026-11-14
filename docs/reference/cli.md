@@ -12,6 +12,9 @@ takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
+`status`は指定IDのRunを1回読み、`type id status`を表示します。exit 0は読取成功であり、表示が`failed`ならRunは失敗のままです。
+正規の`{run: ...}`応答と既存flat形式を扱い、欠落・別ID・不正なtype/statusは表示せずexit 1にします。
+
 `TAKOSUMI_DEPLOY_CONTROL_URL` には、dashboard にサインインしている origin を入れます。公式
 ホスティング（Takosumi hosted service）なら `https://app.takosumi.com` です。
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` に入れる API キーは、下の[トークンを発行する](#トークンを発行する)で

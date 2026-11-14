@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test";
 import { setImmediate as realSetImmediate } from "node:timers";
+import { Hono } from "hono";
 import { main } from "../../../cli/src/main.ts";
+import { mountDeployControlRunRoutes } from "../../../core/api/deploy_control_run_routes.ts";
+import { createDeployControlBodyLimit } from "../../../core/api/deploy_control_shared.ts";
+import type { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -127,4 +131,70 @@ test("status preserves success and HTTP errors; logs do not gain this timer", as
   expect(await main(["logs", "run_ok", "--url", "https://deploy.example.test/"], io)).toBe(0);
   expect(requests[2]?.init?.signal).toBeUndefined();
   expect(jest.getTimerCount()).toBe(0);
+});
+
+test("status reads the canonical envelope from a Core producer fixture", async () => {
+  const runs = [
+    { id: "plan_abcdef12", type: "plan", status: "failed" },
+    { id: "plan_abcdef12", type: "plan", status: "waiting_approval" },
+    { id: "apply_abcdef12", type: "apply", status: "cancelled" },
+    { id: "ssr_abcdef12", type: "source_sync", status: "running" },
+  ];
+  let current = runs[0]!;
+  const readIds: string[] = []; const requests: Request[] = [];
+  const app = new Hono();
+  mountDeployControlRunRoutes({
+    app, dependencies: { getDeployControlToken: () => "synthetic-status-token" },
+    controller: { getRun: async (id: string) => {
+      readIds.push(id);
+      return { ...current, workspaceId: "ws_status" };
+    } } as unknown as OpenTofuController,
+    deployControlBodyLimit: createDeployControlBodyLimit(),
+  });
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init); requests.push(request);
+    // This fixture connects the public CLI consumer to the actual internal
+    // Core producer. It does not add or qualify a public route alias.
+    const producerUrl = new URL(request.url);
+    producerUrl.pathname = producerUrl.pathname.replace(/^\/api\/v1\//u, "/internal/v1/");
+    const response = await app.fetch(new Request(producerUrl, {
+      method: request.method, headers: request.headers, signal: request.signal,
+    }));
+    expect(response.status).toBe(200);
+    return response;
+  }) as typeof fetch;
+  for (const run of runs) {
+    current = run;
+    const stdout: string[] = []; const stderr: string[] = [];
+    expect(await main(["status", run.id, "--url", "https://deploy.example.test", "--token", "synthetic-status-token"],
+      { stdout: line => stdout.push(line), stderr: line => stderr.push(line) })).toBe(0);
+    expect(stdout).toEqual([`${run.type} ${run.id} ${run.status}`]);
+    expect(stderr).toEqual([]);
+    expect(jest.getTimerCount()).toBe(0);
+  }
+  expect(readIds).toEqual(runs.map(run => run.id));
+  expect(requests).toHaveLength(runs.length);
+  expect(requests.every(request => request.method === "GET" && request.headers.get("authorization") === "Bearer synthetic-status-token")).toBe(true);
+});
+
+test("status refuses malformed or mismatched canonical and flat Run projections", async () => {
+  const run = { id: "plan_abcdef12", type: "plan", status: "failed" };
+  for (const response of [
+    {}, { run: null }, { run: {} }, { run: { ...run, id: "plan_other123" } },
+    { run: { ...run, type: "unknown" } }, { run: { ...run, status: "unknown" } },
+    { ...run, run: null }, { ...run, id: "plan_other123" },
+    { ...run, type: "plan\nsynthetic-private" }, { ...run, status: null },
+  ]) {
+    const requests: Request[] = []; const stdout: string[] = []; const stderr: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      requests.push(new Request(input, init)); return Response.json(response);
+    }) as typeof fetch;
+    expect(await main(["status", run.id, "--url", "https://deploy.example.test"],
+      { stdout: line => stdout.push(line), stderr: line => stderr.push(line) })).toBe(1);
+    expect(stdout).toEqual([]);
+    expect(stderr).toEqual(["Takosumi returned an invalid Run status response"]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.method).toBe("GET");
+    expect(jest.getTimerCount()).toBe(0);
+  }
 });
