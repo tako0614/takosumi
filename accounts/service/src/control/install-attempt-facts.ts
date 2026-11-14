@@ -50,6 +50,7 @@ import type {
 } from "../../../../core/domains/install-plans/store.ts";
 import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { declaredRepositoryManifestModulePath } from "./repo-owned-install-config.ts";
 
 const MAX_FACT_MODULES = 100;
 const MAX_FACT_RESOURCES = 200;
@@ -85,11 +86,20 @@ export function moduleCandidates(
 ): readonly GitInstallPlanModuleCandidate[] {
   const index = snapshot.repositoryModules;
   if (!index || index.status !== "ready") return [];
+  const manifest = snapshot.repositoryManifest;
+  const install = manifest?.status === "present" ? manifest.document.install : undefined;
+  const recommendation = install && "defaultModule" in install
+    ? install.defaultModule
+    : undefined;
   return index.modules.slice(0, MAX_FACT_MODULES).map((module) => ({
     path: module.path,
     providers: [
       ...new Set(module.providerPackages.map((provider) => provider.source)),
     ].sort(),
+    ...(recommendation !== undefined &&
+        declaredRepositoryManifestModulePath(snapshot, module.path) === recommendation
+      ? { recommended: true as const }
+      : {}),
   }));
 }
 

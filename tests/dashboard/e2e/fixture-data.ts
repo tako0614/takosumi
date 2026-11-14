@@ -453,7 +453,7 @@ export interface InstallAttemptFixtureOptions {
   /** The Plan Run of the n-th attempt (1-based), when attempts must differ. */
   readonly planRunIdFor?: (sequence: number) => string;
   /** Scanned roots; more than one (without a proven hint) asks for a choice. */
-  readonly modules?: readonly { readonly path: string; readonly providers: readonly string[] }[];
+  readonly modules?: readonly { readonly path: string; readonly providers: readonly string[]; readonly recommended?: true }[];
   readonly resources?: readonly { readonly type: string; readonly count?: number; readonly allowed: boolean }[];
   readonly requirements?: readonly InstallAttemptFixtureRequirement[];
   /** Declared app requirements; candidates are projected without any values. */

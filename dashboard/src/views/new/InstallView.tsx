@@ -572,7 +572,9 @@ function AppInstallPage(props: { readonly principalId: string }) {
                         {existingApps().length > 0 ? t("installStore.installAnother") : t("installStore.install")}
                       </Button>
                     </div>
-                    <p class="iv-start-hint">{existingApps().length > 0 ? t("installStore.installAnotherHint") : t("installStore.startHint")}</p>
+                    <Show when={existingApps().length > 0}>
+                      <p class="iv-start-hint">{t("installStore.installAnotherHint")}</p>
+                    </Show>
                   </div>
                 </form>
               </section>
@@ -588,7 +590,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
                 attempt={attempt}
                 workspaceId={plan()?.workspaceId || currentWorkspaceId() || undefined}
                 fromStore={fromStore()}
-                storeModulePath={listed()?.source.path ?? (listed() ? "." : undefined)}
+                storeModulePath={listed()?.source.path}
                 onDone={(capsuleId) => void finish(capsuleId)}
               />
             </Match>

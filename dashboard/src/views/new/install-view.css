@@ -147,32 +147,52 @@
 .iv-app-intro p { max-width: 56ch; margin: var(--tg-s-1) 0 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-base); line-height: 1.6; overflow-wrap: anywhere; }
 .iv-app-publisher { color: var(--tg-accent-text); font-size: var(--tg-fs-sm); font-weight: 600; overflow-wrap: anywhere; }
 
-.iv-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.iv-choices:not(:has(> [open])) > .iv-choice + .iv-choice { border-inline-start: 1px solid var(--tg-line); }
-.iv-choices:has(> [open]) { grid-template-columns: minmax(0, 1fr); }
+.iv-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.iv-choices > .iv-configuration-trigger { border-inline-start: 1px solid var(--tg-line); }
 .iv-choice { min-width: 0; }
 .iv-choice > summary,
+.iv-configuration-trigger,
 .iv-app-about > summary,
 .iv-configure-page .iv-resource-disclosure > summary { display: flex; align-items: center; gap: var(--tg-s-2); min-height: 2.75rem; cursor: pointer; list-style: none; }
 .iv-choice > summary::-webkit-details-marker,
 .iv-app-about > summary::-webkit-details-marker,
 .iv-configure-page .iv-resource-disclosure > summary::-webkit-details-marker { display: none; }
-.iv-choice > summary { min-height: 3.25rem; padding: var(--tg-s-2) var(--tg-s-3); border-radius: var(--tg-r-md); font-size: var(--tg-fs-sm); }
-.iv-choice > summary > span:first-child { color: var(--tg-fg-muted); white-space: nowrap; }
+.iv-choice > summary, .iv-configuration-trigger { min-height: 3.25rem; padding: var(--tg-s-2) var(--tg-s-3); border-radius: var(--tg-r-md); font-size: var(--tg-fs-sm); }
+:is(.iv-choice > summary, .iv-configuration-trigger) > span:first-child { color: var(--tg-fg-muted); white-space: nowrap; }
 .iv-choice-selection { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--tg-s-2); min-width: 0; overflow-wrap: anywhere; }
 .iv-choice-context { color: var(--tg-fg-muted); }
-.iv-choice > summary strong { min-width: 0; overflow-wrap: anywhere; font-weight: 650; }
+:is(.iv-choice > summary, .iv-configuration-trigger) strong { min-width: 0; overflow-wrap: anywhere; font-weight: 650; }
 .iv-choice > summary > svg,
+.iv-configuration-trigger > svg,
 .iv-app-about > summary > svg,
 .iv-configure-page .iv-resource-disclosure > summary > svg { flex: none; margin-inline-start: auto; color: var(--tg-fg-muted); }
 .iv-choice > summary:hover,
+.iv-configuration-trigger:hover,
 .iv-choice[open] > summary { background: var(--tg-bg-subtle); }
-.iv-choice > summary:focus-visible, .iv-back-link:focus-visible, .iv-app-about > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+.iv-choice > summary:focus-visible, .iv-configuration-trigger:focus-visible, .iv-configuration-close:focus-visible, .iv-back-link:focus-visible, .iv-app-about > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
 .iv-choice[open] > summary > svg,
 .iv-app-about[open] > summary > svg,
 .iv-configure-page .iv-resource-disclosure[open] > summary > svg { transform: rotate(180deg); }
 .iv-choice-content { padding: var(--tg-s-3); }
-.iv-configuration-content { display: grid; gap: var(--tg-s-3); }
+/* Configure in the top layer so its height never moves the Store underneath. */
+.iv-configuration-trigger { width: 100%; min-width: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: var(--tg-fs-sm); text-align: start; }
+.iv-configuration-dialog { position: fixed; inset: min(10dvh, 5rem) 0 auto; width: min(calc(100% - var(--tg-s-5)), 38rem); max-height: calc(100dvh - min(10dvh, 5rem) - var(--tg-s-4)); margin: 0 auto; padding: 0; overflow: auto; overflow-anchor: none; overscroll-behavior: contain; border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); color: var(--tg-fg); box-shadow: var(--tg-shadow-lg); }
+.iv-configuration-dialog::backdrop { background: color-mix(in srgb, var(--tg-bg) 55%, var(--tg-fg) 16%, transparent); }
+.iv-configuration-heading { position: sticky; z-index: 1; top: 0; display: flex; justify-content: space-between; align-items: center; gap: var(--tg-s-2); padding: var(--tg-s-2) var(--tg-s-4); background: var(--tg-bg-elev); border-bottom: 1px solid var(--tg-line); }
+.iv-configuration-heading h2 { font-size: var(--tg-fs-lg); }
+.iv-configuration-close { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; flex: none; border: 0; border-radius: var(--tg-r-md); background: transparent; color: var(--tg-fg-muted); cursor: pointer; }
+.iv-configuration-close:hover, .iv-configuration-close:active { background: var(--tg-bg-subtle); color: var(--tg-fg); }
+.iv-configuration-content { display: grid; gap: var(--tg-s-4); padding: var(--tg-s-4); }
+.iv-configuration-content .iv-inline-connect { scroll-margin-top: 4.5rem; }
+.iv-module-options { display: grid; min-width: 0; gap: var(--tg-s-2); margin: 0; padding: 0; border: 0; }
+.iv-module-options p { margin: 0 0 var(--tg-s-1); }
+.iv-module-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--tg-s-3); padding: var(--tg-s-3); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); cursor: pointer; overflow-wrap: anywhere; }
+.iv-module-option:is(:hover, :has(:checked)) { background: var(--tg-bg-subtle); }
+.iv-module-option:has(:focus-visible) { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+.iv-module-option input { margin: 0; accent-color: var(--tg-accent-emphasis); }
+.iv-module-providers { display: block; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.iv-recommendation { margin-inline-start: var(--tg-s-2); color: var(--tg-accent-text); font-size: var(--tg-fs-sm); }
+
 .iv-module-path, .iv-linked-apps { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); overflow-wrap: anywhere; }
 .iv-module-path code { color: var(--tg-fg); }
 
@@ -180,7 +200,7 @@
 .iv-configure-page .iv-plan-review, .iv-configure-page .iv-execution, .iv-configure-page .iv-sheet-block { border-top: 0; padding-top: 0; }
 .iv-configure-page .iv-progress { padding: var(--tg-s-2) var(--tg-s-3); border: 0; background: var(--tg-bg-subtle); font-size: var(--tg-fs-sm); }
 .iv-execution-contents:not(.iv-decision) { display: contents; }
-.iv-decision { display: grid; gap: var(--tg-s-3); padding: var(--tg-s-4); border-radius: var(--tg-r-lg); background: var(--tg-bg-subtle); }
+.iv-decision { display: grid; gap: var(--tg-s-3); padding-block: var(--tg-s-3); border-top: 1px solid var(--tg-line); }
 .iv-decision .iv-action-row { margin: 0; }
 .iv-decision .iv-action-row > .tg-btn-primary { min-height: 3rem; padding-inline: var(--tg-s-5); justify-content: center; border-radius: var(--tg-r-md); }
 .iv-decision .iv-start-hint, .iv-decision .iv-sheet-block > .iv-muted, .iv-decision .iv-review-warning { margin: 0; }
@@ -198,7 +218,7 @@
 @media (max-width: 46rem) {
   .iv-configure-page { --iv-inset: var(--tg-s-4); }
   .iv-choices { grid-template-columns: minmax(0, 1fr); }
-  .iv-choices:not(:has(> [open])) > .iv-choice + .iv-choice { border-inline-start: 0; }
+  .iv-choices > .iv-configuration-trigger { border-inline-start: 0; }
 }
 @media (max-width: 39.99rem) {
   .iv-configure-page { padding-top: var(--tg-s-2); }
@@ -206,6 +226,7 @@
   .iv-app-icon { width: 3.75rem; border-radius: var(--tg-r-lg); font-size: 1.125rem; }
   .iv-app-intro h1 { font-size: clamp(1.45rem, 7vw, 2rem); }
   .iv-app-intro p { font-size: var(--tg-fs-sm); }
-  .iv-decision { padding: var(--tg-s-3); }
   .iv-decision .iv-action-row > .tg-btn-primary { padding-inline: var(--tg-s-3); }
 }
+
+.iv-start .iv-decision { padding-bottom: 0; }
