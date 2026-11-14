@@ -35,6 +35,7 @@ import type {
 } from "./mod.ts";
 import { readEnvVar } from "./read-env.ts";
 import type { SharedHostedSessionContext } from "./shared-account-workspace.ts";
+import { authLanguage, authPage, escapeAuthHtml } from "./auth-page.ts";
 import { requireAccountSession } from "./account-session.ts";
 import { HOSTED_CODE_TTL_MS, HOSTED_TOKEN_TTL_SECONDS, HOSTED_REFRESH_IDLE_MS, HOSTED_REFRESH_ABSOLUTE_MS, HOSTED_OIDC_SCOPES, hostedGrantIsActive, hostedIssuerSessionId, hostedOpaqueId } from "./hosted-oidc-profile.ts";
 import { findActiveAccessToken } from "./access-token-activity.ts";
@@ -802,7 +803,7 @@ async function handleAuthorizeUncached(input: {
         authorizationSessionHash:await hostedIssuerSessionId(session.sessionId),reauthenticationStartedAt,
         expiresAt:now+300_000,
       });
-      return hostedConsentPage(input.url,transaction,clientId,scope,redirectUri);
+      return hostedConsentPage(input.request, input.url, transaction, client, scope, redirectUri);
     }
     if (input.request.method === "POST") {
       if (input.request.headers.get("origin") !== input.url.origin) return json({error:"invalid_request"},403);
@@ -1966,15 +1967,42 @@ function hostedAuthorizeError(redirectUri: string,state: string|null,error: stri
   if (state) url.searchParams.set("state",state);
   return Response.redirect(url,302);
 }
-function hostedConsentPage(url: URL, transaction: string, clientId: string, scope: string, redirectUri: string): Response {
-  const escape = (value: string) => value.replace(/[&<>"']/gu,(char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]!));
-  return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>Continue sign-in</title></head><body><main><h1>Continue sign-in</h1><p>Allow ${escape(clientId)} to receive your account identity (${escape(scope)})?</p><form method="post" action="${escape(url.pathname+url.search)}"><input type="hidden" name="consent_transaction" value="${escape(transaction)}"><button name="approve" value="yes">Continue</button></form></main></body></html>`,{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store",// form-action also governs the redirect that answers the POST, so it names
-    // the registered redirect_uri's origin as well as the issuer.
-    "content-security-policy":`default-src 'none'; form-action 'self' ${new URL(redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`,
-    // Browsers send `Origin: null` for a form POST from a no-referrer page,
-    // which the issuer's exact-Origin CSRF check must refuse. same-origin keeps
-    // the Referer off every other origin while the POST carries the issuer Origin.
-    "referrer-policy":"same-origin"}});
+function hostedConsentPage(
+  request: Request,
+  url: URL,
+  transaction: string,
+  client: ResolvedOidcClient,
+  scope: string,
+  redirectUri: string,
+): Response {
+  const language = authLanguage(request);
+  const ja = language === "ja";
+  const nonce = base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(16)));
+  const redirect = new URL(redirectUri);
+  const stage = url.origin === "https://auth-staging.takos.jp";
+  const stageClientName = stage && client.clientId === "takosumi-hosted-staging-v1"
+    ? "Takosumi" : stage && client.clientId === "takoserver-console-staging-v1" ? "Takoserver" : undefined;
+  const name = escapeAuthHtml(stageClientName ?? client.displayName ?? client.clientId);
+  const scopes = NATIVE_CONSENT_COPY[language].scopes;
+  const permissions = scope.split(/\s+/u).filter(Boolean).map((item) =>
+    `<li>${escapeAuthHtml(Object.hasOwn(scopes, item) ? scopes[item]! : item)}</li>`).join("");
+  const title = ja ? "サインインを続ける" : "Continue sign-in";
+  const body = `<p class="auth-summary">${ja ? `${name} に次のアクセスを許可しますか？` : `Allow ${name} to access the following?`}</p>` +
+    `<ul class="auth-permissions">${permissions}</ul>` +
+    `<p class="auth-hint">${ja ? "戻り先" : "Returns to"}：${escapeAuthHtml(redirect.host)}</p>` +
+    `<form method="post" action="${escapeAuthHtml(url.pathname + url.search)}"><input type="hidden" name="consent_transaction" value="${escapeAuthHtml(transaction)}">` +
+    `<div class="actions"><button class="auth-button auth-button--primary" type="submit" name="approve" value="yes">${ja ? "許可して続ける" : "Allow and continue"}</button></div></form>`;
+  return new Response(authPage({ language, nonce, title, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "content-language": language,
+      "cache-control": "no-store",
+      // form-action also governs the redirect that answers the POST.
+      "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'self' ${redirect.origin}; frame-ancestors 'none'; base-uri 'none'`,
+      // Keep the issuer Origin on the POST without sending the Referer cross-origin.
+      "referrer-policy": "same-origin",
+    },
+  });
 }
 
 function hostedRecordMetadata(record: {
@@ -2225,8 +2253,9 @@ function nativeConsentPage(input: {
   redirectUri: string;
   accountLabel?: string;
 }): Response {
-  const escape = (value: string) => value.replace(/[&<>"']/gu, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
-  const copy = /^\s*ja\b/iu.test(input.request.headers.get("accept-language") ?? "") ? NATIVE_CONSENT_COPY.ja : NATIVE_CONSENT_COPY.en;
+  const escape = escapeAuthHtml;
+  const language = authLanguage(input.request);
+  const copy = NATIVE_CONSENT_COPY[language];
   const client = input.client.displayName ?? input.client.clientId;
   const instance = new URL(input.issuer).host;
   const scopes = [...new Set(input.scope.split(/\s+/u).filter(Boolean))];
@@ -2237,18 +2266,15 @@ function nativeConsentPage(input: {
   const redirectSource = redirect.protocol === "https:" || redirect.protocol === "http:"
     ? redirect.origin
     : /^[a-z][a-z0-9+.-]*:$/u.test(redirect.protocol) ? redirect.protocol : "'none'";
-  const style = "body{font:16px/1.5 system-ui,sans-serif;margin:0;background:#f6f6f4;color:#1d1d1b}main{max-width:28rem;margin:0 auto;padding:2rem 1.25rem}h1{font-size:1.35rem;line-height:1.3}dl{margin:1rem 0}dt{font-size:.8rem;color:#5c5c58}dd{margin:0 0 .6rem;word-break:break-all}ul{padding-left:1.2rem}.note{font-weight:600}.warn{background:#fff4e5;border-radius:.5rem;padding:.75rem}.actions{display:flex;gap:.75rem;margin-top:1.5rem}button{flex:1;font:inherit;padding:.8rem;border-radius:.6rem;border:1px solid #c8c8c2;background:#fff}button[value=approve]{background:#f5483d;border-color:#f5483d;color:#fff;font-weight:600}";
-  const body = `<!doctype html><html lang="${copy.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(copy.title(client))}</title><style nonce="${nonce}">${style}</style></head><body><main>` +
-    `<h1>${escape(copy.title(client))}</h1>` +
+  const body =
     `<p>${escape(copy.lead(client, instance))}</p>` +
-    `<ul>${scopes.map((scope) => `<li>${escape(copy.scopes[scope] ?? scope)} <small>(${escape(scope)})</small></li>`).join("")}</ul>` +
+    `<ul class="auth-permissions">${scopes.map((scope) => `<li>${escape(Object.hasOwn(copy.scopes, scope) ? copy.scopes[scope]! : scope)} <small>(${escape(scope)})</small></li>`).join("")}</ul>` +
     (scopes.includes("capsules:write") ? `<p class="note">${escape(copy.runs)}</p>` : "") +
     `<dl>${input.accountLabel ? `<dt>${escape(copy.account)}</dt><dd>${escape(input.accountLabel)}</dd>` : ""}<dt>${escape(copy.returnsTo)}</dt><dd>${escape(input.redirectUri)}</dd></dl>` +
     `<p class="warn">${escape(copy.warning(client))}</p>` +
     `<form method="post" action="${escape(input.url.pathname + input.url.search)}"><input type="hidden" name="consent_transaction" value="${escape(input.transaction)}">` +
-    `<div class="actions"><button type="submit" name="decision" value="deny">${escape(copy.deny)}</button><button type="submit" name="decision" value="approve">${escape(copy.approve)}</button></div></form>` +
-    `</main></body></html>`;
-  return new Response(body, {
+    `<div class="actions"><button class="auth-button" type="submit" name="decision" value="deny">${escape(copy.deny)}</button><button class="auth-button auth-button--primary" type="submit" name="decision" value="approve">${escape(copy.approve)}</button></div></form>`;
+  return new Response(authPage({ language, nonce, title: copy.title(client), body }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
