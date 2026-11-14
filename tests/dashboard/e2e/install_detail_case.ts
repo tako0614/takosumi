@@ -296,7 +296,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
   test.describe("Inline app detail installation", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
     test("opening the app page creates nothing; Install reads the repository as one attempt", async ({ page }) => {
-      const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 6 });
+      let readingHeld = true;
+      const f = await detailFixture(page, base, false, false, "not_applicable", { holdSourceReading: () => readingHeld });
       const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(sourceUrl);
       await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
@@ -330,8 +331,10 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         capsule: { name: "cloudflare-service" },
         options: { modulePath: "." },
       }]);
-      // Reading never applies anything (this coordinator reads slowly on
-      // purpose; the Plan itself is covered by the two-decision case).
+      // Keep reading stable through the UI checks and captures, then release
+      // it through the normal reconcile phases. Reading never applies anything;
+      // the Plan itself is covered by the two-decision case.
+      readingHeld = false;
       await expect(installSheet(page).getByTestId("install-settings")).toBeVisible({ timeout: 30_000 });
       expect(f.mutations.some((m) => /\/(apply|approve)$/u.test(m))).toBe(false);
       expect(errors).toEqual([]);
