@@ -243,34 +243,36 @@ function PlanPreview(props: { readonly attempt: InstallAttempt }) {
   return (
     <section class="iv-execution" data-testid="install-plan-preview" data-apply-block={block() ?? ""} aria-label={t("installStore.reviewTitle")}>
 
-      <section class="iv-sheet-block" data-testid="install-cost-pending" aria-labelledby="iv-cost-pending-title">
-        <h3 class="iv-visually-hidden" id="iv-cost-pending-title">{t("installStore.costTitle")}</h3>
-        <p class="iv-muted">{t("installStore.costPending")}</p>
-      </section>
-      <Show when={block()}>
-        {(reason) => (
-          <p class="iv-apply-reason" id={APPLY_REASON_ID} data-testid="install-apply-reason">
-            {t(APPLY_WAIT_TEXT[reason()])}
-          </p>
-        )}
-      </Show>
-      <div class="iv-action-row">
-        {/* Focusable (aria-disabled, not disabled) so its reason is read
-            out; it never does anything before the Plan is ready. */}
-        <Button
-          type="button"
-          variant="primary"
-          size="lg"
-          aria-disabled="true"
-          aria-describedby={block() ? APPLY_REASON_ID : undefined}
-          onClick={(event) => event.preventDefault()}
-        >
-          {t("installStore.allowInstall")}
-        </Button>
-        <StopButton attempt={props.attempt} />
+      <div class="iv-decision">
+        <section class="iv-sheet-block" data-testid="install-cost-pending" aria-labelledby="iv-cost-pending-title">
+          <h3 class="iv-visually-hidden" id="iv-cost-pending-title">{t("installStore.costTitle")}</h3>
+          <p class="iv-muted">{t("installStore.costPending")}</p>
+        </section>
+        <Show when={block()}>
+          {(reason) => (
+            <p class="iv-apply-reason" id={APPLY_REASON_ID} data-testid="install-apply-reason">
+              {t(APPLY_WAIT_TEXT[reason()])}
+            </p>
+          )}
+        </Show>
+        <div class="iv-action-row">
+          {/* Focusable (aria-disabled, not disabled) so its reason is read
+              out; it never does anything before the Plan is ready. */}
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            aria-disabled="true"
+            aria-describedby={block() ? APPLY_REASON_ID : undefined}
+            onClick={(event) => event.preventDefault()}
+          >
+            {t("installStore.allowInstall")}
+          </Button>
+          <StopButton attempt={props.attempt} />
+        </div>
       </div>
-      <details class="iv-disclosure" data-testid="install-planned-resources" ref={(element) => revealWhen(element, () => props.attempt.sheet()?.resources.some((resource) => !resource.allowed))}>
-        <summary>{t("installStore.resourceDetails")}</summary>
+      <details class="iv-disclosure iv-resource-disclosure" data-testid="install-planned-resources" ref={(element) => revealWhen(element, () => props.attempt.sheet()?.resources.some((resource) => !resource.allowed))}>
+        <summary>{t("installStore.resourceDetails")}<ChevronDown size={16} aria-hidden="true" /></summary>
         <Show when={props.attempt.sheet()} fallback={<p class="iv-muted">{t("installStore.plannedPending")}</p>}>
           {(sheet) => (
             <>
@@ -346,6 +348,7 @@ export function InstallScreen(props: {
   readonly workspaceId?: string;
   /** The install started from a Store listing (an empty version means its newest release). */
   readonly fromStore: boolean;
+  readonly storeModulePath?: string | undefined;
   readonly onDone: (capsuleId: string) => void;
 }) {
   const attempt = () => props.attempt;
@@ -759,6 +762,9 @@ export function InstallScreen(props: {
   const linkedAppNames = () => interfaces().map((row) => selectedInterfaceCandidate(row)?.capsuleName).filter(Boolean)
     .concat(summary()?.interfaces.filter((row) => row.choice.kind === "interface").map((row) => row.displayName || (row.choice.kind === "interface" ? row.choice.interfaceId : "")) ?? []).join(", ");
 
+  const modulePath = () => sheet()?.modulePath ?? summary()?.modulePath ?? plan()?.options.modulePath ?? ".";
+  const standardConfiguration = () => modulePath() === (props.storeModulePath ?? ".");
+
   const reviewAction = () => {
     const action = props.attempt.response()?.userAction;
     return view().stage === "review" && action?.kind === "review_run" ? action : undefined;
@@ -778,7 +784,6 @@ export function InstallScreen(props: {
       <div class="iv-section-head iv-visually-hidden">
         <h2 id="iv-sheet-title" data-stage-heading tabindex="-1">{t("installStore.sheetTitle")}</h2>
       </div>
-      <ProgressLine attempt={props.attempt} />
       <ScreenError attempt={props.attempt} />
       <Show when={resubmitting()}>
         <aside class="iv-setup-note" role="status" data-testid="install-resubmit">
@@ -825,162 +830,175 @@ export function InstallScreen(props: {
                 other.choice?.kind === "interface" && other.choice.interfaceId === selectedInterfaceCandidate(row)?.id))),
             view().applyBlock === "interfaces", resubmitting()].some(Boolean);
         })}>
-          <summary><span>{t("installStore.configuration")}</span><strong data-testid="install-selected-configuration">{(sheet()?.modulePath ?? summary()?.modulePath ?? ".") === "." ? t("installStore.defaultConfiguration") : sheet()?.modulePath ?? summary()?.modulePath}</strong><Show when={connectionNames()}>{(names) => <span class="iv-choice-context">{names()}</span>}</Show><ChevronDown size={16} aria-hidden="true" /></summary>
-          <div class="iv-choice-content iv-configuration-content">
-            <Show when={moduleAction()}>{(action) => <ModuleChoice attempt={props.attempt} action={action()} />}</Show>
-      <details class="iv-disclosure" data-testid="install-customization" ref={(element) => revealWhen(element, () => {
-        const check = settingsCheck();
-        return nameError() || proposedName() || (check && !check.ok && check.invalid.some((name) => optionalNames().includes(name)));
-      })}>
-        <summary>{t("installStore.optionalSettings")}</summary>
-        <section data-testid="install-name-settings">
-          <FormField label={t("installStore.name")} hint={t("installStore.nameHint")} error={nameError()} required>
-            <Input
-              value={nameText()}
-              spellcheck={false}
-              disabled={!sheet() || resubmitting() || locked()}
-              data-testid="install-app-name"
-              onInput={(event) => attempt().setNameDraft(event.currentTarget.value)}
-              onBlur={() => void attempt().saveName()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void attempt().saveName();
-                }
-              }}
-            />
-          </FormField>
-          <Show when={proposedName()}>
-            {(proposed) => (
-              <div class="iv-action-row iv-name-proposal">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy()}
-                  onClick={() => {
-                    attempt().setNameDraft(proposed());
-                    void attempt().saveName();
-                  }}
-                >
-                  {t("installStore.useProposedName", { name: proposed() })}
-                </Button>
-              </div>
-            )}
-          </Show>
-        </section>
-        <Show when={summary()}>
-          <div class="iv-action-row">
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={busy() || locked()}
-              data-testid="install-review-edit"
-              onClick={() => void attempt().editReviewSummary()}
-            >
-              {t("installStore.reviewEdit")}
-            </Button>
-            <p class="iv-muted">{t("installStore.reviewEditHint")}</p>
-          </div>
-        </Show>
-        <Show when={summary()}>
-          {(review) => (
-            <div class="iv-fields">
-              <For each={review().settings}>
-                {(setting) => (
-                  <FormField label={setting.name}>
-                    <output data-variable-name={setting.name}>
-                      {setting.sensitive || setting.value === undefined
-                        ? t(setting.set ? "installStore.reviewSet" : "installStore.reviewNotSet")
-                        : typeof setting.value === "string" ? setting.value : JSON.stringify(setting.value)}
-                    </output>
-                  </FormField>
-                )}
-              </For>
-            </div>
-          )}
-        </Show>
-        <Show when={!summary() && optionalNames().length > 0}>
-          <section data-testid="install-optional-settings">
-            <p class="iv-muted">{t("installStore.optionalSettingsHint")}</p>
-            <div class="iv-fields">
-              <For each={optionalNames()}>
-                {(name) => <Show when={variableFor(name)}>{(variable) => <VariableField variable={variable()} />}</Show>}
-              </For>
-            </div>
-          </section>
-        </Show>
-      </details>
-
-      <Show when={rows().length > 0 || (summary()?.connections.length ?? 0) > 0}>
-        <details class="iv-disclosure" data-testid="install-connections" ref={(element) => revealWhen(element, () => [missingRows() > 0, rowKeys().map((key) => Boolean(rowErrors()[key])).some(Boolean)].some(Boolean))}>
           <summary>
-            {t("installStore.cloudConnection")}
-            <span class="iv-disclosure-value">{rows().map((row) => selectedCandidate(row)).filter(Boolean).map((connection) => connection!.displayName).concat(summary()?.connections.map((connection) => connection.displayName) ?? []).join(", ")}</span>
+            <span>{t("installStore.configuration")}</span>
+            <span class="iv-choice-selection">
+              <strong data-testid="install-selected-configuration">
+                {t(moduleAction() ? "installStore.selectValue" : standardConfiguration() ? "installStore.defaultConfiguration" : "installStore.customConfiguration")}
+              </strong>
+              <Show when={connectionNames()}>{(names) => <span class="iv-choice-context">{names()}</span>}</Show>
+            </span>
+            <ChevronDown size={16} aria-hidden="true" />
           </summary>
-          <Show when={missingRows() > 0}>
-            <p class="iv-muted">{t("installStore.providerHint")}</p>
-          </Show>
-          <For each={rowKeys()}>
-            {(key) => (
-              <Show when={requirementFor(key)}>
-                {(requirement) => <ConnectionRow requirement={requirement()} />}
+          <div class="iv-choice-content iv-configuration-content">
+            <Show when={modulePath() !== "." && !moduleAction()}>
+              <p class="iv-module-path">{t("installStore.modulePathLabel")}: <code>{modulePath()}</code></p>
+            </Show>
+            <Show when={moduleAction()}>{(action) => <ModuleChoice attempt={props.attempt} action={action()} />}</Show>
+            <details class="iv-disclosure" data-testid="install-customization" ref={(element) => revealWhen(element, () => {
+              const check = settingsCheck();
+              return nameError() || proposedName() || (check && !check.ok && check.invalid.some((name) => optionalNames().includes(name)));
+            })}>
+              <summary>{t("installStore.optionalSettings")}</summary>
+              <section data-testid="install-name-settings">
+                <FormField label={t("installStore.name")} hint={t("installStore.nameHint")} error={nameError()} required>
+                  <Input
+                    value={nameText()}
+                    spellcheck={false}
+                    disabled={!sheet() || resubmitting() || locked()}
+                    data-testid="install-app-name"
+                    onInput={(event) => attempt().setNameDraft(event.currentTarget.value)}
+                    onBlur={() => void attempt().saveName()}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void attempt().saveName();
+                      }
+                    }}
+                  />
+                </FormField>
+                <Show when={proposedName()}>
+                  {(proposed) => (
+                    <div class="iv-action-row iv-name-proposal">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy()}
+                        onClick={() => {
+                          attempt().setNameDraft(proposed());
+                          void attempt().saveName();
+                        }}
+                      >
+                        {t("installStore.useProposedName", { name: proposed() })}
+                      </Button>
+                    </div>
+                  )}
+                </Show>
+              </section>
+              <Show when={summary()}>
+                <div class="iv-action-row">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={busy() || locked()}
+                    data-testid="install-review-edit"
+                    onClick={() => void attempt().editReviewSummary()}
+                  >
+                    {t("installStore.reviewEdit")}
+                  </Button>
+                  <p class="iv-muted">{t("installStore.reviewEditHint")}</p>
+                </div>
               </Show>
-            )}
-          </For>
-          <For each={summary()?.connections}>
-            {(connection) => (
-              <article class="iv-connection-row" data-testid="install-required-connection"
-                data-provider-source={connection.provider} data-module-local-name={connection.moduleLocalName}
-                data-child-alias={connection.childAlias ?? ""} data-connection-state="selected">
-                <div class="iv-connection-head">
-                  <strong>{readableProviderSourceLabel(connection.provider)}{connection.childAlias ? ` (${connection.childAlias})` : ""}</strong>
-                  <Show when={connection.autoSelected === true}>
-                    <Badge>{t("installStore.interfaces.automatic")}</Badge>
-                  </Show>
-                </div>
-                <p class="iv-connection-name">{connection.displayName}</p>
-              </article>
-            )}
-          </For>
-        </details>
-      </Show>
+              <Show when={summary()}>
+                {(review) => (
+                  <div class="iv-fields">
+                    <For each={review().settings}>
+                      {(setting) => (
+                        <FormField label={setting.name}>
+                          <output data-variable-name={setting.name}>
+                            {setting.sensitive || setting.value === undefined
+                              ? t(setting.set ? "installStore.reviewSet" : "installStore.reviewNotSet")
+                              : typeof setting.value === "string" ? setting.value : JSON.stringify(setting.value)}
+                          </output>
+                        </FormField>
+                      )}
+                    </For>
+                  </div>
+                )}
+              </Show>
+              <Show when={!summary() && optionalNames().length > 0}>
+                <section data-testid="install-optional-settings">
+                  <p class="iv-muted">{t("installStore.optionalSettingsHint")}</p>
+                  <div class="iv-fields">
+                    <For each={optionalNames()}>
+                      {(name) => <Show when={variableFor(name)}>{(variable) => <VariableField variable={variable()} />}</Show>}
+                    </For>
+                  </div>
+                </section>
+              </Show>
+            </details>
 
-      <Show when={interfaces().length > 0 || (summary()?.interfaces.length ?? 0) > 0}>
-        <section class="iv-sheet-block" aria-labelledby="iv-interfaces-title" data-testid="install-interfaces">
-          <h3 id="iv-interfaces-title">{t("installStore.interfaces.title")}</h3>
-          <For each={interfaceKeys()}>
-            {(key, index) => <Show when={interfaceFor(key)}>{(requirement) => <InterfaceRow requirement={requirement()} index={index()} />}</Show>}
-          </For>
-          <For each={summary()?.interfaces}>
-            {(link) => (
-              <article class="iv-connection-row" data-testid="install-required-interface" data-requirement-key={link.requirementKey}>
-                <div class="iv-connection-head">
-                  <strong>{interfaceLabel(link.requirementKey)}</strong>
-                  <Show when={link.autoSelected}><Badge>{t("installStore.interfaces.automatic")}</Badge></Show>
-                </div>
-                <p class="iv-connection-name">{link.choice.kind === "interface" ? link.displayName || link.choice.interfaceId : t("installStore.interfaces.later")}</p>
-              </article>
-            )}
-          </For>
-        </section>
-      </Show>
+            <Show when={rows().length > 0 || (summary()?.connections.length ?? 0) > 0}>
+              <details class="iv-disclosure" data-testid="install-connections" ref={(element) => revealWhen(element, () => [missingRows() > 0, rowKeys().map((key) => Boolean(rowErrors()[key])).some(Boolean)].some(Boolean))}>
+                <summary>
+                  {t("installStore.cloudConnection")}
+                  <span class="iv-disclosure-value">{rows().map((row) => selectedCandidate(row)).filter(Boolean).map((connection) => connection!.displayName).concat(summary()?.connections.map((connection) => connection.displayName) ?? []).join(", ")}</span>
+                </summary>
+                <Show when={missingRows() > 0}>
+                  <p class="iv-muted">{t("installStore.providerHint")}</p>
+                </Show>
+                <For each={rowKeys()}>
+                  {(key) => (
+                    <Show when={requirementFor(key)}>
+                      {(requirement) => <ConnectionRow requirement={requirement()} />}
+                    </Show>
+                  )}
+                </For>
+                <For each={summary()?.connections}>
+                  {(connection) => (
+                    <article class="iv-connection-row" data-testid="install-required-connection"
+                      data-provider-source={connection.provider} data-module-local-name={connection.moduleLocalName}
+                      data-child-alias={connection.childAlias ?? ""} data-connection-state="selected">
+                      <div class="iv-connection-head">
+                        <strong>{readableProviderSourceLabel(connection.provider)}{connection.childAlias ? ` (${connection.childAlias})` : ""}</strong>
+                        <Show when={connection.autoSelected === true}>
+                          <Badge>{t("installStore.interfaces.automatic")}</Badge>
+                        </Show>
+                      </div>
+                      <p class="iv-connection-name">{connection.displayName}</p>
+                    </article>
+                  )}
+                </For>
+              </details>
+            </Show>
 
-      <Show when={!summary() && requiredNames().length > 0}>
-        <section class="iv-settings" aria-label={t("installStore.setupTitle")} data-testid="install-settings">
-          <h3>{t("installStore.setupTitle")}</h3>
-          <div class="iv-fields">
-              <For each={requiredNames()}>
-                {(name) => <Show when={variableFor(name)}>{(variable) => <VariableField variable={variable()} />}</Show>}
-              </For>
-          </div>
-        </section>
-      </Show>
+            <Show when={interfaces().length > 0 || (summary()?.interfaces.length ?? 0) > 0}>
+              <section class="iv-sheet-block" aria-labelledby="iv-interfaces-title" data-testid="install-interfaces">
+                <h3 id="iv-interfaces-title">{t("installStore.interfaces.title")}</h3>
+                <For each={interfaceKeys()}>
+                  {(key, index) => <Show when={interfaceFor(key)}>{(requirement) => <InterfaceRow requirement={requirement()} index={index()} />}</Show>}
+                </For>
+                <For each={summary()?.interfaces}>
+                  {(link) => (
+                    <article class="iv-connection-row" data-testid="install-required-interface" data-requirement-key={link.requirementKey}>
+                      <div class="iv-connection-head">
+                        <strong>{interfaceLabel(link.requirementKey)}</strong>
+                        <Show when={link.autoSelected}><Badge>{t("installStore.interfaces.automatic")}</Badge></Show>
+                      </div>
+                      <p class="iv-connection-name">{link.choice.kind === "interface" ? link.displayName || link.choice.interfaceId : t("installStore.interfaces.later")}</p>
+                    </article>
+                  )}
+                </For>
+              </section>
+            </Show>
+
+            <Show when={!summary() && requiredNames().length > 0}>
+              <section class="iv-settings" aria-label={t("installStore.setupTitle")} data-testid="install-settings">
+                <h3>{t("installStore.setupTitle")}</h3>
+                <div class="iv-fields">
+                    <For each={requiredNames()}>
+                      {(name) => <Show when={variableFor(name)}>{(variable) => <VariableField variable={variable()} />}</Show>}
+                    </For>
+                </div>
+              </section>
+            </Show>
 
           </div>
         </details>
       </div>
 
+      <ProgressLine attempt={props.attempt} />
       <Show when={linkedAppNames()}>{(names) => <p class="iv-linked-apps">{t("installStore.interfaces.title")}: {names()}</p>}</Show>
       <Show when={reviewAction()} fallback={<PlanPreview attempt={props.attempt} />}>
         {(action) => <PlanReview attempt={props.attempt} action={action()} onDone={props.onDone} />}

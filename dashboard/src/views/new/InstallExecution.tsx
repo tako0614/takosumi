@@ -6,7 +6,7 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
-import { AlertCircle, ExternalLink, ShieldAlert } from "lucide-solid";
+import { AlertCircle, ChevronDown, ExternalLink, ShieldAlert } from "lucide-solid";
 import {
   approveRun,
   ControlApiError,
@@ -635,9 +635,9 @@ export default function InstallExecution(props: Props) {
   );
 
   const resourceDetails = (current: () => NonNullable<ReturnType<typeof runLatest>>) => (<>
-              <details class="iv-disclosure" data-testid="install-resource-details"
+              <details class="iv-disclosure iv-resource-disclosure" data-testid="install-resource-details"
                 open={(props.purpose ?? "install") !== "install" || destructive() || (summary()?.change ?? 0) > 0}>
-                <summary>{t("installStore.resourceDetails")}</summary>
+                <summary>{t("installStore.resourceDetails")}<ChevronDown size={16} aria-hidden="true" /></summary>
                 <Show when={isReviewRun(current().type) && summary()}>
                   <dl class="iv-change-counts" aria-label={t("installStore.changes")}>
                     <div>
@@ -729,99 +729,101 @@ export default function InstallExecution(props: Props) {
               {(reasons) => <PolicyReasonList reasons={reasons()} />}
             </Show>
 
-            <Show when={reviewedPlanRunId()}>
-              <section class="iv-sheet-block" data-testid="install-plan-cost" aria-labelledby="iv-cost-title">
-                <h3 classList={{ "iv-visually-hidden": isInstall() }} id="iv-cost-title">{t("installStore.costTitle")}</h3>
-                <Show when={costState()} fallback={<Spinner size={16} />}>
-                  {(state) => (
-                    <>
-                      <CostSummary state={state()} />
-                      <Show when={costLine(state())}>
-                        {(line) => <p class="iv-muted">{line()}</p>}
-                      </Show>
-                    </>
-                  )}
-                </Show>
-              </section>
-            </Show>
-
-            <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId()) && (!isInstall() || destructive() || (summary()?.change ?? 0) > 0)}>{resourceDetails(current)}</Show>
-            <Show when={current().status === "waiting_approval" ? props.blockedReason : undefined}>
-              {(reason) => (
-                <p class="iv-apply-reason" id="iv-approve-outdated" role="status">{reason()}</p>
-              )}
-            </Show>
-            <Show when={current().status === "waiting_approval"}>
-              <div class="iv-action-row">
-                <Button
-                  type="button"
-                  variant="primary"
-                  busy={approving()}
-                  aria-disabled={props.blockedReason ? "true" : undefined}
-                  aria-describedby={props.blockedReason ? "iv-approve-outdated" : undefined}
-                  onClick={() => void approve()}
-                >
-                  {t("installStore.approve")}
-                </Button>
-                <Button
-                  href={`/runs/${encodeURIComponent(current().id)}`}
-                  variant="ghost"
-                  icon={<ExternalLink size={16} />}
-                >
-                  {t("installStore.runDetails")}
-                </Button>
-              </div>
-            </Show>
-
-            <Show when={planReady()}>
-              <Show when={destructive()}>
-                <div class="iv-review-warning">
-                  <ShieldAlert size={20} aria-hidden="true" />
-                  <div>
-                    <strong>{t("installStore.confirmTitle")}</strong>
-                    <p>{t("installStore.confirmHint")}</p>
-                    <Checkbox
-                      checked={confirmed()}
-                      onChange={(event) => setConfirmed(event.currentTarget.checked)}
-                      label={t("installStore.confirm")}
-                    />
-                  </div>
-                </div>
+            <div classList={{ "iv-decision": isInstall() && (Boolean(reviewedPlanRunId()) || current().status === "waiting_approval"), "iv-execution-contents": true }}>
+              <Show when={reviewedPlanRunId()}>
+                <section class="iv-sheet-block" data-testid="install-plan-cost" aria-labelledby="iv-cost-title">
+                  <h3 classList={{ "iv-visually-hidden": isInstall() }} id="iv-cost-title">{t("installStore.costTitle")}</h3>
+                  <Show when={costState()} fallback={<Spinner size={16} />}>
+                    {(state) => (
+                      <>
+                        <CostSummary state={state()} />
+                        <Show when={costLine(state())}>
+                          {(line) => <p class="iv-muted">{line()}</p>}
+                        </Show>
+                      </>
+                    )}
+                  </Show>
+                </section>
               </Show>
-              <Show when={props.blockedReason}>
+
+              <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId()) && (!isInstall() || destructive() || (summary()?.change ?? 0) > 0)}>{resourceDetails(current)}</Show>
+              <Show when={current().status === "waiting_approval" ? props.blockedReason : undefined}>
                 {(reason) => (
-                  <p class="iv-apply-reason" id="iv-plan-outdated" data-testid="install-plan-outdated" role="status">{reason()}</p>
+                  <p class="iv-apply-reason" id="iv-approve-outdated" role="status">{reason()}</p>
                 )}
               </Show>
-              <div class="iv-action-row">
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="lg"
-                  busy={applying()}
-                  disabled={applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
-                  // Held, not disabled, while the screen changed under it:
-                  // still focusable so the reason is read out; the click
-                  // does nothing (install() refuses).
-                  aria-disabled={props.blockedReason ? "true" : undefined}
-                  aria-describedby={props.blockedReason ? "iv-plan-outdated" : undefined}
-                  onClick={() => void install()}
-                >
-                  {t(copy().allow)}
-                </Button>
-                {discardButton()}
-                <Show when={(props.purpose ?? "install") !== "install"}>
-                <Button
-                  href={`/runs/${encodeURIComponent(current().id)}`}
-                  variant="ghost"
-                  icon={<ExternalLink size={16} />}
-                >
-                  {t("installStore.runDetails")}
-                </Button>
-                </Show>
-              </div>
-            </Show>
+              <Show when={current().status === "waiting_approval"}>
+                <div class="iv-action-row">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    busy={approving()}
+                    aria-disabled={props.blockedReason ? "true" : undefined}
+                    aria-describedby={props.blockedReason ? "iv-approve-outdated" : undefined}
+                    onClick={() => void approve()}
+                  >
+                    {t("installStore.approve")}
+                  </Button>
+                  <Button
+                    href={`/runs/${encodeURIComponent(current().id)}`}
+                    variant="ghost"
+                    icon={<ExternalLink size={16} />}
+                  >
+                    {t("installStore.runDetails")}
+                  </Button>
+                </div>
+              </Show>
 
+              <Show when={planReady()}>
+                <Show when={destructive()}>
+                  <div class="iv-review-warning">
+                    <ShieldAlert size={20} aria-hidden="true" />
+                    <div>
+                      <strong>{t("installStore.confirmTitle")}</strong>
+                      <p>{t("installStore.confirmHint")}</p>
+                      <Checkbox
+                        checked={confirmed()}
+                        onChange={(event) => setConfirmed(event.currentTarget.checked)}
+                        label={t("installStore.confirm")}
+                      />
+                    </div>
+                  </div>
+                </Show>
+                <Show when={props.blockedReason}>
+                  {(reason) => (
+                    <p class="iv-apply-reason" id="iv-plan-outdated" data-testid="install-plan-outdated" role="status">{reason()}</p>
+                  )}
+                </Show>
+                <div class="iv-action-row">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="lg"
+                    busy={applying()}
+                    disabled={applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
+                    // Held, not disabled, while the screen changed under it:
+                    // still focusable so the reason is read out; the click
+                    // does nothing (install() refuses).
+                    aria-disabled={props.blockedReason ? "true" : undefined}
+                    aria-describedby={props.blockedReason ? "iv-plan-outdated" : undefined}
+                    onClick={() => void install()}
+                  >
+                    {t(copy().allow)}
+                  </Button>
+                  {discardButton()}
+                  <Show when={(props.purpose ?? "install") !== "install"}>
+                  <Button
+                    href={`/runs/${encodeURIComponent(current().id)}`}
+                    variant="ghost"
+                    icon={<ExternalLink size={16} />}
+                  >
+                    {t("installStore.runDetails")}
+                  </Button>
+                  </Show>
+                </div>
+              </Show>
+
+            </div>
             <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId()) && isInstall() && !destructive() && (summary()?.change ?? 0) === 0}>{resourceDetails(current)}</Show>
 
             <Show
@@ -965,8 +967,8 @@ export default function InstallExecution(props: Props) {
         )}
       </Show>
 
-      <details class="iv-advanced" onToggle={(event) => setLogsOpen(event.currentTarget.open)}>
-        <summary>{t("installStore.logs")}</summary>
+      <details class="iv-advanced" classList={{ "iv-resource-disclosure": isInstall() }} onToggle={(event) => setLogsOpen(event.currentTarget.open)}>
+        <summary>{t("installStore.logs")}<Show when={isInstall()}><ChevronDown size={16} aria-hidden="true" /></Show></summary>
         <Show when={(props.purpose ?? "install") === "install" && planReady() ? runLatest() : undefined}>
           {(current) => <Button href={`/runs/${encodeURIComponent(current().id)}`} variant="ghost" icon={<ExternalLink size={16} />}>{t("installStore.runDetails")}</Button>}
         </Show>

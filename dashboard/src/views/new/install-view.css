@@ -63,23 +63,13 @@
 .iv-open-attempts li > [role="alert"] { flex-basis: 100%; margin: 0; }
 
 /* One app before it is installed: its identity, provenance and one Install. */
-.iv-app-detail { width: min(100%, 46rem); margin: 0 auto var(--tg-s-6); display: flex; gap: var(--tg-s-5); align-items: center; }
-.iv-app-icon { width: 5.5rem; height: 5.5rem; flex: none; display: grid; place-items: center; overflow: hidden; border-radius: var(--tg-r-lg); background: var(--tg-bg-subtle); border: 1px solid var(--tg-line); font-size: 1.75rem; font-weight: 700; }
-.iv-app-icon img { width: 100%; height: 100%; object-fit: cover; }
-.iv-app-detail h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.25rem); line-height: 1.2; overflow-wrap: anywhere; letter-spacing: -.03em; }
-.iv-app-detail p, .iv-muted { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; }
+.iv-muted { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; }
 .iv-provenance { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--tg-s-1) var(--tg-s-2); margin: var(--tg-s-2) 0 0; }
 .iv-provenance code { font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); color: var(--tg-fg); overflow-wrap: anywhere; }
 .iv-handoff { width: min(100%, 46rem); margin: 0 auto var(--tg-s-5); padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); }
 .iv-handoff p { margin: var(--tg-s-1) 0 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); overflow-wrap: anywhere; }
-.iv-start-actions { margin-top: 0; }
 .iv-start-hint { margin: var(--tg-s-3) 0 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; }
 .iv-configure-page .iv-workbench > .tg-btn { width: 100%; min-height: 3.25rem; justify-content: center; }
-@media (max-width: 39.99rem) {
-  .iv-app-detail { align-items: flex-start; gap: var(--tg-s-3); }
-  .iv-app-icon { width: 4rem; height: 4rem; font-size: 1.25rem; }
-}
-
 /* The install sheet: what the app will create, the connections it needs and
    its settings, in one place before anything is applied. */
 .iv-sheet { display: grid; gap: var(--tg-s-3); }
@@ -130,8 +120,6 @@
 .iv-disclosure > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
 .iv-disclosure > :not(summary) { margin-top: var(--tg-s-3); }
 .iv-disclosure-value { display: block; margin-top: var(--tg-s-1); color: var(--tg-fg-muted); font-weight: 400; overflow-wrap: anywhere; }
-.iv-configuration-summary { display: flex; flex-direction: column; justify-content: flex-start; gap: var(--tg-s-2); font-size: var(--tg-fs-sm); }
-.iv-configuration-summary strong { min-width: 0; overflow-wrap: anywhere; }
 .iv-settings { min-width: 0; }
 .iv-settings > h3 { margin: 0 0 var(--tg-s-3); font-size: var(--tg-fs-lg); }
 .iv-sheet .iv-review-head h2 { margin: 0; font-size: var(--tg-fs-lg); }
@@ -142,57 +130,82 @@
 .iv-sheet .iv-review-head p { font-size: var(--tg-fs-sm); }
 .iv-sheet .iv-disclosure > summary:hover { color: var(--tg-accent); }
 .iv-sheet .iv-disclosure > summary:active { color: var(--tg-fg); }
-.iv-configuration-summary > span { color: var(--tg-fg-muted); }
 
-/* App detail, not a console: identity, two compact choices, one primary action.
-   The existing product tokens supply both themes; no new palette or font. */
+/* One app page. The same action area holds preparation, cost and consent. */
 .iv-visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px !important; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.iv-configure-page { max-width: 56rem; padding-top: var(--tg-s-6); }
-.iv-configure-page > .iv-workbench { width: 100%; border: 0; border-radius: 0; box-shadow: none; background: transparent; padding: 0; }
-.iv-back-link { display: inline-flex; align-items: center; gap: var(--tg-s-2); min-height: 2.75rem; margin-bottom: var(--tg-s-6); color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); text-decoration: none; }
-.iv-back-link:hover { color: var(--tg-accent); }
-.iv-configure-page .iv-app-detail { width: 100%; gap: var(--tg-s-6); margin-bottom: var(--tg-s-7); align-items: flex-start; }
-.iv-configure-page .iv-app-icon { width: 7rem; height: 7rem; border-radius: 1.5rem; font-size: 2rem; }
-.iv-configure-page .iv-app-detail h1 { font-size: clamp(1.8rem, 5vw, 2.75rem); line-height: 1.15; margin-block: var(--tg-s-2); }
-.iv-configure-page .iv-app-detail p { max-width: 36rem; margin-bottom: 0; font-size: var(--tg-fs-base); }
-.iv-choices { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--tg-s-3); }
-.iv-choice { min-width: 0; max-width: 100%; }
-.iv-choice > summary { display: flex; align-items: center; gap: var(--tg-s-2); min-height: 2.75rem; padding: var(--tg-s-2) var(--tg-s-3); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); cursor: pointer; font-size: var(--tg-fs-sm); list-style: none; }
-.iv-choice > summary::-webkit-details-marker { display: none; }
-.iv-choice > summary > span { color: var(--tg-fg-muted); }
-.iv-choice > summary > strong { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
-.iv-choice > summary > svg { flex: none; color: var(--tg-fg-muted); }
-.iv-choice > summary:hover { background: var(--tg-bg-hi); }
-.iv-choice > summary:focus-visible, .iv-back-link:focus-visible, .iv-app-about > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 3px; }
-.iv-choice[open] { flex-basis: 100%; }
-.iv-choice[open] > summary { width: fit-content; max-width: 100%; }
-.iv-choice[open] > summary > svg { transform: rotate(180deg); }
-.iv-choice-content { padding-block: var(--tg-s-4); max-width: 42rem; }
-.iv-configuration-content { display: grid; gap: var(--tg-s-4); }
-.iv-start .iv-choice-content { display: grid; gap: var(--tg-s-4); }
-.iv-start .iv-version-choice { justify-self: start; width: 100%; }
-.iv-start .iv-version-choice > summary { width: fit-content; }
-.iv-configure-page .iv-sheet { gap: var(--tg-s-5); }
-.iv-configure-page .iv-plan-review, .iv-configure-page .iv-execution, .iv-configure-page .iv-sheet-block { border-top: 0; padding-top: 0; }
-.iv-configure-page .iv-execution { gap: var(--tg-s-3); }
-.iv-configure-page .iv-action-row { margin-block: var(--tg-s-2) var(--tg-s-4); }
-.iv-configure-page .iv-action-row > .tg-btn-primary { min-width: 16rem; min-height: 3rem; justify-content: center; border-radius: 1.5rem; }
-.iv-configure-page .iv-start-hint { margin-top: 0; }
-.iv-configure-page .iv-disclosure, .iv-configure-page .iv-advanced { border-top: 0; margin-top: 0; padding-top: 0; }
-.iv-configure-page .iv-execution > .iv-disclosure > summary, .iv-configure-page .iv-advanced > summary { font-weight: 500; color: var(--tg-fg-muted); padding-block: var(--tg-s-2); min-height: 2.75rem; }
-.iv-configure-page [data-testid="install-plan-cost"] > .iv-muted { margin: 0; }
-.iv-app-about { margin-top: var(--tg-s-6); padding-top: var(--tg-s-4); border-top: 1px solid var(--tg-line); }
-.iv-app-about > summary { min-height: 2.75rem; cursor: pointer; font-weight: 600; }
-.iv-app-about .iv-provenance { font-size: var(--tg-fs-sm); color: var(--tg-fg-muted); }
-@media (max-width: 39.99rem) {
-  .iv-configure-page { padding-top: var(--tg-s-3); }
-  .iv-back-link { margin-bottom: var(--tg-s-4); }
-  .iv-configure-page .iv-app-detail { gap: var(--tg-s-4); margin-bottom: var(--tg-s-6); }
-  .iv-configure-page .iv-app-icon { width: 4.5rem; height: 4.5rem; border-radius: 1rem; font-size: 1.5rem; }
-  .iv-configure-page .iv-app-detail h1 { margin-top: 0; }
-  .iv-configure-page .iv-app-detail p { font-size: var(--tg-fs-sm); }
-  .iv-configure-page .iv-action-row > .tg-btn-primary { min-width: 0; }
-}
+.iv-configure-page { width: min(100%, 53rem); --iv-inset: var(--tg-s-6); padding-top: var(--tg-s-5); }
+.iv-back-link { display: inline-flex; align-items: center; gap: var(--tg-s-2); min-height: 2.75rem; margin-bottom: var(--tg-s-2); color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); text-decoration: none; }
+.iv-back-link:hover { color: var(--tg-accent-text); }
+.iv-app-surface { min-width: 0; padding: var(--iv-inset); border: 1px solid var(--tg-line); border-radius: var(--tg-r-xl); background: var(--tg-bg-elev); }
+.iv-app-surface > .iv-workbench { width: 100%; border: 0; border-radius: 0; box-shadow: none; background: transparent; padding: 0; }
+.iv-app-detail { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--tg-s-5); align-items: center; margin-bottom: var(--tg-s-6); }
+.iv-app-icon { width: 5.75rem; aspect-ratio: 1; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--tg-line); border-radius: var(--tg-r-xl); background: var(--tg-bg-subtle); font-size: 1.75rem; font-weight: 700; }
+.iv-app-icon img { width: 100%; height: 100%; object-fit: cover; }
+.iv-app-monogram { background: var(--tg-accent-soft); color: var(--tg-accent-text); border-color: transparent; }
+.iv-app-intro { display: grid; min-width: 0; gap: var(--tg-s-1); }
+.iv-app-intro h1 { margin: 0; font-size: clamp(1.85rem, 5vw, 2.75rem); line-height: 1.1; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.iv-app-intro p { max-width: 56ch; margin: var(--tg-s-1) 0 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-base); line-height: 1.6; overflow-wrap: anywhere; }
+.iv-app-publisher { color: var(--tg-accent-text); font-size: var(--tg-fs-sm); font-weight: 600; overflow-wrap: anywhere; }
 
-.iv-choice > summary > .iv-choice-context { min-width: 0; overflow-wrap: anywhere; font-weight: 400; }
-.iv-linked-apps { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); overflow-wrap: anywhere; }
+.iv-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.iv-choices:not(:has(> [open])) > .iv-choice + .iv-choice { border-inline-start: 1px solid var(--tg-line); }
+.iv-choices:has(> [open]) { grid-template-columns: minmax(0, 1fr); }
+.iv-choice { min-width: 0; }
+.iv-choice > summary,
+.iv-app-about > summary,
+.iv-configure-page .iv-resource-disclosure > summary { display: flex; align-items: center; gap: var(--tg-s-2); min-height: 2.75rem; cursor: pointer; list-style: none; }
+.iv-choice > summary::-webkit-details-marker,
+.iv-app-about > summary::-webkit-details-marker,
+.iv-configure-page .iv-resource-disclosure > summary::-webkit-details-marker { display: none; }
+.iv-choice > summary { min-height: 3.25rem; padding: var(--tg-s-2) var(--tg-s-3); border-radius: var(--tg-r-md); font-size: var(--tg-fs-sm); }
+.iv-choice > summary > span:first-child { color: var(--tg-fg-muted); white-space: nowrap; }
+.iv-choice-selection { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--tg-s-2); min-width: 0; overflow-wrap: anywhere; }
+.iv-choice-context { color: var(--tg-fg-muted); }
+.iv-choice > summary strong { min-width: 0; overflow-wrap: anywhere; font-weight: 650; }
+.iv-choice > summary > svg,
+.iv-app-about > summary > svg,
+.iv-configure-page .iv-resource-disclosure > summary > svg { flex: none; margin-inline-start: auto; color: var(--tg-fg-muted); }
+.iv-choice > summary:hover,
+.iv-choice[open] > summary { background: var(--tg-bg-subtle); }
+.iv-choice > summary:focus-visible, .iv-back-link:focus-visible, .iv-app-about > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+.iv-choice[open] > summary > svg,
+.iv-app-about[open] > summary > svg,
+.iv-configure-page .iv-resource-disclosure[open] > summary > svg { transform: rotate(180deg); }
+.iv-choice-content { padding: var(--tg-s-3); }
+.iv-configuration-content { display: grid; gap: var(--tg-s-3); }
+.iv-module-path, .iv-linked-apps { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); overflow-wrap: anywhere; }
+.iv-module-path code { color: var(--tg-fg); }
+
+.iv-configure-page .iv-form, .iv-configure-page .iv-sheet, .iv-configure-page .iv-execution { gap: var(--tg-s-3); }
+.iv-configure-page .iv-plan-review, .iv-configure-page .iv-execution, .iv-configure-page .iv-sheet-block { border-top: 0; padding-top: 0; }
+.iv-configure-page .iv-progress { padding: var(--tg-s-2) var(--tg-s-3); border: 0; background: var(--tg-bg-subtle); font-size: var(--tg-fs-sm); }
+.iv-execution-contents:not(.iv-decision) { display: contents; }
+.iv-decision { display: grid; gap: var(--tg-s-3); padding: var(--tg-s-4); border-radius: var(--tg-r-lg); background: var(--tg-bg-subtle); }
+.iv-decision .iv-action-row { margin: 0; }
+.iv-decision .iv-action-row > .tg-btn-primary { min-height: 3rem; padding-inline: var(--tg-s-5); justify-content: center; border-radius: var(--tg-r-md); }
+.iv-decision .iv-start-hint, .iv-decision .iv-sheet-block > .iv-muted, .iv-decision .iv-review-warning { margin: 0; }
+.iv-decision .iv-sheet-block { gap: var(--tg-s-1); }
+.iv-decision .iv-resource-disclosure > summary { padding-inline: 0; }
+.iv-app-about { margin-top: var(--tg-s-2); }
+.iv-configure-page .iv-execution > .iv-resource-disclosure + .iv-resource-disclosure { margin-top: calc(-1 * var(--tg-s-3)); }
+.iv-configure-page .iv-advanced.iv-resource-disclosure { padding-top: 0; }
+.iv-app-about > summary, .iv-configure-page .iv-resource-disclosure > summary { padding: var(--tg-s-2) var(--tg-s-3); font-size: var(--tg-fs-sm); font-weight: 550; color: var(--tg-fg-muted); }
+.iv-app-about > summary:hover, .iv-configure-page .iv-resource-disclosure > summary:hover { color: var(--tg-fg); }
+.iv-app-about > summary:active, .iv-choice > summary:active, .iv-configure-page .iv-resource-disclosure > summary:active { background: var(--tg-bg-subtle); }
+.iv-configure-page .iv-resource-disclosure > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+.iv-app-about .iv-provenance { margin: 0; padding-inline: var(--tg-s-3); font-size: var(--tg-fs-sm); color: var(--tg-fg-muted); }
+
+@media (max-width: 46rem) {
+  .iv-configure-page { --iv-inset: var(--tg-s-4); }
+  .iv-choices { grid-template-columns: minmax(0, 1fr); }
+  .iv-choices:not(:has(> [open])) > .iv-choice + .iv-choice { border-inline-start: 0; }
+}
+@media (max-width: 39.99rem) {
+  .iv-configure-page { padding-top: var(--tg-s-2); }
+  .iv-app-detail { gap: var(--tg-s-3); margin-bottom: var(--tg-s-4); }
+  .iv-app-icon { width: 3.75rem; border-radius: var(--tg-r-lg); font-size: 1.125rem; }
+  .iv-app-intro h1 { font-size: clamp(1.45rem, 7vw, 2rem); }
+  .iv-app-intro p { font-size: var(--tg-fs-sm); }
+  .iv-decision { padding: var(--tg-s-3); }
+  .iv-decision .iv-action-row > .tg-btn-primary { padding-inline: var(--tg-s-3); }
+}
