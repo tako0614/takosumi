@@ -94,6 +94,7 @@ async function loadHomeApps(): Promise<{ readonly apps: readonly HomeApp[]; read
       // The value-free apps list itself is never an external URL authority.
       try {
         const view = await getCapsuleApp(entry.capsuleId);
+        if (view.incomplete?.includes("screens")) surfacesFailed = true;
         surfaces = openableScreens(view.screens);
         category = view.screens[0]?.category;
         if (state === "ready" && view.state === "installed" && view.version.updateAvailable) state = "update_available";
