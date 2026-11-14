@@ -679,20 +679,33 @@ function Inner() {
     }
     return { workspaceId: r.workspaceId, capsuleId: id, runId: r.id };
   });
-  const [completedRunUiSurfaces] = createResource(
+  const [completedRunUiSurfaces, { refetch: refetchCompletedRunUiSurfaces }] = createResource(
     completedRunUiSurfaceKey,
-    ({ workspaceId, capsuleId: id }) =>
-      listAuthorizedUiSurfaces(workspaceId, {
+    async (scope) => {
+      const { workspaceId, capsuleId: id } = scope;
+      let incomplete = false;
+      const surfaces = await listAuthorizedUiSurfaces(workspaceId, {
         capsuleId: id,
-      }),
+        onIncomplete: () => { incomplete = true; },
+      });
+      return { scope, surfaces, incomplete };
+    },
   );
+  const completedRunUiSurfaceRead = createMemo(() => {
+    const scope = completedRunUiSurfaceKey();
+    if (!scope || completedRunUiSurfaces.error) return undefined;
+    const value = completedRunUiSurfaces.latest;
+    if (!value || value.scope.runId !== scope.runId || value.scope.capsuleId !== scope.capsuleId ||
+        value.scope.workspaceId !== scope.workspaceId) return undefined;
+    return value;
+  });
   const completedRunLaunchUrl = createMemo(() => {
     // Runtime launch surfaces are Interface-owned. StateVersion history,
     // OpenTofu Outputs, Store metadata, and release activation responses do
     // not carry or infer a launch URL. Any malformed/unbound Interface read
     // fails closed to the service-detail action below.
     if (completedRunUiSurfaces.error) return undefined;
-    return completedRunUiSurfaces()?.[0]?.url;
+    return completedRunUiSurfaceRead()?.surfaces[0]?.url;
   });
 
   const clearWorkspaceProjectionCaches = (
@@ -1605,6 +1618,14 @@ function Inner() {
                     {t("run.refreshFailed")}
                   </p>
                 </Show>
+                <Show when={!completedRunUiSurfaces.loading && completedRunUiSurfaceRead()?.incomplete}>
+                  <p class="wa-notice" role="alert">
+                    {t("app.incomplete.screens")}
+                    <Button variant="secondary" size="sm" type="button" onClick={() => void refetchCompletedRunUiSurfaces()}>
+                      {t("app.open.reload")}
+                    </Button>
+                  </p>
+                </Show>
                 {/* ===== summary layer ===== */}
                 <Card>
                   <Show when={summary()}>
@@ -1898,7 +1919,7 @@ function Inner() {
                   {(url) => (
                     <AppPhoneSection
                       url={url()}
-                      appName={(completedRunUiSurfaces.error ? undefined : completedRunUiSurfaces()?.[0]?.name) ?? appName() ?? ""}
+                      appName={completedRunUiSurfaceRead()?.surfaces[0]?.name ?? appName() ?? ""}
                     />
                   )}
                 </Show>
