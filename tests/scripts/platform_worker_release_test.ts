@@ -489,6 +489,7 @@ async function exerciseCodeLane(options: {
   readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
   readonly loginSmokeFails?: boolean;
   readonly unrelatedBindingDrift?: boolean;
+  readonly bindingReplacedBySecret?: string;
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-code-lane-test-"));
   const configPath = join(directory, "wrangler.toml");
@@ -519,6 +520,18 @@ async function exerciseCodeLane(options: {
   if (options.loginAdmission === "normal" || options.loginAdmission === "already-present") predecessor.resources.bindings.push(...rateBindings);
   if (options.loginAdmission === "partial") predecessor.resources.bindings.push(rateBindings[0]);
   if (options.unrelatedBindingDrift) predecessor.resources.bindings.find((binding: { name: string }) => binding.name === "HOSTED").service = "foreign-service";
+  const listedSecrets: string[] = [...CODE_SECRETS];
+  if (options.bindingReplacedBySecret) {
+    const name = options.bindingReplacedBySecret;
+    for (const version of [predecessor, deployed]) {
+      const index = version.resources.bindings.findIndex(
+        (binding: { name: string }) => binding.name === name,
+      );
+      if (index < 0) throw new Error("test binding missing");
+      version.resources.bindings[index] = { name, type: "secret_text" };
+    }
+    listedSecrets.push(name);
+  }
   const container = statusContainerSource();
   let activated = false;
   let uploadCount = 0;
@@ -580,7 +593,7 @@ async function exerciseCodeLane(options: {
     if (argv[1] === "secret" && argv[2] === "list") {
       return {
         exitCode: 0,
-        stdout: JSON.stringify(CODE_SECRETS.map((name) => ({ name }))),
+        stdout: JSON.stringify(listedSecrets.map((name) => ({ name }))),
         stderr: "",
       };
     }
@@ -723,6 +736,57 @@ test("login admission rate-limit bindings have an exact preserved provider tuple
     const changed = structuredClone(version);
     change(changed.resources.bindings.at(-2));
     expect(() => assertPlatformWorkerCodeVersionMatchesConfig(JSON.stringify(changed), source, "takosumi-hosted-staging", CODE_SECRETS, { allowPriorPins: true })).toThrow();
+  }
+});
+
+test("routine code rejects login limiter secrets before building or uploading", async () => {
+  for (const name of [
+    "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER",
+    "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER",
+  ]) {
+    const result = await exerciseCodeLane({
+      loginAdmission: "normal",
+      bindingReplacedBySecret: name,
+    });
+    expect(result.error).toBeInstanceOf(Error);
+    expect((result.error as Error).message).toBe("platform_worker_code_binding_mismatch");
+    expect(result.buildCount).toBe(0);
+    expect(result.gateCount).toBe(0);
+    expect(result.uploadCount).toBe(0);
+    expect(result.activationCount).toBe(0);
+    expect(result.loginSmokeCount).toBe(0);
+  }
+});
+
+test("routine code preserves disjoint secrets and rejects typed binding secret collisions", () => {
+  const source = codeConfigSource().replace(
+    "[vars]\n", '[vars]\nPUBLIC_FIXTURE_MODE = "fixed"\n',
+  );
+  const version = JSON.parse(codeVersionSource(source, CODE_PREDECESSOR_ID, {
+    tag: "predecessor",
+    message: "predecessor",
+  }));
+  version.resources.bindings.push({ name: "EXTRA_OPERATOR_SECRET", type: "secret_text" });
+  const secrets = secretNames(JSON.stringify(
+    [...CODE_SECRETS, "EXTRA_OPERATOR_SECRET"].map((name) => ({ name })),
+  ));
+  expect(() => assertPlatformWorkerCodeVersionMatchesConfig(
+    JSON.stringify(version), source, "takosumi-hosted-staging", secrets,
+    { allowPriorPins: true },
+  )).not.toThrow();
+  for (const name of ["PUBLIC_FIXTURE_MODE", "TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST"]) {
+    const changed = structuredClone(version);
+    const index = changed.resources.bindings.findIndex(
+      (binding: { name: string }) => binding.name === name,
+    );
+    changed.resources.bindings[index] = { name, type: "secret_text" };
+    const changedSecrets = secretNames(JSON.stringify(
+      [...secrets, name].map((secretName) => ({ name: secretName })),
+    ));
+    expect(() => assertPlatformWorkerCodeVersionMatchesConfig(
+      JSON.stringify(changed), source, "takosumi-hosted-staging", changedSecrets,
+      { allowPriorPins: true },
+    )).toThrow("platform_worker_code_binding_mismatch");
   }
 });
 

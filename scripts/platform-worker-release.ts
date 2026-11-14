@@ -5651,6 +5651,13 @@ export function assertPlatformWorkerCodeVersionMatchesConfig(
     }
     seen.add(binding.name);
     if (binding.type === "secret_text") {
+      if (
+        expected.has(binding.name) ||
+        (options.allowPriorPins === true &&
+          (EXECUTION_EVIDENCE_DIGEST_ENV_NAMES as readonly string[]).includes(binding.name))
+      ) {
+        throw new Error("platform_worker_code_binding_mismatch");
+      }
       platformWorkerCodeExactKeys(binding, ["name", "type"]);
       actualSecrets.push(binding.name);
       continue;
