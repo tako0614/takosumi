@@ -16,7 +16,7 @@
  * Pages walk the apps in id order: one page covers up to `limit` apps (default
  * 20, at most 50); the opaque `nextCursor` resumes unfinished candidate
  * keysets as well as the outer app position. Each response is in app id order.
- * Candidate reads are bounded, with `incomplete` marking a partial window.
+ * Candidate reads are bounded; `incomplete` marks unretained loss or uncertainty.
  */
 import type { Capsule } from "takosumi-contract/install-configs";
 import type { Interface } from "takosumi-contract";
@@ -141,6 +141,11 @@ export async function handleAccountUiSurfaces(
   // reads within the existing maximum of 50 candidate reads per request.
   let remainingExtraPages = LAUNCHER_MAX_APPS - window.length;
   let surfacesIncomplete = false;
+  const retainContinuation = (appId: string, cursor: string | undefined): void => {
+    const position = decodeCursor(cursor);
+    if (position?.createdAt && position.id) continuations.set(appId, cursor!);
+    else surfacesIncomplete = true;
+  };
   let next = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
@@ -153,8 +158,7 @@ export async function handleAccountUiSurfaces(
       for (let page = 0; page < LAUNCHER_SURFACE_PAGE_LIMIT; page++) {
         if (page > 0) {
           if (remainingExtraPages === 0) {
-            surfacesIncomplete = true;
-            if (cursor) continuations.set(capsule.id, cursor);
+            retainContinuation(capsule.id, cursor);
             break;
           }
           remainingExtraPages--;
@@ -178,8 +182,7 @@ export async function handleAccountUiSurfaces(
         seenCursors.add(candidates.nextCursor);
         cursor = candidates.nextCursor;
         if (page + 1 === LAUNCHER_SURFACE_PAGE_LIMIT) {
-          surfacesIncomplete = true;
-          continuations.set(capsule.id, cursor);
+          retainContinuation(capsule.id, cursor);
         }
       }
       perApp[index] = [...surfaces.values()];
@@ -206,7 +209,8 @@ export async function handleAccountUiSurfaces(
     {
       interfaces: perApp.flat(),
       ...(nextCursor === undefined ? {} : { nextCursor }),
-      // Either the account read or a covered app's candidate read was bounded.
+      // A complete retained continuation is ordinary pagination. Only mark
+      // loss/uncertainty: consumers conservatively OR this flag across pages.
       ...(resolved.scope.complete && !surfacesIncomplete ? {} : { incomplete: true }),
     },
     200,
