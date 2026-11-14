@@ -4,6 +4,7 @@
  * caller's exact Principal Binding, without a Workspace.
  */
 import { describe, expect, test } from "bun:test";
+import { listAuthorizedUiSurfaces } from "../../../../dashboard/src/lib/ui-surface-interfaces.ts";
 import type { Interface } from "takosumi-contract";
 import { decodeCursor, encodeCursor } from "takosumi-contract/pagination";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
@@ -161,10 +162,125 @@ async function fixture(options: { readonly delegate?: boolean; readonly endlessA
       incomplete: body.incomplete,
     };
   }
-  return { headers, list, surfaces, extraSurfaces, core, ledger };
+  async function readResponse(credential: Record<string, string>, path: string): Promise<Response> {
+    const url = new URL(path, ORIGIN);
+    const response = await handleControlRoute({
+      request: new Request(url, { headers: credential }), url, store: accounts, operations,
+      ...(delegationSources ? { installedAppDelegationSources: delegationSources } : {}),
+    });
+    return response!;
+  }
+  return { headers, list, readResponse, surfaces, extraSurfaces, core, ledger };
 }
 
 describe("account launcher", () => {
+  test("aggregate completion follows the actual route to all screens without a sticky warning on reload", async () => {
+    const h = await fixture({ extraOwnSurfaces: 5 });
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) =>
+      await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId);
+    const credential = h.headers.session(OWNER);
+    let calls = 0;
+    let warned = 0;
+    const transport: typeof fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("GET");
+      expect(init?.credentials).toBe("include");
+      calls++;
+      return await h.readResponse(credential, String(input));
+    }, { preconnect() {} });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const surfaces = await listAuthorizedUiSurfaces(WORKSPACE, {
+        capsuleId: MINE, fetch: transport, onIncomplete: () => { warned++; },
+      });
+      expect(surfaces).toHaveLength(6);
+      expect(new Set(surfaces.map((item) => item.interfaceId)).size).toBe(6);
+      expect(surfaces.every((item) => item.capsuleId === MINE && item.url.startsWith("https://"))).toBe(true);
+      expect(warned).toBe(0);
+    }
+    expect(calls).toBe(4); // Two opaque pages for each read/reload; no retry or extra lookup.
+  });
+
+  test("aggregate completion retains an old serving flag through later complete pages", async () => {
+    const h = await fixture({ extraOwnSurfaces: 5 });
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) =>
+      await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId);
+    const credential = h.headers.session(OWNER);
+    let calls = 0;
+    let warned = 0;
+    const transport: typeof fetch = Object.assign(async (input: RequestInfo | URL) => {
+      const response = await h.readResponse(credential, String(input));
+      if (++calls !== 1) return response;
+      // Old serving's conservative flag, on the same actual authorized route data.
+      const body = await response.json() as Record<string, unknown>;
+      return Response.json({ ...body, incomplete: true });
+    }, { preconnect() {} });
+    const surfaces = await listAuthorizedUiSurfaces(WORKSPACE, {
+      capsuleId: MINE, fetch: transport, onIncomplete: () => { warned++; },
+    });
+    expect(surfaces).toHaveLength(6);
+    expect(calls).toBe(2);
+    expect(warned).toBe(1);
+  });
+
+  test("aggregate completion preserves the hard account enumeration warning after all screen pages", async () => {
+    const h = await fixture({ extraOwnSurfaces: 5, endlessAppPages: true });
+    const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) =>
+      await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId);
+    let warned = 0;
+    let calls = 0;
+    const transport: typeof fetch = Object.assign(async (input: RequestInfo | URL) => {
+      calls++;
+      return await h.readResponse(h.headers.session(OWNER), String(input));
+    }, { preconnect() {} });
+    expect(await listAuthorizedUiSurfaces(WORKSPACE, { capsuleId: MINE, fetch: transport, onIncomplete: () => { warned++; } })).toHaveLength(6);
+    expect([calls, warned]).toEqual([2, 1]);
+  });
+
+  for (const mode of ["empty", "repeated", "malformed"] as const) {
+    test(`aggregate completion preserves ${mode} inner-cursor loss`, async () => {
+      const h = await fixture({ extraOwnSurfaces: 1 });
+      const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+      let reads = 0;
+      h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) => {
+        reads++;
+        // Keep the real current Binding projection; inject only the broken store continuation.
+        const page = await read(filter, subject, permission, { limit: 1 }, capsuleId);
+        return { ...page, nextCursor: mode === "empty" ? "" : mode === "repeated" ? page.nextCursor : `bad-store-cursor-${reads}` };
+      };
+      let warned = 0;
+      let calls = 0;
+      const transport: typeof fetch = Object.assign(async (input: RequestInfo | URL) => {
+        calls++;
+        return await h.readResponse(h.headers.session(OWNER), String(input));
+      }, { preconnect() {} });
+      const surfaces = await listAuthorizedUiSurfaces(WORKSPACE, { capsuleId: MINE, fetch: transport, onIncomplete: () => { warned++; } });
+      expect(surfaces.length).toBeGreaterThan(0);
+      expect(surfaces.every((item) => item.capsuleId === MINE && item.url.startsWith("https://"))).toBe(true);
+      expect([calls, warned, reads]).toEqual([1, 1, mode === "empty" ? 1 : mode === "repeated" ? 2 : 5]);
+    });
+  }
+
+  for (const status of [403, 404, 503]) {
+    test(`aggregate completion rejects a later ${status} without fallback or an incomplete-success callback`, async () => {
+      const h = await fixture({ extraOwnSurfaces: 5 });
+      const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
+      h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async (filter, subject, permission, params, capsuleId) =>
+        await read(filter, subject, permission, { ...params, limit: 1 }, capsuleId);
+      const paths: string[] = [];
+      let warned = 0;
+      const transport: typeof fetch = Object.assign(async (input: RequestInfo | URL) => {
+        const path = String(input); paths.push(path);
+        return paths.length === 1 ? await h.readResponse(h.headers.session(OWNER), path) : Response.json({ error: "fixture transport failure" }, { status });
+      }, { preconnect() {} });
+      await expect(listAuthorizedUiSurfaces(WORKSPACE, { capsuleId: MINE, fetch: transport, onIncomplete: () => { warned++; } })).rejects.toThrow(`Interface API request failed (${status})`);
+      expect(paths).toHaveLength(2);
+      expect(paths.every((path) => path.startsWith("/api/v1/ui-surfaces?"))).toBe(true);
+      expect(warned).toBe(0);
+    });
+  }
+
   test("inner resume keeps a sixth page reachable without redelivering completed apps", async () => {
     const h = await fixture({ extraOwnSurfaces: 5 });
     const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);
@@ -181,7 +297,7 @@ describe("account launcher", () => {
     expect(first.status).toBe(200);
     expect(first.ids).toHaveLength(6);
     expect(first.owners).toEqual([...Array(5).fill(MINE), SHARED]);
-    expect(first.incomplete).toBe(true);
+    expect(first.incomplete).toBeUndefined();
     expect(reads).toBe(6); // Five pages for MINE; the reserved first read for SHARED.
     expect(first.nextCursor).toBeString();
     reads = 0;
@@ -236,7 +352,7 @@ describe("account launcher", () => {
     const credential = h.headers.session(OWNER);
     const first = await h.list(credential, "?limit=50");
     expect([first.status, reads, first.ids.length, new Set(first.owners).size]).toEqual([200, 50, 50, 50]);
-    expect(first.incomplete).toBe(true);
+    expect(first.incomplete).toBeUndefined();
     expect(first.nextCursor).toBeString();
     const payload = JSON.parse(decodeCursor(first.nextCursor)!.id) as { pending: unknown[] };
     expect(payload.pending).toHaveLength(50);
@@ -399,7 +515,7 @@ describe("account launcher", () => {
     expect(result.status).toBe(200);
     expect(new Set(result.owners).size).toBe(50);
     expect(reads).toBe(50);
-    expect(result.incomplete).toBe(true);
+    expect(result.incomplete).toBeUndefined();
   });
 
   const cases: readonly { readonly name: string; readonly credential: (h: Awaited<ReturnType<typeof fixture>>) => Record<string, string>; readonly expected: readonly string[] | "deny" }[] = [
