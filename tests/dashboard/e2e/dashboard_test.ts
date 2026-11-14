@@ -1127,7 +1127,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByTestId("install-app-header")).toContainText("Synthetic fixture: input and activation gated.");
     await prepareInlineFixture(page);
     const sheet = page.getByTestId("install-configuration");
-    await expect(sheet.getByRole("heading", { name: "Cloud connection" })).toBeVisible();
+    const connectionDetails = sheet.getByTestId("install-connections");
+    await expect(connectionDetails.locator(":scope > summary")).toHaveText("Cloud connection");
+    await expect(connectionDetails).toHaveAttribute("open", "");
     // Two candidates: the row asks for a choice and the Plan waits for it.
     await expect(sheet).toHaveAttribute("data-install-state", "connections");
     await expect(page.getByTestId("install-apply-reason")).toHaveText("Choose a connection to check it");
@@ -1138,7 +1140,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByLabel("Region").fill("us-west-2");
     await page.getByLabel("Region").press("Enter");
     // Nothing else to press: the Plan is made once the setting is in.
-    await expect(installReview(page).getByRole("heading", { name: "What this app will create in your cloud" })).toBeVisible();
+    await expect(installReview(page).getByRole("heading", { name: "Review installation" })).toBeVisible();
     const addButton = page.getByRole("button", { name: "Allow and install", exact: true });
     await expect(addButton).toBeDisabled();
     // The connection choice is an answer; the setting travels only with the

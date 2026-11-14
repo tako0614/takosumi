@@ -52,6 +52,7 @@ export function registerInstallReopenCases(
 
       const sheet = page.getByTestId("install-configuration");
       await expect(sheet.getByTestId("install-settings")).toBeVisible();
+      await sheet.getByTestId("install-customization").locator(":scope > summary").click();
       const nameField = sheet.getByLabel(/^App name/u);
       await expect(nameField).toHaveValue("cloudflare-service");
       const publicField = sheet.getByRole("textbox", { name: "Domain", exact: true });

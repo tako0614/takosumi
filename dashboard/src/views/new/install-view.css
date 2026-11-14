@@ -85,7 +85,7 @@
 
 /* The install sheet: what the app will create, the connections it needs and
    its settings, in one place before anything is applied. */
-.iv-sheet { display: grid; gap: var(--tg-s-5); }
+.iv-sheet { display: grid; gap: var(--tg-s-3); }
 .iv-sheet > .iv-section-head { margin-bottom: 0; }
 .iv-sheet > .iv-error { margin: 0; }
 .iv-sheet-block { display: grid; gap: var(--tg-s-3); min-width: 0; padding-top: var(--tg-s-4); border-top: 1px solid var(--tg-line); }
@@ -125,3 +125,24 @@
 @media (max-width: 39.99rem) {
   .iv-progress .tg-btn { width: 100%; margin-left: 0; justify-content: center; }
 }
+
+/* App-first install: the version and chosen configuration stay in view;
+   editors and infrastructure inventories are deliberate disclosures. */
+.iv-disclosure { min-width: 0; border-top: 1px solid var(--tg-line); }
+.iv-disclosure > summary { min-height: 2.75rem; padding-block: var(--tg-s-3); cursor: pointer; font-size: var(--tg-fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.iv-disclosure > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+.iv-disclosure > :not(summary) { margin-top: var(--tg-s-3); }
+.iv-disclosure-value { display: block; margin-top: var(--tg-s-1); color: var(--tg-fg-muted); font-weight: 400; overflow-wrap: anywhere; }
+.iv-configuration-summary { display: flex; flex-direction: column; justify-content: flex-start; gap: var(--tg-s-2); font-size: var(--tg-fs-sm); }
+.iv-configuration-summary strong { min-width: 0; overflow-wrap: anywhere; }
+.iv-settings { min-width: 0; }
+.iv-settings > h3 { margin: 0 0 var(--tg-s-3); font-size: var(--tg-fs-lg); }
+.iv-sheet .iv-review-head h2 { margin: 0; font-size: var(--tg-fs-lg); }
+.iv-sheet [data-testid="install-basics"] { border-top: 0; padding-top: 0; }
+.iv-sheet .iv-execution { gap: var(--tg-s-3); }
+.iv-sheet .iv-advanced { margin-top: 0; padding-top: var(--tg-s-3); }
+.iv-sheet .iv-review-head { flex-direction: row; flex-wrap: wrap; }
+.iv-sheet .iv-review-head p { font-size: var(--tg-fs-sm); }
+.iv-sheet .iv-disclosure > summary:hover { color: var(--tg-accent); }
+.iv-sheet .iv-disclosure > summary:active { color: var(--tg-fg); }
+.iv-configuration-summary > span { color: var(--tg-fg-muted); }
