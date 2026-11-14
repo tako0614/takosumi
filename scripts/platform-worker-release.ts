@@ -30,6 +30,13 @@ import { platformExtensionRoutes } from "../deploy/platform/platform_extensions.
 import { REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES } from "../providers/credential-recipes.generated.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
+  assertPlatformLoginAdmission,
+  platformLoginAdmissionPredecessorSource,
+  platformRateLimitBindings,
+  verifyPlatformLoginStart,
+} from "./platform-login-admission.ts";
+import { AUTH_STAGING_ISSUER } from "../deploy/accounts-cloudflare/src/staging-target.ts";
+import {
   assertPlatformReleaseConfigPathless,
   assertPlatformReleaseSourcePinMatchesCheckout,
   injectPlatformSourcePaths,
@@ -2071,6 +2078,7 @@ export type PlatformWorkerCodeRuntime = Readonly<{
     environment: PlatformEnvironment,
     versionId: string,
   ) => Promise<void>;
+  loginStartReadback?: (versionId: string) => Promise<void>;
   nonce?: () => string;
 }>;
 
@@ -2087,6 +2095,24 @@ export async function runPlatformWorkerCodeRelease(
   argv: readonly string[],
   environment: PlatformEnvironment = "staging",
   runtime: PlatformWorkerCodeRuntime = {},
+): Promise<void> {
+  return runPlatformWorkerCodePublication(argv, environment, runtime, false);
+}
+
+/** Explicit two-binding authority transition; normal code-only keeps exact preservation. */
+export async function runPlatformWorkerLoginAdmissionRelease(
+  argv: readonly string[],
+  environment: PlatformEnvironment = "staging",
+  runtime: PlatformWorkerCodeRuntime = {},
+): Promise<void> {
+  return runPlatformWorkerCodePublication(argv, environment, runtime, true);
+}
+
+async function runPlatformWorkerCodePublication(
+  argv: readonly string[],
+  environment: PlatformEnvironment,
+  runtime: PlatformWorkerCodeRuntime,
+  addLoginAdmission: boolean,
 ): Promise<void> {
   if (environment !== "staging" || argv[0] !== "apply") {
     throw new Error("platform_worker_code_action_invalid");
@@ -2105,6 +2131,10 @@ export async function runPlatformWorkerCodeRelease(
     configBytes,
   );
   assertConfigTargetsSource(configSource, environment);
+  const requiresLoginAdmission = assertPlatformLoginAdmission(configSource);
+  const predecessorSource = addLoginAdmission
+    ? platformLoginAdmissionPredecessorSource(configSource, platformTargetForEnvironment(environment).origin)
+    : configSource;
   (runtime.assertSelectedSource ??
     ((path) => assertPinnedSourceRoot(readPlatformReleaseSourcePin(path))))(
     parsed.config,
@@ -2142,7 +2172,7 @@ export async function runPlatformWorkerCodeRelease(
         command,
         nativeRead,
       );
-    const baseline = await readAuthority(initialConfig.path, configSource, true);
+    const baseline = await readAuthority(initialConfig.path, predecessorSource, true);
     predecessorVersionId = baseline.versionId;
     assertPlatformContainerComplete(baseline.container, runnerImage);
 
@@ -2196,7 +2226,7 @@ export async function runPlatformWorkerCodeRelease(
 
     const immediate = await readAuthority(
       initialConfig.path,
-      configSource,
+      predecessorSource,
       true,
     );
     assertPlatformWorkerCodeAuthorityUnchanged(baseline, immediate, true);
@@ -2292,9 +2322,16 @@ export async function runPlatformWorkerCodeRelease(
       environment,
       deployedVersionId,
     );
+    if (requiresLoginAdmission) {
+      await (runtime.loginStartReadback ?? ((versionId) => verifyPlatformLoginStart({
+        origin: platformTargetForEnvironment(environment).origin,
+        issuer: AUTH_STAGING_ISSUER,
+        versionId,
+      })))(deployedVersionId);
+    }
     process.stdout.write(
       `${JSON.stringify({
-        kind: "takosumi.platform-worker-staging-code@v1",
+        kind: addLoginAdmission ? "takosumi.platform-worker-staging-login-admission@v1" : "takosumi.platform-worker-staging-code@v1",
         status: "ready",
         predecessorVersionId,
         deployedVersionId,
@@ -2308,7 +2345,7 @@ export async function runPlatformWorkerCodeRelease(
     if (mutation === "none") throw error;
     process.stdout.write(
       `${JSON.stringify({
-        kind: "takosumi.platform-worker-staging-code@v1",
+        kind: addLoginAdmission ? "takosumi.platform-worker-staging-login-admission@v1" : "takosumi.platform-worker-staging-code@v1",
         status: "incomplete",
         predecessorVersionId,
         releaseTag,
@@ -5651,6 +5688,14 @@ export function assertPlatformWorkerCodeVersionMatchesConfig(
       });
       continue;
     }
+    if (wanted.type === "ratelimit") {
+      platformWorkerCodeExactKeys(binding, ["name", "type", "namespace_id", "simple"]);
+      if (binding.type !== "ratelimit" || binding.namespace_id !== wanted.namespace_id ||
+        !platformWorkerCodeEqual(binding.simple, wanted.simple)) {
+        throw new Error("platform_worker_code_binding_mismatch");
+      }
+      continue;
+    }
     platformWorkerCodeExactKeys(binding, Object.keys(wanted));
     if (Object.entries(wanted).some(([key, value]) => binding[key] !== value)) {
       throw new Error("platform_worker_code_binding_mismatch");
@@ -5692,6 +5737,7 @@ function platformWorkerCodeExpectedBindings(
   }
   add({ name: config.assets.binding, type: "assets" });
   add({ name: config.version_metadata.binding, type: "version_metadata" });
+  for (const binding of platformRateLimitBindings(config)) add({ ...binding });
   for (const value of platformWorkerCodeRecords(config.d1_databases)) {
     add({
       name: value.binding,

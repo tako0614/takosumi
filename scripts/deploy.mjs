@@ -64,6 +64,12 @@ const PLATFORM_STAGING_CODE = {
   target: "cloudflare-worker:takosumi-staging",
 };
 
+const PLATFORM_STAGING_LOGIN_ADMISSION = {
+  surface: "takosumi-platform-staging-login-admission",
+  environment: "staging",
+  target: "cloudflare-worker:takosumi-staging",
+};
+
 const PLATFORM_PRODUCTION = {
   surface: "takosumi-platform",
   environment: "production",
@@ -144,6 +150,19 @@ const platformContract = ({ surface, target, environment }) => ({
 const CONTRACT = {
   kind: "takos.deploy-contract@v2",
   surfaces: [
+    {
+      surface: PLATFORM_STAGING_LOGIN_ADMISSION.surface,
+      target: PLATFORM_STAGING_LOGIN_ADMISSION.target,
+      lineage: "integration",
+      triggers: ["authority"],
+      obligations: {
+        provenance: "uses the existing staging code publication pipeline and exact source pin; permits only adding both distinct operator-selected Hosted login rate-limit namespaces at global60/60s and IP10/60s from a predecessor without either binding",
+        "independent-review": "requires independent source and exact two-binding configuration-delta review before the operator invokes this authority transition",
+        "post-conditions": "strict full candidate binding/readback, unchanged secret/DB/Runner/topology/settings, and one fresh login-start GET that redirects only to the intended issuer authorization endpoint; no SSO-completion claim",
+        reversal: "retains the predecessor immutable Version and the takosumi-platform-staging rollback owner; rollback removes login admission and restores the former fail-closed503 behavior",
+        "failure-handling": "every unrelated binding/config/authority drift refuses; normal code-only preservation is unchanged; no upload/activation retry, and a failed post-touch smoke remains incomplete until operator history readback",
+      },
+    },
     {
       surface: PLATFORM_STAGING_CODE.surface,
       target: PLATFORM_STAGING_CODE.target,
@@ -496,6 +515,14 @@ if (controlSchema) {
     controlSchema.environment,
     ...args,
   ]));
+}
+
+if (
+  selected === PLATFORM_STAGING_LOGIN_ADMISSION.surface
+) {
+  const { runPlatformWorkerLoginAdmissionRelease } = await import("./platform-worker-release.ts");
+  await runPlatformWorkerLoginAdmissionRelease(process.argv.slice(3), PLATFORM_STAGING_LOGIN_ADMISSION.environment);
+  process.exit(0);
 }
 
 if (
