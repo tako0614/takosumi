@@ -93,6 +93,8 @@ export interface UiSurfaceReadOptions {
   readonly fetch?: typeof fetch;
   /** Limit the read to one installed Capsule (for post-Run handoff). */
   readonly capsuleId?: string;
+  /** The successful read contains only a bounded window of authorized screens. */
+  readonly onIncomplete?: () => void;
 }
 
 const MAX_UI_SURFACE_PAGES = 10_000;
@@ -113,6 +115,7 @@ export async function listAuthorizedUiSurfaces(
   const legacyPath = `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces`;
   let basePath = normalizedCapsuleId ? "/api/v1/ui-surfaces" : legacyPath;
   const interfaces: unknown[] = [];
+  let incomplete = false;
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
   for (let page = 0; page < MAX_UI_SURFACE_PAGES; page += 1) {
@@ -134,6 +137,7 @@ export async function listAuthorizedUiSurfaces(
     if (!isRecord(body) || !Array.isArray(body.interfaces)) {
       throw new Error("UI surface list response is invalid");
     }
+    incomplete ||= body.incomplete === true;
     interfaces.push(...body.interfaces);
 
     if (body.nextCursor === undefined) {
@@ -162,7 +166,9 @@ export async function listAuthorizedUiSurfaces(
           value.capsuleId === normalizedCapsuleId),
     );
 
-  return candidates.map(stripInterface).sort(compareAuthorizedUiSurfaces);
+  const surfaces = candidates.map(stripInterface).sort(compareAuthorizedUiSurfaces);
+  if (incomplete) options.onIncomplete?.();
+  return surfaces;
 }
 
 export function parseUiSurfaceInterface(

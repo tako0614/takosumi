@@ -488,3 +488,120 @@ describe("dashboard UI-surface Interface consumer", () => {
     ).rejects.toThrow("UI surface list pagination cursor is invalid");
   });
 });
+
+test("aggregate completeness reports partial once after successful pages without losing authorized targets", async () => {
+  const events: string[] = [];
+  const calls: string[] = [];
+  const controller = new AbortController();
+  const options = {
+    capsuleId: "cap_1",
+    signal: controller.signal,
+    onIncomplete: () => events.push("partial"),
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(String(input));
+      events.push(`page${calls.length}`);
+      expect(init?.method).toBe("GET");
+      expect(init?.credentials).toBe("include");
+      expect(init?.signal).toBe(controller.signal);
+      return calls.length === 1
+        ? Response.json({ interfaces: [uiInterface()], incomplete: true, nextCursor: "page_2" })
+        : Response.json({ interfaces: [uiInterface({ status: { phase: "Pending" } })], incomplete: true });
+    }) as typeof fetch,
+  };
+  const surfaces = await listAuthorizedUiSurfaces("ws_1", options);
+  expect(surfaces).toHaveLength(1);
+  expect(surfaces[0]?.url).toBe("https://office.example.test/app");
+  expect(events).toEqual(["page1", "page2", "partial"]);
+  expect(calls).toEqual([
+    "/api/v1/ui-surfaces?capsuleId=cap_1",
+    "/api/v1/ui-surfaces?capsuleId=cap_1&cursor=page_2",
+  ]);
+});
+
+test("aggregate completeness distinguishes an empty partial read from complete empty reads", async () => {
+  for (const marker of [undefined, false, true]) {
+    let partial = 0;
+    const calls: string[] = [];
+    const options = {
+      capsuleId: "cap_1",
+      onIncomplete: () => { partial += 1; },
+      fetch: (async (input: RequestInfo | URL) => {
+        calls.push(String(input));
+        return Response.json({ interfaces: [], ...(marker === undefined ? {} : { incomplete: marker }) });
+      }) as typeof fetch,
+    };
+    expect(await listAuthorizedUiSurfaces("ws_1", options)).toEqual([]);
+    expect(partial).toBe(marker === true ? 1 : 0);
+    expect(calls).toEqual(["/api/v1/ui-surfaces?capsuleId=cap_1"]);
+  }
+});
+
+test("aggregate completeness does not report success or use legacy fallback after denied or failed reads", async () => {
+  for (const [status, continuation] of [[403, false], [503, false], [404, true], [503, true]] as const) {
+    let partial = 0;
+    const calls: string[] = [];
+    const options = {
+      capsuleId: "cap_1",
+      onIncomplete: () => { partial += 1; },
+      fetch: (async (input: RequestInfo | URL) => {
+        calls.push(String(input));
+        if (continuation && calls.length === 1) {
+          return Response.json({ interfaces: [uiInterface()], incomplete: true, nextCursor: "page_2" });
+        }
+        return Response.json({ error: "read_failed" }, { status });
+      }) as typeof fetch,
+    };
+    await expect(listAuthorizedUiSurfaces("ws_1", options)).rejects.toThrow();
+    expect(partial).toBe(0);
+    expect(calls).toEqual(continuation ? [
+      "/api/v1/ui-surfaces?capsuleId=cap_1",
+      "/api/v1/ui-surfaces?capsuleId=cap_1&cursor=page_2",
+    ] : ["/api/v1/ui-surfaces?capsuleId=cap_1"]);
+  }
+});
+
+test("aggregate completeness retains the original initial404 compatibility read and its partial marker", async () => {
+  let partial = 0;
+  const calls: string[] = [];
+  const options = {
+    capsuleId: "cap_1",
+    onIncomplete: () => { partial += 1; },
+    fetch: (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      return calls.length === 1
+        ? Response.json({ error: "not_found" }, { status: 404 })
+        : Response.json({ interfaces: [uiInterface()], incomplete: true });
+    }) as typeof fetch,
+  };
+  const surfaces = await listAuthorizedUiSurfaces("ws_1", options);
+  expect(surfaces[0]?.url).toBe("https://office.example.test/app");
+  expect(partial).toBe(1);
+  expect(calls).toEqual([
+    "/api/v1/ui-surfaces?capsuleId=cap_1",
+    "/api/v1/workspaces/ws_1/ui-surfaces?capsuleId=cap_1",
+  ]);
+});
+
+test("aggregate completeness keeps opaque invalid or repeated cursors as failed reads", async () => {
+  for (const cursor of ["", "opaque:page/2"]) {
+    let partial = 0;
+    const calls: string[] = [];
+    const options = {
+      capsuleId: "cap_1",
+      onIncomplete: () => { partial += 1; },
+      fetch: (async (input: RequestInfo | URL) => {
+        calls.push(String(input));
+        return Response.json({ interfaces: [uiInterface()], incomplete: true, nextCursor: cursor });
+      }) as typeof fetch,
+    };
+    await expect(listAuthorizedUiSurfaces("ws_1", options)).rejects.toThrow(
+      cursor ? "UI surface list pagination cursor repeated" : "UI surface list pagination cursor is invalid",
+    );
+    expect(partial).toBe(0);
+    expect(calls).toEqual(cursor ? [
+      "/api/v1/ui-surfaces?capsuleId=cap_1",
+      "/api/v1/ui-surfaces?capsuleId=cap_1&cursor=opaque%3Apage%2F2",
+    ] : ["/api/v1/ui-surfaces?capsuleId=cap_1"]);
+  }
+});

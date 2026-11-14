@@ -60,7 +60,7 @@ describe("use on your phone", () => {
     const before = run.slice(0, mount);
     expect(before.lastIndexOf("</Card>")).toBeGreaterThan(before.lastIndexOf("<Card>"));
     // The screen's display name, then the app's name; the section has its own fallback.
-    expect(run.slice(mount, mount + 300)).toContain("completedRunUiSurfaces()?.[0]?.name) ?? appName()");
+    expect(run.slice(mount, mount + 300)).toContain("completedRunUiSurfaceRead()?.surfaces[0]?.name ?? appName()");
     expect(section).toContain('t("app.phone.qrAriaUnnamed")');
   });
 
