@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   acceptAppOwnershipTransfer, cancelAppOwnershipTransfer, ControlApiError,
   createConnection, createGitInstallAttempt, getAppConnectionChoices, getAppMembers, getCapsuleConfigurationContext,
-  inviteAppMember, listAccessibleApps, listConnections, listPersonalUsagePage,
+  inviteAppMember, listAccessibleApps, listAccessibleAppsPage, listConnections, listPersonalUsagePage,
   removeAppMember, resolveStableSourceTag, transferAppOwnership, resetAppOwnershipCache,
   appOwnershipAvailable, legacyInstallWorkspaceId, startConnectionOAuth, isMissingControlRoute,
   listAppOwnershipTransfers, listIncomingOwnershipTransfers,
@@ -314,7 +314,10 @@ test("a modern install business not_found never selects the legacy install route
 
 test("an absent later app page cannot downgrade the present account API to legacy", async () => {
   stub((path) => path === "/api/v1/apps" ? Response.json({ apps: [], nextCursor: "next" }) : Response.json({ error: { code: "route_not_found" } }, { status: 404 }));
-  await expect(appOwnershipAvailable()).rejects.toMatchObject({ status: 502, code: "invalid_apps_response" });
+  expect(await appOwnershipAvailable()).toBe(true);
+  expect(calls.map((call) => call.path)).toEqual(["/api/v1/apps"]);
+  await expect(listAccessibleAppsPage("next")).rejects.toMatchObject({ status: 502, code: "invalid_apps_response" });
+  await expect(listAccessibleApps()).rejects.toMatchObject({ status: 502, code: "invalid_apps_response" });
   expect(calls.every((call) => !call.path.includes("workspaces"))).toBe(true);
 });
 
