@@ -32,11 +32,14 @@
 
 /* A short list of destinations, then one panel at a time. */
 .ap-overview-link {
-  display: inline-flex;
+  position: sticky;
+  top: var(--tg-topbar-h, 3.5rem);
+  z-index: 2;
+  display: flex;
   align-items: center;
-  justify-self: start;
   gap: var(--tg-s-2);
   min-height: 44px;
+  background: var(--tg-bg);
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
   text-decoration: none;
@@ -108,7 +111,8 @@
   border-radius: 0;
 }
 .ap-panel .ap-list-row:last-child { border-bottom: 0; }
-.ap-panel .ap-section-head h2 { font-size: var(--tg-fs-xl); }
+.ap-panel .ap-section-head h2 { width: fit-content; font-size: var(--tg-fs-xl); }
+.ap-panel .ap-section { scroll-margin-top: calc(var(--tg-topbar-h, 3.5rem) + 44px + var(--tg-s-3)); }
 
 /* Section cards. */
 .ap-section { display: grid; gap: var(--tg-s-4); min-width: 0; scroll-margin-top: calc(var(--tg-topbar-h, 3.5rem) + var(--tg-s-4)); overflow: visible; }

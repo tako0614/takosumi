@@ -468,6 +468,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // A newer version: reviewed in place, applied only by Allow and update.
       stale = true;
       await page.getByRole("link", { name: "App overview", exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(page.getByTestId("app-state-sentence")).toHaveText("Ready to use. A newer version is available.");
       const versionSection = app.getByTestId("app-version");
