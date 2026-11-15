@@ -1,7 +1,6 @@
-/* Installed-app page and Home (TASK-0115). Behavior sections as cards, one
-   primary action per card, lists that become stacked cards under 640px. */
+/* Installed-app overview and its individual management panels. */
 
-.ap-page { width: min(100%, 60rem); margin-inline: auto; display: grid; gap: var(--tg-s-5); min-width: 0; }
+.ap-page { width: min(100%, 46rem); margin-inline: auto; display: grid; gap: var(--tg-s-5); min-width: 0; }
 .ap-muted { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; margin: 0; }
 .ap-notice { margin: 0; padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-success); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); color: var(--tg-fg); font-size: var(--tg-fs-sm); }
 .ap-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); }
@@ -31,11 +30,85 @@
 .ap-open-change { align-self: center; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); text-decoration: underline; text-underline-offset: 2px; }
 .ap-open-change:hover, .ap-open-change:focus-visible { color: var(--tg-fg); }
 
-/* In-page jump links to each section. */
-.ap-jump { display: flex; flex-wrap: wrap; gap: var(--tg-s-1); padding-bottom: var(--tg-s-2); border-bottom: 1px solid var(--tg-line); font-size: var(--tg-fs-sm); }
-.ap-jump a { display: inline-flex; align-items: center; min-height: 44px; padding-inline: var(--tg-s-3); border-radius: var(--tg-r-md); color: var(--tg-fg-muted); text-decoration: none; }
-.ap-jump a:hover, .ap-jump a:active { color: var(--tg-fg); background: var(--tg-bg-subtle); }
-.ap-jump a:focus-visible { color: var(--tg-fg); outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+/* A short list of destinations, then one panel at a time. */
+.ap-overview-link {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--tg-s-2);
+  min-height: 44px;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  text-decoration: none;
+}
+.ap-overview-link:hover,
+.ap-overview-link:focus-visible { color: var(--tg-fg); }
+
+.ap-menu { display: grid; gap: var(--tg-s-4); }
+.ap-menu-group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
+}
+.ap-menu-group > li:first-child .ap-menu-row { border-start-start-radius: inherit; border-start-end-radius: inherit; }
+.ap-menu-group > li:last-child .ap-menu-row { border-end-start-radius: inherit; border-end-end-radius: inherit; }
+.ap-menu-group > li { border-radius: inherit; }
+.ap-menu-group > li + li .ap-menu-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 var(--tg-s-4) auto calc(var(--tg-s-4) * 3);
+  border-top: 1px solid var(--tg-line);
+}
+.ap-menu-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  min-height: 52px;
+  padding: var(--tg-s-2) var(--tg-s-4);
+  color: var(--tg-fg);
+  line-height: 1.35;
+  text-decoration: none;
+}
+.ap-menu-row:hover { background: var(--tg-bg-subtle); }
+.ap-menu-row:active { background: var(--tg-bg-soft); }
+.ap-menu-row:focus-visible { z-index: 1; outline: 2px solid var(--tg-accent); outline-offset: -2px; }
+.ap-menu-icon { display: inline-flex; flex: none; color: var(--tg-fg-muted); }
+.ap-menu-label { font-weight: 600; overflow-wrap: anywhere; }
+.ap-menu-value {
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.ap-menu-next { flex: none; margin-inline-start: auto; color: var(--tg-fg-muted); }
+.ap-menu-value + .ap-menu-next { margin-inline-start: 0; }
+.ap-menu-danger { background: transparent; }
+.ap-menu-danger .ap-menu-label { font-weight: 500; }
+.ap-panel { min-width: 0; }
+.ap-panel[hidden] { display: none; }
+.ap-panel > .ap-section {
+  padding: var(--tg-s-4) 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--tg-line);
+  border-radius: 0;
+  box-shadow: none;
+}
+.ap-panel .ap-list { gap: 0; }
+.ap-panel .ap-list-row {
+  padding-inline: 0;
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+.ap-panel .ap-list-row:last-child { border-bottom: 0; }
+.ap-panel .ap-section-head h2 { font-size: var(--tg-fs-xl); }
 
 /* Section cards. */
 .ap-section { display: grid; gap: var(--tg-s-4); min-width: 0; scroll-margin-top: calc(var(--tg-topbar-h, 3.5rem) + var(--tg-s-4)); overflow: visible; }

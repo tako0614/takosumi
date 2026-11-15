@@ -36,7 +36,7 @@ import {
   type JSX,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { RefreshCw } from "lucide-solid";
+import { ArrowDownToLine, ArrowLeft, ChevronRight, Clock3, Layers3, Link2, RefreshCw, SlidersHorizontal, Smartphone, Trash2, Users } from "lucide-solid";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, EmptyState, Skeleton, Toast } from "../../components/ui/index.ts";
 import {
@@ -166,7 +166,7 @@ function isCapsuleNotFound(error: unknown): boolean {
   );
 }
 
-function scrollToSection(section: AppPageSection | "review") {
+function scrollToAnchor(section: AppPageSection | "review") {
   const id = section === "review" ? "app-review" : APP_PAGE_SECTIONS[section];
   document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "instant" });
 }
@@ -191,6 +191,36 @@ export default function AppManagePage(props: {
   const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
   const capsuleId = () => props.capsuleId;
+
+  const panel = () => {
+    const section = props.section;
+    switch (section) {
+      case "connections":
+      case "settings":
+        return managed() ? "settings" : undefined;
+      case "version":
+      case "links":
+      case "created":
+        return managed() ? section : undefined;
+      case "sharing":
+        return sharingAvailable() ? section : undefined;
+      case "danger":
+        return canRemove() ? section : undefined;
+      case "phone":
+        return phoneScreen() ? section : undefined;
+      case "history":
+        return section;
+      default:
+        return undefined;
+    }
+  };
+  const scrollToSection = (section: AppPageSection | "review") => {
+    if (section !== "review" && props.section !== section) {
+      navigate(appPageHref(capsuleId(), section), { scroll: false });
+    } else {
+      requestAnimationFrame(() => scrollToAnchor(section));
+    }
+  };
 
   // --- the app and the server's view of it -----------------------------------
   const [context, { refetch: refetchContext }] = createResource(
@@ -365,19 +395,37 @@ export default function AppManagePage(props: {
     if (inst) props.onCapsule?.(inst);
   });
 
-  // The section the URL names is scrolled to once the sections above it have
-  // loaded and stopped moving it down.
-  let scrolledTo: string | undefined;
+  // Opening a panel moves the keyboard into it; returning leaves focus on
+  // the row that opened it. Wait only for the destination's own content.
+  let revealed: AppPageSection | undefined;
   createEffect(() => {
     const section = props.section;
-    if (!section || !capsule() || !app() || (section === "sharing" && !sharingAvailable())) return;
-    const key = `${capsuleId()}:${section}`;
-    if (scrolledTo === key) return;
-    const settling = [installConfig, stateVersions, inventory, bindingSet, usage, historyFirst]
-      .some((resource) => resource.loading);
-    if (settling) return;
-    scrolledTo = key;
-    requestAnimationFrame(() => scrollToSection(section));
+    if (!section) {
+      const previous = revealed === "connections" ? "settings" : revealed;
+      revealed = undefined;
+      if (previous) {
+        const frame = requestAnimationFrame(() =>
+          document.querySelector<HTMLElement>(`[data-app-menu="${previous}"]`)?.focus(),
+        );
+        onCleanup(() => cancelAnimationFrame(frame));
+      }
+      return;
+    }
+    if (revealed === section || !capsule() || !app() || (!panel() && section !== "attention")) return;
+    if (section === "connections" && (installConfig.loading || bindingSet.loading)) return;
+    const frame = requestAnimationFrame(() => {
+      const target = document.getElementById(APP_PAGE_SECTIONS[section]);
+      if (!target) return;
+      revealed = section;
+      scrollToAnchor(section);
+      const heading = target.querySelector<HTMLElement>("h2,h3");
+      // The phone chooser has a more specific focus destination after Open.
+      if (heading && section !== "phone") {
+        heading.tabIndex = -1;
+        heading.focus({ preventScroll: true });
+      }
+    });
+    onCleanup(() => cancelAnimationFrame(frame));
   });
 
   const clearCaches = () => {
@@ -965,8 +1013,8 @@ export default function AppManagePage(props: {
   /** Open landed on the chooser (an iPhone custom scheme not chosen yet). */
   const showChooser = (interfaceId: string) => {
     setChooserScreenId(interfaceId);
+    scrollToSection("phone");
     requestAnimationFrame(() => {
-      scrollToSection("phone");
       document.querySelector<HTMLElement>("#phone a[href], #phone button:not([disabled])")?.focus({ preventScroll: true });
     });
   };
@@ -1023,6 +1071,26 @@ export default function AppManagePage(props: {
     managed() && revisionReady() && (view.version.updateAvailable || view.version.stale) &&
     view.state === "installed" && !versionChangeBusy(view);
 
+  const canRemove = () => {
+    const view = app();
+    return Boolean(view && isOwner() && !destroyed() && !view.uninstall.scheduled &&
+      view.state !== "uninstalling" && view.state !== "uninstall_scheduled");
+  };
+  const phoneScreen = () => {
+    const view = app();
+    return view && (view.primaryAction === "open" || secondaryScreens(view)) ? chooserScreen() : undefined;
+  };
+  const menuRow = (section: AppPageSection, label: MessageKey, icon: JSX.Element, value?: () => string | undefined) => (
+    <li>
+      <a class="ap-menu-row" href={appPageHref(capsuleId(), section)} data-app-menu={section}>
+        <span class="ap-menu-icon" aria-hidden="true">{icon}</span>
+        <span class="ap-menu-label">{t(label)}</span>
+        <Show when={value?.()}>{(text) => <span class="ap-menu-value">{text()}</span>}</Show>
+        <ChevronRight class="ap-menu-next" size={16} aria-hidden="true" />
+      </a>
+    </li>
+  );
+
   return (
     <Switch>
       <Match when={!loadError() && (!contextLatest() || !app())}>
@@ -1077,6 +1145,12 @@ export default function AppManagePage(props: {
                 <p class="ap-notice" role="status">{t("app.installedNotice")}</p>
               </Show>
 
+              <Show when={panel()}>
+                <a class="ap-overview-link" href={appPageHref(capsuleId())}>
+                  <ArrowLeft size={18} aria-hidden="true" />
+                  {t("app.manage.overview")}
+                </a>
+              </Show>
               <header class="ap-header" data-testid="app-header">
                 <AppFace
                   name={displayName()}
@@ -1171,7 +1245,7 @@ export default function AppManagePage(props: {
                       {t("app.open.reload")}
                     </Button>
                   </Show>
-                  <Show when={showUpdate(view())}>
+                  <Show when={showUpdate(view()) && panel() !== "version"}>
                     <Button
                       variant="secondary"
                       type="button"
@@ -1188,23 +1262,6 @@ export default function AppManagePage(props: {
                   </Show>
                 </div>
               </header>
-
-              <Show when={managed()}>
-                <nav class="ap-jump" aria-label={t("app.jump.label")}>
-                  <a href="#version">{t("app.version.title")}</a>
-                  <a href="#settings">{t("app.settings.title")}</a>
-                  <a href="#links">{t("app.links.title")}</a>
-                  <a href="#created">{t("app.created.title")}</a>
-                  <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined}>
-                    <a href="#phone">{t("app.phone.title")}</a>
-                  </Show>
-                  <a href="#history">{t("app.history.title")}</a>
-                  <Show when={sharingAvailable()}><a href="#sharing">{t("app.sharing.title")}</a></Show>
-                  <Show when={isOwner() && !view().uninstall.scheduled}>
-                    <a href="#danger">{t("app.uninstall.title")}</a>
-                  </Show>
-                </nav>
-              </Show>
 
               <Show when={destroyed()}>
                 <AppSection id="app-gone" title={t("app.gone.title")} subtitle={t("app.gone.body")}>
@@ -1250,152 +1307,192 @@ export default function AppManagePage(props: {
                 }}
               />
 
+              <Show when={!panel()}>
+                <nav class="ap-menu" aria-label={t("app.manage.label")}>
+                  <Show when={managed()}>
+                    <ul class="ap-menu-group">
+                      {menuRow("version", "app.version.title", <ArrowDownToLine size={19} />, currentRef)}
+                      {menuRow("settings", "app.settings.title", <SlidersHorizontal size={19} />)}
+                      {menuRow("links", "app.links.title", <Link2 size={19} />)}
+                      <Show when={sharingAvailable()}>
+                        {menuRow("sharing", "app.sharing.title", <Users size={19} />)}
+                      </Show>
+                    </ul>
+                  </Show>
+                  <ul class="ap-menu-group">
+                    <Show when={phoneScreen()}>
+                      {menuRow("phone", "app.phone.title", <Smartphone size={19} />)}
+                    </Show>
+                    {menuRow("history", "app.history.title", <Clock3 size={19} />)}
+                    <Show when={managed()}>
+                      {menuRow("created", "app.created.title", <Layers3 size={19} />)}
+                    </Show>
+                  </ul>
+                  <Show when={canRemove()}>
+                    <ul class="ap-menu-group ap-menu-danger">
+                      {menuRow("danger", "app.uninstall.title", <Trash2 size={19} />)}
+                    </ul>
+                  </Show>
+                </nav>
+              </Show>
+
               <Show when={managed()}>
-                <AppVersionSection
-                  version={view().version}
-                  versionIncomplete={appViewIncomplete(view(), "version")}
-                  currentStateVersion={currentStateVersion()}
-                  stateVersions={stateVersionList()}
-                  stateVersionsLoading={stateVersions.loading}
-                  stateVersionsFailed={Boolean(stateVersions.error)}
-                  versionLabels={versionLabels()}
-                  revisionReady={revisionReady()}
-                  reviewBusy={reviewBusy() || versionChangeBusy(view())}
-                  starting={startingIn("version")}
-                  error={errorFor("version")}
-                  notice={noticeFor("version")}
-                  onUpdate={(ref) => startUpdate(ref)}
-                  onRollback={startRollback}
-                  autoUpdateBusy={autoUpdateBusy()}
-                  autoUpdateError={autoUpdateError()}
-                  onAutoUpdate={(enabled) => void toggleAutoUpdate(enabled)}
-                  review={reviewPanel("version")}
-                />
-                <AppSettingsSection
-                  capsuleId={capsuleId()}
-                  workspaceId={inst().workspaceId}
-                  member={appRole() === "member"}
-                  accessKnown={appRole() !== undefined}
-                  memberConnectionChoices={settledValue(memberChoices)}
-                  canCreateConnection={isOwner()}
-                  installConfig={installConfigValue()}
-                  installConfigLoading={installConfig.loading}
-                  authorityGuard={authorityGuard()}
-                  // A loaded app without a binding set uses no connections.
-                  bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}
-                  capsuleInstallConfigId={inst().installConfigId}
-                  seed={settingsSeed()}
-                  bindingsFailed={Boolean(bindingSet.error)}
-                  connections={settledValue(connections) ?? []}
-                  onConnectionsChanged={() => void refetchConnections()}
-                  // A settings change beside a running or pending version
-                  // change would make that change fail when it is applied.
-                  reviewBusy={reviewBusy() || versionChangeBusy(view())}
-                  changeWaits={!reviewBusy() && versionChangeBusy(view())}
-                  starting={startingIn("settings")}
-                  error={errorFor("settings")}
-                  notice={noticeFor("settings")}
-                  onReview={(create) => void startReview("settings", "apply", create, { restartable: false })}
-                  review={reviewPanel("settings")}
-                />
-                <AppLinkedSection app={view()} onChanged={async () => { await refetchApp(); }} />
-                <AppCreatedSection
-                  inventory={settledValue(inventory)}
-                  inventoryLoading={inventory.loading}
-                  inventoryFailed={Boolean(inventory.error)}
-                  bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : []}
-                  connections={settledValue(connections) ?? []}
-                  usage={settledValue(usage)}
-                  usageLoading={usage.loading}
-                  usageFailed={Boolean(usage.error)}
-                  hosted={settledValue(hosted) ?? []}
-                />
+                <div class="ap-panel" hidden={panel() !== "version"}>
+                  <AppVersionSection
+                    version={view().version}
+                    versionIncomplete={appViewIncomplete(view(), "version")}
+                    currentStateVersion={currentStateVersion()}
+                    stateVersions={stateVersionList()}
+                    stateVersionsLoading={stateVersions.loading}
+                    stateVersionsFailed={Boolean(stateVersions.error)}
+                    versionLabels={versionLabels()}
+                    revisionReady={revisionReady()}
+                    reviewBusy={reviewBusy() || versionChangeBusy(view())}
+                    starting={startingIn("version")}
+                    error={errorFor("version")}
+                    notice={noticeFor("version")}
+                    onUpdate={(ref) => startUpdate(ref)}
+                    onRollback={startRollback}
+                    autoUpdateBusy={autoUpdateBusy()}
+                    autoUpdateError={autoUpdateError()}
+                    onAutoUpdate={(enabled) => void toggleAutoUpdate(enabled)}
+                    review={reviewPanel("version")}
+                  />
+                </div>
+                <div class="ap-panel" hidden={panel() !== "settings"}>
+                  <AppSettingsSection
+                    capsuleId={capsuleId()}
+                    workspaceId={inst().workspaceId}
+                    member={appRole() === "member"}
+                    accessKnown={appRole() !== undefined}
+                    memberConnectionChoices={settledValue(memberChoices)}
+                    canCreateConnection={isOwner()}
+                    installConfig={installConfigValue()}
+                    installConfigLoading={installConfig.loading}
+                    authorityGuard={authorityGuard()}
+                    // A loaded app without a binding set uses no connections.
+                    bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}
+                    capsuleInstallConfigId={inst().installConfigId}
+                    seed={settingsSeed()}
+                    bindingsFailed={Boolean(bindingSet.error)}
+                    connections={settledValue(connections) ?? []}
+                    onConnectionsChanged={() => void refetchConnections()}
+                    // A settings change beside a running or pending version
+                    // change would make that change fail when it is applied.
+                    reviewBusy={reviewBusy() || versionChangeBusy(view())}
+                    changeWaits={!reviewBusy() && versionChangeBusy(view())}
+                    starting={startingIn("settings")}
+                    error={errorFor("settings")}
+                    notice={noticeFor("settings")}
+                    onReview={(create) => void startReview("settings", "apply", create, { restartable: false })}
+                    review={reviewPanel("settings")}
+                  />
+                </div>
+                <div class="ap-panel" hidden={panel() !== "links"}>
+                    <AppLinkedSection app={view()} onChanged={async () => { await refetchApp(); }} />
+                </div>
+                <div class="ap-panel" hidden={panel() !== "created"}>
+                  <AppCreatedSection
+                    inventory={settledValue(inventory)}
+                    inventoryLoading={inventory.loading}
+                    inventoryFailed={Boolean(inventory.error)}
+                    bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : []}
+                    connections={settledValue(connections) ?? []}
+                    usage={settledValue(usage)}
+                    usageLoading={usage.loading}
+                    usageFailed={Boolean(usage.error)}
+                    hosted={settledValue(hosted) ?? []}
+                  />
+                </div>
               </Show>
 
               {/* Wherever Open is offered, the same screen can go to a phone,
                   and on a phone this is where it chooses how the screen opens. */}
-              <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined}>
-                {(screen) => (
-                  <AppPhoneSection
-                    url={screen().url}
-                    appName={displayName()}
-                    capsuleId={capsuleId()}
-                    interfaceId={screen().interfaceId}
-                    clients={screen().clients}
-                    missing={missingScreenId !== undefined && missingScreenId === screen().interfaceId}
-                  />
-                )}
-              </Show>
+              <div class="ap-panel" hidden={panel() !== "phone"}>
+                <Show when={phoneScreen()}>
+                  {(screen) => (
+                    <AppPhoneSection
+                      url={screen().url}
+                      appName={displayName()}
+                      capsuleId={capsuleId()}
+                      interfaceId={screen().interfaceId}
+                      clients={screen().clients}
+                      missing={missingScreenId !== undefined && missingScreenId === screen().interfaceId}
+                    />
+                  )}
+                </Show>
 
-              <AppHistorySection
-                events={history()}
-                loading={historyFirst.loading && !historyFirstValue()}
-                failed={Boolean(historyFirst.error) && !historyFirstValue()}
-                onReload={() => void refetchHistory()}
-                hasMore={historyCursor() !== undefined}
-                moreBusy={moreBusy()}
-                moreError={moreError()}
-                onMore={() => void loadMoreHistory()}
-              />
+              </div>
+              <div class="ap-panel" hidden={panel() !== "history"}>
+                <AppHistorySection
+                  events={history()}
+                  loading={historyFirst.loading && !historyFirstValue()}
+                  failed={Boolean(historyFirst.error) && !historyFirstValue()}
+                  onReload={() => void refetchHistory()}
+                  hasMore={historyCursor() !== undefined}
+                  moreBusy={moreBusy()}
+                  moreError={moreError()}
+                  onMore={() => void loadMoreHistory()}
+                />
 
-              <AppSharingSection
-                capsuleId={capsuleId()}
-                role={appRole()}
-                accountId={props.accountId ?? props.principalId}
-                connectionNames={isSettled(connections) ? (settledValue(connections) ?? []).filter((connection) => connection.scope !== "operator").map((connection) => connection.displayName || connection.id) : undefined}
-                onChanged={refreshAll}
-                onAvailability={setSharingAvailable}
-              />
-              <Show
-                when={
-                  isOwner() && !destroyed() && !view().uninstall.scheduled &&
-                  view().state !== "uninstalling" && view().state !== "uninstall_scheduled"
-                }
-              >
-                <AppSection
-                  id="danger"
-                  title={t("app.uninstall.title")}
-                  subtitle={
-                    view().uninstall.mode === "discard"
-                      ? t("app.uninstall.bodyUnapplied", { name: displayName() })
-                      : view().uninstall.mode === "none"
-                        ? t("app.uninstall.bodyImmediate", { name: displayName() })
-                        : graceDays() !== undefined
-                          ? t("app.uninstall.bodyGrace", { name: displayName(), days: graceDays()! })
-                          : t("app.uninstall.body", { name: displayName() })
-                  }
-                  testId="app-uninstall"
-                >
-                  <div class="ap-row-actions">
-                    <Show
-                      when={view().uninstall.mode !== "none"}
-                      fallback={
+              </div>
+              <div class="ap-panel" hidden={panel() !== "sharing"}>
+                <AppSharingSection
+                  capsuleId={capsuleId()}
+                  role={appRole()}
+                  accountId={props.accountId ?? props.principalId}
+                  connectionNames={isSettled(connections) ? (settledValue(connections) ?? []).filter((connection) => connection.scope !== "operator").map((connection) => connection.displayName || connection.id) : undefined}
+                  onChanged={refreshAll}
+                  onAvailability={setSharingAvailable}
+                />
+              </div>
+              <Show when={canRemove()}>
+                <div class="ap-panel" hidden={panel() !== "danger"}>
+                  <AppSection
+                    id="danger"
+                    title={t("app.uninstall.title")}
+                    subtitle={
+                      view().uninstall.mode === "discard"
+                        ? t("app.uninstall.bodyUnapplied", { name: displayName() })
+                        : view().uninstall.mode === "none"
+                          ? t("app.uninstall.bodyImmediate", { name: displayName() })
+                          : graceDays() !== undefined
+                            ? t("app.uninstall.bodyGrace", { name: displayName(), days: graceDays()! })
+                            : t("app.uninstall.body", { name: displayName() })
+                    }
+                    testId="app-uninstall"
+                  >
+                    <div class="ap-row-actions">
+                      <Show
+                        when={view().uninstall.mode !== "none"}
+                        fallback={
+                          <Button
+                            variant="danger"
+                            type="button"
+                            busy={starting()?.action === "uninstall_now"}
+                            disabled={reviewBusy() || uninstallBusy()}
+                            onClick={uninstallNow}
+                          >
+                            {t("app.uninstall.now")}
+                          </Button>
+                        }
+                      >
                         <Button
                           variant="danger"
                           type="button"
-                          busy={starting()?.action === "uninstall_now"}
-                          disabled={reviewBusy() || uninstallBusy()}
-                          onClick={uninstallNow}
+                          busy={uninstallBusy()}
+                          disabled={uninstallBusy() || reviewBusy()}
+                          onClick={() => void uninstall()}
                         >
-                          {t("app.uninstall.now")}
+                          {t("app.uninstall.cta")}
                         </Button>
-                      }
-                    >
-                      <Button
-                        variant="danger"
-                        type="button"
-                        busy={uninstallBusy()}
-                        disabled={uninstallBusy() || reviewBusy()}
-                        onClick={() => void uninstall()}
-                      >
-                        {t("app.uninstall.cta")}
-                      </Button>
+                      </Show>
+                    </div>
+                    <Show when={uninstallError()}>
+                      {(message) => <p class="wa-error" role="alert">{message()}</p>}
                     </Show>
-                  </div>
-                  <Show when={uninstallError()}>
-                    {(message) => <p class="wa-error" role="alert">{message()}</p>}
-                  </Show>
-                </AppSection>
+                  </AppSection>
+                </div>
               </Show>
             </div>
           );

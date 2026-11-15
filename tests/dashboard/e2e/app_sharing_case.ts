@@ -125,7 +125,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
         return route.fulfill({ json: { cancelled: true } });
       });
 
-      await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/apps/${OWNER_APP}#sharing`, { waitUntil: "domcontentloaded" });
       const sharing = page.getByTestId("app-sharing");
       await expect(sharing).toBeVisible();
       await expect(sharing).toContainText("Portable E2E");
@@ -178,7 +178,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
     test("cancelling ownership confirmation sends no change and shows no saved notice", async ({ page }) => {
       const requests = await accountAs(page, "owner");
       await memberRoutes(page, OWNER_APP, PORTABLE_APP_MEMBERS);
-      await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/apps/${OWNER_APP}#sharing`, { waitUntil: "domcontentloaded" });
       const sharing = page.getByTestId("app-sharing");
       await sharing.locator('select[name="transfer-recipient"]').selectOption("tsub_kenta0123456789");
       const transfer = sharing.getByRole("button", { name: "所有権を譲渡", exact: true });
@@ -199,7 +199,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       await page.route("**/api/v1/connections**", (route) =>
         route.fulfill({ json: { connections: PORTABLE_PERSONAL_CONNECTIONS } }));
 
-      await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/apps/${OWNER_APP}#sharing`, { waitUntil: "domcontentloaded" });
       const sharing = page.getByTestId("app-sharing");
       const email = sharing.getByRole("textbox", { name: "メールアドレス" });
       await email.fill("missing-account@example.test");
@@ -228,7 +228,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
         return route.fulfill({ json: { removed: true } });
       });
 
-      await page.goto(`/apps/${SHARED_APP}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/apps/${SHARED_APP}#sharing`, { waitUntil: "domcontentloaded" });
       const sharing = page.getByTestId("app-sharing");
       await expect(sharing).toBeVisible();
       await expect(sharing).toContainText("Hanako Sato");
@@ -269,7 +269,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
         return route.fulfill({ json: { transferId: TRANSFER_ID, state: "accepted" } });
       });
 
-      await page.goto(`/apps/${SHARED_APP}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/apps/${SHARED_APP}#sharing`, { waitUntil: "domcontentloaded" });
       const sharing = page.getByTestId("app-sharing");
       await expect(sharing.locator('input[name="ownership-transfer-id"]')).toHaveCount(0);
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -281,7 +281,8 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       await expect(sharing).toContainText("共有を更新しました");
       await expect(sharing.getByRole("textbox", { name: "メールアドレス" })).toBeVisible();
       await expect(sharing.getByRole("button", { name: "共有から退出" })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "アンインストール" })).toBeVisible();
+      await page.getByRole("link", { name: "アプリ情報", exact: true }).click();
+      await expect(page.getByRole("link", { name: "アンインストール" })).toBeVisible();
       expect(requests.filter((request) => request.method === "POST")).toContainEqual({
         method: "POST",
         path: `/api/v1/ownership-transfers/${TRANSFER_ID}/accept`,
@@ -314,7 +315,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
         route.fulfill({ status: 404, json: { error: { code: "route_not_found" } } }));
       const response = page.waitForResponse((candidate) =>
         new URL(candidate.url()).pathname === `/api/v1/capsules/${OWNER_APP}/members`);
-      await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/apps/${OWNER_APP}#sharing`, { waitUntil: "domcontentloaded" });
       await response;
       await expect(page.getByTestId("app-sharing")).toHaveCount(0);
     });

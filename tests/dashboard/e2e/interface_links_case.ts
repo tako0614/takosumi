@@ -308,6 +308,8 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       await capture(page, "interface-app-links");
 
       // Removal explains the affected app by name before any DELETE is sent.
+      await page.getByRole("link", { name: "アプリ情報", exact: true }).click();
+      await page.locator('[data-app-menu="danger"]').click();
       await page.getByTestId("app-uninstall").getByRole("button", { name: "アンインストール", exact: true }).click();
       const dialog = page.getByRole("dialog");
       await expect(dialog).toContainText("チームWiki は リンク検証 の機能を使えなくなります（アプリ自体は残ります）");
@@ -315,6 +317,8 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
       expect(fixture.mutations).toEqual([]);
 
+      await page.getByRole("link", { name: "アプリ情報", exact: true }).click();
+      await page.locator('[data-app-menu="links"]').click();
       await use("files").getByRole("button", { name: /との連携を変更/u }).click();
       await use("files").getByRole("combobox").selectOption("if_files_b");
       await use("files").getByRole("button", { name: "このアプリと連携する", exact: true }).click();
