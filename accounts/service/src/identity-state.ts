@@ -6,7 +6,7 @@ import type {
   IdentityMergeLock,
 } from "./identity-context-state.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type { ConnectionOAuthAttemptRecord } from "./connection-oauth-attempt.ts";
+import type { ConnectionOAuthAttemptRecord, ConnectionOAuthAttemptSweepInput, ConnectionOAuthAttemptSweepResult } from "./connection-oauth-attempt.ts";
 import type {
   CredentialUnlinkIntent,
   CredentialUnlinkReceipt,
@@ -431,6 +431,7 @@ export interface FinancialSourceReceiptMutation {
 
 /** Optional ports keep ordinary self-host Accounts independent of hosted mode. */
 export interface HostedIdentityStore {
+  pruneConnectionOAuthAttempts?(input: ConnectionOAuthAttemptSweepInput): ConnectionOAuthAttemptSweepResult | Promise<ConnectionOAuthAttemptSweepResult>;
   createConnectionOAuthAttempt?(record: ConnectionOAuthAttemptRecord): boolean | Promise<boolean>;
   consumeConnectionOAuthAttempt?(id: string, browserBindingHash: string, now: number):
     ConnectionOAuthAttemptRecord | undefined | Promise<ConnectionOAuthAttemptRecord | undefined>;
