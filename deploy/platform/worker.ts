@@ -947,6 +947,10 @@ const platformWorker = {
       context,
     );
     await schedulePlatformSideEffect(
+      runScheduledAccountsConnectionOAuthAttemptRetention(env),
+      context,
+    );
+    await schedulePlatformSideEffect(
       runScheduledInterfaceMaterializationIntentDrain(env),
       context,
     );
@@ -1192,6 +1196,24 @@ export async function runScheduledAccountsPasskeyChallengeRetention(
     console.warn(JSON.stringify({ event: "passkey_challenge_retention_failed",
       errorName: error instanceof Error ? error.name : "unknown" }));
     return { scanned: 0, deleted: 0, failures: 1 };
+  }
+}
+
+/** Reclaim only expired credential-setup attempts, on the existing cron cadence. */
+export async function runScheduledAccountsConnectionOAuthAttemptRetention(
+  env: Pick<CloudflareWorkerEnv, "TAKOSUMI_ACCOUNTS_DB" | "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE">,
+): Promise<{ scanned: number | null; deleted: number | null; failures: 0 | 1 }> {
+  const schemaMode = resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE);
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, { schemaMode });
+  try {
+    if (schemaMode !== "predeployed") await store.initialize();
+    const result = await store.pruneConnectionOAuthAttempts({ now: Date.now() });
+    return { ...result, failures: 0 };
+  } catch (error) {
+    // Counts are unknown after an acknowledgement failure; never restore rows.
+    console.warn(JSON.stringify({ event: "connection_oauth_attempt_retention_failed",
+      errorName: error instanceof Error ? error.name : "unknown" }));
+    return { scanned: null, deleted: null, failures: 1 };
   }
 }
 
