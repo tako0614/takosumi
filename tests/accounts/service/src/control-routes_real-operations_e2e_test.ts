@@ -2349,42 +2349,135 @@ test("Workspace Run route serves opaque keyset pages and rejects malformed curso
 });
 
 test("concurrent identical configuration Plan requests share one durable PlanRun", async () => {
-  const { fixture, path, body } = await configurationPlanRouteFixture(
-    "configuration-plan-concurrent",
-  );
-  const call = async () => {
-    const built = request("POST", path, {
-      cookie: fixture.cookie,
-      headers: { "idempotency-key": "configuration-plan-concurrent-v1" },
-      body,
-    });
-    const response = await handleControlRoute({
-      request: built.request,
-      url: built.url,
-      store: fixture.accountStore,
-      operations: fixture.operations,
-    });
-    expect(response).toBeDefined();
-    expect(response!.headers.get("server-timing")).toContain(
-      "tk_control_dispatch",
-    );
-    return {
-      status: response!.status,
-      body: (await response!.json()) as CapsuleConfigurationPlanResponse,
-    };
+  const barrier = () => {
+    let release!: () => void;
+    const reached = new Promise<void>((resolve) => { release = resolve; });
+    return { reached, release };
   };
-  const results = await Promise.all([call(), call()]);
-  expect(results.map((result) => result.status).sort()).toEqual([201, 201]);
-  expect(
-    results.map((result) => result.body.configurationPlan.replayed),
-  ).toEqual([false, false]);
-  expect(new Set(results.map((result) => result.body.configurationPlan.planRunId)))
-    .toHaveLength(1);
-  expect(
-    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
-      (run) => run.type === "plan",
-    ),
-  ).toHaveLength(1);
+  for (const schedule of ["before-canonical-commit", "after-canonical-commit"] as const) {
+    const { fixture, path, body } = await configurationPlanRouteFixture(
+      `configuration-plan-concurrent-${schedule}`,
+    );
+    const readPlan = fixture.deployStore.getPlanRun.bind(fixture.deployStore);
+    const preparePlan = fixture.deployStore.preparePlanRun.bind(fixture.deployStore);
+    const bothAbsent = barrier();
+    const committed = barrier();
+    const acknowledge = barrier();
+    const absentObservations: string[] = [];
+    let committedPlanId: string | undefined;
+    if (schedule === "before-canonical-commit") {
+      fixture.deployStore.getPlanRun = async (id) => {
+        const observed = await readPlan(id);
+        if (absentObservations.length < 2) {
+          expect(observed).toBeUndefined();
+          absentObservations.push(id);
+          if (absentObservations.length === 2) bothAbsent.release();
+          await bothAbsent.reached;
+        }
+        return observed;
+      };
+    } else {
+      fixture.deployStore.preparePlanRun = async (input) => {
+        const prepared = await preparePlan(input);
+        if (prepared.status === "created") {
+          committedPlanId = prepared.run.id;
+          committed.release();
+          // The real row/inputs exist while the first request still awaits ACK.
+          await acknowledge.reached;
+        }
+        return prepared;
+      };
+    }
+    const call = async () => {
+      const built = request("POST", path, {
+        cookie: fixture.cookie,
+        headers: { "idempotency-key": "configuration-plan-concurrent-v1" },
+        body,
+      });
+      const response = await handleControlRoute({
+        request: built.request,
+        url: built.url,
+        store: fixture.accountStore,
+        operations: fixture.operations,
+      });
+      expect(response).toBeDefined();
+      expect(response!.headers.get("server-timing")).toContain(
+        "tk_control_dispatch",
+      );
+      return {
+        status: response!.status,
+        body: (await response!.json()) as CapsuleConfigurationPlanResponse,
+      };
+    };
+    const pending: ReturnType<typeof call>[] = [];
+    try {
+      let results: Awaited<ReturnType<typeof call>>[];
+      if (schedule === "before-canonical-commit") {
+        pending.push(
+          call().finally(bothAbsent.release),
+          call().finally(bothAbsent.release),
+        );
+        results = await Promise.all(pending);
+      } else {
+        let firstReturned = false;
+        const first = call().then((result) => {
+          firstReturned = true;
+          return result;
+        });
+        pending.push(first);
+        await Promise.race([
+          committed.reached,
+          first.then(() => { throw new Error("First request skipped the canonical commit barrier"); }),
+        ]);
+        expect(committedPlanId).toBeDefined();
+        expect((await readPlan(committedPlanId!))?.id).toBe(committedPlanId);
+        const second = call();
+        pending.push(second);
+        const replay = await second;
+        expect(firstReturned).toBe(false);
+        acknowledge.release();
+        results = [await first, replay];
+      }
+      expect(results.map((result) => [
+        result.status,
+        result.body.configurationPlan.replayed,
+      ])).toEqual(schedule === "before-canonical-commit"
+        ? [[201, false], [201, false]]
+        : [[201, false], [200, true]]);
+      const firstPlan = results[0].body.configurationPlan;
+      for (const result of results) {
+        expect(result.body.configurationPlan).toEqual({
+          ...firstPlan,
+          replayed: result.body.configurationPlan.replayed,
+        });
+        expect(result.body.capsule.id).toBe(fixture.seeded.capsule.id);
+        expect(result.body.capsule.installConfigId).toBe(firstPlan.targetInstallConfigId);
+        expect(result.body.links.run).toBe(`/api/v1/runs/${firstPlan.planRunId}`);
+      }
+      if (schedule === "before-canonical-commit") {
+        expect(absentObservations).toEqual([firstPlan.planRunId, firstPlan.planRunId]);
+      } else {
+        expect(committedPlanId).toBe(firstPlan.planRunId);
+      }
+      expect(new Set(results.map((result) => result.body.configurationPlan.planRunId)))
+        .toHaveLength(1);
+      const plans = (await fixture.operations.listRuns(fixture.seeded.workspace.id))
+        .filter((run) => run.type === "plan");
+      expect(plans).toHaveLength(1);
+      expect(plans[0].id).toBe(firstPlan.planRunId);
+      const events = await fixture.deployStore.listActivityEvents(fixture.seeded.workspace.id);
+      expect(events.filter((event) => event.action === "run.plan_created")).toHaveLength(1);
+      expect(events.filter((event) => event.action === "capsule.install_config_rebound"))
+        .toHaveLength(1);
+    } finally {
+      // A rejection cannot leave the other owned request at a test barrier.
+      bothAbsent.release();
+      acknowledge.release();
+      await Promise.allSettled(pending);
+      fixture.deployStore.getPlanRun = readPlan;
+      fixture.deployStore.preparePlanRun = preparePlan;
+    }
+  }
 });
 
 test("owned Capsule configuration Plan records its authenticated creator and replays exact evidence", async () => {
