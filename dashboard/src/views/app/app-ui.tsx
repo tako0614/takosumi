@@ -1,5 +1,5 @@
 /**
- * Small building blocks shared by the installed-app page sections and Home.
+ * Small building blocks shared by the installed-app page sections.
  */
 import {
   createEffect,
@@ -13,7 +13,7 @@ import { ChevronDown, ExternalLink, Smartphone } from "lucide-solid";
 import { Button } from "../../components/ui/index.ts";
 import { formatDateTime, relativeTime, t } from "../../i18n/index.ts";
 import { type OpenRouteScreen, screenOpenRoute } from "../../lib/open-choice-state.ts";
-import { clientTargetLabel, type OpenRoute } from "../../lib/open-routing.ts";
+import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
 
 /** Relative time ("5分前"), with the exact date and time on hover. */
 export function RelativeTime(props: { readonly iso: string }): JSX.Element {
@@ -61,39 +61,6 @@ export function AppSection(props: {
 /** One launchable screen as "Open" shows it: its display name, URL and native clients. */
 export interface OpenableScreen extends OpenRouteScreen {
   readonly name?: string;
-}
-
-/**
- * The anchor one route opens with. The web opens in a new tab, as on a
- * computer; a native app is a link the person taps in place (a universal
- * link must be tapped, and an `intent:` link leaves the page alone when the
- * app opens); the chooser is a page of the dashboard.
- */
-export function openRouteAnchor(route: OpenRoute): { readonly href: string; readonly target?: string; readonly rel?: string } {
-  switch (route.kind) {
-    case "web":
-      return { href: route.href, target: "_blank", rel: "noreferrer noopener" };
-    case "native":
-      return { href: route.href, rel: "noreferrer" };
-    case "choose":
-      return { href: route.href };
-  }
-}
-
-/** The accessible name of a link that opens `name` along `route`. */
-export function openRouteAria(route: OpenRoute, name: string): string {
-  switch (route.kind) {
-    case "web":
-      return t("app.open.aria", { name });
-    case "native":
-      // A native route is always a verified client, which always has a name.
-      return t("app.open.ariaNative", {
-        name,
-        app: route.client.name ?? t("app.phone.unverifiedName", { target: clientTargetLabel(route.client) }),
-      });
-    case "choose":
-      return t("app.open.ariaChoose", { name });
-  }
 }
 
 /**

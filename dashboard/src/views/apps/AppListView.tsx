@@ -30,7 +30,7 @@ import { Button, Input, Toast } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { appPageHref } from "../../lib/app-links.ts";
 import { screenOpenRoute } from "../../lib/open-choice-state.ts";
-import { openRouteAnchor, openRouteAria } from "../app/app-ui.tsx";
+import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
 
 const PAGE_SIZE = 16;
 const SCREEN_READS_IN_FLIGHT = 4;
