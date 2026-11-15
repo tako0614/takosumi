@@ -1248,16 +1248,10 @@ export default function AppManagePage(props: {
                   <Show when={showUpdate(view()) && panel() !== "version"}>
                     <Button
                       variant="secondary"
-                      type="button"
+                      href={appPageHref(capsuleId(), "version")}
                       icon={<RefreshCw size={16} />}
-                      busy={startingIn("version")}
-                      disabled={reviewBusy()}
-                      onClick={() => {
-                        startUpdate();
-                        scrollToSection("version");
-                      }}
                     >
-                      {t("app.version.update")}
+                      {t("app.version.viewUpdate")}
                     </Button>
                   </Show>
                 </div>

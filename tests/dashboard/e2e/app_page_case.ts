@@ -474,7 +474,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const versionSection = app.getByTestId("app-version");
       await expect(versionSection.getByTestId("app-update")).toContainText("A newer version is available");
       await expect(versionSection.getByTestId("app-new-version")).toHaveText("main · fedcba9");
-      await header.getByRole("button", { name: "Update", exact: true }).click();
+      await header.getByRole("link", { name: "View update", exact: true }).click();
+      await expect(versionSection).toBeVisible();
+      expect(revisionPlanBodies).toEqual([]);
+      await versionSection.getByRole("button", { name: "Update", exact: true }).click();
       await expect.poll(() => revisionPlanBodies).toEqual([{ ref: "main" }]);
       const review = versionSection.getByTestId("app-review");
       await expect(review.getByRole("heading", { name: "What the update changes" })).toBeVisible();
@@ -1302,7 +1305,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       scene = "review_pending";
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(problems.locator('[data-problem="review-waiting"]')).toBeVisible();
-      await expect(header.getByRole("button", { name: "Update", exact: true })).toHaveCount(0);
+      await expect(header.getByRole("link", { name: "View update", exact: true })).toHaveCount(0);
       await openPanel(page, "version");
       await expect(app.getByTestId("app-version").getByRole("button", { name: "Update", exact: true })).toBeDisabled();
       await openPanel(page, "settings");

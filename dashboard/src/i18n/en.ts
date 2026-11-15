@@ -578,6 +578,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.version.checkTitle": "Check for a newer version",
   "app.version.checkHint": "Reads the latest version of the same branch or tag and shows what would change. Nothing is applied yet.",
   "app.version.check": "Check for updates",
+  "app.version.viewUpdate": "View update",
   "app.version.update": "Update",
   "app.version.autoTitle": "Automatic updates",
   "app.version.autoLabel": "Update automatically when a newer version is found",
