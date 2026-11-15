@@ -124,8 +124,8 @@ body { min-height: 100svh; margin: 0; display: flex; flex-direction: column; bac
 .auth-mark { flex: 0 0 auto; color: var(--auth-accent); }
 .auth-wordmark { font-size: 1.5rem; line-height: 1; letter-spacing: -.045em; font-weight: 650; }
 .auth-badge { color: var(--auth-muted); text-align: center; margin: var(--auth-space-lg) 0 0; font-size: .6875rem; }
-h1 { margin: 0; font-size: 1.375rem; font-weight: 600; font-style: normal; line-height: 1.5; letter-spacing: -.025em; text-align: center; overflow-wrap: anywhere; }
-.auth-summary { margin: var(--auth-space-sm) 0 0; color: var(--auth-muted); font-size: .875rem; line-height: 1.8; text-align: center; overflow-wrap: anywhere; }
+h1 { margin: 0; font-size: 1.375rem; font-weight: 600; font-style: normal; line-height: 1.5; letter-spacing: -.025em; text-align: center; text-wrap: balance; overflow-wrap: anywhere; }
+.auth-summary { margin: var(--auth-space-sm) 0 0; color: var(--auth-muted); font-size: .875rem; line-height: 1.8; text-align: center; text-wrap: balance; overflow-wrap: anywhere; }
 .auth-task { margin-top: var(--auth-space-xl); min-width: 0; overflow-wrap: anywhere; }
 .auth-providers, .auth-permissions { list-style: none; padding: 0; margin: 0; }
 .auth-providers { display: grid; gap: var(--auth-space-sm); }
