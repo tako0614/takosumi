@@ -279,7 +279,7 @@ test("real Accounts navigation reaches durable GitHub callback, issuer session a
   expect((await sha256Text(verifier!)).slice(7)).toBe(providerAuthorization.searchParams.get("code_challenge"));
   const consent = await accountsHandler(new Request(new URL(callback.headers.get("location")!, issuer), { headers: { cookie: sessionCookie! } }));
   expect(consent.status).toBe(200);
-  expect(await consent.text()).toContain("Allow hosted-staging to access your account?");
+  expect(await consent.text()).toContain("Access for hosted-staging");
   const replay = await accountsHandler(callbackRequest);
   expect(replay.status).toBe(400);
   expect(upstreamRequests).toHaveLength(3);

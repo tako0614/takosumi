@@ -146,7 +146,7 @@ test("the built-in Takosumi Mobile client shows a consent screen instead of issu
   expect(csp).toContain("frame-ancestors 'none'");
   expect(csp).toContain("form-action 'self' takosumi:");
   expect(csp).not.toContain("unsafe-inline");
-  expect(html).toContain("Takosumi Mobile にアクセスを許可しますか？");
+  expect(html).toContain("Takosumi Mobile のアクセス許可");
   expect(html).toContain("Runの承認と取り消し");
   expect(html).toContain("owner@example.test");
   expect(html).toContain(REDIRECT);
@@ -514,7 +514,7 @@ test("English browsers get the English consent screen", async () => {
     }),
   );
   const html = await response.text();
-  expect(html).toContain("Allow Takosumi Mobile to access your account?");
+  expect(html).toContain("Access for Takosumi Mobile");
   expect(html).toContain("approve and cancel Runs");
   expect(html).toContain("change connections, sources and workspaces");
 });

@@ -2202,7 +2202,7 @@ function isNativeConsentTransaction(code: string): boolean {
 const NATIVE_CONSENT_COPY = {
   ja: {
     lang: "ja",
-    title: (client: string) => `${client} にアクセスを許可しますか？`,
+    title: (client: string) => `${client} のアクセス許可`,
     account: "アカウント",
     scopes: {
       openid: "アカウントを識別する",
@@ -2219,7 +2219,7 @@ const NATIVE_CONSENT_COPY = {
   },
   en: {
     lang: "en",
-    title: (client: string) => `Allow ${client} to access your account?`,
+    title: (client: string) => `Access for ${client}`,
     account: "Account",
     scopes: {
       openid: "Identify your account",
