@@ -158,6 +158,15 @@ const EMPTY: TcsAggregateState = {
   loading: false,
 };
 
+/** Optional in-memory public catalogue snapshot owned by a host route. */
+export interface StoreCatalogCache {
+  entry?: {
+    readonly key: string;
+    readonly expiresAt: number;
+    readonly state: TcsAggregateState;
+  };
+}
+
 export interface StoreBrowserProps {
   readonly locale: TcsLocale;
   readonly onConfigure: (listing: TcsListing) => void;
@@ -169,6 +178,7 @@ export interface StoreBrowserProps {
   readonly showSourceControls?: boolean;
   readonly showSortControl?: boolean;
   readonly loadRemoteOnMount?: boolean;
+  readonly catalogCache?: StoreCatalogCache;
 }
 
 export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
@@ -188,19 +198,43 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const showSortControl = () => props.showSortControl ?? true;
 
   let reqToken = 0;
-  async function rebuild() {
+  onCleanup(() => { reqToken++; });
+  const cacheKey = (state: TcsAggregateState) => JSON.stringify([state.sort, state.servers]);
+  const remember = (state: TcsAggregateState) => {
+    if (props.catalogCache) {
+      props.catalogCache.entry = state.status.every((server) => server.ok)
+        ? { key: cacheKey(state), expiresAt: Date.now() + 60_000, state }
+        : undefined;
+    }
+  };
+
+  async function loadPage(base: TcsAggregateState) {
     const token = ++reqToken;
+    const next = await loadMoreTcs(base, undefined, (partial) => {
+      if (token === reqToken) setAgg(partial);
+    });
+    if (token !== reqToken) return;
+    setAgg(next);
+    remember(next);
+  }
+
+  async function rebuild(reuse = false) {
     const base = initTcsState(getTcsServers(), {
       sort: sort(),
       locale: props.locale,
     });
+    const cached = props.catalogCache?.entry;
+    if (reuse && cached && cached.expiresAt > Date.now() && cached.key === cacheKey(base)) {
+      setAgg(cached.state);
+      return;
+    }
+    if (props.catalogCache) props.catalogCache.entry = undefined;
     setAgg({ ...base, loading: true });
-    const next = await loadMoreTcs(base);
-    if (token === reqToken) setAgg(next);
+    await loadPage(base);
   }
 
   onMount(() => {
-    if (props.loadRemoteOnMount ?? true) void rebuild();
+    if (props.loadRemoteOnMount ?? true) void rebuild(true);
   });
   // Re-sort (cheap) on locale change without a refetch.
   createEffect(() => {
@@ -226,12 +260,10 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     void rebuild();
   };
   const onLoadMore = async () => {
-    // Same request token as rebuild(): a stale load-more result must not
-    // clobber a newer sort/server rebuild.
-    const token = ++reqToken;
-    setAgg((p) => ({ ...p, loading: true }));
-    const next = await loadMoreTcs(agg());
-    if (token === reqToken) setAgg(next);
+    const current = agg();
+    if (current.loading || current.done) return;
+    setAgg({ ...current, loading: true });
+    await loadPage(current);
   };
   const onAddServer = (e: Event) => {
     e.preventDefault();
@@ -379,7 +411,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   };
 
   return (
-    <div class="tcs-root">
+    <div class="tcs-root" classList={{ "tcs-page-list": Boolean(props.onSelectListing) }}>
       <div class="tcs-controls">
         <form class="tcs-search" onSubmit={onSearch}>
           <input
@@ -630,14 +662,16 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                     </p>
                   </div>
                 </div>
-                <Show when={listing.seenOn.length > 1}>
+                <Show when={!props.onSelectListing && listing.seenOn.length > 1}>
                   <div class="tcs-card-meta">
                     <span class="tcs-tag tcs-muted">
                       +{listing.seenOn.length - 1} {s("alsoOn", props.locale)}
                     </span>
                   </div>
                 </Show>
-                <div class="tcs-card-actions">{installButton(listing)}</div>
+                <Show when={!props.onSelectListing}>
+                  <div class="tcs-card-actions">{installButton(listing)}</div>
+                </Show>
               </div>
             )}
           </For>
