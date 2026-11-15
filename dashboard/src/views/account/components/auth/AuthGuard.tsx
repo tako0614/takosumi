@@ -20,6 +20,7 @@ import {
 } from "../../lib/session.ts";
 import { t } from "../../../../i18n/index.ts";
 import Button from "../../../../components/ui/Button.tsx";
+import { isHostedSessionUnavailable } from "../../../../lib/shared-auth-session-preflight.ts";
 
 interface Props {
   children: (session: SessionRecord) => JSX.Element;
@@ -64,6 +65,7 @@ export default function AuthGuard(props: Props) {
   );
   const nav = useNavigate();
   const loc = useLocation();
+  const canSignInAgain = () => isHostedSessionUnavailable(failure()?.cause);
 
   const redirectToSignIn = (preserveReturn: boolean): void => {
     const target = preserveReturn
@@ -152,15 +154,20 @@ export default function AuthGuard(props: Props) {
         <main class="auth-page">
           <div class="sign-in-panel notfound-panel">
             <h1 class="sign-in-title">
-              {state() === "maintenance"
+              {canSignInAgain() ? t("auth.sessionCouldNotVerify") : state() === "maintenance"
                 ? t("auth.sessionMaintenanceTitle")
                 : t("errorBoundary.title")}
             </h1>
             <p class="sign-in-sub">
-              {state() === "maintenance"
+              {canSignInAgain() ? t("auth.sessionSignInAgainHint") : state() === "maintenance"
                 ? t("auth.sessionMaintenanceBody")
                 : t("errorBoundary.body")}
             </p>
+            <Show when={canSignInAgain()}>
+              <Button variant="secondary" type="button" onClick={() => redirectToSignIn(true)}>
+                {t("auth.sessionSignInAgain")}
+              </Button>
+            </Show>
             <Button variant="primary" type="button" onClick={retrySession}>
               {t("common.retry")}
             </Button>

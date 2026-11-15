@@ -338,6 +338,9 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.providersLoadFailedMessageWithInstall":
     "Check your connection and try again. These install details are still preserved on this screen.",
   "auth.retryProviderCheck": "Check again",
+  "auth.sessionCouldNotVerify": "Could not verify your sign-in",
+  "auth.sessionSignInAgainHint": "Sign in again to return to this page.",
+  "auth.sessionSignInAgain": "Sign in again",
   "auth.sessionMaintenanceTitle": "Dashboard is temporarily unavailable",
   "auth.sessionMaintenanceBody":
     "The dashboard is undergoing maintenance. Please try again in a moment.",

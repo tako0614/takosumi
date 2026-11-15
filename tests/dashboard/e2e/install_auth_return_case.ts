@@ -46,6 +46,29 @@ export function registerInstallAuthReturnCase(mode: DashboardE2EMode): void {
     expect(page.url()).toBe(signInUrl);
     expect(writes, "login must not install an app or issue a payment").toEqual([]);
   });
+  test("persistent Hosted session failure offers a fresh sign-in with the install destination intact", async ({ page }) => {
+    test.skip(mode !== "portable", "This test supplies a local Hosted session failure.");
+    const destination = "/new?tcsBase=https%3A%2F%2Fstore.example.test&tcsListing=tako%2Fyurucommu";
+    let bootstrapReads = 0;
+    await page.route("**/auth/oidc/session", (route) => route.fulfill({
+      status: 503, json: { error: { code: "oidc_unavailable" } },
+    }));
+    await page.route("**/api/v1/dashboard/bootstrap**", (route) => {
+      bootstrapReads++;
+      return route.abort();
+    });
+    await page.route("**/sign-in?**", (route) => route.fulfill({
+      status: 200, contentType: "text/html", body: "<!doctype html><title>Login boundary reached</title>",
+    }));
+    await page.goto(destination);
+    const recovery = page.getByRole("button", { name: /Sign in again|ログインし直す/ });
+    await expect(recovery).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe("/new");
+    expect(bootstrapReads).toBe(0);
+    await recovery.click();
+    await expect(page).toHaveTitle("Login boundary reached");
+    expect(new URL(page.url()).searchParams.get("return")).toBe(destination);
+  });
   if (mode === "portable") registerInstallReturnInputCases();
   if (selectLiveInstallReturnCase(mode, process.env.TAKOSUMI_E2E_INSTALL_RETURN_PROFILE)) registerLiveInstallReturnCase();
 }

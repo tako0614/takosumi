@@ -81,7 +81,7 @@ function isJson(headers: Headers): boolean {
     .toLowerCase() === "application/json";
 }
 
-function isHostedSessionUnavailable(
+export function isHostedSessionUnavailable(
   error: unknown,
 ): error is SharedAuthSessionPreflightError {
   if (!(error instanceof SharedAuthSessionPreflightError) ||
