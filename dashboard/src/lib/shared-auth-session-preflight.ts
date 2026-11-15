@@ -153,7 +153,11 @@ async function readHealth(): Promise<RoutePresence> {
       } catch (error) {
         // A concurrent Hosted grant check can briefly occupy the session.
         // Only retry its health GET, never the caller's protected operation.
-        if (!isHostedSessionUnavailable(error)) throw error;
+        // An explicit server retry interval is outside the short contention
+        // retry. Surface it to the caller instead of retrying sooner.
+        if (!isHostedSessionUnavailable(error) || error.headers.has("retry-after")) {
+          throw error;
+        }
         unavailable = error;
         continue;
       }
