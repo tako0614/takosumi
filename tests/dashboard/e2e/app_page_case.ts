@@ -511,7 +511,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const settingsReview = settings.getByTestId("app-review");
       await expect(settingsReview.getByRole("heading", { name: "What this changes" })).toBeVisible();
       await expect(settingsReview.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
-      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#settings$`, "u"));
       await settings.scrollIntoViewIfNeeded();
       await capture(page, "app-settings-review");
       await settingsReview.getByRole("button", { name: "Cancel", exact: true }).click();
