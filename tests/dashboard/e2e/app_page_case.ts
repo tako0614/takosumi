@@ -59,6 +59,14 @@ async function capture(page: Page, name: string): Promise<void> {
   if (original) await page.setViewportSize(original);
 }
 
+async function openPanel(page: Page, section: string): Promise<void> {
+  if (new URL(page.url()).hash === `#${section}`) return;
+  const overview = page.getByRole("link", { name: "App overview", exact: true });
+  if (await overview.isVisible()) await overview.click();
+  await page.locator(`[data-app-menu="${section}"]`).click();
+  await expect(page.locator(`#${section}`)).toBeVisible();
+}
+
 function snapshot(id: string, commit: string, fetchedAt: string) {
   return {
     id, origin: "git", workspaceId: "ws_alpha", sourceId: SOURCE_ID,
@@ -169,7 +177,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         return route.fallback();
       });
 
-      await page.goto(`/apps/${capsuleId}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/apps/${capsuleId}#settings`, { waitUntil: "domcontentloaded" });
       const settings = page.getByTestId("app-settings");
       await expect(settings.getByTestId("app-connection-row").nth(0).locator("select")).toHaveValue("pc_hanako_cloudflare");
       await expect(settings.locator('option[value="pc_hanako_cloudflare"]')).toHaveCount(1);
@@ -377,17 +385,28 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(open).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
       await expect(open).toHaveAttribute("target", "_blank");
       await expect(open).toHaveAttribute("rel", "noreferrer noopener");
-      // The sections follow keeping an app, and nothing is folded away. The
-      // uninstall section states the grace period before anything is scheduled.
+      // The overview has one row per destination. Panels must not expose
+      // their forms and destructive controls until a destination is opened.
+      const menu = app.getByRole("navigation", { name: "App management" });
+      await expect(menu.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
+      await expect(app.getByTestId("app-settings")).toBeHidden();
+      await expect(app.getByTestId("app-uninstall")).toBeHidden();
+      await capture(page, "app-overview");
+      await page.setViewportSize({ width: 320, height: 780 });
+      await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+      await expectNoHorizontalOverflow(page, "light app overview at 320px");
+      await page.screenshot({ path: test.info().outputPath("app-overview-light-320.png"), fullPage: true });
+      await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await openPanel(page, "settings");
+      await expect(page.locator("#settings-title")).toBeFocused();
+      await expect(app.getByTestId("app-created")).toBeHidden();
+      await page.goBack({ waitUntil: "domcontentloaded" });
+      await expect(menu.getByRole("link", { name: "Settings", exact: true })).toBeFocused();
+      await expect(menu).toBeVisible();
+      await expect(app.getByTestId("app-settings")).toBeHidden();
       await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
       await expect(app.getByTestId("app-linked")).toContainText("No apps are linked.");
-      const sections = ["app-version", "app-settings", "app-created", "app-history", "app-uninstall"];
-      const tops: number[] = [];
-      for (const id of sections) {
-        await expect(app.getByTestId(id)).toBeVisible();
-        tops.push((await app.getByTestId(id).boundingBox())!.y);
-      }
-      expect([...tops].sort((a, b) => a - b)).toEqual(tops);
       await expect(app.getByTestId("app-problems")).toHaveCount(0);
       await expect(app.locator("details")).toHaveCount(0);
       await expect(app.getByTestId("app-current-version")).toHaveText("main · 0123456");
@@ -411,6 +430,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app.getByTestId("app-settings").locator("textarea")).toHaveCount(0);
       // History: this app's events, each opening its run.
       const history = app.getByTestId("app-history-list");
+      await openPanel(page, "history");
       await expect(history.locator("li").first()).toContainText("Changed settings");
       await expect(history.locator("li").last()).toContainText("Installed");
       await expect(history.locator("li").last()).toContainText("main · 0123456");
@@ -423,6 +443,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       // Several screens: the declared primary opens from the button, every
       // other screen from its menu.
+      await page.getByRole("link", { name: "App overview", exact: true }).click();
       multipleSurfaces = true;
       await page.reload({ waitUntil: "domcontentloaded" });
       const primary = header.getByRole("link", { name: /^Open\b.*Control panel/u });
@@ -440,23 +461,29 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       multipleSurfaces = false;
 
       // Automatic updates are a plain switch.
+      await openPanel(page, "version");
       await app.getByRole("checkbox", { name: "Update automatically when a newer version is found" }).check();
       await expect.poll(() => autoUpdate).toBe(true);
 
       // A newer version: reviewed in place, applied only by Allow and update.
       stale = true;
+      await page.getByRole("link", { name: "App overview", exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(page.getByTestId("app-state-sentence")).toHaveText("Ready to use. A newer version is available.");
       const versionSection = app.getByTestId("app-version");
       await expect(versionSection.getByTestId("app-update")).toContainText("A newer version is available");
       await expect(versionSection.getByTestId("app-new-version")).toHaveText("main · fedcba9");
-      await header.getByRole("button", { name: "Update", exact: true }).click();
+      await header.getByRole("link", { name: "View update", exact: true }).click();
+      await expect(versionSection).toBeVisible();
+      expect(revisionPlanBodies).toEqual([]);
+      await versionSection.getByRole("button", { name: "Update", exact: true }).click();
       await expect.poll(() => revisionPlanBodies).toEqual([{ ref: "main" }]);
       const review = versionSection.getByTestId("app-review");
       await expect(review.getByRole("heading", { name: "What the update changes" })).toBeVisible();
       await expect(review.getByTestId("install-plan-resources")).toContainText("Cloudflare R2 Bucket");
       await expect(review.getByTestId("install-plan-cost")).toContainText("Cloud charges may apply. No cost estimate is available.");
-      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#version$`, "u"));
       await capture(page, "app-update-review");
       // A clean Plan waits for consent: no Apply across Run poll intervals.
       await page.waitForTimeout(3_500);
@@ -471,6 +498,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       // Settings: values and connections, reviewed in place.
       const settings = app.getByTestId("app-settings");
+      await openPanel(page, "settings");
       await settings.getByRole("textbox", { name: /^Region/u }).fill("edited");
       await settings.getByRole("button", { name: "Review", exact: true }).click();
       await expect.poll(() => configurationPlanBodies.length).toBe(1);
@@ -483,7 +511,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const settingsReview = settings.getByTestId("app-review");
       await expect(settingsReview.getByRole("heading", { name: "What this changes" })).toBeVisible();
       await expect(settingsReview.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
-      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#settings$`, "u"));
       await settings.scrollIntoViewIfNeeded();
       await capture(page, "app-settings-review");
       await settingsReview.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -524,7 +552,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await expect(header.getByRole("heading", { level: 1 })).toHaveText(PORTABLE_EXPECTATIONS.appName);
       }
       // The jump links are the same fragments.
-      await app.getByRole("navigation", { name: "Sections on this page" }).getByRole("link", { name: "History" }).click();
+      await app.getByRole("navigation", { name: "App management" }).getByRole("link", { name: "History" }).click();
       await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#history$`, "u"));
       await expect(app.getByTestId("app-history")).toBeInViewport();
 
@@ -666,6 +694,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       // Update → Cancel → Update: the second Update is a new request, not a
       // replay of the plan that was already returned.
+      await openPanel(page, "version");
       await version.getByRole("button", { name: "Update", exact: true }).click();
       await expect(version.getByTestId("app-review")).toContainText("revision_1");
       await version.getByTestId("app-review").getByRole("button", { name: "Cancel", exact: true }).click();
@@ -689,6 +718,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeDisabled();
       await review.getByRole("button", { name: "Close", exact: true }).click();
       await expect(version.getByTestId("app-review")).toHaveCount(0);
+      await openPanel(page, "danger");
       await expect(app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true })).toBeEnabled();
       expect(seenMutations.filter((entry) => entry.endsWith("/apply"))).toHaveLength(1);
 
@@ -696,6 +726,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // change leaves a clean form, a cancelled one shows what the app runs,
       // and the next change is a new request.
       const settings = app.getByTestId("app-settings");
+      await openPanel(page, "settings");
       await expect(settings.getByTestId("app-connections")).toContainText("This app doesn't use any connections.");
       const region = settings.getByRole("textbox", { name: /^Region/u });
       await expect(region).toHaveValue("alpha-region");
@@ -1137,7 +1168,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // During the grace period the app keeps running and stays openable.
       await expect(header.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "https://apps.example.test/state-echo");
       await expect(app.getByTestId("app-uninstall")).toHaveCount(0);
-      await expect(app.getByRole("navigation", { name: "Sections on this page" }).getByRole("link", { name: "Uninstall" })).toHaveCount(0);
+      await expect(app.getByRole("navigation", { name: "App management" }).getByRole("link", { name: "Uninstall" })).toHaveCount(0);
       await capture(page, "app-page-uninstall-scheduled");
       await header.getByRole("button", { name: "Cancel uninstall", exact: true }).click();
       await expect(app).toHaveAttribute("data-app-state", "installed");
@@ -1148,6 +1179,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app.getByTestId("app-version")).toContainText("Couldn't read its version");
       // The grace period shows before anything is scheduled, and in the confirmation.
       await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
+      await openPanel(page, "danger");
       await app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true }).click();
       await expect(page.getByRole("dialog")).toContainText("keeps its data for 7 days");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
@@ -1160,7 +1192,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(problems.getByTestId("app-review")).toContainText("Applying");
       await expect(header.getByRole("button")).toHaveCount(0);
       // Nothing else changes the app while the server applies a change.
+      await openPanel(page, "danger");
       await expect(app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true })).toBeDisabled();
+      await openPanel(page, "version");
       await expect(app.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true })).toBeDisabled();
       await capture(page, "app-page-updating");
 
@@ -1193,6 +1227,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // History reads the server's pages: Show more appends the next one.
       const historyRows = historyList.locator(":scope > li");
       await expect(historyRows).toHaveCount(20);
+      await openPanel(page, "history");
       await app.getByTestId("app-history").getByRole("button", { name: "Show more", exact: true }).click();
       await expect(historyRows).toHaveCount(33);
       await expect(app.getByTestId("app-history").getByRole("button", { name: "Show more", exact: true })).toHaveCount(0);
@@ -1270,8 +1305,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       scene = "review_pending";
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(problems.locator('[data-problem="review-waiting"]')).toBeVisible();
-      await expect(header.getByRole("button", { name: "Update", exact: true })).toHaveCount(0);
+      await expect(header.getByRole("link", { name: "View update", exact: true })).toHaveCount(0);
+      await openPanel(page, "version");
       await expect(app.getByTestId("app-version").getByRole("button", { name: "Update", exact: true })).toBeDisabled();
+      await openPanel(page, "settings");
       // Settings wait too, and say why.
       await expect(app.getByTestId("app-settings").locator("[data-settings-waits]"))
         .toHaveText("Another change is under way or waiting for review. You can change settings after it finishes.");
@@ -1468,6 +1505,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const errors = pageErrors(page);
       await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
       const phone = page.getByTestId("app-phone");
+      await openPanel(page, "phone");
       await expect(phone.getByRole("heading", { name: "Use on your phone" })).toBeVisible();
       await expect(phone.getByRole("img", { name: `QR code that opens ${PORTABLE_EXPECTATIONS.appName}` })).toBeVisible();
       await expect(phone.getByTestId("app-phone-url")).toHaveText(PORTABLE_EXPECTATIONS.appUrl);
@@ -1476,11 +1514,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(phone.getByText("iPhone and iPad (Safari)", { exact: true })).toBeVisible();
       await expect(phone.getByText("Android (Chrome)", { exact: true })).toBeVisible();
       await expect(phone.locator("details, summary, [aria-expanded]")).toHaveCount(0);
-      // It sits after the problems and before Version, beside the one primary Open.
-      expect(await page.evaluate(() => {
-        const ids = [...document.querySelectorAll("[data-testid=app-page] > section[id]")].map((node) => node.id);
-        return ids.indexOf("phone") >= 0 && ids.indexOf("phone") > ids.indexOf("settings");
-      })).toBe(true);
+      await expect(page.getByTestId("app-settings")).toBeHidden();
       await expect(phone.locator(".tg-btn-primary")).toHaveCount(0);
 
       await phone.getByRole("button", { name: "Copy URL", exact: true }).click();
@@ -1837,6 +1871,7 @@ function registerPhoneOpenCases() {
       await expect(headerOpen).toHaveAttribute("data-open-route", "native");
       await expect(headerOpen.getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in Yurucommu` }))
         .toHaveAttribute("href", universalLink);
+      await openPanel(page, "phone");
       await expect(page.getByTestId("app-phone-native").getByRole("link", { name: "Open in Yurucommu", exact: true }))
         .toHaveAttribute("href", universalLink);
       expect(errors).toEqual([]);

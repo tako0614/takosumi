@@ -1058,6 +1058,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.goto(`/new?capsule=${capId}`);
       await expect(page).toHaveURL(new RegExp(`/apps/${capId}$`, "u"));
       const appPage = page.getByTestId("app-page");
+      await page.locator('[data-app-menu="danger"]').click();
       const section = page.getByTestId("app-uninstall");
       // The grace period shows before anything is scheduled.
       await expect(section).toContainText("Its data stays for 7 days");
@@ -1106,6 +1107,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       f.problem("error"); await page.reload();
       await expect(page.getByTestId("app-problems").locator('[data-problem="capsule_error"]')).toContainText("This app has a problem");
       await expect(header.getByRole("button", { name: "Review the installed version again", exact: true })).toBeVisible();
+      await page.locator('[data-app-menu="danger"]').click();
       await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
       f.problem("disabled"); await page.reload();
       await expect(page.getByTestId("app-state-sentence")).toHaveText("Stopped.");
@@ -1118,6 +1120,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     async function uninstallNeverApplied(page: Page): Promise<void> {
       await page.goto(`/apps/${capId}`);
       await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "installing");
+      await page.locator('[data-app-menu="danger"]').click();
       const section = page.getByTestId("app-uninstall");
       await expect(section).toContainText("hasn't created anything in your cloud yet");
       await section.getByRole("button", { name: "Uninstall", exact: true }).click();
@@ -1152,6 +1155,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     test("uninstall confirmation does not claim retired app dependencies", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
       await page.goto(`/new?capsule=${capId}`);
+      await page.locator('[data-app-menu="danger"]').click();
       await expect(page.getByTestId("app-uninstall")).not.toContainText("Linked apps");
       await page.getByRole("button", { name: "Uninstall", exact: true }).click();
       await expect(page.getByRole("dialog")).toBeVisible();
