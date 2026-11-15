@@ -1,3 +1,4 @@
+import type { ConnectionOAuthAttemptRecord } from "./connection-oauth-attempt.ts";
 import { prepareInterfaceInvocationAccessRecord } from "../../../contract/internal-interface-invocation-source.ts";
 import type { InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import type { InterfaceInvocationProvenance } from "../../../contract/internal-interface-invocation-source.ts";
@@ -765,6 +766,8 @@ export class InMemoryAccountsStore implements AccountsStore {
   findCanonicalAccount(subject: TakosumiSubject): Promise<TakosumiAccountRecord | undefined> { return this.#hosted.findCanonicalAccount(subject); }
   isAccountAuthenticationFenced(subject: TakosumiSubject): Promise<boolean> { return this.#hosted.isAccountAuthenticationFenced(subject); }
   findUpstreamIdentityStatus(identity: Pick<UpstreamIdentityRecord, "providerId" | "upstreamIssuer" | "upstreamSubject">): Promise<UpstreamIdentityStatusRecord | undefined> { return this.#hosted.findUpstreamIdentityStatus(identity); }
+  createConnectionOAuthAttempt(record: ConnectionOAuthAttemptRecord): Promise<boolean> { return this.#hosted.createConnectionOAuthAttempt(record); }
+  consumeConnectionOAuthAttempt(id: string, browserBindingHash: string, now: number): Promise<ConnectionOAuthAttemptRecord | undefined> { return this.#hosted.consumeConnectionOAuthAttempt(id, browserBindingHash, now); }
   saveUpstreamLoginTransaction(record: UpstreamLoginTransactionRecord): Promise<void> { return this.#hosted.saveUpstreamLoginTransaction(record); }
   consumeUpstreamLoginTransaction(id: string, browserBindingHash: string, now: number): Promise<UpstreamLoginTransactionRecord | undefined> { return this.#hosted.consumeUpstreamLoginTransaction(id, browserBindingHash, now); }
   saveHostedOidcGrant(record: HostedOidcGrantRecord): Promise<void> { return this.#hosted.saveHostedOidcGrant(record); }

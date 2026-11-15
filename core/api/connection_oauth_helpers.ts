@@ -21,6 +21,8 @@ interface OAuthProviderConfig extends ConnectionOAuthDescriptor {
 
 interface SignedOAuthState {
   readonly helperId: string;
+  /** Independent browser-bound attempts remain distinct within the same tick. */
+  readonly nonce?: string;
   readonly expiresAt: number;
   readonly body: ConnectionOAuthStartInput["body"];
   /** Private Workspace admission tuple captured before OAuth preparation. */
@@ -114,6 +116,7 @@ async function startOAuth(
   const state = await signState(
     {
       helperId: config.id,
+      ...(config.browserBindingRequired ? { nonce: crypto.randomUUID() } : {}),
       expiresAt,
       body: input.body,
       ...(expectedWorkspaceManagementAuthority

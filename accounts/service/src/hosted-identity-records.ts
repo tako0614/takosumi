@@ -34,6 +34,7 @@ import type {
   UpstreamLoginTransactionRecord,
 } from "./identity-state.ts";
 import { upstreamIdentityKey } from "./identity-state.ts";
+import { connectionOAuthAttemptBucket, validConnectionOAuthAttempt, type ConnectionOAuthAttemptRecord } from "./connection-oauth-attempt.ts";
 import type { OwnerOperationContextEvidence, OwnerOperationReceiptEvidence } from "./owner-operation-contract.ts";
 import type { ReviewedRecoveryApprovalRecord, ReviewedRecoveryApprovalPointer, ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
 import { ownerContextBucket, ownerReceiptBucket, ownerContextKey, ownerReceiptKey, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey, canonicalOwnerJson, digest, boundedText, validOwnerTarget, validOwnerContextEvidence, validOwnerReceiptEvidence, OwnerOperationEvidenceConflict, type OwnerOperationContextEvidenceLookup, type OwnerOperationReceiptEvidenceLookup } from "./owner-operation-evidence.ts";
@@ -103,6 +104,17 @@ export class HostedIdentityRecords implements HostedIdentityStore {
     readonly repository: IdentityRecordRepository,
     readonly accounts: Pick<AccountsStore, "findAccount">,
   ) {}
+  async createConnectionOAuthAttempt(record: ConnectionOAuthAttemptRecord): Promise<boolean> {
+    if (!await validConnectionOAuthAttempt(record)) return false;
+    return this.repository.create(connectionOAuthAttemptBucket, record.id, record);
+  }
+  async consumeConnectionOAuthAttempt(id: string, browserBindingHash: string, now: number): Promise<ConnectionOAuthAttemptRecord | undefined> {
+    if (!Number.isSafeInteger(now) || now < 0) return undefined;
+    const record = await this.repository.consume<ConnectionOAuthAttemptRecord>(connectionOAuthAttemptBucket, id, browserBindingHash, now);
+    if (!await validConnectionOAuthAttempt(record) || record!.id !== id ||
+      record!.browserBindingHash !== browserBindingHash || record!.createdAt > now || record!.expiresAt <= now) return undefined;
+    return record;
+  }
   registerFinancialSourceRegistration(value: FinancialSourceRegistration) { return this.repository.registerFinancialSourceRegistration(value); }
   findFinancialSourceRegistration(value: string) { return this.repository.findFinancialSourceRegistration(value); }
   findFinancialSourceParent(value: FS.FinancialSourceParentScope) { return this.repository.findFinancialSourceParent(value); }
