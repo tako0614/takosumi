@@ -1308,7 +1308,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(page.getByRole("heading", { name: "App not found" })).toHaveCount(0);
     });
 
-    test("Home groups stopped apps and opens only authorized screens", async ({ page }) => {
+    test("Home preserves app icons and opens only authorized screens", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
@@ -1339,14 +1339,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       });
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const tiles = page.getByTestId("home-app");
-      await expect(tiles).toHaveCount(5);
-      // Usable apps first; pending and failed apps stay discoverable.
+      await expect(tiles).toHaveCount(6);
+      // Pending and stopped apps keep their icons, after usable apps.
       await expect(tiles.nth(0)).toContainText(PORTABLE_EXPECTATIONS.appName);
       await expect(tiles.nth(0)).toHaveAttribute("data-app-opens", "true");
       await expect(tiles.nth(1)).toHaveAttribute("data-app-state", "update_available");
       await expect(tiles.nth(2)).toHaveAttribute("data-app-state", "needs_attention");
       await expect(tiles.nth(3)).toHaveAttribute("data-app-state", "installing");
       await expect(tiles.nth(4)).toHaveAttribute("data-app-state", "uninstalling");
+      await expect(tiles.nth(5)).toHaveAttribute("data-app-state", "stopped");
       const tile = (name: string) => tiles.filter({ hasText: name });
       await expect(tile("Mail Relay")).toContainText("Needs attention");
       await expect(tile("Team Blog")).toContainText("Update available");
@@ -1366,12 +1367,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(tile("Team Blog").locator(".av-tile-icon")).toHaveCSS("opacity", "1");
       await expect(page.getByTestId("home-apps").getByRole("link", { name: "Find apps", exact: true })).toHaveAttribute("href", "/new");
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
-      await capture(page, "home-mixed");
-      await page.getByRole("button", { name: "Stopped", exact: true }).click();
-      await expect(tiles).toHaveCount(1);
       await expect(tile("Object Storage")).toContainText("Stopped");
       await expect(tile("Object Storage").getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
       await expect(tile("Object Storage").getByRole("link", { name: "Object Storage", exact: true })).toHaveAttribute("href", "/apps/cap_storage");
+      await expect(tile("Mail Relay").locator(".av-tile-dot")).toBeVisible();
+      await page.setViewportSize({ width: 1200, height: 800 });
+      const officeIcon = await office.locator(".av-tile-icon").boundingBox();
+      const blogIcon = await tile("Team Blog").locator(".av-tile-icon").boundingBox();
+      expect(officeIcon!.width).toBeGreaterThan(96);
+      expect(officeIcon!.width).toBe(officeIcon!.height);
+      expect(officeIcon!.y).toBe(blogIcon!.y);
+      expect(officeIcon!.x).toBeLessThan(blogIcon!.x);
+      await capture(page, "home-mixed");
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
     });
@@ -1427,7 +1434,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         expect(await first.boundingBox()).toEqual(before);
         expect(details).toEqual(ids.slice(0, 16));
 
-        await page.getByRole("button", { name: "Next", exact: true }).click();
+        await page.getByRole("button", { name: "More apps", exact: true }).click();
         await expect(first).toHaveAttribute("data-capsule-id", ids[16]!);
         await expect(rows.last()).toHaveAttribute("data-app-opens", "true");
         expect(pages).toEqual([0]);

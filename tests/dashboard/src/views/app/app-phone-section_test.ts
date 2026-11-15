@@ -16,7 +16,6 @@ const section = read("views/app/AppPhoneSection.tsx");
 const css = read("views/app/app-phone.css");
 const page = read("views/app/AppManagePage.tsx");
 const appUi = read("views/app/app-ui.tsx");
-const home = read("views/apps/AppListView.tsx");
 const install = read("views/new/InstallView.tsx");
 const run = read("views/runs/RunView.tsx");
 const indexHtml = readFileSync(resolve(root, "../index.html"), "utf8");
@@ -130,11 +129,9 @@ describe("use on your phone", () => {
     expect(section).toContain('return client.name ?? t("app.phone.unverifiedNameStandalone", { target: clientTargetLabel(client) });');
   });
 
-  test("Open and the Home tile open the way this device chose, and a computer keeps the new tab", () => {
+  test("Open follows the device choice and a computer keeps the new tab", () => {
     expect(appUi).toContain("screenOpenRoute(props.capsuleId, surface)");
     expect(appUi).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
-    expect(home).toContain("screenOpenRoute(props.app.inst.id, surface)");
-    expect(home).toContain("{...openRouteAnchor(route())}");
     // 「開き方を変える」 next to Open leads to the chooser of every screen
     // that has a native app here or a remembered choice.
     expect(page).toContain('data-testid="app-open-change"');

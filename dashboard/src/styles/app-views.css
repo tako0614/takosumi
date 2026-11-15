@@ -349,96 +349,53 @@
   background: color-mix(in srgb, var(--tg-fg) 4%, var(--tg-bg-elev));
   color: var(--tg-fg);
 }
-/* ===== Home app library ===== */
-.av-library {
-  width: min(100%, 65rem);
-  margin-inline: auto;
-}
+/* ===== app launcher (home) =====
+ * A phone-home-screen grid: each app is one tappable icon tile (icon + name),
+ * no timestamps / ops fields. Tapping opens the app's screen, or the app page
+ * for an app without one. A state that needs a word (要対応, 更新あり,
+ * インストール中, …) is a corner dot plus a one-line caption. */
+/* Section heading above a shelf of tiles ("あなたのアプリ" / "さがす"). Keeps the
+   home reading as a library of apps rather than a bare, unlabelled grid. */
 .av-section-head {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 16px;
-  margin-block: 0 20px;
+  align-items: baseline;
+  gap: var(--tg-s-3);
+  margin: var(--tg-s-1) var(--tg-s-1) var(--tg-s-4);
 }
 .av-section-head h1 {
   margin: 0;
   font-family: var(--tg-font-display);
-  font-size: clamp(1.5rem, 1.15rem + 1.4vw, 2.25rem);
-  letter-spacing: -0.035em;
-  font-weight: 660;
-  line-height: 1.15;
-}
-.av-library-store {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding-inline: 12px;
-  min-height: 44px;
-  border-radius: var(--tg-r-md);
-  color: var(--tg-accent-text);
-  background: var(--tg-accent-soft);
-  font-size: var(--tg-fs-sm);
-  font-weight: 650;
-  text-decoration: none;
-}
-.av-library-store:hover { background: var(--tg-bg-hi); }
-.av-library-toolbar {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 16px;
-  margin-block-end: 14px;
-}
-.av-library-filter {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px;
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-bg-subtle);
-}
-.av-library-filter button {
-  padding: 0 14px;
-  min-height: 44px;
-  background: transparent;
-  border: 0;
-  border-radius: var(--tg-r-md);
-  color: var(--tg-fg-muted);
-  font: inherit;
-  font-size: var(--tg-fs-sm);
-  font-weight: 600;
-  cursor: pointer;
-}
-.av-library-filter button[aria-pressed="true"] {
-  background: var(--tg-bg-elev);
+  font-size: var(--tg-fs-lg);
+  font-weight: 680;
+  letter-spacing: -0.01em;
   color: var(--tg-fg);
-  box-shadow: 0 0 0 1px var(--tg-line);
 }
-.av-library-filter button:hover { color: var(--tg-fg); }
+.av-section-head-count {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-subtle);
+}
 .av-home-search {
   position: relative;
   display: flex;
   align-items: center;
-  width: min(100%, 22rem);
+  max-width: 28rem;
+  margin-bottom: var(--tg-s-5);
   color: var(--tg-fg-muted);
 }
 .av-home-search > svg {
   position: absolute;
-  inset-inline-start: 13px;
+  left: var(--tg-s-3);
   pointer-events: none;
 }
 .av-home-search input {
-  width: 100%;
   min-height: 44px;
-  padding-inline: 40px 44px;
+  padding-inline: var(--tg-s-7);
 }
 .av-home-search input::-webkit-search-cancel-button { display: none; }
 .av-home-search button {
   position: absolute;
-  inset-inline-end: 0;
+  right: 0;
   display: grid;
   place-items: center;
   width: 44px;
@@ -449,96 +406,258 @@
   color: var(--tg-fg-muted);
   cursor: pointer;
 }
-.av-home-search button:hover { background: var(--tg-bg-hi); }
+.av-home-search button:hover, .av-home-search button:active {
+  color: var(--tg-fg);
+  background: var(--tg-bg-hi);
+}
+.av-home-search button:focus-visible {
+  outline: 2px solid var(--tg-accent);
+  outline-offset: 2px;
+}
+.av-search-empty {
+  margin-block: var(--tg-s-5);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
 .av-launcher {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
   list-style: none;
   margin: 0;
-  padding: 0;
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-bg-elev);
+  padding: var(--tg-s-2) 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: var(--tg-s-6) var(--tg-s-4);
+  justify-items: center;
 }
-.av-launcher:empty { display: none; }
+.av-launcher > li {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
 .av-tile-wrap {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  min-width: 0;
-  padding-inline-end: 8px;
-  box-shadow: inset 0 -1px var(--tg-line);
+  width: 100%;
+  max-width: 152px;
 }
 .av-tile {
   display: flex;
-  flex: 1;
-  gap: 12px;
+  flex-direction: column;
   align-items: center;
-  min-width: 0;
-  height: 64px;
-  padding: 0 12px;
-  border-radius: var(--tg-r-md);
+  gap: var(--tg-s-3);
+  width: 100%;
+  max-width: 152px;
+  padding: var(--tg-s-2);
+  border: 0;
+  border-radius: var(--tg-r-lg);
+  background: transparent;
   color: var(--tg-fg);
-  text-decoration: none;
+  font-family: var(--tg-font-body);
+  font-size: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition: transform var(--tg-dur) var(--tg-ease);
 }
-.av-tile:hover, .av-tile-manage:hover { background: var(--tg-bg-subtle); }
-.av-library :is(a, button):focus-visible {
+.av-tile:hover {
+  transform: translateY(-3px);
+}
+.av-tile:hover .av-tile-icon {
+  box-shadow: var(--tg-tile-shadow-hover);
+}
+.av-tile:focus-visible {
+  outline: none;
+}
+.av-tile:focus-visible .av-tile-icon {
   outline: 2px solid var(--tg-accent);
-  outline-offset: -2px;
+  outline-offset: 3px;
 }
+/* App icon face: a calm rounded square. A declared image fills it; a declared
+ * emoji sits on it; an app with no declared icon shows its initials on a
+ * kind-tinted monogram tile — distinct by name and by kind, never a wall of
+ * identical boxes. Separation is a hairline, not a glossy cast shadow. */
 .av-tile-icon {
+  position: relative;
+  flex: none;
   display: grid;
   place-items: center;
-  flex: none;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--tg-r-xl);
+  background: var(--tg-tile-face);
+  color: var(--tg-fg-muted);
+  box-shadow: var(--tg-tile-shadow);
+  transition:
+    transform var(--tg-dur) var(--tg-ease),
+    box-shadow var(--tg-dur) var(--tg-ease);
+}
+.av-tile-icon svg {
   width: 40px;
   height: 40px;
-  border-radius: 11px;
+  stroke-width: 1.9;
+}
+.av-tile-mono {
+  font-family: var(--tg-font-display);
+  font-weight: 700;
+  font-size: 1.7rem;
+  letter-spacing: -0.03em;
+}
+.av-tile-k-worker {
+  background: var(--tg-k-worker-bg);
+  color: var(--tg-k-worker-fg);
+  box-shadow: var(--tg-tile-shadow);
+}
+.av-tile-k-site {
+  background: var(--tg-k-site-bg);
+  color: var(--tg-k-site-fg);
+  box-shadow: var(--tg-tile-shadow);
+}
+.av-tile-k-storage {
+  background: var(--tg-k-storage-bg);
+  color: var(--tg-k-storage-fg);
+  box-shadow: var(--tg-tile-shadow);
+}
+.av-tile-k-default {
+  background: var(--tg-k-default-bg);
+  color: var(--tg-k-default-fg);
+  box-shadow: var(--tg-tile-shadow);
+}
+/* The icon plus its status dot. The dot sits beside the face (not inside it)
+ * so a muted face does not fade the dot. */
+.av-tile-face {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.av-tile-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--tg-r-full);
+  background: var(--tg-warn);
+  border: 3px solid var(--tg-bg-elev);
+}
+.av-tile-dot-alert {
+  background: var(--tg-danger);
+}
+.av-tile-dot-info {
+  background: var(--tg-info);
+}
+.av-tile-dot-quiet {
+  background: var(--tg-fg-subtle);
+}
+/* An app that cannot be opened yet (installing, never applied, failed, being
+ * removed, stopped) keeps its tile, quieter; its tap opens the app page. */
+.av-tile-waiting .av-tile-icon {
+  opacity: 0.5;
+  filter: grayscale(0.6);
+}
+.av-tile-waiting .av-tile-name {
+  color: var(--tg-fg-muted);
+}
+.av-tile-name {
+  max-width: 100%;
+  font-size: var(--tg-fs-sm);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  color: var(--tg-fg);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  color: var(--tg-accent-text);
-  background: var(--tg-accent-soft);
+  overflow-wrap: anywhere;
 }
-.av-tile-icon-image { background: var(--tg-bg-subtle); }
-.av-tile-image { display: block; width: 100%; height: 100%; object-fit: cover; }
-.av-tile-mono { font-size: 16px; font-weight: 650; }
-.av-tile-emoji { font-size: 20px; line-height: 1; }
-.av-tile-waiting .av-tile-icon { opacity: 0.5; }
-.av-tile-label { min-width: 0; display: grid; gap: 2px; }
-.av-tile-name, .av-tile-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.av-tile-name { font-size: var(--tg-fs-sm); font-weight: 650; }
-.av-tile-captions { display: flex; gap: 6px; min-width: 0; }
-.av-tile-state { color: var(--tg-fg-muted); font-size: var(--tg-fs-xs); }
-.av-tile-state-info { color: var(--tg-info); }
-.av-tile-state-warn { color: var(--tg-warn); }
-.av-tile-state-alert { color: var(--tg-danger-text); }
-.av-tile-manage {
+.av-tile-label {
   display: grid;
-  flex: none;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: var(--tg-r-md);
-  color: var(--tg-fg-muted);
+  gap: var(--tg-s-1);
+  min-width: 0;
+  width: 100%;
 }
-.av-tile-skeleton { pointer-events: none; }
-.av-tile-skel-name { width: min(45%, 9rem); height: 12px; }
-.av-library-empty {
-  padding: 30px 12px;
-  margin: 0;
-  color: var(--tg-fg-muted);
-  text-align: center;
-  font-size: var(--tg-fs-sm);
-}
-.av-library-pages {
-  display: grid;
-  grid-template-columns: auto minmax(4rem, 1fr) auto;
+.av-tile-actions {
+  display: flex;
   align-items: center;
-  text-align: center;
-  margin-block-end: 12px;
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
+  justify-content: center;
+  gap: var(--tg-s-1);
+  flex-wrap: wrap;
+  max-width: 100%;
+  margin-top: -2px;
 }
-.av-library-pages button { min-height: 44px; }
-@media (max-width: 640px) {
-  .av-home-search { width: 100%; }
-  .av-section-head { margin-block-end: 12px; }
+.av-tile-manage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 var(--tg-s-2);
+  border: 0;
+  border-radius: var(--tg-r-full);
+  background: transparent;
+  color: var(--tg-fg-muted);
+  font: inherit;
+  font-size: var(--tg-fs-xs);
+  cursor: pointer;
+}
+.av-tile-manage:hover {
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+}
+.av-tile-manage:active {
+  background: var(--tg-bg-hi);
+  color: var(--tg-fg);
+}
+.av-tile-manage:focus-visible {
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  /* A bg shade alone (~1.4:1) is not a visible focus indicator. */
+  outline: 2px solid var(--tg-accent);
+  outline-offset: 2px;
+}
+.av-tile-skel {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--tg-r-xl);
+}
+/* trailing "add service" tile: a quiet dashed placeholder, clearly not an app */
+.av-tile-add .av-tile-icon {
+  background: transparent;
+  border: 1.5px dashed var(--tg-line-strong);
+  box-shadow: none;
+  color: var(--tg-fg-subtle);
+}
+.av-tile-add .av-tile-icon svg {
+  filter: none;
+  stroke-width: 2;
+}
+.av-tile-add .av-tile-name {
+  color: var(--tg-fg-muted);
+}
+.av-tile-add:hover .av-tile-icon {
+  border-color: var(--tg-accent);
+  color: var(--tg-accent);
+  box-shadow: none;
+}
+.av-tile-add:hover .av-tile-name {
+  color: var(--tg-fg);
+}
+/* surface tile faces: declared image fills the squircle; declared emoji/glyph
+   sits on the colored tile; otherwise the kind glyph (handled by the base). */
+.av-tile-icon-image {
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg-muted);
+  overflow: hidden;
+}
+.av-tile-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+.av-tile-emoji {
+  font-size: 42px;
+  line-height: 1;
 }
 
 /* ===== service list (/workloads) ===== */
@@ -788,6 +907,10 @@
   .av-start-secondary {
     width: 100%;
   }
+  .av-launcher {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: var(--tg-s-5) var(--tg-s-3);
+  }
   .av-run-history-row {
     grid-template-columns: 1fr;
     align-items: stretch;
@@ -882,6 +1005,38 @@
   font-size: var(--tg-fs-sm);
 }
 
+/* Launcher tile captions under the name: the state in a word (要対応,
+ * 更新あり, インストール中, …) and who shared the app. Up to two lines each, so
+ * a phone-width tile does not cut a state word off. */
+.av-tile-captions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  max-width: 100%;
+  margin-top: calc(-1 * var(--tg-s-2));
+}
+.av-tile-state {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  max-width: 100%;
+  font-size: var(--tg-fs-xs);
+  line-height: 1.3;
+  color: var(--tg-fg-subtle);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.av-tile-state-info {
+  color: var(--tg-info);
+}
+.av-tile-state-warn {
+  color: var(--tg-warn);
+}
+.av-tile-state-alert {
+  color: var(--tg-danger-text);
+}
+
 /* Detail header: instance name as a muted secondary next to the store display
  * name (only rendered when the two differ). */
 .av-title-instance {
@@ -940,3 +1095,43 @@
     min-height: 40px;
   }
 }
+
+/* On a phone, give names and shared-owner labels the width of a row.
+ * The icon/name still opens the app; the separate settings target stays visible. */
+@media (max-width: 640px) {
+  .av-home-search { max-width: none; }
+  .av-launcher { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .av-launcher > li { border-bottom: 1px solid var(--tg-line); }
+  .av-launcher > li:last-child { border-bottom: 0; }
+  .av-tile-wrap { flex-direction: row; max-width: none; gap: var(--tg-s-2); }
+  .av-tile {
+    flex: 1;
+    flex-direction: row;
+    min-width: 0;
+    max-width: none;
+    padding: var(--tg-s-4) 0;
+    text-align: left;
+    transform: none;
+  }
+  .av-tile-face, .av-tile-add .av-tile-icon, .av-tile-skel {
+    width: var(--tg-s-8);
+    flex: none;
+  }
+  .av-tile-name { display: block; overflow: visible; }
+  .av-tile-actions { flex: none; margin: 0; }
+  .av-tile-captions { align-items: flex-start; }
+  .av-tile-manage { font-size: var(--tg-fs-sm); }
+  .av-tile:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+  .av-tile:focus-visible .av-tile-icon { outline: none; }
+}
+
+/* A large library keeps a fixed number of icons in the DOM. */
+.av-launcher-pages {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--tg-s-3);
+  margin-block: var(--tg-s-6) var(--tg-s-2);
+}
+.av-launcher-pages button { min-height: 44px; }

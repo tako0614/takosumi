@@ -12,7 +12,7 @@ import {
   Switch,
   untrack,
 } from "solid-js";
-import { ChevronLeft, ChevronRight, Plus, Search, Settings2, X } from "lucide-solid";
+import { Plus, Search, Settings2, Sparkles, X } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import IncomingOwnershipTransfers from "./IncomingOwnershipTransfers.tsx";
 import AppFace from "../../components/AppFace.tsx";
@@ -40,6 +40,7 @@ interface HomeApp {
   readonly name: string;
   readonly displayName?: AccessibleApp["displayName"];
   readonly iconUrl?: string;
+  readonly category?: string;
   readonly role?: AccessibleApp["role"];
   readonly ownerDisplayName?: string;
   readonly state: AppState;
@@ -54,7 +55,7 @@ interface HomePage {
 }
 
 interface ScreenRead {
-  readonly detail?: Pick<HomeApp, "surfaces" | "state" | "iconUrl">;
+  readonly detail?: Pick<HomeApp, "surfaces" | "state" | "iconUrl" | "category">;
   readonly failed: boolean;
 }
 
@@ -112,7 +113,7 @@ async function loadHome(workspaceId: string): Promise<HomePage> {
   return {
     apps: capsules.filter(isVisibleServiceCapsule).map((inst) => {
       const own = byApp.get(inst.id) ?? [];
-      return { id: inst.id, name: inst.name, state: appState(inst), surfaces: own };
+      return { id: inst.id, name: inst.name, state: appState(inst), surfaces: own, category: own[0]?.category };
     }),
     surfacesFailed: surfaces.failed,
   };
@@ -130,7 +131,7 @@ async function readScreen(app: HomeApp, signal: AbortSignal): Promise<ScreenRead
   const surfaces = openableScreens(view.screens);
   const state = view.state === "installed" && view.version.updateAvailable ? "update_available" : homeState(view.state);
   return {
-    detail: { state, surfaces, iconUrl: app.iconUrl ?? view.iconUrl },
+    detail: { state, surfaces, iconUrl: app.iconUrl ?? view.iconUrl, category: view.screens[0]?.category },
     failed: view.incomplete?.includes("screens") ?? false,
   };
 }
@@ -145,7 +146,6 @@ function Inner() {
     readonly nextCursor?: string;
   }>();
   const [query, setQuery] = createSignal("");
-  const [stopped, setStopped] = createSignal(false);
   const [page, setPage] = createSignal(0);
   const [moreFailed, setMoreFailed] = createSignal(false);
   const [loadingMore, setLoadingMore] = createSignal(false);
@@ -182,7 +182,7 @@ function Inner() {
     const search = term();
     return search
       ? searchable().filter(({ keys }) => keys.some((part) => part.includes(search))).map(({ app }) => app)
-      : apps().filter((app) => (app.state === "stopped") === stopped());
+      : apps();
   });
   const visible = createMemo(() => matches().slice(page() * PAGE_SIZE, (page() + 1) * PAGE_SIZE), [], {
     equals: (prev, next) => prev.length === next.length && prev.every((app, i) => app === next[i]),
@@ -220,19 +220,15 @@ function Inner() {
     batch(() => { setPage(0); setQuery(value); });
   }
   function clearSearch() { changeQuery(""); searchInput?.focus(); }
-  function changeFilter(value: boolean) {
-    batch(() => { setPage(0); setStopped(value); });
-  }
   async function forward() {
     const next = page() + 1;
     const signal = listRead.signal;
-    const filter = stopped();
     const search = term();
     setAdvancing(true);
     try {
       // An intervening server page may have no apps in the selected group.
       while (matches().length <= next * PAGE_SIZE && cursor()) {
-        if (!await loadNext() || stopped() !== filter || term() !== search) return;
+        if (!await loadNext() || term() !== search) return;
       }
       if (!signal.aborted && matches().length > next * PAGE_SIZE) setPage(next);
     } finally {
@@ -262,8 +258,8 @@ function Inner() {
   createEffect(() => {
     retryScreens();
     const shown = visible();
-    // Keep successful projections when a filter is toggled, but cancel work
-    // for rows that leave the view. No late response can change the layout's order.
+    // Keep successful projections across pages, but cancel work
+    // for icons that leave the view. No late response can change the layout's order.
     const pending = untrack(() => shown.filter((app) => app.needsScreenRead && (!screens().has(app.id) || retrying.has(app.id))));
     const controller = new AbortController();
     const { signal } = controller;
@@ -297,14 +293,7 @@ function Inner() {
   return (
     <>
       <IncomingOwnershipTransfers appNames={names()} onChanged={refresh} />
-      <div class="av-library" data-testid="home-apps">
-        <header class="av-section-head">
-          <h1 id={titleId}>{t("apps.sectionYours")}</h1>
-          <a class="av-library-store" href="/new">
-            <Plus size={18} aria-hidden="true" />
-            {t("apps.browse")}
-          </a>
-        </header>
+      <div data-testid="home-apps">
         <Switch>
           <Match when={home.loading && !firstPage()}><LauncherSkeleton /></Match>
           <Match when={home.error}>
@@ -313,31 +302,29 @@ function Inner() {
             </Toast>
           </Match>
           <Match when={firstPage()}>
-            <Show when={apps().length > 0 || cursor()} fallback={
-              <section class="av-library-empty" aria-label={t("apps.start.aria")}>{t("apps.start.titleEmpty")}</section>
-            }>
-              <div class="av-library-toolbar">
-                <div class="av-home-search" role="search" aria-label={t("apps.search")}>
-                  <Search size={17} aria-hidden="true" />
-                  <Input
-                    ref={searchInput}
-                    type="search"
-                    aria-label={t("apps.search")}
-                    placeholder={t("apps.search")}
-                    value={query()}
-                    onInput={(event) => changeQuery(event.currentTarget.value)}
-                    onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
-                  />
-                  <Show when={query()}>
-                    <button type="button" aria-label={t("apps.clearSearch")} onClick={clearSearch}>
-                      <X size={17} aria-hidden="true" />
-                    </button>
-                  </Show>
-                </div>
-                <div class="av-library-filter" role="group" aria-label={t("apps.filter")}>
-                  <button type="button" aria-pressed={!stopped() && !term()} onClick={() => batch(() => { changeQuery(""); changeFilter(false); })}>{t("apps.title")}</button>
-                  <button type="button" aria-pressed={stopped() && !term()} onClick={() => batch(() => { changeQuery(""); changeFilter(true); })}>{t("apps.state.stopped")}</button>
-                </div>
+            <Show when={apps().length > 0 || cursor()} fallback={<AppStartPanel />}>
+              <div class="av-section-head">
+                <h1 id={titleId}>{t("apps.sectionYours")}</h1>
+                <Show when={!cursor()}>
+                  <span class="av-section-head-count">{apps().length}</span>
+                </Show>
+              </div>
+              <div class="av-home-search" role="search" aria-label={t("apps.search")}>
+                <Search size={18} aria-hidden="true" />
+                <Input
+                  ref={searchInput}
+                  type="search"
+                  aria-label={t("apps.search")}
+                  placeholder={t("apps.search")}
+                  value={query()}
+                  onInput={(event) => changeQuery(event.currentTarget.value)}
+                  onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
+                />
+                <Show when={query()}>
+                  <button type="button" aria-label={t("apps.clearSearch")} onClick={clearSearch}>
+                    <X size={18} aria-hidden="true" />
+                  </button>
+                </Show>
               </div>
               <Show when={firstPage()?.surfacesFailed || failedScreens()}>
                 <Toast tone="error">
@@ -351,25 +338,39 @@ function Inner() {
                   <Button variant="secondary" size="sm" type="button" onClick={() => void loadNext()}>{t("common.retry")}</Button>
                 </Toast>
               </Show>
-              <Show when={matches().length === 0 && !cursor()}>
-                <p class="av-library-empty" role="status">{t(term() ? "apps.noMatches" : stopped() ? "apps.noStopped" : "apps.noActive")}</p>
-              </Show>
-              <Show when={page() > 0 || hasNext() || loadingMore()}>
-                <nav class="av-library-pages" aria-label={t("apps.pages")}>
-                  <Button variant="secondary" size="sm" type="button" disabled={page() === 0 || advancing()} onClick={() => setPage((n) => n - 1)}>
-                    <ChevronLeft size={16} aria-hidden="true" />{t("apps.previous")}
-                  </Button>
-                  <span role="status">{loadingMore() ? t("common.loading") : page() + 1}</span>
-                  <Button variant="secondary" size="sm" type="button" disabled={!hasNext() || advancing() || (loadingMore() && visible().length < PAGE_SIZE)} onClick={() => void forward()}>
-                    {t("apps.next")}<ChevronRight size={16} aria-hidden="true" />
-                  </Button>
-                </nav>
+              <Show when={term() && !matches().length && !cursor()}>
+                <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
               </Show>
               <ul class="av-launcher" aria-labelledby={titleId}>
                 <For each={visible()}>
-                  {(app) => <HomeAppRow name={names().get(app.id) ?? app.name} app={{ ...app, ...screens().get(app.id)?.detail }} />}
+                  {(app) => <HomeAppTile name={names().get(app.id) ?? app.name} app={{ ...app, ...screens().get(app.id)?.detail }} />}
                 </For>
+                <Show when={!term()}>
+                  <li>
+                    <a class="av-tile av-tile-add" href="/new">
+                      <span class="av-tile-icon" aria-hidden="true"><Plus /></span>
+                      <span class="av-tile-name">{t("apps.browse")}</span>
+                    </a>
+                  </li>
+                </Show>
               </ul>
+              <Show when={page() > 0 || hasNext() || loadingMore()}>
+                <nav class="av-launcher-pages" aria-label={t("apps.pages")}>
+                  <Show when={page() > 0}>
+                    <Button variant="secondary" size="sm" type="button" disabled={advancing()} onClick={() => setPage((n) => n - 1)}>
+                      {t("apps.previous")}
+                    </Button>
+                  </Show>
+                  <Show when={loadingMore()}>
+                    <span role="status">{t("common.loading")}</span>
+                  </Show>
+                  <Show when={hasNext() && (!term() || matches().length > (page() + 1) * PAGE_SIZE)}>
+                    <Button variant="secondary" size="sm" type="button" disabled={advancing()} onClick={() => void forward()}>
+                      {t("apps.next")}
+                    </Button>
+                  </Show>
+                </nav>
+              </Show>
             </Show>
           </Match>
         </Switch>
@@ -378,7 +379,13 @@ function Inner() {
   );
 }
 
-function HomeAppRow(props: { readonly name: string; readonly app: HomeApp }) {
+function kindClass(kind: string | undefined): string {
+  return kind === "site" || kind === "storage" || kind === "worker"
+    ? `av-tile-k-${kind}`
+    : "av-tile-k-default";
+}
+
+function HomeAppTile(props: { readonly name: string; readonly app: HomeApp }) {
   const name = () => props.name;
   const icon = createMemo(() => {
     const surface = props.app.surfaces[0];
@@ -398,53 +405,65 @@ function HomeAppRow(props: { readonly name: string; readonly app: HomeApp }) {
 
   return (
     <li
-      class="av-tile-wrap"
       data-testid="home-app"
       data-app-state={props.app.state}
       data-app-opens={Boolean(route()) ? "true" : "false"}
       data-capsule-id={props.app.id}
     >
-      <a
-        class="av-tile"
-        classList={{ "av-tile-waiting": homeAppWaiting(props.app) }}
-        href={anchor()?.href ?? pageHref()}
-        target={anchor()?.target}
-        rel={anchor()?.rel}
-        data-open-route={route()?.kind}
-        aria-label={route() ? openRouteAria(route()!, name()) : name()}
-        aria-describedby={describedBy()}
-      >
-        <AppFace
-          class="av-tile-icon"
-          imageFrameClass="av-tile-icon-image"
-          imageClass="av-tile-image"
-          emojiClass="av-tile-emoji"
-          monogramClass="av-tile-mono"
-          name={name()}
-          iconUrl={props.app.iconUrl ?? icon().imageSrc}
-          emoji={icon().emoji}
-        />
-        <span class="av-tile-label">
-          <span class="av-tile-name">{name()}</span>
-          <Show when={describedBy()}>
-            <span class="av-tile-captions" id={captionId}>
-              <Show when={mark()}>
-                {(state) => <span class={`av-tile-state av-tile-state-${state().kind}`}>{t(state().label)}</span>}
-              </Show>
-              <Show when={shared()}>
-                <span class="av-tile-state">{props.app.ownerDisplayName ? t("app.sharing.sharedBy", { name: props.app.ownerDisplayName }) : t("apps.shared")}</span>
-              </Show>
-            </span>
-          </Show>
-        </span>
-      </a>
-      <a
-        class="av-tile-manage"
-        href={settings() ? appPageHref(props.app.id, "settings") : pageHref()}
-        aria-label={t(settings() ? "apps.settingsAria" : "apps.manageAria", { name: name() })}
-      >
-        <Settings2 size={18} aria-hidden="true" />
-      </a>
+      <span class="av-tile-wrap">
+        <a
+          class="av-tile"
+          classList={{ "av-tile-waiting": homeAppWaiting(props.app) }}
+          href={anchor()?.href ?? pageHref()}
+          target={anchor()?.target}
+          rel={anchor()?.rel}
+          data-open-route={route()?.kind}
+          aria-label={route() ? openRouteAria(route()!, name()) : name()}
+          aria-describedby={describedBy()}
+        >
+          <span class="av-tile-face">
+            <AppFace
+              class="av-tile-icon"
+              imageFrameClass="av-tile-icon-image"
+              monogramFrameClass={kindClass(props.app.category)}
+              imageClass="av-tile-image"
+              emojiClass="av-tile-emoji"
+              monogramClass="av-tile-mono"
+              name={name()}
+              iconUrl={props.app.iconUrl ?? icon().imageSrc}
+              emoji={icon().emoji}
+            />
+            <Show when={mark()}>
+              {(state) => <span class={`av-tile-dot av-tile-dot-${state().kind}`} aria-hidden="true" />}
+            </Show>
+          </span>
+          <span class="av-tile-label">
+            <span class="av-tile-name">{name()}</span>
+            <Show when={describedBy()}>
+              <span class="av-tile-captions" id={captionId}>
+                <Show when={mark()}>
+                  {(state) => <span class={`av-tile-state av-tile-state-${state().kind}`}>{t(state().label)}</span>}
+                </Show>
+                <Show when={shared()}>
+                  <span class="av-tile-state">{props.app.ownerDisplayName ? t("app.sharing.sharedBy", { name: props.app.ownerDisplayName }) : t("apps.shared")}</span>
+                </Show>
+              </span>
+            </Show>
+          </span>
+        </a>
+        <Show when={settings() || route()}>
+          <span class="av-tile-actions">
+            <a
+              class="av-tile-manage"
+              href={settings() ? appPageHref(props.app.id, "settings") : pageHref()}
+              aria-label={t(settings() ? "apps.settingsAria" : "apps.manageAria", { name: name() })}
+            >
+              <Settings2 size={13} aria-hidden="true" />
+              <span>{t(settings() ? "app.settings.title" : "apps.manage")}</span>
+            </a>
+          </span>
+        </Show>
+      </span>
     </li>
   );
 }
@@ -452,9 +471,25 @@ function HomeAppRow(props: { readonly name: string; readonly app: HomeApp }) {
 function LauncherSkeleton() {
   return (
     <ul class="av-launcher" aria-hidden="true">
-      <For each={[0, 1, 2, 3]}>
-        {() => <li class="av-tile av-tile-skeleton"><span class="tg-skel av-tile-icon" /><span class="tg-skel av-tile-skel-name" /></li>}
+      <For each={[0, 1, 2, 3, 4, 5]}>
+        {() => <li><span class="av-tile"><span class="tg-skel av-tile-skel" /></span></li>}
       </For>
     </ul>
+  );
+}
+
+function AppStartPanel() {
+  return (
+    <section class="av-start" aria-label={t("apps.start.aria")}>
+      <div class="av-start-copy">
+        <span class="av-start-kicker">{t("apps.start.kicker")}</span>
+        <h2 class="av-start-title">{t("apps.start.titleEmpty")}</h2>
+        <p class="av-start-sub">{t("apps.start.bodyEmpty")}</p>
+      </div>
+      <a href="/new" class="av-start-action">
+        <Sparkles size={18} aria-hidden="true" />
+        <span>{t("apps.start.optionStore")}</span>
+      </a>
+    </section>
   );
 }
