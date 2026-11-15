@@ -470,7 +470,9 @@ export const ja = {
   "apps.start.titleEmpty": "最初のアプリをインストールしましょう",
   "apps.start.bodyEmpty": "ストアから選ぶか、Gitリポジトリのリンクからインストールします。",
   "apps.start.optionStore": "アプリを探す",
-  "apps.listIncomplete": "一部のアプリの画面を読み込めませんでした。タップしてもアプリが開かず、アプリのページが開くものがあるかもしれません。",
+  "apps.moreFailed": "続きのアプリを読み込めませんでした。",
+  "apps.listIncomplete": "一部のアプリの起動情報を読み込めませんでした。",
+
 
 
   // --- Installed app page -----------------------------------------------------

@@ -416,6 +416,10 @@ lightly edited for readers.
 
 `GET /api/v1/apps?cursor&limit` lists the caller's owned and shared apps, with a live `role`, owner display name, app state and primary action. Using an app does not grant management access.
 
+Each entry also includes authorized `screens` and optional `incomplete` sections. Home can launch from the collection without fetching every app detail again. State and primary action use the same rules as the detail view; source/version history and linked-app display metadata are read only for details. Install configs are batched per page, and connection and screen-failure inventories are shared only within the request.
+
+Home shows launch and lifecycle state. Update availability is checked on the app detail page, where version history is read, rather than scanning that history while loading the launcher.
+
 | Method | Path | Permission |
 | --- | --- | --- |
 | GET | `/api/v1/capsules/{capsuleId}/members` | Owner/member; only owner sees email |

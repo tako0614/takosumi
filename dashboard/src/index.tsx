@@ -311,6 +311,14 @@ function mountDashboard(): void {
   );
 }
 
+// Fetch the Home modules alongside discovery; the router still waits for the
+// server's capabilities, and the shell still checks the session before mounting
+// private content. Other entry routes do not pay for Home's code.
+if (window.location.pathname === "/") {
+  void ShellLayout.preload().catch(() => {});
+  void AppListView.preload().catch(() => {});
+}
+
 // Server capabilities are composition truth for the first route too. Mounting
 // before discovery completes can permanently select an OSS fallback inside an
 // untracked list item even after the capability signal updates.

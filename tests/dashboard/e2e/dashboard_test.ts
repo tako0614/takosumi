@@ -1405,6 +1405,32 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
+  test("Home downloads its code during discovery and waits to read private apps", async ({ page }) => {
+    test.skip(mode !== "portable", "uses the isolated discovery fixture");
+    let release!: () => void;
+    const discovery = new Promise<void>((resolve) => { release = resolve; });
+    let appReads = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/v1/apps") appReads++;
+    });
+    await page.route("**/.well-known/takosumi", async (route) => {
+      await discovery;
+      await route.continue();
+    });
+    const downloads = page.waitForRequest((request) =>
+      /\/assets\/AppListView-[^/]+\.js$/u.test(new URL(request.url()).pathname)
+    );
+    try {
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await downloads;
+      expect(appReads).toBe(0);
+    } finally {
+      release();
+    }
+    await expect(page.getByTestId("home-app").first()).toBeVisible();
+    expect(appReads).toBe(1);
+  });
+
   test("Home uses the legacy app projection only when /api/v1/apps returns 404", async ({ page }) => {
     test.skip(mode !== "portable", "legacy route compatibility is exercised only against the local fixture");
     const errors = pageErrors(page);

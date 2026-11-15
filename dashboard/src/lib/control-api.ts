@@ -2067,9 +2067,13 @@ export async function listInstalledApps(workspaceId?: string): Promise<ListInsta
 const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1";
 
 /** Reads the server-computed view of one installed app. */
-export async function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> {
+export function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> {
+  return getCapsuleAppWithSignal(capsuleId);
+}
+
+export async function getCapsuleAppWithSignal(capsuleId: string, signal?: AbortSignal): Promise<CapsuleAppView> {
   const body = await controlFetch<{ app?: CapsuleAppView }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`, { signal },
   );
   const app = body.app;
   if (
@@ -3345,6 +3349,9 @@ export interface AccessibleApp {
   readonly ownerDisplayName: string;
   readonly state: CapsuleAppView["state"] | "update_available";
   readonly primaryAction: CapsuleAppView["primaryAction"];
+  /** Authorized launcher metadata, absent only on older servers. */
+  readonly screens?: CapsuleAppView["screens"];
+  readonly incomplete?: CapsuleAppView["incomplete"];
 }
 let accessibleAppsCache: Promise<readonly AccessibleApp[] | undefined> | undefined;
 let appOwnershipCache: Promise<boolean> | undefined;
@@ -3389,6 +3396,28 @@ export function resetAppOwnershipCache(): void {
   appsDataExpiresAt = 0;
   appsPageCache.clear();
   legacyInstallWorkspace = undefined;
+}
+
+/** Read one page of account summaries. Only a missing first-page route means legacy. */
+export async function listAccessibleAppsPage(cursor?: string, signal?: AbortSignal): Promise<{
+  readonly apps: readonly AccessibleApp[];
+  readonly nextCursor?: string;
+} | undefined> {
+  throwIfAborted(signal);
+  const path = `${BASE}/apps${query({ cursor })}`;
+  let body;
+  try {
+    body = await withAppReadSignal(readCachedAppsPage(path), signal);
+  } catch (error) {
+    if (!isMissingControlRoute(error)) throw error;
+    if (cursor === undefined) return undefined;
+    throw new ControlApiError(502, "invalid_apps_response", "Apps pagination became unavailable.");
+  }
+  if (!isRecord(body) || !Array.isArray(body.apps) ||
+    (body.nextCursor !== undefined && typeof body.nextCursor !== "string")) {
+    throw new ControlApiError(502, "invalid_apps_response", "Apps returned an invalid response.");
+  }
+  return { apps: body.apps as readonly AccessibleApp[], nextCursor: body.nextCursor || undefined };
 }
 
 /** One account app read is shared by role, provider and OAuth consumers. */
@@ -3436,7 +3465,7 @@ async function withAppReadSignal<T>(request: Promise<T>, signal?: AbortSignal): 
 export async function appOwnershipAvailable(signal?: AbortSignal): Promise<boolean> {
   throwIfAborted(signal);
   if (!appOwnershipCache) {
-    const request = listAccessibleApps().then((apps) => apps !== undefined).catch((error: unknown) => {
+    const request = listAccessibleAppsPage().then((page) => page !== undefined).catch((error: unknown) => {
       if (appOwnershipCache === request) appOwnershipCache = undefined;
       throw error;
     });

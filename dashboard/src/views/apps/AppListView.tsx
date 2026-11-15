@@ -1,72 +1,28 @@
-/**
- * Home (`/`) — the app launcher: every installed app as an icon tile.
- *
- * Apps that can be opened come first, in name order. Tapping one opens its
- * screen: in a new tab on a computer, and on a phone the way this device
- * chose or the app declares (its verified native app, the web, or the app
- * page's chooser; lib/open-routing.ts). The small "Settings" link under it
- * opens the app page at its settings.
- * Apps that cannot be opened yet (installing, never applied, failed, being
- * removed, stopped) still get a tile, drawn muted with a status mark, and
- * tapping it opens the app page, where the app is kept. Nothing is folded
- * away. Installed state comes from the app list; every Open target comes from
- * the app's authorized screen projection (an `interface.ui.surface`
- * Interface). Store metadata and OpenTofu Outputs are never launcher
- * authorities.
- */
 import {
   createMemo,
-  createResource,
-  createSignal,
   createUniqueId,
   For,
+  type JSX,
   Match,
   Show,
   Switch,
 } from "solid-js";
 import { Plus, Search, Settings2, Sparkles, X } from "lucide-solid";
+import HomeAppGrid from "./HomeAppGrid.tsx";
+import { createHomeLibrary, type HomeApp } from "../../lib/home-apps.ts";
 import Page from "../account/components/auth/Page.tsx";
 import IncomingOwnershipTransfers from "./IncomingOwnershipTransfers.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { resolveAppIcon } from "../../lib/app-face.ts";
-import { currentWorkspaceId, selectAvailableWorkspaceId, setCurrentWorkspaceId } from "../../lib/workspace-state.ts";
-import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import { listCapsulesCached } from "../../lib/capsule-list.ts";
-import { getCapsuleApp, listAccessibleApps, type AccessibleApp } from "../../lib/control-api.ts";
-import { isVisibleServiceCapsule } from "../../lib/capsules-ui.ts";
-import { type AppState, appState, openableScreens } from "../../lib/app-page.ts";
-import { homeAppOpens, homeAppWaiting, sortHomeApps } from "../../lib/home-launcher.ts";
-import {
-  listAuthorizedUiSurfaces,
-} from "../../lib/ui-surface-interfaces.ts";
-import { locale, type MessageKey, t } from "../../i18n/index.ts";
+import { type AppState } from "../../lib/app-page.ts";
+import { homeAppOpens, homeAppWaiting } from "../../lib/home-launcher.ts";
+import { type MessageKey, t } from "../../i18n/index.ts";
 import { Button, Input, Toast } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { appPageHref } from "../../lib/app-links.ts";
 import { screenOpenRoute } from "../../lib/open-choice-state.ts";
-import { openRouteAnchor, openRouteAria } from "../app/app-ui.tsx";
+import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
 
-/** One installed app on Home with the screens it may open. */
-interface HomeApp {
-  readonly inst: { readonly id: string; readonly name: string };
-  readonly displayName?: string;
-  readonly iconUrl?: string;
-  /** The screen's declared category; tints the monogram face. */
-  readonly category?: string;
-  readonly role?: AccessibleApp["role"];
-  readonly ownerDisplayName?: string;
-  readonly state: AppState;
-  readonly surfaces: readonly {
-    readonly name?: string;
-    readonly url: string;
-    readonly icon?: string;
-    readonly interfaceId?: string;
-    /** Only the app view carries a screen's verified native clients. */
-    readonly clients?: unknown;
-  }[];
-}
-
-/** The small status mark: a dot on the icon and a word under the name. */
 type MarkKind = "alert" | "info" | "warn" | "quiet";
 const STATE_MARK: Readonly<Partial<Record<AppState, { readonly label: MessageKey; readonly kind: MarkKind }>>> = {
   needs_attention: { label: "apps.state.needsAttention", kind: "alert" },
@@ -80,299 +36,184 @@ export default function AppListView() {
   return <Page title={t("apps.title")}>{() => <Inner />}</Page>;
 }
 
-/** 404 is the only compatibility signal; service/auth failures stay visible. */
-async function loadHomeApps(): Promise<{ readonly apps: readonly HomeApp[]; readonly surfacesFailed: boolean }> {
-  const accessible = await listAccessibleApps();
-  if (accessible !== undefined) {
-    let surfacesFailed = false;
-    const rows: HomeApp[] = new Array(accessible.length);
-    let nextIndex = 0;
-    const readApp = async (entry: AccessibleApp): Promise<HomeApp> => {
-      let surfaces: HomeApp["surfaces"] = [];
-      let category: string | undefined;
-      let iconUrl = entry.iconUrl;
-      let state = homeState(entry);
-      // A launcher URL must come from the app's authorized screen projection.
-      // The value-free apps list itself is never an external URL authority.
-      try {
-        const view = await getCapsuleApp(entry.capsuleId);
-        if (view.incomplete?.includes("screens")) surfacesFailed = true;
-        surfaces = openableScreens(view.screens);
-        category = view.screens[0]?.category;
-        iconUrl ??= view.iconUrl;
-        if (state === "ready" && view.state === "installed" && view.version.updateAvailable) state = "update_available";
-      } catch { surfacesFailed = true; }
-      return {
-        inst: { id: entry.capsuleId, name: entry.name },
-        displayName: typeof entry.displayName === "string" ? entry.displayName : entry.displayName?.[locale()],
-        iconUrl,
-        ...(category ? { category } : {}),
-        role: entry.role,
-        ownerDisplayName: entry.ownerDisplayName,
-        state, surfaces,
-      };
-    };
-    await Promise.all(Array.from({ length: Math.min(4, accessible.length) }, async () => {
-      while (nextIndex < accessible.length) {
-        const index = nextIndex++;
-        rows[index] = await readApp(accessible[index]!);
-      }
-    }));
-    return { apps: rows, surfacesFailed };
-  }
-  const workspaces = await listWorkspacesCached();
-  const id = selectAvailableWorkspaceId(currentWorkspaceId(), workspaces);
-  setCurrentWorkspaceId(id);
-  if (!id) return { apps: [], surfacesFailed: false };
-  const [capsules, surfaces] = await Promise.all([
-    listCapsulesCached(id, { includeDestroyed: false }),
-    listAuthorizedUiSurfaces(id).then((value) => ({ value, failed: false }), () => ({ value: [], failed: true })),
-  ]);
-  return {
-    apps: capsules.filter(isVisibleServiceCapsule).map((inst) => {
-      const own = surfaces.value.filter((surface) => surface.capsuleId === inst.id);
-      const category = own[0]?.category;
-      return { inst, state: appState(inst), surfaces: own, ...(category ? { category } : {}) };
-    }), surfacesFailed: surfaces.failed,
-  };
-}
-function homeState(app: AccessibleApp): AppState {
-  switch (app.state) {
-    case "needs_attention": return "needs_attention";
-    case "update_available": return "update_available";
-    case "installing": case "updating": return "installing";
-    case "uninstalling": case "uninstall_scheduled": return "uninstalling";
-    case "uninstalled": case "stopped": return "stopped";
-    default: return "ready";
-  }
-}
 function Inner() {
-  const [home, { refetch }] = createResource(() => ({ workspaceId: currentWorkspaceId(), locale: locale() }), loadHomeApps);
-  const apps = createMemo(() => sortHomeApps(home.error ? [] : home.latest?.apps ?? [], homeAppName, locale()));
-  const [query, setQuery] = createSignal("");
+  const { home, firstPage, cursor, apps, names, query, setQuery, term, matches,
+    setVisible, screens, loadingMore, moreFailed, failedScreens, retryVisible, refresh, loadNext } = createHomeLibrary();
+  const titleId = createUniqueId();
   let searchInput: HTMLInputElement | undefined;
-  const matches = createMemo(() => {
-    const term = query().trim().toLocaleLowerCase(locale());
-    return apps().filter((app) => [homeAppName(app), app.inst.name, app.ownerDisplayName ?? ""]
-      .some((text) => text.toLocaleLowerCase(locale()).includes(term)));
-  });
-  const clearSearch = () => { setQuery(""); searchInput?.focus(); };
+  function clearSearch() { setQuery(""); searchInput?.focus(); }
+
   return (
     <>
-    <IncomingOwnershipTransfers appNames={new Map(apps().map((app) => [app.inst.id, app.displayName ?? app.inst.name]))} onChanged={async () => { await refetch(); }} />
-    <Switch>
-      <Match when={home.loading}><LauncherSkeleton /></Match>
-      <Match when={home.error}>
-        <Toast tone="error">{fetchFailedMessage(home.error, t)}
-          <Button variant="secondary" size="sm" type="button" onClick={() => void refetch()}>{t("common.retry")}</Button>
-        </Toast>
-      </Match>
-      <Match when={home.latest}>
-        <Show when={apps().length > 0} fallback={<AppStartPanel />}>
-          <div data-testid="home-apps">
-            <div class="av-section-head">
-              {/* The page's only heading. */}
-              <h1>{t("apps.sectionYours")}</h1>
-              <span class="av-section-head-count">{apps().length}</span>
-            </div>
-            <div class="av-home-search" role="search" aria-label={t("apps.search")}>
-              <Search size={18} aria-hidden="true" />
-              <Input
-                ref={searchInput}
-                type="search"
-                aria-label={t("apps.search")}
-                placeholder={t("apps.search")}
-                value={query()}
-                onInput={(event) => setQuery(event.currentTarget.value)}
-                onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
-              />
-              <Show when={query()}>
-                <button type="button" aria-label={t("apps.clearSearch")} onClick={clearSearch}>
-                  <X size={18} aria-hidden="true" />
-                </button>
+      <IncomingOwnershipTransfers appNames={names()} onChanged={refresh} />
+      <div data-testid="home-apps">
+        <Switch>
+          <Match when={home.loading && !firstPage()}><LauncherSkeleton /></Match>
+          <Match when={home.error}>
+            <Toast tone="error">{fetchFailedMessage(home.error, t)}
+              <Button variant="secondary" size="sm" type="button" onClick={() => void refresh()}>{t("common.retry")}</Button>
+            </Toast>
+          </Match>
+          <Match when={firstPage()}>
+            <Show when={apps().length > 0 || cursor()} fallback={<AppStartPanel />}>
+              <div class="av-section-head">
+                <h1 id={titleId}>{t("apps.sectionYours")}</h1>
+                <Show when={!cursor()}>
+                  <span class="av-section-head-count">{apps().length}</span>
+                </Show>
+              </div>
+              <div class="av-home-search" role="search" aria-label={t("apps.search")}>
+                <Search size={18} aria-hidden="true" />
+                <Input
+                  ref={searchInput}
+                  type="search"
+                  aria-label={t("apps.search")}
+                  placeholder={t("apps.search")}
+                  value={query()}
+                  onInput={(event) => setQuery(event.currentTarget.value)}
+                  onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
+                />
+                <Show when={query()}>
+                  <button type="button" aria-label={t("apps.clearSearch")} onClick={clearSearch}>
+                    <X size={18} aria-hidden="true" />
+                  </button>
+                </Show>
+              </div>
+              <Show when={firstPage()?.surfacesFailed || failedScreens()}>
+                <Toast tone="error">
+                  {t("apps.listIncomplete")}
+                  <Button variant="secondary" size="sm" type="button" onClick={() => firstPage()?.surfacesFailed ? void refresh() : retryVisible()}>{t("common.retry")}</Button>
+                </Toast>
               </Show>
-            </div>
-            <Show when={home.latest?.surfacesFailed}>
-              <Toast tone="error">
-                {t("apps.listIncomplete")}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={() => void refetch()}
-                >
-                  {t("common.retry")}
-                </Button>
-              </Toast>
-            </Show>
-            <Show when={matches().length === 0}>
-              <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
-            </Show>
-            <ul class="av-launcher">
-              <For each={matches()}>
-                {(app) => (
-                  <li
-                    data-testid="home-app"
-                    data-app-state={app.state}
-                    data-app-opens={homeAppOpens(app) ? "true" : "false"}
-                    data-capsule-id={app.inst.id}
-                  >
-                    <HomeAppTile app={app} />
-                  </li>
-                )}
-              </For>
-              <li>
-                {/* Installing starts in the store; same place as the ストア tab. */}
-                <a class="av-tile av-tile-add" href="/new">
-                  <span class="av-tile-icon" aria-hidden="true">
-                    <Plus />
-                  </span>
+              <Show when={moreFailed()}>
+                <Toast tone="error">
+                  {t("apps.moreFailed")}
+                  <Button variant="secondary" size="sm" type="button" onClick={() => void loadNext()}>{t("common.retry")}</Button>
+                </Toast>
+              </Show>
+              <Show when={term() && !matches().length && !cursor()}>
+                <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
+              </Show>
+              <HomeAppGrid
+                apps={matches()} labelId={titleId}
+                onVisible={setVisible}
+                onNearEnd={() => { if (cursor() && !moreFailed() && !home.loading) void loadNext(); }}
+                render={(app, position) => <HomeAppTile position={position} name={names().get(app.id) ?? app.name} app={{ ...app, ...screens().get(app.id)?.detail }} />}
+                footer={!term() ? (position) => <li style={position()}><a class="av-tile av-tile-add" href="/new">
+                  <span class="av-tile-icon" aria-hidden="true"><Plus /></span>
                   <span class="av-tile-name">{t("apps.browse")}</span>
-                </a>
-              </li>
-            </ul>
-          </div>
-        </Show>
-      </Match>
-    </Switch>
+                </a></li> : undefined}
+              />
+              <Show when={loadingMore()}><p class="av-home-loading" role="status">{t("common.loading")}</p></Show>
+            </Show>
+          </Match>
+        </Switch>
+      </div>
     </>
   );
 }
 
-function homeAppName(app: HomeApp): string {
-  if (app.displayName) return app.displayName;
-  return app.surfaces.length === 1 && app.surfaces[0]!.name
-    ? app.surfaces[0]!.name
-    : app.inst.name;
-}
-
-/** Kind key for the tinted monogram face (worker/site/storage/…). */
 function kindClass(kind: string | undefined): string {
-  switch (kind) {
-    case "site":
-    case "storage":
-    case "worker":
-      return `av-tile-k-${kind}`;
-    default:
-      return "av-tile-k-default";
-  }
+  return kind === "site" || kind === "storage" || kind === "worker"
+    ? `av-tile-k-${kind}`
+    : "av-tile-k-default";
 }
 
-/**
- * One app tile: the icon (or a kind-tinted monogram) with the name under it.
- * An app that opens links to its first authorized screen and keeps a small
- * settings link to its page; every other app links to its page. The status
- * mark's words are the link's accessible description.
- */
-function HomeAppTile(props: { readonly app: HomeApp }) {
-  const name = () => homeAppName(props.app);
-  const icon = () => {
+function HomeAppTile(props: { readonly name: string; readonly app: HomeApp; readonly position: () => JSX.CSSProperties }) {
+  const name = () => props.name;
+  const icon = createMemo(() => {
     const surface = props.app.surfaces[0];
     return surface ? resolveAppIcon(surface.icon, surface.url) : {};
-  };
+  });
   const mark = () => STATE_MARK[props.app.state];
   const shared = () => props.app.role === "member";
   const captionId = createUniqueId();
   const describedBy = () => (mark() || shared() ? captionId : undefined);
-  const openRoute = () => {
+  const route = createMemo(() => {
     const surface = homeAppOpens(props.app) ? props.app.surfaces[0] : undefined;
-    return surface ? screenOpenRoute(props.app.inst.id, surface) : undefined;
-  };
-  const pageHref = () => appPageHref(props.app.inst.id);
-  const settingsAvailable = () => props.app.state === "ready" || props.app.state === "update_available";
-  const tileClass = () => (homeAppWaiting(props.app) ? "av-tile av-tile-waiting" : "av-tile");
-
-  const body = () => (
-    <>
-      <span class="av-tile-face">
-        <AppFace
-          class="av-tile-icon"
-          imageFrameClass="av-tile-icon-image"
-          monogramFrameClass={kindClass(props.app.category)}
-          imageClass="av-tile-image"
-          emojiClass="av-tile-emoji"
-          monogramClass="av-tile-mono"
-          name={name()}
-          iconUrl={props.app.iconUrl ?? icon().imageSrc}
-          emoji={icon().emoji}
-        />
-        <Show when={mark()}>
-          {(state) => <span class={`av-tile-dot av-tile-dot-${state().kind}`} aria-hidden="true" />}
-        </Show>
-      </span>
-      <span class="av-tile-label">
-      <span class="av-tile-name">{name()}</span>
-      <Show when={describedBy()}>
-        <span class="av-tile-captions" id={captionId}>
-          <Show when={mark()}>
-            {(state) => <span class={`av-tile-state av-tile-state-${state().kind}`}>{t(state().label)}</span>}
-          </Show>
-          <Show when={shared()}>
-            <span class="av-tile-state">{props.app.ownerDisplayName ? t("app.sharing.sharedBy", { name: props.app.ownerDisplayName }) : t("apps.shared")}</span>
-          </Show>
-        </span>
-      </Show>
-      </span>
-    </>
-  );
+    return surface ? screenOpenRoute(props.app.id, surface) : undefined;
+  });
+  const pageHref = () => appPageHref(props.app.id);
+  const anchor = createMemo(() => { const open = route(); return open && openRouteAnchor(open); });
+  const settings = () => props.app.state === "ready" || props.app.state === "update_available";
 
   return (
-    <span class="av-tile-wrap">
-      <Show
-        when={openRoute()}
-        fallback={
-          <a class={tileClass()} href={pageHref()} aria-label={name()} aria-describedby={describedBy()}>
-            {body()}
-          </a>
-        }
-      >
-        {(route) => (
-          <>
+    <li
+      style={props.position()}
+      data-testid="home-app"
+      data-app-state={props.app.state}
+      data-app-opens={Boolean(route()) ? "true" : "false"}
+      data-capsule-id={props.app.id}
+    >
+      <span class="av-tile-wrap">
+        <a
+          class="av-tile"
+          classList={{ "av-tile-waiting": homeAppWaiting(props.app) }}
+          href={anchor()?.href ?? pageHref()}
+          target={anchor()?.target}
+          rel={anchor()?.rel}
+          data-open-route={route()?.kind}
+          aria-label={route() ? openRouteAria(route()!, name()) : name()}
+          aria-describedby={describedBy()}
+          title={name()}
+        >
+          <span class="av-tile-face">
+            <AppFace
+              class="av-tile-icon"
+              imageFrameClass="av-tile-icon-image"
+              monogramFrameClass={kindClass(props.app.category)}
+              imageClass="av-tile-image"
+              emojiClass="av-tile-emoji"
+              monogramClass="av-tile-mono"
+              name={name()}
+              iconUrl={props.app.iconUrl ?? icon().imageSrc}
+              emoji={icon().emoji}
+            />
+            <Show when={mark()}>
+              {(state) => <span class={`av-tile-dot av-tile-dot-${state().kind}`} aria-hidden="true" />}
+            </Show>
+          </span>
+          <span class="av-tile-label">
+            <span class="av-tile-name">{name()}</span>
+            <Show when={describedBy()}>
+              <span class="av-tile-captions" id={captionId}>
+                <Show when={mark()}>
+                  {(state) => <span class={`av-tile-state av-tile-state-${state().kind}`}>{t(state().label)}</span>}
+                </Show>
+                <Show when={shared()}>
+                  <span class="av-tile-state">{props.app.ownerDisplayName ? t("app.sharing.sharedBy", { name: props.app.ownerDisplayName }) : t("apps.shared")}</span>
+                </Show>
+              </span>
+            </Show>
+          </span>
+        </a>
+        <Show when={settings() || route()}>
+          <span class="av-tile-actions">
             <a
-              class={tileClass()}
-              {...openRouteAnchor(route())}
-              data-open-route={route().kind}
-              aria-label={openRouteAria(route(), name())}
-              aria-describedby={describedBy()}
+              class="av-tile-manage"
+              href={settings() ? appPageHref(props.app.id, "settings") : pageHref()}
+              aria-label={t(settings() ? "apps.settingsAria" : "apps.manageAria", { name: name() })}
             >
-              {body()}
+              <Settings2 size={13} aria-hidden="true" />
+              <span>{t(settings() ? "app.settings.title" : "apps.manage")}</span>
             </a>
-            <span class="av-tile-actions">
-              {/* Healthy apps go straight to settings; an app needing attention
-                  opens its overview so its next action stays visible. */}
-              <a
-                class="av-tile-manage"
-                href={settingsAvailable() ? appPageHref(props.app.inst.id, "settings") : pageHref()}
-                aria-label={t(settingsAvailable() ? "apps.settingsAria" : "apps.manageAria", { name: name() })}
-              >
-                <Settings2 size={13} aria-hidden="true" />
-                <span>{t(settingsAvailable() ? "app.settings.title" : "apps.manage")}</span>
-              </a>
-            </span>
-          </>
-        )}
-      </Show>
-    </span>
+          </span>
+        </Show>
+      </span>
+    </li>
   );
 }
 
 function LauncherSkeleton() {
   return (
     <ul class="av-launcher" aria-hidden="true">
-      <For each={Array.from({ length: 6 })}>
-        {() => (
-          <li>
-            <span class="av-tile">
-              <span class="tg-skel av-tile-skel" />
-            </span>
-          </li>
-        )}
+      <For each={[0, 1, 2, 3, 4, 5]}>
+        {() => <li><span class="av-tile"><span class="tg-skel av-tile-skel" /></span></li>}
       </For>
     </ul>
   );
 }
 
-/** No apps have been installed yet. */
 function AppStartPanel() {
   return (
     <section class="av-start" aria-label={t("apps.start.aria")}>

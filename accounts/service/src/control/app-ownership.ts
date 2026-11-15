@@ -1,5 +1,4 @@
 /** Per-app account control routes. Durable mutations belong to AppOwnershipOperations. */
-import type { CapsuleAppState, CapsuleAppAction } from "takosumi-contract/capsules";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AppAccess, AppAccessResolver } from "../../../../contract/app-access.ts";
 import { errorJson, json, methodNotAllowed, readJsonObject } from "../http-helpers.ts";
@@ -7,7 +6,7 @@ import { appOwnershipMutationsFrozenResponse } from "../app-ownership-mutations-
 import { bearerAppAllows } from "../account-session.ts";
 import type { ControlDispatchContext } from "./shared.ts";
 import { controlPlaneUnavailable } from "./shared.ts";
-import { readCapsuleAppView } from "./capsule-app.ts";
+import { readCapsuleAppSummaries, readCapsuleAppView } from "./capsule-app.ts";
 import { AppAuthorizationError } from "../../../../core/domains/app-authorization/errors.ts";
 
 export interface AppMemberRecord {
@@ -196,33 +195,20 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
   const capsules = liveAccesses.length > 0
     ? await ctx.operations.capsules.getCapsulesByIds(liveAccesses.map((entry) => entry.capsuleId))
     : [];
-  const capsuleById = new Map(capsules.map((capsule) => [capsule.id, capsule]));
-  const owners = new Map<string, ReturnType<typeof ctx.store.findAccount>>();
-  const apps = await Promise.all(liveAccesses.map(async (live) => {
-    const capsule = capsuleById.get(live.capsuleId);
-    if (!capsule) return undefined;
-    if (ctx.session.workspaceId && capsule.workspaceId !== ctx.session.workspaceId) return undefined;
-    if (capsule.status === "destroyed") return undefined;
-    let ownerRead = owners.get(live.ownerAccountId);
-    if (!ownerRead) {
-      ownerRead = ctx.store.findAccount(live.ownerAccountId as TakosumiSubject);
-      owners.set(live.ownerAccountId, ownerRead);
-    }
-    const [view, owner] = await Promise.all([
-      readCapsuleAppView(ctx, capsule, Date.now()),
-      ownerRead,
-    ]);
-    return {
-      capsuleId: capsule.id,
-      name: capsule.name,
-      ...(view.displayName ? { displayName: view.displayName } : {}),
-      ...(view.iconUrl ? { iconUrl: view.iconUrl } : {}),
-      role: live.role,
-      ownerDisplayName: owner?.displayName?.trim() || live.ownerAccountId,
-      state: view.state as CapsuleAppState,
-      primaryAction: view.primaryAction as CapsuleAppAction,
-    };
-  }));
+  const visible = capsules.filter((capsule) => capsule.status !== "destroyed" &&
+    (!ctx.session.workspaceId || capsule.workspaceId === ctx.session.workspaceId));
+  const [summaries, profiles] = await Promise.all([
+    readCapsuleAppSummaries(ctx, visible, Date.now()),
+    Promise.all([...new Set(liveAccesses.filter((access) => visible.some((capsule) => capsule.id === access.capsuleId))
+      .map((access) => access.ownerAccountId))].map(async (id) => [id, await ctx.store.findAccount(id as TakosumiSubject)] as const)),
+  ]);
+  const byId = new Map(summaries.map((view) => [view.capsuleId, view]));
+  const owners = new Map(profiles);
+  const apps = liveAccesses.flatMap((access) => {
+    const view = byId.get(access.capsuleId);
+    return view ? [{ ...view, role: access.role,
+      ownerDisplayName: owners.get(access.ownerAccountId)?.displayName?.trim() || access.ownerAccountId }] : [];
+  });
   return json({
     apps: apps.filter((entry) => entry !== undefined),
     ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),

@@ -1308,7 +1308,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(page.getByRole("heading", { name: "App not found" })).toHaveCount(0);
     });
 
-    test("Home shows every accessible app with its state and opens only apps with a screen", async ({ page }) => {
+    test("Home preserves app icons and opens only authorized screens", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
@@ -1340,8 +1340,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const tiles = page.getByTestId("home-app");
       await expect(tiles).toHaveCount(6);
-      // Usable apps first in name order; then the ones that cannot be used
-      // yet, what needs the person first. None is folded away.
+      // Pending and stopped apps keep their icons, after usable apps.
       await expect(tiles.nth(0)).toContainText(PORTABLE_EXPECTATIONS.appName);
       await expect(tiles.nth(0)).toHaveAttribute("data-app-opens", "true");
       await expect(tiles.nth(1)).toHaveAttribute("data-app-state", "update_available");
@@ -1349,21 +1348,17 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(tiles.nth(3)).toHaveAttribute("data-app-state", "installing");
       await expect(tiles.nth(4)).toHaveAttribute("data-app-state", "uninstalling");
       await expect(tiles.nth(5)).toHaveAttribute("data-app-state", "stopped");
-      await expect(page.locator(".av-section-head-count")).toHaveText("6");
       const tile = (name: string) => tiles.filter({ hasText: name });
       await expect(tile("Mail Relay")).toContainText("Needs attention");
       await expect(tile("Team Blog")).toContainText("Update available");
       await expect(tile("Chat")).toContainText("Installing");
       await expect(tile("Old Wiki")).toContainText("Uninstall scheduled");
-      await expect(tile("Object Storage")).toContainText("Stopped");
       // Only the app with an authorized screen opens; it keeps a link to its page.
       const office = tile(PORTABLE_EXPECTATIONS.appName);
       await expect(office.getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in a new tab` })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
       await expect(office.getByRole("link", { name: `Settings for ${PORTABLE_EXPECTATIONS.appName}` })).toHaveAttribute("href", "/apps/cap_repository_office#settings");
       await expect(office.locator(".av-tile-icon")).toHaveCSS("opacity", "1");
       // Every other tile opens the app page; the state is its description.
-      await expect(tile("Object Storage").getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
-      await expect(tile("Object Storage").getByRole("link", { name: "Object Storage", exact: true })).toHaveAttribute("href", "/apps/cap_storage");
       const mail = tile("Mail Relay").getByRole("link", { name: "Mail Relay", exact: true });
       await expect(mail).toHaveAttribute("href", "/apps/cap_mail");
       await expect(mail).toHaveAccessibleDescription("Needs attention");
@@ -1372,9 +1367,152 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(tile("Team Blog").locator(".av-tile-icon")).toHaveCSS("opacity", "1");
       await expect(page.getByTestId("home-apps").getByRole("link", { name: "Find apps", exact: true })).toHaveAttribute("href", "/new");
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+      await expect(tile("Object Storage")).toContainText("Stopped");
+      await expect(tile("Object Storage").getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
+      await expect(tile("Object Storage").getByRole("link", { name: "Object Storage", exact: true })).toHaveAttribute("href", "/apps/cap_storage");
+      await expect(tile("Mail Relay").locator(".av-tile-dot")).toBeVisible();
+      await page.setViewportSize({ width: 1200, height: 800 });
+      const officeIcon = await office.locator(".av-tile-icon").boundingBox();
+      const blogIcon = await tile("Team Blog").locator(".av-tile-icon").boundingBox();
+      expect(officeIcon!.width).toBeGreaterThan(96);
+      expect(officeIcon!.width).toBe(officeIcon!.height);
+      expect(officeIcon!.y).toBe(blogIcon!.y);
+      expect(officeIcon!.x).toBeLessThan(blogIcon!.x);
       await capture(page, "home-mixed");
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
+    });
+
+    test("Home scrolls continuously across 300 apps without detail requests", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const ids = Array.from({ length: 300 }, (_, i) => `cap_library_${String(i).padStart(3, "0")}`);
+      const apps = ids.map((capsuleId, i) => ({
+        capsuleId, name: i === 299 ? "Aardvark" : `Library app ${String(i).padStart(3, "0")}`, role: "owner", state: "installed", primaryAction: "open",
+        screens: [{ interfaceId: `if_${capsuleId}`, name: "app.launcher", title: `Library app ${String(i).padStart(3, "0")}`, url: PORTABLE_EXPECTATIONS.appUrl }],
+      }));
+      const pages: number[] = [];
+      const details: string[] = [];
+      const writes: string[] = [];
+      page.on("request", (request) => {
+        const path = new URL(request.url()).pathname;
+        if (path.startsWith("/api/v1/") && request.method() !== "GET") writes.push(request.method());
+        if (/\/capsules\/[^/]+\/app$/u.test(path)) details.push(path);
+      });
+      let releaseTail!: () => void;
+      const tailReady = new Promise<void>((resolve) => { releaseTail = resolve; });
+      await page.route("**/api/v1/apps**", async (route) => {
+        const offset = Number(new URL(route.request().url()).searchParams.get("cursor") ?? 0);
+        pages.push(offset);
+        if (offset === 50) await tailReady;
+        await route.fulfill({ json: { apps: apps.slice(offset, offset + 50),
+          ...(offset + 50 < apps.length ? { nextCursor: String(offset + 50) } : {}) } });
+      });
+      const rows = page.getByTestId("home-app");
+      try {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+        const first = rows.filter({ hasText: "Library app 000" });
+        await expect(first.getByRole("link", { name: "Open Library app 000 in a new tab" })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+        expect(pages).toEqual([0]);
+        await expect(page.getByRole("button", { name: "More apps", exact: true })).toHaveCount(0);
+        const before = await first.boundingBox();
+        await first.locator("a").first().focus();
+        await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }));
+        await expect.poll(() => pages).toEqual([0, 50]);
+        expect(await rows.count()).toBeLessThan(60);
+        await expect(first.locator("a").first()).toBeFocused();
+        releaseTail();
+        await expect(rows.filter({ hasText: "Library app 050" })).toHaveCount(1);
+        await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+        await expect(first).toBeVisible();
+        await expect.poll(() => first.boundingBox()).toEqual(before);
+
+        const search = page.getByRole("searchbox", { name: "Search your apps" });
+        await search.fill("Aardvark");
+        await expect(rows).toHaveCount(1);
+        await expect(rows.getByRole("link", { name: "Open Aardvark in a new tab" })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+        expect(pages).toEqual([0, 50, 100, 150, 200, 250]);
+        await page.getByRole("button", { name: "Clear search" }).click();
+        await expect(first).toBeVisible();
+        expect(await rows.count()).toBeLessThan(60);
+        expect(details).toEqual([]);
+        expect(writes).toEqual([]);
+      } finally { releaseTail(); }
+    });
+
+    test("Home retries an incomplete collection without requesting app details", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      let reads = 0;
+      const details: string[] = [];
+      page.on("request", (request) => { if (/\/capsules\/[^/]+\/app$/u.test(new URL(request.url()).pathname)) details.push(request.url()); });
+      await page.route("**/api/v1/apps", (route) => route.fulfill({ json: { apps: [{
+        capsuleId: "cap_partial_collection", name: "Fixture", role: "owner", state: "installed", primaryAction: "open",
+        screens: ++reads === 1 ? [] : [{ interfaceId: "if_fixture", name: "app.launcher", url: PORTABLE_EXPECTATIONS.appUrl }],
+        ...(reads === 1 ? { incomplete: ["screens"] } : {}),
+      }] } }));
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await expect(page.getByText("Some launch links couldn't be loaded.")).toBeVisible();
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(page.getByRole("link", { name: "Open Fixture in a new tab" })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+      await expect(page.getByText("Some launch links couldn't be loaded.")).toHaveCount(0);
+      expect(reads).toBe(2);
+      expect(details).toEqual([]);
+    });
+
+    test("Home keeps long localized names and captions inside their rows", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      const apps = Array.from({ length: 60 }, (_, i) => ({
+        capsuleId: `cap_long_${i}`, name: `共有されたアプリのとても長い名前を持つテスト ${i}`, role: "member", ownerDisplayName: "とても長い名前の共有元チームの担当者",
+        state: "needs_attention", primaryAction: "retry", screens: [{ interfaceId: `if_long_${i}`, name: "app.launcher", url: PORTABLE_EXPECTATIONS.appUrl }],
+      }));
+      await page.route("**/api/v1/apps", (route) => route.fulfill({ json: { apps } }));
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+        await page.setViewportSize(size);
+        const columns = () => page.locator(".av-home-grid").evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").length);
+        if (size.width > 640) await expect.poll(columns).toBeGreaterThan(1);
+        else {
+          await expect.poll(columns).toBe(1);
+          await expect.poll(() => page.getByTestId("home-app").evaluateAll((tiles) => new Set(tiles.map((tile) => Math.round(tile.getBoundingClientRect().x))).size)).toBe(1);
+        }
+        await expect.poll(() => page.getByTestId("home-app").evaluateAll((tiles) => tiles.every((tile) => {
+          const row = tile.getBoundingClientRect();
+          const content = tile.querySelector(".av-tile-wrap")!.getBoundingClientRect();
+          return content.bottom <= row.bottom + 1 && content.top >= row.top - 1;
+        }))).toBe(true);
+        await expectNoHorizontalOverflow(page, "long Home names");
+      }
+    });
+
+    test("Home keeps a usable screen during a partial read and retries only that app", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      let inventoryReads = 0;
+      let appReads = 0;
+      const id = "cap_library_partial";
+      await page.route("**/api/v1/apps", (route) => {
+        inventoryReads++;
+        return route.fulfill({ json: { apps: [
+          { capsuleId: id, name: "Fixture app", role: "owner", state: "installed", primaryAction: "open" },
+        ] } });
+      });
+      await page.route(`**/api/v1/capsules/${id}/app`, (route) => {
+        appReads++;
+        return route.fulfill({ json: { app: appView(id, "Fixture app", {
+          incomplete: appReads === 1 ? ["screens"] : ["version"],
+          screens: [
+            { interfaceId: "if_invalid", name: "invalid", url: "not-a-url" },
+            { interfaceId: "if_fixture", name: "app.launcher", title: "Fixture app", url: PORTABLE_EXPECTATIONS.appUrl },
+          ],
+        }) } });
+      });
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const open = page.getByRole("link", { name: "Open Fixture app in a new tab" });
+      await expect(open).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+      await expect(page.getByText("Some launch links couldn't be loaded.")).toBeVisible();
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect.poll(() => appReads).toBe(2);
+      await expect(page.getByText("Some launch links couldn't be loaded.")).toHaveCount(0);
+      await expect(open).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+      expect(inventoryReads).toBe(1);
     });
 
     test("Home keeps app icons, searches locally and goes straight to settings", async ({ page, baseURL }) => {

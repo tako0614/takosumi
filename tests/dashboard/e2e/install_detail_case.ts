@@ -1129,7 +1129,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     async function expectHomeWithoutRemovedApp(page: Page): Promise<void> {
       await expect(page).toHaveURL(/\/$/u);
       await expect(page.getByTestId("app-page")).toHaveCount(0);
-      await expect(page.locator("section.av-start")).toBeVisible();
+      await expect(page.getByRole("region", { name: "First app" })).toBeVisible();
       await expect(page.locator(`[data-testid="home-app"][data-capsule-id="${capId}"]`)).toHaveCount(0);
     }
     test("uninstalling a never-applied app removes it at once and returns home", async ({ page }) => {

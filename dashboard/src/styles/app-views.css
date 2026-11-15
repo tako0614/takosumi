@@ -1124,3 +1124,17 @@
   .av-tile:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
   .av-tile:focus-visible .av-tile-icon { outline: none; }
 }
+
+/* Stable row geometry lets Home mount only the rows around the viewport. */
+.av-home-grid { --home-column-min: 128px; grid-auto-rows: 18rem; padding-block: 0; align-content: start; overflow-anchor: none; }
+.av-home-grid > li { align-items: flex-start; }
+.av-home-grid .av-tile-state { -webkit-line-clamp: 1; }
+.av-home-grid .av-tile-name { display: -webkit-box; overflow: hidden; }
+.av-home-loading { text-align: center; color: var(--tg-fg-muted); }
+@media (max-width: 720px) {
+  .av-home-grid { --home-column-min: 104px; }
+}
+@media (max-width: 640px) {
+  .av-home-grid { --home-column-min: 100%; grid-auto-rows: 132px; }
+  .av-home-grid > li { align-items: center; }
+}

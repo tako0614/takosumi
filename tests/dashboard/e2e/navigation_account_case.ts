@@ -255,9 +255,9 @@ export function registerNavigationAccountCases(mode: string): void {
       });
       await page.goto("/", { waitUntil: "domcontentloaded" });
       await expect(page.getByTestId("home-app")).toHaveCount(9);
+      await expect(page.getByTestId("home-apps")).toContainText("一部のアプリの起動情報を読み込めませんでした");
       expect(maximum).toBeLessThanOrEqual(4);
       expect(maximum).toBeGreaterThan(1);
-      await expect(page.getByTestId("home-apps")).toContainText("一部のアプリの画面を読み込めませんでした");
     });
 
     test("接続 shows the apps using each connection and removal names them", async ({ page }) => {
