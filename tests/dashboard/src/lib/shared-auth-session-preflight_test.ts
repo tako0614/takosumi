@@ -140,6 +140,59 @@ test("an explicit retry after initial 503 rechecks health before mandatory canon
   expect(calls).toEqual([healthPath, healthPath, bootstrapPath]);
 });
 
+const hostedSessionUnavailable = () =>
+  Response.json({ error: { code: "oidc_unavailable" } }, { status: 503 });
+
+test("a transient Hosted session check recovers on open before dispatching canonical reads", async () => {
+  const calls: string[] = [];
+  let checks = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path === healthPath) {
+      return ++checks < 3
+        ? hostedSessionUnavailable()
+        : Response.json({ authenticated: true });
+    }
+    if (path === workspacePath) return Response.json({ ok: true });
+    throw new Error(`unexpected request: ${path}`);
+  }) as typeof fetch;
+  const opening = probeInitialSharedAuthSession();
+  const canonical = controlFetch(workspacePath);
+  const [health, response] = await Promise.all([opening, canonical]);
+  expect(health.route).toBe("present");
+  expect(response).toEqual({ ok: true });
+  expect(calls).toEqual([healthPath, healthPath, healthPath, workspacePath]);
+});
+
+test("a retry after Hosted unavailability cannot turn an absent route into an OSS fallback", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path !== healthPath) throw new Error("canonical request escaped");
+    return calls.length === 1
+      ? hostedSessionUnavailable()
+      : Response.json({ error: "not_found" }, { status: 404, headers: absence });
+  }) as typeof fetch;
+  await expect(probeInitialSharedAuthSession()).rejects.toMatchObject({ status: 503 });
+  await expect(controlFetch(workspacePath)).rejects.toMatchObject({ status: 503 });
+  expect(calls).toEqual([healthPath, healthPath]);
+});
+
+test("persistent Hosted unavailability stops retrying and never dispatches the protected request", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path !== healthPath) throw new Error("canonical request escaped");
+    return hostedSessionUnavailable();
+  }) as typeof fetch;
+  await expect(probeInitialSharedAuthSession()).rejects.toMatchObject({ status: 503 });
+  await expect(controlFetch(workspacePath)).rejects.toMatchObject({ status: 503 });
+  expect(calls).toEqual(Array(4).fill(healthPath));
+});
+
 test("an established Hosted route cannot be downgraded by a later initial 404", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
