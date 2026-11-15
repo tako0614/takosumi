@@ -5,28 +5,30 @@ import { authLanguage, authPage, escapeAuthHtml as escapeHtml } from "../../../a
 const stagingIssuer = "https://auth-staging.takos.jp";
 const portalCopy = {
   en: {
-    title: "Sign in to Takos",
+    title: "Sign in",
     stage: "Staging",
     notFound: "Not found",
     method: "Use a GET request to open sign-in.",
     invalid: "This sign-in link is invalid. Start sign-in again from Takosumi Hosted or Takoserver.",
     unavailable: "Sign-in is temporarily unavailable. Try again later from your application.",
     fresh: "Confirm a fresh sign-in to continue to your application.",
-    choose: "Choose your sign-in provider to continue to your application.",
-    start: "Start sign-in from Takosumi Hosted or Takoserver. This staging issuer provides the configured sign-in methods below.",
+    choose: "Use your Takos account with Takosumi and Takoserver.",
+    start: "Start sign-in from Takosumi Hosted or Takoserver.",
+    methods: "Sign-in methods",
     githubFresh: "GitHub cannot confirm fresh credential entry for this request. Use Google to confirm your sign-in.",
     provider: (label: string) => `Continue with ${label}`,
   },
   ja: {
-    title: "Takos にサインイン",
+    title: "サインイン",
     stage: "ステージング",
     notFound: "ページが見つかりません。",
     method: "サインイン画面は GET で開いてください。",
     invalid: "このサインインリンクは無効です。Takosumi Hosted または Takoserver からやり直してください。",
     unavailable: "現在サインインできません。時間をおいて、元のアプリからやり直してください。",
     fresh: "アプリに戻る前に、もう一度本人確認をしてください。",
-    choose: "続けるには、サインイン方法を選んでください。",
-    start: "Takosumi Hosted または Takoserver からサインインを始めてください。この環境では以下の方法が使えます。",
+    choose: "ひとつの Takos アカウントで、Takosumi と Takoserver を使えます。",
+    start: "Takosumi または Takoserver を開いて、サインインを始めてください。",
+    methods: "サインイン方法",
     githubFresh: "GitHub ではこの操作に必要な再認証を確認できません。Google でサインインしてください。",
     provider: (label: string) => `${label} で続ける`,
   },
@@ -74,9 +76,9 @@ export async function handleStagingLoginPortal(input: {
     if (providers.length === 0) return portalResponse(input.request, copy.unavailable, 503);
     const choices = providers.map((provider) => {
       const label = escapeHtml(provider.label);
-      if (!continuation.returnTo) return `<li>${label}</li>`;
+      if (!continuation.returnTo) return `<li class="auth-provider-label">${label}</li>`;
       if (continuation.fresh && provider.id === "github") {
-        return `<li><button class="auth-button" type="button" disabled>${label}</button><p class="auth-hint">${copy.githubFresh}</p></li>`;
+        return `<li><button class="auth-button auth-provider-choice" type="button" disabled>${label}</button><p class="auth-hint">${copy.githubFresh}</p></li>`;
       }
       const target = new URL("/oauth/upstream/authorize", stagingIssuer);
       target.searchParams.set("provider", provider.id);
@@ -85,7 +87,7 @@ export async function handleStagingLoginPortal(input: {
         target.searchParams.set("prompt", "login");
         target.searchParams.set("max_age", continuation.maxAge ?? "0");
       }
-      return `<li><a class="auth-button" href="${escapeHtml(target.pathname + target.search)}">${escapeHtml(copy.provider(provider.label))}</a></li>`;
+      return `<li><a class="auth-button auth-provider-choice" href="${escapeHtml(target.pathname + target.search)}">${escapeHtml(copy.provider(provider.label))}</a></li>`;
     }).join("");
     const explanation = continuation.returnTo ? (continuation.fresh ? copy.fresh : copy.choose) : copy.start;
     return portalResponse(input.request, explanation, 200, {}, `<ul class="auth-providers">${choices}</ul>`);
@@ -200,7 +202,7 @@ function portalResponse(request: Request, message: string, status: number, extra
   const copy = portalCopy[language];
   const nonce = crypto.randomUUID();
   const html = authPage({ language, nonce, title: copy.title, badge: copy.stage,
-    body: `<p class="auth-summary">${escapeHtml(message)}</p>${choices}` });
+    description: message, taskTitle: copy.methods, body: choices });
   return new Response(request.method === "HEAD" ? null : html, {
     status,
     headers: {

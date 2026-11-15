@@ -1982,17 +1982,17 @@ function hostedConsentPage(
   const stage = url.origin === "https://auth-staging.takos.jp";
   const stageClientName = stage && client.clientId === "takosumi-hosted-staging-v1"
     ? "Takosumi" : stage && client.clientId === "takoserver-console-staging-v1" ? "Takoserver" : undefined;
-  const name = escapeAuthHtml(stageClientName ?? client.displayName ?? client.clientId);
+  const name = stageClientName ?? client.displayName ?? client.clientId;
   const scopes = NATIVE_CONSENT_COPY[language].scopes;
   const permissions = scope.split(/\s+/u).filter(Boolean).map((item) =>
     `<li>${escapeAuthHtml(Object.hasOwn(scopes, item) ? scopes[item]! : item)}</li>`).join("");
   const title = ja ? "サインインを続ける" : "Continue sign-in";
-  const body = `<p class="auth-summary">${ja ? `${name} に次のアクセスを許可しますか？` : `Allow ${name} to access the following?`}</p>` +
-    `<ul class="auth-permissions">${permissions}</ul>` +
-    `<p class="auth-hint">${ja ? "戻り先" : "Returns to"}：${escapeAuthHtml(redirect.host)}</p>` +
+  const description = ja ? `${name} に次のアクセスを許可しますか？` : `Allow ${name} to access the following?`;
+  const body = `<ul class="auth-permissions">${permissions}</ul>` +
+    `<dl class="auth-context"><dt>${ja ? "戻り先" : "Returns to"}</dt><dd>${escapeAuthHtml(redirect.host)}</dd></dl>` +
     `<form method="post" action="${escapeAuthHtml(url.pathname + url.search)}"><input type="hidden" name="consent_transaction" value="${escapeAuthHtml(transaction)}">` +
     `<div class="actions"><button class="auth-button auth-button--primary" type="submit" name="approve" value="yes">${ja ? "許可して続ける" : "Allow and continue"}</button></div></form>`;
-  return new Response(authPage({ language, nonce, title, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
+  return new Response(authPage({ language, nonce, title, description, taskTitle: NATIVE_CONSENT_COPY[language].can, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "content-language": language,
@@ -2206,7 +2206,7 @@ const NATIVE_CONSENT_COPY = {
     title: (client: string) => `${client} にアクセスを許可しますか？`,
     lead: (client: string, instance: string) => `${instance} のアカウントで、${client} が次のことをできるようになります。`,
     account: "アカウント",
-    can: "できること",
+    can: "許可するアクセス",
     scopes: {
       openid: "あなたのアカウントを識別する",
       profile: "名前とプロフィール画像を見る",
@@ -2226,7 +2226,7 @@ const NATIVE_CONSENT_COPY = {
     title: (client: string) => `Allow ${client} to access your account?`,
     lead: (client: string, instance: string) => `With your account on ${instance}, ${client} will be able to:`,
     account: "Account",
-    can: "It can",
+    can: "Requested access",
     scopes: {
       openid: "Identify your account",
       profile: "See your name and profile picture",
@@ -2267,14 +2267,13 @@ function nativeConsentPage(input: {
     ? redirect.origin
     : /^[a-z][a-z0-9+.-]*:$/u.test(redirect.protocol) ? redirect.protocol : "'none'";
   const body =
-    `<p>${escape(copy.lead(client, instance))}</p>` +
     `<ul class="auth-permissions">${scopes.map((scope) => `<li>${escape(Object.hasOwn(copy.scopes, scope) ? copy.scopes[scope]! : scope)} <small>(${escape(scope)})</small></li>`).join("")}</ul>` +
     (scopes.includes("capsules:write") ? `<p class="note">${escape(copy.runs)}</p>` : "") +
-    `<dl>${input.accountLabel ? `<dt>${escape(copy.account)}</dt><dd>${escape(input.accountLabel)}</dd>` : ""}<dt>${escape(copy.returnsTo)}</dt><dd>${escape(input.redirectUri)}</dd></dl>` +
+    `<dl class="auth-context">${input.accountLabel ? `<dt>${escape(copy.account)}</dt><dd>${escape(input.accountLabel)}</dd>` : ""}<dt>${escape(copy.returnsTo)}</dt><dd>${escape(input.redirectUri)}</dd></dl>` +
     `<p class="warn">${escape(copy.warning(client))}</p>` +
     `<form method="post" action="${escape(input.url.pathname + input.url.search)}"><input type="hidden" name="consent_transaction" value="${escape(input.transaction)}">` +
     `<div class="actions"><button class="auth-button" type="submit" name="decision" value="deny">${escape(copy.deny)}</button><button class="auth-button auth-button--primary" type="submit" name="decision" value="approve">${escape(copy.approve)}</button></div></form>`;
-  return new Response(authPage({ language, nonce, title: copy.title(client), body }), {
+  return new Response(authPage({ language, nonce, title: copy.title(client), description: copy.lead(client, instance), taskTitle: copy.can, body }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
