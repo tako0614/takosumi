@@ -4255,7 +4255,7 @@ test("OAuth popup callback broadcasts only an opaque attempt result with a nonce
 test("browser-bound provider callbacks reject copied authorization URLs before token exchange", async () => {
   let exchanges = 0;
   const operations = {
-    connectionOAuth: { helper: { browserBindingRequired: true, complete: async () => {
+    connectionOAuth: { helper: { browserBindingRequired: true, start: async () => ({ state: "state-fixture", authorizationUrl: "https://provider.example.test/authorize", expiresAt: new Date(Date.now() + 600_000).toISOString() }), complete: async () => {
       exchanges++;
       return { request: { scope: "personal", ownerAccountId: workspace.ownerUserId }, subject: workspace.ownerUserId };
     } } },
@@ -4267,6 +4267,10 @@ test("browser-bound provider callbacks reject copied authorization URLs before t
   const request = new Request(url);
   const store = new InMemoryAccountsStore();
   store.saveAccount({ subject: workspace.ownerUserId as never, createdAt: Date.now(), updatedAt: Date.now() });
+  store.saveAccountSession({ sessionId: "browser-binding-session", subject: workspace.ownerUserId as never, createdAt: Date.now(), expiresAt: Date.now() + 60_000 });
+  const startUrl = new URL("https://app.example.test/api/v1/connections/oauth/helper/start");
+  const started = await handleControlRoute({ request: new Request(startUrl, { method: "POST", headers: { cookie: "takosumi_session=browser-binding-session", "content-type": "application/json", origin: startUrl.origin }, body: "{}" }), url: startUrl, store, operations });
+  expect(started?.status).toBe(200);
   const refused = await handleControlRoute({ request, url, store, operations });
   expect(refused?.headers.get("location")).toContain("connection_error=oauth_failed");
   expect(exchanges).toBe(0);

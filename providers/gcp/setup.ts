@@ -40,6 +40,8 @@ export function googleOAuthDescriptorFromEnv(
     tokenUrl:
       env.TAKOSUMI_GCP_OAUTH_TOKEN_URL ?? "https://oauth2.googleapis.com/token",
     redirectUri,
+    pkce: true,
+    browserBindingRequired: true,
     scopes: splitScopes(
       env.TAKOSUMI_GCP_OAUTH_SCOPES ??
         "https://www.googleapis.com/auth/cloud-platform",
