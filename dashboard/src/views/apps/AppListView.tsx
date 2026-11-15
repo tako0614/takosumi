@@ -1,63 +1,27 @@
 import {
-  batch,
-  createEffect,
   createMemo,
-  createResource,
-  createSignal,
   createUniqueId,
   For,
+  type JSX,
   Match,
-  onCleanup,
   Show,
   Switch,
-  untrack,
 } from "solid-js";
 import { Plus, Search, Settings2, Sparkles, X } from "lucide-solid";
+import HomeAppGrid from "./HomeAppGrid.tsx";
+import { createHomeLibrary, type HomeApp } from "../../lib/home-apps.ts";
 import Page from "../account/components/auth/Page.tsx";
 import IncomingOwnershipTransfers from "./IncomingOwnershipTransfers.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { resolveAppIcon } from "../../lib/app-face.ts";
-import { currentWorkspaceId, selectAvailableWorkspaceId, setCurrentWorkspaceId } from "../../lib/workspace-state.ts";
-import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import { listCapsulesCached } from "../../lib/capsule-list.ts";
-import { getCapsuleAppWithSignal, listAccessibleAppsPage, type AccessibleApp } from "../../lib/control-api.ts";
-import { isVisibleServiceCapsule } from "../../lib/capsules-ui.ts";
-import { type AppState, appState, openableScreens } from "../../lib/app-page.ts";
-import { homeAppOpens, homeAppWaiting, sortHomeApps } from "../../lib/home-launcher.ts";
-import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
-import { locale, type MessageKey, t } from "../../i18n/index.ts";
+import { type AppState } from "../../lib/app-page.ts";
+import { homeAppOpens, homeAppWaiting } from "../../lib/home-launcher.ts";
+import { type MessageKey, t } from "../../i18n/index.ts";
 import { Button, Input, Toast } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { appPageHref } from "../../lib/app-links.ts";
 import { screenOpenRoute } from "../../lib/open-choice-state.ts";
 import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
-
-const PAGE_SIZE = 16;
-const SCREEN_READS_IN_FLIGHT = 4;
-
-interface HomeApp {
-  readonly id: string;
-  readonly name: string;
-  readonly displayName?: AccessibleApp["displayName"];
-  readonly iconUrl?: string;
-  readonly category?: string;
-  readonly role?: AccessibleApp["role"];
-  readonly ownerDisplayName?: string;
-  readonly state: AppState;
-  readonly surfaces: ReturnType<typeof openableScreens>;
-  readonly needsScreenRead?: boolean;
-}
-
-interface HomePage {
-  readonly apps: readonly HomeApp[];
-  readonly nextCursor?: string;
-  readonly surfacesFailed?: boolean;
-}
-
-interface ScreenRead {
-  readonly detail?: Pick<HomeApp, "surfaces" | "state" | "iconUrl" | "category">;
-  readonly failed: boolean;
-}
 
 type MarkKind = "alert" | "info" | "warn" | "quiet";
 const STATE_MARK: Readonly<Partial<Record<AppState, { readonly label: MessageKey; readonly kind: MarkKind }>>> = {
@@ -72,223 +36,12 @@ export default function AppListView() {
   return <Page title={t("apps.title")}>{() => <Inner />}</Page>;
 }
 
-function homeState(state: AccessibleApp["state"]): AppState {
-  switch (state) {
-    case "needs_attention": return "needs_attention";
-    case "update_available": return "update_available";
-    case "installing": case "updating": return "installing";
-    case "uninstalling": case "uninstall_scheduled": return "uninstalling";
-    case "uninstalled": case "stopped": return "stopped";
-    default: return "ready";
-  }
-}
-
-function fromSummary(entry: AccessibleApp): HomeApp {
-  const state = homeState(entry.state);
-  return {
-    id: entry.capsuleId, name: entry.name, displayName: entry.displayName, iconUrl: entry.iconUrl,
-    role: entry.role, ownerDisplayName: entry.ownerDisplayName, state, surfaces: [],
-    needsScreenRead: state === "ready" || state === "update_available" || state === "needs_attention",
-  };
-}
-
-/** Only absence of the account collection route selects the old Workspace list. */
-async function loadHome(workspaceId: string): Promise<HomePage> {
-  const first = await listAccessibleAppsPage();
-  if (first) return { ...first, apps: first.apps.map(fromSummary) };
-  const workspaces = await listWorkspacesCached();
-  const id = selectAvailableWorkspaceId(workspaceId, workspaces);
-  setCurrentWorkspaceId(id);
-  if (!id) return { apps: [] };
-  const [capsules, surfaces] = await Promise.all([
-    listCapsulesCached(id, { includeDestroyed: false }),
-    listAuthorizedUiSurfaces(id).then((value) => ({ value, failed: false }), () => ({ value: [], failed: true })),
-  ]);
-  const byApp = new Map<string, (typeof surfaces.value)[number][]>();
-  for (const surface of surfaces.value) {
-    const own = byApp.get(surface.capsuleId);
-    if (own) own.push(surface);
-    else byApp.set(surface.capsuleId, [surface]);
-  }
-  return {
-    apps: capsules.filter(isVisibleServiceCapsule).map((inst) => {
-      const own = byApp.get(inst.id) ?? [];
-      return { id: inst.id, name: inst.name, state: appState(inst), surfaces: own, category: own[0]?.category };
-    }),
-    surfacesFailed: surfaces.failed,
-  };
-}
-
-function homeAppName(app: HomeApp): string {
-  const label = app.displayName;
-  return (typeof label === "string" ? label : label?.[locale()]) ||
-    (app.surfaces.length === 1 ? app.surfaces[0]?.name : undefined) || app.name;
-}
-
-/** A summary row can link to its own page. Only an authorized screen can launch an app. */
-async function readScreen(app: HomeApp, signal: AbortSignal): Promise<ScreenRead> {
-  const view = await getCapsuleAppWithSignal(app.id, signal);
-  const surfaces = openableScreens(view.screens);
-  const state = view.state === "installed" && view.version.updateAvailable ? "update_available" : homeState(view.state);
-  return {
-    detail: { state, surfaces, iconUrl: app.iconUrl ?? view.iconUrl, category: view.screens[0]?.category },
-    failed: view.incomplete?.includes("screens") ?? false,
-  };
-}
-
 function Inner() {
-  const [home, { refetch }] = createResource(
-    () => ({ workspaceId: currentWorkspaceId() }),
-    ({ workspaceId }) => loadHome(workspaceId),
-  );
-  const [extra, setExtra] = createSignal<{
-    readonly pages: readonly (readonly HomeApp[])[];
-    readonly nextCursor?: string;
-  }>();
-  const [query, setQuery] = createSignal("");
-  const [page, setPage] = createSignal(0);
-  const [moreFailed, setMoreFailed] = createSignal(false);
-  const [loadingMore, setLoadingMore] = createSignal(false);
-  const [advancing, setAdvancing] = createSignal(false);
-  const [screens, setScreens] = createSignal(new Map<string, ScreenRead>());
-  const [retryScreens, setRetryScreens] = createSignal(0);
+  const { home, firstPage, cursor, apps, names, query, setQuery, term, matches,
+    setVisible, screens, loadingMore, moreFailed, failedScreens, retryVisible, refresh, loadNext } = createHomeLibrary();
   const titleId = createUniqueId();
   let searchInput: HTMLInputElement | undefined;
-  let pendingPage: Promise<boolean> | undefined;
-  let listRead = new AbortController();
-  const seenCursors = new Set<string>();
-  const retrying = new Set<string>();
-  onCleanup(() => listRead.abort());
-
-  const firstPage = () => home.error ? undefined : home.latest;
-  const cursor = () => extra() ? extra()?.nextCursor : firstPage()?.nextCursor;
-  const apps = createMemo(() => {
-    const byId = new Map<string, HomeApp>();
-    // Keep earlier pages in place when the server returns more apps.
-    for (const batch of [firstPage()?.apps ?? [], ...(extra()?.pages ?? [])]) {
-      for (const app of sortHomeApps(batch, homeAppName, locale())) {
-        if (!byId.has(app.id)) byId.set(app.id, app);
-      }
-    }
-    return [...byId.values()];
-  });
-  const names = createMemo(() => new Map(apps().map((app) => [app.id, homeAppName(app)])));
-  const term = createMemo(() => query().trim().toLocaleLowerCase(locale()));
-  const searchable = createMemo(() => apps().map((app) => ({
-    app,
-    keys: [names().get(app.id) ?? "", app.name, app.ownerDisplayName ?? ""].map((part) => part.toLocaleLowerCase(locale())),
-  })));
-  const matches = createMemo(() => {
-    const search = term();
-    return search
-      ? searchable().filter(({ keys }) => keys.some((part) => part.includes(search))).map(({ app }) => app)
-      : apps();
-  });
-  const visible = createMemo(() => matches().slice(page() * PAGE_SIZE, (page() + 1) * PAGE_SIZE), [], {
-    equals: (prev, next) => prev.length === next.length && prev.every((app, i) => app === next[i]),
-  });
-
-  function loadNext(): Promise<boolean> {
-    const next = cursor();
-    if (pendingPage) return pendingPage;
-    if (!next) return Promise.resolve(false);
-    const signal = listRead.signal;
-    setLoadingMore(true);
-    setMoreFailed(false);
-    pendingPage = listAccessibleAppsPage(next, signal).then((data) => {
-      if (signal.aborted || !data) return false;
-      if (data.nextCursor && (data.nextCursor === next || seenCursors.has(data.nextCursor))) {
-        setMoreFailed(true);
-        return false;
-      }
-      seenCursors.add(next);
-      setExtra((previous) => ({ pages: [...(previous?.pages ?? []), data.apps.map(fromSummary)], nextCursor: data.nextCursor }));
-      return true;
-    }, () => {
-      if (!signal.aborted) setMoreFailed(true);
-      return false;
-    }).finally(() => {
-      if (!signal.aborted) {
-        pendingPage = undefined;
-        setLoadingMore(false);
-      }
-    });
-    return pendingPage;
-  }
-
-  function changeQuery(value: string) {
-    batch(() => { setPage(0); setQuery(value); });
-  }
-  function clearSearch() { changeQuery(""); searchInput?.focus(); }
-  async function forward() {
-    const next = page() + 1;
-    const signal = listRead.signal;
-    const search = term();
-    setAdvancing(true);
-    try {
-      // An intervening server page may have no apps in the selected group.
-      while (matches().length <= next * PAGE_SIZE && cursor()) {
-        if (!await loadNext() || term() !== search) return;
-      }
-      if (!signal.aborted && matches().length > next * PAGE_SIZE) setPage(next);
-    } finally {
-      if (!signal.aborted) setAdvancing(false);
-    }
-  }
-  async function refresh() {
-    listRead.abort();
-    listRead = new AbortController();
-    seenCursors.clear();
-    retrying.clear();
-    pendingPage = undefined;
-    const requested = refetch();
-    batch(() => {
-      setExtra(undefined); setPage(0); setLoadingMore(false); setMoreFailed(false); setAdvancing(false);
-      setScreens(new Map()); setRetryScreens((n) => n + 1);
-    });
-    await requested;
-  }
-
-  // Browse one server page at a time. Search can cover every name by reading
-  // the remaining summaries, without fetching details for unrelated apps.
-  createEffect(() => {
-    if (term() && cursor() && !loadingMore() && !moreFailed() && !home.loading) void untrack(loadNext);
-  });
-
-  createEffect(() => {
-    retryScreens();
-    const shown = visible();
-    // Keep successful projections across pages, but cancel work
-    // for icons that leave the view. No late response can change the layout's order.
-    const pending = untrack(() => shown.filter((app) => app.needsScreenRead && (!screens().has(app.id) || retrying.has(app.id))));
-    const controller = new AbortController();
-    const { signal } = controller;
-    onCleanup(() => controller.abort());
-    let index = 0;
-    async function worker() {
-      while (index < pending.length && !signal.aborted) {
-        const app = pending[index++]!;
-        const result = await readScreen(app, signal).catch(() => ({ failed: true }));
-        if (!signal.aborted) {
-          retrying.delete(app.id);
-          setScreens((previous) => new Map(previous).set(app.id, result));
-        }
-      }
-    }
-    // Let the summary paint before kicking off the first detail batch.
-    if (pending.length === 0) return;
-    const timer = requestAnimationFrame(() => {
-      for (let i = 0; i < Math.min(SCREEN_READS_IN_FLIGHT, pending.length); i++) void worker();
-    });
-    onCleanup(() => cancelAnimationFrame(timer));
-  });
-
-  const failedScreens = () => visible().some((app) => screens().get(app.id)?.failed);
-  function retryVisible() {
-    for (const app of visible()) if (screens().get(app.id)?.failed) retrying.add(app.id);
-    setRetryScreens((n) => n + 1);
-  }
-  const hasNext = () => matches().length > (page() + 1) * PAGE_SIZE || Boolean(cursor());
+  function clearSearch() { setQuery(""); searchInput?.focus(); }
 
   return (
     <>
@@ -317,7 +70,7 @@ function Inner() {
                   aria-label={t("apps.search")}
                   placeholder={t("apps.search")}
                   value={query()}
-                  onInput={(event) => changeQuery(event.currentTarget.value)}
+                  onInput={(event) => setQuery(event.currentTarget.value)}
                   onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
                 />
                 <Show when={query()}>
@@ -341,36 +94,17 @@ function Inner() {
               <Show when={term() && !matches().length && !cursor()}>
                 <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
               </Show>
-              <ul class="av-launcher" aria-labelledby={titleId}>
-                <For each={visible()}>
-                  {(app) => <HomeAppTile name={names().get(app.id) ?? app.name} app={{ ...app, ...screens().get(app.id)?.detail }} />}
-                </For>
-                <Show when={!term()}>
-                  <li>
-                    <a class="av-tile av-tile-add" href="/new">
-                      <span class="av-tile-icon" aria-hidden="true"><Plus /></span>
-                      <span class="av-tile-name">{t("apps.browse")}</span>
-                    </a>
-                  </li>
-                </Show>
-              </ul>
-              <Show when={page() > 0 || hasNext() || loadingMore()}>
-                <nav class="av-launcher-pages" aria-label={t("apps.pages")}>
-                  <Show when={page() > 0}>
-                    <Button variant="secondary" size="sm" type="button" disabled={advancing()} onClick={() => setPage((n) => n - 1)}>
-                      {t("apps.previous")}
-                    </Button>
-                  </Show>
-                  <Show when={loadingMore()}>
-                    <span role="status">{t("common.loading")}</span>
-                  </Show>
-                  <Show when={hasNext() && (!term() || matches().length > (page() + 1) * PAGE_SIZE)}>
-                    <Button variant="secondary" size="sm" type="button" disabled={advancing()} onClick={() => void forward()}>
-                      {t("apps.next")}
-                    </Button>
-                  </Show>
-                </nav>
-              </Show>
+              <HomeAppGrid
+                apps={matches()} labelId={titleId}
+                onVisible={setVisible}
+                onNearEnd={() => { if (cursor() && !moreFailed() && !home.loading) void loadNext(); }}
+                render={(app, position) => <HomeAppTile position={position} name={names().get(app.id) ?? app.name} app={{ ...app, ...screens().get(app.id)?.detail }} />}
+                footer={!term() ? (position) => <li style={position()}><a class="av-tile av-tile-add" href="/new">
+                  <span class="av-tile-icon" aria-hidden="true"><Plus /></span>
+                  <span class="av-tile-name">{t("apps.browse")}</span>
+                </a></li> : undefined}
+              />
+              <Show when={loadingMore()}><p class="av-home-loading" role="status">{t("common.loading")}</p></Show>
             </Show>
           </Match>
         </Switch>
@@ -385,7 +119,7 @@ function kindClass(kind: string | undefined): string {
     : "av-tile-k-default";
 }
 
-function HomeAppTile(props: { readonly name: string; readonly app: HomeApp }) {
+function HomeAppTile(props: { readonly name: string; readonly app: HomeApp; readonly position: () => JSX.CSSProperties }) {
   const name = () => props.name;
   const icon = createMemo(() => {
     const surface = props.app.surfaces[0];
@@ -405,6 +139,7 @@ function HomeAppTile(props: { readonly name: string; readonly app: HomeApp }) {
 
   return (
     <li
+      style={props.position()}
       data-testid="home-app"
       data-app-state={props.app.state}
       data-app-opens={Boolean(route()) ? "true" : "false"}
@@ -420,6 +155,7 @@ function HomeAppTile(props: { readonly name: string; readonly app: HomeApp }) {
           data-open-route={route()?.kind}
           aria-label={route() ? openRouteAria(route()!, name()) : name()}
           aria-describedby={describedBy()}
+          title={name()}
         >
           <span class="av-tile-face">
             <AppFace

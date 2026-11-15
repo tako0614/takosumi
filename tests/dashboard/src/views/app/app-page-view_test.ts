@@ -204,7 +204,7 @@ describe("installed app page", () => {
     expect(ui).toContain('role="menuitem"');
     // Each screen opens along its route; the web (always, on a computer) in a new tab.
     expect(ui).toContain("const routeOf = (surface: OpenableScreen) => screenOpenRoute(props.capsuleId, surface);");
-    expect(ui).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
+    expect(readFileSync(resolve(root, "lib/app-launch-link.ts"), "utf8")).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
     expect(ui).toContain("{...openRouteAnchor(otherRoute())}");
   });
 

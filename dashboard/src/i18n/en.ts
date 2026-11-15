@@ -458,9 +458,6 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.start.titleEmpty": "Install your first app",
   "apps.start.bodyEmpty": "Choose one in the Store, or install from a Git repository link.",
   "apps.start.optionStore": "Find apps",
-  "apps.pages": "App list pages",
-  "apps.previous": "Previous",
-  "apps.next": "More apps",
   "apps.moreFailed": "Couldn't load more apps.",
   "apps.listIncomplete": "Some launch links couldn't be loaded.",
 

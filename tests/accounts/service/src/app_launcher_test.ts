@@ -174,6 +174,70 @@ async function fixture(options: { readonly delegate?: boolean; readonly endlessA
 }
 
 describe("account launcher", () => {
+  test("Home carries the same authorized screens without version reads or per-app config queries", async () => {
+    const h = await fixture();
+    const credential = h.headers.session(OWNER);
+    const detailResponse = await h.readResponse(credential, `/api/v1/capsules/${MINE}/app`);
+    expect(detailResponse.status).toBe(200);
+    const detail = (await detailResponse.json()).app;
+    let batches = 0;
+    let sourceReads = 0;
+    let configReads = 0;
+    const configs = h.core.capsules;
+    const batch = configs.getInstallConfigsByIds.bind(configs);
+    const config = configs.getInstallConfig.bind(configs);
+    configs.getInstallConfigsByIds = async (ids) => { batches++; return batch(ids); };
+    configs.getInstallConfig = async (id) => { configReads++; return config(id); };
+    h.core.getSource = async () => { sourceReads++; throw new Error("Home must not read source history"); };
+    const response = await h.readResponse(credential, "/api/v1/apps");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const app = body.apps.find((entry: { capsuleId: string }) => entry.capsuleId === MINE);
+    expect(app).toBeDefined();
+    expect(app.state).toBe(detail.state);
+    expect(app.primaryAction).toBe(detail.primaryAction);
+    expect(app.screens).toEqual(detail.screens);
+    expect(app).not.toHaveProperty("version");
+    expect(app).not.toHaveProperty("links");
+    expect(app).not.toHaveProperty("progress");
+    expect(sourceReads).toBe(0);
+    expect(configReads).toBe(0);
+    expect(batches).toBe(1);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  test("Home shares workspace inventories only inside a request and keeps failed screens explicit", async () => {
+    const h = await fixture();
+    let inventories = 0;
+    const readFailures = h.core.listInterfaceMaterializationFailures;
+    h.core.listInterfaceMaterializationFailures = async (...args) => { inventories++; return readFailures(...args); };
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async () => { throw new Error("fixture screen outage"); };
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const response = await h.readResponse(h.headers.session(OWNER), "/api/v1/apps");
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      const app = body.apps.find((entry: { capsuleId: string }) => entry.capsuleId === MINE);
+      expect(app.screens).toEqual([]);
+      expect(app.incomplete).toContain("screens");
+      expect(inventories).toBe(attempt);
+    }
+  });
+
+  test("launcher summaries preserve app-scoped credentials and do not include other apps' screens", async () => {
+    const h = await fixture();
+    for (const credential of [h.headers.session(MEMBER), h.headers.pat(OWNER, { appIds: [MINE] }), h.headers.oauth(OWNER, MINE)]) {
+      const response = await h.readResponse(credential, "/api/v1/apps");
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      for (const summary of body.apps) {
+        const detail = await h.readResponse(credential, `/api/v1/capsules/${summary.capsuleId}/app`);
+        expect(detail.status).toBe(200);
+        expect(summary.screens).toEqual((await detail.json()).app.screens);
+      }
+      if (credential.authorization) expect(body.apps.every((app: { capsuleId: string }) => app.capsuleId === MINE)).toBe(true);
+    }
+  });
+
   test("aggregate completion follows the actual route to all screens without a sticky warning on reload", async () => {
     const h = await fixture({ extraOwnSurfaces: 5 });
     const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);

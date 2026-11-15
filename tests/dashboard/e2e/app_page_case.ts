@@ -1383,79 +1383,103 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       traffic.assertNoFailures();
     });
 
-    test("Home renders before app details and bounds work across 300 apps", async ({ page }) => {
+    test("Home scrolls continuously across 300 apps without detail requests", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const ids = Array.from({ length: 300 }, (_, i) => `cap_library_${String(i).padStart(3, "0")}`);
       const apps = ids.map((capsuleId, i) => ({
         capsuleId, name: i === 299 ? "Aardvark" : `Library app ${String(i).padStart(3, "0")}`, role: "owner", state: "installed", primaryAction: "open",
+        screens: [{ interfaceId: `if_${capsuleId}`, name: "app.launcher", title: `Library app ${String(i).padStart(3, "0")}`, url: PORTABLE_EXPECTATIONS.appUrl }],
       }));
       const pages: number[] = [];
       const details: string[] = [];
       const writes: string[] = [];
       page.on("request", (request) => {
-        if (new URL(request.url()).pathname.startsWith("/api/v1/") && request.method() !== "GET") writes.push(request.method());
+        const path = new URL(request.url()).pathname;
+        if (path.startsWith("/api/v1/") && request.method() !== "GET") writes.push(request.method());
+        if (/\/capsules\/[^/]+\/app$/u.test(path)) details.push(path);
       });
-      let releaseDetails!: () => void;
-      const detailsReady = new Promise<void>((resolve) => { releaseDetails = resolve; });
       let releaseTail!: () => void;
       const tailReady = new Promise<void>((resolve) => { releaseTail = resolve; });
       await page.route("**/api/v1/apps**", async (route) => {
-        const path = new URL(route.request().url());
-        const offset = Number(path.searchParams.get("cursor") ?? 0);
+        const offset = Number(new URL(route.request().url()).searchParams.get("cursor") ?? 0);
         pages.push(offset);
         if (offset === 50) await tailReady;
-        await route.fulfill({ json: {
-          apps: apps.slice(offset, offset + 50),
-          ...(offset + 50 < apps.length ? { nextCursor: String(offset + 50) } : {}),
-        } });
-      });
-      await page.route("**/api/v1/capsules/*/app", async (route) => {
-        const id = new URL(route.request().url()).pathname.split("/")[4]!;
-        details.push(id);
-        const app = apps.find((entry) => entry.capsuleId === id)!;
-        await detailsReady;
-        await route.fulfill({ json: { app: appView(id, app.name, {
-          screens: [{ interfaceId: "if_library", name: "app.launcher", title: app.name, url: PORTABLE_EXPECTATIONS.appUrl }],
-        }) } });
+        await route.fulfill({ json: { apps: apps.slice(offset, offset + 50),
+          ...(offset + 50 < apps.length ? { nextCursor: String(offset + 50) } : {}) } });
       });
       const rows = page.getByTestId("home-app");
-      const first = rows.first();
       try {
         await page.goto("/", { waitUntil: "domcontentloaded" });
-        await expect(rows).toHaveCount(16);
-        await expect(first.getByRole("link", { name: "Library app 000", exact: true })).toHaveAttribute("href", "/apps/cap_library_000");
-        await expect.poll(() => details.length).toBe(4);
-        const before = await first.boundingBox();
-        expect(pages).toEqual([0]);
-
-        releaseDetails();
-        await expect(rows.last()).toHaveAttribute("data-app-opens", "true");
+        const first = rows.filter({ hasText: "Library app 000" });
         await expect(first.getByRole("link", { name: "Open Library app 000 in a new tab" })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
-        expect(await first.boundingBox()).toEqual(before);
-        expect(details).toEqual(ids.slice(0, 16));
-
-        await page.getByRole("button", { name: "More apps", exact: true }).click();
-        await expect(first).toHaveAttribute("data-capsule-id", ids[16]!);
-        await expect(rows.last()).toHaveAttribute("data-app-opens", "true");
         expect(pages).toEqual([0]);
-        expect(details).toEqual(ids.slice(0, 32));
+        await expect(page.getByRole("button", { name: "More apps", exact: true })).toHaveCount(0);
+        const before = await first.boundingBox();
+        await first.locator("a").first().focus();
+        await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" }));
+        await expect.poll(() => pages).toEqual([0, 50]);
+        expect(await rows.count()).toBeLessThan(60);
+        await expect(first.locator("a").first()).toBeFocused();
+        releaseTail();
+        await expect(rows.filter({ hasText: "Library app 050" })).toHaveCount(1);
+        await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+        await expect(first).toBeVisible();
+        await expect.poll(() => first.boundingBox()).toEqual(before);
 
         const search = page.getByRole("searchbox", { name: "Search your apps" });
         await search.fill("Aardvark");
-        await expect.poll(() => pages).toEqual([0, 50]);
-        await expect(rows).toHaveCount(0);
-        await expect(page.getByText("No matching apps.", { exact: false })).toHaveCount(0);
-        releaseTail();
         await expect(rows).toHaveCount(1);
-        await expect(first.getByRole("link", { name: "Open Aardvark in a new tab" })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+        await expect(rows.getByRole("link", { name: "Open Aardvark in a new tab" })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
         expect(pages).toEqual([0, 50, 100, 150, 200, 250]);
-        expect(details).toEqual([...ids.slice(0, 32), ids[299]]);
         await page.getByRole("button", { name: "Clear search" }).click();
-        await expect(first).toHaveAttribute("data-capsule-id", ids[0]!);
+        await expect(first).toBeVisible();
+        expect(await rows.count()).toBeLessThan(60);
+        expect(details).toEqual([]);
         expect(writes).toEqual([]);
-      } finally {
-        releaseDetails();
-        releaseTail();
+      } finally { releaseTail(); }
+    });
+
+    test("Home retries an incomplete collection without requesting app details", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      let reads = 0;
+      const details: string[] = [];
+      page.on("request", (request) => { if (/\/capsules\/[^/]+\/app$/u.test(new URL(request.url()).pathname)) details.push(request.url()); });
+      await page.route("**/api/v1/apps", (route) => route.fulfill({ json: { apps: [{
+        capsuleId: "cap_partial_collection", name: "Fixture", role: "owner", state: "installed", primaryAction: "open",
+        screens: ++reads === 1 ? [] : [{ interfaceId: "if_fixture", name: "app.launcher", url: PORTABLE_EXPECTATIONS.appUrl }],
+        ...(reads === 1 ? { incomplete: ["screens"] } : {}),
+      }] } }));
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await expect(page.getByText("Some launch links couldn't be loaded.")).toBeVisible();
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(page.getByRole("link", { name: "Open Fixture in a new tab" })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+      await expect(page.getByText("Some launch links couldn't be loaded.")).toHaveCount(0);
+      expect(reads).toBe(2);
+      expect(details).toEqual([]);
+    });
+
+    test("Home keeps long localized names and captions inside their rows", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      const apps = Array.from({ length: 60 }, (_, i) => ({
+        capsuleId: `cap_long_${i}`, name: `共有されたアプリのとても長い名前を持つテスト ${i}`, role: "member", ownerDisplayName: "とても長い名前の共有元チームの担当者",
+        state: "needs_attention", primaryAction: "retry", screens: [{ interfaceId: `if_long_${i}`, name: "app.launcher", url: PORTABLE_EXPECTATIONS.appUrl }],
+      }));
+      await page.route("**/api/v1/apps", (route) => route.fulfill({ json: { apps } }));
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+        await page.setViewportSize(size);
+        const columns = () => page.locator(".av-home-grid").evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").length);
+        if (size.width > 640) await expect.poll(columns).toBeGreaterThan(1);
+        else {
+          await expect.poll(columns).toBe(1);
+          await expect.poll(() => page.getByTestId("home-app").evaluateAll((tiles) => new Set(tiles.map((tile) => Math.round(tile.getBoundingClientRect().x))).size)).toBe(1);
+        }
+        await expect.poll(() => page.getByTestId("home-app").evaluateAll((tiles) => tiles.every((tile) => {
+          const row = tile.getBoundingClientRect();
+          const content = tile.querySelector(".av-tile-wrap")!.getBoundingClientRect();
+          return content.bottom <= row.bottom + 1 && content.top >= row.top - 1;
+        }))).toBe(true);
+        await expectNoHorizontalOverflow(page, "long Home names");
       }
     });
 

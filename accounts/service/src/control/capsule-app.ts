@@ -28,7 +28,7 @@ import {
   type CapsuleAppResponse,
   type CapsuleAdoptedSourceRevision,
 } from "takosumi-contract/capsules";
-import type { Capsule } from "takosumi-contract/install-configs";
+import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
 import type { CapsuleRequiredInterface, Interface, InterfaceLink } from "takosumi-contract/interfaces";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import {
@@ -159,11 +159,118 @@ async function optional<T>(read: () => Promise<T>): Promise<Optional<T>> {
   }
 }
 
+/** Share repeated inventory reads within one response, never between viewers/requests. */
+function appReadInventory(operations: ControlPlaneOperations) {
+  function once<K, V>(read: (key: K) => Promise<V>) {
+    const pending = new Map<K, Promise<V>>();
+    return (key: K): Promise<V> => {
+      let value = pending.get(key);
+      if (!value) { value = read(key); pending.set(key, value); }
+      return value;
+    };
+  }
+  const connections = once((workspace: string) => operations.connections.listProviderConnections(workspace));
+  return {
+    connections,
+    screenFailures: once((workspace: string) => operations.listInterfaceMaterializationFailures(workspace, { limit: APP_SCREEN_FAILURE_LIMIT })),
+    ownerConnections: once(async (owner: string) => {
+      const result: Awaited<ReturnType<typeof connections>>[number][] = [];
+      if (operations.accountResources) {
+        let cursor: string | undefined;
+        const seen = new Set<string>();
+        do {
+          if (seen.size >= 100) throw new Error("owner connection page limit exceeded");
+          const page = await operations.accountResources.listConnections(owner, { limit: 100, ...(cursor ? { cursor } : {}) });
+          result.push(...page.items);
+          cursor = page.nextCursor;
+          if (cursor && seen.has(cursor)) throw new Error("owner connection cursor repeated");
+          if (cursor) seen.add(cursor);
+        } while (cursor);
+      } else {
+        for (const workspace of await operations.workspaces.listWorkspacesByOwner(owner)) {
+          if (workspace.ownerUserId !== owner || workspace.archivedAt) continue;
+          result.push(...await connections(workspace.id));
+        }
+      }
+      return result.filter((connection) => (connection.scope === "personal" || connection.scope === "workspace") && connection.ownerAccountId === owner);
+    }),
+  };
+}
+type AppReadInventory = ReturnType<typeof appReadInventory>;
+
+/** One page of launcher facts. No source, revision history or linked-app display reads. */
+export async function readCapsuleAppSummaries(
+  ctx: ControlDispatchContext,
+  capsules: readonly Capsule[],
+  now: number,
+) {
+  const configs = ctx.operations.capsules;
+  const inventory = appReadInventory(ctx.operations);
+  const batch = configs.getInstallConfigsByIds && capsules.length > 0
+    ? optional(async () => new Map((await configs.getInstallConfigsByIds!([...new Set(capsules.map((app) => app.installConfigId))])).map((row) => [row.id, row])))
+    : undefined;
+  return await Promise.all(capsules.map(async (capsule) => {
+    const config = batch
+      ? batch.then((result) => ({ value: result.value?.get(capsule.installConfigId), failed: result.failed || !result.value?.has(capsule.installConfigId) }))
+      : optional(() => configs.getInstallConfig(capsule.installConfigId));
+    const { view } = await readAppOverview(ctx, capsule, now, config, inventory);
+    return {
+      capsuleId: view.capsuleId,
+      name: view.name,
+      ...(view.displayName ? { displayName: view.displayName } : {}),
+      ...(view.iconUrl ? { iconUrl: view.iconUrl } : {}),
+      state: view.state,
+      primaryAction: view.primaryAction,
+      screens: view.screens,
+      ...(view.incomplete ? { incomplete: view.incomplete } : {}),
+    };
+  }));
+}
+
+/** The app page adds version history and linked-app display to the same state facts. */
 export async function readCapsuleAppView(
   ctx: ControlDispatchContext,
   capsule: Capsule,
   now: number,
 ): Promise<CapsuleAppView> {
+  const { operations } = ctx;
+  const [overview, source, adopted] = await Promise.all([
+    readAppOverview(ctx, capsule, now, optional(() => operations.capsules.getInstallConfig(capsule.installConfigId)), appReadInventory(operations)),
+    capsule.status === "destroyed"
+      ? Promise.resolve<Optional<Source>>({ failed: false })
+      : optional(async () => (await operations.getSource(capsule.sourceId)).source),
+    capsule.status !== "destroyed" && capsuleIsApplied(capsule) && capsule.currentStateVersionId
+      ? optional(() => operations.getCapsuleAdoptedSourceRevision(capsule.id))
+      : Promise.resolve<Optional<CapsuleAdoptedSourceRevision | undefined>>({ failed: false }),
+  ]);
+  const incomplete = new Set(overview.view.incomplete);
+  const [version, displays] = await Promise.all([
+    readVersion(operations, capsule, { source: source.value, adopted: adopted.value, onIncomplete: () => incomplete.add("version") }),
+    optional(async () => new Map(await Promise.all([...overview.linkedApps.values()].map(async (app) =>
+      [app.id, await linkedAppDisplay(ctx, app)] as const)))),
+  ]);
+  if (source.failed || adopted.failed) incomplete.add("version");
+  if (displays.failed) incomplete.add("links");
+  const enrich = (link: CapsuleAppLink): CapsuleAppLink => ({
+    ...link,
+    ...(link.otherApp ? { otherApp: displays.value?.get(link.otherApp.capsuleId) ?? link.otherApp } : {}),
+  });
+  return {
+    ...overview.view,
+    links: { uses: overview.view.links.uses.map(enrich), usedBy: overview.view.links.usedBy.map(enrich) },
+    version,
+    ...(incomplete.size ? { incomplete: [...incomplete].sort() } : {}),
+  };
+}
+
+/** Required state facts are shared by Home and the app page; optional failures stay explicit. */
+async function readAppOverview(
+  ctx: ControlDispatchContext,
+  capsule: Capsule,
+  now: number,
+  config: Promise<Optional<InstallConfig>>,
+  inventory: AppReadInventory,
+): Promise<{ view: Omit<CapsuleAppView, "version">; linkedApps: ReadonlyMap<string, Capsule> }> {
   const { operations } = ctx;
   const destroyed = capsule.status === "destroyed";
   const applied = capsuleIsApplied(capsule);
@@ -191,24 +298,14 @@ export async function readCapsuleAppView(
             currentInstallConfigId: capsule.installConfigId,
           },
         ),
-        readConnectionIssues(operations, capsule),
+        readConnectionIssues(operations, capsule, inventory),
         readUninstallAdmission(operations, capsule, applied),
       ]);
   const preparation = coordinatorPreparation(coordinator, ctx.session.subject, now);
   const revisionPreparing = preparation.preparing;
 
-  const [installConfig, source, adopted, screens, screenFailure] = await Promise.all([
-    optional(() => operations.capsules.getInstallConfig(capsule.installConfigId)),
-    destroyed
-      ? Promise.resolve<Optional<Source>>({ failed: false })
-      : optional(async () => (await operations.getSource(capsule.sourceId)).source),
-    // Same rule as the Capsule read: provenance exists once a current
-    // StateVersion does.
-    !destroyed && managed && capsule.currentStateVersionId
-      ? optional(() => operations.getCapsuleAdoptedSourceRevision(capsule.id))
-      : Promise.resolve<Optional<CapsuleAdoptedSourceRevision | undefined>>({
-          failed: false,
-        }),
+  const [installConfig, screens, screenFailure] = await Promise.all([
+    config,
     managed &&
       (capsule.status === "active" || capsule.status === "stale")
       ? optional(() => readScreens(ctx, capsule))
@@ -217,7 +314,7 @@ export async function readCapsuleAppView(
           failed: false,
         }),
     managed
-      ? optional(() => readScreenFailure(operations, capsule))
+      ? optional(() => readScreenFailure(inventory, capsule))
       : Promise.resolve<Optional<ScreenFailureRead>>({
           value: { complete: true },
           failed: false,
@@ -228,18 +325,11 @@ export async function readCapsuleAppView(
   if (screenFailure.failed || screenFailure.value?.complete === false) {
     incomplete.add("screen_problems");
   }
-  const links: Optional<CapsuleAppLinks> = installConfig.failed
+  const links = installConfig.failed
     ? { failed: true } as const
     : await optional(() => readAppLinks(ctx, capsule, installConfig.value?.requiredInterfaces ?? []));
   if (links.failed) incomplete.add("links");
-  const linkView: CapsuleAppLinks = links.value ?? { uses: [], usedBy: [] };
-
-  const version = await readVersion(operations, capsule, {
-    source: source.value,
-    adopted: adopted.value,
-    onIncomplete: () => incomplete.add("version"),
-  });
-  if (source.failed || adopted.failed) incomplete.add("version");
+  const linkView: CapsuleAppLinks = links.value?.links ?? { uses: [], usedBy: [] };
 
   const screenList = screens.value ?? [];
   const failure = screenFailure.value?.failure;
@@ -265,7 +355,7 @@ export async function readCapsuleAppView(
   const display = installConfig.value?.store;
   const iconUrl = safeImageUrl(display?.iconUrl);
 
-  return {
+  const view: Omit<CapsuleAppView, "version"> = {
     kind: CAPSULE_APP_VIEW_KIND,
     capsuleId: capsule.id,
     workspaceId: capsule.workspaceId,
@@ -281,7 +371,6 @@ export async function readCapsuleAppView(
     problems: derived.problems,
     screens: screenList,
     links: linkView,
-    version,
     progress: {
       revisionPreparing: !destroyed && revisionPreparing,
       ...(preparation.installPlanId ? { installPlanId: preparation.installPlanId } : {}),
@@ -302,6 +391,7 @@ export async function readCapsuleAppView(
     ...(incomplete.size > 0 ? { incomplete: [...incomplete].sort() } : {}),
     observedAt: new Date(now).toISOString(),
   };
+  return { view, linkedApps: links.value?.apps ?? new Map() };
 }
 
 // --- app links -----------------------------------------------------------------
@@ -322,11 +412,11 @@ async function readAppLinks(
   ctx: ControlDispatchContext,
   capsule: Capsule,
   requirements: readonly CapsuleRequiredInterface[],
-): Promise<CapsuleAppLinks> {
+): Promise<{ links: CapsuleAppLinks; apps: ReadonlyMap<string, Capsule> }> {
   const service = ctx.operations.interfaces;
   if (!service) {
     if (requirements.length > 0) throw new Error("Interface service is unavailable");
-    return { uses: [], usedBy: [] };
+    return { links: { uses: [], usedBy: [] }, apps: new Map() };
   }
   if (
     !service.listCapsuleInterfaceLinks || !service.listProviderCapsuleInterfaceLinks || !service.get
@@ -356,7 +446,6 @@ async function readAppLinks(
   const apps = await ctx.operations.capsules.getCapsulesByIds(ids);
   const byId = new Map(apps.map((app) => [app.id, app]));
   byId.set(capsule.id, capsule);
-  const displays = new Map<string, Promise<CapsuleAppLinkedApp>>();
   const management = new Map<string, Promise<boolean>>();
   const providerInterfaces = new Map<string, Promise<Interface | undefined>>();
   // Membership alone must not advertise writes to a read-only delegated grant.
@@ -395,14 +484,6 @@ async function readAppLinks(
   const acceptsLinks = (app: Capsule): boolean =>
     (app.status === "active" || app.status === "stale") &&
     (!app.uninstall || app.uninstall.phase === "cancelled");
-  const display = (app: Capsule): Promise<CapsuleAppLinkedApp> => {
-    let result = displays.get(app.id);
-    if (!result) {
-      result = linkedAppDisplay(ctx, app);
-      displays.set(app.id, result);
-    }
-    return result;
-  };
   const providerInterface = (id: string): Promise<Interface | undefined> => {
     let result = providerInterfaces.get(id);
     if (!result) {
@@ -447,7 +528,7 @@ async function readAppLinks(
       state: link?.state ?? "unset",
       generation: link?.generation ?? 0,
       health,
-      ...(otherApp ? { otherApp: await display(otherApp) } : {}),
+      ...(otherApp ? { otherApp: { capsuleId: otherApp.id, name: otherApp.name } } : {}),
       canManage,
       ...(canApprove !== undefined ? { canApprove } : {}),
     };
@@ -464,7 +545,8 @@ async function readAppLinks(
   const sort = (left: CapsuleAppLink, right: CapsuleAppLink): number =>
     left.consumerCapsuleId.localeCompare(right.consumerCapsuleId) ||
     left.requirementKey.localeCompare(right.requirementKey);
-  return { uses: uses.sort(sort), usedBy: usedBy.sort(sort) };
+  const visibleIds = new Set([...uses, ...usedBy].flatMap((link) => link.otherApp ? [link.otherApp.capsuleId] : []));
+  return { links: { uses: uses.sort(sort), usedBy: usedBy.sort(sort) }, apps: new Map(apps.filter((app) => visibleIds.has(app.id)).map((app) => [app.id, app])) };
 }
 
 function linkHealth(
@@ -579,6 +661,7 @@ function runSummary(run: Run | CapsuleAppRunSummary): CapsuleAppRunSummary {
 async function readConnectionIssues(
   operations: ControlPlaneOperations,
   capsule: Capsule,
+  inventory: AppReadInventory,
 ): Promise<readonly CapsuleAppConnectionIssue[]> {
   const bindingSet = await operations.capsules.getProviderBindingSetByCapsule(
     capsule.id,
@@ -586,41 +669,14 @@ async function readConnectionIssues(
   );
   const bindings = bindingSet?.bindings ?? [];
   if (bindings.length === 0) return [];
-  const connections = new Map((await operations.connections.listProviderConnections(
-    capsule.workspaceId,
-  )).map((connection) => [connection.id, connection]));
+  const connections = new Map((await inventory.connections(capsule.workspaceId)).map((connection) => [connection.id, connection]));
   // The Workspace list intentionally excludes personal connections. Resolve
   // the owner from the canonical ownership ledger, never the legacy Capsule
   // projection, then include that account's own connection inventory.
   const ownership = await operations.appOwnership?.getOwnership(capsule.id);
   const owner = ownership?.ownerAccountId;
   if (owner) {
-    if (operations.accountResources) {
-      let cursor: string | undefined;
-      const seen = new Set<string>();
-      do {
-        if (seen.size >= 100) throw new Error("owner connection page limit exceeded");
-        const page = await operations.accountResources.listConnections(owner, {
-          limit: 100,
-          ...(cursor ? { cursor } : {}),
-        });
-        for (const connection of page.items) {
-          if ((connection.scope === "personal" || connection.scope === "workspace") &&
-            connection.ownerAccountId === owner) connections.set(connection.id, connection);
-        }
-        cursor = page.nextCursor;
-        if (cursor && seen.has(cursor)) throw new Error("owner connection cursor repeated");
-        if (cursor) seen.add(cursor);
-      } while (cursor);
-    } else {
-      for (const workspace of await operations.workspaces.listWorkspacesByOwner(owner)) {
-        if (workspace.ownerUserId !== owner || workspace.archivedAt) continue;
-        for (const connection of await operations.connections.listProviderConnections(workspace.id)) {
-          if ((connection.scope === "personal" || connection.scope === "workspace") &&
-            connection.ownerAccountId === owner) connections.set(connection.id, connection);
-        }
-      }
-    }
+    for (const connection of await inventory.ownerConnections(owner)) connections.set(connection.id, connection);
   }
   const byId = connections;
   const issues: CapsuleAppConnectionIssue[] = [];
@@ -661,13 +717,10 @@ interface ScreenFailureRead {
  * reported as incomplete rather than as "no failure".
  */
 async function readScreenFailure(
-  operations: ControlPlaneOperations,
+  inventory: AppReadInventory,
   capsule: Capsule,
 ): Promise<ScreenFailureRead> {
-  const failures = await operations.listInterfaceMaterializationFailures(
-    capsule.workspaceId,
-    { limit: APP_SCREEN_FAILURE_LIMIT },
-  );
+  const failures = await inventory.screenFailures(capsule.workspaceId);
   const failure = failures.find(
     (candidate) =>
       candidate.capsuleId === capsule.id &&

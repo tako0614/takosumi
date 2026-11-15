@@ -3349,6 +3349,9 @@ export interface AccessibleApp {
   readonly ownerDisplayName: string;
   readonly state: CapsuleAppView["state"] | "update_available";
   readonly primaryAction: CapsuleAppView["primaryAction"];
+  /** Authorized launcher metadata, absent only on older servers. */
+  readonly screens?: CapsuleAppView["screens"];
+  readonly incomplete?: CapsuleAppView["incomplete"];
 }
 let accessibleAppsCache: Promise<readonly AccessibleApp[] | undefined> | undefined;
 let appOwnershipCache: Promise<boolean> | undefined;
