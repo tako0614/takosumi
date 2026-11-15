@@ -513,3 +513,48 @@
   font-size: var(--tg-fs-xs, 0.78rem);
   line-height: 1.6;
 }
+
+/* Hosts with a dedicated app page can use the whole tile to open it. */
+.tcs-page-list .tcs-card {
+  position: relative;
+  justify-content: center;
+  min-height: 106px;
+  background: transparent;
+  border-color: transparent;
+  transition: background-color 0.14s ease;
+}
+
+.tcs-page-list .tcs-card:not(.tcs-card-skeleton):hover {
+  background: var(--c-panel2);
+  transform: none;
+  box-shadow: none;
+}
+
+.tcs-page-list .tcs-card-top {
+  align-items: center;
+}
+
+.tcs-page-list .tcs-card-main {
+  gap: var(--tg-s-1, 4px);
+}
+
+.tcs-page-list .tcs-card-title {
+  margin: 0;
+}
+
+.tcs-page-list .tcs-card-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--tg-r-lg, 14px);
+}
+
+.tcs-page-list .tcs-card-open:focus-visible::after {
+  outline: 2px solid var(--c-accent);
+  outline-offset: -2px;
+}
+
+.tcs-page-list .tcs-card-skeleton {
+  background: var(--c-panel2);
+  animation: none;
+}

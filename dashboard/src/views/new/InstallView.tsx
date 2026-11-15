@@ -21,7 +21,7 @@ import { matchingInstalledApps, type GitInstallPlan, type GitInstallPlanResponse
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, FormField, Input, Select, Spinner } from "../../components/ui/index.ts";
-import { StoreBrowser } from "../store/StoreBrowser.tsx";
+import { StoreBrowser, type StoreCatalogCache } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { listConnections, listInstalledApps, listOpenGitInstallAttempts } from "../../lib/control-api.ts";
@@ -112,6 +112,7 @@ export default function InstallView() {
 
 function InstallRoute(props: { readonly principalId: string }) {
   const location = useLocation();
+  const catalogCache: StoreCatalogCache = {};
   const namesApp = () =>
     Boolean(
       installAttemptId(location.search) ||
@@ -122,6 +123,7 @@ function InstallRoute(props: { readonly principalId: string }) {
     <Switch fallback={
       <StorePage
         principalId={props.principalId}
+        catalogCache={catalogCache}
         rejectedInstallLink={hasInstallPrefillParams(withoutInstallContext(location.search))}
       />
     }>
@@ -137,28 +139,21 @@ function InstallRoute(props: { readonly principalId: string }) {
 
 // --- The Store -------------------------------------------------------------------
 
-function StorePage(props: { readonly principalId: string; readonly rejectedInstallLink: boolean }) {
+function StorePage(props: {
+  readonly principalId: string;
+  readonly rejectedInstallLink: boolean;
+  readonly catalogCache: StoreCatalogCache;
+}) {
   const navigate = useNavigate();
   const [gitUrl, setGitUrl] = createSignal("");
   const [gitError, setGitError] = createSignal<string>();
-  const [installedApps, { refetch: refetchInstalledApps }] = createResource(
-    () => ({ workspaceId: currentWorkspaceId() || undefined }),
-    (scope) => listInstalledApps(scope.workspaceId),
-  );
   // Selecting a listing reflects it into the URL, so back and share work.
   const choose = (listing: TcsListing) => {
     pickedListing = listing;
     navigate(`/new?${buildNewQuery(listing)}`);
   };
   return (
-    <main
-      class="iv-page iv-browse-page"
-      data-install-state={
-        installedApps.error || installedApps.loading || !installedApps() || installedApps()?.complete === false
-          ? "unknown"
-          : "not-installed"
-      }
-    >
+    <main class="iv-page iv-browse-page">
       <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
       <Show when={props.rejectedInstallLink}>
         <div class="iv-error" role="alert" data-testid="install-link-refusal">
@@ -166,18 +161,10 @@ function StorePage(props: { readonly principalId: string; readonly rejectedInsta
         </div>
       </Show>
       <OpenAttempts principalId={props.principalId} />
-      <Show when={installedApps.error}>
-        <div class="iv-error" role="alert">
-          <p>{t("installStore.installedReadFailed")}</p>
-          <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
-        </div>
-      </Show>
       <section class="iv-catalogue iv-catalogue-browse" aria-label={t("installStore.browseTitle")}>
         <StoreBrowser
           locale={locale()}
-          installedApps={!installedApps.loading && !installedApps.error ? installedApps()?.installedApps : []}
-          installedAppsLoading={installedApps.loading}
-          installedAppsComplete={!installedApps.loading && !installedApps.error ? installedApps()?.complete : false}
+          catalogCache={props.catalogCache}
           onConfigure={choose}
           onSelectListing={choose}
           showSourceControls={true}

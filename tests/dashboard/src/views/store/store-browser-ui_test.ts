@@ -124,7 +124,6 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).toContain('props.installedAppsComplete === false');
     expect(storeBrowserSource).toContain('data-testid="store-installed-loading"');
     expect(storeBrowserSource).toContain("when={props.installedAppsLoading}");
-    expect(storeHostSource).toContain("installedAppsLoading={installedApps.loading}");
     expect(storeBrowserSource).toContain('aria-label={s("installAria", props.locale).replace');
     expect(storeBrowserCss).toContain(".tcs-btn.tcs-install");
     // Publisher byline, presentation only.

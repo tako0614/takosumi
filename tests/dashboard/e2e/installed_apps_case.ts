@@ -120,13 +120,16 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       const h = await fixture(page, [app("cap_repository_office", "office-personal")]);
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
-      await expect(card.getByText("インストール済み", { exact: true })).toBeVisible();
-      await expect(card.getByRole("link", { name: "開く: office-personal", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office");
-      await expect(card.getByRole("button", { name: "もう1つ入れる: 共有オフィス", exact: true })).toBeVisible();
-      await expect(card.getByText(hint, { exact: true })).toBeVisible();
+      await expect(card).toBeVisible();
       await capture(page, "store-installed-one");
+      expect(h.reads).not.toContain("/api/v1/capsules/cap_repository_office");
+      await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
+      const installed = page.getByTestId("install-existing-apps");
+      await expect(installed.getByText("インストール済み", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeEnabled();
+      await expect(page.getByText(hint, { exact: true })).toBeVisible();
       expect(h.mutations).toEqual([]);
-      await card.getByRole("link", { name: "開く: office-personal", exact: true }).click();
+      await installed.getByRole("link", { name: "開く: office-personal", exact: true }).click();
       await expect(page).toHaveURL(/\/apps\/cap_repository_office$/u);
       expect(h.mutations).toEqual([]);
 
@@ -147,8 +150,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       const h = await fixture(page, [app("cap_repository_office", "office-personal"), app("cap_imported_state", "office-team")]);
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
-      await expect(card.getByText("2件インストール済み", { exact: true })).toBeVisible();
-      await expect(card.getByRole("link", { name: /^開く:/u })).toHaveCount(2);
+      await expect(card.getByRole("heading", { name: "共有オフィス" })).toBeVisible();
       await capture(page, "store-installed-two");
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
       await expect(page.getByTestId("install-existing-apps").getByText("2件インストール済み", { exact: true })).toBeVisible();
@@ -163,7 +165,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       expect(h.errors).toEqual([]);
     });
 
-    test("marks unmatched listings unknown for a partial summary", async ({ page }) => {
+    test("shows the incomplete installed status on the detail page", async ({ page }) => {
       const knownButDifferent = {
         ...app("cap_other_module", "other-app"),
         installedFrom: { url: "https://github.com/example/other-repository.git", path: "." },
@@ -171,22 +173,20 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       const h = await fixture(page, [knownButDifferent], false);
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
-      await expect(card.getByTestId("store-installed-unknown")).toBeVisible();
-      await expect(card.getByText("インストール状況を確認できません", { exact: true })).toBeVisible();
-      await expect(card.getByRole("button", { name: "インストール: 共有オフィス" })).toBeVisible();
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
       await expect(page.getByText("インストール済みのアプリを確認できませんでした。", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeEnabled();
       expect(h.errors).toEqual([]);
     });
 
-    test("keeps known app links but labels the count as partial", async ({ page }) => {
+    test("keeps known app links and shows incomplete status in details", async ({ page }) => {
       const h = await fixture(page, [app("cap_repository_office", "office-personal")], false, { legacy: true });
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
-      await expect(card.getByText("確認できた範囲では1件インストール済み", { exact: true })).toBeVisible();
-      await expect(card.getByRole("link", { name: "開く: office-personal", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office");
-      await expect(card.getByText("既存アプリとの一致を確認できませんでした。続ける前にアプリ一覧を確認してください。", { exact: true })).toBeVisible();
+      await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
+      const installed = page.getByTestId("install-existing-apps");
+      await expect(installed.getByRole("link", { name: "開く: office-personal", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office");
+      await expect(page.getByText("インストール済みのアプリを確認できませんでした。", { exact: true })).toBeVisible();
       expect(h.reads).toContain("/api/v1/workspaces/ws_alpha/installed-apps");
       expect(h.errors).toEqual([]);
     });
@@ -218,7 +218,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       expect(h.errors).toEqual([]);
     });
 
-    test("keeps Store install status neutral while installed apps are loading", async ({ page }) => {
+    test("shows the Store before installed identity and checks it before starting an install", async ({ page }) => {
       const h = await fixture(page, []);
       let releaseRead!: () => void;
       const read = new Promise<void>((resolve) => { releaseRead = resolve; });
@@ -228,12 +228,50 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       });
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
-      await expect(card).toBeVisible();
-      await expect(card.getByTestId("store-installed-loading")).toBeVisible();
-      await expect(card.getByTestId("store-installed-unknown")).toHaveCount(0);
-      await expect(card.getByRole("button", { name: "インストール: 共有オフィス" })).toHaveCount(0);
+      await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
+      const install = page.getByRole("button", { name: "インストール", exact: true });
+      await expect(install).toBeDisabled();
+      expect(h.mutations).toEqual([]);
       releaseRead();
-      await expect(card.getByRole("button", { name: "インストール: 共有オフィス" })).toBeEnabled();
+      await expect(install).toBeEnabled();
+      expect(h.errors).toEqual([]);
+    });
+
+    test("shows a fast store before another responds and keeps both on return", async ({ page }) => {
+      const h = await fixture(page, []);
+      await page.addInitScript(() => {
+        localStorage.setItem("tcs.stores", JSON.stringify(["https://store.example.test", "https://slow-store.example.test"]));
+      });
+      let releaseSlow!: () => void;
+      const slow = new Promise<void>((resolve) => { releaseSlow = resolve; });
+      const catalogReads: string[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (url.pathname === "/tcs/v2/listings") catalogReads.push(url.hostname);
+      });
+      await page.route("https://slow-store.example.test/tcs/v2/listings**", async (route) => {
+        await slow;
+        return route.fulfill({ json: { items: [{
+          ...listing,
+          id: "example/remote-app",
+          name: { ja: "別のアプリ", en: "Another app" },
+          source: { git: "https://github.com/example/remote" },
+        }] } });
+      });
+      await page.goto("/new");
+      const fast = page.locator('[data-tcs-listing-id="example/installed-app"]');
+      const late = page.locator('[data-tcs-listing-id="example/remote-app"]');
+      await expect(fast).toBeVisible();
+      await expect(late).toHaveCount(0);
+      releaseSlow();
+      await expect(late).toBeVisible();
+      await fast.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
+      await expect(page.getByRole("heading", { name: "共有オフィス", level: 1 })).toBeVisible();
+      await page.goBack();
+      await expect(fast).toBeVisible();
+      await expect(late).toBeVisible();
+      expect(catalogReads.sort()).toEqual(["slow-store.example.test", "store.example.test"]);
+      expect(h.mutations).toEqual([]);
       expect(h.errors).toEqual([]);
     });
 
