@@ -8,28 +8,24 @@ const portalCopy = {
     title: "Sign in",
     stage: "Staging",
     notFound: "Not found",
-    method: "Use a GET request to open sign-in.",
-    invalid: "This sign-in link is invalid. Start sign-in again from Takosumi Hosted or Takoserver.",
+    method: "Reopen this page to sign in.",
+    invalid: "This sign-in link is invalid. Try again from your app.",
     unavailable: "Sign-in is temporarily unavailable. Try again later from your application.",
-    fresh: "Confirm a fresh sign-in to continue to your application.",
-    choose: "Use your Takos account with Takosumi and Takoserver.",
+    fresh: "Sign in again to continue.",
     start: "Start sign-in from Takosumi Hosted or Takoserver.",
-    methods: "Sign-in methods",
-    githubFresh: "GitHub cannot confirm fresh credential entry for this request. Use Google to confirm your sign-in.",
+    githubFresh: "Use Google to sign in again.",
     provider: (label: string) => `Continue with ${label}`,
   },
   ja: {
     title: "サインイン",
     stage: "ステージング",
     notFound: "ページが見つかりません。",
-    method: "サインイン画面は GET で開いてください。",
-    invalid: "このサインインリンクは無効です。Takosumi Hosted または Takoserver からやり直してください。",
+    method: "このページを開き直してください。",
+    invalid: "このサインインリンクは無効です。元のアプリからやり直してください。",
     unavailable: "現在サインインできません。時間をおいて、元のアプリからやり直してください。",
-    fresh: "アプリに戻る前に、もう一度本人確認をしてください。",
-    choose: "ひとつの Takos アカウントで、Takosumi と Takoserver を使えます。",
+    fresh: "もう一度ログインしてください。",
     start: "Takosumi または Takoserver を開いて、サインインを始めてください。",
-    methods: "サインイン方法",
-    githubFresh: "GitHub ではこの操作に必要な再認証を確認できません。Google でサインインしてください。",
+    githubFresh: "再ログインには Google を使ってください。",
     provider: (label: string) => `${label} で続ける`,
   },
 } as const;
@@ -76,9 +72,10 @@ export async function handleStagingLoginPortal(input: {
     if (providers.length === 0) return portalResponse(input.request, copy.unavailable, 503);
     const choices = providers.map((provider) => {
       const label = escapeHtml(provider.label);
-      if (!continuation.returnTo) return `<li class="auth-provider-label">${label}</li>`;
+      const icon = providerIcon(provider.id);
+      if (!continuation.returnTo) return `<li class="auth-provider-label">${icon}${label}</li>`;
       if (continuation.fresh && provider.id === "github") {
-        return `<li><button class="auth-button auth-provider-choice" type="button" disabled>${label}</button><p class="auth-hint">${copy.githubFresh}</p></li>`;
+        return `<li><button class="auth-button auth-provider-choice" type="button" disabled>${icon}${label}</button><p class="auth-hint">${copy.githubFresh}</p></li>`;
       }
       const target = new URL("/oauth/upstream/authorize", stagingIssuer);
       target.searchParams.set("provider", provider.id);
@@ -87,9 +84,9 @@ export async function handleStagingLoginPortal(input: {
         target.searchParams.set("prompt", "login");
         target.searchParams.set("max_age", continuation.maxAge ?? "0");
       }
-      return `<li><a class="auth-button auth-provider-choice" href="${escapeHtml(target.pathname + target.search)}">${escapeHtml(copy.provider(provider.label))}</a></li>`;
+      return `<li><a class="auth-button auth-provider-choice" href="${escapeHtml(target.pathname + target.search)}">${icon}<span>${escapeHtml(copy.provider(provider.label))}</span></a></li>`;
     }).join("");
-    const explanation = continuation.returnTo ? (continuation.fresh ? copy.fresh : copy.choose) : copy.start;
+    const explanation = continuation.returnTo ? (continuation.fresh ? copy.fresh : "") : copy.start;
     return portalResponse(input.request, explanation, 200, {}, `<ul class="auth-providers">${choices}</ul>`);
   } catch {
     return portalResponse(input.request, copy.unavailable, 503);
@@ -202,7 +199,7 @@ function portalResponse(request: Request, message: string, status: number, extra
   const copy = portalCopy[language];
   const nonce = crypto.randomUUID();
   const html = authPage({ language, nonce, title: copy.title, badge: copy.stage,
-    description: message, taskTitle: copy.methods, body: choices });
+    description: message, body: choices });
   return new Response(request.method === "HEAD" ? null : html, {
     status,
     headers: {
@@ -215,4 +212,13 @@ function portalResponse(request: Request, message: string, status: number, extra
       ...extraHeaders,
     },
   });
+}
+
+// Provider marks are static presentation, never returned by provider discovery.
+// Google geometry matches the existing Takoserver sign-in glyph.
+function providerIcon(provider: string): string {
+  const body = provider === "google"
+    ? `<path fill="var(--auth-google-blue)" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5a5.6 5.6 0 0 1-2.4 3.6v3h3.9c2.3-2.1 3.5-5.2 3.5-8.8Z"/><path fill="var(--auth-google-green)" d="M12 24c3.2 0 5.9-1.1 7.9-2.9l-3.9-3c-1.1.7-2.4 1.2-4 1.2-3.1 0-5.7-2.1-6.6-4.9H1.4v3.1A12 12 0 0 0 12 24Z"/><path fill="var(--auth-google-yellow)" d="M5.4 14.4a7.2 7.2 0 0 1 0-4.6V6.7H1.4a12 12 0 0 0 0 10.8l4-3.1Z"/><path fill="var(--auth-google-red)" d="M12 4.8c1.8 0 3.3.6 4.6 1.8l3.4-3.4C17.9 1.2 15.2 0 12 0A12 12 0 0 0 1.4 6.7l4 3.1C6.3 6.9 8.9 4.8 12 4.8Z"/>`
+    : `<path fill="currentColor" d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-6A4.7 4.7 0 0 1 5.6 8.5c-.1-.3-.5-1.6.1-3.3 0 0 1-.3 3.3 1.2a11.4 11.4 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.3 3 .2 3.3a4.7 4.7 0 0 1 1.2 3.2c0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3Z"/>`;
+  return `<svg class="auth-provider-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">${body}</svg>`;
 }
