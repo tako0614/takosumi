@@ -22,88 +22,136 @@ export function escapeAuthHtml(value: string): string {
     .replace(/"/gu, "&quot;").replace(/'/gu, "&#39;");
 }
 
-// One quiet shell for provider selection and permissions. No external assets
-// or scripts: these pages work under the issuer's existing CSP.
+// Shared account presentation. The pixel mark matches Takoserver Console;
+// inline SVG keeps every screen within the existing nonce-only style CSP.
+const authMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34" shape-rendering="crispEdges" class="auth-mark" width="30" height="30" aria-hidden="true">
+  <rect x="9" y="0" width="17" height="8" fill="currentColor"/>
+  <rect x="8" y="1" width="1" height="30" fill="currentColor"/>
+  <rect x="26" y="1" width="1" height="33" fill="currentColor"/>
+  <rect x="7" y="2" width="1" height="30" fill="currentColor"/>
+  <rect x="27" y="2" width="1" height="30" fill="currentColor"/>
+  <rect x="6" y="3" width="1" height="31" fill="currentColor"/>
+  <rect x="28" y="3" width="1" height="22" fill="currentColor"/>
+  <rect x="29" y="4" width="1" height="20" fill="currentColor"/>
+  <rect x="5" y="5" width="1" height="29" fill="currentColor"/>
+  <rect x="4" y="6" width="1" height="15" fill="currentColor"/>
+  <rect x="30" y="6" width="1" height="17" fill="currentColor"/>
+  <rect x="3" y="7" width="1" height="13" fill="currentColor"/>
+  <rect x="31" y="7" width="1" height="15" fill="currentColor"/>
+  <rect x="2" y="8" width="1" height="9" fill="currentColor"/>
+  <rect x="9" y="8" width="4" height="23" fill="currentColor"/>
+  <rect x="15" y="8" width="5" height="3" fill="currentColor"/>
+  <rect x="22" y="8" width="4" height="23" fill="currentColor"/>
+  <rect x="32" y="8" width="1" height="13" fill="currentColor"/>
+  <rect x="1" y="10" width="1" height="4" fill="currentColor"/>
+  <rect x="13" y="10" width="2" height="21" fill="currentColor"/>
+  <rect x="20" y="10" width="2" height="24" fill="currentColor"/>
+  <rect x="33" y="10" width="1" height="10" fill="currentColor"/>
+  <rect x="17" y="11" width="3" height="20" fill="currentColor"/>
+  <rect x="16" y="12" width="1" height="1" fill="currentColor"/>
+  <rect x="15" y="14" width="1" height="20" fill="currentColor"/>
+  <rect x="16" y="16" width="1" height="18" fill="currentColor"/>
+  <rect x="0" y="20" width="3" height="2" fill="currentColor"/>
+  <rect x="1" y="22" width="2" height="2" fill="currentColor"/>
+  <rect x="3" y="23" width="2" height="8" fill="currentColor"/>
+  <rect x="2" y="24" width="1" height="2" fill="currentColor"/>
+  <rect x="28" y="27" width="1" height="4" fill="currentColor"/>
+  <rect x="29" y="28" width="1" height="3" fill="currentColor"/>
+  <rect x="2" y="29" width="1" height="2" fill="currentColor"/>
+  <rect x="30" y="29" width="1" height="2" fill="currentColor"/>
+  <rect x="1" y="30" width="1" height="1" fill="currentColor"/>
+  <rect x="31" y="30" width="1" height="1" fill="currentColor"/>
+  <rect x="10" y="31" width="3" height="1" fill="currentColor"/>
+  <rect x="17" y="31" width="1" height="1" fill="currentColor"/>
+  <rect x="22" y="31" width="1" height="1" fill="currentColor"/>
+  <rect x="25" y="31" width="1" height="3" fill="currentColor"/>
+  <rect x="10" y="32" width="2" height="2" fill="currentColor"/>
+  <rect x="13" y="8" width="2" height="2" fill="var(--auth-mark-face)"/>
+  <rect x="20" y="8" width="2" height="2" fill="var(--auth-mark-face)"/>
+  <rect x="15" y="11" width="2" height="1" fill="var(--auth-mark-face)"/>
+  <rect x="15" y="12" width="1" height="2" fill="var(--auth-mark-face)"/>
+  <rect x="16" y="13" width="1" height="3" fill="var(--auth-mark-face)"/>
+</svg>`;
 const authStyle = `
 :root {
   color-scheme: light dark;
-  --auth-bg: #fafafb;
-  --auth-panel: #fff;
-  --auth-hover: #f2f2f4;
-  --auth-fg: #111113;
-  --auth-muted: #56565f;
-  --auth-border: #e4e4e8;
-  --auth-control-border: #8b8b95;
+  --auth-bg: #ffffff;
+  --auth-panel: #ffffff;
+  --auth-hover: #f6f6f7;
+  --auth-fg: #0e0e10;
+  --auth-muted: #6e7076;
+  --auth-border: #e6e6e8;
+  --auth-control-border: #d3d4d7;
   --auth-accent: #b0301f;
   --auth-action: var(--auth-accent);
   --auth-action-hover: #94281a;
-  --auth-action-text: #fff;
-  --auth-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
-  --auth-gutter: clamp(1.25rem, 5vw, 3rem);
+  --auth-action-text: #ffffff;
+  --auth-mark-face: #17100f;
+  --auth-google-blue: #4285f4;
+  --auth-google-green: #34a853;
+  --auth-google-yellow: #fbbc05;
+  --auth-google-red: #ea4335;
+  --auth-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", "Noto Sans JP", "Hiragino Sans", sans-serif;
+  --auth-space-xs: .5rem;
+  --auth-space-sm: .75rem;
+  --auth-space-md: 1rem;
+  --auth-space-lg: 1.5rem;
+  --auth-space-xl: 2rem;
+  --auth-space-2xl: 2.5rem;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --auth-bg: #0b0b0c;
-    --auth-panel: #131315;
-    --auth-hover: #202024;
+    --auth-bg: #101012;
+    --auth-panel: #17171a;
+    --auth-hover: #1f1f23;
     --auth-fg: #f2f2f3;
-    --auth-muted: #b4b5ba;
-    --auth-border: #2e2e33;
-    --auth-control-border: #777781;
+    --auth-muted: #a4a6ad;
+    --auth-border: #2a2a30;
+    --auth-control-border: #3e3e47;
     --auth-accent: #f17d6c;
     --auth-action: #e0533c;
     --auth-action-hover: #ef6349;
     --auth-action-text: #150907;
+    --auth-mark-face: #0b0b0c;
   }
 }
 * { box-sizing: border-box; }
 html, body { overflow-x: clip; }
-body { min-height: 100svh; margin: 0; background: var(--auth-bg); color: var(--auth-fg); font: 1rem/1.6 var(--auth-font); }
-.auth-header { border-block-end: 1px solid var(--auth-border); background: var(--auth-panel); }
-.auth-bar { max-width: 70rem; min-height: 3.5rem; margin-inline: auto; padding-inline: var(--auth-gutter); display: flex; justify-content: space-between; align-items: center; gap: .75rem; }
-.auth-brand { display: flex; align-items: baseline; gap: .625rem; min-width: 0; }
-.auth-wordmark { font-size: 1.125rem; line-height: 1; letter-spacing: -.055em; font-weight: 780; }
-.auth-wordmark::after { content: ''; display: inline-block; width: .27em; height: .27em; margin-inline-start: .14em; background: var(--auth-accent); }
-.auth-brand-label { color: var(--auth-muted); font-size: .8125rem; font-weight: 540; }
-.auth-badge { color: var(--auth-muted); border: 1px solid var(--auth-border); padding: .125rem .5rem; border-radius: .375rem; font-size: .75rem; white-space: nowrap; }
-.auth-shell { max-width: 60rem; margin-inline: auto; padding: clamp(3.5rem, 15vh, 8.5rem) var(--auth-gutter) 3rem; }
-.auth-grid { display: grid; align-items: start; grid-template-columns: minmax(0, .94fr) minmax(0, 1.06fr); gap: clamp(2.25rem, 6vw, 4.75rem); }
-.auth-intro, .auth-task { min-width: 0; overflow-wrap: anywhere; }
-h1 { margin: 0; font-size: clamp(1.875rem, 4.1vw, 2.625rem); font-weight: 730; font-style: normal; line-height: 1.18; letter-spacing: -.035em; text-wrap: balance; }
-.auth-summary { margin: 1rem 0 0; max-width: 30ch; color: var(--auth-muted); }
-.auth-task { border-inline-start: 1px solid var(--auth-border); padding-inline-start: clamp(1.5rem, 3vw, 2.25rem); }
-.auth-task-title { margin: 0 0 .75rem; font-size: .875rem; line-height: 1.45; font-weight: 680; }
-.auth-task > :first-child { margin-block-start: 0; }
+body { min-height: 100svh; margin: 0; display: flex; flex-direction: column; background: var(--auth-bg); color: var(--auth-fg); font: 400 .9375rem/1.65 var(--auth-font); -webkit-font-smoothing: antialiased; }
+.auth-shell { width: min(100%, 25.5rem); margin: auto; padding: var(--auth-space-2xl) var(--auth-space-lg) 5rem; }
+.auth-shell--consent { width: min(100%, 29rem); }
+.auth-brand { display: flex; align-items: center; justify-content: center; gap: var(--auth-space-sm); margin-bottom: var(--auth-space-xl); }
+.auth-mark { flex: 0 0 auto; color: var(--auth-accent); }
+.auth-wordmark { font-size: 1.5rem; line-height: 1; letter-spacing: -.045em; font-weight: 650; }
+.auth-badge { color: var(--auth-muted); text-align: center; margin: var(--auth-space-lg) 0 0; font-size: .6875rem; }
+h1 { margin: 0; font-size: 1.375rem; font-weight: 600; font-style: normal; line-height: 1.5; letter-spacing: -.025em; text-align: center; overflow-wrap: anywhere; }
+.auth-summary { margin: var(--auth-space-sm) 0 0; color: var(--auth-muted); font-size: .875rem; line-height: 1.8; text-align: center; overflow-wrap: anywhere; }
+.auth-task { margin-top: var(--auth-space-xl); min-width: 0; overflow-wrap: anywhere; }
 .auth-providers, .auth-permissions { list-style: none; padding: 0; margin: 0; }
-.auth-providers { display: grid; gap: .625rem; }
-.auth-provider-label { display: block; border-block-end: 1px solid var(--auth-border); padding: .625rem 0; font-size: .9375rem; }
-.auth-button { display: flex; align-items: center; justify-content: center; min-height: 2.875rem; width: 100%; padding: .625rem .875rem; border: 1px solid var(--auth-control-border); border-radius: .5rem; background: var(--auth-panel); color: var(--auth-fg); text-align: center; text-decoration: none; font: 620 .9375rem/1.35 var(--auth-font); cursor: pointer; }
-.auth-provider-choice { position: relative; justify-content: space-between; gap: 1rem; padding-inline: 1rem; text-align: start; }
-a.auth-provider-choice::after { content: ''; margin-inline-end: .125rem; width: .375rem; height: .375rem; flex: 0 0 auto; border-block-start: 1.5px solid currentColor; border-inline-end: 1.5px solid currentColor; transform: rotate(45deg); color: var(--auth-muted); }
+.auth-providers { display: grid; gap: var(--auth-space-sm); }
+.auth-provider-label { display: flex; justify-content: center; align-items: center; gap: var(--auth-space-sm); padding: var(--auth-space-xs) 0; color: var(--auth-muted); }
+.auth-button { display: flex; align-items: center; justify-content: center; gap: var(--auth-space-sm); min-height: 3rem; width: 100%; padding: var(--auth-space-sm) var(--auth-space-md); border: 1px solid var(--auth-control-border); border-radius: .5rem; background: var(--auth-panel); color: var(--auth-fg); text-align: center; text-decoration: none; font: 500 .875rem/1.5 var(--auth-font); cursor: pointer; }
+.auth-provider-icon { flex: 0 0 auto; width: 1.125rem; height: 1.125rem; }
 .auth-button:hover:not(:disabled) { background: var(--auth-hover); }
-.auth-button:active:not(:disabled) { border-color: var(--auth-accent); }
+.auth-button:active:not(:disabled) { border-color: var(--auth-muted); }
 .auth-button:focus-visible { outline: 2px solid var(--auth-accent); outline-offset: 3px; }
 .auth-button:disabled { color: var(--auth-muted); border-color: var(--auth-border); background: var(--auth-hover); cursor: default; }
+.auth-button:disabled .auth-provider-icon { opacity: .5; }
 .auth-button--primary { background: var(--auth-action); color: var(--auth-action-text); border-color: var(--auth-action); }
-.auth-button--primary:hover:not(:disabled) { background: var(--auth-action-hover); }
-.auth-hint, small, dt { color: var(--auth-muted); }
-.auth-hint { margin: .375rem 0 0; font-size: .8125rem; }
-.auth-permissions { border-block-start: 1px solid var(--auth-border); }
-.auth-permissions li { position: relative; padding: .625rem 0 .625rem 1.25rem; border-block-end: 1px solid var(--auth-border); font-size: .9375rem; }
-.auth-permissions li::before { content: ''; position: absolute; inset-block-start: 1.05em; inset-inline-start: .125rem; width: .375rem; height: .375rem; border: 1px solid var(--auth-control-border); border-radius: 50%; }
-.auth-context { margin: 1rem 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .375rem .75rem; font-size: .8125rem; }
-.auth-context dd { margin: 0; font-weight: 550; overflow-wrap: anywhere; }
-.note, .warn { font-size: .875rem; margin: .875rem 0 0; }
-.note { font-weight: 600; }
-.warn { background: var(--auth-hover); padding: .75rem; border-radius: .5rem; }
-.actions { display: flex; flex-wrap: wrap; gap: .625rem; margin-top: 1.375rem; }
+.auth-button--primary:hover:not(:disabled) { background: var(--auth-action-hover); border-color: var(--auth-action-hover); }
+.auth-hint, dt { color: var(--auth-muted); }
+.auth-hint { margin: var(--auth-space-xs) 0 0; font-size: .75rem; }
+.auth-permissions { padding-block: var(--auth-space-sm); border-block: 1px solid var(--auth-border); }
+.auth-permissions li { position: relative; padding: var(--auth-space-xs) 0 var(--auth-space-xs) var(--auth-space-lg); font-size: .875rem; }
+.auth-permissions li::before { content: ''; position: absolute; top: 1.1em; left: .125rem; width: .625rem; height: .3125rem; border-bottom: 1.5px solid var(--auth-muted); border-left: 1.5px solid var(--auth-muted); transform: rotate(-45deg); }
+.auth-context { margin: var(--auth-space-md) 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--auth-space-xs) var(--auth-space-sm); font-size: .75rem; }
+.auth-context dd { margin: 0; overflow-wrap: anywhere; }
+.warn { font-size: .8125rem; margin: var(--auth-space-md) 0 0; }
+.warn { color: var(--auth-muted); }
+.actions { display: flex; flex-wrap: wrap; gap: var(--auth-space-sm); margin-top: var(--auth-space-lg); }
 .actions > * { flex: 1 1 8rem; width: auto; }
 @media (max-width: 43rem) {
-  .auth-shell { max-width: 30rem; padding-block-start: clamp(2.75rem, 9vh, 4.5rem); }
-  .auth-grid { grid-template-columns: minmax(0, 1fr); gap: 1.625rem; }
-  .auth-intro h1 { text-wrap: initial; }
-  .auth-summary { max-width: none; margin-block-start: .75rem; }
-  .auth-task { border-inline-start: 0; padding-inline-start: 0; }
+  .auth-shell { padding-block: var(--auth-space-2xl) 4rem; }
 }
 `;
 
@@ -113,14 +161,12 @@ export function authPage(input: {
   title: string;
   body?: string;
   description?: string;
-  taskTitle?: string;
   badge?: string;
+  variant?: "consent";
 }): string {
-  const accountLabel = input.language === "ja" ? "アカウント" : "Account";
   const title = escapeAuthHtml(input.title);
-  const badge = input.badge ? `<span class="auth-badge">${escapeAuthHtml(input.badge)}</span>` : "";
+  const badge = input.badge ? `<p class="auth-badge">${escapeAuthHtml(input.badge)}</p>` : "";
   const description = input.description ? `<p class="auth-summary">${escapeAuthHtml(input.description)}</p>` : "";
-  const taskTitle = input.taskTitle ? `<h2 class="auth-task-title">${escapeAuthHtml(input.taskTitle)}</h2>` : "";
-  const task = input.body ? `<div class="auth-task">${taskTitle}${input.body}</div>` : "";
-  return `<!doctype html><html lang="${input.language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style nonce="${escapeAuthHtml(input.nonce)}">${authStyle}</style></head><body><header class="auth-header"><div class="auth-bar"><div class="auth-brand"><span class="auth-wordmark">Takos</span> <span class="auth-brand-label">${accountLabel}</span></div>${badge}</div></header><main class="auth-shell auth-grid"><div class="auth-intro"><h1>${title}</h1>${description}</div>${task}</main></body></html>`;
+  const task = input.body ? `<div class="auth-task">${input.body}</div>` : "";
+  return `<!doctype html><html lang="${input.language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Takos</title><style nonce="${escapeAuthHtml(input.nonce)}">${authStyle}</style></head><body><main class="auth-shell${input.variant === "consent" ? " auth-shell--consent" : ""}"><div class="auth-brand">${authMark}<span class="auth-wordmark">Takos</span></div><h1>${title}</h1>${description}${task}${badge}</main></body></html>`;
 }

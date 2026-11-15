@@ -184,8 +184,8 @@ test("freshness makes Google explicit and disables GitHub without inventing auth
     expect(targets[0]?.searchParams.get("provider")).toBe("google");
     expect(targets[0]?.searchParams.get("prompt")).toBe("login");
     expect(targets[0]?.searchParams.get("max_age")).toBe("0");
-    expect(html).toMatch(/<button\b[^>]*\bdisabled>GitHub<\/button>/u);
-    expect(html).toContain("GitHub cannot confirm fresh credential entry");
+    expect(html.match(/<button\b[^>]*\bdisabled>([\s\S]*?)<\/button>/u)?.[1]?.replace(/<[^>]*>/gu, "")).toBe("GitHub");
+    expect(html).toContain("Use Google to sign in again.");
     expect(html).not.toContain("auth_time");
     expect(html).not.toContain("reauthenticatedAt");
   }
@@ -279,7 +279,7 @@ test("real Accounts navigation reaches durable GitHub callback, issuer session a
   expect((await sha256Text(verifier!)).slice(7)).toBe(providerAuthorization.searchParams.get("code_challenge"));
   const consent = await accountsHandler(new Request(new URL(callback.headers.get("location")!, issuer), { headers: { cookie: sessionCookie! } }));
   expect(consent.status).toBe(200);
-  expect(await consent.text()).toContain("Continue sign-in");
+  expect(await consent.text()).toContain("Allow hosted-staging to access your account?");
   const replay = await accountsHandler(callbackRequest);
   expect(replay.status).toBe(400);
   expect(upstreamRequests).toHaveLength(3);

@@ -1986,13 +1986,12 @@ function hostedConsentPage(
   const scopes = NATIVE_CONSENT_COPY[language].scopes;
   const permissions = scope.split(/\s+/u).filter(Boolean).map((item) =>
     `<li>${escapeAuthHtml(Object.hasOwn(scopes, item) ? scopes[item]! : item)}</li>`).join("");
-  const title = ja ? "サインインを続ける" : "Continue sign-in";
-  const description = ja ? `${name} に次のアクセスを許可しますか？` : `Allow ${name} to access the following?`;
+  const title = NATIVE_CONSENT_COPY[language].title(name);
   const body = `<ul class="auth-permissions">${permissions}</ul>` +
     `<dl class="auth-context"><dt>${ja ? "戻り先" : "Returns to"}</dt><dd>${escapeAuthHtml(redirect.host)}</dd></dl>` +
     `<form method="post" action="${escapeAuthHtml(url.pathname + url.search)}"><input type="hidden" name="consent_transaction" value="${escapeAuthHtml(transaction)}">` +
     `<div class="actions"><button class="auth-button auth-button--primary" type="submit" name="approve" value="yes">${ja ? "許可して続ける" : "Allow and continue"}</button></div></form>`;
-  return new Response(authPage({ language, nonce, title, description, taskTitle: NATIVE_CONSENT_COPY[language].can, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
+  return new Response(authPage({ language, nonce, variant: "consent", title, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "content-language": language,
@@ -2204,19 +2203,16 @@ const NATIVE_CONSENT_COPY = {
   ja: {
     lang: "ja",
     title: (client: string) => `${client} にアクセスを許可しますか？`,
-    lead: (client: string, instance: string) => `${instance} のアカウントで、${client} が次のことをできるようになります。`,
     account: "アカウント",
-    can: "許可するアクセス",
     scopes: {
-      openid: "あなたのアカウントを識別する",
+      openid: "アカウントを識別する",
       profile: "名前とプロフィール画像を見る",
       email: "メールアドレスを見る",
-      offline_access: "サインインしたままにする（この端末で更新を続ける）",
+      offline_access: "ログイン状態を維持する",
       "capsules:read": "アプリ、Run、状態を見る",
-      "capsules:write": "このアカウントでTakosumiを操作する（アプリの変更、Runの承認・取り消し、接続・ソース・スペースの変更を含む）",
+      "capsules:write": "このアカウントでTakosumiを操作する（アプリの変更、Runの承認と取り消し、接続・ソース・スペースの変更など）",
     } as Record<string, string>,
-    runs: "許可すると、このアプリからRunの承認と取り消しを含め、ダッシュボードでできる操作のほとんどができます。",
-    warning: (client: string) => `このページを ${client} から開いていない場合は、「許可しない」を選んでください。`,
+    warning: "心当たりがない場合は、許可しないでください。",
     returnsTo: "戻り先",
     approve: "許可する",
     deny: "許可しない",
@@ -2224,19 +2220,16 @@ const NATIVE_CONSENT_COPY = {
   en: {
     lang: "en",
     title: (client: string) => `Allow ${client} to access your account?`,
-    lead: (client: string, instance: string) => `With your account on ${instance}, ${client} will be able to:`,
     account: "Account",
-    can: "Requested access",
     scopes: {
       openid: "Identify your account",
       profile: "See your name and profile picture",
       email: "See your email address",
       offline_access: "Stay signed in on this device",
       "capsules:read": "See your apps, Runs and their state",
-      "capsules:write": "Act on Takosumi as this account (change apps, approve or cancel Runs, and change connections, sources and workspaces)",
+      "capsules:write": "Act on Takosumi as this account (change apps, approve and cancel Runs, and change connections, sources and workspaces)",
     } as Record<string, string>,
-    runs: "If you allow it, this app can approve and cancel Runs and do most of what you can do in the dashboard.",
-    warning: (client: string) => `If you did not open this page from ${client}, choose Don't allow.`,
+    warning: "If you did not request this, choose Don't allow.",
     returnsTo: "Returns to",
     approve: "Allow",
     deny: "Don't allow",
@@ -2257,7 +2250,6 @@ function nativeConsentPage(input: {
   const language = authLanguage(input.request);
   const copy = NATIVE_CONSENT_COPY[language];
   const client = input.client.displayName ?? input.client.clientId;
-  const instance = new URL(input.issuer).host;
   const scopes = [...new Set(input.scope.split(/\s+/u).filter(Boolean))];
   const nonce = base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(16)));
   const redirect = new URL(input.redirectUri);
@@ -2267,13 +2259,12 @@ function nativeConsentPage(input: {
     ? redirect.origin
     : /^[a-z][a-z0-9+.-]*:$/u.test(redirect.protocol) ? redirect.protocol : "'none'";
   const body =
-    `<ul class="auth-permissions">${scopes.map((scope) => `<li>${escape(Object.hasOwn(copy.scopes, scope) ? copy.scopes[scope]! : scope)} <small>(${escape(scope)})</small></li>`).join("")}</ul>` +
-    (scopes.includes("capsules:write") ? `<p class="note">${escape(copy.runs)}</p>` : "") +
+    `<ul class="auth-permissions">${scopes.map((scope) => `<li>${escape(Object.hasOwn(copy.scopes, scope) ? copy.scopes[scope]! : scope)}</li>`).join("")}</ul>` +
     `<dl class="auth-context">${input.accountLabel ? `<dt>${escape(copy.account)}</dt><dd>${escape(input.accountLabel)}</dd>` : ""}<dt>${escape(copy.returnsTo)}</dt><dd>${escape(input.redirectUri)}</dd></dl>` +
-    `<p class="warn">${escape(copy.warning(client))}</p>` +
+    `<p class="warn">${escape(copy.warning)}</p>` +
     `<form method="post" action="${escape(input.url.pathname + input.url.search)}"><input type="hidden" name="consent_transaction" value="${escape(input.transaction)}">` +
     `<div class="actions"><button class="auth-button" type="submit" name="decision" value="deny">${escape(copy.deny)}</button><button class="auth-button auth-button--primary" type="submit" name="decision" value="approve">${escape(copy.approve)}</button></div></form>`;
-  return new Response(authPage({ language, nonce, title: copy.title(client), description: copy.lead(client, instance), taskTitle: copy.can, body }), {
+  return new Response(authPage({ language, nonce, variant: "consent", title: copy.title(client), body }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
