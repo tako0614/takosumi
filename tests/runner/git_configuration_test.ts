@@ -101,10 +101,10 @@ test("HTTPS transport controls are interpreted by Git and outrank internal crede
     const result = child(root, `
       const {context}=await prepareSourceGitContext({url:"https://source.example.invalid/repo.git",ref:"main",path:"."},{
         env:{GIT_HTTPS_TOKEN:"SOURCE_TOKEN_CANARY",GIT_CONFIG_COUNT:"1",GIT_CONFIG_KEY_0:"http.followRedirects",GIT_CONFIG_VALUE_0:"true",GIT_CONFIG_PARAMETERS:"'http.followRedirects=true'"},files:[]
-      },join(root,"minted"),undefined,undefined,["203.0.113.10","2001:db8::10"]);
+      },join(root,"minted"),undefined,undefined,["93.184.216.34","2001:db8::10"]);
       console.log(JSON.stringify({redirects:configValue(context.env,"http.followRedirects"),resolve:configValue(context.env,"http.curloptResolve"),tokenRetained:context.env.GIT_HTTPS_TOKEN==="SOURCE_TOKEN_CANARY"}));
     `);
-    expect(result).toEqual({ redirects: "false", resolve: "source.example.invalid:443:203.0.113.10,[2001:db8::10]", tokenRetained: true });
+    expect(result).toEqual({ redirects: "false", resolve: "source.example.invalid:443:93.184.216.34,[2001:db8::10]", tokenRetained: true });
   });
 });
 
@@ -113,7 +113,7 @@ test("source credentials cannot replace the inspected HTTPS helper or dynamic lo
     const result = child(root, `
       const {context}=await prepareSourceGitContext({url:"https://source.example.invalid/repo.git",ref:"main",path:"."},{
         env:{GIT_HTTPS_TOKEN:"SOURCE_TOKEN_CANARY",GIT_EXEC_PATH:"/fixture/unselected-helper",LD_PRELOAD:"/fixture/unselected-library",LD_LIBRARY_PATH:"/fixture/unselected-directory"},files:[]
-      },join(root,"minted"),undefined,undefined,["203.0.113.10"]);
+      },join(root,"minted"),undefined,undefined,["93.184.216.34"]);
       console.log(JSON.stringify({tokenRetained:context.env.GIT_HTTPS_TOKEN==="SOURCE_TOKEN_CANARY",unexpected:["GIT_EXEC_PATH","LD_PRELOAD","LD_LIBRARY_PATH"].filter(key=>context.env[key]!==undefined)}));
     `);
     expect(result).toEqual({ tokenRetained: true, unexpected: [] });
