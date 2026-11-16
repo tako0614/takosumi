@@ -709,6 +709,20 @@ export function InstallScreen(props: {
               password field instead (one line: JSON needs no line breaks),
               so no browser ever shows it as typed. */}
           <Match when={variable().type === "json" && !variable().sensitive}>
+            <div>
+            <Show when={variable().defaultValue === undefined && !variable().derivedDefault && !resubmitting()}>
+            <Button size="sm" variant="secondary" disabled={locked() || attempt().settingsChoicesLoading()}
+              onClick={() => void attempt().loadConnectionSettings()}>
+              {t("installStore.connectionSettings")}
+            </Button>
+            <For each={attempt().connectionSettings()}>{(choice) =>
+              <Button size="sm" variant="secondary" disabled={locked()}
+                onClick={() => attempt().applyConnectionSettings(variable().name, choice)}>
+                {choice.displayName} · {readableProviderSourceLabel(choice.provider)} · {choice.moduleLocalName}
+                {choice.childAlias ? ` · ${choice.childAlias}` : ""}{choice.rootAlias ? ` · ${choice.rootAlias}` : ""}: {JSON.stringify(choice.value)}
+              </Button>
+            }</For>
+            </Show>
             <Textarea
               value={draftText(variable())}
               spellcheck={false}
@@ -718,6 +732,7 @@ export function InstallScreen(props: {
               onInput={(event) => type(event.currentTarget.value)}
               onBlur={leave}
             />
+            </div>
           </Match>
         </Switch>
       </FormField>

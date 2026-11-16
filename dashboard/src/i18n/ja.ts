@@ -179,6 +179,7 @@ export const ja = {
   "installStore.sourceRef": "バージョン（省略可）",
   "installStore.sourceAuth": "Git接続",
   "installStore.publicSource": "公開リポジトリ",
+  "installStore.connectionSettings": "接続の公開設定を選ぶ",
   "installStore.selectValue": "選択してください",
   "installStore.yes": "はい",
   "installStore.no": "いいえ",
