@@ -40,6 +40,7 @@ import {
   createGitInstallAttempt,
   discardGitInstallAttempt,
   getGitInstallPlan,
+  listConnections,
   gitPlanReconcileDelayMs,
   isImmutableSourceRevision,
   isMissingControlRoute,
@@ -63,6 +64,8 @@ import {
   bindingsWith,
   canAdvance,
   connectionKey,
+  connectionSettingChoices,
+  currentConnectionSetting,
   interfaceLinksWith,
   continueVariables,
   deriveInstallView,
@@ -81,6 +84,8 @@ import {
   withConnectionOverrides,
   withInterfaceOverrides,
   type ConnectionOverrides,
+  type ConnectionSettingChoice,
+  type ConnectionSettingOrigin,
   type InterfaceOverrides,
   type InstallCandidate,
   type InstallView,
@@ -304,6 +309,60 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       : undefined;
   });
   const latestSelected = () => resolvedVersion() !== undefined;
+  const [settingsChoices, setSettingsChoices] = createSignal<{
+    readonly context: string; readonly choices: readonly ConnectionSettingChoice[];
+  }>();
+  const [settingsChoicesLoading, setSettingsChoicesLoading] = createSignal(false);
+  let settingsRead = 0;
+  const settingsContext = (): string | undefined => {
+    const current = response();
+    if (disposed || !current || current.userAction.kind !== "provide_inputs" || locked() ||
+      current.installPlan.createdBy !== options.principalId || current.installPlan.id !== options.attemptId()) return undefined;
+    return JSON.stringify([epoch, options.principalId, current.installPlan.id, current.installPlan.generation,
+      current.installPlan.createdBy, current.installPlan.workspaceId,
+      current.userAction.connections.map((row) => [connectionKey(row), row.selectedConnectionId ?? "",
+        row.candidates.map((candidate) => [candidate.id, candidate.status])])]);
+  };
+  const connectionSettings = () => {
+    const held = settingsChoices();
+    const context = settingsContext();
+    return held && context !== undefined && held.context === context ? held.choices : [];
+  };
+  const loadConnectionSettings = async () => {
+    const current = response();
+    const context = settingsContext();
+    if (!context || current?.userAction.kind !== "provide_inputs") return;
+    const read = ++settingsRead;
+    setSettingsChoices(undefined);
+    setSettingsChoicesLoading(true);
+    const ids = [...new Set(current.userAction.connections.flatMap((row) =>
+      row.candidates.some((candidate) => candidate.id === row.selectedConnectionId && candidate.status === "verified")
+        ? [row.selectedConnectionId!] : []))];
+    try {
+      const rows = (await listConnections(current.installPlan.workspaceId).catch(() => []))
+        .filter((row) => ids.includes(row.id));
+      if (!disposed && read === settingsRead && settingsContext() === context) {
+        setSettingsChoices({ context, choices: connectionSettingChoices(current.userAction.connections,
+          rows, current.installPlan.createdBy, current.installPlan.workspaceId) });
+      }
+    } finally {
+      if (!disposed && read === settingsRead) setSettingsChoicesLoading(false);
+    }
+  };
+  const applyConnectionSettings = (name: string, choice: ConnectionSettingChoice): boolean => {
+    const current = response();
+    if (locked() || current?.userAction.kind !== "provide_inputs" || awaitingResubmission(current.userAction) ||
+      !connectionSettings().includes(choice)) return false;
+    const variable = current.userAction.variables.find((field) => field.name === name);
+    if (!variable || variable.type !== "json" || variable.sensitive || variable.defaultValue !== undefined || variable.derivedDefault) return false;
+    const draft = drafts()[name];
+    if (draft?.value && (!draft.connectionSetting || currentConnectionSetting(current.userAction.connections, draft.connectionSetting))) return false;
+    setDraft(name, JSON.stringify(choice.value), { connectionSetting: {
+      requirementKey: choice.requirementKey, connectionId: choice.connectionId,
+    } });
+    return true;
+  };
+
   /** The last sheet the coordinator asked for, kept while it moves past it. */
   const [sheet, setSheet] = createSignal<ProvideInputs>();
   /** Committed choices on a GET-only reopen; never treated as live candidates. */
@@ -1035,9 +1094,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * choice counts at once; typed text counts when its field is left
    * (`commitDraft`), so no Plan is made from half-typed values.
    */
-  const setDraft = (name: string, value: string, draftOptions: { readonly typing?: boolean } = {}) => {
+  const setDraft = (name: string, value: string, draftOptions: { readonly typing?: boolean; readonly connectionSetting?: ConnectionSettingOrigin } = {}) => {
     if (locked()) return;
-    setDrafts((current) => ({ ...current, [name]: { value, touched: true } }));
+    setDrafts((current) => ({ ...current, [name]: { value, touched: true,
+      ...(draftOptions.connectionSetting ? { connectionSetting: draftOptions.connectionSetting } : {}) } }));
     if (draftOptions.typing) {
       setSettingsEditing((current) => new Set(current).add(name));
       return;
@@ -1456,6 +1516,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setError,
     drafts,
     setDraft,
+    connectionSettings,
+    settingsChoicesLoading,
+    loadConnectionSettings,
+    applyConnectionSettings,
     commitDraft,
     nameDraft,
     setNameDraft,

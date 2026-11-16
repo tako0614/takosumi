@@ -169,6 +169,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.sourceRef": "Version (optional)",
   "installStore.sourceAuth": "Git connection",
   "installStore.publicSource": "Public repository",
+  "installStore.connectionSettings": "Choose public connection settings",
   "installStore.selectValue": "Choose…",
   "installStore.yes": "Yes",
   "installStore.no": "No",

@@ -33,6 +33,9 @@ import type {
   JsonValue,
 } from "takosumi-contract";
 import type { MessageKey } from "../../i18n/index.ts";
+import type { ProviderConnection } from "takosumi-contract";
+import { sameProviderSource } from "takosumi-contract/provider-env-rules";
+import { providerInstallSettings } from "../../../../providers/install-settings.ts";
 
 // --- URL ---------------------------------------------------------------------
 
@@ -215,6 +218,8 @@ export interface VariableDraft {
   readonly value: string;
   /** False until the person edits the field; untouched defaults are not sent. */
   readonly touched: boolean;
+  /** Exact chosen provider instance; a connection switch invalidates this proposal. */
+  readonly connectionSetting?: ConnectionSettingOrigin;
 }
 
 export type VariableDrafts = Readonly<Record<string, VariableDraft>>;
@@ -342,6 +347,12 @@ export function continueVariables(
   const invalid: string[] = [];
   for (const variable of sheetVariables(action)) {
     const draft = drafts[variable.name];
+    if (draft?.connectionSetting && (variable.type !== "json" || variable.sensitive ||
+      variable.defaultValue !== undefined || variable.derivedDefault !== undefined ||
+      !currentConnectionSetting(action.connections, draft.connectionSetting))) {
+      invalid.push(variable.name);
+      continue;
+    }
     const text = variable.sensitive
       ? (draft?.value ?? "")
       : draft?.touched
@@ -1058,4 +1069,49 @@ export function versionLabel(ref: string | undefined): string | undefined {
   const value = ref?.trim();
   if (!value || value === "HEAD") return undefined;
   return /^[0-9a-f]{40}$/iu.test(value) ? value.slice(0, 7) : value;
+}
+
+/** Explicitly chosen provider instance, not an authority or a default mapping. */
+export type ConnectionSettingOrigin = {
+  readonly requirementKey: string;
+  readonly connectionId: string;
+};
+export interface ConnectionSettingChoice extends ConnectionSettingOrigin {
+  readonly displayName: string;
+  readonly provider: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
+  readonly rootAlias?: string;
+  readonly value: Readonly<Record<string, JsonValue>>;
+}
+
+export function currentConnectionSetting(
+  rows: readonly GitInstallPlanConnectionRequirement[],
+  origin: ConnectionSettingOrigin,
+): boolean {
+  return rows.some((row) => connectionKey(row) === origin.requirementKey &&
+    selectedCandidate(row)?.id === origin.connectionId && selectedCandidate(row)?.status === "verified");
+}
+
+/** Only a current eligible selection owned by this actor can offer public settings. */
+export function connectionSettingChoices(
+  rows: readonly GitInstallPlanConnectionRequirement[],
+  connections: readonly ProviderConnection[],
+  principalId: string,
+  workspaceId: string,
+): readonly ConnectionSettingChoice[] {
+  return rows.flatMap((row) => {
+    const selected = selectedCandidate(row);
+    if (!selected || selected.status !== "verified") return [];
+    const connection = connections.find((value) => value.id === selected.id);
+    if (!connection || connection.ownerAccountId !== principalId ||
+      !sameProviderSource(row.provider, connection.providerSource) ||
+      !(connection.scope === "personal" && connection.workspaceId === undefined ||
+        connection.scope === "workspace" && connection.workspaceId === workspaceId)) return [];
+    const value = providerInstallSettings(connection);
+    return value ? [{ requirementKey: connectionKey(row), connectionId: connection.id,
+      displayName: selected.displayName, provider: row.provider, moduleLocalName: row.moduleLocalName,
+      ...(row.childAlias ? { childAlias: row.childAlias } : {}),
+      ...(row.rootAlias ? { rootAlias: row.rootAlias } : {}), value }] : [];
+  });
 }

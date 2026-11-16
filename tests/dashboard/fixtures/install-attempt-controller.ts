@@ -40,6 +40,7 @@ function scripted(name: string) {
 mock.module(apiPath, () => ({
   ...api,
   createGitInstallAttempt: scripted("createGitInstallAttempt"),
+  listConnections: scripted("listConnections"),
   getGitInstallPlan: scripted("getGitInstallPlan"),
   reconcileGitInstallPlan: scripted("reconcileGitInstallPlan"),
   answerGitInstallAttempt: scripted("answerGitInstallAttempt"),
@@ -160,7 +161,7 @@ async function until(condition: () => boolean, label: string): Promise<void> {
  * A page with a virtual clock: each pause between reconcile commands is
  * recorded and advances the clock at once (yielding to the event loop).
  */
-function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: number; readonly fromStore?: boolean } = {}) {
+function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: number; readonly fromStore?: boolean; readonly principalId?: () => string } = {}) {
   let dispose!: () => void;
   const [attemptId, setAttemptId] = solid.createSignal<string | undefined>(initialAttemptId);
   const left: string[] = [];
@@ -169,7 +170,7 @@ function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: nu
   const attempt = solid.createRoot((disposeRoot: () => void) => {
     dispose = disposeRoot;
     return useInstallAttempt({
-      principalId: "sub_me",
+      get principalId() { return mountOptions.principalId?.() ?? "sub_me"; },
       attemptId,
       onStarted: (id: string) => setAttemptId(id),
       onLeft: (plan: { id: string }) => {
@@ -1954,4 +1955,80 @@ describe("install attempt controller", () => {
     expect(answerBodies().filter((body) => body.continue)).toEqual([{ expectedGeneration: 4, continue: true }]);
     page.dispose();
   });
+});
+
+
+test("explicit public connection settings use the current owned selection and reject stale reads", async () => {
+  let current = respond(inputs({ variables: [{ name: "deployment", type: "json", required: true, sensitive: false }],
+    connections: [{ ...requirement, selectedConnectionId: "conn_a" }], missing: [] }), 1);
+  let release!: (rows: unknown) => void;
+  const row = (id: string, account: string) => ({ id, ownerAccountId: "sub_me", scope: "workspace", workspaceId: "ws_alpha",
+    providerSource: requirement.provider, status: "verified", scopeHints: { moduleInputDefaults: { cloudflare_account_id: account } } });
+  const a = row("conn_a", "a".repeat(32));
+  const b = row("conn_b", "b".repeat(32));
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => [a, b, { ...a, id: "unselected", ownerAccountId: "someone_else" }] });
+  let principal = "sub_me";
+  const page = mount(ID, { settleMs: 60_000, principalId: () => principal });
+  try {
+    await until(() => page.attempt.response() !== undefined, "initial sheet");
+    expect(calls.filter((call) => call.name === "listConnections")).toHaveLength(0);
+    await page.attempt.loadConnectionSettings();
+    expect(page.attempt.connectionSettings().map((choice) => choice.connectionId)).toEqual(["conn_a"]);
+    const choiceA = page.attempt.connectionSettings()[0]!;
+    expect(page.attempt.applyConnectionSettings("api_token", choiceA)).toBe(false);
+    const publicJson = { name: "deployment", type: "json", required: true, sensitive: false };
+    current = respond(inputs({ variables: [{ ...publicJson, defaultValue: { account_id: "already-provided" } }],
+      connections: [{ ...requirement, selectedConnectionId: "conn_a" }], missing: [] }), 1);
+    await page.attempt.reload();
+    await page.attempt.loadConnectionSettings();
+    expect(page.attempt.applyConnectionSettings("deployment", page.attempt.connectionSettings()[0]!)).toBe(false);
+    current = respond(inputs({ variables: [publicJson], connections: [{ ...requirement, selectedConnectionId: "conn_a" }], missing: [] }), 1);
+    await page.attempt.reload();
+    await page.attempt.loadConnectionSettings();
+    const freshA = page.attempt.connectionSettings()[0]!;
+    page.attempt.setDraft("deployment", JSON.stringify({ account_id: "manual" }));
+    expect(page.attempt.applyConnectionSettings("deployment", freshA)).toBe(false);
+    expect(page.attempt.drafts().deployment?.value).toContain("manual");
+    page.attempt.setDraft("deployment", "");
+    expect(page.attempt.applyConnectionSettings("deployment", freshA)).toBe(true);
+    expect(JSON.parse(page.attempt.drafts().deployment!.value)).toEqual({ account_id: "a".repeat(32) });
+    current = respond(inputs({ variables: [publicJson], connections: [{ ...requirement, selectedConnectionId: "conn_a",
+      candidates: requirement.candidates.map((candidate) => ({ ...candidate, status: "revoked" })) }], missing: [] }), 1);
+    await page.attempt.reload();
+    expect(page.attempt.connectionSettings()).toEqual([]);
+    expect(page.attempt.applyConnectionSettings("deployment", freshA)).toBe(false);
+    current = respond(inputs({ variables: [{ name: "deployment", type: "json", required: true, sensitive: false }],
+      connections: [{ ...requirement, selectedConnectionId: "conn_b" }], missing: [] }), 2);
+    await page.attempt.reload();
+    expect(page.attempt.connectionSettings()).toEqual([]);
+    expect(page.attempt.applyConnectionSettings("deployment", freshA)).toBe(false);
+    const { continueVariables } = await import(resolve(dashboard, "src/views/new/install-attempt.ts"));
+    expect(continueVariables(current.userAction as Extract<GitInstallPlanUserAction, { kind: "provide_inputs" }>, page.attempt.drafts())).toMatchObject({ ok: false, invalid: ["deployment"] });
+    handlers.listConnections = async () => new Promise((resolveRows) => { release = resolveRows; });
+    const pending = page.attempt.loadConnectionSettings();
+    await until(() => release !== undefined, "deferred settings read");
+    current = { ...current, installPlan: { ...current.installPlan, generation: 3 } };
+    await page.attempt.reload();
+    release([b]);
+    await pending;
+    expect(page.attempt.connectionSettings()).toEqual([]);
+    const principalPending = page.attempt.loadConnectionSettings();
+    await settle();
+    principal = "other-person";
+    release([b]);
+    await principalPending;
+    expect(page.attempt.connectionSettings()).toEqual([]);
+    principal = "sub_me";
+    handlers.listConnections = async () => [b];
+    await page.attempt.loadConnectionSettings();
+    expect(page.attempt.applyConnectionSettings("deployment", page.attempt.connectionSettings()[0]!)).toBe(true);
+    expect(continueVariables(current.userAction as Extract<GitInstallPlanUserAction, { kind: "provide_inputs" }>, page.attempt.drafts())).toEqual({ ok: true, variables: { deployment: { account_id: "b".repeat(32) } } });
+    handlers.answerGitInstallAttempt = async () => respond({ kind: "wait", phase: "planning" }, 4);
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").at(-1)?.args[1]).toMatchObject({
+      continue: true, expectedGeneration: 3, variables: { deployment: { account_id: "b".repeat(32) } },
+    });
+    expect(calls.filter((call) => call.name === "listConnections").every((call) => call.args[0] === "ws_alpha")).toBe(true);
+  } finally { page.dispose(); }
 });
