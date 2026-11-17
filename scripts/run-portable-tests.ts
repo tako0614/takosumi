@@ -10,6 +10,7 @@ export const TEST_TIMINGS_PATH = "tests/.bun-test-timings.json";
 export const PORTABLE_TEST_COMMAND = [
   "bun", "test", "--isolate", "--only-failures", "./tests",
   "--path-ignore-patterns=tests/dashboard/e2e/**",
+  "--path-ignore-patterns=tests/native/node-postgres/**",
   "--path-ignore-patterns=tests/runner/compatibility_check_test.ts",
   "--path-ignore-patterns=tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
 ] as const;

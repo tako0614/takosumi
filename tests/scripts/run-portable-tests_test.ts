@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { parse } from "yaml";
@@ -10,6 +10,13 @@ import {
   preparePrivateTimingOutput,
   runPortableTestCommands,
 } from "../../scripts/run-portable-tests.ts";
+import {
+  ENCRYPTED_STATE_NATIVE_TEST,
+  captureEncryptedStateNativeOutput,
+  encryptedStateNativeCommand,
+  encryptedStateNativeEnvironment,
+  writeEncryptedStateNativeDiagnostics,
+} from "../../scripts/check-encrypted-state-native.ts";
 
 test("committed timing data is a non-empty Bun timing table", async () => {
   const timings = JSON.parse(await readFile(
@@ -28,9 +35,117 @@ test("unsharded test preserves both original sweeps and exclusions", () => {
     ["bun", "run", "test:workerd"],
     ["bun", "test", "--isolate", "--only-failures", "./tests",
       "--path-ignore-patterns=tests/dashboard/e2e/**",
+      "--path-ignore-patterns=tests/native/node-postgres/**",
       "--path-ignore-patterns=tests/runner/compatibility_check_test.ts",
       "--path-ignore-patterns=tests/core/domains/deploy-control/capsule_execution_authority_test.ts"],
   ]);
+});
+
+test("encrypted state native entry selects its exact separate subgroup", async () => {
+  const command = encryptedStateNativeCommand({
+    bun: process.execPath, tofu: "/fixture/tofu", tar: "/fixture/tar", zstd: "/fixture/zstd",
+  });
+  expect(command).toEqual([process.execPath, "--no-env-file", "test", ENCRYPTED_STATE_NATIVE_TEST]);
+  expect(ENCRYPTED_STATE_NATIVE_TEST)
+    .toBe("./tests/native/node-postgres/encrypted-state-update-reconstruction.test.ts");
+  const packageJson = JSON.parse(await readFile(resolve(import.meta.dir, "../../package.json"), "utf8"));
+  expect(packageJson.scripts["test:encrypted-state-native"])
+    .toBe("bun scripts/check-encrypted-state-native.ts");
+});
+
+test("native state subgroup stays outside portable and Accounts cadences", async () => {
+  expect(PORTABLE_TEST_COMMAND.filter(value => value === "--path-ignore-patterns=tests/native/node-postgres/**"))
+    .toHaveLength(1);
+  const packageJson = JSON.parse(await readFile(resolve(import.meta.dir, "../../package.json"), "utf8"));
+  expect(packageJson.scripts["test:accounts"])
+    .toBe("bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare");
+  expect(packageJson.scripts.test).toBe("bun scripts/run-portable-tests.ts");
+});
+
+test("native state entry fails when a required capability is absent", async () => {
+  const available = { bun: process.execPath, tofu: "/fixture/tofu", tar: "/fixture/tar", zstd: "/fixture/zstd" };
+  for (const missing of ["bun", "tofu", "tar", "zstd"] as const) {
+    expect(() => encryptedStateNativeCommand({ ...available, [missing]: "" }))
+      .toThrow(`encrypted-state native prerequisite unavailable: ${missing}`);
+  }
+  const emptyPath = await mkdtemp(join(tmpdir(), "takosumi-native-missing-tools-"));
+  try {
+    const child = Bun.spawn([
+      process.execPath, "--no-env-file", resolve(import.meta.dir, "../../scripts/check-encrypted-state-native.ts"),
+    ], {
+      cwd: emptyPath, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      env: { PATH: emptyPath, HOME: emptyPath, TMPDIR: emptyPath },
+    });
+    const [output, error, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(code).toBe(1);
+    expect(output).toBe("");
+    expect(error).toContain("encrypted-state native prerequisite unavailable: tofu");
+  } finally {
+    await rm(emptyPath, { recursive: true, force: true });
+  }
+});
+
+test("native entry resets an ambient internal child flag for its outer process", () => {
+  const ambient = { PATH: "/fixture/bin", TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD: "1" };
+  expect(encryptedStateNativeEnvironment(ambient)).toEqual({
+    PATH: ambient.PATH, TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD: "0",
+  });
+  expect(ambient.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD).toBe("1");
+});
+
+test("native failure diagnostics retain bounded actual child streams privately", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-native-child-failure-"));
+  await chmod(root, 0o700);
+  try {
+    const raw = { stdout: [] as Uint8Array[], stderr: [] as Uint8Array[] };
+    const child = Bun.spawn([process.execPath, "--eval",
+      'process.stdout.write("fixture stdout\\n"); process.stderr.write("fixture stderr\\n"); process.exitCode = 9;'],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { PATH: root, HOME: root, TMPDIR: root } });
+    const [output, error, code] = await Promise.all([
+      captureEncryptedStateNativeOutput(child.stdout, raw.stdout),
+      captureEncryptedStateNativeOutput(child.stderr, raw.stderr), child.exited,
+    ]);
+    expect(code).toBe(9);
+    await writeEncryptedStateNativeDiagnostics(root, raw);
+    expect(await readFile(join(root, "child.stdout.log"), "utf8")).toBe(output);
+    expect(await readFile(join(root, "child.stderr.log"), "utf8")).toBe(error);
+    expect(output).toBe("fixture stdout\n");
+    expect(error).toBe("fixture stderr\n");
+    expect((await stat(root)).mode & 0o777).toBe(0o700);
+    for (const name of ["stdout", "stderr"]) {
+      expect((await stat(join(root, `child.${name}.log`))).mode & 0o777).toBe(0o600);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("native diagnostic overflow and save errors preserve custody and original failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-native-diagnostic-failure-"));
+  await chmod(root, 0o700);
+  try {
+    const raw = { stdout: [] as Uint8Array[], stderr: [] as Uint8Array[] };
+    const stream = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new Uint8Array(64 * 1024 + 8).fill(0x61)); controller.close();
+    } });
+    await expect(captureEncryptedStateNativeOutput(stream, raw.stdout)).rejects.toThrow("exceeded bound");
+    expect(stream.locked).toBe(false);
+    await writeEncryptedStateNativeDiagnostics(root, raw);
+    const protectedBytes = await readFile(join(root, "child.stdout.log"));
+    expect(protectedBytes.byteLength).toBe(64 * 1024);
+    const target = join(root, "protected-target");
+    await writeFile(target, "unchanged");
+    await rm(join(root, "child.stderr.log"));
+    await symlink(target, join(root, "child.stderr.log"));
+    const original = new Error("fixture original child failure");
+    const failed = async () => {
+      try { throw original; }
+      finally { await writeEncryptedStateNativeDiagnostics(root, raw, () => { throw new Error("diagnostic reporter failure"); }); }
+    };
+    await expect(failed()).rejects.toBe(original);
+    expect(await readFile(join(root, "child.stdout.log"))).toEqual(protectedBytes);
+    expect(await readFile(target, "utf8")).toBe("unchanged");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("shards run workerd exactly once and use immutable common timings", () => {

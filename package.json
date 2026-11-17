@@ -90,7 +90,8 @@
     "docs:dev": "cd docs && bun run dev",
     "website:build": "bash website/build.sh",
     "website:preview": "cd website && bun run preview",
-    "website:deploy": "bun scripts/deploy.mjs takosumi-website"
+    "website:deploy": "bun scripts/deploy.mjs takosumi-website",
+    "test:encrypted-state-native": "bun scripts/check-encrypted-state-native.ts"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
