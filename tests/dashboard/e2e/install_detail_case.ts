@@ -689,7 +689,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await install.click();
       // Reading, the sheet and the Plan follow on their own: nothing to press.
       const review = await waitForPlan(page);
-      await expect(installSheet(page).getByTestId("install-basics")).toBeVisible();
+      await expect(installSheet(page).getByTestId("install-customization")).toBeVisible();
+      await expect(installSheet(page).getByTestId("install-basics")).not.toBeVisible();
       await expect(install).toHaveCount(1);
       await expect(install).toBeEnabled();
       await expect(page.getByRole("dialog")).toHaveCount(0);
