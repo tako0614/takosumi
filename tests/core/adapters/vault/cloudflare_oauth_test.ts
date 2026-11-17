@@ -21,16 +21,17 @@ interface PrivateHintControl {
   readonly inputs?: Readonly<Record<string, MaterialForControl>>;
 }
 
-async function fixture(legacy = false, selectedAccountId?: string, control?: PrivateHintControl) {
+async function fixture(legacy = false, selectedAccountId?: string, control?: PrivateHintControl, grantedScopes?: string) {
   const store = new InMemoryOpenTofuControlStore();
   await store.putWorkspace({ id: authority.workspaceId, handle: "oauth", displayName: "OAuth", type: "personal",
     ownerUserId: "owner", createdAt: new Date(start).toISOString(), updatedAt: new Date(start).toISOString() });
   let now = start;
   let refreshes = 0;
+  let providerRequests = 0;
   let refreshFailure: "terminal" | "temporary" | undefined;
   let expectedRefreshToken = "refresh-fixture";
   let beforeRefresh: (() => Promise<void>) | undefined;
-  const vault = new StaticSecretConnectionVault({ store,
+  const vaultOptions: ConstructorParameters<typeof StaticSecretConnectionVault>[0] = { store,
     crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "fixture-oauth-vault-passphrase-0123456789" }),
     now: () => new Date(now), newId: () => "conn_oauth_fixture",
     credentialRecipeResolver: (id) => {
@@ -44,6 +45,7 @@ async function fixture(legacy = false, selectedAccountId?: string, control?: Pri
     },
     credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
     fetch: async (url, init) => {
+      providerRequests++;
       if (url === "https://dash.cloudflare.com/oauth2/token") {
         refreshes++;
         expect(new URLSearchParams(String(init?.body)).get("refresh_token")).toBe(expectedRefreshToken);
@@ -60,7 +62,8 @@ async function fixture(legacy = false, selectedAccountId?: string, control?: Pri
       if (url.endsWith(account)) return Response.json({ success: true, result: { id: account } });
       throw new Error("Unexpected provider request");
     },
-  });
+  };
+  const vault = new StaticSecretConnectionVault(vaultOptions);
   const scopeHints = selectedAccountId ? { providerSettings: { accountId: selectedAccountId } } : undefined;
   const descriptor = selectedAccountId ? cloudflareOAuthDescriptorFromEnv({
     TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "client-id-fixture",
@@ -68,9 +71,9 @@ async function fixture(legacy = false, selectedAccountId?: string, control?: Pri
   })! : undefined;
   const values = legacy ? { CLOUDFLARE_API_TOKEN: "legacy-access-fixture" } : descriptor
     ? descriptor.mapTokenResponse({ helperId: "cloudflare", clientId: descriptor.clientId,
-      tokenResponse: { access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600 }, scopeHints })
+      tokenResponse: { access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600, ...(grantedScopes === undefined ? {} : { scope: grantedScopes }) }, scopeHints })
     : cloudflareOAuthValues({ clientId: "client-id-fixture",
-      tokenResponse: { access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600 }, now: start });
+      tokenResponse: { access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600, ...(grantedScopes === undefined ? {} : { scope: grantedScopes }) }, now: start });
   const registrationHints = scopeHints && control ? { providerSettings: {
     ...scopeHints.providerSettings,
     [control.hintKey]: control.hintMaterial ? values[control.hintMaterial]! : control.hintValue!,
@@ -79,8 +82,26 @@ async function fixture(legacy = false, selectedAccountId?: string, control?: Pri
     credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" },
     materialization: "oauth", ...(registrationHints ? { scopeHints: registrationHints } : {}), values }, authority, null);
   return { store, vault, connection, advance: (elapsed = 3600_000) => { now += elapsed; },
+    providerRequests: () => providerRequests,
+    restartWithScopes: (scopes: string) => new StaticSecretConnectionVault({ ...vaultOptions,
+      credentialDrivers: referenceCredentialDriversFromEnv({ TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "client-id-fixture", TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES: scopes }) }),
     refreshes: () => refreshes, failRefresh: (kind: "terminal" | "temporary" = "terminal") => { refreshFailure = kind; }, recover: () => { refreshFailure = undefined; },
     beforeRefresh: (fn: () => Promise<void>) => { beforeRefresh = fn; } };
+}
+
+for (const granted of [undefined, "account-settings.read workers-scripts.admin offline_access"]) {
+  test(`a host scope expansion marks an unexpired ${granted ? "narrow" : "unknown"} grant pending before any provider request`, async () => {
+    const f = await fixture(false, account, undefined, granted);
+    expect(await f.vault.test(f.connection.id, authority, null)).toEqual({ status: "verified" });
+    const before = await f.store.getSecretBlob(f.connection.id);
+    const requests = f.providerRequests();
+    const restarted = f.restartWithScopes("account-settings.read workers-scripts.admin d1.write workers-kv-storage.write workers-r2.write queues.write offline_access");
+    await expect(restarted.mint(authority.workspaceId, [provider])).rejects.toMatchObject({ reason: "provider_connection_setup_required" });
+    expect((await f.store.getConnection(f.connection.id))?.status).toBe("pending");
+    expect((await f.store.getSecretBlob(f.connection.id))?.ciphertext).toBe(before?.ciphertext);
+    expect(f.providerRequests()).toBe(requests);
+    expect(f.refreshes()).toBe(0);
+  });
 }
 
 test("OAuth preserves an explicitly selected account through recipe verification and public hints", async () => {

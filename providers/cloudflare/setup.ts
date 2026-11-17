@@ -37,6 +37,7 @@ export function cloudflareOAuthDescriptorFromEnv(
   if (!clientId || !redirectUri) {
     return undefined;
   }
+  const scopes = splitScopes(env.TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES);
   return {
     id: "cloudflare",
     providerSource: PROVIDER_SOURCE,
@@ -55,7 +56,7 @@ export function cloudflareOAuthDescriptorFromEnv(
     pkce: true,
     browserBindingRequired: true,
     setupFields: [{ key: "accountId", envName: "CLOUDFLARE_ACCOUNT_ID" }],
-    scopes: splitScopes(env.TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES),
+    scopes,
     mapTokenResponse: ({ tokenResponse, helperId, scopeHints }) => {
       const token = tokenResponse.access_token;
       if (typeof token !== "string" || token.length === 0) {
@@ -64,7 +65,7 @@ export function cloudflareOAuthDescriptorFromEnv(
         );
       }
       const account = scopeHints?.providerSettings?.accountId;
-      return { ...cloudflareOAuthValues({ tokenResponse, clientId, now: Date.now() }),
+      return { ...cloudflareOAuthValues({ tokenResponse, clientId, requestedScopes: scopes, now: Date.now() }),
         ...(typeof account === "string" && account ? { CLOUDFLARE_ACCOUNT_ID: account } : {}) };
     },
   };
