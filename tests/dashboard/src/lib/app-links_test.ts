@@ -8,6 +8,7 @@ import {
   appPageHref,
   appPageSectionFromHash,
   installAttemptHref,
+  isSameAppPaneNavigation,
   legacyAppTabSection,
   legacyInstallLocatorCapsuleId,
   reinstallHref,
@@ -34,6 +35,30 @@ describe("app page links", () => {
     expect(appPageSectionFromHash("#linked")).toBeUndefined();
     expect(appPageSectionFromHash("#constructor")).toBeUndefined();
     expect(appPageSectionFromHash("#app-settings")).toBeUndefined();
+  });
+
+  test("the draft stays on the canonical app while moving among its panes and overview", () => {
+    const from = { pathname: "/apps/cap_a", search: "?experiment=1", hash: "#settings" };
+    const connections = { ...from, hash: "#connections" };
+    const overview = { ...from, hash: "" };
+    expect(isSameAppPaneNavigation("cap_a", from, connections)).toBe(true);
+    expect(isSameAppPaneNavigation("cap_a", connections, from)).toBe(true);
+    expect(isSameAppPaneNavigation("cap_a", from, overview)).toBe(true);
+    expect(isSameAppPaneNavigation("cap_a", overview, from)).toBe(true);
+  });
+
+  test("a changed route, query, or unknown fragment is not a pane switch", () => {
+    const from = { pathname: "/apps/cap_a", search: "", hash: "#settings" };
+    for (const to of [
+      { ...from, pathname: "/apps/cap_b", hash: "#connections" },
+      { ...from, pathname: "/workloads/cap_a/connections", hash: "" },
+      { ...from, pathname: "/", hash: "" },
+      { ...from, search: "?experiment=1", hash: "#connections" },
+      { ...from, hash: "#unknown" },
+      from,
+    ]) {
+      expect(isSameAppPaneNavigation("cap_a", from, to)).toBe(false);
+    }
   });
 
   test("old tab routes keep landing on the part of the page they meant", () => {

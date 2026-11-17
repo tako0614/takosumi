@@ -1,14 +1,14 @@
-/* Installed-app page and Home (TASK-0115). Behavior sections as cards, one
-   primary action per card, lists that become stacked cards under 640px. */
+/* App overview: one launch action and grouped navigation. Detail panes
+   retain the same-app controls and only show the selected section. */
 
-.ap-page { width: min(100%, 60rem); margin-inline: auto; display: grid; gap: var(--tg-s-5); min-width: 0; }
+.ap-page { width: min(100%, 48rem); margin-inline: auto; display: grid; gap: var(--tg-s-5); min-width: 0; }
 .ap-muted { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; margin: 0; }
 .ap-notice { margin: 0; padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-success); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); color: var(--tg-fg); font-size: var(--tg-fs-sm); }
 .ap-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); }
 .ap-row-actions .tg-btn { white-space: nowrap; }
 .ap-page code { font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); overflow-wrap: anywhere; }
 
-/* Header: face, name, one-sentence state, Open / Update. */
+/* Header: face, name, one launch action, and an exception when needed. */
 .ap-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--tg-s-4); }
 .ap-icon { width: 4.5rem; height: 4.5rem; flex: none; display: grid; place-items: center; overflow: hidden; border-radius: var(--tg-r-lg); background: var(--tg-bg-subtle); border: 1px solid var(--tg-line); font-size: 1.5rem; font-weight: 700; }
 .ap-icon img { width: 100%; height: 100%; object-fit: cover; }
@@ -31,13 +31,65 @@
 .ap-open-change { align-self: center; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); text-decoration: underline; text-underline-offset: 2px; }
 .ap-open-change:hover, .ap-open-change:focus-visible { color: var(--tg-fg); }
 
-/* In-page jump links to each section. */
-.ap-jump { display: flex; flex-wrap: wrap; gap: var(--tg-s-1); padding-bottom: var(--tg-s-2); border-bottom: 1px solid var(--tg-line); font-size: var(--tg-fs-sm); }
-.ap-jump a { display: inline-flex; align-items: center; min-height: 44px; padding-inline: var(--tg-s-3); border-radius: var(--tg-r-md); color: var(--tg-fg-muted); text-decoration: none; }
-.ap-jump a:hover, .ap-jump a:active { color: var(--tg-fg); background: var(--tg-bg-subtle); }
-.ap-jump a:focus-visible { color: var(--tg-fg); outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+/* The overview menu is a list of destinations, not a second control panel. */
+.ap-management { display: grid; gap: var(--tg-s-4); min-width: 0; }
+.ap-menu-group {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  overflow: clip;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
+  list-style: none;
+}
+.ap-menu-group > li + li { border-block-start: 1px solid var(--tg-line); }
+.ap-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  min-width: 0;
+  min-height: 3.5rem;
+  padding: var(--tg-s-2) var(--tg-s-3);
+  color: var(--tg-fg);
+  text-decoration: none;
+}
+.ap-menu-row:hover { color: var(--tg-fg); background: var(--tg-bg-subtle); }
+.ap-menu-row:active { background: var(--tg-bg-hi); }
+.ap-menu-row:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: -3px; }
+.ap-menu-icon {
+  display: grid;
+  flex: 0 0 2rem;
+  min-height: 2rem;
+  place-items: center;
+  border-radius: var(--tg-r-sm);
+  background: var(--tg-bg-hi);
+  color: var(--tg-fg-muted);
+}
+.ap-menu-label { min-width: 0; flex: 1 1 auto; font-weight: 600; }
+.ap-menu-detail { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); white-space: nowrap; }
+.ap-menu-chevron { flex: none; color: var(--tg-fg-muted); }
+.ap-page .ap-menu-row-danger .ap-menu-label,
+.ap-menu-row-danger .ap-menu-icon { color: var(--tg-danger-text); }
+.ap-overview-back {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  gap: var(--tg-s-1);
+  min-height: 44px;
+  padding-inline: var(--tg-s-2);
+  border-radius: var(--tg-r-md);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  text-decoration: none;
+}
+.ap-overview-back:hover { color: var(--tg-fg); background: var(--tg-bg-subtle); }
+.ap-overview-back:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
 
-/* Section cards. */
+/* The selected pane stays flat; individual notices keep their meaning. */
+.ap-page .ap-section.tg-card { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+.ap-page .ap-section[hidden],
+.ap-settings-fields[hidden] { display: none; }
 .ap-section { display: grid; gap: var(--tg-s-4); min-width: 0; scroll-margin-top: calc(var(--tg-topbar-h, 3.5rem) + var(--tg-s-4)); overflow: visible; }
 .ap-section-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--tg-s-3); }
 .ap-section-head h2 { margin: 0; font-size: var(--tg-fs-lg); letter-spacing: -0.01em; }
@@ -76,13 +128,19 @@
 .ap-version-form .tg-form-field, .ap-version-form label { max-width: 28rem; }
 
 /* Settings. */
-.ap-settings-form { display: grid; gap: var(--tg-s-4); min-width: 0; }
+.ap-settings-form,
+.ap-settings-fields { display: grid; gap: var(--tg-s-4); min-width: 0; }
+.ap-settings-fields { margin: 0; padding: 0; border: 0; }
+.ap-settings-read-state { display: grid; justify-items: start; gap: var(--tg-s-2); }
+.ap-settings-read-state p { margin: 0; }
+.ap-settings-read-state span { display: inline-flex; align-items: center; gap: var(--tg-s-2); }
 .ap-variables { display: grid; gap: var(--tg-s-3); }
 .ap-variable-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--tg-s-2); min-width: 0; }
 
 /* What it created. */
-.ap-clouds { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: var(--tg-s-3); margin: 0; padding: 0; list-style: none; }
-.ap-cloud { display: grid; gap: var(--tg-s-2); align-content: start; padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); min-width: 0; }
+.ap-clouds { display: grid; margin: 0; padding: 0; list-style: none; }
+.ap-cloud { display: grid; gap: var(--tg-s-2); padding-block: var(--tg-s-3); min-width: 0; }
+.ap-cloud + .ap-cloud { border-block-start: 1px solid var(--tg-line); }
 .ap-cloud-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--tg-s-2); }
 .ap-cloud-items { display: grid; gap: var(--tg-s-1); margin: 0; padding: 0; list-style: none; font-size: var(--tg-fs-sm); }
 .ap-cloud-items li { display: flex; justify-content: space-between; gap: var(--tg-s-2); }

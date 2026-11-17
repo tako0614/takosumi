@@ -1,15 +1,10 @@
-/* 接続 and アカウント pages. Lists are cards at every width, so nothing
- * scrolls sideways on a phone; rows wrap their actions under the text below
- * 640px. */
+/* Connection and account settings. Workspace-managed lists keep their existing treatment. */
 
 .acct-page {
   display: flex;
   flex-direction: column;
   gap: var(--tg-s-4);
   max-width: 880px;
-}
-.acct-tabs {
-  margin-bottom: 0;
 }
 .acct-section {
   display: flex;
@@ -21,12 +16,6 @@
   flex-direction: column;
   gap: var(--tg-s-4);
 }
-.acct-workspace-note {
-  margin: 0;
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-  font-weight: 600;
-}
 .acct-help,
 .acct-footnote {
   margin: 0;
@@ -36,13 +25,6 @@
 }
 .acct-footnote {
   color: var(--tg-fg-subtle);
-}
-.acct-pref + .acct-pref {
-  margin-top: var(--tg-s-4);
-}
-.acct-pref-label {
-  margin: 0 0 var(--tg-s-2);
-  font-weight: 650;
 }
 
 /* Lists of people, keys, usage, connections. */
@@ -57,8 +39,7 @@
   font-weight: 700;
 }
 .acct-list,
-.conn-list,
-.acct-link-list {
+.conn-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -124,12 +105,6 @@
   flex-wrap: wrap;
   gap: var(--tg-s-2);
   font-size: var(--tg-fs-sm);
-}
-.acct-link-list a {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--tg-s-2);
 }
 
 /* Roles, one line each. */
@@ -205,22 +180,244 @@
   line-height: 1.45;
 }
 
-/* 接続: one card per connection, with the apps that use it. */
-.conn-card {
+/* Grouped settings use one surface for all related rows. */
+.tg-settings-page {
+  width: min(100%, 42rem);
+}
+.tg-settings-page .tg-page-header {
+  margin-bottom: 0;
+}
+.tg-settings-page .tg-page-title {
+  overflow-wrap: anywhere;
+}
+.tg-settings-section {
+  display: grid;
+  gap: var(--tg-s-2);
+  min-width: 0;
+}
+.tg-settings-heading {
+  margin: 0;
+  padding-inline: var(--tg-s-4);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 650;
+}
+.tg-settings-group,
+.tg-settings-page .acct-list {
   display: flex;
   flex-direction: column;
-  gap: var(--tg-s-2);
-  padding: var(--tg-s-4);
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
 }
-.conn-card-head {
+.tg-settings-group > :not(:first-child),
+.tg-settings-page .acct-list > :not(:first-child) {
+  border-top: 1px solid var(--tg-line);
+}
+.tg-settings-group > :first-child,
+.tg-settings-list-item:first-child .tg-settings-row {
+  border-start-start-radius: var(--tg-r-lg);
+  border-start-end-radius: var(--tg-r-lg);
+}
+.tg-settings-group > :last-child,
+.tg-settings-list-item:last-child:not(:has(details[open])) .tg-settings-row {
+  border-end-start-radius: var(--tg-r-lg);
+  border-end-end-radius: var(--tg-r-lg);
+}
+.tg-settings-page .acct-list > .acct-row {
+  background: transparent;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  box-shadow: none;
+  transform: none;
+  min-width: 0;
+}
+.tg-settings-page .acct-list > .acct-row:first-child {
+  border-top: 0;
+}
+.tg-settings-page .acct-row-meta,
+.tg-settings-page .acct-confirm {
+  overflow-wrap: anywhere;
+}
+.tg-settings-page .acct-row-actions,
+.tg-settings-page .acct-confirm {
+  flex-wrap: wrap;
+}
+.tg-settings-page :is(.tg-btn, .tg-input, .tg-select) {
+  min-height: 44px;
+}
+.tg-settings-row {
+  min-height: 52px;
+  margin: 0;
+  width: 100%;
+  min-width: 0;
   display: flex;
+  gap: var(--tg-s-3);
   align-items: center;
+  padding: var(--tg-s-2) var(--tg-s-4);
+  color: var(--tg-fg);
+}
+.tg-settings-row-wrap {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.tg-settings-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-weight: 620;
+  overflow-wrap: anywhere;
+}
+.tg-settings-value {
+  min-width: 0;
+  flex: 0 1 auto;
+  margin: 0;
+  color: var(--tg-fg-muted);
+  text-align: end;
+  font-size: var(--tg-fs-sm);
+  overflow-wrap: anywhere;
+}
+.tg-settings-row-text {
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--tg-s-1);
+  min-width: 0;
+}
+.tg-settings-note {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.tg-settings-section > .tg-settings-note {
+  padding-inline: var(--tg-s-4);
+}
+.tg-settings-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+.tg-settings-link:hover,
+.tg-settings-link:focus-visible {
+  color: var(--tg-fg);
+  background: var(--tg-bg-subtle);
+}
+.tg-settings-link:focus-visible,
+.tg-settings-back:focus-visible {
+  outline: 2px solid var(--tg-accent);
+  outline-offset: -2px;
+}
+.tg-settings-link > svg {
+  flex: none;
+  color: var(--tg-fg-muted);
+}
+.tg-settings-symbol {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-hi);
+  color: var(--tg-fg);
+}
+.tg-settings-back {
+  display: flex;
+  width: fit-content;
+  gap: var(--tg-s-2);
+  align-items: center;
+  min-height: 44px;
+  color: var(--tg-fg-muted);
+  text-decoration: none;
+}
+.tg-settings-back:hover {
+  color: var(--tg-fg);
+}
+.tg-settings-select.tg-select {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 65%;
+  padding-inline-start: var(--tg-s-3);
+  border-color: var(--tg-line);
+  background-color: var(--tg-bg-elev);
+  text-align: end;
+  color: var(--tg-fg-muted);
+}
+.tg-settings-actions,
+.tg-settings-section-head {
+  display: flex;
   flex-wrap: wrap;
   gap: var(--tg-s-2);
+  align-items: center;
 }
-.conn-card-name {
-  font-weight: 700;
-  overflow-wrap: anywhere;
+.tg-settings-section-head {
+  justify-content: space-between;
+}
+.tg-settings-section-head > p {
+  flex: 1 1 16rem;
+}
+.tg-settings-tip > summary,
+.conn-details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.tg-settings-tip > summary::-webkit-details-marker,
+.conn-details > summary::-webkit-details-marker {
+  display: none;
+}
+.tg-settings-tip > summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 44px;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.tg-settings-tip > summary::before {
+  content: "›";
+  margin-inline-end: var(--tg-s-2);
+}
+.tg-settings-tip[open] > summary::before {
+  transform: rotate(90deg);
+}
+.tg-settings-page .wc-api-key-create {
+  grid-template-columns: minmax(0, 1fr);
+}
+.conn-add-action {
+  display: flex;
+  justify-content: flex-end;
+}
+.conn-details[open] > summary .conn-chevron {
+  transform: rotate(90deg);
+}
+.conn-details[open] > summary {
+  border-bottom: 1px solid var(--tg-line);
+}
+.conn-detail-body,
+.conn-row-feedback {
+  display: grid;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-3) var(--tg-s-4);
+}
+.conn-row-feedback {
+  padding-top: 0;
+}
+.conn-create-settings {
+  display: grid;
+  gap: var(--tg-s-4);
+}
+.conn-create-settings .wc-guided {
+  min-width: 0;
 }
 .conn-card-meta {
   display: flex;
@@ -250,9 +447,12 @@
 }
 .conn-apps-list a {
   display: inline-flex;
-  padding: 2px var(--tg-s-2);
+  align-items: center;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+  padding: var(--tg-s-1) var(--tg-s-2);
   border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-full);
+  border-radius: var(--tg-r-md);
   background: var(--tg-bg-subtle);
   color: var(--tg-fg);
   font-weight: 600;
@@ -261,18 +461,7 @@
 .conn-apps-list a:hover {
   border-color: var(--tg-line-strong);
 }
-.conn-card-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tg-s-2);
-}
-
 @media (max-width: 640px) {
-  /* Five sections fit on a phone without a hidden, scrolled-away tab. */
-  .tg-tabs.acct-tabs {
-    flex-wrap: wrap;
-    overflow-x: visible;
-  }
   .acct-row,
   .acct-danger-row {
     flex-direction: column;
@@ -280,6 +469,16 @@
   }
   .acct-row-amount {
     align-self: flex-start;
+  }
+  .tg-settings-row {
+    gap: var(--tg-s-2);
+    padding-inline: var(--tg-s-3);
+  }
+  .tg-settings-page .acct-confirm .tg-btn {
+    flex: 0 1 auto;
+  }
+  .conn-details > summary > .tg-badge {
+    flex: none;
   }
   .acct-role {
     grid-template-columns: 1fr;

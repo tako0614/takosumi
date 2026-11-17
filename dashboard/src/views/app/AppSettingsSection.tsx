@@ -60,6 +60,7 @@ import {
 } from "../../lib/provider-connections.ts";
 import { providerConnectionStatusLabel } from "../../lib/labels.ts";
 import { providerRowLabels } from "../../lib/app-page.ts";
+import { isSameAppPaneNavigation } from "../../lib/app-links.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { randomUuid } from "../../lib/random-uuid.ts";
@@ -70,6 +71,31 @@ import { AppSection } from "./app-ui.tsx";
 function providerTail(provider: string): string {
   const normalized = provider.toLowerCase().trim();
   return normalized.split("/").at(-1) ?? normalized;
+}
+
+function bindingFingerprint(bindings: ProviderBindings): string {
+  return JSON.stringify(bindings.map((row) => JSON.stringify([
+    row.provider,
+    row.moduleLocalName ?? providerTail(row.provider),
+    row.childAlias,
+    row.rootAlias ?? row.alias,
+    row.connectionId,
+    row.region,
+    row.runCredentialSettings,
+  ])).sort());
+}
+
+interface SettingsRead {
+  readonly config: InstallConfig;
+  readonly guard: string;
+  readonly bindings: ProviderBindings | undefined;
+  readonly bindingFingerprint: string | undefined;
+}
+
+function draftConflicts(base: SettingsRead, current: SettingsRead): boolean {
+  return base.config.id !== current.config.id || base.guard !== current.guard ||
+    (base.bindingFingerprint !== undefined && current.bindingFingerprint !== undefined &&
+      base.bindingFingerprint !== current.bindingFingerprint);
 }
 
 /** Connections that can serve this provider row. */
@@ -142,6 +168,7 @@ function experienceVariableNames(config: InstallConfig | undefined): ReadonlySet
 
 export default function AppSettingsSection(props: {
   readonly capsuleId: string;
+  readonly pane?: "settings" | "connections";
   readonly workspaceId?: string;
   readonly member?: boolean;
   readonly accessKnown?: boolean;
@@ -154,8 +181,12 @@ export default function AppSettingsSection(props: {
   /** Changes when a settings review closes unapplied: the form re-reads what the app runs. */
   readonly seed: number;
   readonly authorityGuard: string | undefined;
+  readonly authorityLoading: boolean;
+  readonly authorityFailed: boolean;
   readonly bindings: ProviderBindings | undefined;
+  readonly bindingsLoading: boolean;
   readonly bindingsFailed: boolean;
+  readonly onRetryReads: () => void;
   readonly connections: readonly ProviderConnection[];
   readonly onConnectionsChanged: () => void;
   readonly reviewBusy: boolean;
@@ -171,6 +202,10 @@ export default function AppSettingsSection(props: {
   const [rows, setRows] = createSignal<ProviderBinding[]>([]);
   const [bindingsDirty, setBindingsDirty] = createSignal(false);
   const [variableRows, setVariableRows] = createSignal<ConfigVariableRow[]>([]);
+  const [draftBase, setDraftBase] = createSignal<{
+    readonly read: SettingsRead;
+    readonly seed: number;
+  }>();
   const [formError, setFormError] = createSignal<string>();
   const [connecting, setConnecting] = createSignal<number>();
   const [connectionMessages, setConnectionMessages] = createSignal<
@@ -186,30 +221,71 @@ export default function AppSettingsSection(props: {
     | undefined;
   const review = props.review;
 
-  createEffect(
-    on(
-      [() => props.bindings, () => props.seed],
-      ([bindings]) => {
-        if (!bindings) return;
-        setRows([...bindings]);
-        setBindingsDirty(false);
-      },
-    ),
-  );
-  // Seed only from the install config: `on` keeps a language switch from
-  // re-seeding the rows and discarding unsaved edits.
-  createEffect(
-    on(
-      [() => props.installConfig, () => props.seed],
-      ([config]) => setVariableRows([...configRowsFromInstallConfig(config, locale())]),
-    ),
-  );
-
   const dirty = () =>
     bindingsDirty() ||
     variableRows().some((row) => row.dirty || row.deleted === true || row.resetToDefault);
+  // The config, current authority, and bindings arrive in separate reads.
+  // Never adopt a refreshing response as the new base of a draft.
+  const configCurrent = () =>
+    !props.installConfigLoading &&
+    props.installConfig !== undefined &&
+    props.installConfig.id === props.capsuleInstallConfigId;
+  const currentRead = createMemo<SettingsRead | undefined>(() => {
+    const config = props.installConfig;
+    const guard = props.authorityGuard;
+    if (!config || !configCurrent() || !guard || props.authorityLoading || props.authorityFailed) {
+      return undefined;
+    }
+    const bindings = props.bindingsLoading || props.bindingsFailed ? undefined : props.bindings;
+    return { config, guard, bindings, bindingFingerprint: bindings && bindingFingerprint(bindings) };
+  });
+  const conflicts = createMemo(() => {
+    const base = draftBase();
+    const current = currentRead();
+    return Boolean(base && current && dirty() && draftConflicts(base.read, current));
+  });
+  const loadDraft = (read: SettingsRead, seed: number) => {
+    setVariableRows([...configRowsFromInstallConfig(read.config, locale())]);
+    setRows([...(read.bindings ?? [])]);
+    setBindingsDirty(false);
+    setConnecting(undefined);
+    setConnectionMessages({});
+    setFormError(undefined);
+    setDraftBase({ read, seed });
+  };
+  // Seed only on the first read, explicit reset, or newly saved configuration.
+  // A same-head refetch can produce new objects while a pane is hidden.
+  createEffect(on([currentRead, () => props.seed], ([read, seed]) => {
+    if (!read) return;
+    const base = draftBase();
+    if (!base || base.seed !== seed || (!dirty() && draftConflicts(base.read, read))) {
+      loadDraft(read, seed);
+    } else if (base.read.bindingFingerprint === undefined && read.bindings !== undefined &&
+      !draftConflicts(base.read, read)) {
+      // The values may be editable before bindings finish their first read.
+      setRows([...read.bindings]);
+      setDraftBase({ read, seed });
+    }
+  }));
+  const hasSettingsReadError = () =>
+    (!props.installConfigLoading && !configCurrent()) ||
+    (!props.authorityLoading && (props.authorityFailed || !props.authorityGuard));
+  const readPending = () =>
+    props.installConfigLoading || props.authorityLoading || props.bindingsLoading;
   useBeforeLeave((event) => {
     if (event.defaultPrevented || !dirty()) return;
+    // Solid supplies a delta for browser Back/Forward. At that point the
+    // browser URL is the destination, while event.from is the old route.
+    try {
+      const current = window.location;
+      const destination = typeof event.to === "number"
+        ? current
+        : new URL(event.to, current.href);
+      if (destination.origin === current.origin &&
+        isSameAppPaneNavigation(props.capsuleId, event.from, destination)) return;
+    } catch {
+      // An unparseable destination never exempts a dirty form.
+    }
     event.preventDefault();
     void (async () => {
       const proceed = await confirm({
@@ -248,7 +324,7 @@ export default function AppSettingsSection(props: {
         };
       }),
     );
-  const experienceNames = createMemo(() => experienceVariableNames(props.installConfig));
+  const experienceNames = createMemo(() => experienceVariableNames(draftBase()?.read.config));
   const visibleRows = createMemo(() => variableRows().filter((row) => !row.deleted));
   const declaredRows = createMemo(() =>
     visibleRows().filter(
@@ -296,25 +372,11 @@ export default function AppSettingsSection(props: {
     props.onConnectionsChanged();
   };
 
-  /**
-   * The values and the authority guard come from separate reads. Review is
-   * offered only when the form was read from the configuration the app runs
-   * now, so a refresh after an apply can never pair the previous version's
-   * screens with the new guard.
-   */
-  const configCurrent = () =>
-    !props.installConfigLoading &&
-    props.installConfig !== undefined &&
-    props.installConfig.id === props.capsuleInstallConfigId;
-
   const submit = () => {
     setFormError(undefined);
-    const config = props.installConfig;
-    const guard = props.authorityGuard;
-    if (!config || !guard || props.bindings === undefined || !configCurrent()) {
-      setFormError(t("app.settings.notReady"));
-      return;
-    }
+    const read = currentRead();
+    if (!read?.bindings || conflicts() || props.accessKnown === false || props.reviewBusy || !dirty()) return;
+    const { config, guard } = read;
     const bindings = props.member && !bindingsDirty()
       ? { bindings: rows() } : reviewedBindings(rows(), props.connections, props.memberConnectionChoices);
     if ("error" in bindings) {
@@ -353,11 +415,11 @@ export default function AppSettingsSection(props: {
     });
   };
 
+  const connectionPane = () => props.pane === "connections";
   return (
     <AppSection
-      id="settings"
-      title={t("app.settings.title")}
-      subtitle={t("app.settings.subtitle")}
+      id={connectionPane() ? "connections" : "settings"}
+      title={t(connectionPane() ? "app.manage.connections" : "app.settings.title")}
       testId="app-settings"
     >
       <form
@@ -367,14 +429,12 @@ export default function AppSettingsSection(props: {
           submit();
         }}
       >
-        <Switch>
-          <Match when={props.installConfigLoading && !props.installConfig}>
-            <Spinner size={18} />
-          </Match>
-          <Match when={!props.installConfig}>
-            <p class="ap-muted">{t("app.settings.notReady")}</p>
-          </Match>
-          <Match when={props.installConfig}>
+        <fieldset
+          class="ap-settings-fields"
+          hidden={connectionPane()}
+          disabled={connectionPane() || !currentRead() || conflicts() || props.starting}
+        >
+          <Show when={draftBase()}>
             <Show
               when={declaredRows().length + optionalRows().length + otherRows().length > 0}
               fallback={<p class="ap-muted">{t("app.settings.noValues")}</p>}
@@ -390,22 +450,19 @@ export default function AppSettingsSection(props: {
                 <VariableRows rows={otherRows()} onChange={editVariable} onReset={resetVariable} />
               </Show>
             </Show>
-          </Match>
-        </Switch>
+          </Show>
+        </fieldset>
 
-        <div class="ap-subsection" id="connections" data-testid="app-connections">
-          <h3>{t("app.settings.connectionsTitle")}</h3>
-          <Switch>
-            <Match when={props.bindingsFailed}>
-              <p class="wa-error" role="alert">{t("app.settings.connectionsLoadFailed")}</p>
-            </Match>
-            <Match when={props.bindings === undefined}>
-              <Spinner size={18} />
-            </Match>
-            <Match when={rows().length === 0}>
+        <fieldset
+          class="ap-settings-fields"
+          hidden={!connectionPane()}
+          disabled={!connectionPane() || !currentRead()?.bindings || conflicts() || props.starting}
+          data-testid="app-connections"
+        >
+          <Show when={draftBase()?.read.bindings}>
+            <Show when={rows().length > 0} fallback={
               <p class="ap-muted">{t("app.settings.connectionsNone")}</p>
-            </Match>
-            <Match when={rows().length > 0}>
+            }>
               <p class="ap-muted">{t("app.settings.connectionsHint")}</p>
               <Index each={rows()}>
                 {(row, index) => {
@@ -486,9 +543,9 @@ export default function AppSettingsSection(props: {
                   );
                 }}
               </Index>
-            </Match>
-          </Switch>
-        </div>
+            </Show>
+          </Show>
+        </fieldset>
 
         <Show when={formError() ?? props.error}>
           {(message) => <p class="wa-error" role="alert">{message()}</p>}
@@ -499,6 +556,40 @@ export default function AppSettingsSection(props: {
         <Show when={props.changeWaits}>
           <p class="ap-muted" role="status" data-settings-waits>{t("app.settings.changeWaits")}</p>
         </Show>
+        <Show when={hasSettingsReadError() || props.bindingsFailed}>
+          <div class="ap-settings-read-state">
+            <Show when={hasSettingsReadError()}>
+              <p class="wa-error" role="alert" data-settings-read-error="config">{t("app.settings.configLoadFailed")}</p>
+            </Show>
+            <Show when={props.bindingsFailed}>
+              <p class="wa-error" role="alert" data-settings-read-error="bindings">{t("app.settings.connectionsLoadFailed")}</p>
+            </Show>
+            <Button type="button" variant="secondary" onClick={props.onRetryReads}>
+              {t("common.retry")}
+            </Button>
+          </div>
+        </Show>
+        <Show when={conflicts()}>
+          <div class="ap-settings-read-state" data-testid="app-settings-draft-conflict">
+            <p class="wa-error" role="alert">{t("app.settings.draftConflict")}</p>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!currentRead()?.bindings}
+              onClick={() => {
+                const read = currentRead();
+                if (read?.bindings) loadDraft(read, props.seed);
+              }}
+            >
+              {t("app.settings.reloadDraft")}
+            </Button>
+          </div>
+        </Show>
+        <Show when={readPending() && !hasSettingsReadError() && !props.bindingsFailed}>
+          <div class="ap-settings-read-state" role="status">
+            <span><Spinner size={18} /> {t("common.loading")}</span>
+          </div>
+        </Show>
         <div class="ap-row-actions">
           <Button
             variant="primary"
@@ -508,8 +599,8 @@ export default function AppSettingsSection(props: {
               props.accessKnown === false ||
               props.reviewBusy ||
               !configCurrent() ||
-              !props.authorityGuard ||
-              props.bindings === undefined ||
+              !currentRead()?.bindings ||
+              conflicts() ||
               !dirty()
             }
           >
@@ -623,6 +714,7 @@ function ConfigVariableInput(props: {
           id={id()}
           name={name()}
           type="number"
+          step="any"
           value={props.row.value}
           placeholder={props.row.placeholder}
           onInput={(event) => setValue(event.currentTarget.value)}

@@ -162,9 +162,9 @@
   display: flex;
   align-items: center;
   gap: var(--tg-s-3);
-  min-height: 40px;
+  min-height: var(--tg-control-height);
   padding: var(--tg-s-2) var(--tg-s-3);
-  border-radius: var(--tg-r-full);
+  border-radius: var(--tg-r-md);
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
   font-weight: 560;
@@ -252,7 +252,7 @@
 /* Current-workspace chip: avatar + name + caret, a single tap opens the menu. */
 .workspace-switcher-current {
   width: 100%;
-  min-height: 38px;
+  min-height: var(--tg-control-height);
   display: flex;
   align-items: center;
   gap: var(--tg-s-2);
@@ -487,8 +487,8 @@
   text-align: center;
 }
 .topbar-icon-btn {
-  width: 34px;
-  height: 34px;
+  width: var(--tg-control-height);
+  height: var(--tg-control-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -506,6 +506,11 @@
   color: var(--tg-fg);
 }
 .topbar-user {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tg-control-height);
+  min-height: var(--tg-control-height);
   border: 0;
   background: transparent;
   padding: 0;
@@ -634,7 +639,7 @@
     min-height: 44px;
   }
   .user-menu-lang-btn {
-    min-height: 40px;
+    min-height: var(--tg-control-height);
     padding: 4px 12px;
   }
 }
@@ -670,7 +675,7 @@
      ellipsis make long purpose names fit without reducing the control to an
      ambiguous initial. */
   .workspace-switcher.compact .workspace-switcher-current {
-    min-height: 36px;
+    min-height: var(--tg-control-height);
     padding: 3px var(--tg-s-2) 3px 3px;
     gap: var(--tg-s-1);
   }

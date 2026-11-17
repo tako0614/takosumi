@@ -93,6 +93,7 @@ export interface ConnectionCreateFormProps {
    * them.
    */
   readonly open?: boolean;
+  readonly settingsAppearance?: boolean;
   /** A connection was saved; the form inputs are already cleared. */
   readonly onCreated: (connection: ProviderConnection) => void | Promise<void>;
   /**
@@ -371,7 +372,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
 
   return (
     <Show when={props.open ?? true}>
-      <Card>
+      <Card class={props.settingsAppearance ? "conn-create-settings" : undefined}>
         <Show when={personalScope.error}>
           <Toast tone="error">{friendlyError(personalScope.error, t).message}
             <Button variant="secondary" onClick={() => void refetchScope()}>{t("common.retry")}</Button>
@@ -425,7 +426,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
 
           <FormField
             label={t("conn.add.displayName")}
-            hint={t("conn.add.displayNameHint")}
+            hint={props.settingsAppearance ? undefined : t("conn.add.displayNameHint")}
           >
             <Input
               id="connection-display-name"
@@ -459,7 +460,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
             when={isGenericEnvProvider()}
             fallback={
               <div hidden={Boolean(oauthHelper()) && !manualCredentials()}>
-                <Show when={setupOption()?.description}>
+                <Show when={!props.settingsAppearance || !setupGuide() ? setupOption()?.description : undefined}>
                   {(description) => <p class="muted">{description()}</p>}
                 </Show>
                 <Show when={setupGuide()}>
@@ -542,7 +543,9 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
               <div class="wc-byok-intro">
                 <h2 class="wc-byok-title">{t("conn.byok.title")}</h2>
                 <p class="muted">{t("conn.byok.body")}</p>
-                <p class="wc-byok-note">{t("conn.byok.noBillingNote")}</p>
+                <Show when={!props.settingsAppearance}>
+                  <p class="wc-byok-note">{t("conn.byok.noBillingNote")}</p>
+                </Show>
               </div>
               <Show when={!credentialRecipes.loading && !genericEnvAvailable()}>
                 <Toast tone="neutral">{t("conn.byok.unavailable")}</Toast>

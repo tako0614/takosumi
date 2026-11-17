@@ -208,10 +208,13 @@ export async function readCapsuleAppSummaries(
   ctx: ControlDispatchContext,
   capsules: readonly Capsule[],
   now: number,
+  preloadedConfigs?: ReadonlyMap<string, InstallConfig>,
 ) {
   const configs = ctx.operations.capsules;
   const inventory = appReadInventory(ctx.operations);
-  const batch = configs.getInstallConfigsByIds && capsules.length > 0
+  const batch = preloadedConfigs
+    ? Promise.resolve({ value: preloadedConfigs, failed: false })
+    : configs.getInstallConfigsByIds && capsules.length > 0
     ? optional(async () => new Map((await configs.getInstallConfigsByIds!([...new Set(capsules.map((app) => app.installConfigId))])).map((row) => [row.id, row])))
     : undefined;
   return await Promise.all(capsules.map(async (capsule) => {

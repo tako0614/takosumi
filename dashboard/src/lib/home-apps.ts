@@ -28,6 +28,9 @@ interface HomePage {
   readonly apps: readonly HomeApp[];
   readonly nextCursor?: string;
   readonly surfacesFailed?: boolean;
+  readonly workspaceId: string;
+  readonly requestedQuery: string;
+  readonly appliedQuery?: string;
 }
 
 interface ScreenRead {
@@ -49,7 +52,7 @@ function homeState(state: AccessibleApp["state"]): AppState {
 function fromSummary(entry: AccessibleApp): HomeApp {
   const state = homeState(entry.state);
   return {
-    id: entry.capsuleId, name: entry.name, displayName: entry.displayName, iconUrl: entry.iconUrl,
+    id: entry.capsuleId, name: entry.name ?? entry.capsuleId, displayName: entry.displayName, iconUrl: entry.iconUrl,
     role: entry.role, ownerDisplayName: entry.ownerDisplayName, state,
     surfaces: openableScreens(entry.screens ?? []), category: entry.screens?.[0]?.category,
     screensFailed: entry.incomplete?.includes("screens"),
@@ -58,24 +61,28 @@ function fromSummary(entry: AccessibleApp): HomeApp {
 }
 
 /** Only absence of the account collection route selects the old Workspace list. */
-async function loadHome(workspaceId: string): Promise<HomePage> {
-  const first = await listAccessibleAppsPage();
-  if (first) return { ...first, apps: first.apps.map(fromSummary) };
+async function loadHome(workspaceId: string, q: string, signal: AbortSignal): Promise<HomePage> {
+  const first = await listAccessibleAppsPage(undefined, signal, q);
+  const scope = { workspaceId, requestedQuery: q };
+  if (first) return { ...first, ...scope, apps: first.apps.map(fromSummary) };
   const workspaces = await listWorkspacesCached();
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
   const id = selectAvailableWorkspaceId(workspaceId, workspaces);
   setCurrentWorkspaceId(id);
-  if (!id) return { apps: [] };
+  if (!id) return { ...scope, apps: [] };
   const [capsules, surfaces] = await Promise.all([
     listCapsulesCached(id, { includeDestroyed: false }),
     listAuthorizedUiSurfaces(id).then((value) => ({ value, failed: false }), () => ({ value: [], failed: true })),
   ]);
   const byApp = new Map<string, (typeof surfaces.value)[number][]>();
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
   for (const surface of surfaces.value) {
     const own = byApp.get(surface.capsuleId);
     if (own) own.push(surface);
     else byApp.set(surface.capsuleId, [surface]);
   }
   return {
+    ...scope,
     apps: capsules.filter(isVisibleServiceCapsule).map((inst) => {
       const own = byApp.get(inst.id) ?? [];
       return { id: inst.id, name: inst.name, state: appState(inst), surfaces: own, category: own[0]?.category };
@@ -105,28 +112,85 @@ async function readScreen(app: HomeApp, signal: AbortSignal): Promise<ScreenRead
 /** Owns collection paging, search and the old-server launch adapter. No DOM or account mutations. */
 export function createHomeLibrary() {
   const SCREEN_READS_IN_FLIGHT = 4;
-  const [home, { refetch }] = createResource(
-    () => ({ workspaceId: currentWorkspaceId() }),
-    ({ workspaceId }) => loadHome(workspaceId),
-  );
   const [extra, setExtra] = createSignal<{
     readonly pages: readonly (readonly HomeApp[])[];
     readonly nextCursor?: string;
   }>();
-  const [query, setQuery] = createSignal("");
+  const [query, setQueryValue] = createSignal("");
+  const [acceptedPage, setAcceptedPage] = createSignal<HomePage>();
+  const [browsePage, setBrowsePage] = createSignal<HomePage>();
+  const term = createMemo(() => query().trim().toLowerCase());
+  const [serverQuery, setServerQuery] = createSignal("");
+  const [requestRevision, setRequestRevision] = createSignal(0);
   const [visible, setVisible] = createSignal<readonly HomeApp[]>([]);
   const [moreFailed, setMoreFailed] = createSignal(false);
   const [loadingMore, setLoadingMore] = createSignal(false);
+  const [seekNextMatch, setSeekNextMatch] = createSignal(false);
   const [screens, setScreens] = createSignal(new Map<string, ScreenRead>());
   const [retryScreens, setRetryScreens] = createSignal(0);
   let pendingPage: Promise<boolean> | undefined;
   let listRead = new AbortController();
+  const [requestInvalidated, setRequestInvalidated] = createSignal(false);
   const seenCursors = new Set<string>();
   const retrying = new Set<string>();
   onCleanup(() => listRead.abort());
 
-  const firstPage = () => home.error ? undefined : home.latest;
-  const cursor = () => extra() ? extra()?.nextCursor : firstPage()?.nextCursor;
+  function resetCollection() {
+    listRead.abort();
+    listRead = new AbortController();
+    seenCursors.clear(); retrying.clear(); pendingPage = undefined;
+    batch(() => {
+      setExtra(undefined); setLoadingMore(false); setMoreFailed(false); setSeekNextMatch(false);
+      setScreens(new Map()); setVisible([]); setRetryScreens((n) => n + 1);
+    });
+  }
+
+  function setQuery(value: string) {
+    batch(() => {
+      if (value.trim().toLowerCase() !== term()) { resetCollection(); setRequestInvalidated(true); }
+      setQueryValue(value);
+    });
+  }
+
+  const [home, { refetch }] = createResource(
+    () => ({ workspaceId: currentWorkspaceId(), q: serverQuery(), revision: requestRevision() }),
+    async ({ workspaceId, q }) => {
+      resetCollection();
+      setRequestInvalidated(false);
+      const signal = listRead.signal;
+      const isCurrent = () => !signal.aborted && q === term() && workspaceId === currentWorkspaceId();
+      try {
+        const page = await loadHome(workspaceId, q, signal);
+        if (!isCurrent()) return undefined;
+        batch(() => { setAcceptedPage(page); if (!q) setBrowsePage(page); });
+        return page;
+      } catch (error) {
+        if (!isCurrent()) return undefined;
+        throw error;
+      }
+    },
+  );
+  createEffect(() => {
+    const q = term();
+    const commitQuery = () => {
+      if (q !== untrack(serverQuery)) setServerQuery(q);
+      else if (untrack(requestInvalidated)) setRequestRevision((n) => n + 1);
+    };
+    if (!q) { commitQuery(); return; }
+    const timer = setTimeout(commitQuery, 200);
+    onCleanup(() => clearTimeout(timer));
+  });
+
+  const firstPage = () => {
+    if (home.error) return undefined;
+    const page = acceptedPage();
+    if (page?.workspaceId === currentWorkspaceId() && page.requestedQuery === term()) return page;
+    // While typing retain only the last accepted browse preview, never old search results.
+    const browse = browsePage();
+    return browse?.workspaceId === currentWorkspaceId() ? browse : undefined;
+  };
+  const cursor = () => firstPage()?.requestedQuery !== serverQuery() || term() !== serverQuery()
+    ? undefined : extra() ? extra()?.nextCursor : firstPage()?.nextCursor;
   const apps = createMemo(() => {
     const byId = new Map<string, HomeApp>();
     // Keep earlier pages in place when the server returns more apps.
@@ -138,13 +202,14 @@ export function createHomeLibrary() {
     return [...byId.values()];
   });
   const names = createMemo(() => new Map(apps().map((app) => [app.id, homeAppName(app)])));
-  const term = createMemo(() => query().trim().toLocaleLowerCase(locale()));
   const searchable = createMemo(() => apps().map((app) => ({
     app,
-    keys: [names().get(app.id) ?? "", app.name, app.ownerDisplayName ?? ""].map((part) => part.toLocaleLowerCase(locale())),
+    keys: [app.name, ...(typeof app.displayName === "string" ? [app.displayName] : Object.values(app.displayName ?? {})),
+      app.role === "member" ? app.ownerDisplayName ?? "" : ""].map((part) => part.toLowerCase()),
   })));
   const matches = createMemo(() => {
     const search = term();
+    if (firstPage()?.appliedQuery === search) return apps();
     return search
       ? searchable().filter(({ keys }) => keys.some((part) => part.includes(search))).map(({ app }) => app)
       : apps();
@@ -153,24 +218,31 @@ export function createHomeLibrary() {
   function loadNext(): Promise<boolean> {
     const next = cursor();
     if (pendingPage) return pendingPage;
-    if (!next) return Promise.resolve(false);
+    if (!next || home.loading) return Promise.resolve(false);
     const signal = listRead.signal;
+    const q = term();
+    const workspaceId = currentWorkspaceId();
+    const appliedQuery = firstPage()?.appliedQuery;
+    const isCurrent = () => !signal.aborted && q === term() && workspaceId === currentWorkspaceId();
     setLoadingMore(true);
     setMoreFailed(false);
-    pendingPage = listAccessibleAppsPage(next, signal).then((data) => {
-      if (signal.aborted || !data) return false;
+    pendingPage = listAccessibleAppsPage(next, signal, q).then((data) => {
+      if (!isCurrent()) return false;
+      if (!data || data.appliedQuery !== appliedQuery) { setMoreFailed(true); return false; }
       if (data.nextCursor && (data.nextCursor === next || seenCursors.has(data.nextCursor))) {
         setMoreFailed(true);
         return false;
       }
+      const page = data.apps.map(fromSummary);
       seenCursors.add(next);
-      setExtra((previous) => ({ pages: [...(previous?.pages ?? []), data.apps.map(fromSummary)], nextCursor: data.nextCursor }));
+      setSeekNextMatch(page.length === 0 && data.nextCursor !== undefined);
+      setExtra((previous) => ({ pages: [...(previous?.pages ?? []), page], nextCursor: data.nextCursor }));
       return true;
-    }, () => {
-      if (!signal.aborted) setMoreFailed(true);
+    }).catch(() => {
+      if (isCurrent()) setMoreFailed(true);
       return false;
     }).finally(() => {
-      if (!signal.aborted) {
+      if (isCurrent()) {
         pendingPage = undefined;
         setLoadingMore(false);
       }
@@ -179,24 +251,21 @@ export function createHomeLibrary() {
   }
 
   async function refresh() {
-    listRead.abort();
-    listRead = new AbortController();
-    seenCursors.clear();
-    retrying.clear();
-    pendingPage = undefined;
     resetAppOwnershipCache();
-    const requested = refetch();
-    batch(() => {
-      setExtra(undefined); setLoadingMore(false); setMoreFailed(false);
-      setScreens(new Map()); setRetryScreens((n) => n + 1);
-    });
-    await requested;
+    await refetch();
   }
 
-  // Browse one server page at a time. Search can cover every name by reading
-  // the remaining summaries, without fetching details for unrelated apps.
+  const searchComplete = () => Boolean(firstPage() && firstPage()!.requestedQuery === term() &&
+    serverQuery() === term() && !requestInvalidated() && !home.loading && !home.error && !cursor() && !loadingMore() &&
+    !moreFailed() && !firstPage()?.surfacesFailed);
+  const searching = () => Boolean(term() && !home.error && !moreFailed() &&
+    (requestInvalidated() || serverQuery() !== term() || home.loading || loadingMore()));
+
+  // Modern search continues only across empty candidate pages; nonempty pages
+  // wait for scrolling. Legacy servers still need a full client-side search.
   createEffect(() => {
-    if (term() && cursor() && !loadingMore() && !moreFailed() && !home.loading) void untrack(loadNext);
+    if (term() && cursor() && !loadingMore() && !moreFailed() && !home.loading &&
+      (firstPage()?.appliedQuery === undefined || apps().length === 0 || seekNextMatch())) void untrack(loadNext);
   });
 
   createEffect(() => {
@@ -235,5 +304,5 @@ export function createHomeLibrary() {
   }
 
   return { home, firstPage, cursor, apps, names, query, setQuery, term, matches,
-    setVisible, screens, loadingMore, moreFailed, failedScreens, retryVisible, refresh, loadNext };
+    searchComplete, searching, setVisible, screens, loadingMore, moreFailed, failedScreens, retryVisible, refresh, loadNext };
 }

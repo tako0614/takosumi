@@ -134,9 +134,13 @@ describe("attempt-driven install page", () => {
     const review = between(sheet, "function PlanReview(", "export function InstallScreen(");
     expect(review).toContain("getCapsuleApp(capsuleId)");
     expect(review.indexOf("<Show\n        when={!app.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
-    expect(review).toContain("if (app()?.applied) props.onDone(props.action.capsuleId);");
+    expect(review).toContain("if (currentApp()?.applied) props.onDone(props.action.capsuleId);");
     expect(review).toContain("view?.progress.run ?? view?.latestRun");
     expect(review).toContain("showPolicyReasons");
+    expect(review).not.toContain("getCapsuleApp(capsuleId).catch");
+    expect(review).toContain('data-testid="install-review-read-error"');
+    expect(review.indexOf('<Show when={!app.error}>')).toBeLessThan(review.indexOf("<InstallExecution"));
+    expect(review).toContain("onClick={() => void refetchApp()}");
   });
 
   test("installed apps are linked at /apps/:id", () => {
@@ -148,6 +152,13 @@ describe("attempt-driven install page", () => {
     // No separate review or module confirmation button remains.
     expect(sheet).not.toContain("installStore.reviewChanges");
     expect(sheet).not.toContain("installStore.moduleConfirm");
+    expect(sheet).not.toContain("installStore.moduleUse");
+    const module = between(sheet, "function ModuleChoice(", "function PlanPreview(");
+    expect(module).toContain("if (busy() || draft() === path) return;");
+    expect(module).toContain('<button type="button" class="iv-module-option"');
+    expect(module).toContain("onClick={() => void choose(module.path)}");
+    expect(module).not.toContain('type="radio"');
+    expect(module.match(/props.attempt.chooseModule\(/gu)).toHaveLength(1);
     // The confirmation is sent on its own (once per attempt and edit) or by
     // 「続ける」 on a paused install, never by another button.
     expect(controller.match(/void confirm\(\)/gu)).toHaveLength(2);
@@ -156,6 +167,17 @@ describe("attempt-driven install page", () => {
     expect(auto).toContain("if (autoSentFor === key) return;");
     expect(between(controller, "const resume = () =>", "/** One PATCH")).toContain("void confirm()");
     expect(sheet.match(/\.confirm\(/gu)).toBeNull();
+  });
+
+  test("required configuration is inline and an operation message is rendered only once", () => {
+    expect(sheet).not.toContain("<dialog");
+    expect(sheet).not.toContain("showModal()");
+    expect(sheet.match(/<ScreenError attempt=/gu)).toHaveLength(1);
+    const screen = between(sheet, "export function InstallScreen(", "data-testid=\"install-customization\"");
+    expect(screen).toContain('data-testid="install-settings"');
+    expect(screen).toContain('data-testid="install-connections"');
+    expect(sheet).toContain("!props.attempt.view().progress ? block() : undefined");
+    expect(sheet).toContain("blockedReasonId={props.attempt.view().progress ? APPLY_REASON_ID : undefined}");
   });
 
   test("discarding never runs alongside another request", () => {

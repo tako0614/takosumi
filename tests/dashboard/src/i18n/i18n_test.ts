@@ -112,21 +112,21 @@ describe("i18n dictionaries", () => {
 
   test("the install actions consistently use the user's Install terminology", () => {
     // TASK-0115: two decisions, one label each. Install states the intent
-    // and only "Allow and install" applies; the Plan in between is made on
+    // and only the final "Install" applies; the Plan in between is made on
     // its own, so no "Review" step label remains.
     expect(ja["installStore.install"]).toBe("インストール");
-    expect(ja["installStore.allowInstall"]).toBe("許可してインストール");
+    expect(ja["installStore.allowInstall"]).toBe("インストール");
     expect(ja["installStore.installing"]).toContain("インストール");
     expect(en["installStore.install"]).toBe("Install");
-    expect(en["installStore.allowInstall"]).toBe("Allow and install");
+    expect(en["installStore.allowInstall"]).toBe("Install");
     expect(Object.hasOwn(ja, "installStore.reviewChanges")).toBe(false);
     expect(Object.hasOwn(en, "installStore.reviewChanges")).toBe(false);
     expect(ja["installStore.applyWait.connections"]).toBe("接続を選ぶと確認できます");
     expect(ja["installStore.applyWait.settings"]).toBe("必須の設定を入力してください");
     expect(ja["installStore.applyWait.checking"]).toBe("確認しています…");
-    expect(ja["installStore.progress.reading"]).toBe("リポジトリを読んでいます");
-    expect(ja["installStore.progress.planning"]).toBe("作られるものを確認しています");
-    expect(ja["installStore.progress.replanning"]).toBe("内容を作り直しています");
+    expect(ja["installStore.progress.reading"]).toBe("準備中…");
+    expect(ja["installStore.progress.planning"]).toBe("変更を確認中…");
+    expect(ja["installStore.progress.replanning"]).toBe("変更を確認中…");
   });
 
   test("the install and app surfaces use the app vocabulary only", () => {

@@ -5,14 +5,10 @@
  * owner knows to open the app again or remove it.
  */
 import { createResource, createSignal, For, Match, Show, Switch } from "solid-js";
-import { BellRing } from "lucide-solid";
 import type { TakosumiAccountsNotificationPusher } from "@takosjp/takosumi-accounts-contract";
 import {
   Badge,
   Button,
-  Card,
-  CardHeader,
-  CardSection,
   Skeleton,
   Toast,
 } from "../../../components/ui/index.ts";
@@ -64,30 +60,16 @@ export default function NotificationDevicesCard() {
 
   return (
     <div class="acct-stack">
-      <Card>
-        <CardHeader
-          title={
-            <span class="wc-card-title-with-icon">
-              <BellRing size={18} />
-              {t("account.devices.title")}
-            </span>
-          }
-          subtitle={t("account.devices.subtitle")}
-        />
-        <CardSection>
-          <p class="acct-help">{t("account.devices.help")}</p>
-          <Show when={unavailable()}>
-            {(key) => <p class="acct-help">{t(key())}</p>}
-          </Show>
-        </CardSection>
-        <Show when={error()}>
-          {(message) => (
-            <Toast tone="error">
-              {t("account.devices.error", { message: message() })}
-            </Toast>
-          )}
-        </Show>
-      </Card>
+      <Show when={unavailable()}>
+        {(key) => <p class="tg-settings-note">{t(key())}</p>}
+      </Show>
+      <Show when={error()}>
+        {(message) => (
+          <Toast tone="error">
+            {t("account.devices.error", { message: message() })}
+          </Toast>
+        )}
+      </Show>
 
       <section class="acct-list-section" aria-label={t("account.devices.listLabel")}>
         <h2 class="acct-list-title">{t("account.devices.listLabel")}</h2>
@@ -112,15 +94,20 @@ export default function NotificationDevicesCard() {
             <Skeleton variant="card" count={1} />
           </Match>
           <Match when={rows().length === 0}>
-            <p class="muted">{t("account.devices.empty")}</p>
+            <div class="tg-settings-group">
+              <p class="tg-settings-row">{t("account.devices.empty")}</p>
+            </div>
+            <Show when={!unavailable()}>
+              <p class="tg-settings-note">{t("account.devices.help")}</p>
+            </Show>
           </Match>
           <Match when>
-            <ul class="acct-list">
+            <ul class="acct-list tg-settings-group">
               <For each={rows()}>
                 {(pusher) => {
                   const health = () => notificationPusherHealth(pusher);
                   return (
-                    <li class="acct-row tg-card" data-pusher-health={health()}>
+                    <li class="acct-row" data-pusher-health={health()}>
                       <div class="acct-row-main">
                         <div class="acct-row-title">
                           <strong>{pusher.device_display_name}</strong>
