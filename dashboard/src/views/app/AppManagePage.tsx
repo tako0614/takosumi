@@ -81,6 +81,8 @@ import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
 import {
   getOrCreateRevisionPlanAttempt,
+  observeRevisionPlanAttempt,
+  releaseObservedRevisionPlanAttempt,
   releaseRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
@@ -655,9 +657,12 @@ export default function AppManagePage(props: {
     const attempt = getOrCreateRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson);
     const response = await createReviewableGitRevisionPlan(forCapsule, request, {
       idempotencyKey: attempt.idempotencyKey,
+      onCreated: (created) => observeRevisionPlanAttempt(
+        revisionAttempts, forCapsule, requestJson, attempt, created.revisionPlan,
+      ),
     });
     const planRunId = response.revisionPlan.planRunId;
-    if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson);
+    if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson, attempt.idempotencyKey);
     return planRunId!;
   };
   const startUpdate = (ref?: string) =>
@@ -761,9 +766,18 @@ export default function AppManagePage(props: {
     void startReview(
       "attention",
       "update",
-      async () =>
-        requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId))
-          .revisionPlan.planRunId,
+      async () => {
+        const forCapsule = capsuleId();
+        const response = requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId));
+        const plan = response.revisionPlan;
+        if (plan.id === revisionPlanId && plan.capsuleId === forCapsule &&
+          typeof plan.revision?.targetRef === "string") {
+          releaseObservedRevisionPlanAttempt(
+            revisionAttempts, forCapsule, JSON.stringify({ ref: plan.revision.targetRef }), plan.id,
+          );
+        }
+        return plan.planRunId;
+      },
       { action: "continue_revision", restartable: false },
     );
   const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);
