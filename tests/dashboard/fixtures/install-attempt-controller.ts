@@ -2032,3 +2032,55 @@ test("explicit public connection settings use the current owned selection and re
     expect(calls.filter((call) => call.name === "listConnections").every((call) => call.args[0] === "ws_alpha")).toBe(true);
   } finally { page.dispose(); }
 });
+
+test("server-owned inputs remain read-only while generic derived defaults can be edited", async () => {
+  const managed = {
+    name: "derived_setting", type: "string" as const, required: false, sensitive: false,
+    derivedDefault: "capsule_name" as const, userEditable: false,
+  };
+  const user = {
+    name: "user_setting", type: "string" as const, required: true, sensitive: false,
+    userEditable: true,
+  };
+  reset({
+    getGitInstallPlan: async () => respond(inputs({ connections: [], interfaces: [], variables: [managed, user], missing: ["variables"] }), 1),
+    answerGitInstallAttempt: async () => respond({ kind: "wait", phase: "planning" }, 2),
+    reconcileGitInstallPlan: abortable([]),
+  });
+  const page = mount(ID);
+  try {
+    await until(() => page.attempt.sheet() !== undefined, "the ownership-aware sheet");
+    expect(page.attempt.sheet()?.variables).toEqual([managed, user]);
+    // A stale draft or programmatic setter must not escape the server's new
+    // ownership projection, even though it is still held in page memory.
+    page.attempt.setDraft(managed.name, "stale-derived-override");
+    expect(page.attempt.view()).toMatchObject({ readyToConfirm: false, missingVariables: [user.name] });
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt")).toHaveLength(0);
+    page.attempt.setDraft(user.name, "typed-user-value");
+    expect(page.attempt.view().readyToConfirm).toBe(true);
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").map((call) => call.args[1])).toEqual([
+      { expectedGeneration: 1, continue: true, variables: { [user.name]: "typed-user-value" } },
+    ]);
+  } finally { page.dispose(); }
+
+  // An absent ownership projection preserves generic InstallConfig behavior:
+  // derivedDefault alone never makes an otherwise editable value read-only.
+  const { userEditable: _ownership, ...generic } = managed;
+  reset({
+    getGitInstallPlan: async () => respond(inputs({ connections: [], interfaces: [], variables: [generic], missing: [] }), 1),
+    answerGitInstallAttempt: async () => respond({ kind: "wait", phase: "planning" }, 2),
+    reconcileGitInstallPlan: abortable([]),
+  });
+  const genericPage = mount(ID);
+  try {
+    await until(() => genericPage.attempt.sheet() !== undefined, "the generic sheet");
+    expect(genericPage.attempt.view().readyToConfirm).toBe(true);
+    genericPage.attempt.setDraft(generic.name, "explicit-generic-override");
+    await genericPage.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").map((call) => call.args[1])).toEqual([
+      { expectedGeneration: 1, continue: true, variables: { [generic.name]: "explicit-generic-override" } },
+    ]);
+  } finally { genericPage.dispose(); }
+});

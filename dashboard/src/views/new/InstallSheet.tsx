@@ -653,6 +653,7 @@ export function InstallScreen(props: {
 
   const VariableField = (fieldProps: { readonly variable: GitInstallPlanVariablePresentation }) => {
     const variable = () => fieldProps.variable;
+    const fieldLocked = () => locked() || variable().userEditable === false;
     const invalid = () => {
       const check = settingsCheck();
       return Boolean(check && !check.ok && check.invalid.includes(variable().name));
@@ -683,7 +684,7 @@ export function InstallScreen(props: {
               value={draftText(variable())}
               placeholder={variable().sensitive ? undefined : variable().placeholder}
               spellcheck={false}
-              disabled={locked()}
+              disabled={fieldLocked()}
               data-variable-name={variable().name}
               onInput={(event) => type(event.currentTarget.value)}
               onBlur={leave}
@@ -696,7 +697,7 @@ export function InstallScreen(props: {
           <Match when={variable().type === "boolean"}>
             <Select
               value={draftText(variable())}
-              disabled={locked()}
+              disabled={fieldLocked()}
               data-variable-name={variable().name}
               onChange={(event) => choose(event.currentTarget.value)}
             >
@@ -711,12 +712,12 @@ export function InstallScreen(props: {
           <Match when={variable().type === "json" && !variable().sensitive}>
             <div>
             <Show when={variable().defaultValue === undefined && !variable().derivedDefault && !resubmitting()}>
-            <Button size="sm" variant="secondary" disabled={locked() || attempt().settingsChoicesLoading()}
+            <Button size="sm" variant="secondary" disabled={fieldLocked() || attempt().settingsChoicesLoading()}
               onClick={() => void attempt().loadConnectionSettings()}>
               {t("installStore.connectionSettings")}
             </Button>
             <For each={attempt().connectionSettings()}>{(choice) =>
-              <Button size="sm" variant="secondary" disabled={locked()}
+              <Button size="sm" variant="secondary" disabled={fieldLocked()}
                 onClick={() => attempt().applyConnectionSettings(variable().name, choice)}>
                 {choice.displayName} · {readableProviderSourceLabel(choice.provider)} · {choice.moduleLocalName}
                 {choice.childAlias ? ` · ${choice.childAlias}` : ""}{choice.rootAlias ? ` · ${choice.rootAlias}` : ""}: {JSON.stringify(choice.value)}
@@ -727,7 +728,7 @@ export function InstallScreen(props: {
               value={draftText(variable())}
               spellcheck={false}
               autocomplete="off"
-              disabled={locked()}
+              disabled={fieldLocked()}
               data-variable-name={variable().name}
               onInput={(event) => type(event.currentTarget.value)}
               onBlur={leave}

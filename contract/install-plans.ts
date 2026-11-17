@@ -388,6 +388,11 @@ export interface GitInstallPlanVariablePresentation {
   readonly type: "string" | "number" | "boolean" | "json" | "unknown";
   readonly required: boolean;
   readonly sensitive: boolean;
+  /**
+   * Response-only repository input ownership; omitted for generic/legacy inputs.
+   * This is presentation metadata. The compiler still checks supplied values.
+   */
+  readonly userEditable?: boolean;
   readonly advanced?: boolean;
   readonly label?: InstallConfigStoreText;
   readonly description?: InstallConfigStoreText;
