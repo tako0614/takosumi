@@ -200,6 +200,12 @@
 .iv-module-mark { width: 1rem; height: 1rem; border: 1px solid var(--tg-line-strong); border-radius: 50%; }
 .iv-module-option[aria-pressed="true"] .iv-module-mark { border-color: var(--tg-accent); background: var(--tg-accent); }
 .iv-module-providers { display: block; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.iv-public-url { display: grid; gap: var(--tg-s-2); min-width: 0; }
+.iv-public-url-modes, .iv-public-url-pending { display: flex; gap: var(--tg-s-2); flex-wrap: wrap; align-items: center; }
+.iv-public-url-modes .tg-btn[aria-pressed="true"] { color: var(--tg-accent-text); border-color: var(--tg-accent); background: var(--tg-bg-subtle); }
+.iv-public-url-value { display: block; padding: var(--tg-s-3); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); overflow-wrap: anywhere; }
+.iv-public-url > .tg-btn { justify-self: start; }
+.iv-public-url-pending { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
 .iv-recommendation { margin-inline-start: var(--tg-s-2); color: var(--tg-accent-text); font-size: var(--tg-fs-sm); }
 
 

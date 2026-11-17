@@ -49,6 +49,7 @@ import {
   awaitingResubmission,
   connectionKey,
   continueVariables,
+  isCloudflarePublicUrl,
   selectedCandidate,
   selectedInterfaceCandidate,
   sheetVariables,
@@ -660,7 +661,16 @@ export function InstallScreen(props: {
 
   const VariableField = (fieldProps: { readonly variable: GitInstallPlanVariablePresentation }) => {
     const variable = () => fieldProps.variable;
+    const [editingUrlName, setEditingUrlName] = createSignal(false);
     const fieldLocked = () => locked() || variable().userEditable === false;
+    const standardUrl = () => {
+      const draft = attempt().drafts()[variable().name];
+      return !draft?.touched || draft.publicEndpoint !== undefined;
+    };
+    const suggestedUrl = () => {
+      const draft = attempt().drafts()[variable().name];
+      return draft?.publicEndpoint?.confirmed && !invalid() ? draft.value : undefined;
+    };
     const invalid = () => {
       const check = settingsCheck();
       return Boolean(check && !check.ok && check.invalid.includes(variable().name));
@@ -677,6 +687,7 @@ export function InstallScreen(props: {
     };
     return (
       <FormField
+        as={isCloudflarePublicUrl(variable()) ? "group" : "label"}
         label={localizedText(variable().label, variable().name)}
         hint={fieldHint(variable())}
         error={invalid() ? t("installStore.settingInvalid") : undefined}
@@ -699,6 +710,41 @@ export function InstallScreen(props: {
             />
           }
         >
+          <Match when={isCloudflarePublicUrl(variable())}>
+            <div class="iv-public-url" data-testid="install-public-url">
+              <div class="iv-public-url-modes" role="group" aria-label={localizedText(variable().label, variable().name)}>
+                <Button size="sm" variant="secondary" aria-pressed={standardUrl()} disabled={fieldLocked() || resubmitting()}
+                  onClick={() => attempt().useStandardPublicUrl(variable().name)}>{t("installStore.standardUrl")}</Button>
+                <Button size="sm" variant="secondary" aria-pressed={!standardUrl()} disabled={fieldLocked() || resubmitting()}
+                  onClick={() => { if (standardUrl()) type(suggestedUrl() ?? ""); }}>{t("installStore.customUrl")}</Button>
+              </div>
+              <Show when={standardUrl()} fallback={
+                <Input type="url" aria-label={localizedText(variable().label, variable().name)} autocomplete="off" value={draftText(variable())} placeholder={variable().placeholder}
+                  spellcheck={false} disabled={fieldLocked()} data-variable-name={variable().name}
+                  onInput={(event) => type(event.currentTarget.value)} onBlur={leave} onKeyDown={leaveOnEnter} />
+              }>
+                <Show when={suggestedUrl()} fallback={
+                  <div class="iv-public-url-pending" role="status">
+                    <span>{t(attempt().settingsChoicesLoading() ? "installStore.urlLoading" : "installStore.urlUnavailable")}</span>
+                    <Button size="sm" variant="secondary" disabled={fieldLocked() || attempt().settingsChoicesLoading() || resubmitting()}
+                      onClick={() => void attempt().loadConnectionSettings()}>{t("common.retry")}</Button>
+                  </div>
+                }>{(url) => <output class="iv-public-url-value" data-variable-name={variable().name}>{url()}</output>}</Show>
+                <Show when={!resubmitting()}>
+                  <Button size="sm" variant="ghost" disabled={fieldLocked()} aria-expanded={editingUrlName()}
+                    onClick={() => setEditingUrlName((value) => !value)}>{t("installStore.urlName")}</Button>
+                  <Show when={editingUrlName()}>
+                    <Input value={nameText()} aria-label={t("installStore.name")} spellcheck={false} autocomplete="off"
+                      disabled={fieldLocked()} data-testid="install-public-url-name"
+                      onInput={(event) => attempt().setNameDraft(event.currentTarget.value)}
+                      onBlur={() => void attempt().saveName()}
+                      onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void attempt().saveName(); } }} />
+                    <Show when={nameError()}>{(message) => <p class="iv-field-error" role="alert">{message()}</p>}</Show>
+                  </Show>
+                </Show>
+              </Show>
+            </div>
+          </Match>
           {/* A yes/no setting is a choice even when it is write-only: the
               value lives only in this page's memory either way. */}
           <Match when={variable().type === "boolean"}>

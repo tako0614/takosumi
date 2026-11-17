@@ -41,6 +41,7 @@ import { isSecretKey } from "takosumi-contract/redaction";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { CapsuleRequiredInterface, Interface } from "takosumi-contract/interfaces";
 import { accountsOidcModuleVariableProfile } from "../../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
+import { capsuleSlug, workspaceSlugSuffix } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 
 import type {
   GitInstallAttemptFacts,
@@ -108,6 +109,32 @@ export type AttemptInputFactsResult =
   | { readonly ok: true; readonly facts: NonNullable<GitInstallAttemptFacts["inputs"]> }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
+/** A UI opt-in backed by accepted declarations, with no host-owned override. */
+function publicEndpointPresentation(install: InstallConfig, base: InstallConfig): {
+  readonly variable: string;
+  readonly endpoint: NonNullable<GitInstallPlanVariablePresentation["publicEndpoint"]>;
+} | undefined {
+  const internal = install.internal;
+  if (internal?.reason !== "per_install_overrides" || !internal.sourceSnapshotId ||
+    !/^sha256:[a-f0-9]{64}$/u.test(internal.repositoryInstallUxDigest ?? "") ||
+    install.installExperience?.repositoryInstallUx?.status !== "accepted") return undefined;
+  const endpoints = install.installExperience.projections?.filter((entry) => entry.kind === "public_endpoint") ?? [];
+  const names = install.installExperience.projections?.filter((entry) => entry.kind === "service_name") ?? [];
+  if (endpoints.length !== 1 || names.length !== 1) return undefined;
+  const url = endpoints[0]!.variables.url;
+  const serviceName = names[0]!.variable;
+  if (!url || url === serviceName || endpoints[0]!.variables.subdomain ||
+    endpoints[0]!.variables.routePattern || endpoints[0]!.baseDomain ||
+    Object.hasOwn(base.variableMapping, url) || Object.hasOwn(base.variableMapping, serviceName)) return undefined;
+  const field = install.variablePresentation?.find((entry) => entry.name === url);
+  const name = install.variablePresentation?.find((entry) => entry.name === serviceName);
+  const source = name?.defaultValue?.source;
+  if (field?.format !== "cloudflare-workers-url" || field.type !== "string" || field.secret ||
+    field.defaultValue !== undefined || isSecretKey(url) || name?.secret || isSecretKey(serviceName) ||
+    (source !== "capsule_name" && source !== "workspace_scoped_capsule_name")) return undefined;
+  return { variable: url, endpoint: { serviceNameVariable: serviceName, serviceNameSource: source } };
+}
+
 /**
  * Inputs facts for one analyzed module. `installConfig` is the preview the
  * coordinator will commit (repository manifest) or the materialized generic
@@ -133,6 +160,7 @@ export function attemptInputFacts(input: {
   let variables: GitInstallPlanVariablePresentation[];
   if (input.repositoryManifest) {
     variables = [];
+    const endpoint = publicEndpointPresentation(input.installConfig, input.baseConfig);
     for (const entry of input.installConfig.variablePresentation ?? []) {
       const literalDefault = entry.defaultValue?.source === "literal"
         ? entry.defaultValue.value
@@ -167,6 +195,8 @@ export function attemptInputFacts(input: {
         ...(entry.placeholder && !sensitive
           ? { placeholder: entry.placeholder }
           : {}),
+        ...(entry.format && !sensitive ? { format: entry.format } : {}),
+        ...(endpoint?.variable === entry.name ? { publicEndpoint: endpoint.endpoint } : {}),
         ...(literalDefault !== undefined && !sensitive
           ? { defaultValue: literalDefault as JsonValue }
           : {}),
@@ -803,7 +833,7 @@ export async function userActionFor(
     interfaceRequirements(operations, plan),
     nameProposal(operations, plan),
   ]);
-  let variables: readonly GitInstallPlanVariablePresentation[] = facts?.variables ??
+  let variables: readonly GitInstallPlanVariablePresentation[] = facts?.variables?.map(({ publicEndpoint: _endpoint, ...variable }) => variable) ??
     resubmit.map((variableName) => ({
       name: variableName,
       type: "unknown" as const,
@@ -829,13 +859,25 @@ export async function userActionFor(
       ? declaredRepositoryManifestModulePath(snapshot, facts.modulePath)
       : undefined;
     if (modulePath && manifest?.status === "present") {
-      const userNames = new Set(manifest.document.install.modules[modulePath]!.inputs
+      const module = manifest.document.install.modules[modulePath]!;
+      const userNames = new Set(module.inputs
         .filter((entry) => entry.source.kind === "user")
         .map((entry) => entry.name));
-      variables = variables.map((variable) => ({
-        ...variable,
-        userEditable: userNames.has(variable.name),
-      }));
+      variables = variables.map((variable) => {
+        const endpoint = facts.variables.find((entry) => entry.name === variable.name)?.publicEndpoint;
+        const declared = module.inputs.find((entry) => entry.name === variable.name);
+        const serviceName = module.inputs.find((entry) => entry.name === endpoint?.serviceNameVariable);
+        const valid = endpoint && declared?.source.kind === "user" &&
+          declared.format === "cloudflare-workers-url" && serviceName?.role === "service_name" &&
+          serviceName.source.kind === endpoint.serviceNameSource &&
+          module.requires?.some((requirement) => requirement.kind === "http.endpoint" &&
+            requirement.deliver.variables?.url === variable.name);
+        const baseName = capsuleSlug(plan.capsule.name);
+        const suffix = valid && endpoint.serviceNameSource === "workspace_scoped_capsule_name"
+          ? workspaceSlugSuffix(plan.workspaceId) : "";
+        return { ...variable, userEditable: userNames.has(variable.name),
+          ...(valid ? { publicEndpoint: { ...endpoint, suggestedName: suffix ? `${baseName}-${suffix}` : baseName } } : {}) };
+      });
     }
   }
   return {

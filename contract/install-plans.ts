@@ -397,6 +397,15 @@ export interface GitInstallPlanVariablePresentation {
   readonly label?: InstallConfigStoreText;
   readonly description?: InstallConfigStoreText;
   readonly placeholder?: string;
+  /** Optional repository UI hint; unknown formats use the ordinary input. */
+  readonly format?: string;
+  /** Accepted http.endpoint + service_name declaration; never inferred from names. */
+  readonly publicEndpoint?: {
+    readonly serviceNameVariable: string;
+    readonly serviceNameSource: "capsule_name" | "workspace_scoped_capsule_name";
+    /** Response-only name, computed with the repository compiler's derivation. */
+    readonly suggestedName?: string;
+  };
   /** Literal default for a non-sensitive input. */
   readonly defaultValue?: JsonValue;
   /** Takosumi derives the value from the app name unless it is supplied. */
