@@ -201,6 +201,11 @@
 .iv-module-option[aria-pressed="true"] .iv-module-mark { border-color: var(--tg-accent); background: var(--tg-accent); }
 .iv-module-providers { display: block; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
 .iv-public-url { display: grid; gap: var(--tg-s-2); min-width: 0; }
+.iv-public-url-options > summary { display: list-item; width: fit-content; padding: var(--tg-s-2) 0; color: var(--tg-fg-muted); cursor: pointer; font-size: var(--tg-fs-sm); }
+.iv-public-url-options > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+.iv-public-url-options[open] > summary { margin-bottom: var(--tg-s-2); }
+.iv-start-version > summary { padding-inline: 0; }
+
 .iv-public-url-modes, .iv-public-url-pending { display: flex; gap: var(--tg-s-2); flex-wrap: wrap; align-items: center; }
 .iv-public-url-modes .tg-btn[aria-pressed="true"] { color: var(--tg-accent-text); border-color: var(--tg-accent); background: var(--tg-bg-subtle); }
 .iv-public-url-value { display: block; padding: var(--tg-s-3); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); overflow-wrap: anywhere; }

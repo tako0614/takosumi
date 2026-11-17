@@ -14,7 +14,6 @@
 .ap-icon img { width: 100%; height: 100%; object-fit: cover; }
 .ap-title { min-width: 0; }
 .ap-title h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); line-height: 1.2; letter-spacing: -0.02em; overflow-wrap: anywhere; }
-.ap-instance-name { display: block; margin-top: var(--tg-s-1); color: var(--tg-fg-muted); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); font-weight: 500; letter-spacing: 0; }
 .ap-state { margin: var(--tg-s-2) 0 0; color: var(--tg-fg-muted); }
 .ap-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--tg-s-2); }
 

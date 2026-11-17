@@ -1221,9 +1221,6 @@ export default function AppManagePage(props: {
                 <div class="ap-title">
                   <h1 id="ap-app-title" tabindex="-1">
                     {displayName()}
-                    <Show when={displayName() !== inst().name}>
-                      <span class="ap-instance-name">{inst().name}</span>
-                    </Show>
                   </h1>
                   <Show when={view().state !== "installed" || view().primaryAction !== "open"}>
                     <p class="ap-state" data-testid="app-state-sentence">{t(appStateSentence(view()))}</p>

@@ -346,7 +346,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       // it through the normal reconcile phases. Reading never applies anything;
       // the Plan itself is covered by the two-decision case.
       readingHeld = false;
-      await expect(installSheet(page).getByTestId("install-selected-configuration")).toBeVisible({ timeout: 30_000 });
+      await expect(installSheet(page).getByTestId("install-selected-configuration")).toHaveText("Selected", { timeout: 30_000 });
       expect(f.mutations.some((m) => /\/(apply|approve)$/u.test(m))).toBe(false);
       expect(errors).toEqual([]);
     });
@@ -626,7 +626,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByTestId("install-version")).not.toBeVisible();
       await expect(page.getByTestId("install-version-choice").locator(":scope > summary")).toContainText("0123456");
       await expect(page.getByTestId("install-customization")).not.toHaveAttribute("open", "");
-      await expect(page.getByTestId("install-selected-configuration")).toContainText("Selected");
+      await expect(page.getByTestId("install-selected-configuration")).not.toBeVisible();
       await expect(page.getByTestId("install-app-name")).not.toBeVisible();
       await expect(page.getByTestId("install-optional-settings").locator("input").first()).not.toBeVisible();
       await expect(review.getByTestId("install-plan-resources")).not.toBeVisible();
@@ -644,6 +644,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.keyboard.press("Enter");
       await expect(review.getByTestId("install-plan-resources")).toBeVisible();
       expect(f.mutations).not.toContain(applyMutation);
+      await expandDetails(page, "install-customization");
       await expandDetails(page, "install-version-choice");
       await expect(page.getByTestId("install-version")).toBeVisible();
       await page.getByTestId("install-version").focus();
@@ -651,6 +652,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.attempts.log.creates).toHaveLength(1);
       await page.getByTestId("install-version-choice").locator(":scope > summary").click();
       const configuration = page.getByTestId("install-customization").locator(":scope > summary");
+      await configuration.click();
       const appHeading = page.getByRole("heading", { name: "cloudflare-service", exact: true });
       for (const width of [375, 1024]) {
         await page.setViewportSize({ width, height: 900 });
@@ -687,7 +689,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await install.click();
       // Reading, the sheet and the Plan follow on their own: nothing to press.
       const review = await waitForPlan(page);
-      await expect(installSheet(page).getByTestId("install-basics")).toBeVisible();
+      await expect(installSheet(page).getByTestId("install-customization")).toBeVisible();
+      await expect(installSheet(page).getByTestId("install-basics")).not.toBeVisible();
       await expect(install).toHaveCount(1);
       await expect(install).toBeEnabled();
       await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -893,7 +896,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expandDetails(page, "install-customization");
       const name = sheet.getByTestId("install-app-name");
       await expect(name).toHaveValue("cloudflare-service");
-      await expect(sheet).toContainText("An app with this name already exists.");
+      await expect(sheet).toContainText("This internal name is already in use.");
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Check what you entered");
       await name.fill("Not A Valid Name");
       await expect(sheet).toContainText("Use lowercase letters");
