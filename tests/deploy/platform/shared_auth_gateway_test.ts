@@ -254,6 +254,37 @@ test("public shared Control gate never initializes Control for invalid identity,
   expect(calls).toBe(0);
 });
 
+test("shared Control routes the Cloudflare redirect before session auth only for the exact GET on the product origin", async () => {
+  let checks = 0;
+  let resolves = 0;
+  const env = configured({ ...rpc, authenticateSharedAuth: async () => {
+    checks++;
+    return { kind: "unauthenticated" };
+  } }) as CloudflareWorkerEnv;
+  const dependencies = {
+    store: new InMemoryAccountsStore(),
+    resolveOperations: async () => {
+      resolves++;
+      return { connectionOAuth: { cloudflare: { browserBindingRequired: true } } } as unknown as ControlPlaneOperations;
+    },
+  };
+  const path = "/api/v1/connections/oauth/cloudflare/callback";
+  const callback = await handlePlatformSharedAuthControlRequest(new Request(origin + path), env, dependencies);
+  expect(callback?.status).toBe(303);
+  expect(callback?.headers.get("location")).toBe(origin + "/connections?connection_error=missing_code");
+  expect(callback?.headers.get("cache-control")).toBe("no-store");
+  expect(checks).toBe(0);
+  expect((await handlePlatformSharedAuthControlRequest(new Request("https://alias.staging.example.test" + path), env, dependencies))?.status).toBe(404);
+  for (const header of ["authorization", "x-takosumi-account-session"]) {
+    const explicitAuth = new Request(origin + path, { headers: { [header]: "unexpected" } });
+    expect((await handlePlatformSharedAuthControlRequest(explicitAuth, env, dependencies))?.status).toBe(401);
+  }
+  expect((await handlePlatformSharedAuthControlRequest(new Request(origin + path, { method: "POST" }), env, dependencies))?.status).toBe(401);
+  expect((await handlePlatformSharedAuthControlRequest(new Request(origin + path + "/extra"), env, dependencies))?.status).toBe(401);
+  expect((await handlePlatformSharedAuthControlRequest(new Request(origin + "/api/v1/connections/oauth/cloudflare/start", { method: "POST" }), env, dependencies))?.status).toBe(401);
+  expect(resolves).toBe(1);
+});
+
 test("shared Run GET reports its read and current Workspace/member phases", async () => {
   const phaseRows: Array<Record<string, unknown>> = [];
   const info = spyOn(console, "info").mockImplementation((value: unknown) => {
