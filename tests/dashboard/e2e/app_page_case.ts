@@ -806,6 +806,121 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       ]);
     });
 
+    test("a lost Update response reads the same app once and recovers only its existing review", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const errors = pageErrors(page);
+      const now = "2026-10-01T00:00:00.000Z";
+      const planId = "run_update_response_lost";
+      const plan = {
+        ...lifecycleRun(planId, "plan", "succeeded", now),
+        capsuleId: CAPSULE_ID, baseStateGeneration: 1,
+        origin: { kind: "revision", ref: "main" },
+        summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass",
+        planResources: [{ address: "cloudflare_workers_script.existing_update", type: "cloudflare_workers_script", actions: ["update"] }],
+      };
+      let acceptUpdate = true;
+      let definiteRejection = false;
+      let holdReadback = false;
+      let releaseReadback: (() => Promise<void>) | undefined;
+      let committed = false;
+      let submitted = false;
+      let appReadsAfterSubmit = 0;
+      const mutations: string[] = [];
+      const appReadIds: string[] = [];
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())) {
+          mutations.push(`${request.method()} ${path}`);
+        }
+        if (path.endsWith("/app") && path.startsWith("/api/v1/capsules/")) {
+          appReadIds.push(path);
+        }
+        if (path === `/api/v1/capsules/${CAPSULE_ID}/app`) {
+          if (submitted) appReadsAfterSubmit += 1;
+          if (submitted && holdReadback) {
+            return await new Promise<void>((resolve) => {
+              releaseReadback = async () => { await route.abort("failed"); resolve(); };
+            });
+          }
+          return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
+            primaryAction: committed ? "review" : "view_resources",
+            version: {
+              current: { sourceSnapshotId: "snap_update_response", ref: "main", path: ".", commit: PORTABLE_SOURCE_COMMIT },
+              updateAvailable: false, stale: false, autoUpdate: false,
+            },
+            progress: committed
+              ? { revisionPreparing: false, review: { runId: planId, runType: "plan" } }
+              : { revisionPreparing: false },
+          }) } });
+        }
+        if (path === `/api/v1/capsules/${CAPSULE_ID}/revision-plans` && request.method() === "POST") {
+          expect(request.postDataJSON()).toEqual({ ref: "main" });
+          expect(request.headers()["idempotency-key"]).toBeTruthy();
+          // Model server acceptance independently of the response observed by
+          // the actual browser fetch. No second operation is manufactured.
+          committed = acceptUpdate;
+          submitted = true;
+          if (definiteRejection) {
+            return route.fulfill({ status: 409, json: { error: { code: "fixture_update_refused", message: "The update was refused." } } });
+          }
+          return route.abort("failed");
+        }
+        if (path === `/api/v1/runs/${planId}`) return route.fulfill({ json: { run: plan } });
+        if (path === `/api/v1/runs/${planId}/cost`) return route.fulfill({ json: { cost: { runId: planId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
+        if (path === `/api/v1/runs/${planId}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        if (path === `/api/v1/runs/${planId}/stream`) return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+        return route.fallback();
+      });
+
+      for (const scene of ["accepted", "not-accepted", "definite-rejection", "readback-pending"] as const) {
+        const accepted = scene === "accepted";
+        acceptUpdate = accepted;
+        definiteRejection = scene === "definite-rejection";
+        holdReadback = scene === "readback-pending";
+        releaseReadback = undefined;
+        committed = false;
+        submitted = false;
+        appReadsAfterSubmit = 0;
+        mutations.length = 0;
+        appReadIds.length = 0;
+        await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+        await openAppPane(page, "version");
+        const rejected = definiteRejection
+          ? page.waitForResponse((response) => response.url().endsWith(`/capsules/${CAPSULE_ID}/revision-plans`) && response.status() === 409)
+          : undefined;
+        await page.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true }).click();
+        if (rejected) {
+          await rejected;
+          await expect(page.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true })).toBeEnabled();
+          expect(appReadsAfterSubmit).toBe(0);
+        } else {
+          await expect.poll(() => appReadsAfterSubmit).toBe(1);
+          if (holdReadback) {
+            // The recovery read has no new deadline and cannot keep the
+            // original action's busy state locked while it remains pending.
+            await expect(page.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true })).toBeEnabled();
+          }
+        }
+        expect(appReadIds.every((path) => path === `/api/v1/capsules/${CAPSULE_ID}/app`)).toBe(true);
+        if (accepted) {
+          await expect(page.getByTestId("app-header").getByRole("button", { name: "Review", exact: true })).toBeVisible();
+          await page.getByTestId("app-header").getByRole("button", { name: "Review", exact: true }).click();
+          const review = page.getByTestId("app-review");
+          await expect(review).toContainText("existing_update");
+          await expect(review.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+        } else {
+          await expect(page.locator('[data-problem="review-waiting"]')).toHaveCount(0);
+          await expect(page.getByTestId("app-review")).toHaveCount(0);
+          await expect(page.getByTestId("app-header").getByRole("button", { name: "Review", exact: true })).toHaveCount(0);
+        }
+        expect(mutations).toEqual([`POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`]);
+        expect(appReadsAfterSubmit).toBe(definiteRejection ? 0 : 1);
+        await (releaseReadback as (() => Promise<void>) | undefined)?.();
+      }
+      expect(errors).toEqual([]);
+    });
+
     test("reviews never replay a returned plan, retry through their own request, and never leak to another app", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);

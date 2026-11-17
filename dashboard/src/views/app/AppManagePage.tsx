@@ -197,6 +197,8 @@ export default function AppManagePage(props: {
   const navigate = useNavigate();
   const location = useLocation();
   const { confirm } = useConfirmDialog();
+  let disposed = false;
+  onCleanup(() => { disposed = true; });
   const capsuleId = () => props.capsuleId;
   const activeSection = () => props.section;
   const [visited, setVisited] = createSignal<{
@@ -564,6 +566,8 @@ export default function AppManagePage(props: {
     if (reviewBusy() || appRole() === undefined || (purpose === "uninstall" && !isOwner())) return;
     // A result that arrives after the page moved to another app is dropped.
     const forCapsule = capsuleId();
+    const forAccount = props.accountId;
+    const forPrincipal = props.principalId;
     setStarting({ section, ...(options.action ? { action: options.action } : {}) });
     setSectionError(undefined);
     setNotice(undefined);
@@ -594,6 +598,18 @@ export default function AppManagePage(props: {
           setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
         } else {
           setSectionError({ section, message: friendlyError(cause, t).message });
+        }
+        if (!disposed && purpose === "update" && props.accountId === forAccount && props.principalId === forPrincipal &&
+          (cause instanceof ControlApiError
+            ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
+            : cause instanceof TypeError)) {
+          // Acceptance may precede a lost response. Only this app's current
+          // server view can name existing work; never repeat the mutation.
+          try {
+            void Promise.resolve(refetchApp()).catch(() => {});
+          } catch {
+            // Keep the original update error when its readback also fails.
+          }
         }
       }
     } finally {
