@@ -28,7 +28,7 @@ test("search scans empty server pages without claiming no match before completio
     calls.push(url.search);
     if (!url.searchParams.has("q")) return Response.json({ apps: [app("initial")] });
     if (url.searchParams.has("cursor")) return last.promise;
-    return Response.json({ apps: [], appliedQuery: "資料", nextCursor: "last" });
+    return Response.json({ apps: [{ ...app("draft"), state: "needs_attention", applied: false }], appliedQuery: "資料", nextCursor: "last" });
   });
   await solid.createRoot(async (dispose: () => void) => {
     const home = createHomeLibrary();
@@ -181,7 +181,7 @@ test("legacy surface failure stays incomplete but stops searching after reads se
   primeWorkspaceListCache([{ id: "workspace" }] as never);
   stub((url) => {
     if (url.pathname === "/api/v1/apps") return Response.json({ error: { code: "route_not_found" } }, { status: 404 });
-    if (url.pathname.endsWith("/capsules")) return Response.json({ capsules: [{ id: "legacy", name: "Legacy", status: "active" }] });
+    if (url.pathname.endsWith("/capsules")) return Response.json({ capsules: [{ id: "legacy", name: "Legacy", status: "active", currentStateGeneration: 1 }] });
     if (url.pathname.endsWith("/ui-surfaces")) return Response.json({ error: { code: "unavailable" } }, { status: 503 });
     throw new Error(`Unexpected fixture path: ${url.pathname}`);
   });

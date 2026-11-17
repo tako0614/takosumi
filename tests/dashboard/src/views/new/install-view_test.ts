@@ -220,12 +220,10 @@ describe("attempt-driven install page", () => {
     }
   });
 
-  test("the Store page keeps search, the Git form and the unfinished installs", () => {
+  test("the Store page keeps search and the Git form", () => {
     expect(view).toContain('class="iv-hero iv-page-heading"');
     expect(view).toContain('class="iv-catalogue iv-catalogue-browse"');
     expect(view).toContain('aria-label={t("installStore.sourceUrl")}');
-    expect(view).toContain("<OpenAttempts principalId={props.principalId} />");
-    expect(view).toContain("listOpenGitInstallAttempts(scope.workspaceId)");
     // Selecting a listing reflects it into the URL so back and share work.
     expect(view).toContain("navigate(`/new?${buildNewQuery(listing)}`);");
   });

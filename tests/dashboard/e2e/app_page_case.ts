@@ -1610,18 +1610,23 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
-      const ids = ["cap_repository_office", "cap_storage", "cap_blog", "cap_mail", "cap_chat", "cap_old"] as const;
+      const ids = ["cap_repository_office", "cap_storage", "cap_blog", "cap_mail", "cap_chat", "cap_old", "cap_failed_preview"] as const;
+      let chatDeployed = false;
       const apps = [
         { capsuleId: ids[0], name: PORTABLE_EXPECTATIONS.appName, role: "owner", state: "installed", primaryAction: "open" },
         { capsuleId: ids[1], name: "Object Storage", role: "member", state: "stopped", primaryAction: "view_resources" },
         { capsuleId: ids[2], name: "Team Blog", role: "member", state: "installed", primaryAction: "open" },
         { capsuleId: ids[3], name: "Mail Relay", role: "owner", state: "needs_attention", primaryAction: "retry" },
-        { capsuleId: ids[4], name: "Chat", role: "owner", state: "installing", primaryAction: "open" },
+        { capsuleId: ids[4], name: "Chat", role: "owner", applied: false, state: "installing", primaryAction: "review" },
         { capsuleId: ids[5], name: "Old Wiki", role: "owner", state: "uninstall_scheduled", primaryAction: "open" },
+        { capsuleId: ids[6], name: "Failed preview", role: "owner", applied: false, state: "needs_attention", primaryAction: "retry" },
       ];
       await page.route("**/api/v1/**", async (route) => {
         const url = new URL(route.request().url());
-        if (url.pathname === "/api/v1/apps") return route.fulfill({ json: { apps } });
+        if (url.pathname === "/api/v1/apps") {
+          return route.fulfill({ json: { apps: apps.map((app) => app.capsuleId === ids[4] && chatDeployed
+            ? { ...app, applied: true, state: "installed", primaryAction: "view_resources", screens: [] } : app) } });
+        }
         const appId = ids.find((id) => url.pathname === `/api/v1/capsules/${id}/app`);
         if (appId) {
           const row = apps[ids.indexOf(appId)]!;
@@ -1637,19 +1642,19 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       });
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const tiles = page.getByTestId("home-app");
-      await expect(tiles).toHaveCount(6);
-      // Pending and stopped apps keep their icons, after usable apps.
+      await expect(tiles).toHaveCount(5);
+      // Deployed but stopped or unhealthy apps remain manageable.
       await expect(tiles.nth(0)).toContainText(PORTABLE_EXPECTATIONS.appName);
       await expect(tiles.nth(0)).toHaveAttribute("data-app-opens", "true");
       await expect(tiles.nth(1)).toHaveAttribute("data-app-state", "update_available");
       await expect(tiles.nth(2)).toHaveAttribute("data-app-state", "needs_attention");
-      await expect(tiles.nth(3)).toHaveAttribute("data-app-state", "installing");
-      await expect(tiles.nth(4)).toHaveAttribute("data-app-state", "uninstalling");
-      await expect(tiles.nth(5)).toHaveAttribute("data-app-state", "stopped");
+      await expect(tiles.nth(3)).toHaveAttribute("data-app-state", "uninstalling");
+      await expect(tiles.nth(4)).toHaveAttribute("data-app-state", "stopped");
       const tile = (name: string) => tiles.filter({ hasText: name });
       await expect(tile("Mail Relay")).toContainText("Needs attention");
       await expect(tile("Team Blog")).toContainText("Update available");
-      await expect(tile("Chat")).toContainText("Installing");
+      await expect(tile("Chat")).toHaveCount(0);
+      await expect(tile("Failed preview")).toHaveCount(0);
       await expect(tile("Old Wiki")).toContainText("Uninstall scheduled");
       // Only the app with an authorized screen opens; it keeps a link to its page.
       const office = tile(PORTABLE_EXPECTATIONS.appName);
@@ -1677,6 +1682,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(officeIcon!.y).toBe(blogIcon!.y);
       expect(officeIcon!.x).toBeLessThan(blogIcon!.x);
       await capture(page, "home-mixed");
+      chatDeployed = true;
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(tile("Chat")).toHaveAttribute("data-app-state", "ready");
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
     });

@@ -228,6 +228,7 @@ export async function readCapsuleAppSummaries(
       name: view.name,
       ...(view.displayName ? { displayName: view.displayName } : {}),
       ...(view.iconUrl ? { iconUrl: view.iconUrl } : {}),
+      applied: view.applied,
       state: view.state,
       primaryAction: view.primaryAction,
       screens: view.screens,
