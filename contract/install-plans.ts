@@ -165,7 +165,7 @@ export interface CreateGitInstallAttemptRequest {
     readonly authConnectionId?: string;
   };
   readonly capsule?: {
-    /** Defaults to a collision-checked name derived from the Git URL. */
+    /** Defaults to a server-assigned `app-<UUID>` technical name. */
     readonly name?: string;
     /** Defaults to `production`. */
     readonly environment?: string;

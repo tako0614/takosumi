@@ -1,3 +1,4 @@
+import { fixtureAttemptName } from "./fixture-data.ts";
 import { expect, test, type Page } from "@playwright/test";
 import type { DashboardE2EMode } from "./traffic-policy.ts";
 import type { InstallAttemptFixture } from "./fixture-data.ts";
@@ -60,7 +61,7 @@ export function registerInstallReopenCases(
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await optional.click();
       const nameField = sheet.getByLabel(/^Internal name/u);
-      await expect(nameField).toHaveValue("cloudflare-service");
+      await expect(nameField).toHaveValue(fixtureAttemptName(1));
       const publicField = sheet.getByRole("textbox", { name: "Domain", exact: true });
       await publicField.fill(publicSetting);
       await secretField.fill(secret);
@@ -79,7 +80,7 @@ export function registerInstallReopenCases(
       const attemptId = new URL(initialUrl).searchParams.get("installPlan")!;
       const reopenedResponse = f.attempts.handle({ method: "GET", path: `/api/v1/install-plans/${attemptId}` });
       expect(reopenedResponse?.json).toMatchObject({ reviewSummary: {
-        appName: "cloudflare-service",
+        appName: fixtureAttemptName(1),
         connections: [{ connectionId: "pc_account_42", displayName: "Takosumi account · account-42" }],
         settings: [
           { name: "domain", type: "string", required: false, sensitive: false, set: true, value: publicSetting },
@@ -96,7 +97,7 @@ export function registerInstallReopenCases(
       await expect(page.getByTestId("install-connections")).toContainText("Takosumi account · account-42");
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await optional.click();
-      await expect(sheet.getByTestId("install-app-name")).toHaveValue("cloudflare-service");
+      await expect(sheet.getByTestId("install-app-name")).toHaveValue(fixtureAttemptName(1));
       await expect(settings.locator('[data-variable-name="domain"]')).toHaveText(publicSetting);
       await expect(settings.locator('[data-variable-name="api_token"]')).toHaveText("Set");
       await expect(secretField).toHaveCount(0);

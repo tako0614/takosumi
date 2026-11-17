@@ -60,11 +60,17 @@ function fromSummary(entry: AccessibleApp): HomeApp {
   };
 }
 
+function installedSummaries(entries: readonly AccessibleApp[]): readonly HomeApp[] {
+  // Older servers have no applied fact. Their "installing" rows are drafts;
+  // preserve recovery for ambiguous errors until upgraded summaries arrive.
+  return entries.filter((entry) => entry.applied ?? entry.state !== "installing").map(fromSummary);
+}
+
 /** Only absence of the account collection route selects the old Workspace list. */
 async function loadHome(workspaceId: string, q: string, signal: AbortSignal): Promise<HomePage> {
   const first = await listAccessibleAppsPage(undefined, signal, q);
   const scope = { workspaceId, requestedQuery: q };
-  if (first) return { ...first, ...scope, apps: first.apps.map(fromSummary) };
+  if (first) return { ...first, ...scope, apps: installedSummaries(first.apps) };
   const workspaces = await listWorkspacesCached();
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
   const id = selectAvailableWorkspaceId(workspaceId, workspaces);
@@ -83,7 +89,8 @@ async function loadHome(workspaceId: string, q: string, signal: AbortSignal): Pr
   }
   return {
     ...scope,
-    apps: capsules.filter(isVisibleServiceCapsule).map((inst) => {
+    apps: capsules.filter((inst) => isVisibleServiceCapsule(inst) &&
+      (Boolean(inst.currentStateVersionId) || inst.currentStateGeneration > 0)).map((inst) => {
       const own = byApp.get(inst.id) ?? [];
       return { id: inst.id, name: inst.name, state: appState(inst), surfaces: own, category: own[0]?.category };
     }),
@@ -233,7 +240,7 @@ export function createHomeLibrary() {
         setMoreFailed(true);
         return false;
       }
-      const page = data.apps.map(fromSummary);
+      const page = installedSummaries(data.apps);
       seenCursors.add(next);
       setSeekNextMatch(page.length === 0 && data.nextCursor !== undefined);
       setExtra((previous) => ({ pages: [...(previous?.pages ?? []), page], nextCursor: data.nextCursor }));
@@ -261,11 +268,12 @@ export function createHomeLibrary() {
   const searching = () => Boolean(term() && !home.error && !moreFailed() &&
     (requestInvalidated() || serverQuery() !== term() || home.loading || loadingMore()));
 
-  // Modern search continues only across empty candidate pages; nonempty pages
-  // wait for scrolling. Legacy servers still need a full client-side search.
+  // Pages can contain only drafts. Continue without waiting for a scroll
+  // that cannot happen. Legacy search also needs a full client-side scan.
   createEffect(() => {
-    if (term() && cursor() && !loadingMore() && !moreFailed() && !home.loading &&
-      (firstPage()?.appliedQuery === undefined || apps().length === 0 || seekNextMatch())) void untrack(loadNext);
+    if (cursor() && !loadingMore() && !moreFailed() && !home.loading &&
+      (apps().length === 0 || seekNextMatch() ||
+        (term() && firstPage()?.appliedQuery === undefined))) void untrack(loadNext);
   });
 
   createEffect(() => {

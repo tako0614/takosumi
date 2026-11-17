@@ -52,35 +52,15 @@ import type {
 import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { alternateInstallName } from "./install-names.ts";
 import { declaredRepositoryManifestModulePath } from "./repo-owned-install-config.ts";
 
 const MAX_FACT_MODULES = 100;
 const MAX_FACT_RESOURCES = 200;
 const MAX_FACT_VARIABLES = 256;
-const MAX_NAME_SUFFIX = 99;
-const MAX_CAPSULE_NAME = 128;
 
 import { deterministicInitialCapsuleId, deterministicInstallSourceId } from "../../../../core/domains/install-plans/source-reservation.ts";
 export { deterministicInitialCapsuleId, deterministicInstallSourceId };
-
-/** `https://github.com/o/my_App.git` → `my-app`; never empty. */
-export function proposedAppName(url: string): string {
-  const last = url
-    .replace(/[?#].*$/u, "")
-    .replace(/\/+$/u, "")
-    .replace(/\.git$/u, "")
-    .split(/[/:]/u)
-    .filter((part) => part.length > 0)
-    .at(-1) ?? "";
-  const slug = last
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/gu, "-")
-    .replace(/-+/gu, "-")
-    .replace(/^-|-$/gu, "")
-    .slice(0, 63)
-    .replace(/-$/u, "");
-  return slug || "app";
-}
 
 /** Module candidates captured for a `module` pause. */
 export function moduleCandidates(
@@ -701,14 +681,8 @@ export async function nameProposal(
   );
   const current = plan.capsule.name;
   if (!taken.has(current)) return { current, proposed: current, conflict: false };
-  for (let suffix = 2; suffix <= MAX_NAME_SUFFIX; suffix += 1) {
-    const tail = `-${suffix}`;
-    const candidate = `${current.slice(0, MAX_CAPSULE_NAME - tail.length)}${tail}`;
-    if (!taken.has(candidate)) {
-      return { current, proposed: candidate, conflict: true };
-    }
-  }
-  return { current, proposed: current, conflict: true };
+  const candidate = await alternateInstallName(plan.workspaceId, plan.id);
+  return { current, proposed: taken.has(candidate) ? current : candidate, conflict: true };
 }
 
 export type AttemptVariablesCheck =

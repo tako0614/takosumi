@@ -2,11 +2,11 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 import {
   createInstallAttemptFixture,
+  fixtureAttemptName,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_UI_SURFACES,
   type InstallAttemptFixture,
   type InstallAttemptFixtureOptions,
-  workspacesResponse,
 } from "./fixture-data.ts";
 
 type BaseFixture = { readonly mutations: string[] };
@@ -339,7 +339,6 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.attempts.log.creates).toEqual([{
         mode: "attempt",
         source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit },
-        capsule: { name: "cloudflare-service" },
         options: { modulePath: "." },
       }]);
       // Keep reading stable through the UI checks and captures, then release
@@ -775,7 +774,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.attempts.log.creates[1]).toEqual({
         mode: "attempt",
         source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit },
-        capsule: { name: "cloudflare-service", environment: "production" },
+        capsule: { name: fixtureAttemptName(1), environment: "production" },
         options: { modulePath: ".", providerBindings: [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: "pc_only" }] },
       });
       const continues = f.attempts.log.answers.filter((answer) => (answer as { continue?: boolean }).continue === true);
@@ -890,22 +889,22 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.attempts.log.reconciles).toBe(reconcilesAfterStop);
     });
     test("the app name is edited before the app exists; a taken name offers a free one", async ({ page }) => {
-      const f = await detailFixture(page, base, false, false, "not_applicable", { takenNames: ["cloudflare-service"] });
+      const f = await detailFixture(page, base, false, false, "not_applicable", { takenNames: [fixtureAttemptName(1)] });
       await page.goto(sourceUrl);
       const sheet = await openInstallSheet(page);
       await expandDetails(page, "install-customization");
       const name = sheet.getByTestId("install-app-name");
-      await expect(name).toHaveValue("cloudflare-service");
+      await expect(name).toHaveValue(fixtureAttemptName(1));
       await expect(sheet).toContainText("This internal name is already in use.");
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Check what you entered");
       await name.fill("Not A Valid Name");
       await expect(sheet).toContainText("Use lowercase letters");
-      await sheet.getByRole("button", { name: "Use “cloudflare-service-2”", exact: true }).click();
-      await expect(name).toHaveValue("cloudflare-service-2");
-      expect(f.attempts.log.answers).toContainEqual({ expectedGeneration: expect.any(Number), capsuleName: "cloudflare-service-2" });
+      await sheet.getByRole("button", { name: `Use “${fixtureAttemptName(1, 8)}”`, exact: true }).click();
+      await expect(name).toHaveValue(fixtureAttemptName(1, 8));
+      expect(f.attempts.log.answers).toContainEqual({ expectedGeneration: expect.any(Number), capsuleName: fixtureAttemptName(1, 8) });
       // The free name completes the sheet: the Plan is made with it.
       await waitForPlan(page);
-      expect(f.attempts.latest()?.capsule.name).toBe("cloudflare-service-2");
+      expect(f.attempts.latest()?.capsule.name).toBe(fixtureAttemptName(1, 8));
       // Renaming after the Plan prepares the install again under the new name.
       await name.fill("renamed-app");
       await name.press("Enter");
@@ -964,7 +963,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.attempts.log.creates[1]).toEqual({
         mode: "attempt",
         source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit },
-        capsule: { name: "cloudflare-service", environment: "production" },
+        capsule: { name: fixtureAttemptName(1), environment: "production" },
         options: { modulePath: "." },
       });
     });
@@ -974,7 +973,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.getByRole("button", { name: "Install", exact: true }).click();
       await expect(page).toHaveURL(/[?&]installPlan=gip_/u);
       const attemptId = new URL(page.url()).searchParams.get("installPlan")!;
-      // A reopened attempt alone (as from the Store's unfinished list).
+      // Opening a saved attempt URL must not advance the coordinator.
       await page.goto(`/new?installPlan=${attemptId}`);
       const progress = installSheet(page).getByTestId("install-progress");
       await expect(progress).toHaveAttribute("data-progress", "paused");
@@ -987,30 +986,28 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await waitForPlan(page);
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
     });
-    test("unfinished installs are listed on the Store page and can continue or stop", async ({ page }) => {
-      await page.addInitScript(() => localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha"));
-      await page.route("**/api/v1/workspaces", (route) => route.fulfill({ json: workspacesResponse() }));
+    test("the Store does not list unfinished installs; the saved install page can resume or stop", async ({ page }) => {
       const f = await detailFixture(page, base, true);
       await page.goto(sourceUrl);
       await expect(await openInstallSheet(page)).toHaveAttribute("data-install-state", "connections");
-      const attemptId = new URL(page.url()).searchParams.get("installPlan")!;
+      const attemptUrl = page.url();
+      const attemptId = new URL(attemptUrl).searchParams.get("installPlan")!;
+      const listReads: string[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (url.pathname.endsWith("/install-plans") && url.searchParams.has("open")) listReads.push(url.pathname);
+      });
       await page.goto("/new");
-      const open = page.getByTestId("install-open-attempts");
-      await expect(open.getByRole("heading", { name: "Unfinished installs" })).toBeVisible();
-      const row = open.locator(`li[data-install-plan-id="${attemptId}"]`);
-      await expect(row).toContainText("cloudflare-service");
-      await expect(row).toContainText("github.com/example/cloudflare-service");
-      await expect(row).toContainText("Waiting for connections and settings");
-      await captureInstallState(page, "store-unfinished");
-      await row.getByRole("link", { name: "Continue", exact: true }).click();
-      await expect(page).toHaveURL(new RegExp(`/new\\?installPlan=${attemptId}$`, "u"));
-      await expect(installSheet(page)).toBeVisible();
-      await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
-      await page.goto("/new");
-      await open.locator(`li[data-install-plan-id="${attemptId}"]`).getByRole("button", { name: "Stop installing", exact: true }).click();
-      await expect(open).toHaveCount(0);
+      await expect(page.locator(".iv-catalogue-browse")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Unfinished installs" })).toHaveCount(0);
+      expect(listReads).toEqual([]);
+
+      await page.goto(attemptUrl);
+      const sheet = installSheet(page);
+      await expect(sheet).toBeVisible();
+      await sheet.getByRole("button", { name: "Stop installing", exact: true }).click();
+      await expect(sheet).toHaveCount(0);
       expect(f.mutations.filter((m) => m === `DELETE /api/v1/install-plans/${attemptId}`)).toHaveLength(1);
-      // Listing, opening and continuing created nothing new.
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
     });
     test("an expired attempt says so and starts over", async ({ page }) => {

@@ -99,20 +99,6 @@ export function appNameValue(value: string | undefined): string | undefined {
     : undefined;
 }
 
-/** `Repository Office` → `repository-office`, for a Store listing's name. */
-export function appNameFromText(value: string): string | undefined {
-  return appNameValue(
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/gu, "-")
-      .replace(/-+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 48)
-      .replace(/-+$/u, ""),
-  );
-}
-
 /** Inputs for starting an install or recreating an existing attempt. */
 export interface InstallCandidate {
   readonly url: string;
@@ -998,34 +984,6 @@ export function deriveInstallView(
     }
     default:
       return view;
-  }
-}
-
-/**
- * Whether the install screen can continue this list entry: only an attempt
- * can. An install plan started without that screen is listed only to be
- * stopped.
- */
-export function openEntryIsContinuable(response: GitInstallPlanResponse): boolean {
-  return response.installPlan.mode === "attempt";
-}
-
-/** Short status of an unfinished attempt in the "途中のインストール" list. */
-export function openAttemptStatusKey(response: GitInstallPlanResponse): MessageKey {
-  if (!openEntryIsContinuable(response)) return "installStore.open.statusNotContinuable";
-  switch (deriveInstallView(response).stage) {
-    case "paused":
-    case "retry":
-      return "installStore.open.statusReading";
-    case "choose_module":
-    case "provide_inputs":
-      return "installStore.open.statusInputs";
-    case "review":
-      return "installStore.open.statusReview";
-    case "invalidated":
-      return "installStore.open.statusExpired";
-    default:
-      return "installStore.open.statusFailed";
   }
 }
 

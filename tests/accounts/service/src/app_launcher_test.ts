@@ -188,6 +188,7 @@ describe("account launcher", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.appliedQuery).toBe("mine");
+    expect(body.apps[0]?.applied).toBe(true);
     expect(body.apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([MINE]);
     expect(projected).toEqual([MINE]);
     expect(batches).toBe(1);

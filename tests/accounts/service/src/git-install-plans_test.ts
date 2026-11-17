@@ -640,7 +640,7 @@ test.each(["plan", "attempt"] as const)(
       ...(mode === "attempt" ? { mode: "attempt" } : {}),
       source: canonical.source, capsule: canonical.capsule, options: canonical.options,
     };
-    expect(canonical.requestDigest).toBe(await stableJsonDigest(input));
+    expect(canonical.requestDigest).toBe(await stableJsonDigest(mode === "attempt" ? ["git-install-attempt/v2", input] : input));
     const key = "historical-relative-spelling";
     const source = { ...canonical.source, path: "./deploy/app" };
     const historical = {
@@ -2236,15 +2236,50 @@ test("install attempts offer only the installer's Workspace connections (TASK-01
     .toEqual(["conn_cloudflare_admin"]);
 });
 
+test("Git install assigns a new UUID once per new attempt and preserves historical defaults on replay", async () => {
+  const fixture = attemptFixture();
+  const endpoint = "/api/v1/workspaces/ws_install/install-plans";
+  const create = (body: unknown, key: string) => fixture.request(endpoint, "POST", body, { "idempotency-key": key });
+  const source = attemptBody();
+  const firstId = await startAttempt(fixture, source, "first-copy");
+  const secondId = await startAttempt(fixture, source, "second-copy");
+  const first = (await fixture.planStore.get(firstId))!;
+  const second = (await fixture.planStore.get(secondId))!;
+  expect(second.capsule.name).not.toBe(first.capsule.name);
+  expect(second.source.name).toBe(first.source.name);
+  const replay = await create(source, "first-copy");
+  expect(replay.status).toBe(200);
+  expect((await replay.json()).installPlan).toMatchObject({ id: firstId, capsule: first.capsule });
+  expect((await create(attemptBody({ capsuleName: "example" }), "first-copy")).status).toBe(409);
+
+  // An old record hashed the normalized repository-derived name, including
+  // when the caller omitted it. Keep both the original id and original name.
+  const legacyId = "gip_1234567890abcdef";
+  const legacyCapsule = { name: "example", environment: "production" };
+  const legacySource = { ...first.source, path: "./" };
+  expect((await fixture.planStore.create({
+    ...first, id: legacyId, source: legacySource, capsule: legacyCapsule,
+    idempotencyKeyHash: await stableJsonDigest("old-default"),
+    requestDigest: await stableJsonDigest({ mode: "attempt", source: legacySource, capsule: legacyCapsule, options: first.options }),
+  }, first.workspaceManagementAuthority)).status).toBe("created");
+  const legacyReplay = await create(source, "old-default");
+  expect(legacyReplay.status).toBe(200);
+  expect((await legacyReplay.json()).installPlan).toMatchObject({ id: legacyId, capsule: legacyCapsule });
+  await startAttempt(fixture, attemptBody({ capsuleName: "example" }), "explicit-name");
+  expect((await create(source, "explicit-name")).status).toBe(409);
+});
+
 test("install attempt pauses once for the whole sheet, auto-selects the only connection, and continues with transient values", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);
   const started = await readPlan(fixture, planId);
+  const generatedName = started.installPlan.capsule.name;
+  expect(generatedName).toMatch(/^app-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
   expect(started).toMatchObject({
     installPlan: {
       mode: "attempt",
       phase: "syncing_source",
-      capsule: { name: "example", environment: "production" },
+      capsule: { name: generatedName, environment: "production" },
       source: { name: "example", ref: "main", path: "." },
     },
     nextAction: "reconcile",
@@ -2287,7 +2322,7 @@ test("install attempt pauses once for the whole sheet, auto-selects the only con
     variables: [
       { name: "region", type: "string", required: true, sensitive: true },
     ],
-    name: { current: "example", proposed: "example", conflict: false },
+    name: { current: generatedName, proposed: generatedName, conflict: false },
     missing: [],
   });
   // Nothing was created in the cloud ledger yet.
@@ -3278,7 +3313,7 @@ test("install attempt asks for connections when no single candidate exists and v
       providerConnection(CLOUDFLARE, "conn_cloudflare02"),
     ],
   });
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const paused = await reconcileUntilIdle(fixture, planId);
   expect(paused.userAction).toMatchObject({
     kind: "provide_inputs",
@@ -3348,9 +3383,10 @@ test("install attempt asks for connections when no single candidate exists and v
   });
   const conflicted = await readPlan(fixture, planId);
   expect(conflicted.userAction).toMatchObject({
-    name: { current: "example", proposed: "example-2", conflict: true },
+    name: { current: "example", proposed: expect.stringMatching(/^app-[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u), conflict: true },
     missing: ["name"],
   });
+  expect((await readPlan(fixture, planId)).userAction.name).toEqual(conflicted.userAction.name);
   const refused = await answer(fixture, planId, {
     expectedGeneration: chosenPayload.installPlan.generation,
     continue: true,
@@ -3611,7 +3647,7 @@ async function reachReviewable(
 
 test("GET and open listing reconstruct a committed attempt review without Plan or Apply", async () => {
   const fixture = attemptFixture();
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const reviewable = await reachReviewable(fixture, planId);
   const before = fixture.mutationCount();
   const generation = reviewable.installPlan.generation;
@@ -3712,7 +3748,7 @@ for (const failure of ["config", "base", "bindings", "connections", "interface"]
   test(`committed review omits only unavailable ${failure} data when a supporting read fails`, async () => {
     const fixture = interfaceAttemptFixture();
     const selected = addInterfaceProvider(fixture, "named");
-    const planId = await startAttempt(fixture);
+    const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
     const reviewable = await reachReviewable(fixture, planId);
     const getConfig = fixture.operations.capsules.getInstallConfig;
     fixture.operations.interfaces!.get = async () => selected;
@@ -3766,7 +3802,7 @@ test("GET reopens a committed public repository setting from the exact reviewed 
       { name: "public_url", type: "string", hasDefault: false },
     ],
   });
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const paused = await reconcileUntilIdle(fixture, planId);
   expect(paused.userAction).toMatchObject({
     kind: "provide_inputs",
@@ -3985,7 +4021,7 @@ test("installing the same Git address creates a distinct Source per app", async 
 
 test("reads never settle an expired or epoch-changed attempt; only the creator's write discards it", async () => {
   const fixture = attemptFixture();
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const adminPlanId = await startAttempt(
     fixture,
     attemptBody({ capsuleName: "admin-app" }),
@@ -4083,7 +4119,7 @@ test("an attempt with a Capsule never expires", async () => {
 
 test("an idle attempt does not block Workspace management; after a drain reads only report it and the creator's answer discards it", async () => {
   const fixture = attemptFixture();
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   // An attempt with coordinator work pending is still a blocker.
   expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(true);
   const paused = await reconcileUntilIdle(fixture, planId);
@@ -4123,7 +4159,7 @@ test("the store admission fence refuses answers after an epoch change even when 
     { continue: true, variables: { region: "eu" } },
   ]) {
     const fixture = attemptFixture({ staleManagementCapture: true });
-    const planId = await startAttempt(fixture);
+    const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
     const paused = await reconcileUntilIdle(fixture, planId);
     expect(paused.installPlan.phase).toBe("awaiting_input");
     await fixture.beginDrain();
@@ -4150,7 +4186,7 @@ test("the store admission fence refuses answers after an epoch change even when 
 
 test("a confirming request whose creation acknowledgement is lost accepts only the same values and adopts the committed Capsule", async () => {
   const fixture = attemptFixture({ loseAckOnce: ["capsule"] });
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const paused = await reconcileUntilIdle(fixture, planId);
   const lost = await answer(fixture, planId, {
     expectedGeneration: paused.installPlan.generation,
@@ -4484,7 +4520,7 @@ test("a started creation without variables is still protected and adopted after 
     loseAckOnce: ["capsule"],
     compatibilityRootModuleVariableDeclarations: [],
   });
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const paused = await reconcileUntilIdle(fixture, planId);
   expect(paused.userAction.variables).toEqual([]);
   const lost = await answer(fixture, planId, {

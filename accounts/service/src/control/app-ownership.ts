@@ -1,4 +1,5 @@
 /** Per-app account control routes. Durable mutations belong to AppOwnershipOperations. */
+import { installDisplayName } from "./install-names.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AppAccess, AppAccessResolver } from "../../../../contract/app-access.ts";
 import type { InstallConfig } from "takosumi-contract/install-configs";
@@ -251,7 +252,7 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
     if (visible.some((capsule) => !searchConfigs!.has(capsule.installConfigId))) return controlPlaneUnavailable();
     const accesses = new Map(visibleAccesses.map((access) => [access.capsuleId, access]));
     selected = visible.filter((capsule) => {
-      const display = searchConfigs!.get(capsule.installConfigId)?.store?.name;
+      const display = installDisplayName(capsule.name, searchConfigs!.get(capsule.installConfigId));
       const access = accesses.get(capsule.id)!;
       const owner = access.role === "member"
         ? owners.get(access.ownerAccountId)?.displayName?.trim() || access.ownerAccountId : "";

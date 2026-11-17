@@ -3401,6 +3401,8 @@ export interface AccessibleApp {
   readonly iconUrl?: string;
   readonly role: AppRole;
   readonly ownerDisplayName: string;
+  /** Whether the app has persisted deployment state; absent on older servers. */
+  readonly applied?: boolean;
   readonly state: CapsuleAppView["state"] | "update_available";
   readonly primaryAction: CapsuleAppView["primaryAction"];
   /** Authorized launcher metadata, absent only on older servers. */
@@ -3438,6 +3440,7 @@ function isHomeAppSummary(value: unknown): boolean {
   for (const field of ["name", "state", "ownerDisplayName", "iconUrl"]) {
     if (value[field] !== undefined && typeof value[field] !== "string") return false;
   }
+  if (value.applied !== undefined && typeof value.applied !== "boolean") return false;
   if (value.displayName !== undefined && typeof value.displayName !== "string" &&
     (!isRecord(value.displayName) || !Object.values(value.displayName).every((label) => typeof label === "string"))) return false;
   if (value.incomplete !== undefined && (!Array.isArray(value.incomplete) ||

@@ -513,6 +513,10 @@ function attemptError(status: number, code: string, message: string, reason?: st
   return { status, json: { error: { code, message, ...(reason ? { details: { reason } } : {}) } } };
 }
 
+export function fixtureAttemptName(sequence: number, version = 4): string {
+  return `app-00000000-0000-${version}000-8000-${sequence.toString(16).padStart(12, "0")}`;
+}
+
 function proposedAttemptName(url: string): string {
   const last = url.replace(/[?#].*$/u, "").replace(/\/+$/u, "").replace(/\.git$/u, "")
     .split(/[/:]/u).filter(Boolean).at(-1) ?? "";
@@ -575,8 +579,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
   const nameFacts = (attempt: StoredAttempt) => {
     const taken = new Set(options.takenNames ?? []);
     const conflict = taken.has(attempt.capsule.name);
-    let proposed = attempt.capsule.name;
-    for (let suffix = 2; taken.has(proposed); suffix += 1) proposed = `${attempt.capsule.name}-${suffix}`;
+    const proposed = conflict ? fixtureAttemptName(attempt.sequence, 8) : attempt.capsule.name;
     return { current: attempt.capsule.name, proposed, conflict };
   };
 
@@ -783,7 +786,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
         ...(typeof source.authConnectionId === "string" ? { authConnectionId: source.authConnectionId } : {}),
       },
       capsule: {
-        name: typeof capsule?.name === "string" ? capsule.name : proposed,
+        name: typeof capsule?.name === "string" ? capsule.name : fixtureAttemptName(sequence),
         environment: typeof capsule?.environment === "string" ? capsule.environment : "production",
       },
       options: {

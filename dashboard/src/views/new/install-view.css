@@ -50,17 +50,6 @@
 .iv-browse-page .iv-page-heading { margin-bottom: var(--tg-s-4); }
 .iv-browse-page .iv-page-heading h1 { font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: 1.1; }
 .iv-page .iv-catalogue.iv-catalogue-browse { border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0; }
-.iv-open-attempts { display: grid; gap: var(--tg-s-2); margin-bottom: var(--tg-s-6); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); }
-.iv-open-attempts h2 { margin: 0; font-size: var(--tg-fs-lg); letter-spacing: -0.01em; }
-.iv-open-attempts > .iv-muted { margin: 0; }
-.iv-open-attempts ul { display: grid; gap: var(--tg-s-2); margin: var(--tg-s-2) 0 0; padding: 0; list-style: none; }
-.iv-open-attempts li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--tg-s-2) var(--tg-s-4); padding-top: var(--tg-s-3); border-top: 1px solid var(--tg-line); }
-.iv-open-attempt-text { display: grid; gap: var(--tg-s-1); min-width: 0; }
-.iv-open-attempt-text strong { overflow-wrap: anywhere; }
-.iv-open-attempt-text span { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); overflow-wrap: anywhere; }
-.iv-open-attempt-status { font-weight: 600; }
-.iv-open-attempt-actions { display: flex; flex-wrap: wrap; gap: var(--tg-s-2); }
-.iv-open-attempts li > [role="alert"] { flex-basis: 100%; margin: 0; }
 
 /* One app before it is installed: its identity, provenance and one Install. */
 .iv-muted { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; }

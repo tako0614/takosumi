@@ -430,7 +430,6 @@ describe("repo-owned repository presentation", () => {
       modulePath: ".",
       presentationFallback: neutralInstallPresentation({
         gitUrl: source.url,
-        capsuleName: "repo-interface",
       }),
     });
 
