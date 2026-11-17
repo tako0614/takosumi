@@ -106,6 +106,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.manual": "Install from a Git repository",
   "installStore.back": "Back to Store",
   "installStore.provenance": "Source and version",
+  "installStore.developmentPreview": "Development preview",
   "installStore.versionLabel": "Version",
   "installStore.latest": "Latest",
   "installStore.defaultBranch": "Default branch",

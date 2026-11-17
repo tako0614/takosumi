@@ -1643,9 +1643,11 @@ test.describe("Takosumi dashboard browser surface", () => {
       await page.keyboard.press("Enter");
       const versionInput = versionChoice.getByRole("textbox", { name: "バージョン（省略可）" });
       await expect(versionInput).toBeVisible();
-      await versionInput.fill("HEAD");
-      await expect(versionChoice.locator(":scope > summary")).toContainText("既定のブランチ");
-      await versionInput.fill("");
+      await versionChoice.getByRole("button", { name: "開発版" }).click();
+      await expect(versionInput).toHaveValue("HEAD");
+      await expect(versionChoice.locator(":scope > summary")).toContainText("開発版");
+      await versionChoice.getByRole("button", { name: "最新", exact: true }).click();
+      await expect(versionInput).toHaveValue("");
       await expect(versionChoice.locator(":scope > summary")).toContainText("最新");
       await versionChoice.locator(":scope > summary").click();
       await expect(versionInput).not.toBeVisible();

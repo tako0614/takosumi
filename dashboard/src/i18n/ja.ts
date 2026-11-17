@@ -116,6 +116,7 @@ export const ja = {
   "installStore.manual": "Gitリポジトリからインストール",
   "installStore.back": "ストアに戻る",
   "installStore.provenance": "取得元とバージョン",
+  "installStore.developmentPreview": "開発版",
   "installStore.versionLabel": "バージョン",
   "installStore.latest": "最新",
   "installStore.defaultBranch": "既定のブランチ",
