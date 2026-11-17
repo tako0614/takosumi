@@ -3255,6 +3255,22 @@ test("discard before any Capsule exists skips Interface revocation", async () =>
   expect(fixture.counts.capsule).toBe(0);
 });
 
+test("a confirming exact provider binding rejects a changed sole automatic candidate", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction.connections[0]).toMatchObject({ selectedConnectionId: "conn_cloudflare01", autoSelected: true });
+  fixture.operations.connections.listProviderConnections = async () => [providerConnection(CLOUDFLARE, "conn_cloudflare02")];
+  const response = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation, continue: true,
+    variables: { region: "https://example.previous-account.workers.dev" },
+    providerBindings: [{ provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_cloudflare01" }],
+  });
+  expect(response.status).toBe(409);
+  expect(fixture.counts.capsule).toBe(0);
+  expect((await fixture.planStore.get(planId))!.options.providerBindings).toBeUndefined();
+});
+
 test("install attempt asks for connections when no single candidate exists and validates answers", async () => {
   const fixture = attemptFixture({
     providerConnections: [
@@ -3477,6 +3493,46 @@ test("install attempt JSON projects manifest input editability without changing 
     expect(projected.variables.every(x => x.userEditable === undefined)).toBe(true);
   }
   expect(JSON.stringify(stored.attemptFacts)).toBe(captured);
+});
+
+test("public URL presentation uses accepted endpoint roles and exact compiler names without persisting proposed values", async () => {
+  const base = repositoryManifest(["."]);
+  if (base.status !== "present") throw new Error("expected manifest fixture");
+  for (const source of ["capsule_name", "workspace_scoped_capsule_name"] as const) {
+    const fixture = attemptFixture({
+      repositoryManifest: { ...base, document: { ...base.document, install: { modules: { ".": {
+        inputs: [
+          { name: "service_identifier", type: "string", source: { kind: source }, role: "service_name", label: { en: "Name" } },
+          { name: "visible_address", type: "string", source: { kind: "user" }, format: "cloudflare-workers-url", required: true, label: { en: "URL" } },
+        ], requires: [{ kind: "http.endpoint", deliver: { variables: { url: "visible_address" } } }],
+      } } } } },
+      providerConnections: [], compatibilityResources: [], compatibilityRootProviderRequirements: [],
+      compatibilityRootModuleVariableDeclarations: [
+        { name: "service_identifier", type: "string", hasDefault: true },
+        { name: "visible_address", type: "string", hasDefault: false },
+      ],
+    });
+    const appName = "a".repeat(60);
+    const id = await startAttempt(fixture, attemptBody({ capsuleName: appName }));
+    const paused = await reconcileUntilIdle(fixture, id);
+    expect(paused.userAction).toMatchObject({ kind: "provide_inputs" });
+    const expected = "a".repeat(48) + (source === "workspace_scoped_capsule_name" ? "-ws-ins" : "");
+    expect(paused.userAction.variables.find((entry: { name: string }) => entry.name === "visible_address")).toMatchObject({
+      format: "cloudflare-workers-url", userEditable: true,
+      publicEndpoint: { serviceNameVariable: "service_identifier", serviceNameSource: source, suggestedName: expected },
+    });
+    const stored = (await fixture.planStore.get(id))!;
+    expect(JSON.stringify(stored.attemptFacts)).not.toContain("suggestedName");
+    const missing = await userActionFor({ ...fixture.operations, getSourceSnapshot: async () => {
+      throw new OpenTofuControllerError("not_found", "missing fixture snapshot");
+    } }, stored);
+    if (missing.kind !== "provide_inputs") throw new Error("expected inputs");
+    expect(missing.variables.every((entry) => entry.publicEndpoint === undefined)).toBe(true);
+    const renamed = await answer(fixture, id, { expectedGeneration: paused.installPlan.generation, capsuleName: "renamed" });
+    expect(renamed.status).toBe(200);
+    expect((await renamed.json()).userAction.variables.find((entry: { name: string }) => entry.name === "visible_address").publicEndpoint.suggestedName)
+      .toBe("renamed" + (source === "workspace_scoped_capsule_name" ? "-ws-ins" : ""));
+  }
 });
 
 test("install attempt with a repository manifest pauses after manifest analysis and creates from the reviewed preview", async () => {

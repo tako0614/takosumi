@@ -2084,3 +2084,148 @@ test("server-owned inputs remain read-only while generic derived defaults can be
     ]);
   } finally { genericPage.dispose(); }
 });
+
+const endpointField = { name: "public_address", type: "string" as const, required: true, sensitive: false,
+  userEditable: true, format: "cloudflare-workers-url",
+  publicEndpoint: { serviceNameVariable: "deployment_name", serviceNameSource: "capsule_name" as const, suggestedName: "office-compiled" } };
+const endpointInputs = (name = "office", connectionId = "conn_a", resubmit = false) => inputs({
+  variables: [{ ...endpointField, publicEndpoint: { ...endpointField.publicEndpoint, suggestedName: `${name}-compiled` } }],
+  connections: [{ ...requirement, selectedConnectionId: connectionId }], missing: [],
+  name: { current: name, proposed: name, conflict: false },
+  ...(resubmit ? { resubmitVariables: [endpointField.name] } : {}),
+});
+const endpointConnection = (id: string, subdomain: string) => ({ id, providerSource: requirement.provider,
+  ownerAccountId: "sub_me", scope: "personal", status: "verified",
+  scopeHints: { moduleInputDefaults: { cloudflare_account_id: "a".repeat(32), cloudflare_workers_subdomain: subdomain },
+    providerSettings: { accountId: "a".repeat(32), workersSubdomain: subdomain } } });
+
+test("standard public URL uses server names, preserves manual URL edits, and explicitly returns to automatic", async () => {
+  let current = respond(endpointInputs(), 1);
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => [endpointConnection("conn_a", "alpha"), endpointConnection("conn_b", "beta")],
+    answerGitInstallAttempt: async (_id, answer) => {
+      const request = answer as { capsuleName?: string };
+      current = request.capsuleName
+        ? respond(endpointInputs(request.capsuleName), 2)
+        : respond({ kind: "wait", phase: "planning" }, 5);
+      return current;
+    }, reconcileGitInstallPlan: abortable([]) });
+  const page = mount(ID);
+  try {
+    await until(() => page.attempt.drafts().public_address?.value === "https://office-compiled.alpha.workers.dev", "initial automatic URL");
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt")).toHaveLength(0);
+    page.attempt.setNameDraft("renamed");
+    await page.attempt.saveName();
+    await until(() => page.attempt.drafts().public_address?.value === "https://renamed-compiled.alpha.workers.dev", "canonical renamed URL");
+    page.attempt.setDraft("public_address", "https://custom.example", { typing: true });
+    page.attempt.commitDraft("public_address");
+    current = respond(endpointInputs("another", "conn_b"), 3);
+    await page.attempt.reload();
+    await until(() => page.attempt.connectionSettings()[0]?.connectionId === "conn_b", "new selected metadata");
+    expect(page.attempt.drafts().public_address).toEqual({ value: "https://custom.example", touched: true });
+    page.attempt.useStandardPublicUrl("public_address");
+    await until(() => page.attempt.drafts().public_address?.value === "https://another-compiled.beta.workers.dev", "restored automatic URL");
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").at(-1)?.args[1]).toMatchObject({
+      expectedGeneration: 3, continue: true, variables: { public_address: "https://another-compiled.beta.workers.dev" },
+    });
+  } finally { page.dispose(); }
+});
+
+test("late metadata and failed refresh cannot confirm an old connection's standard URL", async () => {
+  let current = respond(endpointInputs(), 1);
+  const first = deferred<unknown[]>();
+  const second = deferred<unknown[]>();
+  let reads = 0;
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => ++reads === 1 ? first.promise : second.promise });
+  const page = mount(ID);
+  try {
+    await until(() => reads === 1, "first metadata request");
+    current = respond(endpointInputs("office", "conn_b"), 2);
+    await page.attempt.reload();
+    await until(() => reads === 2, "replacement metadata request");
+    first.resolve([endpointConnection("conn_a", "old")]);
+    await settle();
+    expect(page.attempt.drafts().public_address).toBeUndefined();
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt")).toHaveLength(0);
+    second.resolve([endpointConnection("conn_b", "current")]);
+    await until(() => page.attempt.drafts().public_address?.publicEndpoint?.confirmed === true, "current metadata");
+    expect(page.attempt.drafts().public_address?.value).toBe("https://office-compiled.current.workers.dev");
+    handlers.listConnections = async () => { reads += 1; throw new Error("metadata unavailable"); };
+    current = respond(endpointInputs("office", "conn_b"), 3);
+    await page.attempt.reload();
+    await until(() => reads === 3 && !page.attempt.settingsChoicesLoading(), "failed metadata refresh");
+    expect(page.attempt.drafts().public_address?.publicEndpoint?.confirmed).toBe(false);
+    expect(page.attempt.view().readyToConfirm).toBe(false);
+    await page.attempt.confirm();
+    await settle();
+    expect(reads).toBe(3);
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt")).toHaveLength(0);
+    handlers.listConnections = async () => [endpointConnection("conn_b", "new-current")];
+    await page.attempt.loadConnectionSettings();
+    await until(() => page.attempt.drafts().public_address?.value === "https://office-compiled.new-current.workers.dev", "explicit refreshed URL");
+  } finally { page.dispose(); }
+});
+
+test("a failed rename cannot send the old generated URL with an unsaved app name", async () => {
+  let current = respond(endpointInputs(), 1);
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => [endpointConnection("conn_a", "alpha")],
+    answerGitInstallAttempt: async () => { throw new Error("rename unavailable"); } });
+  const page = mount(ID);
+  try {
+    await until(() => page.attempt.drafts().public_address?.publicEndpoint?.confirmed === true, "initial URL");
+    page.attempt.setNameDraft("renamed");
+    await page.attempt.saveName();
+    expect(page.attempt.nameDraft()).toBe("renamed");
+    expect(page.attempt.view().readyToConfirm).toBe(false);
+    expect(page.attempt.drafts().public_address?.publicEndpoint?.confirmed).toBe(false);
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").map((call) => call.args[1]))
+      .toEqual([{ expectedGeneration: 1, capsuleName: "renamed" }]);
+    handlers.answerGitInstallAttempt = async () => {
+      current = respond(endpointInputs("renamed"), 2);
+      return current;
+    };
+    await page.attempt.saveName();
+    await until(() => page.attempt.drafts().public_address?.value === "https://renamed-compiled.alpha.workers.dev", "accepted renamed URL");
+    expect(page.attempt.view().readyToConfirm).toBe(true);
+  } finally { page.dispose(); }
+});
+
+test("public URL resubmission retains the exact in-memory value and reopened inputs stay write-only", async () => {
+  let current = respond(endpointInputs(), 1);
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => [endpointConnection("conn_a", "alpha")],
+    answerGitInstallAttempt: async () => {
+      current = respond(endpointInputs("office", "conn_a", true), 2);
+      return current;
+    } });
+  const page = mount(ID);
+  try {
+    await until(() => page.attempt.drafts().public_address?.publicEndpoint?.confirmed === true, "prepared URL");
+    await page.attempt.confirm();
+    expect(page.attempt.view().readyToConfirm).toBe(true);
+    await page.attempt.confirm();
+    const answers = calls.filter((call) => call.name === "answerGitInstallAttempt").map((call) => call.args[1]);
+    expect(answers).toEqual([
+      { expectedGeneration: 1, continue: true, variables: { public_address: "https://office-compiled.alpha.workers.dev" },
+        providerBindings: [{ provider: requirement.provider, moduleLocalName: requirement.moduleLocalName, connectionId: "conn_a" }] },
+      { expectedGeneration: 2, continue: true, variables: { public_address: "https://office-compiled.alpha.workers.dev" } },
+    ]);
+    expect(calls.filter((call) => call.name === "listConnections")).toHaveLength(1);
+  } finally { page.dispose(); }
+  reset({ getGitInstallPlan: async () => current });
+  const reopened = mount(ID);
+  try {
+    await until(() => reopened.attempt.sheet() !== undefined, "reopened resubmit sheet");
+    expect(reopened.attempt.drafts()).toEqual({});
+    const { sheetVariables } = await import(resolve(dashboard, "src/views/new/install-attempt.ts"));
+    expect(sheetVariables(reopened.attempt.sheet()!)[0]?.sensitive).toBe(true);
+    expect(calls.filter((call) => call.name === "listConnections")).toHaveLength(0);
+    reopened.attempt.setDraft("public_address", "https://office-compiled.alpha.workers.dev");
+    expect(reopened.attempt.view().readyToConfirm).toBe(true);
+  } finally { reopened.dispose(); }
+});
