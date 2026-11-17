@@ -1079,6 +1079,15 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
 
   test.describe("Installed app page", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
+
+    async function openUninstall(page: Page): Promise<Locator> {
+      await page.getByTestId("app-management").locator('[data-app-section-link="danger"]').click();
+      await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-section", "danger");
+      const section = page.getByTestId("app-uninstall");
+      await expect(section).toBeVisible();
+      return section;
+    }
+
     test("Uninstall confirms once, restores its real reservation, and supports cancellation", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
       // The reservation uses this fixture's fixed timestamps, not today's date.
@@ -1087,7 +1096,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.goto(`/new?capsule=${capId}`);
       await expect(page).toHaveURL(new RegExp(`/apps/${capId}$`, "u"));
       const appPage = page.getByTestId("app-page");
-      const section = page.getByTestId("app-uninstall");
+      const section = await openUninstall(page);
       // The grace period shows before anything is scheduled.
       await expect(section).toContainText("Its data stays for 7 days");
       await section.getByRole("button", { name: "Uninstall", exact: true }).click();
@@ -1102,6 +1111,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const scheduled = page.getByTestId("app-problems").locator('[data-problem="uninstall"]');
       await expect(scheduled).toContainText("will be uninstalled on");
       await expect(page.getByTestId("app-uninstall")).toHaveCount(0);
+      await page.getByTestId("app-section-back").click();
+      await expect(appPage).toHaveAttribute("data-app-section", "overview");
+      await expect(page.locator('[data-app-section-link="danger"]')).toHaveCount(0);
       await page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true }).click();
       await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
       f.destroy(); await page.reload();
@@ -1135,19 +1147,21 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       f.problem("error"); await page.reload();
       await expect(page.getByTestId("app-problems").locator('[data-problem="capsule_error"]')).toContainText("This app has a problem");
       await expect(header.getByRole("button", { name: "Review the installed version again", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
+      await expect((await openUninstall(page)).getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
+      await page.getByTestId("app-section-back").click();
+      await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-section", "overview");
       f.problem("disabled"); await page.reload();
       await expect(page.getByTestId("app-state-sentence")).toHaveText("Stopped.");
       await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
       // A stopped app cannot be scheduled for uninstall; it is removed by a
       // reviewed plan instead.
-      await expect(page.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall now", exact: true })).toBeVisible();
+      await expect((await openUninstall(page)).getByRole("button", { name: "Uninstall now", exact: true })).toBeVisible();
     });
     /** Uninstall a never-applied app from its page; the dialog promises an immediate removal. */
     async function uninstallNeverApplied(page: Page): Promise<void> {
       await page.goto(`/apps/${capId}`);
       await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "installing");
-      const section = page.getByTestId("app-uninstall");
+      const section = await openUninstall(page);
       await expect(section).toContainText("hasn't created anything in your cloud yet");
       await section.getByRole("button", { name: "Uninstall", exact: true }).click();
       const dialog = page.getByRole("dialog");
@@ -1181,8 +1195,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     test("uninstall confirmation does not claim retired app dependencies", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
       await page.goto(`/new?capsule=${capId}`);
-      await expect(page.getByTestId("app-uninstall")).not.toContainText("Linked apps");
-      await page.getByRole("button", { name: "Uninstall", exact: true }).click();
+      const section = await openUninstall(page);
+      await expect(section).not.toContainText("Linked apps");
+      await section.getByRole("button", { name: "Uninstall", exact: true }).click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await expect(page.getByRole("dialog")).not.toContainText("Dependent app");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();

@@ -220,6 +220,13 @@ export function registerNavigationAccountCases(mode: string): void {
           for (const width of [320, 375, 414, 768, 1440]) {
             const label = `${name}-${language}-${theme}-${width}`;
             await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
+            if (name === "home") {
+              // The virtual grid recomputes its columns on the next animation frame.
+              const grid = page.locator(".av-home-grid");
+              await expect.poll(() => grid.evaluate((node) =>
+                getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/u).length === 1
+              ), `${label} Home row layout`).toBe(width <= 640);
+            }
             await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth), label).toBeLessThanOrEqual(1);
             const size = await primary.boundingBox();
             expect(size?.width, `${label} target width`).toBeGreaterThanOrEqual(44);

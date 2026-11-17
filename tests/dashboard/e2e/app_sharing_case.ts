@@ -220,6 +220,10 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
     test("a member can leave but cannot manage members or uninstall the app", async ({ page }) => {
       const requests = await accountAs(page, "member");
       await memberRoutes(page, SHARED_APP, PORTABLE_SHARED_APP_MEMBERS);
+      await page.route(`**/api/v1/capsules/${SHARED_APP}/provider-bindings`, (route) =>
+        route.request().method() === "GET"
+          ? route.fulfill({ json: { providerBindingSet: null } })
+          : route.fallback());
       await page.route((url) => url.pathname === "/api/v1/connections", (route) => {
         const url = new URL(route.request().url());
         if (url.searchParams.get("projection") === "labels" && url.searchParams.get("capsuleId") === SHARED_APP) {

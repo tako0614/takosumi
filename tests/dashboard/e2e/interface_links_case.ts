@@ -226,19 +226,23 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       const fixture = await appFixture(page, [
         link("calendar", { linkId: "il_calendar", state: "pending_approval", generation: 1, providerCapsuleId: "cap_calendar", providerInterfaceId: "if_calendar", otherApp: { capsuleId: "cap_calendar", name: "予定表" } }),
       ], [request("il_req_wiki", "cap_wiki", "チームWiki", 1), request("il_req_blog", "cap_blog", "ブログ", 2)]);
-      await page.goto(`/apps/${ID}#links`);
+      await page.goto(`/apps/${ID}`);
+      // The provider opens the decision pane from the overview notice.
+      const problems = page.getByTestId("app-problems");
+      const card = problems.locator('[data-problem="interface_link_approval_pending"]');
+      await expect(card).toHaveCount(2);
+      await expect(card.first()).toHaveClass(/ap-problem-info/u);
+      await expect(problems).toContainText("お知らせ");
+      await expect(card.first()).toContainText("チームWiki が、このアプリとの連携の承認を待っています。");
+      await card.first().getByRole("button", { name: "連携の依頼を確認する", exact: true }).click();
+      await expect(page).toHaveURL(/#links$/u);
       const section = page.getByTestId("app-linked");
+      await expect(section).toBeVisible();
+      expect(fixture.mutations).toEqual([]);
       const use = section.locator('[data-testid="app-link-use"][data-requirement="calendar"]');
       const requestRow = (name: string) => section.getByTestId("app-link-used-by").filter({ hasText: name });
       // The consumer side names the app whose approval it waits for.
       await expect(use.getByTestId("app-link-state")).toHaveText("予定表 の承認待ち");
-      // The provider side: an info card per request and the decision in place.
-      const card = page.locator('[data-problem="interface_link_approval_pending"]');
-      await expect(card).toHaveCount(2);
-      await expect(card.first()).toHaveClass(/ap-problem-info/u);
-      await expect(page.getByTestId("app-problems")).toContainText("お知らせ");
-      await expect(card.first()).toContainText("チームWiki が、このアプリとの連携の承認を待っています。");
-      await expect(card.first().getByRole("button", { name: "連携の依頼を確認する", exact: true })).toBeVisible();
       for (const name of ["チームWiki", "ブログ"]) {
         await expect(requestRow(name)).toContainText("権限: Files · Read, Files · Write");
         await expect(requestRow(name)).not.toContainText("files.read");
@@ -252,6 +256,7 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       await requestRow("チームWiki").getByRole("button", { name: /との連携を承認/u }).click();
       const dialog = page.getByRole("dialog");
       await expect(dialog).toContainText("チームWiki を使う人が、このアプリの次の権限を使えるようになります: Files · Read, Files · Write。");
+      expect(fixture.mutations).toEqual([]);
       await capture(page, "interface-link-approve-confirm");
       await dialog.getByRole("button", { name: "承認", exact: true }).click();
       await expect(requestRow("チームWiki")).toContainText("連携中");

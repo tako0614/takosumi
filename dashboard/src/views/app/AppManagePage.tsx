@@ -233,8 +233,9 @@ export default function AppManagePage(props: {
   const backToOverview = (event: MouseEvent) => {
     if (!isPlainClick(event)) return;
     event.preventDefault();
-    // Returning always means this app's overview, including on a direct URL.
-    navigate(appPaneHref(), { replace: true, scroll: false });
+    // Always open this app's overview, even from a direct link. Keep the
+    // pane in browser history so Back/Forward can restore its draft.
+    navigate(appPaneHref(), { scroll: false });
   };
 
   // --- the app and the server's view of it -----------------------------------
