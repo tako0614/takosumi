@@ -267,7 +267,7 @@ describe("installed app page", () => {
   });
 
   test("a returned Plan releases its idempotency key; a failed or unknown outcome keeps it", () => {
-    expect(page).toContain("if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson);");
+    expect(page).toContain("if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson, attempt.idempotencyKey);");
     expect(page.indexOf("releaseRevisionPlanAttempt(revisionAttempts")).toBeGreaterThan(
       page.indexOf("await createReviewableGitRevisionPlan(forCapsule"),
     );
@@ -298,7 +298,7 @@ describe("installed app page", () => {
     // A continued revision that settles without a Plan (for example already
     // current) reports its own diagnostic, not a generic "not started".
     expect(continueRevision).toContain("requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId))");
-    expect(continueRevision).toContain(".revisionPlan.planRunId");
+    expect(continueRevision).toContain("return plan.planRunId;");
     expect(continueRevision).toContain('"update",');
     expect(attention).toContain("props.actions.continueRevision(revisionPlanId())");
     // Continuing a stopped one waits too while another change is under way

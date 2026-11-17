@@ -1535,6 +1535,8 @@ export async function createReviewableGitRevisionPlan(
     readonly timeoutMs?: number;
     /** Reconcile cadence; see {@link GitPlanPollCadence}. */
     readonly pollCadence?: GitPlanPollCadence;
+    /** Observe this request's acknowledged coordinator before reconciliation. */
+    readonly onCreated?: (response: GitRevisionPlanResponse) => void;
   } = {},
 ): Promise<GitRevisionPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
@@ -1546,6 +1548,7 @@ export async function createReviewableGitRevisionPlan(
       { signal },
     );
     throwIfAborted(signal);
+    options.onCreated?.(first);
     const response = await driveGitPlanReconcile<GitRevisionPlanResponse>({
       kind: "revision",
       maxReconciles: options.maxReconciles ?? 120,
