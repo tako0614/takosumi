@@ -40,7 +40,7 @@ import {
   CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
 } from "./cloudflare/credentials.ts";
 import { cloudflareProviderSettings } from "./cloudflare/settings.ts";
-import { cloudflareOAuthExpiresAt, cloudflareOAuthRefreshRequired, refreshCloudflareOAuthValues } from "./cloudflare/oauth.ts";
+import { assertCloudflareOAuthScopes, cloudflareOAuthExpiresAt, cloudflareOAuthRefreshRequired, refreshCloudflareOAuthValues } from "./cloudflare/oauth.ts";
 import { buildAwsAssumeRoleConnection } from "./aws/setup.ts";
 import {
   buildGitHttpsTokenConnection,
@@ -424,11 +424,28 @@ export const REFERENCE_CREDENTIAL_RECIPE_DRIVERS: CredentialRecipeDriverRegistry
 
 /** Current operator credentials remain host-owned and rotate without tenant rewrites. */
 export function referenceCredentialDriversFromEnv(env: Readonly<Record<string, string | undefined>>): CredentialRecipeDriverRegistry {
+  const scopes = (env.TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES ?? "").split(/[\s,]+/u).filter(Boolean);
   return { ...REFERENCE_CREDENTIAL_RECIPE_DRIVERS,
-    "cloudflare/oauth": { ...cloudflareOAuthDriver, refresh: (input) => refreshCloudflareOAuthValues(input, {
+    "cloudflare/oauth": { ...cloudflareOAuthDriver,
+    refreshRequired(values, now, minimumLifetimeSeconds) {
+      try { assertCloudflareOAuthScopes(values, scopes); }
+      catch { return true; } // Existing Vault renewal failure marks reconnect required.
+      return cloudflareOAuthRefreshRequired(values, now, minimumLifetimeSeconds);
+    },
+    async verify(input) {
+      try { assertCloudflareOAuthScopes(input.values, scopes); }
+      catch { return { ok: false, detail: "Cloudflare permissions changed or required scopes are missing; reconnect Cloudflare" }; }
+      return await cloudflareOAuthDriver.verify!(input);
+    },
+    async mint(input) {
+      assertCloudflareOAuthScopes(input.values, scopes);
+      return await cloudflareOAuthDriver.mint!(input);
+    },
+    refresh: (input) => refreshCloudflareOAuthValues(input, {
       clientId: env.TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID,
       clientSecret: env.TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_SECRET,
       tokenUrl: env.TAKOSUMI_CLOUDFLARE_OAUTH_TOKEN_URL,
+      scopes,
     }) } };
 }
 
