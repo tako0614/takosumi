@@ -1,3 +1,4 @@
+import { installDisplayName } from "./install-names.ts";
 import { normalizeInstallConfigSourceUrl } from "takosumi-contract/install-configs";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { capsuleInstallConfigReAdoptionAuthoritySnapshot } from "./install-config-re-adoptions.ts";
@@ -364,6 +365,7 @@ async function readAppOverview(
   const review = reviewablePlan(latestRun);
   const display = installConfig.value?.store;
   const iconUrl = safeImageUrl(display?.iconUrl);
+  const displayName = installDisplayName(capsule.name, installConfig.value);
 
   const view: Omit<CapsuleAppView, "version"> = {
     kind: CAPSULE_APP_VIEW_KIND,
@@ -372,7 +374,7 @@ async function readAppOverview(
     projectId: capsule.projectId,
     name: capsule.name,
     environment: capsule.environment,
-    ...(display ? { displayName: { ja: display.name.ja, en: display.name.en } } : {}),
+    ...(displayName ? { displayName } : {}),
     ...(iconUrl ? { iconUrl } : {}),
     status: capsule.status,
     applied,
@@ -410,10 +412,11 @@ async function readAppOverview(
 export async function linkedAppDisplay(ctx: ControlDispatchContext, app: Capsule): Promise<CapsuleAppLinkedApp> {
   const config = await ctx.operations.capsules.getInstallConfig(app.installConfigId);
   const iconUrl = safeImageUrl(config.store?.iconUrl);
+  const displayName = installDisplayName(app.name, config);
   return {
     capsuleId: app.id,
     name: app.name,
-    ...(config.store ? { displayName: { ja: config.store.name.ja, en: config.store.name.en } } : {}),
+    ...(displayName ? { displayName } : {}),
     ...(iconUrl ? { iconUrl } : {}),
   };
 }

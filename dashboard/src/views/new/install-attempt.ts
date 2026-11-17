@@ -99,20 +99,6 @@ export function appNameValue(value: string | undefined): string | undefined {
     : undefined;
 }
 
-/** `Repository Office` → `repository-office`, for a Store listing's name. */
-export function appNameFromText(value: string): string | undefined {
-  return appNameValue(
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/gu, "-")
-      .replace(/-+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 48)
-      .replace(/-+$/u, ""),
-  );
-}
-
 /** Inputs for starting an install or recreating an existing attempt. */
 export interface InstallCandidate {
   readonly url: string;

@@ -117,6 +117,12 @@ rename cryptographic scope. See [app storage roots](../operations/app-storage-ro
 StateVersion storage and locking are part of the canonical Run lifecycle; they
 are not a separate Resource/Form ledger.
 
+New Git install attempts assign an `app-<UUID>` technical name when no name is
+provided. The name is allocated once per attempt and retained on replay.
+Store display names and Git repository labels are presentation only, and do not
+supply a technical name. An explicit technical name still uses the regular
+uniqueness check before creation.
+
 New Git installs allocate a dedicated Source with a deterministic install-plan-derived id,
 an immutable `ownerCapsuleId`, and private `createdByInstallPlanId` provenance in existing JSON.
 Initial Capsule authority claims or verifies the Source in the same store commit; another

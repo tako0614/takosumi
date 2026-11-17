@@ -391,11 +391,14 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           <Show when={props.installedAppsComplete === false}>
             <p class="tcs-installed-hint">{s("installedUnknownHint", props.locale)}</p>
           </Show>
-          <For each={installed()}>{(app) => (
-            <a class="tcs-btn tcs-primary" href={appPageHref(app.capsuleId)} aria-label={`${s("open", props.locale)}: ${app.name}`}>
-              {s("open", props.locale)}<Show when={installedFor(listing).length > 1}> · {app.name}</Show>
-            </a>
-          )}</For>
+          <For each={installed()}>{(app) => {
+            const label = () => pick(app.displayName ?? listing.name, props.locale);
+            return (
+              <a class="tcs-btn tcs-primary" href={appPageHref(app.capsuleId)} aria-label={`${s("open", props.locale)}: ${label()}`}>
+                {s("open", props.locale)}<Show when={installed().length > 1}> · {label()}</Show>
+              </a>
+            );
+          }}</For>
           <button type="button" class="tcs-btn" aria-label={`${s("installAnother", props.locale)}: ${pick(listing.name, props.locale)}`} onClick={() => props.onConfigure(listing)}>
             {s("installAnother", props.locale)}
           </button>

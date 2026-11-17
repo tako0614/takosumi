@@ -12,7 +12,6 @@ import type {
   GitInstallPlanUserAction,
 } from "takosumi-contract";
 import {
-  appNameFromText,
   appNameValue,
   attemptBelongsHere,
   attemptCreateRequest,
@@ -365,7 +364,6 @@ describe("starting and starting over", () => {
 
   test("a name the API would refuse is left to the coordinator to propose", () => {
     expect(attemptCreateRequest({ url: "https://x.example/r.git", ref: "", sourcePath: ".", modulePath: "", name: "Bad Name" }).capsule).toBeUndefined();
-    expect(appNameFromText("Repository Office")).toBe("repository-office");
     expect(appNameValue("ok-name")).toBe("ok-name");
     expect(appNameValue("")).toBeUndefined();
   });

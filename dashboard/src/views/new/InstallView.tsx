@@ -43,7 +43,6 @@ import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { InstallScreen } from "./InstallSheet.tsx";
 import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import {
-  appNameFromText,
   attemptProblemKey,
   INSTALL_SCREEN_STAGES,
   installAttemptId,
@@ -242,7 +241,7 @@ function OpenAttempts(props: { readonly principalId: string }) {
             {(entry) => (
               <li data-install-plan-id={entry.installPlan.id}>
                 <div class="iv-open-attempt-text">
-                  <strong>{entry.installPlan.capsule.name}</strong>
+                  <strong>{capsuleNameFromUrl(entry.installPlan.source.url)}</strong>
                   <span>
                     {repositoryLabel(entry.installPlan.source.url)}
                     <Show when={versionLabel(entry.installPlan.source.ref)}>{(version) => <> · {version()}</>}</Show>
@@ -319,7 +318,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
       ref: plan.source.ref === "HEAD" ? "" : plan.source.ref,
       sourcePath: plan.source.path,
       path: plan.options.modulePath ?? "",
-      name: plan.capsule.name,
+      name: capsuleNameFromUrl(plan.source.url),
     });
     return path ? (appendAppHandoff(path, handoff()) ?? path).replace(/^\/new/u, "") : "";
   };
@@ -402,9 +401,6 @@ function AppInstallPage(props: { readonly principalId: string }) {
         ref: ref(),
         sourcePath: prefill()?.sourcePath ?? ".",
         modulePath: listed()?.source.path ?? prefill()?.path ?? "",
-        name: prefill()?.name
-          ? appNameFromText(prefill()!.name!)
-          : appNameFromText(listed()?.suggestedName ?? ""),
         ...(sourceAuth() ? { authConnectionId: sourceAuth() } : {}),
       },
       { fromStore: fromStore() },
@@ -503,11 +499,14 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     <div class="iv-existing-apps" data-testid="install-existing-apps">
                       <p class="iv-muted">{installedLabel()}</p>
                       <div class="iv-action-row">
-                        <For each={existingApps()}>{(app) => (
-                          <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${app.name}`}>
-                            {t("installStore.open")}<Show when={existingApps().length > 1}> · {app.name}</Show>
-                          </Button>
-                        )}</For>
+                        <For each={existingApps()}>{(app) => {
+                          const label = () => app.displayName?.[locale()] || title();
+                          return (
+                            <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${label()}`}>
+                              {t("installStore.open")}<Show when={existingApps().length > 1}> · {label()}</Show>
+                            </Button>
+                          );
+                        }}</For>
                       </div>
                     </div>
                   </Show>
