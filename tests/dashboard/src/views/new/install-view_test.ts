@@ -76,7 +76,8 @@ describe("attempt-driven install page", () => {
     expect(sheet).toContain("<InstallExecution");
     const execution = read("dashboard/src/views/new/InstallExecution.tsx");
     const install = between(execution, "const install = async", "// Apply starts only from");
-    expect(install).toContain("createApplyRun(runId()");
+    expect(install).toContain("createApplyRun(plan.id,");
+    expect(install).toContain("plan.id !== runId()");
     // An out-of-date Plan is never applied, nor approved.
     expect(install).toContain("if (props.blockedReason ||");
     expect(between(execution, "const approve = async", "const install = async")).toContain("if (props.blockedReason) return;");
