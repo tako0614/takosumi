@@ -3420,6 +3420,41 @@ function expireAccessibleAppsData(): void {
   appsDataExpiresAt = 0;
 }
 
+function normalizeAppsRouteError(path: string, error: unknown): unknown {
+  // The old first-page dispatcher has no resource id and predates route_not_found.
+  const appUrl = new URL(path, "https://dashboard.invalid");
+  if (appUrl.pathname === `${BASE}/apps` && !appUrl.searchParams.has("cursor") &&
+    error instanceof ControlApiError && error.status === 404 &&
+    error.code === "not_found" && error.details === undefined && isRecord(error.body) && isRecord(error.body.error)) {
+    return new ControlApiError(404, "route_not_found", error.message, error.body, error.isHttpStatusFallback);
+  }
+  return error;
+}
+
+/** Validate fields consumed by Home, allowing old role-only summary records. */
+function isHomeAppSummary(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.capsuleId !== "string" || !value.capsuleId ||
+    (value.role !== "owner" && value.role !== "member")) return false;
+  for (const field of ["name", "state", "ownerDisplayName", "iconUrl"]) {
+    if (value[field] !== undefined && typeof value[field] !== "string") return false;
+  }
+  if (value.displayName !== undefined && typeof value.displayName !== "string" &&
+    (!isRecord(value.displayName) || !Object.values(value.displayName).every((label) => typeof label === "string"))) return false;
+  if (value.incomplete !== undefined && (!Array.isArray(value.incomplete) ||
+    !value.incomplete.every((part) => typeof part === "string"))) return false;
+  return value.screens === undefined || (Array.isArray(value.screens) && value.screens.every((screen) =>
+    isRecord(screen) && typeof screen.url === "string" && typeof screen.interfaceId === "string" &&
+    (screen.title === undefined || typeof screen.title === "string") &&
+    (screen.category === undefined || typeof screen.category === "string") &&
+    (screen.clients === undefined || (isRecord(screen.clients) &&
+      (screen.clients.preferred === "web" || screen.clients.preferred === "native") &&
+      (screen.clients.ios === undefined || isRecord(screen.clients.ios)) &&
+      (screen.clients.android === undefined || isRecord(screen.clients.android)))) &&
+    (screen.icon === undefined || (isRecord(screen.icon) &&
+      (screen.icon.kind === "image" ? typeof screen.icon.url === "string" :
+        screen.icon.kind === "glyph" && typeof screen.icon.glyph === "string")))));
+}
+
 function readCachedAppsPage(path: string): Promise<{ nextCursor?: string } & Record<string, unknown>> {
   expireAccessibleAppsData();
   const cached = appsPageCache.get(path);
@@ -3428,13 +3463,7 @@ function readCachedAppsPage(path: string): Promise<{ nextCursor?: string } & Rec
     if (appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
     return body;
   }).catch((error: unknown) => {
-    // The old collection route has no resource id and cannot return a missing
-    // app. Its dispatcher predates route_not_found; this exception applies
-    // only to the initial GET /apps capability probe, never mutation errors.
-    if (path === `${BASE}/apps` && error instanceof ControlApiError && error.status === 404 &&
-      error.code === "not_found" && error.details === undefined && isRecord(error.body) && isRecord(error.body.error)) {
-      error = new ControlApiError(404, "route_not_found", error.message, error.body, error.isHttpStatusFallback);
-    }
+    error = normalizeAppsRouteError(path, error);
     if (!isMissingControlRoute(error) && appsPageCache.get(path) === request) appsPageCache.delete(path);
     if (isMissingControlRoute(error) && appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
     throw error;
@@ -3453,25 +3482,37 @@ export function resetAppOwnershipCache(): void {
 }
 
 /** Read one page of account summaries. Only a missing first-page route means legacy. */
-export async function listAccessibleAppsPage(cursor?: string, signal?: AbortSignal): Promise<{
+export async function listAccessibleAppsPage(cursor?: string, signal?: AbortSignal, q = ""): Promise<{
   readonly apps: readonly AccessibleApp[];
   readonly nextCursor?: string;
+  /** Absent on legacy servers that ignore q. */
+  readonly appliedQuery?: string;
 } | undefined> {
   throwIfAborted(signal);
-  const path = `${BASE}/apps${query({ cursor })}`;
+  const search = q.trim().toLowerCase();
+  const path = `${BASE}/apps${query({ cursor, q: search || undefined })}`;
   let body;
   try {
-    body = await withAppReadSignal(readCachedAppsPage(path), signal);
+    // Typed queries have unbounded cardinality and belong to this view only.
+    // Do not retain them in the shared cache; cancellation reaches the transport.
+    body = search
+      ? await controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { signal })
+      : await withAppReadSignal(readCachedAppsPage(path), signal);
   } catch (error) {
+    error = normalizeAppsRouteError(path, error);
     if (!isMissingControlRoute(error)) throw error;
     if (cursor === undefined) return undefined;
     throw new ControlApiError(502, "invalid_apps_response", "Apps pagination became unavailable.");
   }
-  if (!isRecord(body) || !Array.isArray(body.apps) ||
-    (body.nextCursor !== undefined && typeof body.nextCursor !== "string")) {
+  throwIfAborted(signal);
+  if (!isRecord(body) || !Array.isArray(body.apps) || !body.apps.every(isHomeAppSummary) ||
+    (body.nextCursor !== undefined && (typeof body.nextCursor !== "string" || !body.nextCursor)) ||
+    (body.appliedQuery !== undefined && body.appliedQuery !== search)) {
+    appsPageCache.delete(path);
     throw new ControlApiError(502, "invalid_apps_response", "Apps returned an invalid response.");
   }
-  return { apps: body.apps as readonly AccessibleApp[], nextCursor: body.nextCursor || undefined };
+  return { apps: body.apps as readonly AccessibleApp[], nextCursor: body.nextCursor || undefined,
+    ...(typeof body.appliedQuery === "string" ? { appliedQuery: body.appliedQuery } : {}) };
 }
 
 /** One account app read is shared by role, provider and OAuth consumers. */

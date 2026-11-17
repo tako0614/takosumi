@@ -52,17 +52,22 @@ export function registerInstallReopenCases(
 
       const sheet = page.getByTestId("install-configuration");
       await expect(sheet.getByTestId("install-settings")).toBeVisible();
-      await sheet.getByTestId("install-customization").locator(":scope > summary").click();
+      const settings = sheet.getByTestId("install-customization");
+      const optional = settings.locator(":scope > summary");
+      const secretField = sheet.getByLabel(/^API token/u);
+      await expect(secretField).toBeVisible();
+      await expect(settings).not.toHaveAttribute("open", "");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await optional.click();
       const nameField = sheet.getByLabel(/^App name/u);
       await expect(nameField).toHaveValue("cloudflare-service");
       const publicField = sheet.getByRole("textbox", { name: "Domain", exact: true });
       await publicField.fill(publicSetting);
-      const secretField = sheet.getByLabel(/^API token/u);
       await secretField.fill(secret);
       await secretField.press("Enter");
 
       const review = page.getByTestId("install-review");
-      await expect(review.getByRole("button", { name: "Allow and install", exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(review.getByRole("button", { name: "Install", exact: true })).toBeVisible({ timeout: 15_000 });
       expect(f.continued()?.variables).toEqual({ domain: publicSetting, api_token: secret });
       expect(f.attempts.log.creates.map((entry) => JSON.stringify(entry)).join("\n")).not.toContain(secret);
       await Promise.all(responseReads);
@@ -86,11 +91,15 @@ export function registerInstallReopenCases(
       await page.reload();
       await expect(page).toHaveURL(initialUrl);
       const reopened = page.getByTestId("install-review");
-      await expect(reopened.getByRole("button", { name: "Allow and install", exact: true })).toBeVisible();
-      await expect(page.getByTestId("install-app-name")).toHaveValue("cloudflare-service");
+      await expect(reopened.getByRole("button", { name: "Install", exact: true })).toBeVisible();
+      await expect(page.getByTestId("install-app-name")).not.toBeVisible();
       await expect(page.getByTestId("install-connections")).toContainText("Takosumi account · account-42");
-      await expect(page.locator('[data-variable-name="domain"]')).toContainText(publicSetting);
-      await expect(page.locator('[data-variable-name="api_token"]')).toContainText("Set");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await optional.click();
+      await expect(sheet.getByTestId("install-app-name")).toHaveValue("cloudflare-service");
+      await expect(settings.locator('[data-variable-name="domain"]')).toHaveText(publicSetting);
+      await expect(settings.locator('[data-variable-name="api_token"]')).toHaveText("Set");
+      await expect(secretField).toHaveCount(0);
       await expect(reopened).not.toContainText(secret);
       const afterReload = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage }, url: location.href }));
       expect(afterReload).not.toContain(secret);

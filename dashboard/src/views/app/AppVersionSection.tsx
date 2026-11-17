@@ -64,7 +64,6 @@ export default function AppVersionSection(props: {
     <AppSection
       id="version"
       title={t("app.version.title")}
-      subtitle={t("app.version.subtitle")}
       testId="app-version"
     >
       <dl class="ap-facts">

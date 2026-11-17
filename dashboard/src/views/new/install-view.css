@@ -6,7 +6,7 @@
 .iv-hero h1, .iv-section-head h2, .iv-workbench h2 { min-width: 0; margin: 0; overflow-wrap: anywhere; letter-spacing: -0.025em; }
 .iv-hero h1 { font-size: clamp(2rem, 7vw, 3.75rem); line-height: 0.96; }
 .iv-hero p, .iv-section-head p, .iv-status span, .iv-review-head p, .iv-review-warning p, .iv-error p, .iv-centered p { margin: var(--tg-s-2) 0 0; color: var(--tg-fg-muted); }
-.iv-catalogue, .iv-workbench { border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); box-shadow: var(--tg-shadow-sm); }
+.iv-catalogue, .iv-workbench { border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); box-shadow: none; }
 .iv-catalogue { padding: var(--tg-s-5); }
 .iv-workbench { width: min(100%, 46rem); margin-inline: auto; padding: var(--tg-s-5); }
 .iv-section-head { display: grid; gap: var(--tg-s-1); margin-bottom: var(--tg-s-5); }
@@ -17,7 +17,7 @@
 .iv-form > .tg-btn, .iv-workbench > .tg-btn:last-child { justify-self: start; margin-top: var(--tg-s-5); white-space: nowrap; }
 .iv-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); margin-top: var(--tg-s-5); }
 .iv-action-row .tg-btn { white-space: nowrap; }
-.iv-page .tg-btn { white-space: nowrap; }
+.iv-page .tg-btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .iv-centered { display: grid; justify-items: center; min-height: 17rem; align-content: center; text-align: center; }
 .iv-centered h2 { margin-top: var(--tg-s-4); }
 .iv-centered .iv-action-row { justify-content: center; }
@@ -133,74 +133,81 @@
 
 /* One app page. The same action area holds preparation, cost and consent. */
 .iv-visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px !important; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.iv-configure-page { width: min(100%, 53rem); --iv-inset: var(--tg-s-6); padding-top: var(--tg-s-5); }
+.iv-configure-page { width: min(100%, 48rem); --iv-inset: var(--tg-s-4); padding-top: var(--tg-s-4); }
 .iv-back-link { display: inline-flex; align-items: center; gap: var(--tg-s-2); min-height: 2.75rem; margin-bottom: var(--tg-s-2); color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); text-decoration: none; }
 .iv-back-link:hover { color: var(--tg-accent-text); }
-.iv-app-surface { min-width: 0; padding: var(--iv-inset); border: 1px solid var(--tg-line); border-radius: var(--tg-r-xl); background: var(--tg-bg-elev); }
+.iv-app-surface { min-width: 0; }
 .iv-app-surface > .iv-workbench { width: 100%; border: 0; border-radius: 0; box-shadow: none; background: transparent; padding: 0; }
-.iv-app-detail { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--tg-s-5); align-items: center; margin-bottom: var(--tg-s-6); }
-.iv-app-icon { width: 5.75rem; aspect-ratio: 1; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--tg-line); border-radius: var(--tg-r-xl); background: var(--tg-bg-subtle); font-size: 1.75rem; font-weight: 700; }
+.iv-app-detail { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--tg-s-4); align-items: center; margin-bottom: var(--tg-s-5); }
+.iv-app-icon { width: 4.5rem; aspect-ratio: 1; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--tg-line); border-radius: var(--tg-r-xl); background: var(--tg-bg-subtle); font-size: 1.75rem; font-weight: 700; }
 .iv-app-icon img { width: 100%; height: 100%; object-fit: cover; }
 .iv-app-monogram { background: var(--tg-accent-soft); color: var(--tg-accent-text); border-color: transparent; }
 .iv-app-intro { display: grid; min-width: 0; gap: var(--tg-s-1); }
-.iv-app-intro h1 { margin: 0; font-size: clamp(1.85rem, 5vw, 2.75rem); line-height: 1.1; letter-spacing: -.035em; overflow-wrap: anywhere; }
-.iv-app-intro p { max-width: 56ch; margin: var(--tg-s-1) 0 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-base); line-height: 1.6; overflow-wrap: anywhere; }
-.iv-app-publisher { color: var(--tg-accent-text); font-size: var(--tg-fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.iv-app-intro h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); line-height: 1.2; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.iv-app-intro p { max-width: 56ch; margin: var(--tg-s-1) 0 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; overflow-wrap: anywhere; }
+.iv-app-publisher { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); font-weight: 600; overflow-wrap: anywhere; }
 
-.iv-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-.iv-choices > .iv-configuration-trigger { border-inline-start: 1px solid var(--tg-line); }
+/* Version and configuration use compact, labelled grouped rows. */
+.iv-choices { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); }
+.iv-choices > * + * { border-top: 1px solid var(--tg-line); }
 .iv-choice { min-width: 0; }
 .iv-choice > summary,
-.iv-configuration-trigger,
+.iv-configuration-summary,
 .iv-app-about > summary,
-.iv-configure-page .iv-resource-disclosure > summary { display: flex; align-items: center; gap: var(--tg-s-2); min-height: 2.75rem; cursor: pointer; list-style: none; }
+.iv-configure-page .iv-resource-disclosure > summary { display: flex; align-items: center; gap: var(--tg-s-3); min-height: 2.75rem; list-style: none; }
+.iv-choice > summary,
+.iv-app-about > summary,
+.iv-configure-page .iv-resource-disclosure > summary { cursor: pointer; }
 .iv-choice > summary::-webkit-details-marker,
 .iv-app-about > summary::-webkit-details-marker,
 .iv-configure-page .iv-resource-disclosure > summary::-webkit-details-marker { display: none; }
-.iv-choice > summary, .iv-configuration-trigger { min-height: 3.25rem; padding: var(--tg-s-2) var(--tg-s-3); border-radius: var(--tg-r-md); font-size: var(--tg-fs-sm); }
-:is(.iv-choice > summary, .iv-configuration-trigger) > span:first-child { color: var(--tg-fg-muted); white-space: nowrap; }
-.iv-choice-selection { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--tg-s-2); min-width: 0; overflow-wrap: anywhere; }
+.iv-choice > summary, .iv-configuration-summary { padding: var(--tg-s-3) var(--iv-inset); border-radius: var(--tg-r-lg); font-size: var(--tg-fs-sm); }
+:is(.iv-choice > summary, .iv-configuration-summary) > span:first-child { flex: 0 1 auto; color: var(--tg-fg-muted); overflow-wrap: anywhere; }
+.iv-choice-selection { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 0 var(--tg-s-2); min-width: 0; margin-inline-start: auto; overflow-wrap: anywhere; text-align: end; }
 .iv-choice-context { color: var(--tg-fg-muted); }
-:is(.iv-choice > summary, .iv-configuration-trigger) strong { min-width: 0; overflow-wrap: anywhere; font-weight: 650; }
+:is(.iv-choice > summary, .iv-configuration-summary) strong { min-width: 0; overflow-wrap: anywhere; font-weight: 550; }
+.iv-choice > summary > strong { margin-inline-start: auto; text-align: end; }
 .iv-choice > summary > svg,
-.iv-configuration-trigger > svg,
 .iv-app-about > summary > svg,
-.iv-configure-page .iv-resource-disclosure > summary > svg { flex: none; margin-inline-start: auto; color: var(--tg-fg-muted); }
-.iv-choice > summary:hover,
-.iv-configuration-trigger:hover,
+.iv-configure-page .iv-resource-disclosure > summary > svg { flex: none; color: var(--tg-fg-muted); }
+.iv-app-about > summary > svg,
+.iv-configure-page .iv-resource-disclosure > summary > svg { margin-inline-start: auto; }
 .iv-choice[open] > summary { background: var(--tg-bg-subtle); }
-.iv-choice > summary:focus-visible, .iv-configuration-trigger:focus-visible, .iv-configuration-close:focus-visible, .iv-back-link:focus-visible, .iv-app-about > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+@media (hover: hover) { .iv-choice > summary:hover { background: var(--tg-bg-subtle); } }
+.iv-choice > summary:focus-visible, .iv-back-link:focus-visible, .iv-app-about > summary:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
 .iv-choice[open] > summary > svg,
 .iv-app-about[open] > summary > svg,
 .iv-configure-page .iv-resource-disclosure[open] > summary > svg { transform: rotate(180deg); }
-.iv-choice-content { padding: var(--tg-s-3); }
-/* Configure in the top layer so its height never moves the Store underneath. */
-.iv-configuration-trigger { width: 100%; min-width: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: var(--tg-fs-sm); text-align: start; }
-.iv-configuration-dialog { position: fixed; inset: min(10dvh, 5rem) 0 auto; width: min(calc(100% - var(--tg-s-5)), 38rem); max-height: calc(100dvh - min(10dvh, 5rem) - var(--tg-s-4)); margin: 0 auto; padding: 0; overflow: auto; overflow-anchor: none; overscroll-behavior: contain; border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); color: var(--tg-fg); box-shadow: var(--tg-shadow-lg); }
-.iv-configuration-dialog::backdrop { background: color-mix(in srgb, var(--tg-bg) 55%, var(--tg-fg) 16%, transparent); }
-.iv-configuration-heading { position: sticky; z-index: 1; top: 0; display: flex; justify-content: space-between; align-items: center; gap: var(--tg-s-2); padding: var(--tg-s-2) var(--tg-s-4); background: var(--tg-bg-elev); border-bottom: 1px solid var(--tg-line); }
-.iv-configuration-heading h2 { font-size: var(--tg-fs-lg); }
-.iv-configuration-close { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; flex: none; border: 0; border-radius: var(--tg-r-md); background: transparent; color: var(--tg-fg-muted); cursor: pointer; }
-.iv-configuration-close:hover, .iv-configuration-close:active { background: var(--tg-bg-subtle); color: var(--tg-fg); }
-.iv-configuration-content { display: grid; gap: var(--tg-s-4); padding: var(--tg-s-4); }
-.iv-configuration-content .iv-inline-connect { scroll-margin-top: 4.5rem; }
+.iv-choice-content { padding: var(--iv-inset); }
+.iv-configuration-content { display: grid; gap: var(--tg-s-3); min-width: 0; }
+.iv-configuration-content > :is(.iv-settings, .iv-sheet-block, .iv-disclosure) { padding: var(--iv-inset); border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); }
+.iv-configuration-content > .iv-disclosure { padding-block: 0; }
+.iv-configuration-content > .iv-disclosure[open] { padding-bottom: var(--iv-inset); }
+.iv-configuration-content .iv-connection-row { padding: var(--tg-s-3) 0; border: 0; border-radius: 0; }
+.iv-configuration-content .iv-connection-row + .iv-connection-row { border-top: 1px solid var(--tg-line); }
+.iv-configuration-content .iv-connection-row:last-child { padding-bottom: 0; }
+.iv-configuration-content :is(h3, .iv-settings > h3) { margin: 0; font-size: var(--tg-fs-sm); font-weight: 600; }
+.iv-configuration-content .iv-fields { margin-top: var(--tg-s-3); }
+.iv-configuration-content .iv-fields > * { min-width: 0; }
 .iv-module-options { display: grid; min-width: 0; gap: var(--tg-s-2); margin: 0; padding: 0; border: 0; }
 .iv-module-options p { margin: 0 0 var(--tg-s-1); }
-.iv-module-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--tg-s-3); padding: var(--tg-s-3); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); cursor: pointer; overflow-wrap: anywhere; }
-.iv-module-option:is(:hover, :has(:checked)) { background: var(--tg-bg-subtle); }
-.iv-module-option:has(:focus-visible) { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
-.iv-module-option input { margin: 0; accent-color: var(--tg-accent-emphasis); }
+.iv-module-option { width: 100%; min-height: 2.75rem; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--tg-s-3); padding: var(--tg-s-3); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+.iv-module-option[aria-pressed="true"] { background: var(--tg-accent-soft); border-color: var(--tg-accent); }
+.iv-module-option:active { background: var(--tg-bg-subtle); }
+.iv-module-options:disabled .iv-module-option { cursor: wait; opacity: 0.65; }
+@media (hover: hover) { .iv-module-option:hover { background: var(--tg-bg-subtle); } }
+.iv-module-option:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+.iv-module-mark { width: 1rem; height: 1rem; border: 1px solid var(--tg-line-strong); border-radius: 50%; }
+.iv-module-option[aria-pressed="true"] .iv-module-mark { border-color: var(--tg-accent); background: var(--tg-accent); }
 .iv-module-providers { display: block; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
 .iv-recommendation { margin-inline-start: var(--tg-s-2); color: var(--tg-accent-text); font-size: var(--tg-fs-sm); }
 
-.iv-module-path, .iv-linked-apps { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); overflow-wrap: anywhere; }
-.iv-module-path code { color: var(--tg-fg); }
 
 .iv-configure-page .iv-form, .iv-configure-page .iv-sheet, .iv-configure-page .iv-execution { gap: var(--tg-s-3); }
-.iv-configure-page .iv-plan-review, .iv-configure-page .iv-execution, .iv-configure-page .iv-sheet-block { border-top: 0; padding-top: 0; }
+.iv-configure-page .iv-plan-review, .iv-configure-page .iv-execution, .iv-configure-page .iv-decision > .iv-sheet-block { border-top: 0; padding-top: 0; }
 .iv-configure-page .iv-progress { padding: var(--tg-s-2) var(--tg-s-3); border: 0; background: var(--tg-bg-subtle); font-size: var(--tg-fs-sm); }
 .iv-execution-contents:not(.iv-decision) { display: contents; }
-.iv-decision { display: grid; gap: var(--tg-s-3); padding-block: var(--tg-s-3); border-top: 1px solid var(--tg-line); }
+.iv-decision { display: grid; gap: var(--tg-s-3); padding: var(--iv-inset, var(--tg-s-4)); border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); }
 .iv-decision .iv-action-row { margin: 0; }
 .iv-decision .iv-action-row > .tg-btn-primary { min-height: 3rem; padding-inline: var(--tg-s-5); justify-content: center; border-radius: var(--tg-r-md); }
 .iv-decision .iv-start-hint, .iv-decision .iv-sheet-block > .iv-muted, .iv-decision .iv-review-warning { margin: 0; }
@@ -218,15 +225,36 @@
 @media (max-width: 46rem) {
   .iv-configure-page { --iv-inset: var(--tg-s-4); }
   .iv-choices { grid-template-columns: minmax(0, 1fr); }
-  .iv-choices > .iv-configuration-trigger { border-inline-start: 0; }
 }
 @media (max-width: 39.99rem) {
   .iv-configure-page { padding-top: var(--tg-s-2); }
   .iv-app-detail { gap: var(--tg-s-3); margin-bottom: var(--tg-s-4); }
   .iv-app-icon { width: 3.75rem; border-radius: var(--tg-r-lg); font-size: 1.125rem; }
-  .iv-app-intro h1 { font-size: clamp(1.45rem, 7vw, 2rem); }
+  .iv-app-intro h1 { font-size: clamp(1.3rem, 5vw, 1.65rem); }
   .iv-app-intro p { font-size: var(--tg-fs-sm); }
   .iv-decision .iv-action-row > .tg-btn-primary { padding-inline: var(--tg-s-3); }
 }
 
-.iv-start .iv-decision { padding-bottom: 0; }
+
+/* Store rows share the grouped surface; other StoreBrowser hosts are unchanged. */
+.iv-browse-page { max-width: 56rem; }
+.iv-browse-page .tcs-grid { grid-template-columns: minmax(0, 1fr); gap: 0; border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); }
+.iv-browse-page .tcs-page-list .tcs-card { min-height: 6rem; margin: 0; padding: var(--tg-s-4); border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; transition: none; }
+.iv-browse-page .tcs-page-list .tcs-card + .tcs-card { border-top: 1px solid var(--tg-line); }
+.iv-browse-page .tcs-page-list .tcs-card:first-child { border-radius: var(--tg-r-lg) var(--tg-r-lg) 0 0; }
+.iv-browse-page .tcs-page-list .tcs-card:last-child { border-radius: 0 0 var(--tg-r-lg) var(--tg-r-lg); }
+.iv-browse-page .tcs-page-list .tcs-card:only-child { border-radius: var(--tg-r-lg); }
+.iv-browse-page .tcs-card-open::after { border-radius: inherit; }
+.iv-browse-page .tcs-page-list .tcs-card:active { background: var(--tg-bg-subtle); }
+.iv-browse-page .tcs-page-list .tcs-card-skeleton { background: var(--tg-bg-subtle); }
+.iv-browse-page .tcs-app-icon { width: 3.5rem; height: 3.5rem; border-radius: var(--tg-r-lg); }
+.iv-browse-page .tcs-card-title { font-size: var(--tg-fs-base); line-height: 1.4; }
+.iv-browse-page .tcs-card-by { color: var(--tg-fg-muted); }
+.iv-browse-page .tcs-card-desc { -webkit-line-clamp: 2; line-clamp: 2; }
+.iv-page :is(.iv-status, .iv-error, .iv-review-warning) { min-width: 0; flex-wrap: wrap; overflow-wrap: anywhere; }
+.iv-page :is(.iv-status, .iv-error, .iv-review-warning) > div { min-width: 0; }
+@media (max-width: 24rem) {
+  .iv-page { padding-inline: var(--tg-s-3); }
+  .iv-configure-page { --iv-inset: var(--tg-s-3); }
+  .iv-browse-page .tcs-page-list .tcs-card { padding: var(--tg-s-3); }
+}

@@ -302,7 +302,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--tg-s-2);
-  min-height: 40px;
+  min-height: var(--tg-control-height);
   padding: 0 var(--tg-s-4);
   border: 1px solid var(--tg-accent-emphasis);
   border-radius: var(--tg-r-md);
@@ -327,7 +327,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
+  min-height: var(--tg-control-height);
   padding: 0 var(--tg-s-4);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
@@ -1092,7 +1092,7 @@
   .legal-lang button,
   .legal-sign-in,
   .legal-nav-link {
-    min-height: 40px;
+    min-height: var(--tg-control-height);
   }
 }
 

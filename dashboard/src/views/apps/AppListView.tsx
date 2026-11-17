@@ -7,7 +7,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { Plus, Search, Settings2, Sparkles, X } from "lucide-solid";
+import { Plus, Search, Settings2, X } from "lucide-solid";
 import HomeAppGrid from "./HomeAppGrid.tsx";
 import { createHomeLibrary, type HomeApp } from "../../lib/home-apps.ts";
 import Page from "../account/components/auth/Page.tsx";
@@ -38,7 +38,8 @@ export default function AppListView() {
 
 function Inner() {
   const { home, firstPage, cursor, apps, names, query, setQuery, term, matches,
-    setVisible, screens, loadingMore, moreFailed, failedScreens, retryVisible, refresh, loadNext } = createHomeLibrary();
+    setVisible, screens, loadingMore, moreFailed, failedScreens, retryVisible, refresh, loadNext,
+    searching, searchComplete } = createHomeLibrary();
   const titleId = createUniqueId();
   let searchInput: HTMLInputElement | undefined;
   function clearSearch() { setQuery(""); searchInput?.focus(); }
@@ -52,10 +53,13 @@ function Inner() {
           <Match when={home.error}>
             <Toast tone="error">{fetchFailedMessage(home.error, t)}
               <Button variant="secondary" size="sm" type="button" onClick={() => void refresh()}>{t("common.retry")}</Button>
+              <Show when={term()}>
+                <Button variant="secondary" size="sm" type="button" onClick={clearSearch}>{t("apps.clearSearch")}</Button>
+              </Show>
             </Toast>
           </Match>
           <Match when={firstPage()}>
-            <Show when={apps().length > 0 || cursor()} fallback={<AppStartPanel />}>
+            <Show when={apps().length > 0 || cursor() || term()} fallback={<AppStartPanel />}>
               <div class="av-section-head">
                 <h1 id={titleId}>{t("apps.sectionYours")}</h1>
                 <Show when={!cursor()}>
@@ -67,6 +71,7 @@ function Inner() {
                 <Input
                   ref={searchInput}
                   type="search"
+                  maxLength={200}
                   aria-label={t("apps.search")}
                   placeholder={t("apps.search")}
                   value={query()}
@@ -91,7 +96,7 @@ function Inner() {
                   <Button variant="secondary" size="sm" type="button" onClick={() => void loadNext()}>{t("common.retry")}</Button>
                 </Toast>
               </Show>
-              <Show when={term() && !matches().length && !cursor()}>
+              <Show when={term() && !matches().length && searchComplete()}>
                 <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
               </Show>
               <HomeAppGrid
@@ -104,7 +109,7 @@ function Inner() {
                   <span class="av-tile-name">{t("apps.browse")}</span>
                 </a></li> : undefined}
               />
-              <Show when={loadingMore()}><p class="av-home-loading" role="status">{t("common.loading")}</p></Show>
+              <Show when={loadingMore() || searching()}><p class="av-home-loading" role="status">{t("common.loading")}</p></Show>
             </Show>
           </Match>
         </Switch>
@@ -218,12 +223,9 @@ function AppStartPanel() {
   return (
     <section class="av-start" aria-label={t("apps.start.aria")}>
       <div class="av-start-copy">
-        <span class="av-start-kicker">{t("apps.start.kicker")}</span>
         <h2 class="av-start-title">{t("apps.start.titleEmpty")}</h2>
-        <p class="av-start-sub">{t("apps.start.bodyEmpty")}</p>
       </div>
       <a href="/new" class="av-start-action">
-        <Sparkles size={18} aria-hidden="true" />
         <span>{t("apps.start.optionStore")}</span>
       </a>
     </section>

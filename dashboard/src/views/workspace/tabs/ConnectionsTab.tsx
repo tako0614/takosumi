@@ -32,7 +32,7 @@ import {
   Switch,
 } from "solid-js";
 import { A } from "@solidjs/router";
-import { ArrowLeft, Plug, Plus, RefreshCw } from "lucide-solid";
+import { ArrowLeft, ChevronRight, Plug, Plus, RefreshCw } from "lucide-solid";
 import {
   providerSetupOptionsFromCredentialRecipes,
   type ProviderConnectionSetupOption,
@@ -69,8 +69,6 @@ import { formatDate, formatDateTime, locale, t } from "../../../i18n/index.ts";
 import {
   Badge,
   Button,
-  Card,
-  CardHeader,
   EmptyState,
   Skeleton,
   Toast,
@@ -181,6 +179,22 @@ export default function ConnectionsTab(props: {
   const [createFormOpen, setCreateFormOpen] = createSignal(
     Boolean(installReturn) || Boolean(props.embedded),
   );
+  let settingsList!: HTMLDivElement;
+  const openCreateForm = () => {
+    setCreateFormOpen(true);
+    requestAnimationFrame(() => {
+      const field = settingsList.querySelector<HTMLElement>(
+        "#connection-provider, #connection-display-name",
+      );
+      field?.focus();
+    });
+  };
+  const closeCreateForm = () => {
+    setCreateFormOpen(false);
+    requestAnimationFrame(() => {
+      settingsList.querySelector<HTMLElement>("[data-add-connection]")?.focus();
+    });
+  };
   // An errored resource THROWS on read; every data read goes through this
   // guarded accessor so a failed list surfaces the error toast below instead
   // of crashing the tab.
@@ -215,7 +229,7 @@ export default function ConnectionsTab(props: {
     setLastCreatedConnectionId(connection.id);
     setLastCreatedVerifiedHint(false);
     await refreshConnections();
-    if (!installReturn) setCreateFormOpen(false);
+    if (!installReturn) closeCreateForm();
   };
   const installReturnHref = installReturn
     ? installReturnPathFromContext(installReturn)
@@ -456,89 +470,106 @@ export default function ConnectionsTab(props: {
     </Show>
   );
 
+  const connectionById = createMemo(() =>
+    new Map(providerConnectionRows().map((connection) => [connection.id, connection])),
+  );
+  const connectionIds = () => providerConnectionRows().map((connection) => connection.id);
+  // A test refreshes the data. Key the rows by ID so it doesn't collapse an
+  // open disclosure or replace its controls with new DOM elements.
   const providerConnectionList = () => (
-    <ul class="conn-list">
-      <For each={providerConnectionRows()}>
-        {(connection) => (
-          <li class="conn-card tg-card">
-            <div class="conn-card-head">
-              <span class="conn-card-name">
-                {providerConnectionDisplayName(connection) ||
-                  providerConnectionProviderLabel(
-                    connection,
-                    providerOptions(),
-                  )}
-              </span>
-              <Badge tone={providerConnectionTone(connection.status)}>
-                {providerConnectionStatusLabel(connection.status)}
-              </Badge>
-            </div>
-            <div class="conn-card-meta">
-              <span>
-                {providerConnectionProviderLabel(
-                  connection,
-                  providerOptions(),
-                )}
-              </span>
-              <Show when={connection.scope === "operator"}>
-                <span>{t("conn.operatorProvided")}</span>
-              </Show>
-              <Show when={connection.expiresAt}>
-                {(expiresAt) => (
-                  <span title={formatDateTime(expiresAt())}>
-                    {t("conn.expiresAt", { date: formatDate(expiresAt()) })}
-                  </span>
-                )}
-              </Show>
-            </div>
-            {usageLine(connection)}
-            <div class="conn-card-actions">
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                onClick={() => void runTest(connection.id)}
-                busy={testBusy(connection.id)}
-              >
-                {testBusy(connection.id) ? t("conn.testing") : t("conn.test")}
-              </Button>
-              <Show when={removable(connection)}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  class="conn-remove"
-                  onClick={() => void confirmRemoveProviderConnection(connection)}
-                  busy={remove.busy() && removingId() === connection.id}
-                  disabled={remove.busy()}
-                >
-                  {t("conn.remove.cta")}
-                </Button>
-              </Show>
-            </div>
-            <Show when={testError(connection.id)}>
-              {(failure) => (
-                <Toast tone="error">
-                  {failure().message}
-                  <Show when={failure().detail}>
-                    {(detail) => (
-                      <details class="wc-conn-test-detail">
-                        <summary>{t("common.details")}</summary>
-                        {detail()}
-                      </details>
+    <ul class="conn-list tg-settings-group">
+      <For each={connectionIds()}>
+        {(id) => (
+          <Show when={connectionById().get(id)}>
+            {(connection) => {
+              const provider = () => providerConnectionProviderLabel(connection(), providerOptions());
+              const displayName = () => providerConnectionDisplayName(connection()) || provider();
+              return (
+                <li class="tg-settings-list-item">
+                  <details class="conn-details">
+                    <summary class="tg-settings-row tg-settings-link">
+                      <span class="tg-settings-symbol"><Plug size={17} aria-hidden="true" /></span>
+                      <span class="tg-settings-row-text">
+                        <strong class="tg-settings-label">{displayName()}</strong>
+                        <Show when={displayName() !== provider()}>
+                          <span class="tg-settings-note">{provider()}</span>
+                        </Show>
+                      </span>
+                      <Badge tone={providerConnectionTone(connection().status)}>
+                        {providerConnectionStatusLabel(connection().status)}
+                      </Badge>
+                      <ChevronRight class="conn-chevron" size={16} aria-hidden="true" />
+                    </summary>
+                    <div class="conn-detail-body">
+                      <Show when={connection().scope === "operator" || connection().expiresAt}>
+                        <div class="conn-card-meta">
+                          <Show when={connection().scope === "operator"}>
+                            <span>{t("conn.operatorProvided")}</span>
+                          </Show>
+                          <Show when={connection().expiresAt}>
+                            {(expiresAt) => (
+                              <time datetime={expiresAt()} title={formatDateTime(expiresAt())}>
+                                {t("conn.expiresAt", { date: formatDate(expiresAt()) })}
+                              </time>
+                            )}
+                          </Show>
+                        </div>
+                      </Show>
+                      {usageLine(connection())}
+                      <div class="tg-settings-actions">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          type="button"
+                          onClick={() => void runTest(id)}
+                          busy={testBusy(id)}
+                        >
+                          {testBusy(id) ? t("conn.testing") : t("conn.test")}
+                        </Button>
+                        <Show when={removable(connection())}>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            type="button"
+                            class="conn-remove"
+                            onClick={() => void confirmRemoveProviderConnection(connection())}
+                            busy={remove.busy() && removingId() === id}
+                            disabled={remove.busy()}
+                          >
+                            {t("conn.remove.cta")}
+                          </Button>
+                        </Show>
+                      </div>
+                    </div>
+                  </details>
+                  <Show when={testError(id)}>
+                    {(failure) => (
+                      <div class="conn-row-feedback">
+                        <Toast tone="error">
+                          {failure().message}
+                          <Show when={failure().detail}>
+                            {(detail) => (
+                              <details class="wc-conn-test-detail">
+                                <summary>{t("common.details")}</summary>
+                                {detail()}
+                              </details>
+                            )}
+                          </Show>
+                        </Toast>
+                      </div>
                     )}
                   </Show>
-                </Toast>
-              )}
-            </Show>
-          </li>
+                </li>
+              );
+            }}
+          </Show>
         )}
       </For>
     </ul>
   );
 
   return (
-    <div class="wc-stack">
+    <div class="wc-stack" ref={settingsList}>
       {/* Result banner from a credential OAuth backend callback redirect. */}
       <Show when={oauthNotice()}>
         {(notice) => (
@@ -567,63 +598,15 @@ export default function ConnectionsTab(props: {
         )}
       </Show>
 
-      <Show when={installReturn && installReturnHref}>
-        <Card>
-          <CardHeader
-            title={t("conn.return.title", {
-              name: installReturn?.label ?? "",
-            })}
-            subtitle={t("conn.return.subtitle")}
-            actions={
+      <Show when={installReturnHref}>
+        {(href) => (
+          <div class="tg-settings-group">
+            <div class="tg-settings-row tg-settings-row-wrap">
+              <Show when={installReturn?.label}>
+                {(name) => <span class="tg-settings-label">{t("conn.return.title", { name: name() })}</span>}
+              </Show>
               <Show
                 when={shouldOfferInstallReturn()}
-                fallback={
-                  <Show when={lastCreatedConnectionId()}>
-                    {(id) => (
-                      <Button
-                        variant="secondary"
-                        type="button"
-                        busy={testBusy(id())}
-                        onClick={() => void runTest(id())}
-                      >
-                        {testBusy(id())
-                          ? t("conn.testing")
-                          : t("conn.saved.testCta")}
-                      </Button>
-                    )}
-                  </Show>
-                }
-              >
-                <Button
-                  variant="secondary"
-                  href={installReturnHref}
-                  icon={<ArrowLeft size={16} />}
-                  onClick={clearStoredInstallReturn}
-                >
-                  {t("conn.return.cta")}
-                </Button>
-              </Show>
-            }
-          />
-        </Card>
-      </Show>
-
-      <Show when={lastCreatedConnectionName()}>
-        {(name) => (
-          <Toast tone="success">
-            <span class="wc-inline-feedback">
-              <span>
-                {t(
-                  lastCreatedReady()
-                    ? "conn.saved.message"
-                    : "conn.saved.needsTest",
-                  {
-                    name: name(),
-                  },
-                )}
-              </span>
-              <Show
-                when={lastCreatedReady() && installReturnHref}
                 fallback={
                   <Show when={lastCreatedConnectionId()}>
                     {(id) => (
@@ -634,49 +617,70 @@ export default function ConnectionsTab(props: {
                         busy={testBusy(id())}
                         onClick={() => void runTest(id())}
                       >
-                        {testBusy(id())
-                          ? t("conn.testing")
-                          : t("conn.saved.testCta")}
+                        {testBusy(id()) ? t("conn.testing") : t("conn.saved.testCta")}
                       </Button>
                     )}
                   </Show>
                 }
               >
-                {(href) => (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    href={href()}
-                    icon={<ArrowLeft size={14} />}
-                    onClick={clearStoredInstallReturn}
-                  >
-                    {t("conn.saved.returnCta")}
-                  </Button>
-                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  href={href()}
+                  icon={<ArrowLeft size={16} />}
+                  onClick={clearStoredInstallReturn}
+                >
+                  {lastCreatedConnectionId()
+                    ? t("conn.saved.returnCta")
+                    : t("conn.return.cta")}
+                </Button>
               </Show>
-            </span>
+            </div>
+          </div>
+        )}
+      </Show>
+
+      <Show when={lastCreatedConnectionName()}>
+        {(name) => (
+          <Toast tone={lastCreatedReady() ? "success" : "neutral"}>
+            {t(lastCreatedReady() || !installReturnHref ? "conn.saved.message" : "conn.saved.needsTest", {
+              name: name(),
+            })}
           </Toast>
         )}
       </Show>
 
-      <Show when={providerConnectionRows().length > 0}>
-        <div class="wc-stack-sm">
-          <Show when={!createFormOpen()}>
-            <div class="wc-card-action-row">
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                icon={<Plus size={14} />}
-                onClick={() => setCreateFormOpen(true)}
-              >
-                {t("conn.add.open")}
-              </Button>
-            </div>
-          </Show>
-          <ActionError error={remove.error} />
-          {providerConnectionList()}
+      <Show when={hasProviderConnections() && !createFormOpen()}>
+        <div class="conn-add-action">
+          <Button
+            variant="secondary"
+            size="sm"
+            type="button"
+            icon={<Plus size={16} />}
+            data-add-connection
+            onClick={openCreateForm}
+          >
+            {t("conn.add.open")}
+          </Button>
         </div>
+      </Show>
+      {/* ----- register form ----- */}
+      <ConnectionCreateForm
+        open={shouldShowCreateForm()}
+        settingsAppearance={!props.embedded}
+        workspaceId={workspaceId()}
+        setupCatalog={credentialRecipes}
+        initialProviderSource={props.initialProviderSource}
+        onCreated={afterConnectionCreated}
+        verifyConnection={verifyCreatedConnection}
+        onCancel={
+          hasProviderConnections() ? closeCreateForm : undefined
+        }
+      />
+
+      <Show when={hasProviderConnections()}>
+        <ActionError error={remove.error} />
+        {providerConnectionList()}
       </Show>
       <Show
         when={
@@ -695,7 +699,8 @@ export default function ConnectionsTab(props: {
               variant="primary"
               type="button"
               icon={<Plus size={16} />}
-              onClick={() => setCreateFormOpen(true)}
+              data-add-connection
+              onClick={openCreateForm}
             >
               {t("conn.add.open")}
             </Button>
@@ -731,19 +736,6 @@ export default function ConnectionsTab(props: {
           );
         }}
       </Show>
-
-      {/* ----- register form ----- */}
-      <ConnectionCreateForm
-        open={shouldShowCreateForm()}
-        workspaceId={workspaceId()}
-        setupCatalog={credentialRecipes}
-        initialProviderSource={props.initialProviderSource}
-        onCreated={afterConnectionCreated}
-        verifyConnection={verifyCreatedConnection}
-        onCancel={
-          hasProviderConnections() ? () => setCreateFormOpen(false) : undefined
-        }
-      />
 
       {/* First-load skeleton only — refetch after create/test/revoke keeps the
           list rendered instead of flashing two skeleton cards each time. */}

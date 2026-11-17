@@ -46,7 +46,7 @@ import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 
 /**
  * Why this Plan is being reviewed. Every purpose shares the same review and
- * apply rules (nothing applies before the explicit "Allow and …" click, no
+ * apply rules (nothing applies before the explicit final action, no
  * consent survives a reload or a URL); only the words change.
  */
 export type ReviewPurpose = "install" | "update" | "apply" | "uninstall";
@@ -135,6 +135,8 @@ interface Props {
    * held and this says why.
    */
   readonly blockedReason?: string;
+  /** Reuse the parent screen's visible progress instead of repeating it. */
+  readonly blockedReasonId?: string;
   /** An Apply was started (or may have been): what it applies can no longer change. */
   readonly onApplyStarted?: () => void;
 }
@@ -522,7 +524,7 @@ export default function InstallExecution(props: Props) {
     }
   };
 
-  // Apply starts only from the "Allow and install" click on the reviewed Plan.
+  // Apply starts only from the final "Install" click on the reviewed Plan.
   // Nothing applies automatically, and no consent survives a reload or URL.
   // Unknown POSTs are held.
   let observedInitialRun = props.initialRunId ?? props.planRunId;
@@ -699,30 +701,34 @@ export default function InstallExecution(props: Props) {
       <Show when={runLatest()}>
         {(current) => (
           <>
-            <div classList={{ "iv-review-head": true, "iv-visually-hidden": isInstall() && planReady() }}>
+            <div classList={{ "iv-review-head": true, "iv-visually-hidden": isInstall() && (planReady() || isApplyRun(current().type)) }}>
               <div>
                 <h2 id="iv-review-title">
                   {isApplyRun(current().type)
                     ? t(copy().applying)
                     : t(copy().title)}
                 </h2>
-                <p>
-                  {isApplyRun(current().type)
-                    ? t(copy().applyingHint)
-                    : t(copy().hint)}
-                </p>
+                <Show when={!isInstall() || (!planReady() && !isApplyRun(current().type))}>
+                  <p>
+                    {isApplyRun(current().type)
+                      ? t(copy().applyingHint)
+                      : t(copy().hint)}
+                  </p>
+                </Show>
               </div>
-              <Badge
-                tone={installRunStatusTone(
-                  current().type,
-                  current().status,
-                  readinessState(),
-                )}
-              >
-                {isReviewRun(current().type) && current().status === "succeeded"
-                  ? t("installStore.reviewReady")
-                  : runStatusLabel(current().status)}
-              </Badge>
+              <Show when={!isInstall() || (!planReady() && !isApplyRun(current().type))}>
+                <Badge
+                  tone={installRunStatusTone(
+                    current().type,
+                    current().status,
+                    readinessState(),
+                  )}
+                >
+                  {isReviewRun(current().type) && current().status === "succeeded"
+                    ? t("installStore.reviewReady")
+                    : runStatusLabel(current().status)}
+                </Badge>
+              </Show>
             </div>
 
             <Show when={props.showPolicyReasons && isReviewRun(current().type) ? current().policyReasons : undefined}>
@@ -747,7 +753,7 @@ export default function InstallExecution(props: Props) {
               </Show>
 
               <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId()) && (!isInstall() || destructive() || (summary()?.change ?? 0) > 0)}>{resourceDetails(current)}</Show>
-              <Show when={current().status === "waiting_approval" ? props.blockedReason : undefined}>
+              <Show when={current().status === "waiting_approval" && !props.blockedReasonId ? props.blockedReason : undefined}>
                 {(reason) => (
                   <p class="iv-apply-reason" id="iv-approve-outdated" role="status">{reason()}</p>
                 )}
@@ -759,7 +765,7 @@ export default function InstallExecution(props: Props) {
                     variant="primary"
                     busy={approving()}
                     aria-disabled={props.blockedReason ? "true" : undefined}
-                    aria-describedby={props.blockedReason ? "iv-approve-outdated" : undefined}
+                    aria-describedby={props.blockedReason ? props.blockedReasonId ?? "iv-approve-outdated" : undefined}
                     onClick={() => void approve()}
                   >
                     {t("installStore.approve")}
@@ -789,7 +795,7 @@ export default function InstallExecution(props: Props) {
                     </div>
                   </div>
                 </Show>
-                <Show when={props.blockedReason}>
+                <Show when={!props.blockedReasonId ? props.blockedReason : undefined}>
                   {(reason) => (
                     <p class="iv-apply-reason" id="iv-plan-outdated" data-testid="install-plan-outdated" role="status">{reason()}</p>
                   )}
@@ -805,7 +811,7 @@ export default function InstallExecution(props: Props) {
                     // still focusable so the reason is read out; the click
                     // does nothing (install() refuses).
                     aria-disabled={props.blockedReason ? "true" : undefined}
-                    aria-describedby={props.blockedReason ? "iv-plan-outdated" : undefined}
+                    aria-describedby={props.blockedReason ? props.blockedReasonId ?? "iv-plan-outdated" : undefined}
                     onClick={() => void install()}
                   >
                     {t(copy().allow)}

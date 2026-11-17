@@ -10,7 +10,7 @@ export default function ConnectionsView() {
   return (
     <Page title={t("nav.connections")}>
       {() => (
-        <div>
+        <div class="acct-page tg-settings-page">
           <PageHeader title={t("nav.connections")} />
           <ConnectionsTab />
         </div>

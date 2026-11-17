@@ -11,7 +11,7 @@
  *   coordinator reads the repository and makes the Plan. Its id joins the
  *   URL (`installPlan=gip_…`) so a reload reopens the same attempt, read-only
  *   until the person acts again.
- * - Nothing applies before 「許可してインストール」; the install then finishes
+ * - Nothing applies before 「インストール」; the install then finishes
  *   on the same screen, which offers 「開く」 and the app's own page.
  */
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
@@ -515,6 +515,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
                     <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
                   </Show>
+                  <div class="iv-choices">
                   <details class="iv-choice iv-version-choice" data-testid="install-source-fields">
                     <summary>
                       <span>{t("installStore.versionLabel")}</span>
@@ -535,6 +536,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
                       </FormField>
                     </div>
                   </details>
+                  </div>
                   <Show when={sourceConnections().length > 0}>
                     <FormField label={t("installStore.sourceAuth")}>
                       <Select value={sourceAuth()} onChange={(event) => setSourceAuth(event.currentTarget.value)}>
@@ -684,12 +686,11 @@ function AttemptProblem(props: { readonly attempt: InstallAttempt; readonly onRe
     <section class="iv-workbench" data-testid="install-attempt-problem" data-install-stage={view().stage}>
       <div class="iv-section-head" role="alert">
         <h2 data-stage-heading tabindex="-1">{title()}</h2>
-        <p>{text()}</p>
-        <Show when={attemptProblemKey(code()) === "installStore.problem.generic" && diagnostic()?.message}>
+        <p>{props.attempt.error() || text()}</p>
+        <Show when={!props.attempt.error() && attemptProblemKey(code()) === "installStore.problem.generic" && diagnostic()?.message}>
           {(message) => <p class="iv-muted">{message()}</p>}
         </Show>
       </div>
-      <Show when={props.attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
       <div class="iv-action-row">
         <Switch>
           <Match when={view().primary === "retry"}>

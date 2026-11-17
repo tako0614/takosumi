@@ -37,10 +37,10 @@
   align-items: center;
   justify-content: center;
   gap: var(--tg-s-2);
-  min-height: 38px;
+  min-height: var(--tg-control-height);
   padding: 0 var(--tg-s-5);
-  border-radius: var(--tg-r-full);
-  font-weight: 680;
+  border-radius: var(--tg-r-md);
+  font-weight: 600;
   font-size: var(--tg-fs-sm);
   border: 1px solid transparent;
   background: transparent;
@@ -90,21 +90,19 @@
   -webkit-text-fill-color: var(--tg-accent-fg);
   /* Darken (not brighten) on hover so the white label keeps AA contrast. */
   background: var(--tg-accent-emphasis-hover);
-  transform: translateY(-1px);
-  box-shadow: var(--tg-accent-btn-shadow), var(--tg-shadow-card-hover);
+  box-shadow: none;
 }
 .tg-btn-secondary {
   background: var(--tg-bg-elev);
   color: var(--tg-fg);
   border-color: var(--tg-line-strong);
-  box-shadow: var(--tg-shadow-xs);
+  box-shadow: none;
 }
 .tg-btn-secondary:hover:not(:disabled) {
   border-color: var(--tg-line-strong);
   color: var(--tg-fg);
   background: color-mix(in srgb, var(--tg-fg) 4%, var(--tg-bg-elev));
-  transform: translateY(-1px);
-  box-shadow: var(--tg-shadow-card-hover);
+  box-shadow: none;
 }
 .tg-btn-ghost {
   background: transparent;
@@ -129,11 +127,10 @@
   background: color-mix(in srgb, var(--tg-danger) 12%, transparent);
   color: var(--tg-danger-text);
   border-color: var(--tg-danger);
-  transform: translateY(-1px);
-  box-shadow: var(--tg-shadow-card-hover);
+  box-shadow: none;
 }
 .tg-btn-sm {
-  min-height: 30px;
+  min-height: var(--tg-control-height);
   padding: 0 var(--tg-s-3);
   font-size: var(--tg-fs-xs);
 }
@@ -172,7 +169,7 @@
   padding: var(--tg-s-5);
   position: relative;
   overflow: hidden;
-  box-shadow: var(--tg-card-inset), var(--tg-shadow-xs);
+  box-shadow: none;
   transition:
     border-color var(--tg-dur) var(--tg-ease),
     box-shadow var(--tg-dur) var(--tg-ease),
@@ -180,8 +177,7 @@
 }
 .tg-card-hover:hover {
   border-color: var(--tg-line-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--tg-card-inset), var(--tg-shadow-card-hover);
+  background: var(--tg-bg-subtle);
 }
 .tg-card-header {
   display: flex;
@@ -349,7 +345,7 @@
 .tg-select,
 .tg-textarea {
   padding: var(--tg-s-2) var(--tg-s-4);
-  min-height: 40px;
+  min-height: var(--tg-control-height);
   background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line-strong);
   border-radius: var(--tg-r-lg);
@@ -584,8 +580,7 @@
   }
 
   .tg-page-actions .tg-btn {
-    /* Do NOT shrink below the base 38px here — 32px failed the 40px touch
-       minimum. The coarse-pointer block below enforces ≥44px on touch. */
+    /* Preserve the shared 44px target while reducing horizontal padding. */
     padding: 0.42em 0.9em;
   }
 
@@ -897,14 +892,10 @@
   margin-top: 0.25rem;
 }
 
-/* ----- Touch targets (WCAG 2.5.8 / M37) -----
- * On coarse pointers (touch), raise the shared small controls to a comfortable
- * minimum — 40px for controls with a label, 44px for icon-only — without
- * changing the compact desktop (fine-pointer) sizing. Each owned CSS file adds
- * the same block for its own view-local controls. */
+/* Keep the shared target size in compact action rows on touch devices too. */
 @media (pointer: coarse) {
   .tg-btn-sm {
-    min-height: 40px;
+    min-height: var(--tg-control-height);
   }
   .tg-page-actions .tg-btn {
     min-height: 44px;

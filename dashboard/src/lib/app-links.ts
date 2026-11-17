@@ -49,6 +49,23 @@ export function appPageSectionFromHash(hash: string): AppPageSection | undefined
   return Object.hasOwn(APP_PAGE_SECTIONS, name) ? (name as AppPageSection) : undefined;
 }
 
+type AppPaneLocation = Readonly<{ pathname: string; search: string; hash: string }>;
+
+/** Moving between these views keeps the same app page and its form mounted. */
+export function isSameAppPaneNavigation(
+  capsuleId: string,
+  from: AppPaneLocation,
+  to: AppPaneLocation,
+): boolean {
+  const pathname = appPageHref(capsuleId);
+  const valid = (hash: string) => hash === "" || (
+    hash.startsWith("#") && appPageSectionFromHash(hash) !== undefined
+  );
+  return from.pathname === pathname && to.pathname === pathname &&
+    from.search === to.search && from.hash !== to.hash &&
+    valid(from.hash) && valid(to.hash);
+}
+
 /**
  * The section an old `/workloads/:id/:tab` (or `/services/…`, `/capsules/…`)
  * tab segment meant. Unknown tabs land on the top of the page.

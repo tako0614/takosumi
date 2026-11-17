@@ -47,8 +47,8 @@ describe("ConnectionsTab per-connection test state", () => {
     expect(source).toContain("setTestError(id, null);");
     expect(source).toMatch(/finally \{\s*setTestBusy\(id, false\);\s*\}/);
     // Errors render inside the owning connection's row, not one global toast.
-    expect(source).toContain("<Show when={testError(connection.id)}>");
-    expect(source).toContain("busy={testBusy(connection.id)}");
+    expect(source).toContain("<Show when={testError(id)}>");
+    expect(source).toContain("busy={testBusy(id)}");
   });
 
   test("the verified hint only follows the last-created connection", () => {
@@ -76,7 +76,7 @@ describe("ConnectionsTab per-connection test state", () => {
     expect(source).toContain("setRemovingId(id);");
     expect(source).toMatch(/finally \{\s*setRemovingId\(null\);\s*\}/);
     expect(source).toContain(
-      "busy={remove.busy() && removingId() === connection.id}",
+      "busy={remove.busy() && removingId() === id}",
     );
   });
 });

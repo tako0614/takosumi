@@ -13,7 +13,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { Check, Copy, KeyRound, Plus } from "lucide-solid";
+import { Check, Copy, Plus } from "lucide-solid";
 import {
   type TakosumiAccountsCreatePatResponse,
   type TakosumiAccountsPatMetadata,
@@ -23,9 +23,6 @@ import {
 import {
   Badge,
   Button,
-  Card,
-  CardHeader,
-  CardSection,
   Checkbox,
   FormField,
   Input,
@@ -157,34 +154,27 @@ export default function TakosumiApiKeysCard() {
 
   return (
     <div class="acct-stack">
-      <Card class="wc-api-keys">
-        <CardHeader
-          title={
-            <span class="wc-card-title-with-icon">
-              <KeyRound size={18} />
-              {t("account.apiKeys.title")}
-            </span>
-          }
-          subtitle={t("account.apiKeys.subtitle")}
-          actions={
-            <Show when={!formOpen()}>
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<Plus size={15} />}
-                onClick={() => {
-                  setFormOpen(true);
-                  setCreated(undefined);
-                }}
-              >
-                {t("account.apiKeys.create")}
-              </Button>
-            </Show>
-          }
-        />
-        <CardSection>
-          <p class="acct-help">{t("account.apiKeys.apiHelp")}</p>
-        </CardSection>
+      <div class="wc-api-keys">
+        <div class="tg-settings-section-head">
+          <p class="tg-settings-note">{t("account.apiKeys.subtitle")}</p>
+          <Show when={!formOpen()}>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Plus size={15} />}
+              onClick={() => {
+                setFormOpen(true);
+                setCreated(undefined);
+              }}
+            >
+              {t("account.apiKeys.create")}
+            </Button>
+          </Show>
+        </div>
+        <details class="tg-settings-tip">
+          <summary>{t("common.details")}</summary>
+          <p class="tg-settings-note">{t("account.apiKeys.apiHelp")}</p>
+        </details>
 
         <Show when={error()}>
           {(message) => (
@@ -332,7 +322,7 @@ export default function TakosumiApiKeysCard() {
             </div>
           </form>
         </Show>
-      </Card>
+      </div>
 
       {/* `keys()` throws once the list read has failed; show the failure
           with a retry instead of taking the page down. */}
@@ -359,15 +349,15 @@ export default function TakosumiApiKeysCard() {
             <Skeleton variant="card" count={2} />
           </Match>
           <Match when={keyRows().length === 0}>
-            <p class="muted">{t("account.apiKeys.empty")}</p>
+            <div class="tg-settings-group"><p class="tg-settings-row">{t("account.apiKeys.empty")}</p></div>
           </Match>
           <Match when>
-            <ul class="acct-list">
+            <ul class="acct-list tg-settings-group">
               <For each={keyRows()}>
                 {(key) => {
                   const status = () => apiKeyStatus(key);
                   return (
-                    <li class="acct-row tg-card">
+                    <li class="acct-row">
                       <div class="acct-row-main">
                         <div class="acct-row-title">
                           <strong>{key.name}</strong>
