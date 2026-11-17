@@ -247,7 +247,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly cloudflareWorkersSubdomain: string;
   readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
-  /** Existing workspace/provider connection to bind without creating or revoking it. */
+  /** Existing account-owned/provider connection to bind without creating or revoking it. */
   readonly providerConnectionId?: string;
   /**
    * Explicit 0..N ProviderBindings for the selected module. The singular
@@ -1872,7 +1872,6 @@ async function runPlatformControlPlaneSmokeInternal(
         options.providerBindings.map(async (binding, index) => {
           const actualProvider = await lookupExistingProviderConnectionSource(
             options,
-            workspaceId,
             binding.connectionId,
           );
           if (canonicalProviderSource(actualProvider) !== binding.provider) {
@@ -1889,7 +1888,6 @@ async function runPlatformControlPlaneSmokeInternal(
       const providerConnectionSource =
         await lookupExistingProviderConnectionSource(
           options,
-          workspaceId,
           options.providerConnectionId,
         );
       providerBindings = [
@@ -3064,29 +3062,32 @@ async function lookupPublicProviderConnectionId(
 
 async function listSmokeProviderConnections(
   options: PlatformControlPlaneSmokeOptions,
-  workspaceId: string,
+  workspaceId?: string,
 ): Promise<readonly SmokeProviderConnectionListEntry[]> {
   const response = await requestJson<{
     readonly providerConnections?: readonly SmokeProviderConnectionListEntry[];
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/provider-connections?workspaceId=${encodeURIComponent(workspaceId)}`,
+    path: `${API_PREFIX}/provider-connections${workspaceId !== undefined
+      ? `?workspaceId=${encodeURIComponent(workspaceId)}`
+      : ""}`,
   });
   return response.providerConnections ?? [];
 }
 
 async function lookupExistingProviderConnectionSource(
   options: PlatformControlPlaneSmokeOptions,
-  workspaceId: string,
   providerConnectionId: string,
 ): Promise<string> {
-  const match = (await listSmokeProviderConnections(options, workspaceId)).find(
+  // The account list includes the caller's personal connections; the legacy
+  // Workspace list deliberately excludes them. Binding admission remains Core's.
+  const match = (await listSmokeProviderConnections(options)).find(
     (connection) => connection.id === providerConnectionId,
   );
   if (!match) {
     throw new Error(
-      `provider connection ${providerConnectionId} was not available to the scratch Workspace`,
+      `provider connection ${providerConnectionId} was not available to the authenticated account`,
     );
   }
   if (typeof match.providerSource !== "string" || !match.providerSource) {
