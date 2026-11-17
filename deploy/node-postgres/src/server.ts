@@ -133,6 +133,9 @@ export interface ComposedServerOverrides {
   readonly allowOperatorScopedProviderConnections?: Parameters<
     typeof buildComposedApp
   >[0]["allowOperatorScopedProviderConnections"];
+  readonly createModuleVariableMaterializer?: Parameters<
+    typeof buildComposedApp
+  >[0]["createModuleVariableMaterializer"];
   readonly createRuntimeInputOidcClientSource?: Parameters<
     typeof buildComposedApp
   >[0]["createRuntimeInputOidcClientSource"];
@@ -227,6 +230,11 @@ export async function buildComposedServer(
       ? {
           allowOperatorScopedProviderConnections:
             overrides.allowOperatorScopedProviderConnections,
+        }
+      : {}),
+    ...(overrides.createModuleVariableMaterializer
+      ? {
+          createModuleVariableMaterializer: overrides.createModuleVariableMaterializer,
         }
       : {}),
     ...(overrides.createRuntimeInputOidcClientSource

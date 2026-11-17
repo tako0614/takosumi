@@ -78,6 +78,21 @@ import { OpenTofuControllerError } from "../../../core/domains/deploy-control/er
 import type { RuntimeInputOidcClientSource } from "../../../core/domains/deploy-control/runtime_input_materializer.ts";
 import type { RuntimeInputOidcControlLedger } from "../../../deploy/platform/runtime_input_oidc_client_source.ts";
 import type { CapsuleOidcAccountsLedger } from "../../../deploy/platform/accounts_oidc_client_registration.ts";
+import type { CapsuleModuleVariableMaterializer } from "../../../core/domains/deploy-control/module_variable_materializer.ts";
+import type {
+  AccountsOidcModuleVariableAccountsLedger,
+  AccountsOidcModuleVariableControlLedger,
+} from "../../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
+
+export interface ModuleVariableMaterializerFactoryInput {
+  readonly control: AccountsOidcModuleVariableControlLedger;
+  readonly accounts: AccountsOidcModuleVariableAccountsLedger;
+  readonly issuer: string;
+}
+
+export type ModuleVariableMaterializerFactory = (
+  input: ModuleVariableMaterializerFactoryInput,
+) => CapsuleModuleVariableMaterializer | Promise<CapsuleModuleVariableMaterializer>;
 
 export interface RuntimeInputOidcClientSourceFactoryInput {
   readonly control: RuntimeInputOidcControlLedger;
@@ -128,6 +143,11 @@ export interface ComposedAppInput {
    * after the embedded service operations facade has been created.
    */
   readonly createRuntimeInputOidcClientSource?: RuntimeInputOidcClientSourceFactory;
+  /**
+   * Manifest-gated module variables use a separate host authority from bindings.
+   * The host closure keeps its pairwise subject secret outside this input.
+   */
+  readonly createModuleVariableMaterializer?: ModuleVariableMaterializerFactory;
   /** Private host key forwarded to Core's runtime-binding derivation lane. */
   readonly runtimeBindingDerivationKey?:
     CreateTakosumiServiceArg["runtimeBindingDerivationKey"];
@@ -268,6 +288,10 @@ export async function buildComposedApp(
     input.createRuntimeInputOidcClientSource
       ? createDeferredRuntimeInputOidcClientSource()
       : undefined;
+  const deferredModuleVariableMaterializer =
+    input.createModuleVariableMaterializer
+      ? createDeferredModuleVariableMaterializer()
+      : undefined;
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   // The authenticated bearer's app limit for each Interface request, keyed by
   // the request object the Interface routes hand to every callback.
@@ -333,6 +357,9 @@ export async function buildComposedApp(
           runtimeInputOidcClientSource:
             deferredRuntimeInputOidcClientSource.client,
         }
+      : {}),
+    ...(deferredModuleVariableMaterializer
+      ? { moduleVariableMaterializer: deferredModuleVariableMaterializer.client }
       : {}),
     ...(input.runtimeBindingDerivationKey !== undefined
       ? { runtimeBindingDerivationKey: input.runtimeBindingDerivationKey }
@@ -515,6 +542,26 @@ export async function buildComposedApp(
     },
   });
   controlPlaneOperations = created.operations;
+  if (input.createModuleVariableMaterializer) {
+    const materializer = await input.createModuleVariableMaterializer(
+      Object.freeze({
+        control: Object.freeze({
+          getCapsule: async (id: string) =>
+            await readOptional(() => created.operations.capsules.getCapsule(id)),
+          getInstallConfig: async (id: string) =>
+            await readOptional(() =>
+              created.operations.capsules.getInstallConfig(id)
+            ),
+        }),
+        accounts: Object.freeze({
+          ...createRuntimeInputOidcAccountsLedger(input.store),
+          revokeOidcClient: input.store.revokeOidcClient.bind(input.store),
+        }),
+        issuer: input.config.issuer,
+      }),
+    );
+    deferredModuleVariableMaterializer!.initialize(materializer);
+  }
   if (input.createRuntimeInputOidcClientSource) {
     const source = await input.createRuntimeInputOidcClientSource(
       Object.freeze({
@@ -662,6 +709,41 @@ async function readOptional<T>(read: () => Promise<T>): Promise<T | undefined> {
     }
     throw error;
   }
+}
+
+/** Bootstrap the Core port before the host can read the Core authority ledger. */
+function createDeferredModuleVariableMaterializer(): {
+  readonly client: CapsuleModuleVariableMaterializer;
+  initialize(materializer: CapsuleModuleVariableMaterializer): void;
+} {
+  let materializer: CapsuleModuleVariableMaterializer | undefined;
+  const requireMaterializer = (): CapsuleModuleVariableMaterializer => {
+    if (!materializer) {
+      throw new TypeError("module variable materializer is not initialized");
+    }
+    return materializer;
+  };
+  return {
+    client: {
+      materialize: async (input) => await requireMaterializer().materialize(input),
+      retire: async (input) => await requireMaterializer().retire(input),
+    },
+    initialize(next) {
+      if (
+        !next || typeof next !== "object" ||
+        typeof next.materialize !== "function" ||
+        typeof next.retire !== "function"
+      ) {
+        throw new TypeError(
+          "createModuleVariableMaterializer must return materialize and retire methods",
+        );
+      }
+      if (materializer) {
+        throw new TypeError("module variable materializer is already initialized");
+      }
+      materializer = next;
+    },
+  };
 }
 
 interface DeferredRuntimeInputOidcClientSource {
