@@ -35,7 +35,6 @@ import {
   abandonUnappliedCapsule,
   approveRun,
   capsuleAbandonmentCompleted,
-  CAPSULE_RUN_PAGE_MAX,
   ControlApiError,
   ControlApiIndeterminateError,
   cancelRun,
@@ -48,7 +47,6 @@ import {
   getRunLogs,
   getSource,
   listCapsuleActivity,
-  listCapsuleRuns,
   listStateVersions,
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
@@ -136,18 +134,18 @@ import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
 import { appPageHref } from "../../lib/app-links.ts";
 import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
+import { APPLY_RECOVERY_RUN_LIMIT, recoverApplyRun } from "../../lib/apply-run-recovery.ts";
 import {
   createLastGoodValue,
   latestOrUndefined,
 } from "../../lib/resource-read.ts";
 
 const APPLY_REQUEST_TIMEOUT_MS = 45_000;
-const APPLY_RECOVERY_TIMEOUT_MS = 5_000;
 const RELEASE_ACTIVATION_POLL_MS = 3_000;
 /** Newest-slice size of the Workspace Run ledger fetched to decide whether a
  * succeeded review run's deploy approval was already consumed by a later
  * apply (matches the run history's first page). */
-const SIBLING_RUNS_LIMIT = 200;
+const SIBLING_RUNS_LIMIT = APPLY_RECOVERY_RUN_LIMIT;
 
 export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
@@ -161,20 +159,6 @@ function isRunNotFound(error: unknown): boolean {
     error instanceof ControlApiError &&
     (error.status === 404 || error.code === "not_found")
   );
-}
-
-function latestApplyRunForPlan(
-  runs: readonly Run[],
-  planRun: Run,
-): Run | undefined {
-  const type = planRun.type === "plan" ? "apply" : "destroy_apply";
-  const matches = runs.filter((candidate) =>
-    typeof candidate.id === "string" && candidate.id !== "" &&
-    candidate.id !== planRun.id && candidate.type === type &&
-    candidate.workspaceId === planRun.workspaceId &&
-    candidate.capsuleId === planRun.capsuleId && candidate.planRunId === planRun.id
-  );
-  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function diagnosticDisplayText(value: string | undefined): string | undefined {
@@ -1017,32 +1001,13 @@ function Inner() {
     const controller = new AbortController();
     applyReadController?.abort();
     applyReadController = controller;
-    const timeout = setTimeout(() => controller.abort(), APPLY_RECOVERY_TIMEOUT_MS);
     setCheckingApply(true);
     try {
-      const rows: Run[] = [];
-      let cursor: string | undefined;
-      // The same finite ledger budget as approval display, narrowed to the
-      // expected operation. A truncated window never proves a unique result.
-      for (let pageIndex = 0; pageIndex < Math.ceil(SIBLING_RUNS_LIMIT / CAPSULE_RUN_PAGE_MAX); pageIndex++) {
-        if (!ownsApply(attempt) || controller.signal.aborted) return;
-        const page = await listCapsuleRuns(attempt.plan.capsuleId!, {
-          limit: CAPSULE_RUN_PAGE_MAX,
-          types: [attempt.plan.type === "plan" ? "apply" : "destroy_apply"],
-          ...(cursor ? { cursor } : {}),
-          signal: controller.signal,
-        });
-        if (!ownsApply(attempt) || controller.signal.aborted || unconfirmedApply() !== attempt) return;
-        if (page.runs.length > CAPSULE_RUN_PAGE_MAX) return;
-        rows.push(...page.runs);
-        if (!page.nextCursor) return latestApplyRunForPlan(rows, attempt.plan);
-        if (page.nextCursor === cursor) return;
-        cursor = page.nextCursor;
-      }
-    } catch {
-      // Failed, cancelled and incomplete reads leave the mutation unconfirmed.
+      return await recoverApplyRun(attempt.plan, {
+        signal: controller.signal,
+        isCurrent: () => ownsApply(attempt) && unconfirmedApply() === attempt,
+      });
     } finally {
-      clearTimeout(timeout);
       if (applyReadController === controller) {
         applyReadController = undefined;
         if (ownsApply(attempt)) setCheckingApply(false);

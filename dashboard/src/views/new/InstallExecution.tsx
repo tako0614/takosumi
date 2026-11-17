@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createResource,
@@ -10,6 +11,7 @@ import { AlertCircle, ChevronDown, ExternalLink, ShieldAlert } from "lucide-soli
 import {
   approveRun,
   ControlApiError,
+  ControlApiIndeterminateError,
   createApplyRun,
   getRun,
   getRunCostInfo,
@@ -43,6 +45,7 @@ import {
 } from "../../lib/capsules-ui.ts";
 import { installRunNeedsFallbackRead } from "./install-run-polling.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+import { recoverApplyRun } from "../../lib/apply-run-recovery.ts";
 
 /**
  * Why this Plan is being reviewed. Every purpose shares the same review and
@@ -310,6 +313,13 @@ function isApplyRun(type: Run["type"] | undefined): boolean {
 }
 
 export default function InstallExecution(props: Props) {
+  let disposed = false;
+  let executionEpoch = 0;
+  let recoveryController: AbortController | undefined;
+  onCleanup(() => {
+    disposed = true;
+    recoveryController?.abort();
+  });
   const copy = () => REVIEW_COPY[props.purpose ?? "install"];
   const [runId, setRunId] = createSignal(props.initialRunId ?? props.planRunId);
   const [run, { mutate, refetch }] = createResource(runId, async (id) => {
@@ -320,9 +330,21 @@ export default function InstallExecution(props: Props) {
   // Never `run()` / `run.latest`: both THROW once a load has failed, and the
   // 3s fallback read below means one 5xx mid-install replaced the whole app
   // with the root reload card. A failed refetch keeps the last good run.
-  const runLatest = createLastGoodValue(run, (r) => r.id === runId());
+  const runLatest = createLastGoodValue(run, (r) => r.id === runId() && r.capsuleId === props.capsuleId);
   const [applying, setApplying] = createSignal(false);
   const [applyUnconfirmed, setApplyUnconfirmed] = createSignal(false);
+  type ApplyAttempt = { readonly plan: Run; readonly epoch: number; readonly propsPlanId: string; readonly initialId: string };
+  const [recoverableApply, setRecoverableApply] = createSignal<ApplyAttempt>();
+  const [checkingApply, setCheckingApply] = createSignal(false);
+  const sameOwner = (attempt: ApplyAttempt) => !disposed && attempt.epoch === executionEpoch &&
+    props.capsuleId === attempt.plan.capsuleId && props.planRunId === attempt.propsPlanId &&
+    (props.initialRunId ?? props.planRunId) === attempt.initialId;
+  const ownsApply = (attempt: ApplyAttempt) => {
+    const current = runLatest();
+    return sameOwner(attempt) && runId() === attempt.plan.id && current?.id === attempt.plan.id &&
+      current.capsuleId === attempt.plan.capsuleId && current.workspaceId === attempt.plan.workspaceId &&
+      current.type === attempt.plan.type;
+  };
   const [logsOpen, setLogsOpen] = createSignal(false);
   const [logs, { refetch: refetchLogs }] = createResource(
     () => logsOpen() ? runId() : false, async (id) => ({ runId: id, logs: await getRunLogs(id) }),
@@ -504,34 +526,81 @@ export default function InstallExecution(props: Props) {
     }
   };
 
+  const identifyApply = (id: string, attempt: ApplyAttempt) => {
+    if (!ownsApply(attempt)) return;
+    // Observing an exact Apply locks the answers/discard path before its
+    // separate Run read starts. Its status is never taken from the listing.
+    batch(() => {
+      setHasSeenApply(true);
+      mutate(undefined);
+      setRunId(id);
+      setApplyUnconfirmed(false);
+      setRecoverableApply(undefined);
+      setError(null);
+    });
+  };
+  const recoverApply = async (attempt: ApplyAttempt) => {
+    if (!ownsApply(attempt) || recoverableApply() !== attempt) return;
+    recoveryController?.abort();
+    const controller = new AbortController();
+    recoveryController = controller;
+    setCheckingApply(true);
+    try {
+      const recovered = await recoverApplyRun(attempt.plan, {
+        signal: controller.signal,
+        isCurrent: () => ownsApply(attempt) && recoverableApply() === attempt,
+      });
+      if (recovered && ownsApply(attempt)) identifyApply(recovered.id, attempt);
+    } finally {
+      if (recoveryController === controller) {
+        recoveryController = undefined;
+        if (sameOwner(attempt)) setCheckingApply(false);
+      }
+    }
+  };
+  const recheckApply = async () => {
+    const attempt = recoverableApply();
+    if (attempt && !applying() && !checkingApply()) await recoverApply(attempt);
+  };
   const install = async () => {
     if (props.blockedReason || applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
+    const plan = runLatest();
+    if (!plan || plan.id !== runId() || plan.capsuleId !== props.capsuleId || !plan.workspaceId) return;
+    const attempt = { plan, epoch: executionEpoch, propsPlanId: props.planRunId, initialId: props.initialRunId ?? props.planRunId };
     setApplying(true);
     setError(null);
     try {
-      const envelope = await createApplyRun(runId(), { timeoutMs: 30_000 });
-      mutate(undefined);
-      setRunId(envelope.run.id);
+      const envelope = await createApplyRun(plan.id, { timeoutMs: 30_000 });
+      identifyApply(envelope.run.id, attempt);
     } catch (cause) {
-      // A timeout after POST is indeterminate. Do not retry from this surface;
-      // the run detail remains the recovery/audit path.
-      if (!(cause instanceof ControlApiError) || cause.status === 0 || cause.status >= 500) {
+      if (!ownsApply(attempt)) return;
+      if (cause instanceof ControlApiIndeterminateError && cause.operation === "apply") {
+        setRecoverableApply(attempt);
+        setApplyUnconfirmed(true);
+        setError(t("run.applyUnconfirmed"));
+        await recoverApply(attempt);
+      } else if (!(cause instanceof ControlApiError) || cause.status === 0 || cause.status >= 500) {
         setApplyUnconfirmed(true);
         setError(t("installStore.applyUnconfirmed"));
       } else setError(friendlyError(cause, t).message);
     } finally {
-      setApplying(false);
+      if (sameOwner(attempt)) setApplying(false);
     }
   };
 
   // Apply starts only from the final "Install" click on the reviewed Plan.
   // Nothing applies automatically, and no consent survives a reload or URL.
   // Unknown POSTs are held.
-  let observedInitialRun = props.initialRunId ?? props.planRunId;
+  const executionScope = () => JSON.stringify([props.capsuleId, props.planRunId, props.initialRunId ?? props.planRunId]);
+  let observedInitialRun = executionScope();
   createEffect(() => {
     const id = props.initialRunId ?? props.planRunId;
-    if (id === observedInitialRun) return;
-    observedInitialRun = id;
+    const scope = executionScope();
+    if (scope === observedInitialRun) return;
+    observedInitialRun = scope;
+    executionEpoch += 1;
+    recoveryController?.abort();
+    setRecoverableApply(undefined); setCheckingApply(false); setApplying(false);
     setConfirmed(false); setApplyUnconfirmed(false); setError(null);
     mutate(undefined); setRunId(id);
   });
@@ -996,6 +1065,11 @@ export default function InstallExecution(props: Props) {
                 here — but the review can close; the run detail and the app's
                 history show what happened. */}
             <Show when={applyUnconfirmed()}>{closeButton()}</Show>
+            <Show when={applyUnconfirmed() && recoverableApply()}>
+              <Button type="button" variant="secondary" busy={checkingApply()} disabled={applying() || checkingApply()} onClick={() => void recheckApply()}>
+                {t("common.retry")}
+              </Button>
+            </Show>
           </div>
         )}
       </Show>

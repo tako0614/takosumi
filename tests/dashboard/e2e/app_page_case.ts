@@ -806,6 +806,76 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       ]);
     });
 
+    test("an embedded Update recovers its accepted Apply after lost responses without another mutation", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const errors = pageErrors(page);
+      const now = "2026-11-17T00:00:00.000Z";
+      const planId = "plan_embedded_update";
+      const applyId = "apply_embedded_update";
+      const plan = {
+        ...lifecycleRun(planId, "plan", "succeeded", now),
+        capsuleId: CAPSULE_ID, summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass",
+        planResources: [{ address: "fixture_resource.embedded", type: "fixture_resource", actions: ["update"] }],
+      };
+      const apply = { ...lifecycleRun(applyId, "apply", "failed", now), capsuleId: CAPSULE_ID, planRunId: planId };
+      let attempts = 0, effects = 0, historyReads = 0, applyReads = 0;
+      const held: { release?: () => Promise<void> } = {};
+      const mutations: string[] = [];
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request(), url = new URL(request.url()), path = url.pathname;
+        if (request.method() !== "GET") mutations.push(`${request.method()} ${path}`);
+        if (path === `/api/v1/capsules/${CAPSULE_ID}/app`) return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
+          primaryAction: "view_resources",
+          version: { current: { sourceSnapshotId: "snap_embedded", ref: "main", path: ".", commit: PORTABLE_SOURCE_COMMIT }, updateAvailable: false, stale: false, autoUpdate: false },
+        }) } });
+        if (path === `/api/v1/capsules/${CAPSULE_ID}/revision-plans` && request.method() === "POST") {
+          return route.fulfill({ status: 201, json: { revisionPlan: { id: "revision_embedded", phase: "review_ready", generation: 1, planRunId: planId }, nextAction: "review_run", links: { self: "/api/v1/revision-plans/revision_embedded" } } });
+        }
+        if (path === `/api/v1/runs/${planId}/apply` && request.method() === "POST") {
+          attempts += 1;
+          if (effects === 0) effects += 1;
+          return route.abort("failed");
+        }
+        if (path === `/api/v1/capsules/${CAPSULE_ID}/runs`) {
+          if (attempts >= 2 && url.searchParams.getAll("type").join() === "apply") {
+            historyReads += 1;
+            return route.fulfill({ json: { runs: [apply] } });
+          }
+          return route.fulfill({ json: { runs: [] } });
+        }
+        if (path === `/api/v1/runs/${planId}`) return route.fulfill({ json: { run: plan } });
+        if (path === `/api/v1/runs/${applyId}`) {
+          applyReads += 1;
+          await new Promise<void>((resolve) => {
+            held.release = async () => { await route.fulfill({ json: { run: apply } }); resolve(); };
+          });
+          return;
+        }
+        if (path === `/api/v1/runs/${planId}/cost`) return route.fulfill({ json: { cost: { runId: planId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
+        if (path.endsWith("/stream") && path.startsWith("/api/v1/runs/")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+        if (path.endsWith("/logs") && path.startsWith("/api/v1/runs/")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        return route.fallback();
+      });
+      await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+      await openAppPane(page, "version");
+      const version = page.getByTestId("app-version");
+      await version.getByRole("button", { name: "Check for updates", exact: true }).click();
+      const review = version.getByTestId("app-review");
+      await review.getByRole("button", { name: "Allow and update", exact: true }).click();
+      await expect.poll(() => attempts).toBe(2);
+      await expect.poll(() => historyReads).toBe(1);
+      await expect.poll(() => applyReads).toBeGreaterThan(0);
+      await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toHaveCount(0);
+      await expect(review.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+      await held.release?.();
+      await expect(review).toContainText("The update couldn't finish");
+      await expect(review.locator(`a[href="/runs/${applyId}"]`)).toBeVisible();
+      expect(effects).toBe(1);
+      expect(mutations).toEqual([`POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`, `POST /api/v1/runs/${planId}/apply`, `POST /api/v1/runs/${planId}/apply`]);
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#version$`, "u"));
+      expect(errors).toEqual([]);
+    });
+
     test("a lost Update response reads the same app once and recovers only its existing review", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);

@@ -71,8 +71,10 @@ describe("RunView", () => {
   });
 
   test("timeout recovery uses the exact Apply Run -> Plan Run relation", () => {
-    expect(source).toContain("candidate.planRunId === planRun.id");
-    expect(source).not.toContain("Date.parse(planRun.createdAt)");
+    const recovery = readFileSync(resolve(import.meta.dir, "../../../../../dashboard/src/lib/apply-run-recovery.ts"), "utf8");
+    expect(source).toContain("recoverApplyRun(attempt.plan,");
+    expect(recovery).toContain("candidate.planRunId === plan.id");
+    expect(recovery).not.toContain("Date.parse(");
   });
 
   test("summary-less runs are honest: no fake zeros, fail-closed destructive gate", () => {
