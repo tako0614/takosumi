@@ -3963,7 +3963,10 @@ export class RunEngine {
       input.compatibilityReport,
       input.snapshot,
       input.modulePath,
-      { skipReady: input.skipReadySourceFileDiscovery === true },
+      {
+        skipReady: input.skipReadySourceFileDiscovery === true,
+        readWithoutReport: input.operation === "destroy",
+      },
     );
     const declaredInputs = declaredGenericCapsuleInputs(
       sourceFiles,
@@ -4527,10 +4530,12 @@ export class RunEngine {
     report: CapsuleCompatibilityReport | undefined,
     sourceSnapshot: SourceSnapshot,
     modulePath: string | undefined,
-    options: { readonly skipReady?: boolean } = {},
+    options: { readonly skipReady?: boolean; readonly readWithoutReport?: boolean } = {},
   ): Promise<readonly OpenTofuCapsuleSourceFile[] | undefined> {
-    if (!report) return undefined;
-    if (report.level !== "ready") return undefined;
+    // Destroy has no compatibility admission, but its already-pinned applied
+    // module still declares which current provider defaults are legal inputs.
+    if (!report && !options.readWithoutReport) return undefined;
+    if (report && report.level !== "ready") return undefined;
     if (options.skipReady) return undefined;
     if (!this.#sourcesService) return undefined;
     try {
