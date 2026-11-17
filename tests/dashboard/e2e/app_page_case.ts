@@ -264,12 +264,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await page.reload({ waitUntil: "domcontentloaded" });
       await form.getByRole("button", { name: "Read target inputs", exact: true }).click();
       await expect(form.getByRole("combobox", { name: "How to use Release note", exact: true })).toHaveValue("unresolved");
-      await form.getByRole("button", { name: "Adopt settings and review target Plan", exact: true }).click();
+      await form.getByRole("button", { name: "Adopt settings and review changes", exact: true }).click();
       expect(writes).toHaveLength(1);
       await form.getByRole("combobox", { name: "How to use Release note", exact: true }).selectOption("set");
       await form.getByRole("textbox", { name: "Release note", exact: true }).fill(core.adoptionRequest.reviewedUserVariables.release_note);
       await form.getByRole("combobox", { name: "How to use Clear optional", exact: true }).selectOption("unset");
-      await form.getByRole("button", { name: "Adopt settings and review target Plan", exact: true }).click();
+      await form.getByRole("button", { name: "Adopt settings and review changes", exact: true }).click();
       await expect(page.getByTestId("app-review").getByRole("button", { name: "Allow and update", exact: true })).toBeEnabled();
       expect(contextReads).toBe(1);
       expect(writes.map(write => write.path)).toEqual([`${base}/revision-plans`, `${base}/install-config-re-adoptions`, `${base}/revision-plans`]);

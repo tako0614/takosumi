@@ -620,7 +620,7 @@ export const ja = {
   "app.reAdoption.boolean": "true または false を入力してください。",
   "app.reAdoption.default": "更新先の既定値",
   "app.reAdoption.blocked": "これらの入力はここでは安全に編集できません。",
-  "app.reAdoption.pending": "送信した内容を保持して結果を確認します。続ける場合は同じ内容と要求キーを使います。Planの適用は行いません。",
+  "app.reAdoption.pending": "送信した内容を保持して結果を確認します。続ける場合は同じ内容と要求キーを使います。デプロイは行いません。",
   "app.reAdoption.resume": "送信した内容で確認を続ける",
   "app.reAdoption.review": "設定を再採用して更新内容を確認",
   "app.reAdoption.invalid": "必須項目と値を確認してください。現在値を確認できない項目は、値の入力か未設定を明示してください。",
