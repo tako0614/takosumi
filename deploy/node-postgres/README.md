@@ -275,6 +275,16 @@ a commercial host extension and are not part of this public distribution.
   receive full service operations, the Accounts store, server config, or
   secrets. The host keeps its pairwise subject secret, derivation key, and
   public-origin authority outside this factory seam.
+- Manifest-gated Accounts OIDC **module variables** use the separate
+  `createModuleVariableMaterializer` hook on `buildComposedApp`/`buildComposedServer`.
+  Its frozen input contains only `{ control, accounts, issuer }`: the two current
+  Capsule/InstallConfig reads and four Accounts client registration/retirement
+  methods. Compose the existing `createTakosumiAccountsOidcModuleVariableMaterializer`
+  with that input and the host's existing private `pairwiseSubjectSecret` in the
+  closure. Core receives the port before bootstrap completes; the factory is
+  initialized before the app is returned. Omission keeps these repository
+  projections fail-closed. This does not generate user-supplied issuer/client/owner
+  values or replace the binding-delivered `createRuntimeInputOidcClientSource`.
 - Operator-owned credential composition is explicit: pass the complete
   `credentialRecipes` and `credentialRecipeDrivers` together with any fixed
   `operatorProviderConnections`. A host may also supply the generic
