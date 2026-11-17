@@ -352,7 +352,13 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
           }
         },
         "preRun": {
-          "type": "cloudflare_oauth"
+          "type": "cloudflare_oauth",
+          "inputs": {
+            "CLOUDFLARE_ACCOUNT_ID": {
+              "from": "value",
+              "name": "account_id"
+            }
+          }
         }
       },
       "api_token": {

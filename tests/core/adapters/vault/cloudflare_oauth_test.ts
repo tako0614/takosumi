@@ -5,13 +5,23 @@ import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-co
 import { referenceCredentialDriversFromEnv, REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
 import { createDefaultRunnerProfiles } from "../../../../core/domains/deploy-control/runner_profiles.ts";
 import { cloudflareOAuthValues } from "../../../../providers/cloudflare/oauth.ts";
+import { cloudflareOAuthDescriptorFromEnv } from "../../../../providers/cloudflare/setup.ts";
 
 const provider = "registry.opentofu.org/cloudflare/cloudflare";
 const account = "0123456789abcdef0123456789abcdef";
 const start = Date.parse("2026-10-27T00:00:00Z");
 const authority = { workspaceId: "ws_oauth", managementState: "active" as const, managementEpoch: 1 };
 
-async function fixture(legacy = false) {
+type MaterialForControl = { readonly from: "value" | "secret" | "generated"; readonly name: string };
+interface PrivateHintControl {
+  readonly hintKey: string;
+  readonly hintValue?: string;
+  readonly hintMaterial?: "CLOUDFLARE_API_TOKEN" | "CLOUDFLARE_OAUTH_SESSION";
+  readonly env?: Readonly<Record<string, MaterialForControl>>;
+  readonly inputs?: Readonly<Record<string, MaterialForControl>>;
+}
+
+async function fixture(legacy = false, selectedAccountId?: string, control?: PrivateHintControl) {
   const store = new InMemoryOpenTofuControlStore();
   await store.putWorkspace({ id: authority.workspaceId, handle: "oauth", displayName: "OAuth", type: "personal",
     ownerUserId: "owner", createdAt: new Date(start).toISOString(), updatedAt: new Date(start).toISOString() });
@@ -23,7 +33,15 @@ async function fixture(legacy = false) {
   const vault = new StaticSecretConnectionVault({ store,
     crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "fixture-oauth-vault-passphrase-0123456789" }),
     now: () => new Date(now), newId: () => "conn_oauth_fixture",
-    credentialRecipeResolver: (id) => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find((item) => item.id === id),
+    credentialRecipeResolver: (id) => {
+      const recipe = REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find((item) => item.id === id);
+      if (!recipe || (!control?.env && !control?.inputs)) return recipe;
+      const mode = recipe.authModes.oauth!;
+      return { ...recipe, authModes: { ...recipe.authModes, oauth: { ...mode,
+        env: { ...mode.env, ...control.env },
+        preRun: { ...mode.preRun!, inputs: { ...mode.preRun?.inputs, ...control.inputs } },
+      } } };
+    },
     credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
     fetch: async (url, init) => {
       if (url === "https://dash.cloudflare.com/oauth2/token") {
@@ -43,14 +61,60 @@ async function fixture(legacy = false) {
       throw new Error("Unexpected provider request");
     },
   });
+  const scopeHints = selectedAccountId ? { providerSettings: { accountId: selectedAccountId } } : undefined;
+  const descriptor = selectedAccountId ? cloudflareOAuthDescriptorFromEnv({
+    TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "client-id-fixture",
+    TAKOSUMI_CLOUDFLARE_OAUTH_REDIRECT_URI: "https://product.example.test/api/v1/connections/oauth/cloudflare/callback",
+  })! : undefined;
+  const values = legacy ? { CLOUDFLARE_API_TOKEN: "legacy-access-fixture" } : descriptor
+    ? descriptor.mapTokenResponse({ helperId: "cloudflare", clientId: descriptor.clientId,
+      tokenResponse: { access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600 }, scopeHints })
+    : cloudflareOAuthValues({ clientId: "client-id-fixture",
+      tokenResponse: { access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600 }, now: start });
+  const registrationHints = scopeHints && control ? { providerSettings: {
+    ...scopeHints.providerSettings,
+    [control.hintKey]: control.hintMaterial ? values[control.hintMaterial]! : control.hintValue!,
+  } } : scopeHints;
   const connection = await vault.register({ workspaceId: authority.workspaceId, provider,
     credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" },
-    materialization: "oauth", values: legacy ? { CLOUDFLARE_API_TOKEN: "legacy-access-fixture" } : cloudflareOAuthValues({ clientId: "client-id-fixture",
-      tokenResponse: { access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600 }, now: start }) }, authority, null);
+    materialization: "oauth", ...(registrationHints ? { scopeHints: registrationHints } : {}), values }, authority, null);
   return { store, vault, connection, advance: (elapsed = 3600_000) => { now += elapsed; },
     refreshes: () => refreshes, failRefresh: (kind: "terminal" | "temporary" = "terminal") => { refreshFailure = kind; }, recover: () => { refreshFailure = undefined; },
     beforeRefresh: (fn: () => Promise<void>) => { beforeRefresh = fn; } };
 }
+
+test("OAuth preserves an explicitly selected account through recipe verification and public hints", async () => {
+  const f = await fixture(false, account);
+  expect(await f.vault.test(f.connection.id, authority, null)).toEqual({ status: "verified" });
+  const current = (await f.store.getConnection(f.connection.id))!;
+  expect(current.ownerAccountId).toBe("owner");
+  expect(current.scopeHints?.providerSettings?.accountId).toBe(account);
+  expect(current.scopeHints?.moduleInputDefaults?.cloudflare_account_id).toBe(account);
+  expect(JSON.stringify(current.scopeHints)).not.toContain("access-original");
+  expect(JSON.stringify(current.scopeHints)).not.toContain("refresh-fixture");
+  expect((await f.vault.mint(authority.workspaceId, [provider])).env).toEqual({ CLOUDFLARE_API_TOKEN: "access-original" });
+});
+
+test("OAuth selected-account declarations keep private and undeclared hint material private", async () => {
+  const controls: readonly PrivateHintControl[] = [
+    { hintKey: "access_token", hintValue: "access-original" },
+    { hintKey: "refresh_token", hintValue: "refresh-fixture" },
+    { hintKey: "label", hintMaterial: "CLOUDFLARE_OAUTH_SESSION" },
+    { hintKey: "label", hintMaterial: "CLOUDFLARE_OAUTH_SESSION",
+      inputs: { "*": { from: "value", name: "account_id" } } },
+    { hintKey: "label", hintMaterial: "CLOUDFLARE_API_TOKEN",
+      inputs: { CLOUDFLARE_API_TOKEN: { from: "value", name: "access_token" } } },
+    { hintKey: "label", hintMaterial: "CLOUDFLARE_API_TOKEN",
+      env: { CLOUDFLARE_API_TOKEN: { from: "value", name: "access_token" } },
+      inputs: { CLOUDFLARE_API_TOKEN: { from: "secret", name: "access_token" } } },
+  ];
+  for (const control of controls) {
+    await expect((async () => {
+      const f = await fixture(false, account, control);
+      await f.vault.test(f.connection.id, authority, null);
+    })()).rejects.toThrow(/credential|secret/u);
+  }
+});
 
 test("OAuth discovers one account, renews sealed tokens, and never mints refresh/client secrets to the runner", async () => {
   const f = await fixture();

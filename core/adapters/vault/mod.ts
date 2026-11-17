@@ -3141,21 +3141,26 @@ function sensitiveMaterialValuesForRecipe(
   const mode = recipe?.authModes[recipeRef.authMode];
   if (!mode) return allValues;
 
-  const envDeclarations = mode.env;
+  // Named inputs share env source semantics; any private declaration wins.
+  // A preRun input does not declare an env wildcard.
+  const envDeclarations = [
+    ...Object.entries(mode.env ?? {}),
+    ...Object.entries(mode.preRun?.inputs ?? {}).filter(([name]) => name !== "*"),
+  ];
   const sensitiveEnvNames = new Set(
-    Object.entries(envDeclarations ?? {})
+    envDeclarations
       .filter(([name, declaration]) =>
         name !== "*" && sensitiveMaterialSource(declaration.from),
       )
       .map(([name]) => name),
   );
   const knownEnvNames = new Set(
-    Object.keys(envDeclarations ?? {}).filter((name) => name !== "*"),
+    envDeclarations.map(([name]) => name).filter((name) => name !== "*"),
   );
-  const wildcardIsSensitive =
-    envDeclarations?.["*"] !== undefined &&
-    sensitiveMaterialSource(envDeclarations["*"].from);
-  const wildcardIsDeclared = envDeclarations?.["*"] !== undefined;
+  const wildcardIsSensitive = envDeclarations.some(([name, declaration]) =>
+    name === "*" && sensitiveMaterialSource(declaration.from)
+  );
+  const wildcardIsDeclared = envDeclarations.some(([name]) => name === "*");
   const includeUnknownEnvAsSensitive =
     options.includeUnknownEnvAsSensitive ?? true;
   const sensitiveValues = Object.entries(material.env).flatMap(

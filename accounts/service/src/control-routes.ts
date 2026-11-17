@@ -662,20 +662,16 @@ export async function handleControlRoute(
   const { request, url, store } = context;
   if (!isApiV1Path(url.pathname)) return undefined;
   const timings = serverTimingBucketForPath(url.pathname);
-  const prefix = API_V1_PREFIX;
 
   // The credential-OAuth callback is the ONE control route reached by a
   // top-level CROSS-SITE redirect (dash.cloudflare.com -> this origin). The
   // browser sends no Authorization header, and privacy/cookie policy can still
-  // withhold the session cookie, so `requireAccountSession` would make the
-  // callback brittle. The callback therefore authenticates from the
-  // authenticated subject embedded in the HMAC-signed OAuth state (minted by
-  // the cookie-authenticated `start`), not from the session cookie. Route it
-  // BEFORE the session gate.
+  // withhold the session cookie. The callback uses the OAuth state issued by
+  // the authenticated start and, for browser-bound helpers, the one-time
+  // attempt and matching browser cookie. Route it BEFORE the session gate.
   const connectionOAuthHelperId = connectionOAuthCallbackHelperId(
     url.pathname,
     request.method,
-    prefix,
   );
   if (connectionOAuthHelperId) {
     const operations =
@@ -784,18 +780,17 @@ function controlRouteRequiredScope(
 
 /**
  * Returns the opaque helper id for `GET /api/v1/connections/oauth/:id/callback`.
- * only control route reached cross-site, so it is dispatched before the
- * session-cookie gate and authorizes from the signed OAuth state instead
- * (see {@link handleControlRoute}).
+ * This is the only control route reached by the provider's browser redirect.
+ * Composition roots use this matcher to reach the callback in
+ * {@link handleControlRoute} before their account session gate.
  */
-function connectionOAuthCallbackHelperId(
+export function connectionOAuthCallbackHelperId(
   pathname: string,
   method: string,
-  prefix: string,
 ): string | undefined {
   if (method !== "GET") return undefined;
   const match = pathname.match(
-    new RegExp(`^${prefix}/connections/oauth/([^/]+)/callback$`, "u"),
+    new RegExp(`^${API_V1_PREFIX}/connections/oauth/([^/]+)/callback$`, "u"),
   );
   if (!match?.[1]) return undefined;
   try {
