@@ -303,7 +303,12 @@ const CONTRACT = {
 };
 
 if (process.argv.includes("--contract")) {
-  process.stdout.write(`${JSON.stringify(CONTRACT, null, 2)}\n`);
+  await new Promise((resolve, reject) => {
+    process.stdout.write(`${JSON.stringify(CONTRACT, null, 2)}\n`, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
   process.exit(0);
 }
 

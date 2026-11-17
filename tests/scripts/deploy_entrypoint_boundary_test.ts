@@ -6,94 +6,106 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dir, "../..");
 
 test("OSS deploy entrypoint owns the official platform Worker without a Cloud wrapper", async () => {
-  const child = Bun.spawn(["bun", "scripts/deploy.mjs", "--contract"], {
-    cwd: root,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  expect(exitCode, stderr).toBe(0);
-  const contract = JSON.parse(stdout) as {
-    readonly surfaces: readonly {
-      readonly surface: string;
-      readonly target: string;
-      readonly triggers?: readonly string[];
-      readonly obligations?: Readonly<Record<string, string>>;
-    }[];
-  };
-  expect(contract.surfaces).toEqual([
-    expect.objectContaining({ surface: "takosumi-platform-staging-login-admission", target: "cloudflare-worker:takosumi-staging", triggers: ["authority"] }),
-    expect.objectContaining({
-      surface: "takosumi-platform-staging-code",
-      target: "cloudflare-worker:takosumi-staging",
-      triggers: [],
-    }),
-    expect.objectContaining({
-      surface: "takosumi-platform-staging",
-      target: "cloudflare-worker:takosumi-staging",
-    }),
-    expect.objectContaining({
-      surface: "takosumi-platform",
-      target: "cloudflare-worker:takosumi",
-    }),
-    expect.objectContaining({ surface: "takosumi-auth-staging-bootstrap", target: "cloudflare-worker:takosumi-auth-staging", triggers: ["irreversible", "authority"] }),
-    expect.objectContaining({ surface: "takosumi-auth-staging-authority", target: "cloudflare-worker:takosumi-auth-staging", triggers: ["authority"] }),
-    expect.objectContaining({ surface: "takosumi-auth-staging-code", target: "cloudflare-worker:takosumi-auth-staging", triggers: [] }),
-    expect.objectContaining({ surface: "takosumi-auth-staging-topology", target: "cloudflare-worker-domain:auth-staging.takos.jp", triggers: ["irreversible", "authority"] }),
-    expect.objectContaining({ surface: "takosumi-accounts-d1-schema-staging", triggers: ["irreversible", "authority"] }),
-    expect.objectContaining({ surface: "takosumi-oss-github-release", target: "github-release:tako0614/takosumi", triggers: ["published-identity"] }),
-    expect.objectContaining({
-      surface: "takosumi-control-d1-schema-staging",
-      triggers: ["irreversible", "authority"],
-    }),
-    expect.objectContaining({
-      surface: "takosumi-control-d1-schema-production-v66-v69",
-      target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
-      triggers: ["irreversible", "authority"],
-    }),    expect.objectContaining({
-      surface: "takosumi-control-d1-schema-production-v66-v75",
-      target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
-      triggers: ["irreversible", "authority"],
-    }),
-    expect.objectContaining({
-      surface: "takosumi-control-d1-schema-production-v75-v79",
-      target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
-      triggers: ["irreversible", "authority"],
-    }),
-    expect.objectContaining({
-      surface: "takosumi-runner-image",
-      target: "cloudflare-container:takosumi-runner",
-    }),
-    expect.objectContaining({
-      surface: "takosumi-website",
-      target: "cloudflare-pages:takosumi-website",
-    }),
-    expect.objectContaining({
-      surface: "takosumi-contract-package",
-      target: "npm:@takosjp/takosumi-contract",
-    }),
-  ]);
-  const runnerImage = contract.surfaces.find(
-    (entry) => entry.surface === "takosumi-runner-image",
-  );
-  expect(runnerImage?.triggers).toEqual(["authority", "published-identity"]);
-  expect(Object.keys(runnerImage?.obligations ?? {}).sort()).toEqual([
-    "failure-handling",
-    "independent-review",
-    "no-overwrite",
-    "post-conditions",
-    "provenance",
-    "reversal",
-  ]);
+  const temporary = await mkdtemp(join(tmpdir(), "takosumi-contract-stdout-"));
+  try {
+    const preload = join(temporary, "deferred-stdout.mjs");
+    await writeFile(preload, `const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = (...args) => {
+  setImmediate(() => write(...args));
+  return false;
+};
+`);
+    const child = Bun.spawn([process.execPath, "--preload", preload, "scripts/deploy.mjs", "--contract"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    const contract = JSON.parse(stdout) as {
+      readonly surfaces: readonly {
+        readonly surface: string;
+        readonly target: string;
+        readonly triggers?: readonly string[];
+        readonly obligations?: Readonly<Record<string, string>>;
+      }[];
+    };
+    expect(contract.surfaces).toEqual([
+      expect.objectContaining({ surface: "takosumi-platform-staging-login-admission", target: "cloudflare-worker:takosumi-staging", triggers: ["authority"] }),
+      expect.objectContaining({
+        surface: "takosumi-platform-staging-code",
+        target: "cloudflare-worker:takosumi-staging",
+        triggers: [],
+      }),
+      expect.objectContaining({
+        surface: "takosumi-platform-staging",
+        target: "cloudflare-worker:takosumi-staging",
+      }),
+      expect.objectContaining({
+        surface: "takosumi-platform",
+        target: "cloudflare-worker:takosumi",
+      }),
+      expect.objectContaining({ surface: "takosumi-auth-staging-bootstrap", target: "cloudflare-worker:takosumi-auth-staging", triggers: ["irreversible", "authority"] }),
+      expect.objectContaining({ surface: "takosumi-auth-staging-authority", target: "cloudflare-worker:takosumi-auth-staging", triggers: ["authority"] }),
+      expect.objectContaining({ surface: "takosumi-auth-staging-code", target: "cloudflare-worker:takosumi-auth-staging", triggers: [] }),
+      expect.objectContaining({ surface: "takosumi-auth-staging-topology", target: "cloudflare-worker-domain:auth-staging.takos.jp", triggers: ["irreversible", "authority"] }),
+      expect.objectContaining({ surface: "takosumi-accounts-d1-schema-staging", triggers: ["irreversible", "authority"] }),
+      expect.objectContaining({ surface: "takosumi-oss-github-release", target: "github-release:tako0614/takosumi", triggers: ["published-identity"] }),
+      expect.objectContaining({
+        surface: "takosumi-control-d1-schema-staging",
+        triggers: ["irreversible", "authority"],
+      }),
+      expect.objectContaining({
+        surface: "takosumi-control-d1-schema-production-v66-v69",
+        target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
+        triggers: ["irreversible", "authority"],
+      }),    expect.objectContaining({
+        surface: "takosumi-control-d1-schema-production-v66-v75",
+        target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
+        triggers: ["irreversible", "authority"],
+      }),
+      expect.objectContaining({
+        surface: "takosumi-control-d1-schema-production-v75-v79",
+        target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
+        triggers: ["irreversible", "authority"],
+      }),
+      expect.objectContaining({
+        surface: "takosumi-runner-image",
+        target: "cloudflare-container:takosumi-runner",
+      }),
+      expect.objectContaining({
+        surface: "takosumi-website",
+        target: "cloudflare-pages:takosumi-website",
+      }),
+      expect.objectContaining({
+        surface: "takosumi-contract-package",
+        target: "npm:@takosjp/takosumi-contract",
+      }),
+    ]);
+    const runnerImage = contract.surfaces.find(
+      (entry) => entry.surface === "takosumi-runner-image",
+    );
+    expect(runnerImage?.triggers).toEqual(["authority", "published-identity"]);
+    expect(Object.keys(runnerImage?.obligations ?? {}).sort()).toEqual([
+      "failure-handling",
+      "independent-review",
+      "no-overwrite",
+      "post-conditions",
+      "provenance",
+      "reversal",
+    ]);
 
-  const source = await Bun.file(resolve(root, "scripts/deploy.mjs")).text();
-  expect(source).not.toContain("takosumi-cloud");
-  expect(source).toContain('import("./platform-worker-release.ts")');
-  expect(source).toContain('import("./runner-image-release.ts")');
+    const source = await Bun.file(resolve(root, "scripts/deploy.mjs")).text();
+    expect(source).not.toContain("takosumi-cloud");
+    expect(source).toContain('import("./platform-worker-release.ts")');
+    expect(source).toContain('import("./runner-image-release.ts")');
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 async function schemaDeploy(
