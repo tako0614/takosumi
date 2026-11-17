@@ -2108,17 +2108,76 @@ export async function runPlatformWorkerLoginAdmissionRelease(
   return runPlatformWorkerCodePublication(argv, environment, runtime, true);
 }
 
+type StagingCodeResume = Readonly<{
+  config: string;
+  version: string;
+  tag: string;
+  predecessor: string;
+}>;
+
+function parseStagingCodeResume(args: readonly string[]): StagingCodeResume {
+  const keys = new Set(["--config", "--version", "--tag", "--predecessor"]);
+  const values = new Map<string, string>();
+  for (let index = 0; index < args.length; index += 2) {
+    const key = args[index];
+    const value = args[index + 1];
+    if (!key || !keys.has(key) || values.has(key) || !value || value.startsWith("--")) {
+      throw new Error("platform_worker_code_resume_arguments_invalid");
+    }
+    values.set(key, value);
+  }
+  const config = values.get("--config");
+  const version = values.get("--version");
+  const tag = values.get("--tag");
+  const predecessor = values.get("--predecessor");
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u;
+  if (!config || !version || !uuid.test(version) ||
+    !predecessor || !uuid.test(predecessor) || version === predecessor ||
+    !tag || !/^tks-stg-code-[0-9a-f]{32}$/u.test(tag)) {
+    throw new Error("platform_worker_code_resume_arguments_invalid");
+  }
+  return { config: absolute(config), version, tag, predecessor };
+}
+
+/**
+ * A later recovery runner may execute from a descendant of the source pin,
+ * but it may not change any input to the Worker or dashboard build.
+ */
+function assertStagingCodeResumeSource(configPath: string): string {
+  const pin = readPlatformReleaseSourcePin(configPath);
+  const checkout = platformActionSourceRuntime.checkoutIdentity();
+  if (!sameGitRemote(pin.repository, checkout.repository) ||
+    !isAncestor(pin.commit, checkout.commit)) {
+    throw new Error("platform_worker_code_resume_source_drift");
+  }
+  const toolPaths = new Set([
+    "scripts/deploy.mjs",
+    "scripts/platform-worker-release.ts",
+    "tests/scripts/platform_worker_release_test.ts",
+  ]);
+  const files = [
+    ...git(["--no-replace-objects", "diff", "--no-renames", "--name-only", "-z", pin.commit, "--"]).split("\0"),
+    ...git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
+  ];
+  if (files.some((path) => path && !toolPaths.has(path))) {
+    throw new Error("platform_worker_code_resume_source_drift");
+  }
+  return `${platformReleaseSourceAuthorityDigest(pin)}:${checkout.commit}`;
+}
+
 async function runPlatformWorkerCodePublication(
   argv: readonly string[],
   environment: PlatformEnvironment,
   runtime: PlatformWorkerCodeRuntime,
   addLoginAdmission: boolean,
 ): Promise<void> {
-  if (environment !== "staging" || argv[0] !== "apply") {
+  if (environment !== "staging" ||
+    (argv[0] !== "apply" && (argv[0] !== "resume" || addLoginAdmission))) {
     throw new Error("platform_worker_code_action_invalid");
   }
-  const parsed = parsePlatformWorkerReleaseArgs(["status", ...argv.slice(1)]);
-  if (parsed.action !== "status") {
+  const resume = argv[0] === "resume" ? parseStagingCodeResume(argv.slice(1)) : undefined;
+  const parsed = resume ?? parsePlatformWorkerReleaseArgs(["status", ...argv.slice(1)]);
+  if ("action" in parsed && parsed.action !== "status") {
     throw new Error("platform_worker_code_arguments_invalid");
   }
   const command = runtime.command ?? requiredCommand;
@@ -2135,10 +2194,12 @@ async function runPlatformWorkerCodePublication(
   const predecessorSource = addLoginAdmission
     ? platformLoginAdmissionPredecessorSource(configSource, platformTargetForEnvironment(environment).origin)
     : configSource;
-  (runtime.assertSelectedSource ??
-    ((path) => assertPinnedSourceRoot(readPlatformReleaseSourcePin(path))))(
-    parsed.config,
-  );
+  const assertSource = () => {
+    if (runtime.assertSelectedSource) return runtime.assertSelectedSource(parsed.config);
+    if (resume) return assertStagingCodeResumeSource(parsed.config);
+    return assertPinnedSourceRoot(readPlatformReleaseSourcePin(parsed.config));
+  };
+  const sourceFence = assertSource();
 
   const initialConfig = createPlatformDryRunConfig(
     platformWorkerCodeWithoutMigrations(configSource),
@@ -2174,6 +2235,9 @@ async function runPlatformWorkerCodePublication(
       );
     const baseline = await readAuthority(initialConfig.path, predecessorSource, true);
     predecessorVersionId = baseline.versionId;
+    if (resume && predecessorVersionId !== resume.predecessor) {
+      throw new Error("platform_worker_code_resume_predecessor_changed");
+    }
     assertPlatformContainerComplete(baseline.container, runnerImage);
 
     const dashboard = await (runtime.buildDashboard ??
@@ -2224,45 +2288,50 @@ async function runPlatformWorkerCodePublication(
       throw new Error("platform_worker_code_bundle_digest_drift");
     }
 
-    const immediate = await readAuthority(
-      initialConfig.path,
-      predecessorSource,
-      true,
-    );
-    assertPlatformWorkerCodeAuthorityUnchanged(baseline, immediate, true);
-    assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
-    initialConfig.assertUnchanged();
-    finalConfig.assertUnchanged();
+    const assertPredecessorUnchanged = async () => {
+      const immediate = await readAuthority(initialConfig.path, predecessorSource, true);
+      assertPlatformWorkerCodeAuthorityUnchanged(baseline, immediate, true);
+      if (resume && assertSource() !== sourceFence) {
+        throw new Error("platform_worker_code_resume_source_drift");
+      }
+      assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
+      initialConfig.assertUnchanged();
+      finalConfig!.assertUnchanged();
+    };
 
-    const nonce = (runtime.nonce ?? (() => randomBytes(16).toString("hex")))();
-    if (!/^[0-9a-f]{32}$/u.test(nonce)) {
-      throw new Error("platform_worker_code_nonce_invalid");
+    const releaseMessage = `takosumi-platform-staging-code ${entryDigest}`;
+    let deployedVersionId: string;
+    if (resume) {
+      releaseTag = resume.tag;
+      deployedVersionId = resume.version;
+    } else {
+      await assertPredecessorUnchanged();
+      const nonce = (runtime.nonce ?? (() => randomBytes(16).toString("hex")))();
+      if (!/^[0-9a-f]{32}$/u.test(nonce)) {
+        throw new Error("platform_worker_code_nonce_invalid");
+      }
+      releaseTag = `tks-stg-code-${nonce}`;
+      mutation = "upload";
+      const upload = await command(
+        [
+          WRANGLER,
+          "versions",
+          "upload",
+          finalEntry,
+          "--no-bundle",
+          "--config",
+          finalConfig.path,
+          "--tag",
+          releaseTag,
+          "--message",
+          releaseMessage,
+          "--strict",
+        ],
+        undefined,
+        root,
+      );
+      deployedVersionId = parseUploadedVersion(`${upload.stdout}\n${upload.stderr}`);
     }
-    releaseTag = `tks-stg-code-${nonce}`;
-    const releaseMessage =
-      `takosumi-platform-staging-code ${entryDigest}`;
-    mutation = "upload";
-    const upload = await command(
-      [
-        WRANGLER,
-        "versions",
-        "upload",
-        finalEntry,
-        "--no-bundle",
-        "--config",
-        finalConfig.path,
-        "--tag",
-        releaseTag,
-        "--message",
-        releaseMessage,
-        "--strict",
-      ],
-      undefined,
-      root,
-    );
-    const deployedVersionId = parseUploadedVersion(
-      `${upload.stdout}\n${upload.stderr}`,
-    );
     const uploadedSource = await readPlatformWorkerCodeVersion(
       finalConfig.path,
       deployedVersionId,
@@ -2282,6 +2351,9 @@ async function runPlatformWorkerCodePublication(
       releaseMessage,
     );
     assertPlatformWorkerCodeStableVersion(baseline.version, uploaded);
+    // A pre-existing candidate is read first, then the active predecessor and
+    // all source/config/authority fences are checked again immediately before switching.
+    if (resume) await assertPredecessorUnchanged();
 
     activationConfig = createPlatformWorkerCodeActivationConfig(
       workerName,
@@ -2338,6 +2410,7 @@ async function runPlatformWorkerCodePublication(
         releaseTag,
         entryDigest,
         dashboardDigest: dashboard.digest,
+        ...(resume ? { resumedUpload: true } : {}),
         historicalRollbackOwner: "takosumi-platform-staging",
       })}\n`,
     );
