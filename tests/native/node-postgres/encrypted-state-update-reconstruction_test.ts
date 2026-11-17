@@ -1,7 +1,8 @@
 /**
  * Explicit native cadence: provider-free output changes and same-process fresh
  * PGlite/Core/crypto objects from saved files. This is neither an OS restart,
- * real PostgreSQL, App-bound/genuine identity, nor managed-resource proof.
+ * real PostgreSQL, genuine identity, nor managed-resource proof. Management
+ * ownership comes from the real installer; initial identity/Git remain fixtures.
  */
 import { expect, test } from "bun:test";
 import {
@@ -21,7 +22,6 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { ArtifactReferenceAllocation } from "../../../core/adapters/storage/artifact-references.ts";
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
 import type { RunRootOwnership } from "../../../runner/lib/run_root_ownership.ts";
@@ -119,8 +119,6 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
     await import("../../../accounts/service/src/control-routes.ts");
   const { ACCOUNT_SESSION_COOKIE_NAME } =
     await import("../../../accounts/service/src/account-session.ts");
-  const { genericOpenTofuVariableContractDigest } =
-    await import("../../../accounts/service/src/control/generic-opentofu-variable-contract.ts");
   const { sha256Digest } =
     await import("../../../core/adapters/source/digest.ts");
   const { PartitionedSecretBoundaryCrypto } =
@@ -131,8 +129,6 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
     await import("../../../core/domains/deploy-control/store_sql.ts");
   const { SqlAppOwnershipStore } =
     await import("../../../core/domains/app-ownership/store.ts");
-  const { applyExpectedGuardFromPlanRun } =
-    await import("../../../core/domains/deploy-control/mod.ts");
   const { createTakosumiService } = await import("../../../core/bootstrap.ts");
   const {
     createFileOpenTofuStateArtifactStore,
@@ -147,7 +143,7 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
     await import("../../../runner/lib/run_completion.ts");
   const { acquireRunRootOwnership } =
     await import("../../../runner/lib/run_root_ownership.ts");
-  const { FIXTURE_EXECUTION_EVIDENCE_AUTHORITY, seedCapsuleModel } =
+  const { FIXTURE_EXECUTION_EVIDENCE_AUTHORITY } =
     await import("../../helpers/deploy-control/model_fixture.ts");
   const { PGliteSqlClient } =
     await import("../../helpers/deploy-control/pglite_sql_client.ts");
@@ -159,7 +155,7 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
     new PartitionedSecretBoundaryCrypto({ globalPassphrase: testPassphrase });
   const STATE_CRYPTO = newCrypto();
 
-  test("native provider-free normal update preserves encrypted files and reloads exact SQL snapshot through fresh services", async () => {
+  test("native installed-app management update preserves encrypted files and live access through fresh services", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-v2-core-"));
     const client = await PGliteSqlClient.create();
     let reopenedClient:
@@ -174,7 +170,7 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
       await mkdir(sourceDir, { recursive: true });
       await writeFile(
         join(sourceDir, "main.tf"),
-        'variable "public_url" { type = string }\noutput "launch_url" { value = var.public_url }\n',
+        'variable "public_url" {\n type = string\n default = "https://before.example.test"\n}\noutput "launch_url" { value = var.public_url }\n',
       );
       const tar = spawnSync(
         "tar",
@@ -202,69 +198,32 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
           coreCommitRawOutputRef = args[0].output.rawArtifactRef;
         return await commitRunState(...args);
       };
-      const seeded = await seedCapsuleModel(store, {
-        workspaceId: `workspace_local_v2_${id}`,
-        capsuleId: `capsule_local_v2_${id}`,
-        sourceId: `source_local_v2_${id}`,
-        snapshotId: `snapshot_local_v2_${id}`,
-        installConfigId: `config_local_v2_${id}`,
-        environment: "integration",
-        name: "local-v2-success",
-        installConfig: {
-          modulePath: ".",
-          variableMapping: { public_url: "https://before.example.test" },
-          internal: {
-            reason: "per_install_overrides",
-            genericOpenTofuSourceSnapshotId: `snapshot_local_v2_${id}`,
-            genericOpenTofuVariableContractDigest:
-              await genericOpenTofuVariableContractDigest({
-                declarations: [
-                  { name: "public_url", type: "string", hasDefault: false },
-                ],
-                modulePath: ".",
-              }),
-          },
-        },
-      });
-      // A canonical-looking subject is still a synthetic legacy Workspace owner.
-      // No App-bound or genuine account authority is claimed by this fixture.
+      // The account/session and Git transport are synthetic bootstrap inputs.
+      // Canonical app ownership is produced only by the real install coordinator.
       const subject = "tsub_native_encrypted_state_fixture" as const;
-      await store.putWorkspace({ ...seeded.workspace, ownerUserId: subject });
-      await store.putSourceSnapshot({
-        ...seeded.snapshot,
-        archiveDigest,
-        archiveSizeBytes: archiveBytes.byteLength,
-        repositoryInstallMetadata: { status: "absent" },
-        repositoryManifest: { status: "absent" },
-        repositoryModules: {
-          status: "ready",
-          scopePath: ".",
-          modules: [
-            { path: ".", providerPackages: [], rootProviderRequirements: [] },
-          ],
-        },
-      });
-      const compatibilityReport: CapsuleCompatibilityReport = {
-        id: `compatibility_local_v2_${id}`,
-        sourceId: seeded.source.id,
-        sourceSnapshotId: seeded.snapshot.id,
-        capsuleId: seeded.capsule.id,
-        modulePath: ".",
-        level: "ready",
-        findings: [],
-        providerPackages: [],
-        rootProviderRequirements: [],
-        resources: [],
-        dataSources: [],
-        provisioners: [],
-        createdAt: "2026-10-03T00:00:00.000Z",
-      };
-      await store.putCapsuleCompatibilityReport(compatibilityReport);
-      await store.patchCapsule(seeded.capsule.id, {
-        compatibilityReportId: compatibilityReport.id,
-        compatibilityStatus: compatibilityReport.level,
-        updatedAt: "2026-10-03T00:00:00.000Z",
-      });
+      const member = "tsub_native_encrypted_state_member" as const;
+      const sessionId = crypto.randomUUID();
+      const memberSessionId = crypto.randomUUID();
+      const accounts = new InMemoryAccountsStore();
+      const now = Date.now();
+      for (const [accountSubject, cookie, email] of [
+        [subject, sessionId, "owner@example.test"],
+        [member, memberSessionId, "member@example.test"],
+      ] as const) {
+        accounts.saveAccount({
+          subject: accountSubject,
+          email,
+          emailVerified: true,
+          createdAt: now,
+          updatedAt: now,
+        });
+        accounts.saveAccountSession({
+          sessionId: cookie,
+          subject: accountSubject,
+          createdAt: now,
+          expiresAt: now + 600_000,
+        });
+      }
 
       const profile = createLocalOpenTofuRunnerProfile(1);
       const rawOutputRefs: string[] = [];
@@ -384,6 +343,22 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
       });
       let adapterReturnedRawOutputRef: unknown;
       const routedRunner: OpenTofuRunner = {
+        // No Git network: the real archive bytes above are this fixture's input.
+        sourceSync: async () => ({
+          resolvedCommit: "3".repeat(40),
+          archiveDigest,
+          archiveSizeBytes: archiveBytes.byteLength,
+          repositoryInstallMetadata: { status: "absent" },
+          repositoryManifest: { status: "absent" },
+          repositoryModules: {
+            status: "ready",
+            scopePath: ".",
+            modules: [
+              { path: ".", providerPackages: [], rootProviderRequirements: [] },
+            ],
+          },
+        }),
+        cleanupUnusedSourceArchive: async () => {},
         readCapsuleSourceFiles: (job) =>
           routedHttpRunner.readCapsuleSourceFiles!(job),
         plan: async (job, control) => {
@@ -413,43 +388,159 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
         secretCrypto: STATE_CRYPTO,
       });
 
-      console.log(JSON.stringify({ phase: "actual-variable-compatibility" }));
-      const actualCompatibility =
-        await created.operations.createSourceCompatibilityCheck(
-          seeded.source.id,
-          {
-            sourceSnapshotId: seeded.snapshot.id,
-            modulePath: ".",
-            capsuleId: seeded.capsule.id,
+      function accountRoute(
+        operations: typeof created.operations,
+        cookie = sessionId,
+      ) {
+        return async (
+          method: string,
+          path: string,
+          body?: unknown,
+          key?: string,
+        ) => {
+          const url = new URL(`https://app.example.test${path}`);
+          const response = await handleControlRoute({
+            request: new Request(url, {
+              method,
+              headers: {
+                cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${cookie}`,
+                ...(body === undefined
+                  ? {}
+                  : { "content-type": "application/json" }),
+                ...(key ? { "idempotency-key": key } : {}),
+              },
+              ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+            }),
+            url,
+            store: accounts,
+            operations,
+          });
+          if (!response) throw new Error("fixture_route_not_found");
+          return response;
+        };
+      }
+      const route = accountRoute(created.operations);
+      const appOwnership = created.operations.appOwnership;
+      const appAccess = created.operations.appAccess;
+      if (!appOwnership || !appAccess)
+        throw new Error("canonical app authority unavailable");
+      const workspace = await created.operations.workspaces.createWorkspace({
+        handle: `native-owned-${id.slice(0, 20)}`,
+        displayName: "Native owned app",
+        type: "personal",
+        ownerUserId: subject,
+      });
+      console.log(JSON.stringify({ phase: "normal-installer-ownership" }));
+      const installResponse = await route(
+        "POST",
+        `/api/v1/workspaces/${workspace.id}/install-plans`,
+        {
+          source: {
+            name: "native-output",
+            url: "https://github.com/fixture/native-output.git",
+            ref: "3".repeat(40),
+            path: ".",
           },
+          capsule: {
+            name: "native-encrypted-update",
+            environment: "integration",
+          },
+          options: { modulePath: ".", providerBindings: [] },
+        },
+        "native-owned-initial-install",
+      );
+      if (installResponse.status !== 201) {
+        const rejected = await installResponse.clone().json();
+        console.log(
+          JSON.stringify({
+            phase: "initial-install-rejection",
+            status: installResponse.status,
+            code: rejected.error?.code,
+            reason: rejected.error?.details?.reason,
+          }),
         );
-      expect(actualCompatibility.report.level).toBe("ready");
-      expect(actualCompatibility.report.rootModuleVariables).toContain(
-        "public_url",
-      );
+      }
+      expect(installResponse.status).toBe(201);
+      const installId = (await installResponse.json()).installPlan.id as string;
+      let install: {
+        planRunId?: string;
+        capsuleId?: string;
+        sourceId?: string;
+        sourceSnapshotId?: string;
+      } = {};
+      for (let step = 0; step < 10 && !install.planRunId; step += 1) {
+        const next = await route(
+          "POST",
+          `/api/v1/install-plans/${installId}/reconcile`,
+        );
+        expect(next.status).toBe(200);
+        install = (await next.json()).installPlan;
+      }
+      expect(install.planRunId).toBeString();
+      expect(install.capsuleId).toBeString();
+      const capsule = (await store.getCapsule(install.capsuleId!))!;
+      const source = (await store.getSource(capsule.sourceId))!;
+      const installed = { workspace, capsule, source };
+      expect(await appOwnership.getOwnership(capsule.id)).toMatchObject({
+        capsuleId: capsule.id,
+        ownerAccountId: subject,
+        ownershipEpoch: 0,
+      });
       expect(
-        actualCompatibility.report.rootModuleVariableDeclarations,
-      ).toContainEqual({
-        name: "public_url",
-        type: "string",
-        hasDefault: false,
+        await appAccess.resolveAppAccess(subject, capsule.id),
+      ).toMatchObject({
+        capsuleId: capsule.id,
+        ownerAccountId: subject,
+        role: "owner",
+        ownershipEpoch: 0,
       });
-      console.log(JSON.stringify({ phase: "initial-plan" }));
-      const initialPlan = await created.operations.createCapsulePlan(
-        seeded.capsule.id,
-        { compatibilityReportId: actualCompatibility.report.id },
+      const actualCompatibility = (await store.getCapsuleCompatibilityReport(
+        capsule.compatibilityReportId!,
+      ))!;
+      expect(actualCompatibility.level).toBe("ready");
+      expect(actualCompatibility.rootModuleVariables).toContain("public_url");
+      expect(actualCompatibility.rootModuleVariableDeclarations).toContainEqual(
+        {
+          name: "public_url",
+          type: "string",
+          hasDefault: true,
+        },
       );
+      const initialPlan = {
+        planRun: (await store.getPlanRun(install.planRunId!))!,
+      };
       expect(initialPlan.planRun.planDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
-      if (initialPlan.planRun.status === "waiting_approval")
-        await created.operations.approveRun(initialPlan.planRun.id, {
-          approvedBy: "fixture-operator",
-        });
-      const initialApply = await created.operations.createApplyRun({
-        planRunId: initialPlan.planRun.id,
-        expected: applyExpectedGuardFromPlanRun(initialPlan.planRun),
+      expect(initialPlan.planRun).toMatchObject({
+        createdBy: subject,
+        ownershipEpoch: 0,
       });
-      expect(initialApply.applyRun.status).toBe("succeeded");
-      const before = (await store.getCapsule(seeded.capsule.id))!;
+      if (initialPlan.planRun.status === "waiting_approval") {
+        expect(
+          (
+            await route(
+              "POST",
+              `/api/v1/runs/${initialPlan.planRun.id}/approve`,
+            )
+          ).status,
+        ).toBe(200);
+      }
+      const initialApplyResponse = await route(
+        "POST",
+        `/api/v1/runs/${initialPlan.planRun.id}/apply`,
+      );
+      expect(initialApplyResponse.status).toBe(201);
+      const initialApply = await initialApplyResponse.json();
+      expect(initialApply.run).toMatchObject({
+        status: "succeeded",
+        capsuleId: capsule.id,
+        planRunId: initialPlan.planRun.id,
+      });
+      expect(await store.getApplyRun(initialApply.run.id)).toMatchObject({
+        createdBy: subject,
+        capsuleId: capsule.id,
+        planRunId: initialPlan.planRun.id,
+      });
+      const before = (await store.getCapsule(installed.capsule.id))!;
       const oldState = (await store.getStateVersion(
         before.currentStateVersionId!,
       ))!;
@@ -494,67 +585,22 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
       ).toBe(true);
       const oldPlain = (await stateArtifactStore.read(oldState.stateRef))!;
       expect(oldPlain.stateBytes.byteLength).toBeGreaterThan(0);
-      function accountRoute(operations: typeof created.operations) {
-        const accounts = new InMemoryAccountsStore();
-        const now = Date.now();
-        const sessionId = crypto.randomUUID();
-        accounts.saveAccount({
-          subject,
-          email: "owner@example.test",
-          displayName: "Fixture owner",
-          createdAt: now,
-          updatedAt: now,
-        });
-        accounts.saveAccountSession({
-          sessionId,
-          subject,
-          createdAt: now,
-          expiresAt: now + 600000,
-        });
-        return async (
-          method: string,
-          path: string,
-          body?: unknown,
-          key?: string,
-        ) => {
-          const url = new URL(`https://app.example.test${path}`);
-          const response = await handleControlRoute({
-            request: new Request(url, {
-              method,
-              headers: {
-                cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}`,
-                ...(body === undefined
-                  ? {}
-                  : { "content-type": "application/json" }),
-                ...(key ? { "idempotency-key": key } : {}),
-              },
-              ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-            }),
-            url,
-            store: accounts,
-            operations,
-          });
-          if (!response) throw new Error("fixture_route_not_found");
-          return response;
-        };
-      }
-      const route = accountRoute(created.operations);
       console.log(JSON.stringify({ phase: "normal-configuration-api" }));
       const currentResponse = await route(
         "GET",
-        `/api/v1/capsules/${seeded.capsule.id}`,
+        `/api/v1/capsules/${installed.capsule.id}`,
       );
       expect(currentResponse.status).toBe(200);
       const currentBody = await currentResponse.json();
       const bindingSet =
         await created.operations.capsules.getProviderBindingSetByCapsule(
-          seeded.capsule.id,
-          seeded.capsule.environment,
+          installed.capsule.id,
+          installed.capsule.environment,
         );
       expect(bindingSet).toBeDefined();
       const configured = await route(
         "POST",
-        `/api/v1/capsules/${seeded.capsule.id}/configuration-plans`,
+        `/api/v1/capsules/${installed.capsule.id}/configuration-plans`,
         {
           variablePatch: {
             set: { public_url: "https://after.example.test" },
@@ -604,16 +650,24 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
       expect(nativePlanJson.output_changes.launch_url.after).toBe(
         "https://after.example.test",
       );
-      if (updatePlan.planRun.status === "waiting_approval")
-        await created.operations.approveRun(updatePlan.planRun.id, {
-          approvedBy: "fixture-operator",
-        });
-      // A normal second Apply uses the real HTTP driver/Runner/native provider-free tofu.
-      const updateApply = await created.operations.createApplyRun({
-        planRunId: updatePlan.planRun.id,
-        expected: applyExpectedGuardFromPlanRun(updatePlan.planRun),
+      expect(updatePlan.planRun).toMatchObject({
+        createdBy: subject,
+        ownershipEpoch: 0,
       });
-      expect(updateApply.applyRun.status).toBe("succeeded");
+      if (updatePlan.planRun.status === "waiting_approval") {
+        expect(
+          (await route("POST", `/api/v1/runs/${updatePlan.planRun.id}/approve`))
+            .status,
+        ).toBe(200);
+      }
+      // Explicit management Apply retains the real HTTP driver/Runner/native tofu.
+      const updateApplyResponse = await route(
+        "POST",
+        `/api/v1/runs/${updatePlan.planRun.id}/apply`,
+      );
+      expect(updateApplyResponse.status).toBe(201);
+      const updateApply = await updateApplyResponse.json();
+      expect(updateApply.run.status).toBe("succeeded");
       expect(applyPosts).toBe(2);
       expect(successfulApplyAcksDropped).toBe(1);
       expect(applyCompletionReadsAfterAckLoss).toBe(1);
@@ -628,13 +682,13 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
       expect(mutationObservation.completionReadbackEpoch).toBe(
         mutationObservation.preparationEpoch!,
       );
-      const after = (await store.getCapsule(seeded.capsule.id))!;
+      const after = (await store.getCapsule(installed.capsule.id))!;
       const newState = (await store.getStateVersion(
         after.currentStateVersionId!,
       ))!;
       const newOutput = (await store.getOutput(after.currentOutputId!))!;
       expect(after.currentStateGeneration).toBe(2);
-      expect(newState.createdByRunId).toBe(updateApply.applyRun.id);
+      expect(newState.createdByRunId).toBe(updateApply.run.id);
       expect(newState.id).not.toBe(oldState.id);
       expect(newState.stateRef).not.toBe(oldState.stateRef);
       const newPlain = (await stateArtifactStore.read(newState.stateRef))!;
@@ -648,12 +702,10 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
         JSON.parse(new TextDecoder().decode(newPlain.stateBytes)).outputs
           .launch_url.value,
       ).toBe("https://after.example.test");
-      expect(oldOutput.publicOutputs.launch_url).toBe(
-        "https://before.example.test",
-      );
-      expect(newOutput.publicOutputs.launch_url).toBe(
-        "https://after.example.test",
-      );
+      // The normal generic installer did not declare an output allowlist.
+      // Actual raw/state values change below; they are not implicitly public.
+      expect(oldOutput.publicOutputs).toEqual({});
+      expect(newOutput.publicOutputs).toEqual({});
       expect(rawOutputRefs).toHaveLength(2);
       expect(typeof newOutput.rawArtifactRef).toBe("string");
       expect(newOutput.rawArtifactRef).toBe(rawOutputRefs[1]);
@@ -669,7 +721,7 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
         sensitive: false,
         value: "https://after.example.test",
       });
-      expect(newPlain.createdByRunId).toBe(updateApply.applyRun.id);
+      expect(newPlain.createdByRunId).toBe(updateApply.run.id);
       const priorEnvelope = oldFiles.map((f) => ({
         path: f.path,
         hash: createHash("sha256").update(f.bytes).digest("hex"),
@@ -687,6 +739,19 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
           (f) => !new TextDecoder().decode(f.bytes).includes(testPassphrase),
         ),
       ).toBe(true);
+      const admittedMember = await route(
+        "POST",
+        `/api/v1/capsules/${after.id}/members`,
+        {
+          email: "member@example.test",
+          consent: "connections_and_code",
+        },
+      );
+      expect(admittedMember.status).toBe(202);
+      expect(await appAccess.resolveAppAccess(member, after.id)).toMatchObject({
+        capsuleId: after.id,
+        role: "member",
+      });
       // Only this owned DB artifact persists; no key is written or logged.
       console.log(JSON.stringify({ phase: "sql-snapshot-persist" }));
       const snapshot = await client.snapshotDataDir();
@@ -735,22 +800,37 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
         secretCrypto: freshCrypto,
       });
       const freshRoute = accountRoute(fresh.operations);
+      const freshMemberRoute = accountRoute(fresh.operations, memberSessionId);
+      expect(
+        await fresh.operations.appAccess!.resolveAppAccess(subject, after.id),
+      ).toMatchObject({
+        capsuleId: after.id,
+        ownerAccountId: subject,
+        role: "owner",
+        ownershipEpoch: 0,
+      });
+      expect(
+        await fresh.operations.appAccess!.resolveAppAccess(member, after.id),
+      ).toMatchObject({
+        capsuleId: after.id,
+        role: "member",
+      });
       const recoveredResponse = await freshRoute(
         "GET",
-        `/api/v1/runs/${updateApply.applyRun.id}`,
+        `/api/v1/runs/${updateApply.run.id}`,
       );
       expect(recoveredResponse.status).toBe(200);
       expect((await recoveredResponse.json()).run).toMatchObject({
-        id: updateApply.applyRun.id,
+        id: updateApply.run.id,
         status: "succeeded",
         planRunId: updatePlan.planRun.id,
       });
-      expect((await fresh.operations.getRun(updateApply.applyRun.id)).id).toBe(
-        updateApply.applyRun.id,
+      expect((await fresh.operations.getRun(updateApply.run.id)).id).toBe(
+        updateApply.run.id,
       );
-      expect(
-        (await fresh.operations.getRun(updateApply.applyRun.id)).status,
-      ).toBe("succeeded");
+      expect((await fresh.operations.getRun(updateApply.run.id)).status).toBe(
+        "succeeded",
+      );
       expect(await freshStore.getCapsule(after.id)).toEqual(after);
       expect(await freshStore.getStateVersion(oldState.id)).toEqual(oldState);
       expect(await freshStore.getStateVersion(newState.id)).toEqual(newState);
@@ -762,7 +842,7 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
       expect(recoveredOld.stateBytes).toEqual(oldPlain.stateBytes);
       expect(recoveredNew.stateBytes).toEqual(newPlain.stateBytes);
       expect(recoveredNew.stateDigest).toBe(newState.digest);
-      expect(recoveredNew.createdByRunId).toBe(updateApply.applyRun.id);
+      expect(recoveredNew.createdByRunId).toBe(updateApply.run.id);
       const freshOldRawOutput = await freshFileStore.readRawOutput(
         oldOutput.rawArtifactRef,
       );
@@ -782,6 +862,81 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
       });
       expect(freshOldRawOutput!.outputs).toEqual(oldRawOutput!.outputs);
       expect(freshNewRawOutput!.outputs).toEqual(updatedRawOutput!.outputs);
+      // Both current roles survived SQL reconstruction. A known Run ID grants nothing.
+      expect(
+        (await freshMemberRoute("GET", `/api/v1/runs/${updateApply.run.id}`))
+          .status,
+      ).toBe(200);
+      const runIds = (await fresh.operations.listRuns(workspace.id))
+        .map((run) => run.id)
+        .sort();
+      expect(runIds).toContain(updateApply.run.id);
+      const effectiveConfig = await fresh.operations.capsules.getInstallConfig(
+        after.installConfigId!,
+      );
+      const runnerRequests = routedRequests.length;
+      expect(
+        (
+          await freshRoute(
+            "DELETE",
+            `/api/v1/capsules/${after.id}/members/${member}`,
+          )
+        ).status,
+      ).toBe(204);
+      expect(
+        await fresh.operations.appAccess!.resolveAppAccess(member, after.id),
+      ).toBeUndefined();
+      const deniedConfig = {
+        variablePatch: {
+          set: { public_url: "https://denied.example.test" },
+          remove: [],
+        },
+        providerBindings: [],
+        interfaceBlueprints: [],
+        expected: {
+          authorityGuard: currentBody.installConfigReAdoption.authorityGuard,
+        },
+      };
+      for (const deniedRoute of [freshMemberRoute, freshRoute]) {
+        const status = deniedRoute === freshMemberRoute ? 403 : 401;
+        if (status === 401) await accounts.deleteAccountSession(sessionId);
+        expect(
+          (await deniedRoute("GET", `/api/v1/runs/${updateApply.run.id}`))
+            .status,
+        ).toBe(status);
+        expect(
+          (
+            await deniedRoute(
+              "POST",
+              `/api/v1/runs/${updatePlan.planRun.id}/apply`,
+            )
+          ).status,
+        ).toBe(status);
+        expect(
+          (
+            await deniedRoute(
+              "POST",
+              `/api/v1/capsules/${after.id}/configuration-plans`,
+              deniedConfig,
+              `denied-native-${status}`,
+            )
+          ).status,
+        ).toBe(status);
+        expect(routedRequests).toHaveLength(runnerRequests);
+        expect(applyPosts).toBe(2);
+        expect(await freshStore.getCapsule(after.id)).toEqual(after);
+        expect(
+          await fresh.operations.capsules.getInstallConfig(
+            after.installConfigId!,
+          ),
+        ).toEqual(effectiveConfig);
+        expect(
+          (await fresh.operations.listRuns(workspace.id))
+            .map((run) => run.id)
+            .sort(),
+        ).toEqual(runIds);
+        expect(await fileManifest(stateRoot)).toEqual(filesAfter);
+      }
       const wrongCrypto = new PartitionedSecretBoundaryCrypto({
         globalPassphrase: Buffer.from(
           crypto.getRandomValues(new Uint8Array(48)),
@@ -792,12 +947,22 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
           newState.stateRef,
         ),
       ).rejects.toBeDefined();
-      const newEnvelopeFile = filesAfter.find((f) =>
-        new TextDecoder().decode(f.bytes).includes(newState.stateRef),
-      )!;
+      // Raw-output envelopes also contain stateRef. Select the state purpose,
+      // not whichever serialized artifact happens to contain that substring.
+      const stateEnvelopes = filesAfter.filter((file) => {
+        const envelope = JSON.parse(new TextDecoder().decode(file.bytes));
+        return (
+          envelope.version === 2 &&
+          envelope.stateRef === newState.stateRef &&
+          envelope.createdByRunId === updateApply.run.id
+        );
+      });
+      expect(stateEnvelopes).toHaveLength(1);
+      const newEnvelopeFile = stateEnvelopes[0]!;
       const envelope = JSON.parse(
         new TextDecoder().decode(newEnvelopeFile.bytes),
       );
+      expect(envelope.workspaceId).toBe(workspace.id);
       const changed = { ...envelope, workspaceId: "different-fixture-scope" };
       await writeFile(newEnvelopeFile.path, JSON.stringify(changed), {
         mode: 0o600,
@@ -827,6 +992,10 @@ if (Bun.env.TAKOSUMI_TEST_ENCRYPTED_UPDATE_CHILD !== "1") {
           freshNonemptyRawOutputBothGenerations: true,
           rawOutputRefsLinkedToActualProducer: true,
           sameRunRead: true,
+          actualInstallerOwnershipAndCurrentAppAccess: true,
+          persistedMemberRoleRecheckedAfterReconstruction: true,
+          removedMemberAndRevokedSessionDeniedKnownIds: true,
+          rejectedRequestsPreserveCapsuleConfigRunsAndCiphertext: true,
           secondApplyDispatches: 1,
           recoveryAdditionalApply: 0,
           oldFilesPreserved: true,

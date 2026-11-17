@@ -54,6 +54,13 @@ It binds state/raw-output references and encrypted bytes, saves a data-bearing
 PGlite snapshot, then uses new Core/SQL/file-store/crypto objects and a fresh
 handler to read the same Run and both generations without another Apply. The
 same random test key is deliberately reinjected into a distinct crypto instance;
-no key is written or logged. Legacy Workspace/session and initial source/config
-provenance are fixtures. This proves same-process fresh objects, not OS restart,
+no key is written or logged. A stored synthetic management account-session drives
+initial installation, canonical app ownership, configuration and explicit Apply.
+The current owner/member roles survive SQL reconstruction; removed app members
+and revoked sessions are refused even with known app/Run IDs, without changing
+state files, the effective config or Run IDs. The Memory Accounts store remains
+live while Core is reconstructed; initial accounts/sessions and Git transport
+remain fixtures. App-data OAuth Link/Binding is a separate authority. With no
+public output allowlist declared, this fixture checks nonempty state/raw outputs
+without publishing them. This proves same-process fresh objects, not OS restart,
 crash durability, real PostgreSQL, genuine identity or managed-resource effects.
