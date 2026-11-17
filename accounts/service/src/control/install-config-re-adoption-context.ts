@@ -15,6 +15,10 @@ import type { StoredGitInstallPlan } from "../../../../core/domains/install-plan
 import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
 import type { ControlDispatchContext } from "./shared.ts";
 import {
+  requireAppAccess,
+  requireOwnerForDelegateCodeChange,
+} from "./app-authorization.ts";
+import {
   capsuleInstallConfigReAdoptionAuthoritySnapshot,
   resolveReAdoptionBaseInstallConfig,
   reviewedUserVariablesRecord,
@@ -120,6 +124,28 @@ export async function handleCapsuleReAdoptionInputContext(
     revisionTargetIdentity(finalPlan) !== revisionTargetIdentity(plan)) {
     return refused(ctx, "re_adoption_input_context_stale");
   }
+  const liveAccess = await requireAppAccess({
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    capsule,
+    action: "change_settings",
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
+  if (!liveAccess.ok) return liveAccess.response;
+  const liveOwnerFence = await requireOwnerForDelegateCodeChange({
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    workspaceId: capsule.workspaceId,
+    capsuleIds: [capsule.id],
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
+  if (!liveOwnerFence.ok) return liveOwnerFence.response;
   const context: CapsuleInstallConfigReAdoptionInputContext = {
     capsuleId: capsule.id, revisionPlanId: plan.id, sourceId: source.id,
     sourceSnapshotId: snapshot.id, targetRef: plan.revision!.targetRef,
