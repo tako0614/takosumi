@@ -131,6 +131,19 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     return await this.#getByScope(scope);
   }
 
+  async revisionForPlanRun(capsuleId: string, workspaceId: string, planRunId: string): Promise<StoredGitInstallPlan | undefined> {
+    const result = await this.#db.prepare(
+      `select * from git_install_plans
+        where workspace_id = ?
+          and json_extract(record_json, '$.capsuleId') = ?
+          and json_extract(record_json, '$.operation') = 'revision'
+          and json_extract(record_json, '$.planRunId') = ?
+        limit 2`,
+    ).bind(workspaceId, capsuleId, planRunId).all<GitInstallPlanD1Row>();
+    if (!Array.isArray(result.results)) throw new TypeError("Git revision lookup did not return rows");
+    return result.results.length === 1 ? rowPlan(result.results[0]!) : undefined;
+  }
+
   async preparingCoordinatorForCapsule(
     capsuleId: string,
     workspaceId: string,

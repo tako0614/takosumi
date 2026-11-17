@@ -1,3 +1,4 @@
+import { handleCapsuleReAdoptionInputContext } from "./install-config-re-adoption-context.ts";
 /**
  * Session-authed Capsule (`/api/v1/capsules`)
  * control routes: read/patch/destroy-plan, plan / destroy-plan / drift-check,
@@ -205,8 +206,9 @@ export async function handleCapsules(
     // A refused caller must not append Activity to another Workspace by
     // repeatedly guessing a Capsule ID.
     if (!auth.ok) return auth.response;
-    if (method === "POST" && segments.length === 3 &&
-      (segments[2] === "revision-plans" || segments[2] === "install-config-re-adoptions")) {
+    if (segments.length === 3 && ((method === "POST" &&
+      (segments[2] === "revision-plans" || segments[2] === "install-config-re-adoptions")) ||
+      (method === "GET" && segments[2] === "install-config-re-adoption-context"))) {
       const codeChange = await requireOwnerForDelegateCodeChange({
         operations, store, session: ctx.session, workspaceId: capsule.workspaceId, capsuleIds: [capsule.id],
       });
@@ -387,6 +389,9 @@ export async function handleCapsules(
     if (leaf === "install-config-re-adoptions" && segments.length === 3) {
       return await handleCapsuleInstallConfigReAdoption(ctx, capsule, method);
     }
+    if (leaf === "install-config-re-adoption-context" && segments.length === 3) {
+      return await handleCapsuleReAdoptionInputContext(ctx, capsule, method);
+    }
     if (leaf === "destroy-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       const body = await readJsonObject(request.clone()).catch(() => null);
@@ -484,6 +489,7 @@ async function capsuleRouteAppAction(
   method: string,
 ): Promise<AppAction> {
   const leaf = segments.length === 2 ? undefined : segments[2];
+  if (leaf === "install-config-re-adoption-context" && segments.length === 3) return "change_settings";
   if (method === "GET" || method === "HEAD") return "view";
   if (leaf === "configuration-plans" && segments.length === 3) {
     // A configuration plan that selects provider connections is the

@@ -977,7 +977,7 @@ function isAdoptedRevision(
 }
 
 /** Ref names compare exactly; full commit ids compare without case. */
-function sameGitName(left: string, right: string): boolean {
+export function sameGitName(left: string, right: string): boolean {
   return (
     left === right ||
     (IMMUTABLE_COMMIT.test(left) &&

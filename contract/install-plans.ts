@@ -403,6 +403,47 @@ export interface GitInstallPlanVariablePresentation {
   readonly derivedDefault?: "capsule_name" | "workspace_scoped_capsule_name";
 }
 
+/** Read-only value state for a declared public user input; never infer a missing value. */
+export type CapsuleReAdoptionCurrentUserValue =
+  | { readonly status: "present"; readonly value: JsonValue }
+  | { readonly status: "unset" }
+  | { readonly status: "unavailable" };
+
+/** Closed, non-secret user-input projection from one immutable revision target. */
+export interface CapsuleReAdoptionInputVariable extends GitInstallPlanVariablePresentation {
+  readonly type: "string" | "number" | "boolean" | "json";
+  readonly sensitive: false;
+  readonly userEditable: true;
+  readonly currentValue: CapsuleReAdoptionCurrentUserValue;
+}
+
+/**
+ * Reading this context performs no preparation or mutation. The guard is the
+ * existing current-Capsule re-adoption guard, not authority minted by the target.
+ * Explicit reviewedUserVariables remain a complete replacement set.
+ */
+export interface CapsuleInstallConfigReAdoptionInputContext {
+  readonly capsuleId: string;
+  readonly revisionPlanId: string;
+  readonly sourceId: string;
+  readonly sourceSnapshotId: string;
+  readonly targetRef: string;
+  readonly resolvedCommit: string;
+  readonly modulePath: string;
+  readonly currentInstallConfigId: string;
+  readonly currentStateGeneration: number;
+  readonly currentStateVersionId?: string;
+  readonly authorityGuard: string;
+  /** Actual service-owned generic policy reference, never its private contents. */
+  readonly baseInstallConfigId: string;
+  readonly variables: readonly CapsuleReAdoptionInputVariable[];
+  readonly blockedReason?: "secret_inputs" | "unsupported_inputs" | "host_policy_conflict";
+}
+
+export interface CapsuleInstallConfigReAdoptionInputContextResponse {
+  readonly installConfigReAdoptionContext: CapsuleInstallConfigReAdoptionInputContext;
+}
+
 export interface GitInstallPlanNameProposal {
   /** The app name the attempt will create. */
   readonly current: string;

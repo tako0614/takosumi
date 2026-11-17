@@ -825,6 +825,8 @@ export interface CapsuleAppScreen {
 
 export interface CapsuleAppRunSummary {
   readonly id: string;
+  /** Exact current failed revision Plan's saved coordinator; never a stalled-progress id. */
+  readonly revisionPlanId?: string;
   readonly type: RunType;
   readonly status: RunStatus;
   readonly createdAt: string;
