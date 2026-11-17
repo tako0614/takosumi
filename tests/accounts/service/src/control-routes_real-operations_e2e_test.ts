@@ -4152,7 +4152,7 @@ test("repository preflight resolves the sole indexed module before exact compati
   });
   expect(derivedInstallConfig.store).toMatchObject({
     provider: "Repository",
-    suggestedName: "repo-default",
+    suggestedName: "repository-default",
     name: { ja: "リポジトリ名", en: "Repository name" },
     description: { ja: "リポジトリの説明", en: "Repository description" },
     source: { url: seeded.source.url },
