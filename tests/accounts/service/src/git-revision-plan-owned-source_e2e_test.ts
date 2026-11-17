@@ -27,6 +27,7 @@ import {
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { retryPlanForRun, type RetryPlanApi } from "../../../../dashboard/src/lib/run-retry.ts";
 
 setDefaultTimeout(180_000);
 
@@ -97,9 +98,13 @@ async function compose(backend: Backend, runner: OpenTofuRunner): Promise<{
   return { deployStore, operations };
 }
 
-async function ownedAppFixture(kind: Backend, installRef: string, options: { readonly sourceText?: string } = {}) {
+async function ownedAppFixture(
+  kind: Backend,
+  installRef: string,
+  options: { readonly sourceText?: string; readonly initialApplyFails?: boolean } = {},
+) {
   const branchHeads = new Map<string, string>([["main", MAIN_HEAD]]);
-  let applyFails = false;
+  let applyFails = options.initialApplyFails ?? false;
   const syncedRefs: string[] = [];
   const planJobs: Parameters<OpenTofuRunner["plan"]>[0][] = [];
   const applyJobs: Parameters<OpenTofuRunner["apply"]>[0][] = [];
@@ -253,11 +258,14 @@ async function ownedAppFixture(kind: Backend, installRef: string, options: { rea
     installPlan = (await advanced.json()).installPlan;
   }
   expect(installPlan.planRunId).toBeString();
-  await applyPlanRun(installPlan.planRunId!);
+  const initialApply = await applyPlanRun(installPlan.planRunId!);
   const capsuleId = installPlan.capsuleId!;
   const sourceId = installPlan.sourceId!;
   const capsule = await deployStore.getCapsule(capsuleId);
-  expect(capsule).toMatchObject({ status: "active", currentStateGeneration: 1 });
+  expect(capsule).toMatchObject({
+    status: options.initialApplyFails ? "error" : "active",
+    currentStateGeneration: 1,
+  });
   expect((await appOwnership.getOwnership(capsuleId))?.ownerAccountId).toBe(OWNER);
   expect(await deployStore.getSource(sourceId)).toMatchObject({
     ownerCapsuleId: capsuleId,
@@ -283,6 +291,8 @@ async function ownedAppFixture(kind: Backend, installRef: string, options: { rea
     workspace,
     capsuleId,
     sourceId,
+    initialApply,
+    initialPlanRunId: installPlan.planRunId!,
     syncedRefs,
     branchHeads,
     route,
@@ -313,6 +323,112 @@ async function ownedAppFixture(kind: Backend, installRef: string, options: { rea
     },
   };
 }
+
+test("[memory] Review again after an initial persisted Apply failure reviews the same snapshot and partial state before an explicit Apply", async () => {
+  const fixture = await ownedAppFixture("memory", PINNED, { initialApplyFails: true });
+  const failed = fixture.initialApply.run;
+  const originalPlan = await fixture.deployStore.getPlanRun(fixture.initialPlanRunId);
+  const failedLedger = await fixture.deployStore.getApplyRun(failed.id);
+  const partial = await fixture.deployStore.getStateVersion(failedLedger!.stateVersionId!);
+  expect(failed).toMatchObject({ type: "apply", status: "failed" });
+  expect(failed.outputId).toBeUndefined();
+  expect(partial).toMatchObject({
+    capsuleId: fixture.capsuleId,
+    generation: 1,
+    digest: STATE_DIGEST,
+    createdByRunId: failed.id,
+  });
+  expect(originalPlan).toMatchObject({ baseStateGeneration: 0, appliedApplyRunId: failed.id });
+  expect(failedLedger!.outputId).toBeUndefined();
+  const sourceBefore = await fixture.deployStore.getSource(fixture.sourceId);
+  const bindingsBefore = await fixture.deployStore.getProviderBindingSetByCapsule(fixture.capsuleId, "production");
+  expect(bindingsBefore).toBeDefined();
+  const syncsBefore = await fixture.sourceSyncRuns();
+
+  // Use the same owner-authenticated HTTP reads and rollback action as the
+  // dashboard. Other retry routes are mistakes for this first partial state.
+  const calls: string[] = [];
+  const unexpected = async () => { throw new Error("partial initial Apply must review its current StateVersion"); };
+  const api: RetryPlanApi = {
+    getRun: async (id) => {
+      calls.push(`read ${id}`);
+      const response = await fixture.route("GET", `/api/v1/runs/${id}`);
+      expect(response.status).toBe(200);
+      return (await response.json()).run;
+    },
+    planRollback: async (stateVersionId) => {
+      calls.push(`rollback ${stateVersionId}`);
+      const response = await fixture.route("POST", `/api/v1/state-versions/${stateVersionId}/rollback-plan`);
+      expect(response.status).toBe(201);
+      return await response.json();
+    },
+    destroyPlanCapsule: unexpected,
+    planCapsule: unexpected,
+    planRevision: unexpected,
+    planTracked: unexpected,
+  };
+  const freshCapsule = await fixture.route("GET", `/api/v1/capsules/${fixture.capsuleId}`);
+  expect(freshCapsule.status).toBe(200);
+  const capsule = (await freshCapsule.json()).capsule;
+  expect(capsule).toMatchObject({ status: "error", currentStateGeneration: 1, currentStateVersionId: partial!.id });
+  expect(capsule.currentOutputId).toBeUndefined();
+  const retryPlanId = await retryPlanForRun(await api.getRun(failed.id), capsule, api);
+  expect(calls).toEqual([`read ${failed.id}`, `read ${originalPlan!.id}`, `rollback ${partial!.id}`]);
+  expect(retryPlanId).toBeString();
+  expect(retryPlanId).not.toBe(originalPlan!.id);
+  const retryPlan = await fixture.deployStore.getPlanRun(retryPlanId!);
+  expect(retryPlan).toMatchObject({
+    capsuleId: fixture.capsuleId,
+    status: "succeeded",
+    baseStateGeneration: 1,
+    sourceSnapshotId: originalPlan!.sourceSnapshotId,
+    capsuleCurrentStateVersionId: partial!.id,
+    origin: { kind: "rollback", stateVersionId: partial!.id },
+  });
+  expect(retryPlan!.appliedApplyRunId).toBeUndefined();
+  expect(fixture.planJobs).toHaveLength(2);
+  expect(fixture.planJobs[0]!.stateScope?.priorState).toBeUndefined();
+  expect(fixture.planJobs[1]!.stateScope?.priorState).toEqual({
+    generation: 1,
+    stateRef: partial!.stateRef,
+    digest: partial!.digest,
+    createdByRunId: failed.id,
+  });
+  expect(fixture.planJobs[0]!.sourceArchive).toBeDefined();
+  expect(fixture.planJobs[1]!.sourceArchive).toEqual(fixture.planJobs[0]!.sourceArchive);
+  expect(retryPlan!.resolvedProviderBindingsDigest).toBe(originalPlan!.resolvedProviderBindingsDigest);
+  expect(fixture.applyJobs).toHaveLength(1);
+  expect(await fixture.deployStore.getApplyRun(failed.id)).toEqual(failedLedger);
+  expect(await fixture.deployStore.getPlanRun(originalPlan!.id)).toEqual(originalPlan);
+  expect(await fixture.deployStore.getSource(fixture.sourceId)).toEqual(sourceBefore);
+  expect(await fixture.deployStore.getProviderBindingSetByCapsule(fixture.capsuleId, "production")).toEqual(bindingsBefore);
+  expect(await fixture.sourceSyncRuns()).toEqual(syncsBefore);
+  expect((await fixture.appOwnership.getOwnership(fixture.capsuleId))?.ownerAccountId).toBe(OWNER);
+
+  // Reviewing never dispatches Apply. The owner makes a separate explicit
+  // Apply of the new Plan; the failed Plan and its partial state stay intact.
+  fixture.setApplyFails(false);
+  const repaired = await fixture.applyPlanRun(retryPlanId!);
+  const repairedLedger = await fixture.deployStore.getApplyRun(repaired.run.id);
+  expect(repaired.run).toMatchObject({ status: "succeeded", planRunId: retryPlanId });
+  expect(fixture.applyJobs).toHaveLength(2);
+  expect(await fixture.deployStore.getCapsule(fixture.capsuleId)).toMatchObject({
+    id: fixture.capsuleId,
+    status: "active",
+    currentStateGeneration: 2,
+    currentStateVersionId: repairedLedger!.stateVersionId,
+  });
+  expect(await fixture.deployStore.getStateVersion(repairedLedger!.stateVersionId!)).toMatchObject({
+    capsuleId: fixture.capsuleId,
+    generation: 2,
+    createdByRunId: repaired.run.id,
+  });
+  expect(await fixture.deployStore.getStateVersion(partial!.id)).toEqual(partial);
+  expect(await fixture.deployStore.getApplyRun(failed.id)).toEqual(failedLedger);
+  expect(await fixture.deployStore.getPlanRun(originalPlan!.id)).toEqual(originalPlan);
+  expect(await fixture.deployStore.getSource(fixture.sourceId)).toEqual(sourceBefore);
+  expect(await fixture.deployStore.getProviderBindingSetByCapsule(fixture.capsuleId, "production")).toEqual(bindingsBefore);
+});
 
 for (const kind of BACKENDS) {
   test(`[${kind}] a version check the previous release left claimed in syncing_source ends in one reconcile`, async () => {
