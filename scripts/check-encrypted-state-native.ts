@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 
 export const ENCRYPTED_STATE_NATIVE_TEST =
-  "./tests/native/node-postgres/encrypted-state-update-reconstruction.test.ts";
+  "./tests/native/node-postgres/encrypted-state-update-reconstruction_test.ts";
 
 export function encryptedStateNativeCommand(input: {
   readonly bun: string;

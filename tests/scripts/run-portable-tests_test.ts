@@ -47,7 +47,7 @@ test("encrypted state native entry selects its exact separate subgroup", async (
   });
   expect(command).toEqual([process.execPath, "--no-env-file", "test", ENCRYPTED_STATE_NATIVE_TEST]);
   expect(ENCRYPTED_STATE_NATIVE_TEST)
-    .toBe("./tests/native/node-postgres/encrypted-state-update-reconstruction.test.ts");
+    .toBe("./tests/native/node-postgres/encrypted-state-update-reconstruction_test.ts");
   const packageJson = JSON.parse(await readFile(resolve(import.meta.dir, "../../package.json"), "utf8"));
   expect(packageJson.scripts["test:encrypted-state-native"])
     .toBe("bun scripts/check-encrypted-state-native.ts");
