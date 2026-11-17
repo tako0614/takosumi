@@ -519,10 +519,18 @@ function AppInstallPage(props: { readonly principalId: string }) {
                   <details class="iv-choice iv-version-choice" data-testid="install-source-fields">
                     <summary>
                       <span>{t("installStore.versionLabel")}</span>
-                      <strong>{ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong>
+                      <strong>{ref() === "HEAD" && fromStore() ? t("installStore.developmentPreview") : ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong>
                       <ChevronDown size={16} aria-hidden="true" />
                     </summary>
                     <div class="iv-choice-content">
+                      <Show when={fromStore()}>
+                        <div class="iv-action-row" role="group" aria-label={t("installStore.versionLabel")}>
+                          <Button type="button" size="sm" variant={ref().trim() ? "ghost" : "secondary"} aria-pressed={!ref().trim()}
+                            onClick={() => setRef("")}>{t("installStore.latest")}</Button>
+                          <Button type="button" size="sm" variant={ref() === "HEAD" ? "secondary" : "ghost"} aria-pressed={ref() === "HEAD"}
+                            onClick={() => setRef("HEAD")}>{t("installStore.developmentPreview")}</Button>
+                        </div>
+                      </Show>
                       <FormField
                         label={t("installStore.sourceRef")}
                         hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
