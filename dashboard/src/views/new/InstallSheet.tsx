@@ -661,7 +661,6 @@ export function InstallScreen(props: {
 
   const VariableField = (fieldProps: { readonly variable: GitInstallPlanVariablePresentation }) => {
     const variable = () => fieldProps.variable;
-    const [editingUrlName, setEditingUrlName] = createSignal(false);
     const fieldLocked = () => locked() || variable().userEditable === false;
     const standardUrl = () => {
       const draft = attempt().drafts()[variable().name];
@@ -712,12 +711,6 @@ export function InstallScreen(props: {
         >
           <Match when={isCloudflarePublicUrl(variable())}>
             <div class="iv-public-url" data-testid="install-public-url">
-              <div class="iv-public-url-modes" role="group" aria-label={localizedText(variable().label, variable().name)}>
-                <Button size="sm" variant="secondary" aria-pressed={standardUrl()} disabled={fieldLocked() || resubmitting()}
-                  onClick={() => attempt().useStandardPublicUrl(variable().name)}>{t("installStore.standardUrl")}</Button>
-                <Button size="sm" variant="secondary" aria-pressed={!standardUrl()} disabled={fieldLocked() || resubmitting()}
-                  onClick={() => { if (standardUrl()) type(suggestedUrl() ?? ""); }}>{t("installStore.customUrl")}</Button>
-              </div>
               <Show when={standardUrl()} fallback={
                 <Input type="url" aria-label={localizedText(variable().label, variable().name)} autocomplete="off" value={draftText(variable())} placeholder={variable().placeholder}
                   spellcheck={false} disabled={fieldLocked()} data-variable-name={variable().name}
@@ -730,19 +723,16 @@ export function InstallScreen(props: {
                       onClick={() => void attempt().loadConnectionSettings()}>{t("common.retry")}</Button>
                   </div>
                 }>{(url) => <output class="iv-public-url-value" data-variable-name={variable().name}>{url()}</output>}</Show>
-                <Show when={!resubmitting()}>
-                  <Button size="sm" variant="ghost" disabled={fieldLocked()} aria-expanded={editingUrlName()}
-                    onClick={() => setEditingUrlName((value) => !value)}>{t("installStore.urlName")}</Button>
-                  <Show when={editingUrlName()}>
-                    <Input value={nameText()} aria-label={t("installStore.name")} spellcheck={false} autocomplete="off"
-                      disabled={fieldLocked()} data-testid="install-public-url-name"
-                      onInput={(event) => attempt().setNameDraft(event.currentTarget.value)}
-                      onBlur={() => void attempt().saveName()}
-                      onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void attempt().saveName(); } }} />
-                    <Show when={nameError()}>{(message) => <p class="iv-field-error" role="alert">{message()}</p>}</Show>
-                  </Show>
-                </Show>
               </Show>
+              <details class="iv-public-url-options" data-testid="install-public-url-options">
+                <summary>{t("installStore.changePublicUrl")}</summary>
+                <div class="iv-public-url-modes" role="group" aria-label={localizedText(variable().label, variable().name)}>
+                  <Button size="sm" variant="secondary" aria-pressed={standardUrl()} disabled={fieldLocked() || resubmitting()}
+                    onClick={() => attempt().useStandardPublicUrl(variable().name)}>{t("installStore.standardUrl")}</Button>
+                  <Button size="sm" variant="secondary" aria-pressed={!standardUrl()} disabled={fieldLocked() || resubmitting()}
+                    onClick={() => { if (standardUrl()) type(suggestedUrl() ?? ""); }}>{t("installStore.customUrl")}</Button>
+                </div>
+              </details>
             </div>
           </Match>
           {/* A yes/no setting is a choice even when it is write-only: the
@@ -867,42 +857,6 @@ export function InstallScreen(props: {
       </div>
       <ScreenError attempt={props.attempt} />
 
-      <div class="iv-choices" data-testid="install-basics" role="group" aria-label={t("installStore.basicsTitle")}>
-        <details class="iv-choice iv-version-choice" data-testid="install-version-choice">
-          <summary><span>{t("installStore.versionLabel")}</span><strong>{versionText() ? versionLabel(versionText()) ?? t("installStore.defaultBranch") : t(props.fromStore ? "installStore.latest" : "installStore.defaultBranch")}</strong><ChevronDown size={16} aria-hidden="true" /></summary>
-          <div class="iv-choice-content">
-          <FormField
-            label={t("installStore.sourceRef")}
-            hint={props.fromStore ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
-          >
-            <Input
-              value={versionText()}
-              placeholder={props.fromStore ? t("installStore.sourceRefStable") : undefined}
-              spellcheck={false}
-              disabled={resubmitting() || !plan() || locked()}
-              data-testid="install-version"
-              onInput={(event) => attempt().setVersionDraft(event.currentTarget.value)}
-              onBlur={() => attempt().commitVersion()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  attempt().commitVersion();
-                }
-              }}
-            />
-          </FormField>
-          </div>
-        </details>
-        <div class="iv-configuration-summary" data-testid="install-configuration-choice">
-          <span>{t("installStore.configuration")}</span>
-          <span class="iv-choice-selection">
-            <strong data-testid="install-selected-configuration">{configurationLabel()}</strong>
-            <Show when={!moduleAction() && explicitlySelected() && modulePath() && modulePath() !== "."}>
-              <span class="iv-choice-context">{modulePath()}</span>
-            </Show>
-          </span>
-        </div>
-      </div>
       <div class="iv-configuration-content" id="iv-configuration-editor">
           <Show when={resubmitting()}>
             <aside class="iv-setup-note" role="status" data-testid="install-resubmit">
@@ -978,6 +932,42 @@ export function InstallScreen(props: {
             return nameError() || proposedName() || (check && !check.ok && check.invalid.some((name) => optionalNames().includes(name)));
           })}>
             <summary>{t("installStore.optionalSettings")}</summary>
+              <div class="iv-choices" data-testid="install-basics" role="group" aria-label={t("installStore.basicsTitle")}>
+                <details class="iv-choice iv-version-choice" data-testid="install-version-choice">
+                  <summary><span>{t("installStore.versionLabel")}</span><strong>{versionText() ? versionLabel(versionText()) ?? t("installStore.defaultBranch") : t(props.fromStore ? "installStore.latest" : "installStore.defaultBranch")}</strong><ChevronDown size={16} aria-hidden="true" /></summary>
+                  <div class="iv-choice-content">
+                  <FormField
+                    label={t("installStore.sourceRef")}
+                    hint={props.fromStore ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
+                  >
+                    <Input
+                      value={versionText()}
+                      placeholder={props.fromStore ? t("installStore.sourceRefStable") : undefined}
+                      spellcheck={false}
+                      disabled={resubmitting() || !plan() || locked()}
+                      data-testid="install-version"
+                      onInput={(event) => attempt().setVersionDraft(event.currentTarget.value)}
+                      onBlur={() => attempt().commitVersion()}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          attempt().commitVersion();
+                        }
+                      }}
+                    />
+                  </FormField>
+                  </div>
+                </details>
+                <div class="iv-configuration-summary" data-testid="install-configuration-choice">
+                  <span>{t("installStore.configuration")}</span>
+                  <span class="iv-choice-selection">
+                    <strong data-testid="install-selected-configuration">{configurationLabel()}</strong>
+                    <Show when={!moduleAction() && explicitlySelected() && modulePath() && modulePath() !== "."}>
+                      <span class="iv-choice-context">{modulePath()}</span>
+                    </Show>
+                  </span>
+                </div>
+              </div>
             <section data-testid="install-name-settings">
               <FormField label={t("installStore.name")} hint={t("installStore.nameHint")} error={nameError()} required>
                 <Input

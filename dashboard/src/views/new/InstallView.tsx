@@ -375,7 +375,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   const title = () => {
     const selected = listed();
     const text = selected?.name?.[locale()]?.trim() || selected?.suggestedName;
-    return text || plan()?.capsule.name || prefill()?.name || (gitUrl() ? capsuleNameFromUrl(gitUrl()) : "");
+    return text || prefill()?.name || (gitUrl() ? capsuleNameFromUrl(gitUrl()) : "");
   };
   const description = () => {
     const text = listed()?.description?.[locale()]?.trim();
@@ -515,36 +515,6 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
                     <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
                   </Show>
-                  <div class="iv-choices">
-                  <details class="iv-choice iv-version-choice" data-testid="install-source-fields">
-                    <summary>
-                      <span>{t("installStore.versionLabel")}</span>
-                      <strong>{ref() === "HEAD" && fromStore() ? t("installStore.developmentPreview") : ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong>
-                      <ChevronDown size={16} aria-hidden="true" />
-                    </summary>
-                    <div class="iv-choice-content">
-                      <Show when={fromStore()}>
-                        <div class="iv-action-row" role="group" aria-label={t("installStore.versionLabel")}>
-                          <Button type="button" size="sm" variant={ref().trim() ? "ghost" : "secondary"} aria-pressed={!ref().trim()}
-                            onClick={() => setRef("")}>{t("installStore.latest")}</Button>
-                          <Button type="button" size="sm" variant={ref() === "HEAD" ? "secondary" : "ghost"} aria-pressed={ref() === "HEAD"}
-                            onClick={() => setRef("HEAD")}>{t("installStore.developmentPreview")}</Button>
-                        </div>
-                      </Show>
-                      <FormField
-                        label={t("installStore.sourceRef")}
-                        hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
-                      >
-                        <Input
-                          value={ref()}
-                          placeholder={fromStore() ? t("installStore.sourceRefStable") : undefined}
-                          spellcheck={false}
-                          onInput={(event) => setRef(event.currentTarget.value)}
-                        />
-                      </FormField>
-                    </div>
-                  </details>
-                  </div>
                   <Show when={sourceConnections().length > 0}>
                     <FormField label={t("installStore.sourceAuth")}>
                       <Select value={sourceAuth()} onChange={(event) => setSourceAuth(event.currentTarget.value)}>
@@ -573,6 +543,34 @@ function AppInstallPage(props: { readonly principalId: string }) {
                       <p class="iv-start-hint">{t("installStore.installAnotherHint")}</p>
                     </Show>
                   </div>
+                  <details class="iv-disclosure iv-choice iv-version-choice iv-start-version" data-testid="install-source-fields">
+                    <summary>
+                      <span>{t("installStore.versionLabel")}</span>
+                      <strong>{ref() === "HEAD" && fromStore() ? t("installStore.developmentPreview") : ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong>
+                      <ChevronDown size={16} aria-hidden="true" />
+                    </summary>
+                    <div class="iv-choice-content">
+                      <Show when={fromStore()}>
+                        <div class="iv-action-row" role="group" aria-label={t("installStore.versionLabel")}>
+                          <Button type="button" size="sm" variant={ref().trim() ? "ghost" : "secondary"} aria-pressed={!ref().trim()}
+                            onClick={() => setRef("")}>{t("installStore.latest")}</Button>
+                          <Button type="button" size="sm" variant={ref() === "HEAD" ? "secondary" : "ghost"} aria-pressed={ref() === "HEAD"}
+                            onClick={() => setRef("HEAD")}>{t("installStore.developmentPreview")}</Button>
+                        </div>
+                      </Show>
+                      <FormField
+                        label={t("installStore.sourceRef")}
+                        hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
+                      >
+                        <Input
+                          value={ref()}
+                          placeholder={fromStore() ? t("installStore.sourceRefStable") : undefined}
+                          spellcheck={false}
+                          onInput={(event) => setRef(event.currentTarget.value)}
+                        />
+                      </FormField>
+                    </div>
+                  </details>
                 </form>
               </section>
             </Match>

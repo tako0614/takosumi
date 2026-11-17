@@ -144,7 +144,7 @@ export function registerInstallPublicUrlCases(mode: DashboardE2EMode): void {
   test.describe("Cloudflare public URL suggestion", () => {
     test.skip(mode !== "portable", "deterministic local install-plan fixture only");
 
-    test("follows the app name in standard mode and keeps a custom URL on mobile", async ({ page }, info) => {
+    test("shows the standard URL without editors and preserves a custom URL after a deployment name change", async ({ page }, info) => {
       const fixture = await publicUrlFixture(page, { marker: true });
       const traffic = monitorDashboardTraffic(page, mode);
       await page.setViewportSize({ width: 390, height: 844 });
@@ -153,32 +153,35 @@ export function registerInstallPublicUrlCases(mode: DashboardE2EMode): void {
       const standard = url.getByRole("button", { name: "Standard URL", exact: true });
       const custom = url.getByRole("button", { name: "Custom URL", exact: true });
       const output = url.locator(`output[data-variable-name="${urlVariable}"]`);
-      await expect(standard).toHaveAttribute("aria-pressed", "true");
       await expect(output).toHaveText(standardUrl(originalName));
+      const appTitle = page.getByRole("heading", { level: 1 });
+      await expect(appTitle).toHaveText("public-url-fixture");
       expect(fixture.mutations).toEqual([]);
       expect(fixture.metadataReads).toContain(connectionA.id);
 
-      const changeName = url.getByRole("button", { name: "Change name", exact: true });
-      await changeName.press("Enter");
-      await expect(changeName).toHaveAttribute("aria-expanded", "true");
-      const inlineName = url.getByTestId("install-public-url-name");
-      await changeName.press("Tab");
-      await expect(inlineName).toBeFocused();
-      await inlineName.fill("renamed-app");
-      await inlineName.press("Enter");
+      const nameSettings = page.getByTestId("install-customization");
+      const summary = nameSettings.locator(":scope > summary");
+      const appName = nameSettings.getByTestId("install-app-name");
+      await expect(appName).not.toBeVisible();
+      await expect(custom).not.toBeVisible();
+      await summary.press("Enter");
+      await appName.fill("renamed-app");
+      await appName.press("Enter");
+      await summary.press("Enter");
       await expect(output).toHaveText(standardUrl("renamed-app"));
+      await expect(appTitle).toHaveText("public-url-fixture");
       expect(fixture.continues()).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
       await page.screenshot({ path: info.outputPath("standard-url-mobile.png"), fullPage: true, animations: "disabled" });
 
+      await url.getByTestId("install-public-url-options").locator(":scope > summary").press("Enter");
+      await expect(standard).toHaveAttribute("aria-pressed", "true");
       await custom.press("Enter");
       await expect(custom).toHaveAttribute("aria-pressed", "true");
       const customInput = url.locator(`input[data-variable-name="${urlVariable}"]`);
       await customInput.fill(customUrl);
       await customInput.press("Enter");
-      const nameSettings = page.getByTestId("install-customization");
-      await nameSettings.locator(":scope > summary").press("Enter");
-      const appName = nameSettings.getByTestId("install-app-name");
+      await summary.press("Enter");
       await appName.fill("renamed-again");
       await appName.press("Enter");
       await expect.poll(() => fixture.attempts.latest()?.capsule.name).toBe("renamed-again");
@@ -220,6 +223,7 @@ export function registerInstallPublicUrlCases(mode: DashboardE2EMode): void {
 
         fixture.finishConnectionReadB();
         await expect(url.getByRole("status")).toContainText("No standard URL confirmed");
+        await url.getByTestId("install-public-url-options").locator(":scope > summary").press("Enter");
         await url.getByRole("button", { name: "Custom URL", exact: true }).press("Enter");
         const input = url.locator(`input[data-variable-name="${urlVariable}"]`);
         await expect(input).toHaveValue("");

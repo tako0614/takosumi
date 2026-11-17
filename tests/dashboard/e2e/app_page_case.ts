@@ -393,7 +393,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === `/api/v1/capsules/${CAPSULE_ID}/app`) {
           const screen = (id: string, title: string, url: string) => ({ interfaceId: `if_${id}`, name: `app.${id}`, title, url });
-          return route.fulfill({ json: { app: appView(CAPSULE_ID, PORTABLE_EXPECTATIONS.appName, {
+          return route.fulfill({ json: { app: appView(CAPSULE_ID, "internal-office-deployment", {
+            displayName: { ja: PORTABLE_EXPECTATIONS.appName, en: PORTABLE_EXPECTATIONS.appName },
             screens: multipleSurfaces
               // The server returns every screen in its declared order.
               ? [screen("control", "Control panel", "https://apps.example.test/control"), screen("documentation", "Documentation", "https://apps.example.test/documentation")]

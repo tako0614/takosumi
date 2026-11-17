@@ -1133,7 +1133,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByTestId("install-source-fields").locator("input")).not.toBeVisible();
     await prepareInlineFixture(page);
     const sheet = page.getByTestId("install-configuration");
-    await expect(sheet.getByTestId("install-version-choice").locator(":scope > summary")).toContainText("Latest");
+    await expect(sheet.getByTestId("install-version-choice")).not.toBeVisible();
     const connectionDetails = sheet.getByTestId("install-connections");
     await expect(connectionDetails).toBeVisible();
     await expect(page.getByRole("dialog")).toHaveCount(0);
