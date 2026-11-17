@@ -350,7 +350,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 114 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
+次の 115 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
 
 ### アプリの所有と個人の接続・使用量
 
@@ -562,6 +562,7 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | GET      | `/api/v1/projects/{projectId}`                             | Project を読む                               |
 | GET      | `/api/v1/workspaces/{workspaceId}/capsules`                | Capsule を一覧する                           |
 | GET      | `/api/v1/capsules/{capsuleId}`                             | Capsule を読む                               |
+| GET      | `/api/v1/capsules/{capsuleId}/install-config-re-adoption-context?revisionPlanId={id}` | 既存の対象 revision に束縛した再採用入力を読む |
 | POST     | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | SourceSnapshot の InstallConfig を再採用する |
 | PATCH    | `/api/v1/capsules/{capsuleId}`                             | Capsule を更新する                           |
 | DELETE   | `/api/v1/capsules/{capsuleId}`                             | 削除を予約する（即時破棄計画は `?immediate=true`） |
@@ -998,6 +999,23 @@ StateVersion が参照する Plan Run の SourceSnapshot が Capsule の追跡�
 初回 apply 前はこの field はありません。
 
 ### Capsule InstallConfig の再採用
+
+`GET /api/v1/capsules/{capsuleId}/install-config-re-adoption-context?revisionPlanId={id}`
+は `change_settings` と既存の delegate-owner 条件で認可した read-only endpoint です。
+既存 revision の exact SourceSnapshot/module/ref/commit と現在の config/state に束縛し、
+`installConfigReAdoptionContext` に既存 opaque `authorityGuard`、base InstallConfig ID、
+non-secret な `source.kind=user` の宣言だけを返します。Run、scan、preview config は作りません。
+各 `currentValue` は `present`（安全に提示できる `value` 付き）、`unset`、`unavailable` を
+区別します。`unavailable` を空値や unset として送信せず、`blockedReason` があれば入力を
+確定しません。POST の `reviewedUserVariables` は完全置換であり、維持する optional 値も
+明示的に含めます。対象または現在の authority が変われば 409 で再読を要求します。
+
+`AppView.latestRun.revisionPlanId` は、現在の failed revision Plan と保存済み coordinator が
+一意に対応する場合だけの value-free locator です。認可や再採用の authority ではありません。
+従来の `progress.revisionPlanId`（Plan 作成前の準備停止）とは別です。再採用済みなら旧 hint は
+消え、既存 Run の `origin.kind=revision/ref` から正規 revision 再計画へ戻れます。
+新 Plan の snapshot/config/state/ref を選択済み context と照合してから review し、同じ branch
+が別 commit へ進んだ場合は古い回答のまま review/apply しません。
 
 `GET /api/v1/capsules/{capsuleId}` は、認証済み caller が読める opaque
 `installConfigReAdoption.authorityGuard` を返します。これは private な

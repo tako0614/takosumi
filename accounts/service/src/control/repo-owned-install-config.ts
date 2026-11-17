@@ -1023,7 +1023,7 @@ function repositoryManifestModulePath(
   return `${scopePath}/${modulePath}`;
 }
 
-function remapRepositoryManifestModule(
+export function remapRepositoryManifestModule(
   document: RepositoryManifestDocument,
   repositoryModulePath: string,
   selectedModulePath: string,

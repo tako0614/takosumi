@@ -1,0 +1,423 @@
+{
+  "contextBody": {
+    "installConfigReAdoptionContext": {
+      "capsuleId": "cap_93048c6c2b31421a",
+      "revisionPlanId": "grp_403e831a1e904e34",
+      "sourceId": "src_93048c6c2b31421a",
+      "sourceSnapshotId": "snap_a1c54e2d0b259bd0",
+      "targetRef": "release/v2",
+      "resolvedCommit": "0123456789abcdef0123456789abcdef01234567",
+      "modulePath": ".",
+      "currentInstallConfigId": "icfg_cb90a51e71625261",
+      "currentStateGeneration": 1,
+      "currentStateVersionId": "state_f606ccd94f857515535577d91451368d2e69d8b6a3c1919dea1468cb6b50bcf7",
+      "authorityGuard": "sha256:86d4893000bfd0ca758a235c3758b7bfe8ecb21f2530268d5416b3fdfa10666a",
+      "baseInstallConfigId": "cfg-default-opentofu-capsule",
+      "variables": [
+        {
+          "name": "optional_keep",
+          "type": "string",
+          "required": false,
+          "sensitive": false,
+          "userEditable": true,
+          "label": {
+            "en": "Keep optional"
+          },
+          "currentValue": {
+            "status": "present",
+            "value": "Keep before revision"
+          }
+        },
+        {
+          "name": "optional_unset",
+          "type": "string",
+          "required": false,
+          "sensitive": false,
+          "userEditable": true,
+          "label": {
+            "en": "Clear optional"
+          },
+          "currentValue": {
+            "status": "present",
+            "value": "Clear before revision"
+          }
+        },
+        {
+          "name": "release_note",
+          "type": "string",
+          "required": true,
+          "sensitive": false,
+          "userEditable": true,
+          "label": {
+            "en": "Release note"
+          },
+          "currentValue": {
+            "status": "unavailable"
+          }
+        }
+      ]
+    }
+  },
+  "failedRevisionResponse": {
+    "revisionPlan": {
+      "id": "grp_403e831a1e904e34",
+      "workspaceId": "ws_9a102ab6da7e436d",
+      "createdBy": "user_owned_revision",
+      "requestDigest": "sha256:84f8de40f4962613d93f43c680586b5e6b3ba0bd0105690756de9e73abed286f",
+      "operation": "revision",
+      "source": {
+        "name": "yurucommu",
+        "url": "https://github.com/takos/yurucommu",
+        "ref": "release/v2",
+        "path": "."
+      },
+      "capsule": {
+        "name": "yurucommu",
+        "environment": "production"
+      },
+      "options": {},
+      "revision": {
+        "targetRef": "release/v2",
+        "base": {
+          "capsuleStateGeneration": 1,
+          "capsuleStateVersionId": "state_f606ccd94f857515535577d91451368d2e69d8b6a3c1919dea1468cb6b50bcf7",
+          "installConfigId": "icfg_cb90a51e71625261",
+          "installConfigDigest": "sha256:30793a7a51041992b706ea15bc9cbefe7a431fd250f0105fbdc29e8100c2d7c6"
+        }
+      },
+      "sourceId": "src_93048c6c2b31421a",
+      "capsuleId": "cap_93048c6c2b31421a",
+      "installConfigId": "icfg_cb90a51e71625261",
+      "installConfigBaseId": "icfg_cb90a51e71625261",
+      "installConfigBaseDigest": "sha256:30793a7a51041992b706ea15bc9cbefe7a431fd250f0105fbdc29e8100c2d7c6",
+      "installModulePath": ".",
+      "phase": "failed",
+      "generation": 4,
+      "createdAt": "2026-11-17T04:01:39.659Z",
+      "updatedAt": "2026-11-17T04:01:39.671Z",
+      "sourceSyncRunId": "ssr_a1c54e2d0b259bd0",
+      "diagnostic": {
+        "code": "plan_run_failed",
+        "message": "The canonical revision Plan Run did not become reviewable."
+      },
+      "sourceSnapshotId": "snap_a1c54e2d0b259bd0",
+      "compatibilityRequestDigest": "sha256:a5e692ac491c438ce26b750613ac8e6f588b389f3e98fb85531db2871258ff2a",
+      "compatibilityCheckRunId": "ccr_a5e692ac491c438c",
+      "compatibilityReportId": "caprep_a5e692ac491c438c",
+      "planRunId": "plan_403e831a1e904e34",
+      "completedAt": "2026-11-17T04:01:39.671Z"
+    },
+    "nextAction": "none",
+    "links": {
+      "self": "/api/v1/revision-plans/grp_403e831a1e904e34",
+      "run": "/api/v1/runs/plan_403e831a1e904e34"
+    }
+  },
+  "appBefore": {
+    "app": {
+      "kind": "takosumi.capsule-app@v1",
+      "capsuleId": "cap_93048c6c2b31421a",
+      "workspaceId": "ws_9a102ab6da7e436d",
+      "projectId": "prj_default_ws_9a102ab6da7e436d",
+      "name": "yurucommu",
+      "environment": "production",
+      "status": "active",
+      "applied": true,
+      "state": "needs_attention",
+      "primaryAction": "retry",
+      "problems": [
+        {
+          "code": "run_failed",
+          "severity": "error",
+          "runId": "plan_403e831a1e904e34",
+          "runType": "plan",
+          "errorCode": "plan_failed"
+        }
+      ],
+      "screens": [],
+      "links": {
+        "uses": [],
+        "usedBy": []
+      },
+      "progress": {
+        "revisionPreparing": false
+      },
+      "latestRun": {
+        "id": "plan_403e831a1e904e34",
+        "type": "plan",
+        "status": "failed",
+        "createdAt": "2026-11-17T04:01:39.667Z",
+        "startedAt": "2026-11-17T04:01:39.668Z",
+        "finishedAt": "2026-11-17T04:01:39.669Z",
+        "errorCode": "plan_failed",
+        "revisionPlanId": "grp_403e831a1e904e34"
+      },
+      "uninstall": {
+        "impact": {
+          "usedBy": []
+        },
+        "mode": "scheduled",
+        "graceDays": 7
+      },
+      "observedAt": "2026-11-17T04:01:39.672Z",
+      "version": {
+        "repository": {
+          "url": "https://github.com/takos/yurucommu",
+          "defaultRef": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7"
+        },
+        "current": {
+          "sourceSnapshotId": "snap_c51b5b9c73d85aae",
+          "ref": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7",
+          "path": ".",
+          "commit": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7"
+        },
+        "latest": {
+          "sourceSnapshotId": "snap_c51b5b9c73d85aae",
+          "ref": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7",
+          "commit": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7",
+          "fetchedAt": "2026-11-17T04:01:39.606Z"
+        },
+        "updateAvailable": false,
+        "stale": false,
+        "autoUpdate": false
+      }
+    }
+  },
+  "appAfterAdoption": {
+    "app": {
+      "kind": "takosumi.capsule-app@v1",
+      "capsuleId": "cap_93048c6c2b31421a",
+      "workspaceId": "ws_9a102ab6da7e436d",
+      "projectId": "prj_default_ws_9a102ab6da7e436d",
+      "name": "yurucommu",
+      "environment": "production",
+      "status": "active",
+      "applied": true,
+      "state": "needs_attention",
+      "primaryAction": "retry",
+      "problems": [
+        {
+          "code": "run_failed",
+          "severity": "error",
+          "runId": "plan_403e831a1e904e34",
+          "runType": "plan",
+          "errorCode": "plan_failed"
+        }
+      ],
+      "screens": [],
+      "links": {
+        "uses": [],
+        "usedBy": []
+      },
+      "progress": {
+        "revisionPreparing": false
+      },
+      "latestRun": {
+        "id": "plan_403e831a1e904e34",
+        "type": "plan",
+        "status": "failed",
+        "createdAt": "2026-11-17T04:01:39.667Z",
+        "startedAt": "2026-11-17T04:01:39.668Z",
+        "finishedAt": "2026-11-17T04:01:39.669Z",
+        "errorCode": "plan_failed"
+      },
+      "uninstall": {
+        "impact": {
+          "usedBy": []
+        },
+        "mode": "scheduled",
+        "graceDays": 7
+      },
+      "observedAt": "2026-11-17T04:01:39.691Z",
+      "version": {
+        "repository": {
+          "url": "https://github.com/takos/yurucommu",
+          "defaultRef": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7"
+        },
+        "current": {
+          "sourceSnapshotId": "snap_c51b5b9c73d85aae",
+          "ref": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7",
+          "path": ".",
+          "commit": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7"
+        },
+        "latest": {
+          "sourceSnapshotId": "snap_c51b5b9c73d85aae",
+          "ref": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7",
+          "commit": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7",
+          "fetchedAt": "2026-11-17T04:01:39.606Z"
+        },
+        "updateAvailable": false,
+        "stale": false,
+        "autoUpdate": false
+      }
+    }
+  },
+  "currentBody": {
+    "capsule": {
+      "id": "cap_93048c6c2b31421a",
+      "workspaceId": "ws_9a102ab6da7e436d",
+      "projectId": "prj_default_ws_9a102ab6da7e436d",
+      "name": "yurucommu",
+      "slug": "yurucommu",
+      "sourceId": "src_93048c6c2b31421a",
+      "installConfigId": "icfg_a153f92ba99d357a",
+      "environment": "production",
+      "currentStateGeneration": 1,
+      "status": "active",
+      "createdAt": "2026-11-17T04:01:39.600Z",
+      "updatedAt": "2026-11-17T04:01:39.690Z",
+      "compatibilityReportId": "caprep_a5e692ac491c438c",
+      "compatibilityStatus": "ready",
+      "currentStateVersionId": "state_f606ccd94f857515535577d91451368d2e69d8b6a3c1919dea1468cb6b50bcf7",
+      "adoptedSourceRevision": {
+        "sourceSnapshotId": "snap_c51b5b9c73d85aae",
+        "ref": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7",
+        "path": ".",
+        "resolvedCommit": "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7"
+      }
+    },
+    "installConfigReAdoption": {
+      "authorityGuard": "sha256:d663c8f86db09a6ea1309033fabdee9a3cde029959b0b7f2e8b12a98f6257d14"
+    }
+  },
+  "failedRunBody": {
+    "run": {
+      "id": "plan_403e831a1e904e34",
+      "workspaceId": "ws_9a102ab6da7e436d",
+      "capsuleId": "cap_93048c6c2b31421a",
+      "environment": "production",
+      "type": "plan",
+      "status": "failed",
+      "sourceSnapshotId": "snap_a1c54e2d0b259bd0",
+      "compatibilityReportId": "caprep_a5e692ac491c438c",
+      "baseStateGeneration": 1,
+      "requiredProviderRequirements": [],
+      "runEnvironmentEvidenceDigest": "sha256:5a937785eadcac70eae9e5bdda601c46827b0c4884b404e6e53211b2dea6409c",
+      "redactionProfileId": "redact_provider_material",
+      "policyStatus": "pass",
+      "origin": {
+        "kind": "revision",
+        "ref": "release/v2"
+      },
+      "errorCode": "plan_failed",
+      "createdBy": "user_owned_revision",
+      "createdAt": "2026-11-17T04:01:39.667Z",
+      "startedAt": "2026-11-17T04:01:39.668Z",
+      "finishedAt": "2026-11-17T04:01:39.669Z"
+    }
+  },
+  "targetRevisionResponse": {
+    "revisionPlan": {
+      "id": "grp_e1b5d53f3a834312",
+      "workspaceId": "ws_9a102ab6da7e436d",
+      "createdBy": "user_owned_revision",
+      "requestDigest": "sha256:84f8de40f4962613d93f43c680586b5e6b3ba0bd0105690756de9e73abed286f",
+      "operation": "revision",
+      "source": {
+        "name": "yurucommu",
+        "url": "https://github.com/takos/yurucommu",
+        "ref": "release/v2",
+        "path": "."
+      },
+      "capsule": {
+        "name": "yurucommu",
+        "environment": "production"
+      },
+      "options": {},
+      "revision": {
+        "targetRef": "release/v2",
+        "base": {
+          "capsuleStateGeneration": 1,
+          "capsuleStateVersionId": "state_f606ccd94f857515535577d91451368d2e69d8b6a3c1919dea1468cb6b50bcf7",
+          "installConfigId": "icfg_a153f92ba99d357a",
+          "installConfigDigest": "sha256:6aa7c3379f60dfe2349287f8963b4a31b861b3fb589c2f2be8793c1b009f0fa0"
+        }
+      },
+      "sourceId": "src_93048c6c2b31421a",
+      "capsuleId": "cap_93048c6c2b31421a",
+      "installConfigId": "icfg_a153f92ba99d357a",
+      "installConfigBaseId": "icfg_a153f92ba99d357a",
+      "installConfigBaseDigest": "sha256:6aa7c3379f60dfe2349287f8963b4a31b861b3fb589c2f2be8793c1b009f0fa0",
+      "installModulePath": ".",
+      "phase": "reviewable",
+      "generation": 4,
+      "createdAt": "2026-11-17T04:01:39.693Z",
+      "updatedAt": "2026-11-17T04:01:39.701Z",
+      "sourceSyncRunId": "ssr_1da0232e1a63a9b1",
+      "sourceSnapshotId": "snap_a1c54e2d0b259bd0",
+      "compatibilityRequestDigest": "sha256:9236c731f8837ff09befa609c7e51504361ca057dd164972699987bed92eab71",
+      "compatibilityCheckRunId": "ccr_9236c731f8837ff0",
+      "compatibilityReportId": "caprep_9236c731f8837ff0",
+      "planRunId": "plan_e1b5d53f3a834312",
+      "completedAt": "2026-11-17T04:01:39.701Z"
+    },
+    "nextAction": "review_run",
+    "links": {
+      "self": "/api/v1/revision-plans/grp_e1b5d53f3a834312",
+      "run": "/api/v1/runs/plan_e1b5d53f3a834312"
+    }
+  },
+  "movedRevisionResponse": {
+    "revisionPlan": {
+      "id": "grp_0e35f182c5224439",
+      "workspaceId": "ws_9a102ab6da7e436d",
+      "createdBy": "user_owned_revision",
+      "requestDigest": "sha256:84f8de40f4962613d93f43c680586b5e6b3ba0bd0105690756de9e73abed286f",
+      "operation": "revision",
+      "source": {
+        "name": "yurucommu",
+        "url": "https://github.com/takos/yurucommu",
+        "ref": "release/v2",
+        "path": "."
+      },
+      "capsule": {
+        "name": "yurucommu",
+        "environment": "production"
+      },
+      "options": {},
+      "revision": {
+        "targetRef": "release/v2",
+        "base": {
+          "capsuleStateGeneration": 1,
+          "capsuleStateVersionId": "state_f606ccd94f857515535577d91451368d2e69d8b6a3c1919dea1468cb6b50bcf7",
+          "installConfigId": "icfg_a153f92ba99d357a",
+          "installConfigDigest": "sha256:6aa7c3379f60dfe2349287f8963b4a31b861b3fb589c2f2be8793c1b009f0fa0"
+        }
+      },
+      "sourceId": "src_93048c6c2b31421a",
+      "capsuleId": "cap_93048c6c2b31421a",
+      "installConfigId": "icfg_a153f92ba99d357a",
+      "installConfigBaseId": "icfg_a153f92ba99d357a",
+      "installConfigBaseDigest": "sha256:6aa7c3379f60dfe2349287f8963b4a31b861b3fb589c2f2be8793c1b009f0fa0",
+      "installModulePath": ".",
+      "phase": "reviewable",
+      "generation": 4,
+      "createdAt": "2026-11-17T04:01:39.701Z",
+      "updatedAt": "2026-11-17T04:01:39.709Z",
+      "sourceSyncRunId": "ssr_c38cb8d10441816d",
+      "sourceSnapshotId": "snap_c38cb8d10441816d",
+      "compatibilityRequestDigest": "sha256:4edb95910929467ff80e4563517d1563df1aa27cfaef7a8b13c4ef4b741d3b49",
+      "compatibilityCheckRunId": "ccr_4edb95910929467f",
+      "compatibilityReportId": "caprep_4edb95910929467f",
+      "planRunId": "plan_0e35f182c5224439",
+      "completedAt": "2026-11-17T04:01:39.709Z"
+    },
+    "nextAction": "review_run",
+    "links": {
+      "self": "/api/v1/revision-plans/grp_0e35f182c5224439",
+      "run": "/api/v1/runs/plan_0e35f182c5224439"
+    }
+  },
+  "adoptionRequest": {
+    "sourceSnapshotId": "snap_a1c54e2d0b259bd0",
+    "baseInstallConfigId": "cfg-default-opentofu-capsule",
+    "reason": "Review named target input",
+    "expected": {
+      "authorityGuard": "sha256:86d4893000bfd0ca758a235c3758b7bfe8ecb21f2530268d5416b3fdfa10666a"
+    },
+    "reviewedUserVariables": {
+      "release_note": "Approved target",
+      "optional_keep": "Keep before revision"
+    }
+  }
+}

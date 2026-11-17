@@ -2208,3 +2208,50 @@ function revisionPlan(): StoredGitInstallPlan {
     },
   };
 }
+
+test("exact revision Plan lookup is scoped and refuses ambiguous saved links across stores", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memory = new InMemoryOpenTofuControlStore();
+  await memory.putWorkspace(workspace("ws_one"));
+  await memory.putWorkspace(workspace("ws_two"));
+  await seedPostgresWorkspace(postgres, "ws_one");
+  await seedPostgresWorkspace(postgres, "ws_two");
+  await seedD1Workspace(d1, "ws_one");
+  await seedD1Workspace(d1, "ws_two");
+  try {
+    for (const store of [new InMemoryGitInstallPlanStore(memory), new SqlGitInstallPlanStore(postgres), new D1GitInstallPlanStore(d1)]) {
+      const lookup = store.revisionForPlanRun;
+      expect(lookup).toBeFunction();
+      const exact: StoredGitInstallPlan = { ...plan("revision_exact_lookup", "exact_lookup_digest"), operation: "revision", capsuleId: "cap_exact_lookup", planRunId: "plan_exact_lookup", phase: "failed" };
+      expect((await store.create(exact)).status).toBe("created");
+      for (const [i, change] of [
+        { capsuleId: "cap_other_lookup" },
+        { workspaceId: "ws_two", workspaceManagementAuthority: { workspaceId: "ws_two", managementState: "active" as const, managementEpoch: 1 } },
+        { planRunId: "plan_other_lookup" },
+        { operation: "install" as const },
+      ].entries()) {
+        expect((await store.create({ ...exact, ...change, id: `lookup_other_${i}`, idempotencyKeyHash: `lookup_key_${i}`, requestDigest: `lookup_digest_${i}` })).status).toBe("created");
+      }
+      expect((await lookup.call(store, "cap_exact_lookup", "ws_one", "plan_exact_lookup"))?.id).toBe(exact.id);
+      expect(await lookup.call(store, "cap_missing_lookup", "ws_one", "plan_exact_lookup")).toBeUndefined();
+      expect(await lookup.call(store, "cap_exact_lookup", "ws_missing_lookup", "plan_exact_lookup")).toBeUndefined();
+      expect(await lookup.call(store, "cap_exact_lookup", "ws_one", "plan_missing_lookup")).toBeUndefined();
+      expect(await store.get(exact.id)).toEqual(exact);
+      expect((await store.create({ ...exact, id: "revision_ambiguous_lookup", idempotencyKeyHash: "lookup_ambiguous_key", requestDigest: "lookup_ambiguous_digest" })).status).toBe("created");
+      expect(await lookup.call(store, "cap_exact_lookup", "ws_one", "plan_exact_lookup")).toBeUndefined();
+    }
+  } finally { await postgres.close(); }
+});
+
+test("D1 revision Plan lookup does not treat an absent SELECT result array as no match", async () => {
+  const statement = {
+    bind: (..._values: unknown[]) => statement,
+    first: async <T>() => null as T | null,
+    all: async <T>() => ({} as { results?: readonly T[] }),
+    run: async () => { throw new Error("unexpected fixture write"); },
+  };
+  const store = new D1GitInstallPlanStore({ prepare: () => statement });
+  await expect(store.revisionForPlanRun("cap_fixture", "ws_fixture", "plan_fixture")).rejects.toThrow("did not return rows");
+});

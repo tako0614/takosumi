@@ -1,3 +1,8 @@
+import { normalizeInstallConfigSourceUrl } from "takosumi-contract/install-configs";
+import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
+import { capsuleInstallConfigReAdoptionAuthoritySnapshot } from "./install-config-re-adoptions.ts";
+import { matchesCurrentRevision, revisionTargetIdentity } from "./install-config-re-adoption-context.ts";
+import { sameGitName } from "./revision-plans.ts";
 /**
  * Per-app reads for the installed-app page (TASK-0115):
  *
@@ -320,6 +325,8 @@ async function readAppOverview(
           failed: false,
         }),
   ]);
+  const revisionHint = await optional(() => readFailedRevisionPlanHint(ctx, capsule, latestRun));
+  if (revisionHint.failed) incomplete.add("version");
   if (installConfig.failed) incomplete.add("display");
   if (screens.failed) incomplete.add("screens");
   if (screenFailure.failed || screenFailure.value?.complete === false) {
@@ -381,7 +388,7 @@ async function readAppOverview(
       ...(inFlightRun ? { run: runSummary(inFlightRun) } : {}),
       ...(review ? { review: { runId: review.id, runType: review.type } } : {}),
     },
-    ...(latestRun ? { latestRun: runSummary(latestRun) } : {}),
+    ...(latestRun ? { latestRun: { ...runSummary(latestRun), ...(revisionHint.value ? { revisionPlanId: revisionHint.value } : {}) } } : {}),
     uninstall: uninstallTerms(operations, capsule, {
       applied,
       admission,
@@ -628,7 +635,7 @@ export function coordinatorPreparation(
 async function readLatestLifecycleRun(
   operations: ControlPlaneOperations,
   capsule: Capsule,
-): Promise<CapsuleAppLatestRun | undefined> {
+): Promise<(CapsuleAppLatestRun & Pick<Run, "origin">) | undefined> {
   if (typeof operations.listCapsuleRunsPage !== "function") {
     throw new Error("the Capsule Run listing is not wired on this host");
   }
@@ -638,7 +645,56 @@ async function readLatestLifecycleRun(
     types: CAPSULE_APP_LIFECYCLE_RUN_TYPES,
   });
   const run = page.runs[0];
-  return run ? { ...runSummary(run), ...(run.policyStatus ? { policyStatus: run.policyStatus } : {}) } : undefined;
+  return run ? { ...runSummary(run), ...(run.origin ? { origin: run.origin } : {}), ...(run.policyStatus ? { policyStatus: run.policyStatus } : {}) } : undefined;
+}
+
+/** An optional locator is evidence about this exact failed Plan, never authority. */
+async function readFailedRevisionPlanHint(
+  ctx: ControlDispatchContext,
+  capturedCapsule: Capsule,
+  run: (CapsuleAppLatestRun & Pick<Run, "origin">) | undefined,
+): Promise<string | undefined> {
+  if (run?.type !== "plan" || run.status !== "failed" || run.origin?.kind !== "revision") return undefined;
+  const { operations } = ctx;
+  const lookup = operations.gitInstallPlans.revisionForPlanRun;
+  if (!lookup) throw new Error("Exact revision Plan lookup is unavailable");
+  const candidate = await lookup.call(operations.gitInstallPlans, capturedCapsule.id, capturedCapsule.workspaceId, run.id);
+  if (!candidate?.sourceSnapshotId || candidate.phase === "discarded") return undefined;
+  const [authority, canonical, snapshot, sourceResponse] = await Promise.all([
+    capsuleInstallConfigReAdoptionAuthoritySnapshot(operations, capturedCapsule.id),
+    operations.getPlanRun(run.id),
+    operations.getSourceSnapshot(candidate.sourceSnapshotId),
+    operations.getSource(capturedCapsule.sourceId),
+  ]);
+  const capsule = authority.capsule;
+  const plan = canonical.planRun;
+  const source = sourceResponse.source;
+  if (capsule.workspaceId !== capturedCapsule.workspaceId || capsule.sourceId !== capturedCapsule.sourceId ||
+    capsule.installConfigId !== capturedCapsule.installConfigId || capsule.status !== capturedCapsule.status ||
+    capsule.currentStateGeneration !== capturedCapsule.currentStateGeneration ||
+    capsule.currentStateVersionId !== capturedCapsule.currentStateVersionId ||
+    !matchesCurrentRevision(candidate, capsule, authority.installConfigDigest) ||
+    candidate.planRunId !== plan.id || plan.id !== run.id || plan.status !== "failed" ||
+    plan.workspaceId !== capsule.workspaceId || plan.capsuleId !== capsule.id ||
+    plan.sourceSnapshotId !== candidate.sourceSnapshotId || plan.origin?.kind !== "revision" ||
+    !sameGitName(plan.origin.ref, candidate.revision!.targetRef) ||
+    plan.capsuleCurrentStateVersionId !== (capsule.currentStateVersionId ?? null) ||
+    plan.capsuleExecutionAuthorityEpoch !== authority.executionAuthorityEpoch ||
+    snapshot.id !== candidate.sourceSnapshotId || snapshot.sourceId !== capsule.sourceId || snapshot.workspaceId !== capsule.workspaceId ||
+    source.id !== capsule.sourceId || source.workspaceId !== capsule.workspaceId || source.status !== "active" ||
+    normalizeInstallConfigSourceUrl(snapshot.url) !== normalizeInstallConfigSourceUrl(source.url) ||
+    normalizeInstallConfigSourceUrl(candidate.source.url) !== normalizeInstallConfigSourceUrl(source.url) ||
+    snapshot.path !== candidate.source.path || !sameGitName(snapshot.ref, candidate.revision!.targetRef) ||
+    plan.source.kind !== "git" || typeof plan.source.commit !== "string" || !sameGitName(plan.source.commit, snapshot.resolvedCommit) ||
+    normalizeInstallConfigSourceUrl(plan.source.url) !== normalizeInstallConfigSourceUrl(source.url) ||
+    normalizeCompatibilityReportModulePath(plan.source.modulePath ?? ".") !== candidate.installModulePath) return undefined;
+  const [current, exact] = await Promise.all([
+    capsuleInstallConfigReAdoptionAuthoritySnapshot(operations, capsule.id),
+    lookup.call(operations.gitInstallPlans, capsule.id, capsule.workspaceId, run.id),
+  ]);
+  return current.authorityGuard === authority.authorityGuard && exact?.id === candidate.id &&
+      revisionTargetIdentity(exact) === revisionTargetIdentity(candidate)
+    ? candidate.id : undefined;
 }
 
 function runSummary(run: Run | CapsuleAppRunSummary): CapsuleAppRunSummary {

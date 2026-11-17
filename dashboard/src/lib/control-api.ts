@@ -51,6 +51,10 @@ import type {
   CapsuleCurrentResourceInventory as ContractCapsuleCurrentResourceInventory,
   CapsuleConfigurationPlanRequest,
   CapsuleConfigurationPlanResponse,
+  CapsuleInstallConfigReAdoptionResponse,
+  CapsuleInstallConfigReAdoptionInputContext,
+  CapsuleInstallConfigReAdoptionInputContextResponse,
+  CreateCapsuleInstallConfigReAdoptionRequest,
   CreateGitInstallAttemptRequest,
   DiscardGitInstallPlanRequest,
   GitInstallPlanResponse,
@@ -1220,6 +1224,53 @@ export async function createCapsuleConfigurationPlan(
       body: request,
     },
   );
+}
+
+/** Explicit immutable configuration re-adoption; never plans or applies. */
+export async function createCapsuleInstallConfigReAdoption(
+  capsuleId: string,
+  request: CreateCapsuleInstallConfigReAdoptionRequest,
+  idempotencyKey: string,
+): Promise<CapsuleInstallConfigReAdoptionResponse> {
+  return await controlFetch<CapsuleInstallConfigReAdoptionResponse>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/install-config-re-adoptions`,
+    {
+      method: "POST",
+      headers: { "idempotency-key": idempotencyKey },
+      body: request,
+    },
+  );
+}
+
+/** Read-only, target-bound presentation; never fetches repository text. */
+export async function getCapsuleInstallConfigReAdoptionContext(
+  capsuleId: string,
+  revisionPlanId: string,
+): Promise<CapsuleInstallConfigReAdoptionInputContext> {
+  const body = await controlFetch<CapsuleInstallConfigReAdoptionInputContextResponse>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/install-config-re-adoption-context${query({ revisionPlanId })}`,
+  );
+  const value = body?.installConfigReAdoptionContext;
+  const nonempty = (field: unknown): field is string => typeof field === "string" && field.length > 0;
+  const names = new Set<string>();
+  if (!isRecord(value) || value.capsuleId !== capsuleId || value.revisionPlanId !== revisionPlanId ||
+    ![value.sourceId, value.sourceSnapshotId, value.targetRef, value.resolvedCommit, value.modulePath,
+      value.currentInstallConfigId, value.authorityGuard, value.baseInstallConfigId].every(nonempty) ||
+    !Number.isSafeInteger(value.currentStateGeneration) || value.currentStateGeneration < 0 ||
+    (value.currentStateVersionId !== undefined && !nonempty(value.currentStateVersionId)) ||
+    (value.blockedReason !== undefined && !["secret_inputs", "unsupported_inputs", "host_policy_conflict"].includes(value.blockedReason)) ||
+    !Array.isArray(value.variables) || !value.variables.every(variable => {
+      if (!isRecord(variable) || !nonempty(variable.name) || names.has(variable.name) ||
+        variable.userEditable !== true || variable.sensitive !== false || typeof variable.required !== "boolean" ||
+        typeof variable.type !== "string" || !["string", "number", "boolean", "json"].includes(variable.type) || !isRecord(variable.currentValue)) return false;
+      names.add(variable.name);
+      return variable.currentValue.status === "present"
+        ? Object.prototype.hasOwnProperty.call(variable.currentValue, "value")
+        : variable.currentValue.status === "unset" || variable.currentValue.status === "unavailable";
+    })) {
+    throw new ControlApiError(502, "invalid_re_adoption_context", "The target inputs could not be confirmed.");
+  }
+  return value;
 }
 
 // --- Install attempts (TASK-0115 Phase 3b) -----------------------------------

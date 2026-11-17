@@ -116,6 +116,13 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/capsules/{capsuleId}/install-config-re-adoption-context",
+      summary: "Read exact revision user-input context with change_settings authority",
+      auth: "account-session",
+      queryParameters: [{ name: "revisionPlanId", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } }],
+    },
+    {
+      method: "GET",
       path: "/api/v1/revision-plans/{revisionPlanId}",
       summary: "Read a Git revision plan without advancing it",
       auth: "account-session",

@@ -16,6 +16,7 @@ import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import {
+  capsuleInstallConfigReAdoptionAuthoritySnapshot,
   hasValidDerivedTargetSeal,
   sealInstallConfigSuccessor,
 } from "../../../../accounts/service/src/control/install-config-re-adoptions.ts";
@@ -32,6 +33,7 @@ import type {
   InstallConfig,
   SourceBuildConfig,
 } from "takosumi-contract/install-configs";
+import { normalizeInstallConfigSourceUrl } from "takosumi-contract/install-configs";
 import type { JsonValue } from "takosumi-contract/types";
 import type {
   OpenTofuApplyJob,
@@ -8304,4 +8306,201 @@ test("an installed app's OAuth token cannot switch the app to another owner conn
   const owner = await installedAppConnectionFixture("owner-session-rebind");
   const ownerSwitched = { ...owner.body, providerBindings: owner.body.providerBindings.map((binding) => ({ ...binding, connectionId: owner.alternate })) };
   expect((await owner.call("POST", owner.path, { cookie: owner.fixture.cookie }, ownerSwitched, "owner-switch")).status).toBe(201);
+});
+
+
+async function reAdoptionInputContextFixture(suffix: string, currentOverrides: Partial<InstallConfig> = {}) {
+  const inputs: readonly RepositoryInstallUxInput[] = [
+    { name: "public_url", source: { kind: "user" }, type: "string", required: true, label: { en: "Public URL" } },
+    { name: "enabled", source: { kind: "user" }, type: "boolean", required: false, label: { en: "Enabled" } },
+    { name: "new_optional", source: { kind: "user" }, type: "string", required: false, label: { en: "Optional" } },
+    { name: "opaque_choice", source: { kind: "user" }, type: "json", required: false, label: { en: "Choice" } },
+    { name: "current_sensitive", source: { kind: "user" }, type: "string", required: false, label: { en: "Current choice" } },
+    { name: "managed_name", source: { kind: "capsule_name" }, type: "string", label: { en: "Managed" } },
+  ];
+  const fixture = await reAdoptionRouteFixture(suffix, {
+    genericDefault: true, repositoryInputs: inputs,
+    currentVariableMapping: { enabled: false, opaque_choice: { token: "fixture-hidden-nested-value" }, current_sensitive: "fixture-hidden-declared-value", managed_name: "fixture-managed-value", unknown_value: "fixture-private-unknown" },
+    currentInstallConfig: { modulePath: "deploy/opentofu/cloudflare", variablePresentation: [{ name: "current_sensitive", secret: true }], ...currentOverrides },
+  });
+  const source = (await fixture.operations.getSource(fixture.seeded.source.id)).source;
+  const currentSnapshot = await fixture.operations.getSourceSnapshot(fixture.seeded.snapshot.id);
+  const targetSnapshot: SourceSnapshot = {
+    ...currentSnapshot, id: `snap_target_context_${suffix}`, ref: "release/v2", resolvedCommit: "b".repeat(40),
+    archiveRef: `fixture-target-${suffix}`, fetchedAt: "2026-09-05T00:00:00.000Z",
+  };
+  await fixture.deployStore.putSourceSnapshot(targetSnapshot);
+  const compatibility = await fixture.operations.createSourceCompatibilityCheck(source.id, {
+    sourceSnapshotId: targetSnapshot.id, capsuleId: fixture.seeded.capsule.id, modulePath: "deploy/opentofu/cloudflare",
+  });
+  const revisionId = `grp_input_context_${suffix}`;
+  const config = await fixture.operations.capsules.getInstallConfig(fixture.seeded.capsule.installConfigId);
+  const configDigest = await stableJsonDigest(config);
+  await putConfigurationFixtureRevisionRow(fixture, revisionId, (row) => ({
+    ...row, source: { name: source.name, url: normalizeInstallConfigSourceUrl(source.url), ref: targetSnapshot.ref, path: targetSnapshot.path },
+    sourceSnapshotId: targetSnapshot.id, installModulePath: "deploy/opentofu/cloudflare", compatibilityReportId: compatibility.report.id,
+    phase: "failed", revision: { targetRef: targetSnapshot.ref, base: { ...row.revision!.base, installConfigDigest: configDigest } },
+  }));
+  return { ...fixture, source, targetSnapshot, revisionId, config };
+}
+
+test("revision re-adoption context exposes only exact safe user inputs without mutation", async () => {
+  const f = await reAdoptionInputContextFixture("safe-context");
+  const before = { capsule: await f.operations.capsules.getCapsule(f.seeded.capsule.id), config: f.config, configs: await f.deployStore.listInstallConfigs(f.seeded.workspace.id), revision: await f.operations.gitInstallPlans.get(f.revisionId), files: f.runner.capsuleSourceFileJobs.length, plans: f.runner.planJobs.length, applies: f.runner.applyJobs.length };
+  const response = await controlJson<{ readonly installConfigReAdoptionContext: {
+    readonly capsuleId: string; readonly revisionPlanId: string; readonly sourceId: string; readonly sourceSnapshotId: string; readonly resolvedCommit: string; readonly targetRef: string; readonly modulePath: string;
+    readonly currentInstallConfigId: string; readonly currentStateGeneration: number; readonly authorityGuard: string; readonly baseInstallConfigId: string;
+    readonly variables: readonly { readonly name: string; readonly type: string; readonly required: boolean; readonly userEditable: boolean; readonly sensitive: boolean; readonly currentValue: { readonly status: string; readonly value?: unknown } }[];
+  } }>({ operations: f.operations, store: f.accountStore, cookie: f.cookie, method: "GET", path: `/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}` }, 200);
+  const context = response.installConfigReAdoptionContext;
+  expect(context).toMatchObject({ capsuleId: f.seeded.capsule.id, revisionPlanId: f.revisionId, sourceId: f.source.id, sourceSnapshotId: f.targetSnapshot.id, targetRef: "release/v2", resolvedCommit: "b".repeat(40), modulePath: "deploy/opentofu/cloudflare", currentInstallConfigId: before.capsule.installConfigId, currentStateGeneration: before.capsule.currentStateGeneration, baseInstallConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID });
+  expect(context.authorityGuard).toBe(await readReAdoptionGuard(f));
+  expect(context.variables.map((v) => v.name)).toEqual(["public_url", "enabled", "new_optional", "opaque_choice", "current_sensitive"]);
+  expect(context.variables.every((v) => v.userEditable === true && v.sensitive === false)).toBe(true);
+  expect(context.variables.find((v) => v.name === "public_url")?.currentValue).toEqual({ status: "present", value: TAKOS_PUBLIC_ORIGIN });
+  expect(context.variables.find((v) => v.name === "enabled")?.currentValue).toEqual({ status: "present", value: false });
+  expect(context.variables.find((v) => v.name === "new_optional")?.currentValue).toEqual({ status: "unset" });
+  expect(context.variables.find((v) => v.name === "opaque_choice")?.currentValue).toEqual({ status: "unavailable" });
+  expect(context.variables.find((v) => v.name === "current_sensitive")?.currentValue).toEqual({ status: "unavailable" });
+  const encoded = JSON.stringify(response);
+  for (const hidden of ["fixture-hidden-nested-value", "fixture-hidden-declared-value", "fixture-private-unknown", "fixture-managed-value", "PLATFORM_PRIVATE_KEY", "repositoryManifest", "variableMapping"]) expect(encoded).not.toContain(hidden);
+  expect(await f.operations.capsules.getCapsule(f.seeded.capsule.id)).toEqual(before.capsule);
+  expect(await f.operations.capsules.getInstallConfig(before.config.id)).toEqual(before.config);
+  expect(await f.deployStore.listInstallConfigs(f.seeded.workspace.id)).toEqual(before.configs);
+  expect(await f.operations.gitInstallPlans.get(f.revisionId)).toEqual(before.revision);
+  expect([f.runner.capsuleSourceFileJobs.length, f.runner.planJobs.length, f.runner.applyJobs.length]).toEqual([before.files, before.plans, before.applies]);
+});
+
+
+test("revision re-adoption context keeps the designated delegate owner boundary for a current app member", async () => {
+  const f = await reAdoptionInputContextFixture("context-member");
+  expect(f.deployStore instanceof InMemoryOpenTofuControlStore).toBe(true);
+  const memory = f.deployStore as InMemoryOpenTofuControlStore;
+  expect(memory.setCapsuleOwnership({ capsuleId: f.seeded.capsule.id, ownerAccountId: "user_test", ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: `apps/${f.seeded.capsule.id}` })).toBe(true);
+  const subject = "context_member" as TakosumiSubject;
+  seedSession(f.accountStore, subject);
+  expect(await f.operations.appOwnership!.putMember({ capsuleId: f.seeded.capsule.id, accountId: subject, status: "active", addedBy: "user_test", createdAt: "2026-09-05T00:00:00.000Z", updatedAt: "2026-09-05T00:00:00.000Z" })).toBe(true);
+  expect(await f.operations.appAccess!.resolveAppAccess(subject, f.seeded.capsule.id)).toMatchObject({ role: "member" });
+  const token = "fixture.context.read-only-pat";
+  f.accountStore.savePersonalAccessToken(token, { tokenId: "pat_context_read", tokenPrefix: "fixture", subject, name: "Fixture read", scopes: ["read"], appIds: [f.seeded.capsule.id], createdAt: Date.now() });
+  const get = async (path: string) => {
+    const url = new URL(`https://app.takosumi.test${path}`);
+    return (await handleControlRoute({ request: new Request(url, { headers: { authorization: `Bearer ${token}` } }), url, store: f.accountStore, operations: f.operations, installedAppDelegationSources: [{ url: f.source.url, path: f.source.defaultPath, refs: ["refs/heads/main"] }] }))!;
+  };
+  expect((await get(`/api/v1/capsules/${f.seeded.capsule.id}`)).status).toBe(200);
+  expect((await get(`/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}`)).status).toBe(403);
+  const ownerUrl = new URL(`https://app.takosumi.test/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}`);
+  const ownerResponse = await handleControlRoute({ request: new Request(ownerUrl, { headers: { cookie: f.cookie } }), url: ownerUrl, store: f.accountStore, operations: f.operations, installedAppDelegationSources: [{ url: f.source.url, path: f.source.defaultPath, refs: ["refs/heads/main"] }] });
+  expect(ownerResponse?.status).toBe(200);
+});
+
+test("revision re-adoption context refuses stale or cross-target coordinates without mutation", async () => {
+  const f = await reAdoptionInputContextFixture("context-scope");
+  const good = (await f.operations.gitInstallPlans.get(f.revisionId))!;
+  const changes: readonly ((row: StoredGitInstallPlan) => StoredGitInstallPlan)[] = [
+    (r) => ({ ...r, operation: "install", revision: undefined }),
+    (r) => ({ ...r, capsuleId: "cap_some_other_app" }),
+    (r) => ({ ...r, sourceId: "src_some_other_app" }),
+    (r) => ({ ...r, installConfigId: "icfg_other" }),
+    (r) => ({ ...r, sourceSnapshotId: f.seeded.snapshot.id }),
+    (r) => ({ ...r, installModulePath: "." }),
+    (r) => ({ ...r, source: { ...r.source, path: "another" } }),
+    (r) => ({ ...r, revision: { ...r.revision!, targetRef: "release/another" } }),
+    (r) => ({ ...r, revision: { ...r.revision!, base: { ...r.revision!.base, installConfigDigest: "sha256:stale" } } }),
+    (r) => ({ ...r, revision: { ...r.revision!, base: { ...r.revision!.base, capsuleStateGeneration: r.revision!.base.capsuleStateGeneration + 1 } } }),
+    (r) => ({ ...r, revision: { ...r.revision!, base: { ...r.revision!.base, capsuleStateVersionId: "state_another" } } }),
+  ];
+  const before = await f.operations.capsules.getCapsule(f.seeded.capsule.id);
+  const configs = await f.deployStore.listInstallConfigs(before.workspaceId);
+  for (let i = 0; i < changes.length; i += 1) {
+    const id = `${f.revisionId}_mismatch_${i}`;
+    await putConfigurationFixtureRevisionRow(f, id, (fresh) => changes[i]!({ ...good, id, idempotencyKeyHash: fresh.idempotencyKeyHash, requestDigest: fresh.requestDigest }));
+    await controlJson({ operations: f.operations, store: f.accountStore, cookie: f.cookie, method: "GET", path: `/api/v1/capsules/${before.id}/install-config-re-adoption-context?revisionPlanId=${id}` }, 409);
+  }
+  expect(await f.operations.capsules.getCapsule(before.id)).toEqual(before);
+  expect(await f.deployStore.listInstallConfigs(before.workspaceId)).toEqual(configs);
+  expect(f.runner.planJobs).toHaveLength(0);
+  expect(f.runner.applyJobs).toHaveLength(0);
+});
+
+test("revision re-adoption context keeps generic and missing current input evidence unavailable", async () => {
+  const generic = await reAdoptionInputContextFixture("context-generic", { internal: { reason: "per_install_overrides", sourceSnapshotId: "snap_re_adoption_context-generic", genericOpenTofuVariableContractDigest: `sha256:${"1".repeat(64)}`, genericOpenTofuSourceSnapshotId: "snap_re_adoption_context-generic" } });
+  const missing = await reAdoptionInputContextFixture("context-missing", { internal: { reason: "per_install_overrides", sourceSnapshotId: "snap_missing_current_context" } });
+  for (const f of [generic, missing]) {
+    const response = await controlJson<{ installConfigReAdoptionContext: { variables: readonly { currentValue: {status: string} }[] } }>({ operations: f.operations, store: f.accountStore, cookie: f.cookie, method: "GET", path: `/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}` }, 200);
+    expect(response.installConfigReAdoptionContext.variables.every((v) => v.currentValue.status === "unavailable" || (f === generic && v.currentValue.status === "unset"))).toBe(true);
+    const encoded = JSON.stringify(response);
+    expect(encoded).not.toContain(TAKOS_PUBLIC_ORIGIN);
+    expect(encoded).not.toContain("fixture-hidden");
+  }
+});
+
+test("revision re-adoption context closes secret target inputs without exposing their names or values", async () => {
+  const f = await reAdoptionInputContextFixture("context-secret");
+  const observation = f.targetSnapshot.repositoryManifest!;
+  if (observation.status !== "present") throw new Error("fixture manifest missing");
+  const key = "deploy/opentofu/cloudflare";
+  await f.deployStore.putSourceSnapshot({ ...f.targetSnapshot, repositoryManifest: { ...observation, document: { ...observation.document, install: { ...observation.document.install, modules: { [key]: { ...observation.document.install.modules[key]!, inputs: observation.document.install.modules[key]!.inputs.map((v) => v.name === "public_url" ? { ...v, secret: true } : v) } } } } } });
+  const result = await controlJson<{installConfigReAdoptionContext: {blockedReason?: string; variables: readonly {name: string}[]}}>({ operations: f.operations, store: f.accountStore, cookie: f.cookie, method: "GET", path: `/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}` }, 200);
+  expect(result.installConfigReAdoptionContext.blockedReason).toBe("secret_inputs");
+  expect(result.installConfigReAdoptionContext.variables.some((v) => v.name === "public_url")).toBe(false);
+  expect(JSON.stringify(result)).not.toContain(TAKOS_PUBLIC_ORIGIN);
+});
+
+test("revision re-adoption context rejects a current authority change during its reads", async () => {
+  const f = await reAdoptionInputContextFixture("context-read-race");
+  const original = f.operations.getCompatibilityReport;
+  let changed = false;
+  f.operations.getCompatibilityReport = async (id) => {
+    const result = await original.call(f.operations, id);
+    if (!changed) { changed = true; await seedRouteCommittedPostApplyRecovery(f, "context-read-race"); }
+    return result;
+  };
+  await controlJson({ operations: f.operations, store: f.accountStore, cookie: f.cookie, method: "GET", path: `/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}` }, 409);
+  expect(changed).toBe(true);
+  expect(f.runner.planJobs).toHaveLength(0);
+  expect(f.runner.applyJobs).toHaveLength(0);
+});
+
+test("revision re-adoption context does not turn a backend error into missing input evidence", async () => {
+  const f = await reAdoptionInputContextFixture("context-backend");
+  const original = f.operations.getSourceSnapshot;
+  f.operations.getSourceSnapshot = async (id) => {
+    if (id === f.config.internal?.sourceSnapshotId) throw new Error("fixture_current_snapshot_backend_error");
+    return await original.call(f.operations, id);
+  };
+  const response = await controlJson<{ error: { code: string; message: string } }>({ operations: f.operations, store: f.accountStore, cookie: f.cookie, method: "GET", path: `/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}` }, 500);
+  expect(response.error).toMatchObject({ code: "internal_error", message: "internal error" });
+  expect(f.runner.planJobs).toHaveLength(0);
+  expect(f.runner.applyJobs).toHaveLength(0);
+});
+
+test("revision input recovery hint follows only the exact latest failed Plan", async () => {
+  const f = await reAdoptionInputContextFixture("context-reload-hint");
+  const authority = await capsuleInstallConfigReAdoptionAuthoritySnapshot(f.operations, f.seeded.capsule.id);
+  const capsule = authority.capsule;
+  const saved = (await f.operations.gitInstallPlans.get(f.revisionId))!;
+  const linkedId = "grp_context_reload_exact";
+  const planRun: PlanRun = {
+    id: "plan_context_reload_exact", workspaceId: capsule.workspaceId, capsuleId: capsule.id,
+    capsuleCurrentStateVersionId: capsule.currentStateVersionId ?? null,
+    capsuleExecutionAuthorityEpoch: authority.executionAuthorityEpoch,
+    source: { kind: "git", url: f.source.url, commit: f.targetSnapshot.resolvedCommit, modulePath: saved.installModulePath },
+    sourceSnapshotId: f.targetSnapshot.id, sourceDigest: `sha256:${"1".repeat(64)}`,
+    operation: "update", origin: { kind: "revision", ref: "release/v2" },
+    runnerProfileId: "opentofu-default", variablesDigest: `sha256:${"2".repeat(64)}`,
+    requiredProviders: [], status: "failed", policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: `sha256:${"3".repeat(64)}`, auditEvents: [], createdAt: 2, updatedAt: 2,
+  };
+  expect((await f.operations.gitInstallPlans.create({ ...saved, id: linkedId, idempotencyKeyHash: "key_context_reload_exact", planRunId: planRun.id })).status).toBe("created");
+  await f.deployStore.putPlanRun(planRun);
+  const read = () => controlJson<{ app: { latestRun: { id: string; revisionPlanId?: string } } }>({ operations: f.operations, store: f.accountStore, cookie: f.cookie, method: "GET", path: `/api/v1/capsules/${capsule.id}/app` }, 200);
+  expect((await read()).app.latestRun).toMatchObject({ id: planRun.id, revisionPlanId: linkedId });
+  await controlJson({ operations: f.operations, store: f.accountStore, cookie: f.cookie, method: "GET", path: `/api/v1/capsules/${capsule.id}/install-config-re-adoption-context?revisionPlanId=${linkedId}` }, 200);
+  // A newer unrelated failure must never inherit the older target locator.
+  await f.deployStore.putPlanRun({ ...planRun, id: "plan_context_reload_unrelated", createdAt: 3, updatedAt: 3, origin: { kind: "configuration" } });
+  expect((await read()).app.latestRun).toEqual(expect.objectContaining({ id: "plan_context_reload_unrelated" }));
+  expect((await read()).app.latestRun.revisionPlanId).toBeUndefined();
+  expect(f.runner.planJobs).toHaveLength(0);
+  expect(f.runner.applyJobs).toHaveLength(0);
 });

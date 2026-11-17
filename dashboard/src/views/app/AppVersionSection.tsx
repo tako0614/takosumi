@@ -39,6 +39,7 @@ export default function AppVersionSection(props: {
   readonly autoUpdateError?: string;
   readonly onAutoUpdate: (enabled: boolean) => void;
   readonly review: JSX.Element;
+  readonly targetInputs?: JSX.Element;
 }): JSX.Element {
   const [requestedRef, setRequestedRef] = createSignal("");
   const [showAllPrevious, setShowAllPrevious] = createSignal(false);
@@ -140,6 +141,7 @@ export default function AppVersionSection(props: {
       <Show when={props.notice}>
         {(message) => <p class="ap-notice" role="status">{message()}</p>}
       </Show>
+      {props.targetInputs}
       {review}
 
       <div class="ap-subsection">

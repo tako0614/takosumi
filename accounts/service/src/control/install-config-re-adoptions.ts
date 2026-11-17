@@ -908,7 +908,7 @@ function jsonRecord(
  * Top-level keys are manifest variable names; nested keys are user JSON and
  * therefore participate in the ordinary secret-key vocabulary.
  */
-function reviewedUserVariablesRecord(
+export function reviewedUserVariablesRecord(
   value: unknown,
 ): Readonly<Record<string, JsonValue>> | undefined {
   if (!isPlainJsonObject(value)) return undefined;
