@@ -408,7 +408,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 114
+`accounts/service/src/control-route-inventory.ts`; it currently contains 115
 public route descriptors, listed below. Accounts compositions include the same routes in `/openapi.json` and publish their count as `x-takos-public-session-endpoint-count`. Core-only processes omit the unmounted Accounts routes. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -610,6 +610,7 @@ data and settings.
 | GET | `/api/v1/projects/{projectId}` | Read a Project |
 | GET | `/api/v1/workspaces/{workspaceId}/capsules` | List Workspace Capsules |
 | GET | `/api/v1/capsules/{capsuleId}` | Read a Capsule |
+| GET | `/api/v1/capsules/{capsuleId}/install-config-re-adoption-context?revisionPlanId={id}` | Read re-adoption inputs bound to an existing target revision |
 | POST | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | Re-adopt a Capsule to the latest InstallConfig in its repository, conditional on its current binding |
 | PATCH | `/api/v1/capsules/{capsuleId}` | Update a Capsule |
 | DELETE | `/api/v1/capsules/{capsuleId}` | Schedule deletion of an applied Capsule after a grace period; `?immediate=true` creates a destroy Plan only, which still needs review and Apply |
@@ -631,6 +632,27 @@ data and settings.
 | POST | `/api/v1/capsules/{capsuleId}/drift-check` | Create a Capsule drift check Run |
 | GET | `/api/v1/capsules/{capsuleId}/backups` | List backups taken of the app |
 | POST | `/api/v1/capsules/{capsuleId}/backups` | Create a Capsule Backup |
+
+`GET /api/v1/capsules/{capsuleId}/install-config-re-adoption-context?revisionPlanId={id}`
+requires `change_settings` and the existing designated-delegate owner check.
+It accepts one exact, nonempty `revisionPlanId` of at most 256 characters. Its
+read-only `installConfigReAdoptionContext` binds the existing revision's exact
+snapshot/module/ref/commit and current config/state, and returns the existing
+opaque `authorityGuard`, base InstallConfig ID and declared non-secret
+`source.kind=user` inputs. It creates no Run, scan or preview InstallConfig.
+Each `currentValue` is `present` (with a safe `value`), `unset` or `unavailable`.
+Never submit `unavailable` as an empty value or unset, or confirm a context with
+`blockedReason`. The POST's `reviewedUserVariables` is a complete replacement:
+include optional values explicitly to keep them. A changed target or current
+authority returns 409 and requires rereading.
+
+`AppView.latestRun.revisionPlanId` is a value-free locator only when the current
+failed revision Plan has one exact saved coordinator link, not authorization or
+re-adoption authority. It differs from the existing pre-Plan preparation/stall
+`progress.revisionPlanId`. Re-adoption removes the stale hint; the existing Run
+`origin.kind=revision/ref` supports normal revision retry. Before review, match
+the new Plan's snapshot/config/state/ref against the selected context. If the
+same branch moves to another commit, do not review/apply the old answers blindly.
 
 `GET /api/v1/capsules/{capsuleId}/app` returns one view of an installed app.
 The control plane computes `state` and `primaryAction` from the Capsule, this
