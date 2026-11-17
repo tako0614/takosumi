@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
+import { userActionFor } from "../../../../accounts/service/src/control/install-attempt-facts.ts";
 import { handleAuthenticatedControlRoute } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { defaultCapsuleInstallConfig } from "../../../../core/domains/capsules/default_install_config.ts";
@@ -3410,6 +3411,72 @@ test("install attempt asks to choose among scanned modules and restarts analysis
     installModulePath: "apps/b",
   });
   expect(analyzed.userAction).toMatchObject({ kind: "provide_inputs", modulePath: "apps/b" });
+});
+
+test("install attempt JSON projects manifest input editability without changing stored facts", async () => {
+  const base = repositoryManifest(["."]);
+  if (base.status !== "present") throw new Error("expected manifest fixture");
+  const fixture = attemptFixture({
+    repositoryManifest: { ...base, document: { ...base.document, install: {
+      modules: { ".": { inputs: [
+        { name: "managed_name", type: "string", source: { kind: "capsule_name" }, label: { en: "Managed" } },
+        { name: "user_setting", type: "string", source: { kind: "user" }, required: true, label: { en: "User" } },
+      ] } },
+    } } },
+    providerConnections: [], compatibilityResources: [], compatibilityRootProviderRequirements: [],
+    compatibilityRootModuleVariableDeclarations: [
+      { name: "managed_name", type: "string", hasDefault: true },
+      { name: "user_setting", type: "string", hasDefault: false },
+    ],
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction.kind).toBe("provide_inputs");
+  const stored = (await fixture.planStore.get(planId))!;
+  const captured = JSON.stringify(stored.attemptFacts);
+  expect(stored.attemptFacts?.inputs?.variables.every(x => x.userEditable === undefined)).toBe(true);
+  const response = await fixture.request(`/api/v1/install-plans/${planId}`);
+  expect(response.status).toBe(200);
+  const payload = await response.json();
+  expect(payload.userAction.variables).toEqual([
+    expect.objectContaining({ name: "managed_name", userEditable: false, derivedDefault: "capsule_name" }),
+    expect.objectContaining({ name: "user_setting", userEditable: true, required: true }),
+  ]);
+  expect(payload.installPlan.attemptFacts).toBeUndefined();
+  expect(JSON.stringify((await fixture.planStore.get(planId))?.attemptFacts)).toBe(captured);
+  const snapshot = await fixture.operations.getSourceSnapshot(stored.sourceSnapshotId!);
+  const readSnapshot = fixture.operations.getSourceSnapshot;
+  fixture.operations.getSourceSnapshot = async () => {
+    throw new OpenTofuControllerError("not_found", "missing snapshot fixture");
+  };
+  const missingSnapshot = await fixture.request(`/api/v1/install-plans/${planId}`);
+  expect(missingSnapshot.status).toBe(200);
+  expect((await missingSnapshot.json()).userAction.variables.every((x: { userEditable?: boolean }) => x.userEditable === undefined)).toBe(true);
+  fixture.operations.getSourceSnapshot = async () => { throw new Error("fixture snapshot read unavailable"); };
+  await expect(userActionFor(fixture.operations, stored)).rejects.toThrow("fixture snapshot read unavailable");
+  fixture.operations.getSourceSnapshot = readSnapshot;
+  for (const wrongSnapshot of [
+    { ...snapshot, id: "snapshot_other" },
+    { ...snapshot, sourceId: "source_other" },
+    { ...snapshot, workspaceId: "workspace_other" },
+    { ...snapshot, repositoryManifest: { status: "absent" as const } },
+  ]) {
+    const projected = await userActionFor({ ...fixture.operations, getSourceSnapshot: async () => wrongSnapshot }, stored);
+    expect(projected.kind).toBe("provide_inputs");
+    if (projected.kind !== "provide_inputs") throw new Error("expected inputs");
+    expect(projected.variables.every(x => x.userEditable === undefined)).toBe(true);
+    expect(projected.variables[0]?.derivedDefault).toBe("capsule_name");
+  }
+  for (const legacy of [
+    { ...stored, sourceSnapshotId: undefined },
+    { ...stored, installModulePath: "other" },
+  ]) {
+    const projected = await userActionFor(fixture.operations, legacy);
+    expect(projected.kind).toBe("provide_inputs");
+    if (projected.kind !== "provide_inputs") throw new Error("expected inputs");
+    expect(projected.variables.every(x => x.userEditable === undefined)).toBe(true);
+  }
+  expect(JSON.stringify(stored.attemptFacts)).toBe(captured);
 });
 
 test("install attempt with a repository manifest pauses after manifest analysis and creates from the reviewed preview", async () => {

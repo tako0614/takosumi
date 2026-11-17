@@ -49,6 +49,7 @@ import type {
   StoredGitInstallPlan,
 } from "../../../../core/domains/install-plans/store.ts";
 import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import { declaredRepositoryManifestModulePath } from "./repo-owned-install-config.ts";
 
@@ -802,13 +803,41 @@ export async function userActionFor(
     interfaceRequirements(operations, plan),
     nameProposal(operations, plan),
   ]);
-  const variables = facts?.variables ??
+  let variables: readonly GitInstallPlanVariablePresentation[] = facts?.variables ??
     resubmit.map((variableName) => ({
       name: variableName,
       type: "unknown" as const,
       required: true,
       sensitive: true,
     }));
+  // Ownership is projected from the exact immutable repository declaration,
+  // never written into the captured facts or inferred from a default's shape.
+  if (facts && variables.length > 0 && plan.sourceId && plan.sourceSnapshotId &&
+    facts.modulePath === (plan.installModulePath ?? plan.options.modulePath ?? ".")) {
+    let snapshot: SourceSnapshot | undefined;
+    try {
+      snapshot = await operations.getSourceSnapshot(plan.sourceSnapshotId);
+    } catch (error) {
+      // Missing optional presentation evidence leaves legacy editability;
+      // advancing the attempt still requires the canonical snapshot.
+      if (!(error instanceof OpenTofuControllerError) || error.code !== "not_found") throw error;
+    }
+    const manifest = snapshot?.repositoryManifest;
+    const modulePath = snapshot && snapshot.id === plan.sourceSnapshotId &&
+        snapshot.sourceId === plan.sourceId &&
+        snapshot.workspaceId === plan.workspaceId && manifest?.status === "present"
+      ? declaredRepositoryManifestModulePath(snapshot, facts.modulePath)
+      : undefined;
+    if (modulePath && manifest?.status === "present") {
+      const userNames = new Set(manifest.document.install.modules[modulePath]!.inputs
+        .filter((entry) => entry.source.kind === "user")
+        .map((entry) => entry.name));
+      variables = variables.map((variable) => ({
+        ...variable,
+        userEditable: userNames.has(variable.name),
+      }));
+    }
+  }
   return {
     kind: "provide_inputs",
     modulePath: facts?.modulePath ?? plan.installModulePath ??
