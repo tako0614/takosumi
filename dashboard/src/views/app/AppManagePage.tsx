@@ -121,6 +121,8 @@ import { phoneClient } from "../../lib/open-routing.ts";
 import AppAttentionSection from "./AppAttentionSection.tsx";
 import AppPhoneSection from "./AppPhoneSection.tsx";
 import AppVersionSection from "./AppVersionSection.tsx";
+import AppReAdoptionInputs from "./AppReAdoptionInputs.tsx";
+import { reAdoptionRevisionFromApp, reAdoptionRevisionFromError } from "../../lib/re-adoption-inputs.ts";
 import AppSettingsSection from "./AppSettingsSection.tsx";
 import AppCreatedSection from "./AppCreatedSection.tsx";
 import AppHistorySection from "./AppHistorySection.tsx";
@@ -434,6 +436,8 @@ export default function AppManagePage(props: {
 
   // --- in-page reviews ---------------------------------------------------------
   const [review, setReview] = createSignal<ActiveReview>();
+  const [reAdoptionRevisionId, setReAdoptionRevisionId] = createSignal<string>();
+  const reAdoptionTargetId = () => reAdoptionRevisionId() ?? reAdoptionRevisionFromApp(app());
   const [starting, setStarting] = createSignal<
     { readonly section: ReviewSection; readonly action?: CapsuleAppAction | "continue_revision" }
   >();
@@ -466,6 +470,7 @@ export default function AppManagePage(props: {
       capsuleId,
       () => {
         setReview(undefined);
+        setReAdoptionRevisionId(undefined);
         setStarting(undefined);
         setSectionError(undefined);
         setNotice(undefined);
@@ -510,11 +515,16 @@ export default function AppManagePage(props: {
         planRunId,
         ...(options.restartable === false ? {} : { restart: create }),
       });
+      if (purpose === "update") setReAdoptionRevisionId(undefined);
       queueMicrotask(() =>
         document.getElementById("app-review")?.scrollIntoView({ block: "nearest", behavior: "instant" }),
       );
     } catch (cause) {
       if (capsuleId() === forCapsule) {
+        if (purpose === "update") {
+          const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
+          if (target) setReAdoptionRevisionId(target);
+        }
         // Finding no newer version is an answer, not a failure.
         if (isRevisionAlreadyCurrent(cause)) {
           setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
@@ -1283,6 +1293,18 @@ export default function AppManagePage(props: {
                   autoUpdateBusy={autoUpdateBusy()}
                   autoUpdateError={autoUpdateError()}
                   onAutoUpdate={(enabled) => void toggleAutoUpdate(enabled)}
+                  targetInputs={
+                    <Show when={reAdoptionTargetId()}>
+                      {target => <AppReAdoptionInputs
+                        capsuleId={capsuleId()}
+                        revisionPlanId={target()}
+                        principalId={props.principalId}
+                        busy={reviewBusy() || versionChangeBusy(view())}
+                        onReview={create => startReview("version", "update", create, { restartable: false })}
+                        onChanged={() => void Promise.allSettled([refetchContext(), refetchApp()])}
+                      />}
+                    </Show>
+                  }
                   review={reviewPanel("version")}
                 />
                 <AppSettingsSection

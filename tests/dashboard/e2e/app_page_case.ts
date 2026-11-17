@@ -10,6 +10,7 @@
  * `/apps/:id` is the canonical URL; older app URLs redirect there.
  */
 import { type BrowserContext, expect, test, type Page } from "@playwright/test";
+import reAdoptionCoreSeam from "../fixtures/re-adoption-core-seam.json" with { type: "json" };
 import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
@@ -189,6 +190,97 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         interfaceBlueprints: [],
         expected: { authorityGuard: AUTHORITY_GUARD },
       });
+    });
+
+    test("target user inputs recover a failed update and stop at explicit Plan review", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const errors = pageErrors(page);
+      // Captured provider-free actual Core public responses; no live provider.
+      const core = reAdoptionCoreSeam;
+      const context = core.contextBody.installConfigReAdoptionContext;
+      const id = context.capsuleId, sourceId = context.sourceId;
+      const base = `/api/v1/capsules/${id}`;
+      const adoptedConfig = core.currentBody.capsule.installConfigId;
+      let failed = false, adopted = false, contextReads = 0;
+      const writes: Array<{ path: string; key: string | undefined; body: unknown }> = [];
+      const capsule = () => ({ ...core.currentBody.capsule,
+        installConfigId: adopted ? adoptedConfig : context.currentInstallConfigId,
+      });
+      const failedRun = core.failedRunBody.run;
+      const targetPlan = { ...lifecycleRun(core.targetRevisionResponse.revisionPlan.planRunId, "plan", "succeeded", "2026-10-03T00:00:00.000Z", { capsuleId: id }),
+        summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass",
+        planResources: [{ address: "fixture_resource.entry", type: "fixture_resource", actions: ["update"] }],
+      };
+      const revision = (ready: boolean) => ready ? core.targetRevisionResponse : core.failedRevisionResponse;
+      await page.route("**/api/v1/**", async route => {
+        const request = route.request(), url = new URL(request.url()), path = url.pathname;
+        if (request.method() !== "GET") writes.push({ path, key: request.headers()["idempotency-key"], body: request.postDataJSON() });
+        if (path === "/api/v1/apps") return route.fulfill({ json: { apps: [{ capsuleId: id, name: "Input recovery fixture", role: "owner", state: "installed", primaryAction: "retry", screens: [] }] } });
+        if (path === base) return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: context.authorityGuard } } });
+        if (path === `${base}/app`) return route.fulfill({ json: failed
+          ? adopted ? core.appAfterAdoption : core.appBefore
+          : { app: { ...core.appBefore.app, state: "installed", primaryAction: "none", problems: [], latestRun: undefined } },
+        });
+        if (path === `${base}/install-config-re-adoption-context`) {
+          expect(url.searchParams.get("revisionPlanId")).toBe(context.revisionPlanId);
+          contextReads++;
+          return route.fulfill({ json: { installConfigReAdoptionContext: context } });
+        }
+        if (path === `${base}/install-config-re-adoptions`) {
+          adopted = true;
+          return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: {
+            replayed: false, targetInstallConfigId: adoptedConfig, sourceSnapshotId: context.sourceSnapshotId,
+          } } });
+        }
+        if (path === `${base}/revision-plans`) {
+          failed = true;
+          return route.fulfill({ status: 201, json: revision(adopted) });
+        }
+        if (path === `${base}/runs`) return route.fulfill({ json: { runs: failed ? [failedRun] : [] } });
+        if (path === `${base}/state-versions`) return route.fulfill({ json: { stateVersions: [] } });
+        if (path === `${base}/current-resource-inventory`) return route.fulfill({ json: { inventory: null } });
+        if (path === `${base}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: id, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
+        if (path === `${base}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: { id: "pbs_inputs", capsuleId: id, workspaceId: "ws_alpha", environment: "production", bindings: [] } } });
+        if (path === `/api/v1/capsule-configs/${capsule().installConfigId}`) return route.fulfill({ json: { installConfig: {
+          id: capsule().installConfigId, name: "Input recovery fixture", workspaceId: "ws_alpha", policy: {}, variableMapping: {}, outputAllowlist: {}, interfaceBlueprints: [],
+          createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+        } } });
+        for (const run of [failedRun, targetPlan]) {
+          if (path === `/api/v1/runs/${run.id}`) return route.fulfill({ json: { run } });
+          if (path === `/api/v1/runs/${run.id}/cost`) return route.fulfill({ json: { cost: { runId: run.id, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
+          if (path === `/api/v1/runs/${run.id}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (path === `/api/v1/runs/${run.id}/stream`) return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+        }
+        return route.fallback();
+      });
+      await page.goto(`/apps/${id}`, { waitUntil: "domcontentloaded" });
+      const version = page.getByTestId("app-version");
+      await version.locator(".ap-version-form input").fill(context.targetRef);
+      await version.locator(".ap-version-form button[type=submit]").click();
+      const form = page.getByTestId("app-target-inputs");
+      await expect(form.getByRole("button", { name: "Read target inputs", exact: true })).toBeVisible();
+      expect(contextReads).toBe(0);
+      // Fresh reload loses local catch state; the separate failed-Plan hint remains.
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await form.getByRole("button", { name: "Read target inputs", exact: true }).click();
+      await expect(form.getByRole("combobox", { name: "How to use Release note", exact: true })).toHaveValue("unresolved");
+      await form.getByRole("button", { name: "Adopt settings and review target Plan", exact: true }).click();
+      expect(writes).toHaveLength(1);
+      await form.getByRole("combobox", { name: "How to use Release note", exact: true }).selectOption("set");
+      await form.getByRole("textbox", { name: "Release note", exact: true }).fill(core.adoptionRequest.reviewedUserVariables.release_note);
+      await form.getByRole("combobox", { name: "How to use Clear optional", exact: true }).selectOption("unset");
+      await form.getByRole("button", { name: "Adopt settings and review target Plan", exact: true }).click();
+      await expect(page.getByTestId("app-review").getByRole("button", { name: "Allow and update", exact: true })).toBeEnabled();
+      expect(contextReads).toBe(1);
+      expect(writes.map(write => write.path)).toEqual([`${base}/revision-plans`, `${base}/install-config-re-adoptions`, `${base}/revision-plans`]);
+      expect(writes[1]!.body).toEqual({ baseInstallConfigId: context.baseInstallConfigId, sourceSnapshotId: context.sourceSnapshotId,
+        reason: "Review declared target user inputs", expected: { authorityGuard: context.authorityGuard },
+        reviewedUserVariables: core.adoptionRequest.reviewedUserVariables });
+      expect(writes[2]!.body).toEqual({ ref: context.targetRef });
+      expect(writes[1]!.key).toBeTruthy();
+      expect(writes[2]!.key).not.toBe(writes[1]!.key);
+      expect(writes.some(write => /\/(apply|approve)$/u.test(write.path))).toBe(false);
+      expect(errors).toEqual([]);
     });
 
     test("keeps an installed app: open, update, settings, what it created and history in place", async ({ page }) => {
