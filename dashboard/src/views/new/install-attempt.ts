@@ -346,6 +346,9 @@ export function continueVariables(
   const missing: string[] = [];
   const invalid: string[] = [];
   for (const variable of sheetVariables(action)) {
+    // Only an explicit server ownership projection forbids an override.
+    // Generic derived defaults remain editable when this metadata is absent.
+    if (variable.userEditable === false) continue;
     const draft = drafts[variable.name];
     if (draft?.connectionSetting && (variable.type !== "json" || variable.sensitive ||
       variable.defaultValue !== undefined || variable.derivedDefault !== undefined ||
