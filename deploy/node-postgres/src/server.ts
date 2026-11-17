@@ -301,6 +301,8 @@ async function buildAccountsHandler(
     issuer: config.issuer,
     store,
     ...(config.clients ? { clients: config.clients } : {}),
+    ...(config.passwordAuthMode ? {passwordAuthMode: config.passwordAuthMode} : {}),
+    passwordClientAddress: (request: Request) => privatePeerAddresses.get(request),
     ...(config.loginEmailAllowlist
       ? { loginEmailAllowlist: config.loginEmailAllowlist }
       : {}),
@@ -518,6 +520,9 @@ interface ServerConfig {
   hostname: string;
 }
 
+// Runtime-provided peer address; never accept a public forwarding header here.
+const privatePeerAddresses = new WeakMap<Request, string>();
+
 async function serveOnAnyRuntime(
   handler: (req: Request) => Promise<Response> | Response,
   options: ServerConfig,
@@ -525,12 +530,21 @@ async function serveOnAnyRuntime(
   const bunGlobal = (
     globalThis as {
       Bun?: {
-        serve: (opts: ServerConfig & { fetch: typeof handler }) => unknown;
+        serve: (opts: ServerConfig & {
+          fetch: (req: Request, server: { requestIP(req: Request): { address: string } | null }) => ReturnType<typeof handler>;
+        }) => unknown;
       };
     }
   ).Bun;
   if (bunGlobal?.serve) {
-    bunGlobal.serve({ ...options, fetch: handler });
+    bunGlobal.serve({
+      ...options,
+      fetch(request, server) {
+        const address = server.requestIP(request)?.address;
+        if (address) privatePeerAddresses.set(request, address);
+        return handler(request);
+      },
+    });
     return;
   }
   // Node fallback for tests and external embedders that do not run Bun.
@@ -558,7 +572,9 @@ async function serveOnAnyRuntime(
         duplex?: "half";
       };
       if (body) requestInit.duplex = "half";
-      const response = await handler(new Request(url, requestInit));
+      const request = new Request(url, requestInit);
+      if (req.socket.remoteAddress) privatePeerAddresses.set(request, req.socket.remoteAddress);
+      const response = await handler(request);
       res.statusCode = response.status;
       response.headers.forEach((value, key) => res.setHeader(key, value));
       if (!response.body) {

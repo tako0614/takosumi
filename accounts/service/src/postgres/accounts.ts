@@ -93,8 +93,7 @@ export async function saveAccount(
         subject: record.subject,
         email: record.email ?? null,
         // Tri-state: persist NULL when genuinely unknown so a re-read returns
-        // `undefined`, never a coerced `false`. The COALESCE on update keeps a
-        // previously-asserted value when a later save omits the claim.
+        // `undefined`, never a coerced `false`.
         emailVerified: record.emailVerified ?? null,
         displayName: record.displayName ?? null,
         picture: record.picture ?? null,
@@ -110,7 +109,11 @@ export async function saveAccount(
         target: accounts.subject,
         set: {
           email: sql`excluded.email`,
-          emailVerified: sql`coalesce(excluded.email_verified, ${accounts.emailVerified})`,
+          // Verification may be kept for a profile-only write with the exact
+          // same address. An explicit upstream observation can clear it.
+          emailVerified: Object.hasOwn(record, "emailVerified")
+            ? sql`excluded.email_verified`
+            : sql`case when excluded.email is not distinct from ${accounts.email} then ${accounts.emailVerified} else null end`,
           displayName: sql`excluded.display_name`,
           picture: sql`coalesce(excluded.picture, ${accounts.picture})`,
           termsVersion: sql`coalesce(excluded.terms_version, ${accounts.termsVersion})`,
@@ -150,12 +153,11 @@ export async function findAccount(
 export async function findAccountByVerifiedEmail(
   client: PostgresQueryClient,
   email: string,
+  options?: { unique?: boolean },
 ): Promise<TakosumiAccountRecord | undefined> {
   const normalized = normalizeAccountEmail(email);
   if (!normalized) return undefined;
-  const row = await firstDrizzle<AccountRow>(
-    client,
-    db
+  const query = db
       .select({
         subject: accounts.subject,
         email: accounts.email,
@@ -172,10 +174,14 @@ export async function findAccountByVerifiedEmail(
       .where(
         and(
           eq(accounts.emailVerified, true),
-          sql`lower(${accounts.email}) = ${normalized}`,
+          options?.unique
+            ? sql`lower(btrim(${accounts.email})) = ${normalized}`
+            : sql`lower(${accounts.email}) = ${normalized}`,
         ),
-      ),
-  );
+      ).limit(options?.unique ? 2 : 1);
+  const { sql: text, params } = query.toSQL();
+  const rows = (await runQuery<AccountRow>(client, text, params)).rows;
+  const row = options?.unique && rows.length !== 1 ? undefined : rows[0];
   return row ? accountFromRow(row) : undefined;
 }
 

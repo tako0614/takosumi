@@ -392,6 +392,7 @@ export interface TakosumiAccountsAuthProvider {
 /** Body of `GET /api/v1/auth/providers`. */
 export interface TakosumiAccountsAuthProvidersResponse {
   readonly providers: readonly TakosumiAccountsAuthProvider[];
+  readonly password?: { readonly enabled: true };
 }
 
 export interface OidcDiscoveryDocument {

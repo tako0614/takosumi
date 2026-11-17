@@ -68,26 +68,28 @@ export async function handleStagingLoginPortal(input: {
     const providerResponse = await input.accountsHandler(new Request(`${stagingIssuer}/api/v1/auth/providers`, {
       headers: { accept: "application/json" },
     }));
-    const providers = await readProviders(providerResponse);
-    if (providers.length === 0) return portalResponse(input.request, copy.unavailable, 503);
+    const { providers, passwordEnabled } = await readProviders(providerResponse);
+    if (providers.length === 0 && !passwordEnabled) return portalResponse(input.request, copy.unavailable, 503);
+    if (continuation.returnTo === "/account" && !passwordEnabled) return portalResponse(input.request, copy.invalid, 400);
+    const returnTo = continuation.returnTo ?? (passwordEnabled ? "/account" : undefined);
     const choices = providers.map((provider) => {
       const label = escapeHtml(provider.label);
       const icon = providerIcon(provider.id);
-      if (!continuation.returnTo) return `<li class="auth-provider-label">${icon}${label}</li>`;
+      if (!returnTo) return `<li class="auth-provider-label">${icon}${label}</li>`;
       if (continuation.fresh && provider.id === "github") {
         return `<li><button class="auth-button auth-provider-choice" type="button" disabled>${icon}${label}</button><p class="auth-hint">${copy.githubFresh}</p></li>`;
       }
       const target = new URL("/oauth/upstream/authorize", stagingIssuer);
       target.searchParams.set("provider", provider.id);
-      target.searchParams.set("return_to", continuation.returnTo);
+      target.searchParams.set("return_to", returnTo);
       if (continuation.fresh) {
         target.searchParams.set("prompt", "login");
         target.searchParams.set("max_age", continuation.maxAge ?? "0");
       }
       return `<li><a class="auth-button auth-provider-choice" href="${escapeHtml(target.pathname + target.search)}">${icon}<span>${escapeHtml(copy.provider(provider.label))}</span></a></li>`;
     }).join("");
-    const explanation = continuation.returnTo ? (continuation.fresh ? copy.fresh : "") : copy.start;
-    return portalResponse(input.request, explanation, 200, {}, `<ul class="auth-providers">${choices}</ul>`);
+    const explanation = returnTo ? (continuation.fresh ? copy.fresh : "") : copy.start;
+    return portalResponse(input.request, explanation, 200, {}, `<ul class="auth-providers">${choices}</ul>`, passwordEnabled ? returnTo : undefined);
   } catch {
     return portalResponse(input.request, copy.unavailable, 503);
   }
@@ -111,6 +113,9 @@ function validateContinuation(url: URL): { returnTo?: string; fresh: boolean; ma
     if (prompt !== null || maxAge !== null) throw new TypeError("missing sign-in continuation");
     return { fresh: false };
   }
+  // The management return is admitted only after password capability is checked.
+  if (rawReturn === "/account") return { returnTo: rawReturn, fresh: prompt === "login" || maxAge !== null,
+    ...(maxAge !== null ? { maxAge } : {}) };
   if (rawReturn.length > returnLimit || controlCharacters.test(rawReturn) || rawReturn.includes("\\") ||
     !/^\/oauth\/authorize(?:\?|$)/u.test(rawReturn)) {
     throw new TypeError("invalid sign-in continuation");
@@ -140,7 +145,7 @@ function validateContinuation(url: URL): { returnTo?: string; fresh: boolean; ma
   };
 }
 
-async function readProviders(response: Response): Promise<TakosumiAccountsAuthProvider[]> {
+async function readProviders(response: Response): Promise<{ providers: TakosumiAccountsAuthProvider[]; passwordEnabled: boolean }> {
   if (response.status !== 200 || !/^application\/json(?:\s*;|$)/iu.test(response.headers.get("content-type") ?? "")) {
     throw new TypeError("provider discovery is unavailable");
   }
@@ -187,19 +192,22 @@ async function readProviders(response: Response): Promise<TakosumiAccountsAuthPr
       result.push({ id: provider.id, enabled: true, label: provider.label.trim(), protocol: provider.protocol });
     }
   }
-  return result;
+  if (body.password !== undefined && (!isRecord(body.password) || typeof body.password.enabled !== "boolean")) {
+    throw new TypeError("invalid password capability");
+  }
+  return { providers: result, passwordEnabled: isRecord(body.password) && body.password.enabled === true };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function portalResponse(request: Request, message: string, status: number, extraHeaders: Record<string, string> = {}, choices = ""): Response {
+function portalResponse(request: Request, message: string, status: number, extraHeaders: Record<string, string> = {}, choices = "", passwordReturn?: string): Response {
   const language = authLanguage(request);
   const copy = portalCopy[language];
   const nonce = crypto.randomUUID();
   const html = authPage({ language, nonce, title: copy.title, badge: copy.stage,
-    description: message, body: choices });
+    description: message, body: choices + (passwordReturn ? passwordForm(language, nonce, passwordReturn) : "") });
   return new Response(request.method === "HEAD" ? null : html, {
     status,
     headers: {
@@ -207,11 +215,74 @@ function portalResponse(request: Request, message: string, status: number, extra
       "cache-control": "no-store",
       "content-language": language,
       "x-content-type-options": "nosniff",
-      "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
+      "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; ${passwordReturn ? `script-src 'nonce-${nonce}'; connect-src 'self'; ` : ''}base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
       "referrer-policy": "no-referrer",
       ...extraHeaders,
     },
   });
+}
+
+
+const passwordCopy = {
+  en: {
+    title: "Sign in with a password", email: "Email address", password: "Password", noScript: "Enable JavaScript to sign in with a password.",
+    failed: "We couldn't complete this request. Check your details and try again.", credentials: "We couldn't verify these details. Check them and try again.",
+    rateLimited: "Too many attempts. Wait a while before trying again.", unavailable: "Password sign-in is currently unavailable. Try again later or use another method.",
+  },
+  ja: {
+    title: "パスワードでサインイン", email: "メールアドレス", password: "パスワード", noScript: "パスワードでサインインするにはJavaScriptを有効にしてください。",
+    failed: "操作を完了できませんでした。入力内容を確かめて、もう一度お試しください。", credentials: "入力内容を確認できませんでした。内容を確かめて、もう一度お試しください。",
+    rateLimited: "試行回数が多くなっています。しばらく待ってから、もう一度お試しください。", unavailable: "現在、パスワードによるサインインは利用できません。時間をおくか、別の方法をお使いください。",
+  },
+} as const;
+
+function passwordForm(language: "ja" | "en", nonce: string, returnTo: string): string {
+  const copy = passwordCopy[language];
+  const h = escapeHtml;
+  const messages = JSON.stringify(copy).replace(/</gu, "\\u003c");
+  return `<style nonce="${h(nonce)}">
+.auth-password { margin-top: var(--auth-space-lg); border-top: 1px solid var(--auth-border); padding-top: var(--auth-space-lg); }
+.auth-password fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: var(--auth-space-md); min-width: 0; }
+.auth-password label { display: grid; gap: var(--auth-space-xs); font-size: .875rem; }
+.auth-password input { width: 100%; min-width: 0; min-height: 2.75rem; padding: .5rem; border: 1px solid var(--auth-control-border); border-radius: .5rem; background: var(--auth-panel); color: var(--auth-fg); font: inherit; }
+.auth-password input:focus-visible { outline: 2px solid var(--auth-accent); outline-offset: 2px; }
+.auth-password h2 { font-size: 1rem; margin: 0 0 var(--auth-space-md); }
+</style>
+<section class="auth-password" id="password-root" data-return-path="${h(returnTo)}"><h2 id="password-heading">${h(copy.title)}</h2>
+<form id="password-form" method="post" action="/api/v1/auth/password/login" aria-labelledby="password-heading"><fieldset id="password-fields">
+<label>${h(copy.email)}<input name="email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+<label>${h(copy.password)}<input name="password" type="password" autocomplete="current-password" required></label>
+<button class="auth-button auth-button--primary" type="submit">${h(copy.title)}</button>
+</fieldset></form><p class="warn" id="password-error" role="alert"></p><noscript><p>${h(copy.noScript)}</p></noscript></section>
+<script nonce="${h(nonce)}">(() => {
+"use strict";
+const copy = ${messages};
+const root = document.getElementById("password-root");
+const form = document.getElementById("password-form");
+const fields = document.getElementById("password-fields");
+const error = document.getElementById("password-error");
+const controller = new AbortController();
+let busy = false;
+addEventListener("pagehide", () => { controller.abort(); form.reset(); });
+document.querySelectorAll(".auth-providers a").forEach((link) => link.addEventListener("click", (event) => { if (busy) event.preventDefault(); }));
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (busy) return;
+  const values = new FormData(form);
+  busy = true; fields.disabled = true; error.textContent = "";
+  try {
+    const response = await fetch("/api/v1/auth/password/login", { method: "POST", credentials: "same-origin", redirect: "error", signal: controller.signal,
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ email: String(values.get("email") || "").trim(), password: String(values.get("password") || "") }) });
+    if (!response.ok) { error.textContent = response.status === 429 ? copy.rateLimited : response.status === 401 || response.status === 403 ? copy.credentials : response.status === 404 || response.status === 503 ? copy.unavailable : copy.failed; return; }
+    const result = await response.json();
+    if (!result || typeof result.subject !== "string" || !result.subject) throw new Error("invalid response");
+    if (controller.signal.aborted) return;
+    form.reset(); location.assign(root.dataset.returnPath);
+  } catch { if (!controller.signal.aborted) error.textContent = copy.failed; }
+  finally { busy = false; fields.disabled = false; }
+});
+})();</script>`;
 }
 
 // Provider marks are static presentation, never returned by provider discovery.

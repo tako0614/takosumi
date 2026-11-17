@@ -9,6 +9,7 @@ import { createResource, createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { ExternalLink, LogOut } from "lucide-solid";
 import { clearSession, type SessionRecord } from "../lib/session.ts";
+import SignInMethodsCard from "../components/SignInMethodsCard.tsx";
 import { intlLocale, locale, setLocale, t } from "../../../i18n/index.ts";
 import type { MessageKey } from "../../../i18n/index.ts";
 import {
@@ -114,6 +115,8 @@ export default function ProfileSection(props: {
           <p class="muted">{t("account.profile.nameHint")}</p>
         </CardSection>
       </Card>
+
+      <SignInMethodsCard />
 
       <Card>
         <CardHeader

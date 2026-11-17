@@ -1,3 +1,5 @@
+import { PostgresPasswordAuthStore } from "./postgres/passwords.ts";
+import type { PasswordAuthStore } from "./password-store.ts";
 import type { ConnectionOAuthAttemptRecord, ConnectionOAuthAttemptSweepInput, ConnectionOAuthAttemptSweepResult } from "./connection-oauth-attempt.ts";
 import { hashSessionId } from "./session-hash-salt.ts";
 import type {
@@ -48,11 +50,13 @@ import type { NotificationDeliveryStore } from "./notification-deliveries-store.
 export type { PostgresQueryClient, PostgresQueryResult };
 
 export class PostgresAccountsStore implements AccountsStore {
+  readonly passwordAuth: PasswordAuthStore;
   readonly #client: PostgresQueryClient;
   readonly #hosted: HostedIdentityRecords;
 
   constructor(client: PostgresQueryClient) {
     this.#client = client;
+    this.passwordAuth = new PostgresPasswordAuthStore(client);
     this.#hosted = new HostedIdentityRecords(new PostgresIdentityRecordRepository(client), this);
   }
 
@@ -160,8 +164,9 @@ export class PostgresAccountsStore implements AccountsStore {
 
   findAccountByVerifiedEmail(
     email: string,
+    options?: { unique?: boolean },
   ): Promise<TakosumiAccountRecord | undefined> {
-    return accounts.findAccountByVerifiedEmail(this.#client, email);
+    return accounts.findAccountByVerifiedEmail(this.#client, email, options);
   }
 
   linkUpstreamIdentityIfAbsent(record: UpstreamIdentityRecord): Promise<boolean> { return accounts.linkUpstreamIdentityIfAbsent(this.#client, record); }

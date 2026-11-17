@@ -35,6 +35,7 @@
       "name": "@takosjp/takosumi-accounts-service",
       "version": "0.0.1",
       "dependencies": {
+        "@noble/hashes": "2.2.0",
         "@takosjp/takosumi-accounts-contract": "workspace:*",
         "hono": "^4.13.5",
       },

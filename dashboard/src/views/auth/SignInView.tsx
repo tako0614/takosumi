@@ -38,6 +38,8 @@ import { rpc } from "../account/lib/api.ts";
 import { refreshSession } from "../account/lib/session.ts";
 import LogoMark from "../account/components/brand/LogoMark.tsx";
 import { setDocumentTitle, t } from "../../i18n/index.ts";
+import PasswordSignIn from "./PasswordSignIn.tsx";
+import type { PasswordCapability } from "../account/lib/password-auth.ts";
 
 type Provider = string;
 
@@ -76,6 +78,8 @@ export function SignInPanel() {
   const [providersLoaded, setProvidersLoaded] = createSignal(false);
   const [providersLoadFailed, setProvidersLoadFailed] = createSignal(false);
   const [sharedAuth, setSharedAuth] = createSignal(false);
+  const [password, setPassword] = createSignal<PasswordCapability>();
+  const [passwordPending, setPasswordPending] = createSignal(false);
   let providerCheck = 0;
   onCleanup(() => { providerCheck += 1; });
 
@@ -85,6 +89,7 @@ export function SignInPanel() {
     setProvidersLoadFailed(false);
     setProviders([]);
     setSharedAuth(false);
+    setPassword(undefined);
     void probeInitialSharedAuthSession()
       .then(async ({ route }) => {
         if (check !== providerCheck) return;
@@ -96,6 +101,7 @@ export function SignInPanel() {
           const res = await rpc.auth.listProviders();
           if (check !== providerCheck) return;
           setProviders(res.providers.filter(isDashboardOAuthProvider));
+          setPassword(res.password?.enabled === true ? res.password : undefined);
         }
         setProvidersLoaded(true);
       })
@@ -115,7 +121,7 @@ export function SignInPanel() {
   const enabledProviders = (): readonly TakosumiAccountsAuthProvider[] =>
     providers().filter((provider) => provider.enabled);
   const hasEnabledProvider = (): boolean =>
-    sharedAuth() || providers().some((provider) => provider.enabled);
+    sharedAuth() || password()?.enabled === true || providers().some((provider) => provider.enabled);
   const providerSubText = (p: Provider): string | undefined => {
     if (!providersLoaded()) return t("auth.providerChecking");
     if (providersLoadFailed()) return t("auth.providerRetryNeeded");
@@ -127,7 +133,7 @@ export function SignInPanel() {
   // offers no crypto.subtle for PKCE). Say so instead of a dead button.
   const [startError, setStartError] = createSignal<string | null>(null);
   const select = (p: Provider) => {
-    if (!isEnabled(p)) return;
+    if (!isEnabled(p) || passwordPending()) return;
     setStartError(null);
     rpc.auth.startUpstreamOAuth(p).catch(() => {
       setStartError(
@@ -225,7 +231,7 @@ export function SignInPanel() {
             type="button"
             class="sign-in-btn"
             data-provider={p.id}
-            disabled={!isEnabled(p.id)}
+            disabled={!isEnabled(p.id) || passwordPending()}
             onClick={() => select(p.id)}
           >
             <span class="sign-in-icon">
@@ -257,6 +263,9 @@ export function SignInPanel() {
           </button>
         ))}
       </div>
+      <Show when={password()}>
+        <PasswordSignIn returnTo={returnParam()} onPending={setPasswordPending} />
+      </Show>
       <Show when={startError()}>
         {(message) => (
           <p class="sign-in-error" role="alert">

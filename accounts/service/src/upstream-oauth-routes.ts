@@ -63,10 +63,14 @@ export function upstreamOAuthNotConfigured(): Response {
 export function handleAuthProvidersRequest(input: {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
+  password?: TakosumiAccountsAuthProvidersResponse["password"];
 }): Response {
   try {
     const providers = buildPublicAuthProviderDescriptors(input);
-    const body: TakosumiAccountsAuthProvidersResponse = { providers };
+    const body: TakosumiAccountsAuthProvidersResponse = {
+      providers,
+      ...(input.password ? { password: input.password } : {}),
+    };
     return json(body, 200, { "cache-control": "no-store" });
   } catch {
     // This endpoint is public. A malformed in-process registration must not
@@ -206,7 +210,9 @@ async function handleHostedUpstreamAuthorizeRequest(input: {
     let contextContinuation:UpstreamLoginTransactionRecord["contextContinuation"];
     if (requestedReturn !== null) {
       const target = new URL(requestedReturn, input.url.origin);
-      if(target.pathname!=="/oauth/authorize"){
+      const accountSettings = input.upstreamOAuth.passwordAccountReturnEnabled &&
+        requestedReturn === "/account" && target.href === new URL("/account", input.url.origin).href;
+      if(target.pathname!=="/oauth/authorize" && !accountSettings){
         if(!input.upstreamOAuth.hostedSessionPolicy||!input.request||!identityContextContinuationPath(target))throw new TypeError("invalid hosted context continuation");
         contextContinuation=await createIdentityContextContinuation({request:input.request,store:input.store,target,providerId:resolved.client.providerId,now:Date.now()});
       }else if (target.origin !== input.url.origin || target.username || target.password || target.hash) {
@@ -520,7 +526,9 @@ async function handleUpstreamCallbackRequestUncached(input: {
       const target = new URL(transaction.returnTo, input.url.origin);
       if(transaction.contextContinuation){
         if(target.origin!==input.url.origin||identityContextContinuationPath(target)!==transaction.contextContinuation.path||account.subject!==transaction.contextContinuation.expectedSubject)throw new TypeError("invalid context continuation");
-      }else if (target.origin !== input.url.origin || target.pathname !== "/oauth/authorize" || target.username || target.password || target.hash) {
+      }else if (target.origin !== input.url.origin ||
+        (target.pathname !== "/oauth/authorize" && !(input.upstreamOAuth.passwordAccountReturnEnabled && transaction.returnTo === "/account")) ||
+        target.username || target.password || target.hash) {
         throw new TypeError("invalid hosted continuation");
       }
       headers.set("location", target.pathname + target.search);

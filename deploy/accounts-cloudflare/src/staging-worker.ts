@@ -2,6 +2,8 @@ import { createCloudflareWorker, type PrivateAccountsFinancialSourceFacade, type
 import { FinancialSourceUnavailable } from "../../../accounts/service/src/financial-source.ts";
 import { createIdentityMergeRetryService, type IdentityMergeRetryService, type IdentityMergeRetryRuntimeContext } from "../../../accounts/service/src/identity-merge-retry.ts";
 import { handleStagingLoginPortal } from "./staging-login-portal.ts";
+import { handleStagingSignInMethods } from "./staging-sign-in-methods.ts";
+import { parsePasswordAuthMode } from "../../../accounts/service/src/password-auth-config.ts";
 import { createDerivedWorkspaceBillingEnrollment } from "../../../accounts/service/src/workspace-billing-organization.ts";
 import { createStagingIdentityPortal } from "./staging-identity-portal.ts";
 import {
@@ -188,6 +190,13 @@ export function createAuthStagingWorker(dependencies: {
             issuer: AUTH_STAGING_ISSUER,
             accountsHandler: (portalRequest) => accounts.fetch(portalRequest, env, context),
           })(request) ?? Response.json({ error: "not_found" }, { status: 404 });
+        } catch {
+          response = Response.json({ error: "auth_staging_unavailable" }, { status: 503 });
+        }
+      } else if (url.pathname === "/account" && parsePasswordAuthMode(env.TAKOSUMI_ACCOUNTS_PASSWORD_AUTH) !== "disabled") {
+        try {
+          await schemaForRequest(env, request);
+          response = await handleStagingSignInMethods(request, (accountRequest) => accounts.fetch(accountRequest, env, context));
         } catch {
           response = Response.json({ error: "auth_staging_unavailable" }, { status: 503 });
         }
