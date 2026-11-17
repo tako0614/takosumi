@@ -895,7 +895,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expandDetails(page, "install-customization");
       const name = sheet.getByTestId("install-app-name");
       await expect(name).toHaveValue("cloudflare-service");
-      await expect(sheet).toContainText("This deployment name is already in use.");
+      await expect(sheet).toContainText("This internal name is already in use.");
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Check what you entered");
       await name.fill("Not A Valid Name");
       await expect(sheet).toContainText("Use lowercase letters");

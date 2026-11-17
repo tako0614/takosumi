@@ -59,7 +59,7 @@ export function registerInstallReopenCases(
       await expect(settings).not.toHaveAttribute("open", "");
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await optional.click();
-      const nameField = sheet.getByLabel(/^Deployment name/u);
+      const nameField = sheet.getByLabel(/^Internal name/u);
       await expect(nameField).toHaveValue("cloudflare-service");
       const publicField = sheet.getByRole("textbox", { name: "Domain", exact: true });
       await publicField.fill(publicSetting);
