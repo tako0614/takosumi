@@ -932,6 +932,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.approving": "Approving…",
   "run.deploy": "Allow and apply",
   "run.deploying": "Applying…",
+  "run.applyUnconfirmed": "We couldn't confirm the result. Retry checks for the existing operation without sending it again.",
   "run.deployBlocked": "Can't apply",
   "run.retryPlan": "Review changes again",
   "run.restartLatestSource": "Start over with the latest source",

@@ -943,6 +943,7 @@ export const ja = {
   "run.approving": "承認中…",
   "run.deploy": "許可して適用",
   "run.deploying": "適用しています…",
+  "run.applyUnconfirmed": "処理結果を確認できませんでした。再試行では送信し直さず、受け付け済みの処理を確認します。",
   "run.deployBlocked": "適用できません",
   "run.retryPlan": "もう一度変更を確認",
   "run.restartLatestSource": "最新のソースで最初からやり直す",

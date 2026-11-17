@@ -35,7 +35,9 @@ import {
   abandonUnappliedCapsule,
   approveRun,
   capsuleAbandonmentCompleted,
+  CAPSULE_RUN_PAGE_MAX,
   ControlApiError,
+  ControlApiIndeterminateError,
   cancelRun,
   createApplyRun,
   extractRunId,
@@ -46,6 +48,7 @@ import {
   getRunLogs,
   getSource,
   listCapsuleActivity,
+  listCapsuleRuns,
   listStateVersions,
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
@@ -139,6 +142,7 @@ import {
 } from "../../lib/resource-read.ts";
 
 const APPLY_REQUEST_TIMEOUT_MS = 45_000;
+const APPLY_RECOVERY_TIMEOUT_MS = 5_000;
 const RELEASE_ACTIVATION_POLL_MS = 3_000;
 /** Newest-slice size of the Workspace Run ledger fetched to decide whether a
  * succeeded review run's deploy approval was already consumed by a later
@@ -147,10 +151,6 @@ const SIBLING_RUNS_LIMIT = 200;
 
 export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
-}
-
-function isRequestTimeout(error: unknown): boolean {
-  return error instanceof ControlApiError && error.code === "request_timeout";
 }
 
 /** True when the run fetch failed because the run genuinely does not exist —
@@ -167,13 +167,14 @@ function latestApplyRunForPlan(
   runs: readonly Run[],
   planRun: Run,
 ): Run | undefined {
-  return runs.find((candidate) => {
-    if (candidate.type !== "apply" && candidate.type !== "destroy_apply") {
-      return false;
-    }
-    if (candidate.capsuleId !== planRun.capsuleId) return false;
-    return candidate.planRunId === planRun.id;
-  });
+  const type = planRun.type === "plan" ? "apply" : "destroy_apply";
+  const matches = runs.filter((candidate) =>
+    typeof candidate.id === "string" && candidate.id !== "" &&
+    candidate.id !== planRun.id && candidate.type === type &&
+    candidate.workspaceId === planRun.workspaceId &&
+    candidate.capsuleId === planRun.capsuleId && candidate.planRunId === planRun.id
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function diagnosticDisplayText(value: string | undefined): string | undefined {
@@ -495,7 +496,22 @@ function ProviderResolutionTable(props: {
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
-  const runId = () => params.id ?? "";
+  const runId = () => {
+    const segment = params.id ?? "";
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      // Preserve malformed segments for the existing not-found read path.
+      return segment;
+    }
+  };
+  let disposed = false;
+  let runEpoch = 0;
+  let applyReadController: AbortController | undefined;
+  onCleanup(() => {
+    disposed = true;
+    applyReadController?.abort();
+  });
   const appHandoff = appHandoffFromSearch(
     typeof location === "undefined" ? "" : location.search,
   );
@@ -910,6 +926,15 @@ function Inner() {
 
   const [applied, setApplied] = createSignal(false);
   const [needsConfirm, setNeedsConfirm] = createSignal(false);
+  type ApplyAttempt = { readonly plan: Run; readonly epoch: number };
+  const [unconfirmedApply, setUnconfirmedApply] = createSignal<ApplyAttempt>();
+  const [checkingApply, setCheckingApply] = createSignal(false);
+  const ownsApply = ({ plan, epoch }: ApplyAttempt): boolean => {
+    const current = runLatest();
+    return !disposed && epoch === runEpoch && runId() === plan.id &&
+      current?.id === plan.id && current.capsuleId === plan.capsuleId &&
+      current.workspaceId === plan.workspaceId && current.type === plan.type;
+  };
 
   // Whether this plan's deploy approval is still OPEN is not a run-local
   // fact: an apply / destroy_apply explicitly linked by planRunId consumes it
@@ -928,7 +953,7 @@ function Inner() {
     ([capsuleId]) => listRecentCapsuleRuns(capsuleId, SIBLING_RUNS_LIMIT),
   );
   const isDeployableRun = (r: Run): boolean => {
-    if (!isDeployApprovalCandidate(r) || applied()) return false;
+    if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply()) return false;
     // A failed or unfinished history read cannot prove approval is still open.
     if (siblingRuns.error || siblingRuns.loading) return false;
     const siblings = siblingRuns.latest;
@@ -987,9 +1012,69 @@ function Inner() {
       changeCounts().delete > 0 ||
       !changeCountsKnown());
 
+  const recoverApply = async (attempt: ApplyAttempt): Promise<Run | undefined> => {
+    if (!ownsApply(attempt) || unconfirmedApply() !== attempt) return;
+    const controller = new AbortController();
+    applyReadController?.abort();
+    applyReadController = controller;
+    const timeout = setTimeout(() => controller.abort(), APPLY_RECOVERY_TIMEOUT_MS);
+    setCheckingApply(true);
+    try {
+      const rows: Run[] = [];
+      let cursor: string | undefined;
+      // The same finite ledger budget as approval display, narrowed to the
+      // expected operation. A truncated window never proves a unique result.
+      for (let pageIndex = 0; pageIndex < Math.ceil(SIBLING_RUNS_LIMIT / CAPSULE_RUN_PAGE_MAX); pageIndex++) {
+        if (!ownsApply(attempt) || controller.signal.aborted) return;
+        const page = await listCapsuleRuns(attempt.plan.capsuleId!, {
+          limit: CAPSULE_RUN_PAGE_MAX,
+          types: [attempt.plan.type === "plan" ? "apply" : "destroy_apply"],
+          ...(cursor ? { cursor } : {}),
+          signal: controller.signal,
+        });
+        if (!ownsApply(attempt) || controller.signal.aborted || unconfirmedApply() !== attempt) return;
+        if (page.runs.length > CAPSULE_RUN_PAGE_MAX) return;
+        rows.push(...page.runs);
+        if (!page.nextCursor) return latestApplyRunForPlan(rows, attempt.plan);
+        if (page.nextCursor === cursor) return;
+        cursor = page.nextCursor;
+      }
+    } catch {
+      // Failed, cancelled and incomplete reads leave the mutation unconfirmed.
+    } finally {
+      clearTimeout(timeout);
+      if (applyReadController === controller) {
+        applyReadController = undefined;
+        if (ownsApply(attempt)) setCheckingApply(false);
+      }
+    }
+  };
+  const finishApply = async (envelope: unknown, attempt: ApplyAttempt) => {
+    if (!ownsApply(attempt)) return;
+    setUnconfirmedApply(undefined);
+    setNeedsConfirm(false);
+    setApplied(true);
+    clearWorkspaceProjectionCaches(attempt.plan.workspaceId);
+    const applyRunId = extractRunId(envelope);
+    if (applyRunId && applyRunId !== attempt.plan.id) {
+      const href = `/runs/${encodeURIComponent(applyRunId)}`;
+      navigate(appendAppHandoff(href, appHandoff) ?? href);
+      return;
+    }
+    await Promise.all([refetchRun(), refetchLogs()]);
+  };
+  const recheckApply = createAction(async () => {
+    const attempt = unconfirmedApply();
+    if (!attempt) return;
+    const recovered = await recoverApply(attempt);
+    if (recovered) await finishApply({ run: recovered }, attempt);
+  });
   const deploy = createAction(async (confirmedReview?: boolean) => {
     let envelope: unknown;
     const currentRun = runLatest();
+    if (!currentRun || currentRun.id !== runId() || !currentRun.capsuleId ||
+      !currentRun.workspaceId || !isReviewRun(currentRun) || unconfirmedApply()) return;
+    const attempt = { plan: currentRun, epoch: runEpoch };
     if (
       currentRun &&
       requiresDestructiveConfirmation(currentRun) &&
@@ -999,41 +1084,19 @@ function Inner() {
       return;
     }
     try {
-      envelope = await createApplyRun(runId(), {
+      envelope = await createApplyRun(currentRun.id, {
         timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
       });
     } catch (error) {
-      if (currentRun?.capsuleId && isRequestTimeout(error)) {
-        const recovered = latestApplyRunForPlan(
-          await listRecentCapsuleRuns(currentRun.capsuleId, 30),
-          currentRun,
-        );
-        if (recovered) {
-          envelope = { run: recovered };
-        } else {
-          envelope = await createApplyRun(runId(), {
-            timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
-          });
-        }
-      } else {
-        throw error;
-      }
+      if (!ownsApply(attempt)) return;
+      if (!(error instanceof ControlApiIndeterminateError) || error.operation !== "apply") throw error;
+      setUnconfirmedApply(attempt);
+      const recovered = await recoverApply(attempt);
+      if (!ownsApply(attempt)) return;
+      if (!recovered) throw error;
+      envelope = { run: recovered };
     }
-    setNeedsConfirm(false);
-    setApplied(true);
-    clearWorkspaceProjectionCaches(currentRun?.workspaceId);
-    // Jump to the apply Run when the backend surfaced its id — that page then
-    // polls to "デプロイが完了しました" on its own. Fallback: stay here with the
-    // applied notice (the legacy behaviour).
-    const applyRunId = extractRunId(envelope);
-    if (applyRunId && applyRunId !== runId()) {
-      navigate(
-        appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
-          `/runs/${applyRunId}`,
-      );
-      return;
-    }
-    await Promise.all([refetchRun(), refetchLogs()]);
+    await finishApply(envelope, attempt);
   });
 
   // Per-run UI state must reset when this SAME component instance navigates
@@ -1045,6 +1108,12 @@ function Inner() {
     const id = runId();
     if (id === lastRunId) return;
     lastRunId = id;
+    runEpoch += 1;
+    applyReadController?.abort();
+    setUnconfirmedApply(undefined);
+    setCheckingApply(false);
+    deploy.clearError();
+    recheckApply.clearError();
     setApplied(false);
     setNeedsConfirm(false);
   });
@@ -1312,6 +1381,9 @@ function Inner() {
       };
     }
     if (isReviewRun(r)) {
+      if (unconfirmedApply()) {
+        return { kind: "progress", text: t("run.applyUnconfirmed") };
+      }
       if (applied()) {
         return { kind: "ok", text: t("run.summary.applied") };
       }
@@ -1883,7 +1955,19 @@ function Inner() {
                       </p>
                     )}
                   </Show>
-                  <Show when={deploy.error()}>
+                  <Show when={unconfirmedApply()}>
+                    <p class="wa-error" role="alert">{t("run.applyUnconfirmed")}</p>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      disabled={deploy.busy() || checkingApply() || recheckApply.busy()}
+                      busy={checkingApply()}
+                      onClick={() => void recheckApply.run()}
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  </Show>
+                  <Show when={!unconfirmedApply() && deploy.error()}>
                     {(m) => (
                       <p class="wa-error" role="alert">
                         {m()}

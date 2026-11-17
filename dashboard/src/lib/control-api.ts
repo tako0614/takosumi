@@ -2266,6 +2266,7 @@ export async function listCapsuleRuns(
     readonly limit?: number;
     readonly cursor?: string;
     readonly types?: readonly RunType[];
+    readonly signal?: AbortSignal;
   } = {},
 ): Promise<CapsuleRunPage> {
   const params = new URLSearchParams();
@@ -2277,6 +2278,7 @@ export async function listCapsuleRuns(
   const search = params.toString();
   const body = await controlFetch<{ runs?: unknown; nextCursor?: unknown }>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/runs${search ? `?${search}` : ""}`,
+    { signal: options.signal },
   );
   // A page without its list is unreadable, never an empty history.
   if (
