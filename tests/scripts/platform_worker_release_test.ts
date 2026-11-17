@@ -486,6 +486,7 @@ async function exerciseCodeLane(options: {
   readonly routeDrift?: CodeRouteDrift;
   readonly containerDrift?: boolean;
   readonly uploadFails?: boolean;
+  readonly resume?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-version" | "wrong-predecessor" | "already-serving" | "unhealthy" | "source-drift";
   readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
   readonly loginSmokeFails?: boolean;
   readonly unrelatedBindingDrift?: boolean;
@@ -510,7 +511,7 @@ async function exerciseCodeLane(options: {
   }));
   const deployed = JSON.parse(codeVersionSource(finalSource, CODE_DEPLOYED_ID, {
     tag,
-    message,
+    message: options.resume === "wrong-digest" ? `takosumi-platform-staging-code sha256:${"0".repeat(64)}` : message,
   }));
   const rateBindings = [
     { name: "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER", type: "ratelimit", namespace_id: "2026111401", simple: { limit: 60, period: 60 } },
@@ -532,12 +533,14 @@ async function exerciseCodeLane(options: {
     }
     listedSecrets.push(name);
   }
-  const container = statusContainerSource();
-  let activated = false;
+  const container = statusContainerSource({ failed: options.resume === "unhealthy" ? 1 : 0 });
+  let activated = options.resume === "already-serving";
   let uploadCount = 0;
   let activationCount = 0;
   let buildCount = 0;
   let gateCount = 0;
+  let sourceCheckCount = 0;
+  const operationOrder: string[] = [];
   let loginSmokeCount = 0;
   let topologySnapshot = 0;
   let uploadArgs: readonly string[] = [];
@@ -562,6 +565,7 @@ async function exerciseCodeLane(options: {
       };
     }
     if (argv[1] === "versions" && argv[2] === "deploy") {
+      operationOrder.push("activate");
       activationCount += 1;
       activationArgs = argv;
       activationConfigSource = readFileSync(
@@ -572,6 +576,7 @@ async function exerciseCodeLane(options: {
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     if (argv[1] === "deployments" && argv[2] === "status") {
+      operationOrder.push("serving");
       return {
         exitCode: 0,
         stdout: JSON.stringify({
@@ -584,9 +589,10 @@ async function exerciseCodeLane(options: {
       };
     }
     if (argv[1] === "versions" && argv[2] === "view") {
+      if (argv[3] === CODE_DEPLOYED_ID) operationOrder.push("candidate");
       return {
         exitCode: 0,
-        stdout: JSON.stringify(argv[3] === CODE_DEPLOYED_ID ? deployed : predecessor),
+        stdout: JSON.stringify(argv[3] === CODE_PREDECESSOR_ID ? predecessor : deployed),
         stderr: "",
       };
     }
@@ -609,12 +615,24 @@ async function exerciseCodeLane(options: {
   let error: unknown;
   try {
     await (options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
-      ["apply", "--config", configPath],
+      options.resume
+        ? [
+          "resume", "--config", configPath,
+          "--version", options.resume === "wrong-version" ? STATUS_VERSION_ID : CODE_DEPLOYED_ID,
+          "--tag", options.resume === "wrong-tag" ? `tks-stg-code-${"2".repeat(32)}` : tag,
+          "--predecessor", options.resume === "wrong-predecessor" ? STATUS_VERSION_ID : CODE_PREDECESSOR_ID,
+        ]
+        : ["apply", "--config", configPath],
       "staging",
       {
         command,
         repositoryRoot: root,
-        assertSelectedSource: () => undefined,
+        assertSelectedSource: () => {
+          sourceCheckCount += 1;
+          if (options.resume === "source-drift" && sourceCheckCount === 2) {
+            throw new Error("synthetic source pin drift");
+          }
+        },
         buildDashboard: async () => {
           buildCount += 1;
           return { digest: `sha256:${"d".repeat(64)}`, entries: [] };
@@ -655,6 +673,8 @@ async function exerciseCodeLane(options: {
     buildCount,
     gateCount,
     loginSmokeCount,
+    sourceCheckCount,
+    operationOrder,
     topologySnapshot,
     uploadArgs,
     activationArgs,
@@ -1006,6 +1026,52 @@ test("routine code publishes once and refuses production", async () => {
   await expect(
     runPlatformWorkerCodeRelease(["apply", "--config", "/private/config"], "production"),
   ).rejects.toThrow("platform_worker_code_action_invalid");
+});
+
+test("routine code resumes an existing exact Version without uploading", async () => {
+  const result = await exerciseCodeLane({ resume: "valid", uploadFails: true, loginAdmission: "normal" });
+  expect(result).toMatchObject({
+    error: undefined,
+    uploadCount: 0,
+    activationCount: 1,
+    buildCount: 1,
+    gateCount: 1,
+    loginSmokeCount: 1,
+    sourceCheckCount: 2,
+    topologySnapshot: 3,
+  });
+  expect(result.operationOrder.slice(0, 4)).toEqual(["serving", "candidate", "serving", "activate"]);
+  expect(result.activationArgs).toEqual(expect.arrayContaining([`${CODE_DEPLOYED_ID}@100%`]));
+});
+
+test("routine resume refuses a mismatched identity or unhealthy predecessor without any mutation", async () => {
+  for (const [resume, message] of [
+    ["wrong-tag", "platform_worker_release_version_identity_invalid"],
+    ["wrong-digest", "platform_worker_release_version_identity_invalid"],
+    ["wrong-version", "platform_worker_release_version_identity_invalid"],
+    ["wrong-predecessor", "platform_worker_code_resume_predecessor_changed"],
+    ["already-serving", "platform_worker_code_resume_predecessor_changed"],
+    ["unhealthy", "platform_worker_release_container_not_ready"],
+    ["source-drift", "synthetic source pin drift"],
+  ] as const) {
+    const refused = await exerciseCodeLane({ resume });
+    expect(refused.error).toBeInstanceOf(Error);
+    expect((refused.error as Error).message).toBe(message);
+    expect(refused).toMatchObject({ uploadCount: 0, activationCount: 0 });
+  }
+  const drifted = await exerciseCodeLane({ resume: "valid", topologyDriftAt: 2 });
+  expect(drifted.error).toBeInstanceOf(Error);
+  expect(drifted).toMatchObject({ uploadCount: 0, activationCount: 0 });
+});
+
+test("routine resume is not a production or authority-transition action", async () => {
+  const args = [
+    "resume", "--config", "/private/config.toml", "--version", CODE_DEPLOYED_ID,
+    "--tag", `tks-stg-code-${"1".repeat(32)}`, "--predecessor", CODE_PREDECESSOR_ID,
+  ];
+  await expect(runPlatformWorkerCodeRelease(args, "production")).rejects.toThrow("platform_worker_code_action_invalid");
+  await expect(runPlatformWorkerLoginAdmissionRelease(args, "staging")).rejects.toThrow("platform_worker_code_action_invalid");
+  await expect(runPlatformWorkerCodeRelease(args.slice(0, -2))).rejects.toThrow("platform_worker_code_resume_arguments_invalid");
 });
 
 test("login admission dedicated transition adds only both ports, then normal code preserves them", async () => {
