@@ -4027,6 +4027,8 @@ async function runConfiguredPublicUrlLifecycleFixture(
     readonly reconcileApply?: boolean;
     readonly ambiguousApplyReconciliation?: boolean;
     readonly temporaryConnection?: boolean;
+    readonly connectionListMode?: "personal" | "missing" | "forbidden" | "workspace";
+    readonly explicitProviderBindings?: boolean;
     readonly omitDestroyedEvent?: boolean;
   } = {},
 ) {
@@ -4105,6 +4107,14 @@ async function runConfiguredPublicUrlLifecycleFixture(
       cloudflareConnectionMode: behavior.temporaryConnection
         ? "guided"
         : "none",
+      ...(behavior.connectionListMode && !behavior.temporaryConnection
+        ? behavior.explicitProviderBindings
+          ? { providerBindingsJson: JSON.stringify([{
+              provider: "registry.opentofu.org/cloudflare/cloudflare",
+              connectionId: providerConnectionId,
+            }]) }
+          : { providerConnectionId }
+        : {}),
       ...(behavior.temporaryConnection
         ? {
             cloudflareAccountId: "account-configured-public-url",
@@ -4244,11 +4254,22 @@ async function runConfiguredPublicUrlLifecycleFixture(
         return Response.json({ status: "verified" });
       }
       if (method === "GET" && path === "/api/v1/provider-connections") {
+        const workspaceQuery = new URL(request.path, options.url).searchParams.get("workspaceId");
+        if (behavior.connectionListMode === "forbidden") {
+          return Response.json({ error: { code: "forbidden" } }, { status: 403 });
+        }
+        if (behavior.connectionListMode === "missing" ||
+          (behavior.connectionListMode === "personal" && workspaceQuery !== null) ||
+          (behavior.connectionListMode === "workspace" && workspaceQuery !== workspaceId)) {
+          return Response.json({ providerConnections: [] });
+        }
         return Response.json({
           providerConnections: [{
             id: providerConnectionId,
             providerSource: "registry.opentofu.org/cloudflare/cloudflare",
             displayName: `Layer-2 smoke ${appName}`,
+            ...(behavior.connectionListMode === "personal"
+              ? { scope: "personal", status: "verified" } : {}),
           }],
         });
       }
@@ -4284,7 +4305,7 @@ async function runConfiguredPublicUrlLifecycleFixture(
           report: {
             id: reportId,
             level: "ready",
-            rootProviderRequirements: behavior.temporaryConnection
+            rootProviderRequirements: behavior.temporaryConnection || behavior.connectionListMode
               ? [{
                   source: "registry.opentofu.org/cloudflare/cloudflare",
                   moduleLocalName: "cloudflare",
@@ -4480,6 +4501,46 @@ async function runConfiguredPublicUrlLifecycleFixture(
     runs,
   };
 }
+
+test("personal connection smoke selects explicit own connections with the account list", async () => {
+  for (const explicitProviderBindings of [false, true]) {
+    const fixture = await runConfiguredPublicUrlLifecycleFixture({ kind: "http-404" },
+      { connectionListMode: "personal", explicitProviderBindings });
+    expect(fixture.result.error).toBeUndefined();
+    expect(fixture.result.status).toBe("passed");
+    expect(fixture.result.completedSteps).toContain(explicitProviderBindings
+      ? "existingProviderConnectionsSelected" : "existingProviderConnectionSelected");
+    const lists = fixture.controlPlaneRequests.filter((r) => r.path.startsWith("/api/v1/provider-connections"));
+    expect(lists.map((r) => r.path)).toEqual(["/api/v1/provider-connections"]);
+    expect(fixture.controlPlaneRequests.some((r) => r.path.startsWith("/api/v1/connections"))).toBe(false);
+    expect(fixture.result.connectionRevoked).toBeUndefined();
+  }
+});
+
+test("personal connection smoke keeps missing and forbidden selections before Source mutation", async () => {
+  for (const connectionListMode of ["missing", "forbidden"] as const) {
+    const fixture = await runConfiguredPublicUrlLifecycleFixture({ kind: "http-404" },
+      { connectionListMode });
+    expect(fixture.result.status).toBe("failed");
+    expect(fixture.result.error).toMatch(connectionListMode === "missing"
+      ? /not available to the authenticated account/u : /403/u);
+    expect(fixture.controlPlaneRequests.map((r) => [r.method, r.path])).toEqual([
+      ["GET", "/"], ["GET", "/api/v1/provider-connections"],
+      ["GET", "/api/v1/workspaces/ws_configuredpublicurl/capsules"],
+    ]);
+    expect(fixture.result.connectionRevoked).toBeUndefined();
+  }
+});
+
+test("personal connection smoke retains the Workspace lookup for its newly created connection", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture({ kind: "http-404" },
+    { connectionListMode: "workspace", temporaryConnection: true });
+  expect(fixture.result.error).toBeUndefined();
+  expect(fixture.result.status).toBe("passed");
+  const lists = fixture.controlPlaneRequests.filter((r) => r.path.startsWith("/api/v1/provider-connections"));
+  expect(lists.map((r) => r.path)).toEqual(["/api/v1/provider-connections?workspaceId=ws_configuredpublicurl"]);
+  expect(fixture.controlPlaneRequests.filter((r) => r.path === `/api/v1/connections/${fixture.rawConnectionId}/revoke`)).toHaveLength(1);
+});
 
 test("generic OpenTofu smoke verifies every configured URL absent after Destroy", async () => {
   const fixture = await runConfiguredPublicUrlLifecycleFixture({

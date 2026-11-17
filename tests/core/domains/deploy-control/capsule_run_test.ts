@@ -3129,6 +3129,89 @@ variable "account_id" {
   expect(root["outputs.tf"]!.match(/output "build_metadata"/g)).toHaveLength(1);
 });
 
+test("Destroy Plan keeps declared provider defaults from its applied module without compatibility admission", async () => {
+  const store = new LegacyFlatCompatibilityReportReadStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: { modulePath: "deploy/runtime", variableMapping: {
+      project_name: "generic-inputs", explicit_label: "operator-choice",
+    } },
+  });
+  const { workspaceId: _workspaceId, ...connectionBase } =
+    cloudflareConnection("conn_personal_destroy_defaults", seeded.workspace.id);
+  const connection: ProviderConnection = {
+    ...connectionBase, scope: "personal", ownerAccountId: seeded.workspace.ownerUserId,
+    scopeHints: { moduleInputDefaults: {
+      provider_account: "fixture-account", provider_endpoint: "fixture-endpoint",
+      explicit_label: "provider-default", nested_only: "must-not-inject",
+      never_declared: "must-not-inject",
+    } },
+  };
+  await store.putConnection(connection);
+  await transitionProviderBindingSetForFixture(store, {
+    id: "bindings_destroy_defaults", workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id, environment: seeded.capsule.environment,
+    bindings: [{ provider: FIXTURE_CLOUDFLARE_PROVIDER, moduleLocalName: "cloudflare",
+      connectionId: connection.id }],
+    createdAt: seeded.capsule.createdAt, updatedAt: seeded.capsule.updatedAt,
+  });
+  const sourcesService = new SourcesService({ store, readCapsuleSourceFiles: async () => [
+    { path: "main.tf", text: `terraform {
+  required_providers {
+    cloudflare = { source = "cloudflare/cloudflare" }
+  }
+}
+${["project_name", "provider_account", "provider_endpoint", "explicit_label"].map((name) =>
+  `variable "${name}" {\n  type = string\n}`).join("\n")}
+output "launch_url" { value = "https://generic-inputs.example.test" }
+` },
+    { path: "nested/variables.tf", text: 'variable "nested_only" { type = string }\n' },
+  ] });
+  const sourceReads: Array<{ id: string; modulePath?: string }> = [];
+  const readSource = sourcesService.readCapsuleSourceFiles.bind(sourcesService);
+  sourcesService.readCapsuleSourceFiles = (snapshot, options) => {
+    sourceReads.push({ id: snapshot.id, modulePath: options?.modulePath });
+    return readSource(snapshot, options);
+  };
+  const profile = multiProviderRunnerProfile();
+  const vault = countingProviderVault();
+  const controller = controllerWith(store, runner, { sourcesService,
+    runnerProfiles: [profile], defaultRunnerProfileId: profile.id, vault: vault.vault as never });
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(create.planRun.status).toBe("succeeded");
+  const applied = await controller.createApplyRun({ planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun) });
+  expect(applied.applyRun.status).toBe("succeeded");
+  await store.putSourceSnapshot({ ...seeded.snapshot, id: "snap_unapplied_newer",
+    archiveRef: "workspaces/other/source-new.tar.zst", fetchedAt: "2026-06-08T00:00:00.000Z" });
+  sourceReads.length = 0;
+  store.failCompatibilityReportReads = true;
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  const job = runner.planJobs[1]!;
+  expect(job.variables).toMatchObject({ provider_account: "fixture-account",
+    provider_endpoint: "fixture-endpoint", project_name: "generic-inputs", explicit_label: "operator-choice" });
+  expect(job.generatedRoot!.files["main.tf"]).toContain('provider_account = "fixture-account"');
+  expect(job.generatedRoot!.files["main.tf"]).toContain('provider_endpoint = "fixture-endpoint"');
+  expect(job.generatedRoot!.files["main.tf"]).not.toContain("nested_only");
+  expect(job.generatedRoot!.files["main.tf"]).not.toContain("never_declared");
+  expect(JSON.stringify(job.generatedRoot)).not.toContain("fixture-provider-token");
+  expect(destroy.planRun.compatibilityReportId).toBeUndefined();
+  expect(destroy.planRun.sourceSnapshotId).toBe(create.planRun.sourceSnapshotId);
+  expect(sourceReads).toEqual([{ id: seeded.snapshot.id, modulePath: "deploy/runtime" }]);
+  expect(job.sourceArchive?.ref).toBe(seeded.snapshot.archiveRef);
+  expect(job.stateScope).toMatchObject({ workspaceId: seeded.workspace.id,
+    subject: { kind: "capsule", id: seeded.capsule.id }, environment: "preview", generation: 1 });
+  const minted = vault.mintCount;
+  await store.putConnection({ ...connection, ownerAccountId: "other-account" });
+  await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id)).rejects.toMatchObject({
+    code: "permission_denied", details: { reason: "connection_not_owned_by_app_owner" },
+  });
+  expect(vault.mintCount).toBe(minted);
+  expect(runner.planJobs).toHaveLength(2);
+});
+
 test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
