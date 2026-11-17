@@ -608,7 +608,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.reAdoption.boolean": "Enter true or false.",
   "app.reAdoption.default": "Target default",
   "app.reAdoption.blocked": "These inputs cannot be safely edited here.",
-  "app.reAdoption.pending": "The submitted answer is held while its outcome is confirmed. Continue uses the same answer and request keys; it does not deploy any changes.",
+  "app.reAdoption.pending": "Your submitted answer is kept while the result is confirmed. Continue resumes the same review.",
   "app.reAdoption.resume": "Continue the submitted review",
   "app.reAdoption.review": "Adopt settings and review changes",
   "app.reAdoption.invalid": "Complete the required inputs and correct invalid values. Unavailable current values need an explicit choice.",
