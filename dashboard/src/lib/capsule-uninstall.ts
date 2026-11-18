@@ -26,7 +26,9 @@ export function appUninstallBanner(
   now: number = Date.now(),
 ): string {
   const record = app.uninstall.scheduled;
-  if (appUninstallConnectionNotice(app)) return t("app.uninstall.bannerConnection", { name });
+  const notice = appUninstallConnectionNotice(app);
+  if (notice === "app.uninstall.connectionRemoved") return t("app.uninstall.bannerConnectionRemoved", { name });
+  if (notice === "app.uninstall.connectionUnavailable") return t("app.uninstall.bannerConnection", { name });
   if (app.problems.some((problem) => problem.code === "uninstall_failed")) {
     return t("app.uninstall.bannerFailed", { name });
   }

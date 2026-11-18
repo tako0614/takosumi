@@ -337,7 +337,7 @@ export default function AppAttentionSection(props: {
                     </>
                   )}
                 </Show>
-                <Show when={uninstallConnectionNotice() && props.canUninstall !== false && app().primaryAction !== "fix_connection"}>
+                <Show when={uninstallConnectionNotice() === "app.uninstall.connectionUnavailable" && props.canUninstall !== false && app().primaryAction !== "fix_connection"}>
                   <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
                 </Show>
               </div>

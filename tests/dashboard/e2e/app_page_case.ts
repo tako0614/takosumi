@@ -1624,9 +1624,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await capture(page, "app-page-uninstall-scheduled");
       connectionRemoved = true;
       await page.reload({ waitUntil: "domcontentloaded" });
-      await expect(scheduled).toContainText(`Uninstalling ${NAME} requires a working cloud connection.`);
-      await expect(scheduled).toContainText("This app's cloud connection was removed.");
-      await expect(scheduled.getByRole("link", { name: "View cloud connections" })).toHaveAttribute("href", "/connections");
+      await expect(scheduled).toContainText(`Uninstalling ${NAME} is on hold.`);
+      await expect(scheduled).toContainText("This uninstall can't switch to another connection yet.");
+      await expect(scheduled.getByRole("link", { name: "View cloud connections" })).toHaveCount(0);
       await expect(scheduled.getByRole("button", { name: "Uninstall now", exact: true })).toHaveCount(0);
       await expect(problems.locator('[data-problem="connection_unavailable"]')).toHaveCount(0);
       await header.getByRole("button", { name: "Cancel uninstall", exact: true }).click();
@@ -1643,7 +1643,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
       await app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true }).click();
       await expect(page.getByRole("dialog")).toContainText("keeps its data for 7 days");
-      await expect(page.getByRole("dialog")).toContainText("This app's cloud connection was removed.");
+      await expect(page.getByRole("dialog")).toContainText("This uninstall can't switch to another connection yet.");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
       connectionRemoved = false;
 

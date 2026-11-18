@@ -1298,8 +1298,12 @@ export default function AppManagePage(props: {
         {(loaded) => {
           const inst = () => loaded().inst;
           const view = () => loaded().view;
-          const primaryLabel = () =>
-            view().primaryAction === "retry" ? retryLabel(view()) : appPrimaryActionLabel(view().primaryAction);
+          const primaryLabel = () => {
+            const action = view().primaryAction;
+            if (action === "fix_connection" && view().uninstall.scheduled &&
+              uninstallConnectionNotice() === "app.uninstall.connectionRemoved") return undefined;
+            return action === "retry" ? retryLabel(view()) : appPrimaryActionLabel(action);
+          };
           return (
             <AppSectionVisibility.Provider value={sectionVisible}>
             <div
@@ -1663,7 +1667,7 @@ export default function AppManagePage(props: {
                     {(notice) => <p role="status">{t(notice())}</p>}
                   </Show>
                   <div class="ap-row-actions">
-                    <Show when={uninstallConnectionNotice()}>
+                    <Show when={uninstallConnectionNotice() === "app.uninstall.connectionUnavailable"}>
                       <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
                     </Show>
                     <Show
