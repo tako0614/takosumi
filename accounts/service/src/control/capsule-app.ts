@@ -1,3 +1,4 @@
+import { installDisplayName } from "./install-names.ts";
 import { normalizeInstallConfigSourceUrl } from "takosumi-contract/install-configs";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { capsuleInstallConfigReAdoptionAuthoritySnapshot } from "./install-config-re-adoptions.ts";
@@ -208,10 +209,13 @@ export async function readCapsuleAppSummaries(
   ctx: ControlDispatchContext,
   capsules: readonly Capsule[],
   now: number,
+  preloadedConfigs?: ReadonlyMap<string, InstallConfig>,
 ) {
   const configs = ctx.operations.capsules;
   const inventory = appReadInventory(ctx.operations);
-  const batch = configs.getInstallConfigsByIds && capsules.length > 0
+  const batch = preloadedConfigs
+    ? Promise.resolve({ value: preloadedConfigs, failed: false })
+    : configs.getInstallConfigsByIds && capsules.length > 0
     ? optional(async () => new Map((await configs.getInstallConfigsByIds!([...new Set(capsules.map((app) => app.installConfigId))])).map((row) => [row.id, row])))
     : undefined;
   return await Promise.all(capsules.map(async (capsule) => {
@@ -224,6 +228,7 @@ export async function readCapsuleAppSummaries(
       name: view.name,
       ...(view.displayName ? { displayName: view.displayName } : {}),
       ...(view.iconUrl ? { iconUrl: view.iconUrl } : {}),
+      applied: view.applied,
       state: view.state,
       primaryAction: view.primaryAction,
       screens: view.screens,
@@ -361,6 +366,7 @@ async function readAppOverview(
   const review = reviewablePlan(latestRun);
   const display = installConfig.value?.store;
   const iconUrl = safeImageUrl(display?.iconUrl);
+  const displayName = installDisplayName(capsule.name, installConfig.value);
 
   const view: Omit<CapsuleAppView, "version"> = {
     kind: CAPSULE_APP_VIEW_KIND,
@@ -369,7 +375,7 @@ async function readAppOverview(
     projectId: capsule.projectId,
     name: capsule.name,
     environment: capsule.environment,
-    ...(display ? { displayName: { ja: display.name.ja, en: display.name.en } } : {}),
+    ...(displayName ? { displayName } : {}),
     ...(iconUrl ? { iconUrl } : {}),
     status: capsule.status,
     applied,
@@ -407,10 +413,11 @@ async function readAppOverview(
 export async function linkedAppDisplay(ctx: ControlDispatchContext, app: Capsule): Promise<CapsuleAppLinkedApp> {
   const config = await ctx.operations.capsules.getInstallConfig(app.installConfigId);
   const iconUrl = safeImageUrl(config.store?.iconUrl);
+  const displayName = installDisplayName(app.name, config);
   return {
     capsuleId: app.id,
     name: app.name,
-    ...(config.store ? { displayName: { ja: config.store.name.ja, en: config.store.name.en } } : {}),
+    ...(displayName ? { displayName } : {}),
     ...(iconUrl ? { iconUrl } : {}),
   };
 }

@@ -170,10 +170,85 @@ async function fixture(options: { readonly delegate?: boolean; readonly endlessA
     });
     return response!;
   }
-  return { headers, list, readResponse, surfaces, extraSurfaces, core, ledger };
+  return { headers, list, readResponse, surfaces, extraSurfaces, core, ledger, accounts };
 }
 
 describe("account launcher", () => {
+  test("Home search filters one authorized candidate page before summary work and reuses its config batch", async () => {
+    const h = await fixture();
+    const configs = h.core.capsules;
+    const batch = configs.getInstallConfigsByIds.bind(configs);
+    let batches = 0;
+    configs.getInstallConfigsByIds = async (ids) => { batches++; return batch(ids); };
+    configs.getInstallConfig = async () => { throw new Error("per-app config query"); };
+    const readRuns = h.core.listCapsuleRunsPage;
+    const projected: string[] = [];
+    h.core.listCapsuleRunsPage = async (...args) => { projected.push(args[0]); return readRuns(...args); };
+    const response = await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=%20MINE%20");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.appliedQuery).toBe("mine");
+    expect(body.apps[0]?.applied).toBe(true);
+    expect(body.apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([MINE]);
+    expect(projected).toEqual([MINE]);
+    expect(batches).toBe(1);
+    projected.length = 0;
+    expect((await (await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=absent")).json()).apps).toEqual([]);
+    expect(projected).toEqual([]);
+    expect(batches).toBe(2);
+  });
+
+  test("Home search includes translated display labels and shared owner, never unauthorized app metadata", async () => {
+    const h = await fixture();
+    const configs = h.core.capsules;
+    const batch = configs.getInstallConfigsByIds.bind(configs);
+    configs.getInstallConfigsByIds = async (ids) => (await batch(ids)).map((config) => ({ ...config,
+      store: { order: 1, surface: "app", kind: "data", provider: "fixture", suggestedName: "app",
+        badge: { ja: "データ", en: "Data" }, name: { ja: "資料保管", en: "Archive" },
+        description: { ja: "保管", en: "Store" } },
+    }));
+    h.accounts.saveAccount({ subject: OTHER, displayName: "Shared teammate", createdAt: 0, updatedAt: 0 });
+    for (const q of ["資料", "ARCHIVE"]) {
+      const response = await h.readResponse(h.headers.session(OWNER), `/api/v1/apps?q=${encodeURIComponent(q)}`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([MINE, SHARED, STOPPED]);
+    }
+    const shared = await (await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=teammate")).json();
+    expect(shared.apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([SHARED]);
+    const hidden = await (await h.readResponse(h.headers.pat(OWNER, { appIds: [MINE] }), "/api/v1/apps?q=teammate")).json();
+    expect(hidden.apps).toEqual([]);
+  });
+
+  test("search cursors continue empty pages and bind query, account and credential scope", async () => {
+    const h = await fixture();
+    const credentials = h.headers.session(OWNER);
+    const first = await (await h.readResponse(credentials, "/api/v1/apps?q=shared&limit=1")).json();
+    expect(first.apps).toEqual([]);
+    expect(first.nextCursor).toBeString();
+    const next = `/api/v1/apps?q=shared&limit=1&cursor=${first.nextCursor}`;
+    const second = await (await h.readResponse(credentials, next)).json();
+    expect(second.apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([SHARED]);
+    const last = await (await h.readResponse(credentials, `/api/v1/apps?q=shared&limit=1&cursor=${second.nextCursor}`)).json();
+    expect(last.apps).toEqual([]);
+    expect(last.nextCursor).toBeUndefined();
+    expect((await h.readResponse(credentials, next.replace("q=shared", "q=mine"))).status).toBe(400);
+    expect((await h.readResponse(h.headers.session(MEMBER), next)).status).toBe(400);
+    expect((await h.readResponse(h.headers.pat(OWNER, { appIds: [MINE] }), next)).status).toBe(400);
+    const scopedFirst = await (await h.readResponse(h.headers.pat(OWNER, { appIds: [MINE, SHARED] }), "/api/v1/apps?q=shared&limit=1")).json();
+    expect((await h.readResponse(h.headers.pat(OWNER, { appIds: [MINE] }),
+      `/api/v1/apps?q=shared&limit=1&cursor=${scopedFirst.nextCursor}`)).status).toBe(400);
+    expect((await h.readResponse(credentials, "/api/v1/apps?q=%00")).status).toBe(400);
+    expect((await h.readResponse(credentials, `/api/v1/apps?q=${"x".repeat(201)}`)).status).toBe(400);
+  });
+
+  test("failed or missing search labels never become an empty successful search", async () => {
+    const h = await fixture();
+    h.core.capsules.getInstallConfigsByIds = async () => { throw new Error("fixture label outage"); };
+    expect((await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=absent")).status).toBe(503);
+    h.core.capsules.getInstallConfigsByIds = async () => [];
+    expect((await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=absent")).status).toBe(503);
+  });
+
   test("Home carries the same authorized screens without version reads or per-app config queries", async () => {
     const h = await fixture();
     const credential = h.headers.session(OWNER);

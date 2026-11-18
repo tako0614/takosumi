@@ -25,6 +25,7 @@ const read = (relativePath: string) =>
   );
 
 const component = read("components/TakosumiApiKeysCard.tsx");
+const accountView = read("AccountView.tsx");
 const client = read("lib/tokens.ts");
 
 const CATALOG = {
@@ -91,17 +92,19 @@ describe("Takosumi API key management", () => {
     expect(component).toContain("const [formOpen, setFormOpen] = createSignal(false);");
     expect(component).toContain("<Show when={formOpen()}>");
     expect(component).toContain("<Show when={!formOpen()}>");
-    // The CLI flag is the headline; the API detail is one plain line.
+    // CLI and API implementation details stay out of the route title.
     expect(ja["account.apiKeys.subtitle"]).toContain("--token");
     expect(en["account.apiKeys.subtitle"]).toContain("--token");
-    expect(ja["account.apiKeys.title"]).not.toContain("/api/v1");
+    expect(accountView).toContain('href: "/account/cli", labelKey: "account.section.cli"');
+    expect(ja["account.section.cli"]).not.toContain("/api/v1");
+    expect(en["account.section.cli"]).not.toContain("/api/v1");
     expect(ja["account.apiKeys.apiHelp"]).toContain("/api/v1");
     expect(component).toContain('t("account.apiKeys.apiHelp")');
     // Revoking states its consequence before it happens.
     expect(component).toContain('t("account.apiKeys.revokeConsequence")');
-    // Rows are cards at every width, so nothing scrolls sideways on a phone.
+    // Do not introduce a horizontally scrolling table on a phone.
     expect(component).not.toContain("<DataTable");
-    expect(component).toContain('class="acct-row tg-card"');
+    expect(component).toContain('<ul class="acct-list tg-settings-group">');
   });
 
   test("shows a new secret once and keeps list rows metadata-only", () => {

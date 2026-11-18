@@ -35,8 +35,11 @@ import {
   Switch,
   type JSX,
 } from "solid-js";
-import { useNavigate } from "@solidjs/router";
-import { RefreshCw } from "lucide-solid";
+import { useLocation, useNavigate } from "@solidjs/router";
+import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
+import {
+  ChevronLeft, Clock3, FolderOpen, Link2, Plug, RefreshCw, Settings2, Smartphone, Trash2, Users,
+} from "lucide-solid";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, EmptyState, Skeleton, Toast } from "../../components/ui/index.ts";
 import {
@@ -46,6 +49,7 @@ import {
   type CapsuleAppView,
   type Capsule,
   ControlApiError,
+  createCapsuleDestroyRecoveryPlan,
   createReviewableGitRevisionPlan,
   createStateVersionRollbackPlan,
   advanceGitInstallPlan,
@@ -55,7 +59,7 @@ import {
   getCapsule,
   getAppConnectionChoices,
   resetAppOwnershipCache,
-  getCapsuleApp,
+  getCapsuleAppWithSignal,
   getCapsuleConfigurationContext,
   getCapsuleProviderBindingSet,
   getCapsuleUsageSummary,
@@ -86,6 +90,7 @@ import {
   releaseRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
+import { appUninstallConnectionNotice, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
 import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
 import {
   APP_HISTORY_RUN_TYPES,
@@ -115,7 +120,7 @@ import {
 } from "../../lib/run-retry.ts";
 import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.ts";
 import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
-import { AppSection, OpenAppButton } from "./app-ui.tsx";
+import { AppManagementRow, AppSection, AppSectionVisibility, OpenAppButton } from "./app-ui.tsx";
 import { currentOpenPlatform, rememberedOpenChoice } from "../../lib/open-choice-state.ts";
 import { phoneClient } from "../../lib/open-routing.ts";
 import AppAttentionSection from "./AppAttentionSection.tsx";
@@ -180,7 +185,7 @@ export default function AppManagePage(props: {
   /** Signed-in principal (kept for embedding pages; screens come from the server). */
   readonly principalId?: string;
   readonly accountId?: string;
-  /** The section the URL fragment names; scrolled to once the page settles. */
+  /** The app pane selected by a canonical URL fragment. */
   readonly section?: AppPageSection;
   /**
    * The screen whose chooser the URL opens (`?open=<interface>`), and whether
@@ -193,13 +198,56 @@ export default function AppManagePage(props: {
   readonly onCapsule?: (capsule: Capsule) => void;
 }): JSX.Element {
   const navigate = useNavigate();
+  const location = useLocation();
   const { confirm } = useConfirmDialog();
+  let disposed = false;
+  let uninstallReadController: AbortController | undefined;
+  onCleanup(() => { disposed = true; uninstallReadController?.abort(); });
   const capsuleId = () => props.capsuleId;
+  const activeSection = () => props.section;
+  const [visited, setVisited] = createSignal<{
+    readonly capsuleId: string;
+    readonly sections: ReadonlySet<AppPageSection>;
+  }>({ capsuleId: capsuleId(), sections: new Set() });
+  const sectionVisited = (...sections: readonly AppPageSection[]) => sections.some((section) =>
+    activeSection() === section ||
+    (visited().capsuleId === capsuleId() && visited().sections.has(section))
+  );
+  createEffect(on([capsuleId, activeSection], ([id, section]) => {
+    setVisited((previous) => {
+      const seen = previous.capsuleId === id ? previous.sections : new Set<AppPageSection>();
+      if (!section || seen.has(section)) return previous.capsuleId === id ? previous : { capsuleId: id, sections: seen };
+      return { capsuleId: id, sections: new Set([...seen, section]) };
+    });
+  }));
+  const settingsVisited = () => sectionVisited("settings", "connections");
+  const resourcesVisited = () => sectionVisited("created");
+  const versionsVisited = () => sectionVisited("version", "history");
+  const appPaneHref = (section?: AppPageSection) =>
+    `${appPageHref(capsuleId())}${location.search}${section ? `#${APP_PAGE_SECTIONS[section]}` : ""}`;
+  const openSection = (section: AppPageSection) => {
+    if (activeSection() !== section) navigate(appPaneHref(section), { scroll: false });
+  };
+  const isPlainClick = (event: MouseEvent) =>
+    event.button === 0 && !event.defaultPrevented &&
+    !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+  const openSectionLink = (event: MouseEvent, section: AppPageSection) => {
+    if (!isPlainClick(event)) return;
+    event.preventDefault();
+    openSection(section);
+  };
+  const backToOverview = (event: MouseEvent) => {
+    if (!isPlainClick(event)) return;
+    event.preventDefault();
+    // Always open this app's overview, even from a direct link. Keep the
+    // pane in browser history so Back/Forward can restore its draft.
+    navigate(appPaneHref(), { scroll: false });
+  };
 
   // --- the app and the server's view of it -----------------------------------
-  const [context, { refetch: refetchContext }] = createResource(
+  const [context, { refetch: refetchContext }] = createResource<Awaited<ReturnType<typeof getCapsuleConfigurationContext>>, string, AbortSignal>(
     capsuleId,
-    getCapsuleConfigurationContext,
+    (id, info) => getCapsuleConfigurationContext(id, { signal: info.refetching instanceof AbortSignal ? info.refetching : undefined }),
   );
   // Never `context()`/`.latest` directly: both throw once a read failed. A
   // failed refetch keeps the last good app on screen with a quiet notice.
@@ -216,15 +264,17 @@ export default function AppManagePage(props: {
   );
   const appRole = () => role.error ? undefined : role();
   const isOwner = () => appRole() === "owner";
-  const [sharingAvailable, setSharingAvailable] = createSignal(false);
+  const [sharingAvailable, setSharingAvailable] = createSignal<boolean>();
   const [memberChoices, { refetch: refetchMemberChoices }] = createResource(
-    () => appRole() === "member" ? capsuleId() : null,
+    () => appRole() === "member" && settingsVisited() ? capsuleId() : null,
     (id) => getAppConnectionChoices(id),
   );
 
 
 
-  const [appView, { refetch: refetchApp }] = createResource(capsuleId, getCapsuleApp);
+  const [appView, { refetch: refetchApp }] = createResource<CapsuleAppView, string, AbortSignal | { readonly isCurrent: () => boolean }>(capsuleId, (id, info) =>
+    getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined,
+      typeof info.refetching === "object" && info.refetching !== null && !(info.refetching instanceof AbortSignal) ? info.refetching : {}));
   const app = createLastGoodValue(appView, (value) => value.capsuleId === capsuleId());
   const destroyed = () => app()?.state === "uninstalled";
   const applied = () => app()?.applied === true;
@@ -234,18 +284,30 @@ export default function AppManagePage(props: {
   // not serve (for example a skewed deploy) is unreadable, not missing.
   const notFound = () => !contextLatest() && isCapsuleNotFound(context.error);
 
-  const [installConfig] = createResource(
-    () => capsule()?.installConfigId ?? null,
+  const [installConfig, { refetch: refetchInstallConfig }] = createResource(
+    () => {
+      const view = app();
+      // A complete App view already owns its projection. Missing optional
+      // Store metadata there means the app uses its name and generated icon.
+      const recoverDisplay = appViewIncomplete(view, "display") &&
+        (!view?.displayName?.[locale()] || !(view?.screens[0]?.icon ?? view?.iconUrl));
+      return settingsVisited() || view?.primaryAction === "reinstall" || recoverDisplay
+        ? capsule()?.installConfigId ?? null
+        : null;
+    },
     getInstallConfig,
   );
-  const installConfigValue = () => settledValue(installConfig);
+  const installConfigValue = () => {
+    const value = settledValue(installConfig);
+    return value?.id === capsule()?.installConfigId ? value : undefined;
+  };
   const displayName = () =>
     app()?.displayName?.[locale()] ??
     capsuleDisplayName(installConfigValue(), locale()) ??
     capsule()?.name ?? "";
 
   const [stateVersions, { refetch: refetchStateVersions }] = createResource(
-    () => (applied() ? capsuleId() : null),
+    () => (applied() && versionsVisited() ? capsuleId() : null),
     listStateVersions,
   );
   const stateVersionList = () => settledValue(stateVersions) ?? [];
@@ -259,32 +321,33 @@ export default function AppManagePage(props: {
   const [snapshots] = createResource(
     () => {
       const inst = capsule();
-      return inst?.sourceId && managed() && stateVersionList().length > 1 ? inst.sourceId : null;
+      return inst?.sourceId && managed() && versionsVisited() && stateVersionList().length > 1 ? inst.sourceId : null;
     },
     (id) => listSourceSnapshots(id),
   );
   const snapshotList = () => settledValue(snapshots) ?? [];
 
   const [bindingSet, { refetch: refetchBindings }] = createResource(
-    () => (managed() ? capsuleId() : null),
+    () => (managed() && (settingsVisited() || resourcesVisited()) ? capsuleId() : null),
     getCapsuleProviderBindingSet,
   );
   const [connections, { refetch: refetchConnections }] = createResource(
-    () => (managed() && isOwner() ? { workspaceId: workspaceId() } : null),
+    () => (managed() && isOwner() && (settingsVisited() || resourcesVisited() || sectionVisited("sharing"))
+      ? { workspaceId: workspaceId() } : null),
     (key) => listProviderConnections(key.workspaceId),
   );
   const [inventory, { refetch: refetchInventory }] = createResource(
-    () => (managed() ? capsuleId() : null),
+    () => (managed() && resourcesVisited() ? capsuleId() : null),
     getCurrentResourceInventory,
   );
   const [usage, { refetch: refetchUsage }] = createResource(
-    () => (managed() ? capsuleId() : null),
+    () => (managed() && resourcesVisited() ? capsuleId() : null),
     getCapsuleUsageSummary,
   );
   const [hosted] = createResource(
     () => {
       const inst = capsule();
-      return inst && managed() && inst.workspaceId
+      return inst && managed() && inst.workspaceId && resourcesVisited()
         ? { workspaceId: inst.workspaceId, capsuleId: inst.id }
         : null;
     },
@@ -292,8 +355,9 @@ export default function AppManagePage(props: {
   );
 
   // --- history: the app's own Runs, page by page --------------------------------
-  const [historyFirst, { refetch: refetchHistory }] = createResource(capsuleId, (id) =>
-    listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES }),
+  const [historyFirst, { refetch: refetchHistory }] = createResource(
+    () => versionsVisited() ? capsuleId() : null,
+    (id) => listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES }),
   );
   const historyFirstValue = () => settledValue(historyFirst);
   // Older pages survive a refresh of the first page (see mergeAppHistoryPages).
@@ -369,20 +433,28 @@ export default function AppManagePage(props: {
     if (inst) props.onCapsule?.(inst);
   });
 
-  // The section the URL names is scrolled to once the sections above it have
-  // loaded and stopped moving it down.
-  let scrolledTo: string | undefined;
-  createEffect(() => {
-    const section = props.section;
-    if (!section || !capsule() || !app() || (section === "sharing" && !sharingAvailable())) return;
-    const key = `${capsuleId()}:${section}`;
-    if (scrolledTo === key) return;
-    const settling = [installConfig, stateVersions, inventory, bindingSet, usage, historyFirst]
-      .some((resource) => resource.loading);
-    if (settling) return;
-    scrolledTo = key;
-    requestAnimationFrame(() => scrollToSection(section));
-  });
+  // For an opened pane, focus its heading. Returning restores the menu row
+  // that opened it; a deep link with no visible row falls back to the title.
+  createEffect(on([
+    activeSection,
+    () => Boolean(capsule() && app()),
+  ], ([section, ready], previous) => {
+    if (!ready || (!section && !previous?.[0])) return;
+    const frame = requestAnimationFrame(() => {
+      if (section) {
+        const heading = document.getElementById(`${APP_PAGE_SECTIONS[section]}-title`) ??
+          document.querySelector<HTMLElement>("[data-testid=app-section-back]");
+        heading?.focus({ preventScroll: true });
+        window.scrollTo({ top: 0, behavior: "instant" });
+      } else {
+        const row = document.querySelector<HTMLElement>(`[data-app-section-link="${previous?.[0]}"]`) ??
+          document.getElementById("ap-app-title");
+        // Restore the focused row into view, including at short mobile heights.
+        row?.focus();
+      }
+    });
+    onCleanup(() => cancelAnimationFrame(frame));
+  }));
 
   const clearCaches = () => {
     const workspace = workspaceId();
@@ -495,17 +567,21 @@ export default function AppManagePage(props: {
     purpose: ReviewPurpose,
     /** The Plan Run to review; `null` when the work continues elsewhere. */
     create: () => Promise<string | null | undefined>,
-    options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction | "continue_revision" } = {},
+    options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction | "continue_revision"; readonly isCurrent?: () => boolean } = {},
   ) => {
     if (reviewBusy() || appRole() === undefined || (purpose === "uninstall" && !isOwner())) return;
     // A result that arrives after the page moved to another app is dropped.
     const forCapsule = capsuleId();
-    setStarting({ section, ...(options.action ? { action: options.action } : {}) });
+    const forAccount = props.accountId;
+    const forPrincipal = props.principalId;
+    const heldStarting = { section, ...(options.action ? { action: options.action } : {}) };
+    setStarting(heldStarting);
+    const isCurrent = () => capsuleId() === forCapsule && (!options.isCurrent || options.isCurrent());
     setSectionError(undefined);
     setNotice(undefined);
     try {
       const planRunId = await create();
-      if (capsuleId() !== forCapsule) return;
+      if (!isCurrent()) return;
       // The work continues elsewhere (an install that waits on its own page).
       if (planRunId === null) return;
       if (!planRunId) throw new Error(t("app.review.notStarted"));
@@ -520,7 +596,7 @@ export default function AppManagePage(props: {
         document.getElementById("app-review")?.scrollIntoView({ block: "nearest", behavior: "instant" }),
       );
     } catch (cause) {
-      if (capsuleId() === forCapsule) {
+      if (isCurrent()) {
         if (purpose === "update") {
           const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
           if (target) setReAdoptionRevisionId(target);
@@ -531,9 +607,23 @@ export default function AppManagePage(props: {
         } else {
           setSectionError({ section, message: friendlyError(cause, t).message });
         }
+        if (!disposed && (purpose === "update" || purpose === "uninstall") && props.accountId === forAccount && props.principalId === forPrincipal &&
+          (cause instanceof ControlApiError
+            ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
+            : cause instanceof TypeError)) {
+          // Acceptance may precede a lost response. Only this app's current
+          // server view can name existing work; never repeat the mutation.
+          try {
+            void Promise.resolve(refetchApp(options.isCurrent ? { isCurrent: options.isCurrent } : undefined)).catch(() => {});
+          } catch {
+            // Keep the original update error when its readback also fails.
+          }
+        }
       }
     } finally {
-      if (capsuleId() === forCapsule) setStarting(undefined);
+      // A retired replacement intent may release its own busy state, but
+      // must never clear an action that replaced it on the same app.
+      if (capsuleId() === forCapsule && (!options.isCurrent || starting() === heldStarting)) setStarting(undefined);
     }
   };
 
@@ -817,13 +907,17 @@ export default function AppManagePage(props: {
     }
   };
   const fixConnection = () => {
-    if (managed()) scrollToSection("connections");
+    if (managed() && !app()?.uninstall.scheduled) openSection("connections");
     else navigate("/connections");
   };
 
   // --- uninstall -------------------------------------------------------------------
   const [uninstallBusy, setUninstallBusy] = createSignal(false);
   const [uninstallError, setUninstallError] = createSignal<string>();
+  const uninstallConnectionNotice = () => {
+    const view = app();
+    return view && appUninstallConnectionNotice(view);
+  };
   const graceDays = () => {
     const terms = app()?.uninstall;
     return terms?.mode === "scheduled" ? terms.graceDays : undefined;
@@ -836,20 +930,95 @@ export default function AppManagePage(props: {
     clearCaches();
     navigate("/", { replace: true });
   };
-  /** Re-reads the app after an uninstall whose answer did not say it is gone. */
-  const removedOnReread = async (): Promise<boolean> => {
+  type UninstallAttempt = {
+    readonly kind: "schedule" | "cancel";
+    readonly before: Capsule;
+    readonly accountId: string | undefined;
+    readonly principalId: string | undefined;
+    readonly epoch: number;
+    readonly message?: string;
+  };
+  let uninstallEpoch = 0;
+  const [uninstallRecovery, setUninstallRecovery] = createSignal<UninstallAttempt>();
+  const [uninstallReadPending, setUninstallReadPending] = createSignal(false);
+  let uninstallReadFlight: Promise<unknown> | undefined;
+  const uninstallScope = createMemo(() => JSON.stringify([capsuleId(), workspaceId(), props.accountId, props.principalId]));
+  createEffect(on(uninstallScope, () => {
+    uninstallEpoch += 1;
+    uninstallReadController?.abort();
+    setUninstallBusy(false);
+    setUninstallError(undefined);
+    setUninstallRecovery(undefined);
+  }));
+  const sameUninstallScope = (operation: UninstallAttempt) => !disposed && operation.epoch === uninstallEpoch &&
+    capsuleId() === operation.before.id && workspaceId() === operation.before.workspaceId &&
+    props.accountId === operation.accountId && props.principalId === operation.principalId;
+  const ownsUninstall = (operation: UninstallAttempt) => sameUninstallScope(operation) && isOwner();
+  const uninstallAttempt = (kind: UninstallAttempt["kind"], before: Capsule): UninstallAttempt => ({
+    kind, before: structuredClone(before), accountId: props.accountId, principalId: props.principalId,
+    epoch: uninstallEpoch,
+  });
+  /** One read-only pair; it never retries a mutation or waits indefinitely. */
+  const rereadUninstall = async (operation: UninstallAttempt) => {
+    if (!ownsUninstall(operation) || uninstallReadFlight) return "unverified" as const;
     clearCaches();
-    const [, reread] = await Promise.allSettled([refetchContext(), refetchApp()]);
-    return (
-      reread.status === "fulfilled" &&
-      reread.value?.capsuleId === capsuleId() &&
-      reread.value.state === "uninstalled"
-    );
+    const controller = new AbortController();
+    uninstallReadController = controller;
+    const reads = Promise.allSettled([
+      Promise.resolve().then(() => ownsUninstall(operation) ? refetchContext(controller.signal) : undefined),
+      Promise.resolve().then(() => ownsUninstall(operation) ? refetchApp(controller.signal) : undefined),
+    ]);
+    uninstallReadFlight = reads;
+    setUninstallReadPending(true);
+    // Keep a non-cooperative transport single-flight even after our deadline.
+    void reads.finally(() => {
+      if (uninstallReadFlight !== reads) return;
+      uninstallReadFlight = undefined;
+      setUninstallReadPending(false);
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        reads,
+        new Promise<undefined>((resolve) => { timer = setTimeout(() => { controller.abort(); resolve(undefined); }, 5_000); }),
+      ]);
+      if (!ownsUninstall(operation) || !result) return "unverified" as const;
+      const [context, view] = result;
+      return context.status === "fulfilled" && context.value && view.status === "fulfilled" && view.value
+        ? observeUninstallReadback(operation.kind, operation.before, context.value.capsule, view.value)
+        : "unverified" as const;
+    } finally { clearTimeout(timer); if (uninstallReadController === controller && !uninstallReadFlight) uninstallReadController = undefined; }
+  };
+  const recoverUninstall = async (operation: UninstallAttempt) => {
+    if (!ownsUninstall(operation)) return;
+    setUninstallRecovery(operation);
+    const observed = await rereadUninstall(operation);
+    if (!ownsUninstall(operation)) return;
+    if (observed === "removed") {
+      setUninstallRecovery(undefined);
+      leaveRemovedApp();
+    } else if (observed === "cancelled") {
+      setUninstallRecovery(undefined);
+      setUninstallError(undefined);
+    } else {
+      setUninstallRecovery(operation);
+      // A newly observed reservation is displayed as fact, not attributed to our lost response.
+      setUninstallError(observed === "reservation" ? undefined : operation.message);
+    }
+  };
+  const retryUninstallRead = async () => {
+    const operation = uninstallRecovery();
+    if (!operation || !ownsUninstall(operation) || uninstallBusy() || uninstallReadPending()) return;
+    setUninstallBusy(true);
+    try { await recoverUninstall(operation); }
+    finally { if (sameUninstallScope(operation)) setUninstallBusy(false); }
   };
   const uninstall = async () => {
     const inst = capsule();
     if (!inst || !isOwner() || uninstallBusy()) return;
+    const selection = uninstallAttempt("schedule", inst);
     const days = graceDays();
+    const connectionNotice = uninstallConnectionNotice();
     const ok = await confirm({
       title: t("app.uninstall.confirmTitle"),
       message: [
@@ -858,6 +1027,7 @@ export default function AppManagePage(props: {
           : days !== undefined
             ? t("app.uninstall.confirmGrace", { name: displayName(), days })
             : t("app.uninstall.confirmMessage", { name: displayName() }),
+        connectionNotice ? t(connectionNotice) : undefined,
         app()?.uninstall.impact?.usedBy.length
           ? t("app.links.uninstallImpact", {
               apps: app()!.uninstall.impact.usedBy.map((row) => row.otherApp?.displayName?.[locale()] || row.otherApp?.name || row.consumerCapsuleId).join(locale() === "ja" ? "、" : ", "),
@@ -870,51 +1040,78 @@ export default function AppManagePage(props: {
       cancelText: t("common.cancel"),
       danger: true,
     });
-    if (!ok) return;
+    if (!ok || !ownsUninstall(selection) || uninstallBusy()) return;
+    const operation = { ...selection, epoch: ++uninstallEpoch };
     setUninstallBusy(true);
     setUninstallError(undefined);
+    setUninstallRecovery(undefined);
     try {
       const result = await deleteCapsule(inst.id);
+      if (!ownsUninstall(operation)) return;
       if (result.capsule?.status === "destroyed" || result.abandoned) {
         leaveRemovedApp();
         return;
       }
-      if (await removedOnReread()) leaveRemovedApp();
+      if (await rereadUninstall(operation) === "removed" && ownsUninstall(operation)) leaveRemovedApp();
     } catch (cause) {
-      // The server may have committed the removal even though its answer
-      // failed on the way back: re-read the app before showing it again.
-      if (await removedOnReread()) {
-        leaveRemovedApp();
+      if (!ownsUninstall(operation)) return;
+      if (cause instanceof ControlApiError && cause.status >= 400 && cause.status < 500) {
+        setUninstallError(friendlyError(cause, t).message);
+        await rereadUninstall(operation);
         return;
       }
-      setUninstallError(friendlyError(cause, t).message);
+      await recoverUninstall({ ...operation, message: friendlyError(cause, t).message });
     } finally {
-      setUninstallBusy(false);
+      if (sameUninstallScope(operation)) setUninstallBusy(false);
     }
   };
   const cancelUninstall = async () => {
-    if (!isOwner() || uninstallBusy()) return;
+    const inst = capsule();
+    if (!inst || !isOwner() || uninstallBusy()) return;
+    const operation = { ...uninstallAttempt("cancel", inst), epoch: ++uninstallEpoch };
     setUninstallBusy(true);
     setUninstallError(undefined);
+    setUninstallRecovery(undefined);
     try {
-      await cancelCapsuleUninstall(capsuleId());
+      await cancelCapsuleUninstall(inst.id);
+      if (!ownsUninstall(operation)) return;
       clearCaches();
       await Promise.allSettled([refetchContext(), refetchApp(), refetchHistory()]);
     } catch (cause) {
-      setUninstallError(friendlyError(cause, t).message);
+      if (!ownsUninstall(operation)) return;
+      if (cause instanceof ControlApiError && cause.status >= 400 && cause.status < 500) {
+        setUninstallError(friendlyError(cause, t).message);
+        await rereadUninstall(operation);
+        return;
+      }
+      await recoverUninstall({ ...operation, message: friendlyError(cause, t).message });
     } finally {
-      setUninstallBusy(false);
+      if (sameUninstallScope(operation)) setUninstallBusy(false);
     }
   };
   // The immediate teardown is a plan reviewed in place: its removal list,
   // the explicit check and the approval dialog all stay in front of it.
   const uninstallNow = () => {
-    if (!isOwner()) return;
+    if (!isOwner() || uninstallConnectionNotice()) return;
     void startReview(
       "attention",
       "uninstall",
       async () => extractRunId(await deleteCapsule(capsuleId(), { immediate: true })),
       { restartable: false, action: "uninstall_now" },
+    );
+  };
+  const reviewUninstallWithConnection = (replacements: readonly DestroyProviderConnectionReplacement[]) => {
+    const view = app();
+    if (!view || !isOwner() || uninstallConnectionNotice() !== "app.uninstall.connectionRemoved" ||
+      review() || view.progress.run || view.progress.review) return;
+    const heldScope = uninstallScope();
+    const heldEpoch = uninstallEpoch;
+    const isCurrent = () => !disposed && isOwner() && uninstallEpoch === heldEpoch && uninstallScope() === heldScope;
+    void startReview(
+      "attention",
+      "uninstall",
+      async () => extractRunId(await createCapsuleDestroyRecoveryPlan(view.capsuleId, replacements, { isCurrent })),
+      { restartable: false, action: "uninstall_now", isCurrent },
     );
   };
 
@@ -924,10 +1121,11 @@ export default function AppManagePage(props: {
     const step = appPrimaryStep(view);
     switch (step.kind) {
       case "show_created":
-        scrollToSection("created");
+        openSection("created");
         return;
       case "review":
-        openRunReview(step.runId, step.runType);
+        if (review()?.section === "attention") scrollToSection("review");
+        else openRunReview(step.runId, step.runType);
         return;
       case "retry":
         retry(step.problem);
@@ -939,7 +1137,7 @@ export default function AppManagePage(props: {
         fixConnection();
         return;
       case "fix_interface_link":
-        scrollToSection("links");
+        openSection("links");
         return;
       case "continue_install":
         continueInstall();
@@ -955,9 +1153,10 @@ export default function AppManagePage(props: {
         return;
     }
   };
-  /** The primary action's own review is already open below the header. */
+  /** A visible review or the Resources row already provides this action. */
   const primaryOpenInPlace = (view: CapsuleAppView) =>
-    view.primaryAction === "review" && review()?.section === "attention";
+    (view.primaryAction === "review" && review()?.section === "attention") ||
+    (view.primaryAction === "view_resources" && managed());
   const primaryBusy = (view: CapsuleAppView) =>
     starting()?.action === view.primaryAction ||
     (view.primaryAction === "cancel_uninstall" && uninstallBusy()) ||
@@ -989,10 +1188,13 @@ export default function AppManagePage(props: {
   /** Open landed on the chooser (an iPhone custom scheme not chosen yet). */
   const showChooser = (interfaceId: string) => {
     setChooserScreenId(interfaceId);
-    requestAnimationFrame(() => {
-      scrollToSection("phone");
-      document.querySelector<HTMLElement>("#phone a[href], #phone button:not([disabled])")?.focus({ preventScroll: true });
-    });
+    if (activeSection() !== "phone") {
+      openSection("phone");
+    } else {
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>("#phone a[href], #phone button:not([disabled])")?.focus({ preventScroll: true });
+      });
+    }
   };
   /**
    * 「開き方を変える」: on a phone, every screen that has a native app for this
@@ -1043,9 +1245,36 @@ export default function AppManagePage(props: {
     view.primaryAction !== "open" && screens().length > 0 &&
     view.state !== "uninstalling" && view.state !== "uninstalled";
   const versionChangeBusy = appVersionChangeBusy;
-  const showUpdate = (view: CapsuleAppView) =>
+  const updateAvailable = (view: CapsuleAppView) =>
     managed() && revisionReady() && (view.version.updateAvailable || view.version.stale) &&
     view.state === "installed" && !versionChangeBusy(view);
+
+  const sectionVisible = (id: string): boolean => {
+    const selected = activeSection();
+    if (id === "app-gone") return true;
+    if (id === "attention") {
+      return !selected || selected === id || review()?.section === "attention" ||
+        starting()?.section === "attention" || Boolean(errorFor("attention")) || selected === "danger";
+    }
+    return selected === id;
+  };
+
+  const managementRow = (
+    section: AppPageSection,
+    label: MessageKey,
+    icon: JSX.Element,
+    options: { detail?: string; danger?: boolean } = {},
+  ) => (
+    <AppManagementRow
+      section={section}
+      href={appPaneHref(section)}
+      onNavigate={openSectionLink}
+      icon={icon}
+      label={t(label)}
+      detail={options.detail}
+      danger={options.danger}
+    />
+  );
 
   return (
     <Switch>
@@ -1090,17 +1319,35 @@ export default function AppManagePage(props: {
         {(loaded) => {
           const inst = () => loaded().inst;
           const view = () => loaded().view;
-          const primaryLabel = () =>
-            view().primaryAction === "retry" ? retryLabel(view()) : appPrimaryActionLabel(view().primaryAction);
+          const primaryLabel = () => {
+            const action = view().primaryAction;
+            if (action === "fix_connection" && view().uninstall.scheduled &&
+              uninstallConnectionNotice() === "app.uninstall.connectionRemoved") return undefined;
+            return action === "retry" ? retryLabel(view()) : appPrimaryActionLabel(action);
+          };
           return (
-            <div class="ap-page" data-testid="app-page" data-app-state={view().state} data-primary-action={view().primaryAction}>
+            <AppSectionVisibility.Provider value={sectionVisible}>
+            <div
+              class="ap-page"
+              data-testid="app-page"
+              data-app-state={view().state}
+              data-primary-action={view().primaryAction}
+              data-app-section={activeSection() ?? "overview"}
+            >
+              <Show when={activeSection()}>
+                <a
+                  class="ap-overview-back"
+                  data-testid="app-section-back"
+                  href={appPaneHref()}
+                  onClick={backToOverview}
+                >
+                  <ChevronLeft size={19} aria-hidden="true" />
+                  {t("app.backToOverview")}
+                </a>
+              </Show>
               <Show when={context.error || appView.error}>
                 <Toast tone="error">{t("app.refreshFailed")}</Toast>
               </Show>
-              <Show when={props.justInstalled && managed()}>
-                <p class="ap-notice" role="status">{t("app.installedNotice")}</p>
-              </Show>
-
               <header class="ap-header" data-testid="app-header">
                 <AppFace
                   name={displayName()}
@@ -1109,17 +1356,16 @@ export default function AppManagePage(props: {
                   class="ap-icon"
                 />
                 <div class="ap-title">
-                  <h1>
+                  <h1 id="ap-app-title" tabindex="-1">
                     {displayName()}
-                    <Show when={displayName() !== inst().name}>
-                      <span class="ap-instance-name">{inst().name}</span>
-                    </Show>
                   </h1>
-                  <p class="ap-state" data-testid="app-state-sentence">{t(appStateSentence(view()))}</p>
+                  <Show when={view().state !== "installed" || view().primaryAction !== "open"}>
+                    <p class="ap-state" data-testid="app-state-sentence">{t(appStateSentence(view()))}</p>
+                  </Show>
                   <Show when={appViewIncomplete(view(), "screens")}>
                     <p class="ap-muted" role="alert" data-incomplete="screens">{t("app.incomplete.screens")}</p>
                   </Show>
-                  <Show when={appViewIncomplete(view(), "display")}>
+                  <Show when={appViewIncomplete(view(), "display") && !installConfigValue()}>
                     <p class="ap-muted" role="status" data-incomplete="display">{t("app.incomplete.display")}</p>
                   </Show>
                 </div>
@@ -1136,6 +1382,8 @@ export default function AppManagePage(props: {
                     <Match when={view().primaryAction === "reinstall"}>
                       <Button
                         variant="primary"
+                        disabled={installConfig.loading}
+                        busy={installConfig.loading}
                         href={reinstallHref(reinstallInput(view(), inst()))}
                       >
                         {t("app.action.reinstall")}
@@ -1195,37 +1443,42 @@ export default function AppManagePage(props: {
                       {t("app.open.reload")}
                     </Button>
                   </Show>
-                  <Show when={showUpdate(view())}>
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      icon={<RefreshCw size={16} />}
-                      busy={startingIn("version")}
-                      disabled={reviewBusy()}
-                      onClick={() => {
-                        startUpdate();
-                        scrollToSection("version");
-                      }}
-                    >
-                      {t("app.version.update")}
-                    </Button>
-                  </Show>
                 </div>
               </header>
 
-              <Show when={managed()}>
-                <nav class="ap-jump" aria-label={t("app.jump.label")}>
-                  <a href="#version">{t("app.version.title")}</a>
-                  <a href="#settings">{t("app.settings.title")}</a>
-                  <a href="#links">{t("app.links.title")}</a>
-                  <a href="#created">{t("app.created.title")}</a>
-                  <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined}>
-                    <a href="#phone">{t("app.phone.title")}</a>
+              <Show when={props.justInstalled && managed() && !activeSection() && view().primaryAction !== "open"}>
+                <p class="ap-notice" role="status">{t("app.installedNotice")}</p>
+              </Show>
+
+              <Show when={!activeSection()}>
+                <nav class="ap-management" aria-label={t("app.jump.label")} data-testid="app-management">
+                  <Show when={managed()}>
+                    <ul class="ap-menu-group">
+                      {managementRow("settings", "app.settings.title", <Settings2 size={19} />)}
+                      {managementRow("version", "app.version.title", <RefreshCw size={18} />, {
+                        detail: updateAvailable(view()) ? t("app.version.update") : undefined,
+                      })}
+                      {managementRow("connections", "app.manage.connections", <Plug size={19} />)}
+                      {managementRow("links", "app.links.title", <Link2 size={19} />)}
+                    </ul>
                   </Show>
-                  <a href="#history">{t("app.history.title")}</a>
-                  <Show when={sharingAvailable()}><a href="#sharing">{t("app.sharing.title")}</a></Show>
-                  <Show when={isOwner() && !view().uninstall.scheduled}>
-                    <a href="#danger">{t("app.uninstall.title")}</a>
+                  <ul class="ap-menu-group">
+                    <Show when={managed()}>
+                      {managementRow("created", "app.manage.resources", <FolderOpen size={19} />)}
+                    </Show>
+                    {managementRow("history", "app.history.title", <Clock3 size={19} />)}
+                    <Show when={!destroyed() && appRole() !== undefined && sharingAvailable() !== false}>
+                      {managementRow("sharing", "app.sharing.title", <Users size={19} />)}
+                    </Show>
+                    <Show when={!destroyed() && (view().primaryAction === "open" || secondaryScreens(view())) && chooserScreen()}>
+                      {managementRow("phone", "app.phone.title", <Smartphone size={18} />)}
+                    </Show>
+                  </ul>
+                  <Show when={!destroyed() && isOwner() && !view().uninstall.scheduled &&
+                    view().state !== "uninstalling" && view().state !== "uninstall_scheduled"}>
+                    <ul class="ap-menu-group">
+                      {managementRow("danger", "app.uninstall.title", <Trash2 size={19} />, { danger: true })}
+                    </ul>
                   </Show>
                 </nav>
               </Show>
@@ -1243,6 +1496,16 @@ export default function AppManagePage(props: {
                   <Button variant="secondary" onClick={() => void refetchRole()}>{t("common.retry")}</Button>
                 </Toast>
               </Show>
+              <Show when={uninstallRecovery() && isOwner()}>
+                <div data-testid="app-uninstall-recovery" role="status">
+                  <Toast tone="neutral">{t("app.uninstall.unconfirmed")}
+                    <Button variant="secondary" busy={uninstallBusy()} disabled={uninstallReadPending()} onClick={() => void retryUninstallRead()}>{t("common.refresh")}</Button>
+                  </Toast>
+                </div>
+              </Show>
+              <Show when={uninstallError()}>
+                {(message) => <p class="wa-error" role="alert" data-testid="app-uninstall-error">{message()}</p>}
+              </Show>
               <AppAttentionSection
                 canUninstall={isOwner()}
                 app={view()}
@@ -1252,7 +1515,6 @@ export default function AppManagePage(props: {
                   ? { startingAction: starting()!.action! }
                   : {})}
                 uninstallBusy={uninstallBusy()}
-                {...(uninstallError() ? { uninstallError: uninstallError()! } : {})}
                 screenRetryBusy={screenRetryBusy()}
                 {...(screenRetryMessage() ? { screenRetryMessage: screenRetryMessage()! } : {})}
                 {...(errorFor("attention") ? { error: errorFor("attention")! } : {})}
@@ -1265,16 +1527,17 @@ export default function AppManagePage(props: {
                   retry,
                   retryScreen: (problem) => void retryScreen(problem),
                   fixConnection,
-                  fixInterfaceLink: () => scrollToSection("links"),
+                  fixInterfaceLink: () => openSection("links"),
                   continueInstall,
                   cancelUninstall: () => void cancelUninstall(),
                   uninstallNow,
+                  reviewUninstallWithConnection,
                   openReview: openRunReview,
                   continueRevision,
                 }}
               />
 
-              <Show when={managed()}>
+              <Show when={managed() && sectionVisited("version")}>
                 <AppVersionSection
                   version={view().version}
                   versionIncomplete={appViewIncomplete(view(), "version")}
@@ -1307,8 +1570,11 @@ export default function AppManagePage(props: {
                   }
                   review={reviewPanel("version")}
                 />
+              </Show>
+              <Show when={managed() && settingsVisited()}>
                 <AppSettingsSection
                   capsuleId={capsuleId()}
+                  pane={activeSection() === "connections" ? "connections" : "settings"}
                   workspaceId={inst().workspaceId}
                   member={appRole() === "member"}
                   accessKnown={appRole() !== undefined}
@@ -1317,11 +1583,19 @@ export default function AppManagePage(props: {
                   installConfig={installConfigValue()}
                   installConfigLoading={installConfig.loading}
                   authorityGuard={authorityGuard()}
+                  authorityLoading={context.loading}
+                  authorityFailed={Boolean(context.error)}
                   // A loaded app without a binding set uses no connections.
                   bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}
                   capsuleInstallConfigId={inst().installConfigId}
                   seed={settingsSeed()}
+                  bindingsLoading={bindingSet.loading}
                   bindingsFailed={Boolean(bindingSet.error)}
+                  onRetryReads={() => {
+                    if (context.error) void refetchContext();
+                    if (!installConfigValue()) void refetchInstallConfig();
+                    if (bindingSet.error) void refetchBindings();
+                  }}
                   connections={settledValue(connections) ?? []}
                   onConnectionsChanged={() => void refetchConnections()}
                   // A settings change beside a running or pending version
@@ -1334,7 +1608,11 @@ export default function AppManagePage(props: {
                   onReview={(create) => void startReview("settings", "apply", create, { restartable: false })}
                   review={reviewPanel("settings")}
                 />
+              </Show>
+              <Show when={managed() && sectionVisited("links")}>
                 <AppLinkedSection app={view()} onChanged={async () => { await refetchApp(); }} />
+              </Show>
+              <Show when={managed() && resourcesVisited()}>
                 <AppCreatedSection
                   inventory={settledValue(inventory)}
                   inventoryLoading={inventory.loading}
@@ -1350,7 +1628,8 @@ export default function AppManagePage(props: {
 
               {/* Wherever Open is offered, the same screen can go to a phone,
                   and on a phone this is where it chooses how the screen opens. */}
-              <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined}>
+              <Show when={sectionVisited("phone") && (view().primaryAction === "open" || secondaryScreens(view()))
+                ? chooserScreen() : undefined}>
                 {(screen) => (
                   <AppPhoneSection
                     url={screen().url}
@@ -1363,6 +1642,7 @@ export default function AppManagePage(props: {
                 )}
               </Show>
 
+              <Show when={sectionVisited("history")}>
               <AppHistorySection
                 events={history()}
                 loading={historyFirst.loading && !historyFirstValue()}
@@ -1373,7 +1653,9 @@ export default function AppManagePage(props: {
                 moreError={moreError()}
                 onMore={() => void loadMoreHistory()}
               />
+              </Show>
 
+              <Show when={sectionVisited("sharing") && !destroyed()}>
               <AppSharingSection
                 capsuleId={capsuleId()}
                 role={appRole()}
@@ -1382,9 +1664,10 @@ export default function AppManagePage(props: {
                 onChanged={refreshAll}
                 onAvailability={setSharingAvailable}
               />
+              </Show>
               <Show
                 when={
-                  isOwner() && !destroyed() && !view().uninstall.scheduled &&
+                  sectionVisited("danger") && isOwner() && !destroyed() && !view().uninstall.scheduled &&
                   view().state !== "uninstalling" && view().state !== "uninstall_scheduled"
                 }
               >
@@ -1402,7 +1685,13 @@ export default function AppManagePage(props: {
                   }
                   testId="app-uninstall"
                 >
+                  <Show when={uninstallConnectionNotice()}>
+                    {(notice) => <p role="status">{t(notice())}</p>}
+                  </Show>
                   <div class="ap-row-actions">
+                    <Show when={uninstallConnectionNotice() === "app.uninstall.connectionUnavailable"}>
+                      <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
+                    </Show>
                     <Show
                       when={view().uninstall.mode !== "none"}
                       fallback={
@@ -1410,7 +1699,7 @@ export default function AppManagePage(props: {
                           variant="danger"
                           type="button"
                           busy={starting()?.action === "uninstall_now"}
-                          disabled={reviewBusy() || uninstallBusy()}
+                          disabled={reviewBusy() || uninstallBusy() || Boolean(uninstallConnectionNotice())}
                           onClick={uninstallNow}
                         >
                           {t("app.uninstall.now")}
@@ -1428,12 +1717,10 @@ export default function AppManagePage(props: {
                       </Button>
                     </Show>
                   </div>
-                  <Show when={uninstallError()}>
-                    {(message) => <p class="wa-error" role="alert">{message()}</p>}
-                  </Show>
                 </AppSection>
               </Show>
             </div>
+            </AppSectionVisibility.Provider>
           );
         }}
       </Match>

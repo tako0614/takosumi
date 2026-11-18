@@ -111,6 +111,32 @@ function inputFacts(installConfig: InstallConfig = config()) {
   return result.facts;
 }
 
+test("standard public URL hint requires accepted unambiguous roles, no secret/default or host override", () => {
+  const base = { ...config(), variableMapping: {}, variablePresentation: [], installExperience: {} };
+  const install: InstallConfig = { ...config(), variablePresentation: [
+    { name: "address", type: "string", format: "cloudflare-workers-url", required: true, label: { en: "URL" } },
+    { name: "name", type: "string", defaultValue: { source: "capsule_name" }, label: { en: "Name" } },
+  ], installExperience: { repositoryInstallUx: { status: "accepted" }, projections: [
+    { kind: "public_endpoint", variables: { url: "address" } }, { kind: "service_name", variable: "name" },
+  ] } };
+  const presentation = (next = install, host: InstallConfig = base) => {
+    const result = attemptInputFacts({ modulePath: ".", report: { rootProviderRequirements: [], resources: [] } as unknown as CapsuleCompatibilityReport,
+      installConfig: next, baseConfig: host, repositoryManifest: true });
+    if (!result.ok) throw new Error(result.message);
+    return result.facts.variables.find((field) => field.name === "address");
+  };
+  expect(presentation()?.publicEndpoint).toEqual({ serviceNameVariable: "name", serviceNameSource: "capsule_name" });
+  for (const patch of [
+    { internal: undefined },
+    { installExperience: { projections: install.installExperience!.projections } },
+    { installExperience: { ...install.installExperience, projections: [{ kind: "public_endpoint", variables: { url: "address" } }] } },
+    { installExperience: { ...install.installExperience, projections: [...install.installExperience!.projections!, { kind: "service_name", variable: "other" }] } },
+    ...[{ format: "url" }, { format: "future-url" }, { secret: true, required: false }, { defaultValue: { source: "literal", value: "https://supplied.example" } }]
+      .map((field) => ({ variablePresentation: [{ ...install.variablePresentation![0]!, ...field }, install.variablePresentation![1]!] })),
+  ] as Partial<InstallConfig>[]) expect(presentation({ ...install, ...patch })?.publicEndpoint).toBeUndefined();
+  for (const name of ["address", "name"]) expect(presentation(install, { ...base, variableMapping: { [name]: "host-owned" } })?.publicEndpoint).toBeUndefined();
+});
+
 test("committed review exposes only values backed by accepted non-secret repository presentation", () => {
   const installConfig: InstallConfig = {
     ...config({ variableMapping: {

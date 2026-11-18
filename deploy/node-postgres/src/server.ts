@@ -33,6 +33,9 @@ import {
   startOwnNotificationDispatcher,
 } from "./own-notification-dispatcher.ts";
 import { planOwnNotification } from "../../../core/domains/notifications/own_notifications.ts";
+import { createDefaultRunnerProfiles } from "../../../core/domains/deploy-control/runner_profiles.ts";
+import { SqlOpenTofuControlStore } from "../../../core/domains/deploy-control/store_sql.ts";
+import { startLocalApplyStartupRecovery } from "./local-apply-startup-recovery.ts";
 import { startSourceRetirementSweeper } from "./source-retirement-sweeper.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
 import { isSecretKey, redactString } from "takosumi-contract/redaction";
@@ -133,6 +136,9 @@ export interface ComposedServerOverrides {
   readonly allowOperatorScopedProviderConnections?: Parameters<
     typeof buildComposedApp
   >[0]["allowOperatorScopedProviderConnections"];
+  readonly createModuleVariableMaterializer?: Parameters<
+    typeof buildComposedApp
+  >[0]["createModuleVariableMaterializer"];
   readonly createRuntimeInputOidcClientSource?: Parameters<
     typeof buildComposedApp
   >[0]["createRuntimeInputOidcClientSource"];
@@ -150,6 +156,9 @@ export interface ComposedServerOverrides {
 export async function buildComposedServer(
   overrides: ComposedServerOverrides = {},
 ): Promise<void> {
+  const runner = overrides.opentofuRunner;
+  const runnerProfiles = (overrides.runnerProfiles ?? createDefaultRunnerProfiles()).map((profile) => ({ ...profile }));
+  const runnerExecutors = overrides.opentofuRunnerExecutors ? new Map(overrides.opentofuRunnerExecutors) : undefined;
   const env = readEnv();
   const config = parseEnv(env);
   const pool = createPostgresPool(config, env);
@@ -191,15 +200,13 @@ export async function buildComposedServer(
       ),
     preHandle: (req) => preHandleNonServiceRequest(req, pool),
     ...(staticAssets ? { staticAssets } : {}),
-    ...(overrides.opentofuRunner
-      ? { opentofuRunner: overrides.opentofuRunner }
+    ...(runner
+      ? { opentofuRunner: runner }
       : {}),
-    ...(overrides.opentofuRunnerExecutors
-      ? { opentofuRunnerExecutors: overrides.opentofuRunnerExecutors }
+    ...(runnerExecutors
+      ? { opentofuRunnerExecutors: runnerExecutors }
       : {}),
-    ...(overrides.runnerProfiles
-      ? { runnerProfiles: overrides.runnerProfiles }
-      : {}),
+    runnerProfiles,
     ...(overrides.executionEvidenceAuthority
       ? { executionEvidenceAuthority: overrides.executionEvidenceAuthority }
       : {}),
@@ -229,6 +236,11 @@ export async function buildComposedServer(
             overrides.allowOperatorScopedProviderConnections,
         }
       : {}),
+    ...(overrides.createModuleVariableMaterializer
+      ? {
+          createModuleVariableMaterializer: overrides.createModuleVariableMaterializer,
+        }
+      : {}),
     ...(overrides.createRuntimeInputOidcClientSource
       ? {
           createRuntimeInputOidcClientSource:
@@ -250,6 +262,15 @@ export async function buildComposedServer(
       : {}),
   });
 
+  startLocalApplyStartupRecovery({
+    operations,
+    store: overrides.opentofuControlStore ?? new SqlOpenTofuControlStore({ client: overrides.sqlClient ?? wrapServiceSqlClient(pool) }),
+    runner,
+    profiles: runnerProfiles,
+    executors: runnerExecutors,
+    startedAt: Date.now(),
+    log: structuredLog,
+  });
   startCapsuleUninstallFinalizer({ operations, log: structuredLog });
   ownNotifications = startOwnNotificationDispatcher({
     operations,

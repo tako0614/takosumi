@@ -3129,6 +3129,89 @@ variable "account_id" {
   expect(root["outputs.tf"]!.match(/output "build_metadata"/g)).toHaveLength(1);
 });
 
+test("Destroy Plan keeps declared provider defaults from its applied module without compatibility admission", async () => {
+  const store = new LegacyFlatCompatibilityReportReadStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: { modulePath: "deploy/runtime", variableMapping: {
+      project_name: "generic-inputs", explicit_label: "operator-choice",
+    } },
+  });
+  const { workspaceId: _workspaceId, ...connectionBase } =
+    cloudflareConnection("conn_personal_destroy_defaults", seeded.workspace.id);
+  const connection: ProviderConnection = {
+    ...connectionBase, scope: "personal", ownerAccountId: seeded.workspace.ownerUserId,
+    scopeHints: { moduleInputDefaults: {
+      provider_account: "fixture-account", provider_endpoint: "fixture-endpoint",
+      explicit_label: "provider-default", nested_only: "must-not-inject",
+      never_declared: "must-not-inject",
+    } },
+  };
+  await store.putConnection(connection);
+  await transitionProviderBindingSetForFixture(store, {
+    id: "bindings_destroy_defaults", workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id, environment: seeded.capsule.environment,
+    bindings: [{ provider: FIXTURE_CLOUDFLARE_PROVIDER, moduleLocalName: "cloudflare",
+      connectionId: connection.id }],
+    createdAt: seeded.capsule.createdAt, updatedAt: seeded.capsule.updatedAt,
+  });
+  const sourcesService = new SourcesService({ store, readCapsuleSourceFiles: async () => [
+    { path: "main.tf", text: `terraform {
+  required_providers {
+    cloudflare = { source = "cloudflare/cloudflare" }
+  }
+}
+${["project_name", "provider_account", "provider_endpoint", "explicit_label"].map((name) =>
+  `variable "${name}" {\n  type = string\n}`).join("\n")}
+output "launch_url" { value = "https://generic-inputs.example.test" }
+` },
+    { path: "nested/variables.tf", text: 'variable "nested_only" { type = string }\n' },
+  ] });
+  const sourceReads: Array<{ id: string; modulePath?: string }> = [];
+  const readSource = sourcesService.readCapsuleSourceFiles.bind(sourcesService);
+  sourcesService.readCapsuleSourceFiles = (snapshot, options) => {
+    sourceReads.push({ id: snapshot.id, modulePath: options?.modulePath });
+    return readSource(snapshot, options);
+  };
+  const profile = multiProviderRunnerProfile();
+  const vault = countingProviderVault();
+  const controller = controllerWith(store, runner, { sourcesService,
+    runnerProfiles: [profile], defaultRunnerProfileId: profile.id, vault: vault.vault as never });
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(create.planRun.status).toBe("succeeded");
+  const applied = await controller.createApplyRun({ planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun) });
+  expect(applied.applyRun.status).toBe("succeeded");
+  await store.putSourceSnapshot({ ...seeded.snapshot, id: "snap_unapplied_newer",
+    archiveRef: "workspaces/other/source-new.tar.zst", fetchedAt: "2026-06-08T00:00:00.000Z" });
+  sourceReads.length = 0;
+  store.failCompatibilityReportReads = true;
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  const job = runner.planJobs[1]!;
+  expect(job.variables).toMatchObject({ provider_account: "fixture-account",
+    provider_endpoint: "fixture-endpoint", project_name: "generic-inputs", explicit_label: "operator-choice" });
+  expect(job.generatedRoot!.files["main.tf"]).toContain('provider_account = "fixture-account"');
+  expect(job.generatedRoot!.files["main.tf"]).toContain('provider_endpoint = "fixture-endpoint"');
+  expect(job.generatedRoot!.files["main.tf"]).not.toContain("nested_only");
+  expect(job.generatedRoot!.files["main.tf"]).not.toContain("never_declared");
+  expect(JSON.stringify(job.generatedRoot)).not.toContain("fixture-provider-token");
+  expect(destroy.planRun.compatibilityReportId).toBeUndefined();
+  expect(destroy.planRun.sourceSnapshotId).toBe(create.planRun.sourceSnapshotId);
+  expect(sourceReads).toEqual([{ id: seeded.snapshot.id, modulePath: "deploy/runtime" }]);
+  expect(job.sourceArchive?.ref).toBe(seeded.snapshot.archiveRef);
+  expect(job.stateScope).toMatchObject({ workspaceId: seeded.workspace.id,
+    subject: { kind: "capsule", id: seeded.capsule.id }, environment: "preview", generation: 1 });
+  const minted = vault.mintCount;
+  await store.putConnection({ ...connection, ownerAccountId: "other-account" });
+  await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id)).rejects.toMatchObject({
+    code: "permission_denied", details: { reason: "connection_not_owned_by_app_owner" },
+  });
+  expect(vault.mintCount).toBe(minted);
+  expect(runner.planJobs).toHaveLength(2);
+});
+
 test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -13355,4 +13438,179 @@ test("v2.6 marked repository Plan refuses a different snapshot API before materi
     .rejects.toThrow(/repository_install_ux_snapshot_mismatch/);
   expect(runner.planJobs).toHaveLength(0);
   expect(runner.applyJobs).toHaveLength(0);
+});
+
+
+test("destroy explicitly recovers a deleted connection only for its confirmed applied account", async () => {
+  const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
+  const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
+  const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedRunnableCapsuleModel(store, { environment: "preview", installConfig: oidcMaterializedInstallConfig() });
+  let sequence = 0;
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "synthetic-destroy-reconnect-fixture-passphrase" }),
+    now: () => new Date("2026-11-18T07:00:00Z"),
+    newId: () => `conn_reconnect_${++sequence}`,
+    credentialRecipeResolver: id => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(recipe => recipe.id === id),
+    credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    fetch: async input => {
+      const account = /\/accounts\/([a-f0-9]{32})/.exec(input)?.[1];
+      return Response.json({ success: true, result: input.endsWith("/workers/subdomain") ? { subdomain: "synthetic-team" } : account ? { id: account } : { status: "active" } });
+    },
+  });
+  const register = async (accountId = "0123456789abcdef0123456789abcdef") => {
+    const row = await vault.register({
+      workspaceId: seeded.workspace.id, provider: FIXTURE_CLOUDFLARE_PROVIDER,
+      credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
+      values: { CLOUDFLARE_API_TOKEN: "synthetic-fixture-token", CLOUDFLARE_ACCOUNT_ID: accountId },
+    }, undefined, null);
+    expect((await vault.test(row.id, undefined, null)).status).toBe("verified");
+    return (await store.getConnection(row.id))!;
+  };
+  const old = await register();
+  const replacement = await register();
+  const foreign = await register("fedcba9876543210fedcba9876543210");
+  const laterReplacement = await register();
+  const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
+  await transitionProviderBindingSetForFixture(store, { ...originalBinding, bindings: originalBinding.bindings.map(binding => ({ ...binding, connectionId: old.id })) });
+  const mintIds: string[][] = [];
+  const mint = vault.mintForCapsuleProviderBindings.bind(vault);
+  vault.mintForCapsuleProviderBindings = async (...args) => {
+    mintIds.push(args[1].map(entry => entry.connectionId));
+    return await mint(...args);
+  };
+  const runner = recordingRunner();
+  const retiredBindings: string[][] = [];
+  const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
+    ...fixtureAuthorityBoundModuleVariableMaterializer(),
+    async retire(input) {
+      expect(input.capsule.status).toBe("destroyed");
+      retiredBindings.push(input.resolvedProviderBindings.map(entry => entry.connection.id));
+    },
+  };
+  const controller = controllerWith(store, runner, { vault, moduleVariableMaterializer });
+  const created = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(created.planRun.status).toBe("succeeded");
+  const applied = await controller.createApplyRun({ planRunId: created.planRun.id, expected: applyExpectedGuardFromPlanRun(created.planRun) });
+  expect(applied.applyRun.status).toBe("succeeded");
+  const { CapsulesService } = await import("../../../../core/domains/capsules/mod.ts");
+  const capsules = new CapsulesService({ store, now: () => new Date("2026-11-18T07:00:00Z") });
+  const scheduled = await capsules.scheduleCapsuleUninstall(seeded.capsule.id, { requester: { subject: seeded.workspace.ownerUserId } });
+  await capsules.advanceCapsuleUninstall(seeded.capsule.id, { uninstallId: scheduled.uninstall!.id, revision: scheduled.uninstall!.revision }, { blockedReason: "destroy_plan_refused" });
+  const capsuleBefore = (await store.getCapsule(seeded.capsule.id))!;
+  const bindingBefore = await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment);
+  const configBefore = await store.getInstallConfig(capsuleBefore.installConfigId);
+  const appliedPlanBefore = await store.getPlanRun(created.planRun.id);
+  const stateBefore = await store.getStateVersion(capsuleBefore.currentStateVersionId!);
+  expect(await vault.revoke(old.id, undefined, null)).toBe(true);
+  expect(await store.getConnection(old.id)).toBeUndefined();
+  await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id)).rejects.toMatchObject({ code: "not_found" });
+  const selection = [{ connectionId: old.id, replacementConnectionId: replacement.id }];
+  const { PlanRunPreparationConflictError } = await import("../../../../core/domains/deploy-control/store.ts");
+  const noDispatch = async (work: () => Promise<unknown>, expected: typeof OpenTofuControllerError | typeof PlanRunPreparationConflictError = OpenTofuControllerError) => {
+    const plans = runner.planJobs.length; const mints = mintIds.length;
+    await expect(work()).rejects.toBeInstanceOf(expected);
+    expect(runner.planJobs).toHaveLength(plans); expect(mintIds).toHaveLength(mints);
+    expect(runner.destroyJobs).toHaveLength(0);
+  };
+  const attempt = () => controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, { destroyProviderConnectionReplacements: selection });
+  for (const row of [
+    { ...foreign, id: replacement.id },
+    { ...replacement, status: "revoked" as const },
+    { ...replacement, expiresAt: "2020-01-01T00:00:00Z" },
+    { ...replacement, credentialVerification: undefined },
+    { ...replacement, credentialVerification: { ...replacement.credentialVerification!, capabilities: [] } },
+    { ...replacement, scopeHints: { ...replacement.scopeHints, providerSettings: { accountId: "11111111111111111111111111111111", workersSubdomain: "synthetic-team" } } },
+  ]) {
+    await store.putConnection(row); await noDispatch(attempt);
+  }
+  await store.putConnection(replacement);
+  for (const legacy of [
+    { ...appliedPlanBefore!, resolvedProviderBindingsDigest: undefined },
+    { ...appliedPlanBefore!, requiredProviderRequirements: undefined },
+  ]) { await store.putPlanRun(legacy); await noDispatch(attempt); }
+  await store.putPlanRun(appliedPlanBefore!);
+  await noDispatch(() => controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, { destroyProviderConnectionReplacements: [{ connectionId: old.id, replacementConnectionId: old.id }] }));
+  await noDispatch(() => controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, { destroyProviderConnectionReplacements: [{ connectionId: "conn_unknown_legacy", replacementConnectionId: replacement.id }] }));
+  await noDispatch(() => controller.createCapsulePlan(seeded.capsule.id, {}, { destroyProviderConnectionReplacements: selection }));
+  await store.putCapsule({ ...capsuleBefore, sourceId: undefined } as unknown as Capsule);
+  await noDispatch(attempt);
+  await store.putCapsule(capsuleBefore);
+  const { handleCapsules } = await import("../../../../accounts/service/src/control/capsules.ts");
+  const { InMemoryAccountsStore } = await import("../../../../accounts/service/src/store.ts");
+  const { controllerErrorResponse } = await import("../../../../accounts/service/src/control/shared.ts");
+  const accountsStore = new InMemoryAccountsStore();
+  let routeDispatches = 0;
+  const operations = {
+    capsules: { getCapsule: async () => (await store.getCapsule(seeded.capsule.id))! },
+    workspaces: { getWorkspace: async () => seeded.workspace, getWorkspaceForAccount: async () => seeded.workspace },
+    members: { listMembers: async () => [] },
+    createCapsuleDestroyPlan: async (id: string, options?: Parameters<import("../../../../accounts/service/src/control-operations.ts").ControlPlaneOperations["createCapsuleDestroyPlan"]>[1]) => {
+      routeDispatches += 1;
+      return await controller.createCapsuleDestroyPlan(id, { actor: options?.actor }, { destroyProviderConnectionReplacements: options?.destroyProviderConnectionReplacements });
+    },
+    getRun: (id: string) => controller.getRun(id),
+    getRunCost: async () => undefined,
+  // Only these existing route ports are implemented by this provider-free fixture.
+  } as unknown as import("../../../../accounts/service/src/control-operations.ts").ControlPlaneOperations;
+  const request = async (body: unknown, credential: "session" | "oauth-access-token" = "session") => {
+    const req = new Request(`https://fixture.invalid/api/v1/capsules/${seeded.capsule.id}/destroy-plan`, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
+    return await handleCapsules({ request: req, url: new URL(req.url), operations, store: accountsStore,
+      session: { subject: seeded.workspace.ownerUserId, credential, uninstallRequester: { subject: seeded.workspace.ownerUserId } },
+    }, ["capsules", seeded.capsule.id, "destroy-plan"], "POST").catch(controllerErrorResponse);
+  };
+  for (const invalid of [null, [], [{}], [{ ...selection[0], arbitraryAccountClaim: "ignored-must-refuse" }], [selection[0], selection[0]], [{ connectionId: old.id, replacementConnectionId: old.id }]]) {
+    expect((await request({ destroyProviderConnectionReplacements: invalid }))!.status).toBe(400);
+  }
+  expect((await request({ destroyProviderConnectionReplacements: selection }, "oauth-access-token"))!.status).toBe(403);
+  expect(routeDispatches).toBe(0);
+  // No-body callers retain the ordinary path, which still cannot use a deleted row.
+  expect((await request(undefined))!.status).toBe(404);
+  expect(routeDispatches).toBe(1);
+  const routed = await request({ destroyProviderConnectionReplacements: selection });
+  expect(routed!.status).toBe(201);
+  const routedBody = await routed!.json() as { run: Run };
+  expect(routedBody.run.type).toBe("destroy_plan");
+  expect(routedBody.run.capsuleId).toBe(seeded.capsule.id);
+  expect(routeDispatches).toBe(2);
+  const destroy = await controller.getPlanRun(routedBody.run.id);
+  expect(destroy.planRun.createdBy).toBe(seeded.workspace.ownerUserId);
+  const repeated = await controller.createCapsuleDestroyPlan(seeded.capsule.id, { actor: seeded.workspace.ownerUserId }, {
+    planRunId: destroy.planRun.id, destroyProviderConnectionReplacements: selection,
+  });
+  expect(repeated.planRun.id).toBe(destroy.planRun.id);
+  await noDispatch(() => controller.createCapsuleDestroyPlan(seeded.capsule.id, { actor: seeded.workspace.ownerUserId }, {
+    planRunId: destroy.planRun.id, destroyProviderConnectionReplacements: [{ connectionId: old.id, replacementConnectionId: laterReplacement.id }],
+  }), PlanRunPreparationConflictError);
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  expect(destroy.planRun.operation).toBe("destroy");
+  expect(destroy.planRun.sourceSnapshotId).toBe(appliedPlanBefore!.sourceSnapshotId);
+  expect(destroy.planRun.baseStateGeneration).toBe(capsuleBefore.currentStateGeneration);
+  expect(destroy.planRun.variablesDigest).toBe(appliedPlanBefore!.variablesDigest);
+  expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
+  expect(await store.getInstallConfig(capsuleBefore.installConfigId)).toEqual(configBefore);
+  expect(await store.getStateVersion(capsuleBefore.currentStateVersionId!)).toEqual(stateBefore);
+  expect(await store.getPlanRun(created.planRun.id)).toEqual(appliedPlanBefore);
+  expect((await store.getCapsule(seeded.capsule.id))!.uninstall).toEqual(capsuleBefore.uninstall);
+  expect(runner.destroyJobs).toHaveLength(0);
+  expect(mintIds.at(-1)).toEqual([replacement.id]);
+  await controller.approveRun(destroy.planRun.id);
+  // Current authority is re-read at Apply too, after the reviewed Plan exists.
+  for (const [row, reason] of [[{ ...foreign, id: replacement.id }, "destroy_connection_recovery_unproven"], [{ ...replacement, status: "revoked" as const }, "provider_connection_not_ready"]] as const) {
+    await store.putConnection(row);
+    const before = runner.destroyJobs.length; const mints = mintIds.length;
+    await expect(controller.createApplyRun({ planRunId: destroy.planRun.id, expected: applyExpectedGuardFromPlanRun(destroy.planRun) })).rejects.toMatchObject({ code: "failed_precondition", details: { reason } });
+    expect(runner.destroyJobs).toHaveLength(before); expect(mintIds).toHaveLength(mints);
+  }
+  await store.putConnection(replacement);
+  const destroyed = await controller.createApplyRun({ planRunId: destroy.planRun.id, expected: applyExpectedGuardFromPlanRun(destroy.planRun) });
+  expect(destroyed.applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(mintIds.at(-1)).toEqual([replacement.id]);
+  expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
+  expect(await store.getInstallConfig(capsuleBefore.installConfigId)).toEqual(configBefore);
+  expect(await store.getConnection(old.id)).toBeUndefined();
+  expect(retiredBindings).toEqual([[replacement.id]]);
 });

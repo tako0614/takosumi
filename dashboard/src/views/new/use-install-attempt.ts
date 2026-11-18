@@ -65,6 +65,8 @@ import {
   canAdvance,
   connectionKey,
   connectionSettingChoices,
+  cloudflarePublicUrlDraft,
+  isCloudflarePublicUrl,
   currentConnectionSetting,
   interfaceLinksWith,
   continueVariables,
@@ -320,6 +322,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       current.installPlan.createdBy !== options.principalId || current.installPlan.id !== options.attemptId()) return undefined;
     return JSON.stringify([epoch, options.principalId, current.installPlan.id, current.installPlan.generation,
       current.installPlan.createdBy, current.installPlan.workspaceId,
+      current.userAction.name.current,
+      current.userAction.variables.map((field) => [field.name, field.publicEndpoint]),
       current.userAction.connections.map((row) => [connectionKey(row), row.selectedConnectionId ?? "",
         row.candidates.map((candidate) => [candidate.id, candidate.status])])]);
   };
@@ -328,18 +332,21 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const context = settingsContext();
     return held && context !== undefined && held.context === context ? held.choices : [];
   };
+  const invalidatePublicUrls = () => setDrafts((held) => Object.fromEntries(Object.entries(held).map(([name, draft]) => [name,
+    draft.publicEndpoint ? { ...draft, publicEndpoint: { ...draft.publicEndpoint, confirmed: false } } : draft])));
   const loadConnectionSettings = async () => {
     const current = response();
     const context = settingsContext();
     if (!context || current?.userAction.kind !== "provide_inputs") return;
     const read = ++settingsRead;
     setSettingsChoices(undefined);
+    if (!awaitingResubmission(current.userAction)) invalidatePublicUrls();
     setSettingsChoicesLoading(true);
     const ids = [...new Set(current.userAction.connections.flatMap((row) =>
       row.candidates.some((candidate) => candidate.id === row.selectedConnectionId && candidate.status === "verified")
         ? [row.selectedConnectionId!] : []))];
     try {
-      const rows = (await listConnections(current.installPlan.workspaceId).catch(() => []))
+      const rows = (ids.length ? await listConnections(current.installPlan.workspaceId).catch(() => []) : [])
         .filter((row) => ids.includes(row.id));
       if (!disposed && read === settingsRead && settingsContext() === context) {
         setSettingsChoices({ context, choices: connectionSettingChoices(current.userAction.connections,
@@ -385,7 +392,21 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   /** The install is being prepared again until its new Plan (or the person) is needed. */
   const [replanning, setReplanning] = createSignal(false);
   /** An Apply started: the answers it applies can no longer change here. */
-  const [locked, setLocked] = createSignal(false);
+  const [answersLocked, setLocked] = createSignal(false);
+  /** Pending saved-review reads hold edits without permanently locking a fresh Plan. */
+  const [reviewHolds, setReviewHolds] = createSignal<ReadonlySet<symbol>>(new Set());
+  const reviewHeld = () => reviewHolds().size > 0;
+  const locked = () => answersLocked() || reviewHeld();
+  const holdReview = () => {
+    const token = Symbol();
+    setReviewHolds((held) => new Set([...held, token]));
+    return () => setReviewHolds((held) => {
+      if (!held.has(token)) return held;
+      const next = new Set(held);
+      next.delete(token);
+      return next;
+    });
+  };
   /** Preparing again did not go through; Continue tries it again. */
   const [replanStalled, setReplanStalled] = createSignal(false);
   /**
@@ -487,7 +508,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   const view = createMemo<InstallView>(() => {
     const current = mutating();
-    return deriveInstallView(response(), {
+    const derived = deriveInstallView(response(), {
       starting: current === "start",
       driving: driving(),
       mutating: current !== undefined && current !== "answer",
@@ -505,6 +526,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       nameInvalid: nameInvalid(),
       answersKept: sheet() !== undefined,
     });
+    return { ...derived, canDiscard: derived.canDiscard && !reviewHeld() };
   });
 
   /** The connection rows as the person last chose them. */
@@ -524,6 +546,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   const forgetInputs = () => {
     setDrafts({});
+    ++settingsRead;
+    setSettingsChoices(undefined);
+    setSettingsChoicesLoading(false);
     setNameDraftSignal(undefined);
     setNameEditing(false);
     setVersionDraftSignal(undefined);
@@ -882,7 +907,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * that failed, or try a Plan that failed again with the same answers.
    */
   const resume = () => {
-    if (mutating()) return;
+    if (mutating() || reviewHeld()) return;
     setArmed(true);
     if (interfaceLinksToSend() !== undefined && response()?.userAction.kind === "provide_inputs") {
       setInterfaceSendBlocked(false);
@@ -1062,6 +1087,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     if (locked()) return;
     setNameDraftSignal(value);
     setNameEditing(value !== undefined);
+    // A failed rename must not send the old generated URL with an unsaved
+    // new name. Only the accepted server name can generate its replacement.
+    if (value !== undefined) invalidatePublicUrls();
   };
 
   /**
@@ -1102,6 +1130,16 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setSettingsEditing((current) => new Set(current).add(name));
       return;
     }
+    edited();
+  };
+
+  /** Explicitly return to the standard URL, without retaining a custom override. */
+  const useStandardPublicUrl = (name: string) => {
+    const current = sheet();
+    if (locked() || !current || awaitingResubmission(current) ||
+      !current.variables.some((variable) => variable.name === name && isCloudflarePublicUrl(variable))) return;
+    setDrafts((held) => { const next = { ...held }; delete next[name]; return next; });
+    commitDraft(name);
     edited();
   };
 
@@ -1163,10 +1201,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * settle; it only makes a Plan.
    */
   const confirm = async (): Promise<void> => {
-    if (confirming()) return;
+    if (confirming() || locked()) return;
     setConfirming(true);
     try {
       while (answerRun) await answerRun.catch(() => undefined);
+      if (locked()) return;
       if (interfaceLinksToSend() !== undefined) return;
       const current = response();
       if (current?.userAction.kind !== "provide_inputs") return;
@@ -1181,6 +1220,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const typed = nameDraft()?.trim();
       const rename = typed !== undefined && typed !== action.name.current &&
         !awaitingResubmission(action);
+      // A generated URL depends on this exact connection. Freeze it in the
+      // same answer so a changed sole automatic candidate cannot substitute
+      // another account after the page composed the URL.
+      const endpointOrigin = awaitingResubmission(action) ? undefined : action.variables
+        .map((variable) => drafts()[variable.name]?.publicEndpoint).find((origin) => origin !== undefined);
+      const endpointRow = endpointOrigin && action.connections.find((row) => connectionKey(row) === endpointOrigin.requirementKey);
       // Snapshot every implicit candidate set shown on this sheet. This is
       // observation evidence for the final compatibility check, not a choice
       // to persist in the attempt's options. Resubmission cannot change it.
@@ -1198,6 +1243,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const next = await answer(
         {
           continue: true,
+          ...(endpointRow && endpointOrigin ? { providerBindings: bindingsWith(action.connections, endpointRow, endpointOrigin.connectionId) } : {}),
           ...(observedInterfaces.length > 0 ? { observedInterfaces } : {}),
           ...(Object.keys(values.variables).length > 0 ? { variables: values.variables } : {}),
           ...(rename ? { capsuleName: typed } : {}),
@@ -1369,7 +1415,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const current = response();
     const ready = view().readyToConfirm;
     const version = editVersion();
-    if (current?.userAction.kind !== "provide_inputs" || !ready) return;
+    if (current?.userAction.kind !== "provide_inputs" || !ready || locked()) return;
     if (!armed() || mutating() || confirming() || editing() || nameInvalid() || outdated()) return;
     if (bindingsToSend() !== undefined || interfaceLinksToSend() !== undefined) return;
     const key = `${current.installPlan.id}:${version}`;
@@ -1380,6 +1426,39 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       void confirm();
     }, settleMs);
     onCleanup(() => clearTimeout(timer));
+  });
+
+  // Read once per exact live selection. A failed read waits for an explicit retry.
+  let publicUrlReadContext: string | undefined;
+  createEffect(() => {
+    const current = response();
+    const context = settingsContext();
+    if (!context || current?.userAction.kind !== "provide_inputs" || awaitingResubmission(current.userAction) ||
+      !current.userAction.variables.some(isCloudflarePublicUrl)) return;
+    if (publicUrlReadContext === context) return;
+    publicUrlReadContext = context;
+    void loadConnectionSettings();
+  });
+
+  // Automatic suggestions do not arm a GET-only reopen or alter manual input.
+  createEffect(() => {
+    const current = response();
+    if (current?.userAction.kind !== "provide_inputs" || locked() || awaitingResubmission(current.userAction) ||
+      nameEditing() || nameDraft() !== undefined) return;
+    const choices = connectionSettings();
+    const held = drafts();
+    const next = { ...held };
+    let changed = false;
+    for (const variable of current.userAction.variables) {
+      const draft = held[variable.name];
+      if (draft?.touched && !draft.publicEndpoint) continue;
+      const candidate = cloudflarePublicUrlDraft(current.userAction, variable, choices);
+      if (candidate && JSON.stringify(candidate) !== JSON.stringify(draft)) {
+        next[variable.name] = candidate;
+        changed = true;
+      }
+    }
+    if (changed) { setDrafts(next); setEditVersion((version) => version + 1); }
   });
 
   // An out-of-date Plan is prepared again once edits settle, once per edit.
@@ -1412,7 +1491,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   /** 「やめる」: throw the whole attempt away. Never alongside another request. */
   const discard = async (): Promise<boolean> => {
     const current = response();
-    if (!current || mutating()) return false;
+    if (!current || mutating() || reviewHeld()) return false;
     setMutating("discard");
     setError(undefined);
     try {
@@ -1449,7 +1528,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    */
   const restart = async (): Promise<boolean> => {
     const current = response();
-    if (!current || mutating()) return false;
+    if (!current || mutating() || reviewHeld()) return false;
     if (sheet()) return await replan();
     setMutating("restart");
     setError(undefined);
@@ -1496,7 +1575,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * it applies until the install finishes.
    */
   const lockAnswers = () => {
-    if (!locked()) setLocked(true);
+    setLocked(true);
   };
 
   /** The install is done: nothing typed for it stays in memory. */
@@ -1520,6 +1599,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     settingsChoicesLoading,
     loadConnectionSettings,
     applyConnectionSettings,
+    useStandardPublicUrl,
     commitDraft,
     nameDraft,
     setNameDraft,
@@ -1538,6 +1618,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     replanning,
     locked,
     lockAnswers,
+    holdReview,
     start,
     resume,
     chooseModule,

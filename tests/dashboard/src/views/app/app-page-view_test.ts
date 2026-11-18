@@ -31,9 +31,10 @@ describe("installed app page", () => {
     expect(route).toContain("appPageSectionFromHash(location.hash)");
   });
 
-  test("sections follow the keep-an-app behaviors in order", () => {
+  test("overview keeps the app header above its existing behavior sections", () => {
     const order = [
       'data-testid="app-header"',
+      'data-testid="app-management"',
       "<AppAttentionSection",
       "<AppVersionSection",
       "<AppSettingsSection",
@@ -47,8 +48,7 @@ describe("installed app page", () => {
     // Section fragments the URL may name exist on the page.
     expect(attention).toContain('id="attention"');
     expect(version).toContain('id="version"');
-    expect(settings).toContain('id="settings"');
-    expect(settings).toContain('id="connections"');
+    expect(settings).toContain('id={connectionPane() ? "connections" : "settings"}');
     expect(linked).toContain('id="links"');
     expect(created).toContain('id="created"');
     expect(history).toContain('id="history"');
@@ -77,7 +77,8 @@ describe("installed app page", () => {
   });
 
   test("state, problems, screens and history come from the server's per-app reads", () => {
-    expect(page).toContain("createResource(capsuleId, getCapsuleApp)");
+    expect(page).toContain("getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined,");
+    expect(page).toContain('!(info.refetching instanceof AbortSignal) ? info.refetching : {}');
     expect(page).toContain("listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES })");
     expect(page).toContain("data-app-state={view().state}");
     expect(page).toContain("t(appStateSentence(view()))");
@@ -156,13 +157,15 @@ describe("installed app page", () => {
     // while another action is primary (an app needing attention may still
     // serve its last successful version), except while it is removed.
     expect(page).toMatch(/<OpenAppButton\s+surfaces=\{screens\(\)\}\s+appName=\{displayName\(\)\}\s+variant="secondary"/u);
-    const secondary = page.slice(page.indexOf("const secondaryScreens = "), page.indexOf("const showUpdate = "));
+    const secondary = page.slice(page.indexOf("const secondaryScreens = "), page.indexOf("const updateAvailable = "));
     expect(secondary).toContain('view.primaryAction !== "open" && screens().length > 0');
     expect(secondary).toContain('view.state !== "uninstalling" && view.state !== "uninstalled"');
     expect(page).toContain('<Match when={view().primaryAction === "reinstall"}>');
     expect(page).toContain("href={reinstallHref(reinstallInput(view(), inst()))}");
-    // A connection problem goes to the connections this app uses.
-    expect(page).toContain('if (managed()) scrollToSection("connections");');
+    // App settings can change the binding only outside a scheduled uninstall.
+    const fixConnection = page.slice(page.indexOf("const fixConnection = () =>"), page.indexOf("// --- uninstall"));
+    expect(fixConnection).toContain('if (managed() && !app()?.uninstall.scheduled) openSection("connections");');
+    expect(fixConnection).toContain('else navigate("/connections");');
     // In-progress work the server reports is followed in place, never applied.
     expect(page).toContain("auto: true,");
     expect(page).toContain("dismissedRuns.has(target.runId)");
@@ -231,7 +234,7 @@ describe("installed app page", () => {
 
   test("uninstall is one implementation: grace period stated first and cancellable", () => {
     expect(page).toContain("await deleteCapsule(inst.id);");
-    expect(page).toContain("await cancelCapsuleUninstall(capsuleId());");
+    expect(page).toContain("await cancelCapsuleUninstall(inst.id);");
     expect(page).toContain("deleteCapsule(capsuleId(), { immediate: true })");
     expect(page).not.toContain("dependencyWarning");
     expect(page).not.toContain("dependencyCheck");
@@ -278,7 +281,7 @@ describe("installed app page", () => {
     expect(create).toContain("dirty: false, deleted: false, resetToDefault: false");
     // An unapplied settings review re-reads the form from what the app runs.
     expect(page).toContain('if (active.section === "settings") setSettingsSeed((value) => value + 1);');
-    expect(settings).toContain("[() => props.installConfig, () => props.seed]");
+    expect(settings).toContain("[currentRead, () => props.seed]");
   });
 
   test("continuing an install advances the attempt that owns the app instead of planning beside it", () => {
@@ -346,7 +349,8 @@ describe("installed app page", () => {
     expect(route).toContain("<Show when={params.id ?? \"\"} keyed>");
     // Defense in depth inside the page.
     expect(page).toContain("const forCapsule = capsuleId();");
-    expect(page).toContain("if (capsuleId() !== forCapsule) return;");
+    expect(page).toContain("const isCurrent = () => capsuleId() === forCapsule && (!options.isCurrent || options.isCurrent());");
+    expect(page).toContain("if (!isCurrent()) return;");
     const reset = page.slice(page.indexOf("on(\n      capsuleId,"), page.indexOf("{ defer: true }", page.indexOf("on(\n      capsuleId,")));
     for (const signal of [
       "setReview(undefined)",

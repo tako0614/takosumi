@@ -76,7 +76,8 @@ describe("attempt-driven install page", () => {
     expect(sheet).toContain("<InstallExecution");
     const execution = read("dashboard/src/views/new/InstallExecution.tsx");
     const install = between(execution, "const install = async", "// Apply starts only from");
-    expect(install).toContain("createApplyRun(runId()");
+    expect(install).toContain("createApplyRun(plan.id,");
+    expect(install).toContain("plan.id !== runId()");
     // An out-of-date Plan is never applied, nor approved.
     expect(install).toContain("if (props.blockedReason ||");
     expect(between(execution, "const approve = async", "const install = async")).toContain("if (props.blockedReason) return;");
@@ -133,10 +134,14 @@ describe("attempt-driven install page", () => {
   test("a reopened review asks the app where it stands before offering the apply", () => {
     const review = between(sheet, "function PlanReview(", "export function InstallScreen(");
     expect(review).toContain("getCapsuleApp(capsuleId)");
-    expect(review.indexOf("<Show\n        when={!app.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
-    expect(review).toContain("if (app()?.applied) props.onDone(props.action.capsuleId);");
-    expect(review).toContain("view?.progress.run ?? view?.latestRun");
+    expect(review.indexOf("<Show\n        when={!entry.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
+    expect(review).toContain("if (value.app.applied) props.onDone(props.action.capsuleId);");
+    expect(review).toContain("app.progress.run ?? app.latestRun");
     expect(review).toContain("showPolicyReasons");
+    expect(review).not.toContain("getCapsuleApp(capsuleId).catch");
+    expect(review).toContain('data-testid="install-review-read-error"');
+    expect(review.indexOf('<Show when={!entry.error}>')).toBeLessThan(review.indexOf("<InstallExecution"));
+    expect(review).toContain("onClick={() => void refetch()}");
   });
 
   test("installed apps are linked at /apps/:id", () => {
@@ -148,6 +153,13 @@ describe("attempt-driven install page", () => {
     // No separate review or module confirmation button remains.
     expect(sheet).not.toContain("installStore.reviewChanges");
     expect(sheet).not.toContain("installStore.moduleConfirm");
+    expect(sheet).not.toContain("installStore.moduleUse");
+    const module = between(sheet, "function ModuleChoice(", "function PlanPreview(");
+    expect(module).toContain("if (busy() || draft() === path) return;");
+    expect(module).toContain('<button type="button" class="iv-module-option"');
+    expect(module).toContain("onClick={() => void choose(module.path)}");
+    expect(module).not.toContain('type="radio"');
+    expect(module.match(/props.attempt.chooseModule\(/gu)).toHaveLength(1);
     // The confirmation is sent on its own (once per attempt and edit) or by
     // 「続ける」 on a paused install, never by another button.
     expect(controller.match(/void confirm\(\)/gu)).toHaveLength(2);
@@ -158,9 +170,20 @@ describe("attempt-driven install page", () => {
     expect(sheet.match(/\.confirm\(/gu)).toBeNull();
   });
 
+  test("required configuration is inline and an operation message is rendered only once", () => {
+    expect(sheet).not.toContain("<dialog");
+    expect(sheet).not.toContain("showModal()");
+    expect(sheet.match(/<ScreenError attempt=/gu)).toHaveLength(1);
+    const screen = between(sheet, "export function InstallScreen(", "data-testid=\"install-customization\"");
+    expect(screen).toContain('data-testid="install-settings"');
+    expect(screen).toContain('data-testid="install-connections"');
+    expect(sheet).toContain("!props.attempt.view().progress ? block() : undefined");
+    expect(sheet).toContain("blockedReasonId={props.attempt.view().progress ? APPLY_REASON_ID : undefined}");
+  });
+
   test("discarding never runs alongside another request", () => {
     const discard = between(controller, "const discard = async", "const restart = async");
-    expect(discard).toContain("if (!current || mutating()) return false;");
+    expect(discard).toContain("if (!current || mutating() || reviewHeld()) return false;");
     expect(discard.indexOf("await stopDriving()")).toBeLessThan(discard.indexOf("discardInstallAttempt("));
     // Stopping aborts the reconcile in flight instead of waiting it out.
     expect(between(controller, "const halt = () =>", "onCleanup(")).toContain("driveAbort?.abort();");
@@ -198,12 +221,10 @@ describe("attempt-driven install page", () => {
     }
   });
 
-  test("the Store page keeps search, the Git form and the unfinished installs", () => {
+  test("the Store page keeps search and the Git form", () => {
     expect(view).toContain('class="iv-hero iv-page-heading"');
     expect(view).toContain('class="iv-catalogue iv-catalogue-browse"');
     expect(view).toContain('aria-label={t("installStore.sourceUrl")}');
-    expect(view).toContain("<OpenAttempts principalId={props.principalId} />");
-    expect(view).toContain("listOpenGitInstallAttempts(scope.workspaceId)");
     // Selecting a listing reflects it into the URL so back and share work.
     expect(view).toContain("navigate(`/new?${buildNewQuery(listing)}`);");
   });

@@ -126,6 +126,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       });
 
       await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      await page.getByTestId("app-management").locator('[data-app-section-link="sharing"]').click();
       const sharing = page.getByTestId("app-sharing");
       await expect(sharing).toBeVisible();
       await expect(sharing).toContainText("Portable E2E");
@@ -179,6 +180,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       const requests = await accountAs(page, "owner");
       await memberRoutes(page, OWNER_APP, PORTABLE_APP_MEMBERS);
       await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      await page.getByTestId("app-management").locator('[data-app-section-link="sharing"]').click();
       const sharing = page.getByTestId("app-sharing");
       await sharing.locator('select[name="transfer-recipient"]').selectOption("tsub_kenta0123456789");
       const transfer = sharing.getByRole("button", { name: "所有権を譲渡", exact: true });
@@ -200,6 +202,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
         route.fulfill({ json: { connections: PORTABLE_PERSONAL_CONNECTIONS } }));
 
       await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      await page.getByTestId("app-management").locator('[data-app-section-link="sharing"]').click();
       const sharing = page.getByTestId("app-sharing");
       const email = sharing.getByRole("textbox", { name: "メールアドレス" });
       await email.fill("missing-account@example.test");
@@ -217,6 +220,10 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
     test("a member can leave but cannot manage members or uninstall the app", async ({ page }) => {
       const requests = await accountAs(page, "member");
       await memberRoutes(page, SHARED_APP, PORTABLE_SHARED_APP_MEMBERS);
+      await page.route(`**/api/v1/capsules/${SHARED_APP}/provider-bindings`, (route) =>
+        route.request().method() === "GET"
+          ? route.fulfill({ json: { providerBindingSet: null } })
+          : route.fallback());
       await page.route((url) => url.pathname === "/api/v1/connections", (route) => {
         const url = new URL(route.request().url());
         if (url.searchParams.get("projection") === "labels" && url.searchParams.get("capsuleId") === SHARED_APP) {
@@ -229,17 +236,28 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       });
 
       await page.goto(`/apps/${SHARED_APP}`, { waitUntil: "domcontentloaded" });
+      await page.getByTestId("app-management").locator('[data-app-section-link="sharing"]').click();
       const sharing = page.getByTestId("app-sharing");
       await expect(sharing).toBeVisible();
       await expect(sharing).toContainText("Hanako Sato");
       await expect(sharing.getByRole("textbox", { name: "メールアドレス" })).toHaveCount(0);
       await expect(sharing.getByRole("button", { name: "メンバーを削除" })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: /アンインストール|Uninstall/u })).toHaveCount(0);
       await captureSharing(page, "sharing-member");
+      await page.getByTestId("app-section-back").click();
+      const management = page.getByTestId("app-management");
+      await expect(management.locator('[data-app-section-link="danger"]')).toHaveCount(0);
+      await management.locator('[data-app-section-link="connections"]').click();
+      await expect(page.getByTestId("app-connections")).toBeVisible();
+      await expect.poll(() => requests.some((request) => request.path === "/api/v1/connections")).toBe(true);
       const connectionReads = requests.filter((request) => request.method === "GET" && request.path === "/api/v1/connections");
       expect(connectionReads.length).toBeGreaterThan(0);
       expect(connectionReads.every((request) => request.search === `?capsuleId=${SHARED_APP}&projection=labels`)).toBe(true);
 
+      await page.goto(`/apps/${SHARED_APP}#danger`, { waitUntil: "domcontentloaded" });
+      await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-section", "danger");
+      await expect(page.getByRole("button", { name: /アンインストール|Uninstall/u })).toHaveCount(0);
+      await page.getByTestId("app-section-back").click();
+      await management.locator('[data-app-section-link="sharing"]').click();
       await sharing.getByRole("button", { name: "共有から退出" }).click();
       const leaveDialog = page.getByRole("dialog");
       await expect(leaveDialog).toContainText("共有から退出します");
@@ -270,7 +288,10 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       });
 
       await page.goto(`/apps/${SHARED_APP}`, { waitUntil: "domcontentloaded" });
+      await page.getByTestId("app-management").locator('[data-app-section-link="sharing"]').click();
       const sharing = page.getByTestId("app-sharing");
+      await expect(page).toHaveURL(/#sharing$/u);
+      await expect(sharing).toBeVisible();
       await expect(sharing.locator('input[name="ownership-transfer-id"]')).toHaveCount(0);
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(sharing).toContainText("所有権の譲渡が届いています");
@@ -281,7 +302,9 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       await expect(sharing).toContainText("共有を更新しました");
       await expect(sharing.getByRole("textbox", { name: "メールアドレス" })).toBeVisible();
       await expect(sharing.getByRole("button", { name: "共有から退出" })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "アンインストール" })).toBeVisible();
+      await page.getByTestId("app-section-back").click();
+      await page.getByTestId("app-management").locator('[data-app-section-link="danger"]').click();
+      await expect(page.getByTestId("app-uninstall").getByRole("button", { name: "アンインストール", exact: true })).toBeVisible();
       expect(requests.filter((request) => request.method === "POST")).toContainEqual({
         method: "POST",
         path: `/api/v1/ownership-transfers/${TRANSFER_ID}/accept`,
@@ -308,15 +331,20 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       expect(requests.filter((request) => request.method === "POST")).toContainEqual({ method: "POST", path: `/api/v1/ownership-transfers/${TRANSFER_ID}/accept` });
     });
 
-    test("hides the app-sharing section when its new members route is absent", async ({ page }) => {
+    test("an older server has no sharing actions or overview entry", async ({ page }) => {
       await accountAs(page, "owner");
       await page.route(`**/api/v1/capsules/${OWNER_APP}/members`, (route) =>
         route.fulfill({ status: 404, json: { error: { code: "route_not_found" } } }));
       const response = page.waitForResponse((candidate) =>
         new URL(candidate.url()).pathname === `/api/v1/capsules/${OWNER_APP}/members`);
-      await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/apps/${OWNER_APP}#sharing`, { waitUntil: "domcontentloaded" });
       await response;
-      await expect(page.getByTestId("app-sharing")).toHaveCount(0);
+      const sharing = page.getByTestId("app-sharing");
+      await expect(sharing).toContainText("この項目は利用できません。");
+      await expect(sharing.getByRole("textbox")).toHaveCount(0);
+      await expect(sharing.getByRole("button")).toHaveCount(0);
+      await page.getByTestId("app-section-back").click();
+      await expect(page.getByTestId("app-management").locator('[data-app-section-link="sharing"]')).toHaveCount(0);
     });
   });
 }

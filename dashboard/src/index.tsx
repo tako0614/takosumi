@@ -15,9 +15,8 @@ import { resolveLegacyAppUrl } from "./lib/app-links.ts";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import "./lib/theme.ts";
 
-// Web fonts referenced by the design tokens (`--tg-font-body` / `--tg-font-mono`).
-import "@fontsource-variable/bricolage-grotesque";
-import "@fontsource-variable/jetbrains-mono";
+// System fonts keep Japanese and Latin UI text consistent and avoid a font
+// download/layout swap before the first interaction. See styles/tokens.css.
 
 // Takosumi dashboard design system:
 //   tokens (app palette) → base (reset/body/a11y) → components

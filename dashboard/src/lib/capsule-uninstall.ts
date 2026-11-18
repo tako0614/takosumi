@@ -1,5 +1,19 @@
-import type { CapsuleAppView } from "./control-api.ts";
-import { formatDateTime, t } from "../i18n/index.ts";
+import type { Capsule, CapsuleAppView } from "./control-api.ts";
+import { formatDateTime, t, type MessageKey } from "../i18n/index.ts";
+
+export function appUninstallConnectionNotice(
+  app: Pick<CapsuleAppView, "uninstall" | "problems">,
+): MessageKey | undefined {
+  if (app.uninstall.mode === "discard") return;
+  const record = app.uninstall.scheduled;
+  if (record?.phase === "destroying" && !record.blocked &&
+    !app.problems.some((problem) => problem.code === "uninstall_failed")) return;
+  const issues = app.problems.filter((problem) => problem.code === "connection_unavailable");
+  if (issues.some((problem) => problem.connectionStatus === "missing" || problem.connectionStatus === "revoked")) {
+    return "app.uninstall.connectionRemoved";
+  }
+  if (issues.length > 0) return "app.uninstall.connectionUnavailable";
+}
 
 /**
  * The one sentence that says where an app's uninstall stands, from the
@@ -12,6 +26,9 @@ export function appUninstallBanner(
   now: number = Date.now(),
 ): string {
   const record = app.uninstall.scheduled;
+  const notice = appUninstallConnectionNotice(app);
+  if (notice === "app.uninstall.connectionRemoved") return t("app.uninstall.bannerConnectionRemoved", { name });
+  if (notice === "app.uninstall.connectionUnavailable") return t("app.uninstall.bannerConnection", { name });
   if (app.problems.some((problem) => problem.code === "uninstall_failed")) {
     return t("app.uninstall.bannerFailed", { name });
   }
@@ -42,4 +59,37 @@ export function appUninstallExportNote(
     default:
       return undefined;
   }
+}
+
+/** Public readback facts, never evidence that this caller created a reservation. */
+export function observeUninstallReadback(
+  kind: "schedule" | "cancel",
+  before: Pick<Capsule, "id" | "workspaceId" | "status" | "uninstall">,
+  current: Pick<Capsule, "id" | "workspaceId" | "status" | "uninstall">,
+  app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "state" | "applied" | "uninstall">,
+): "removed" | "reservation" | "cancelled" | "unverified" {
+  if (current.id !== before.id || app.capsuleId !== before.id ||
+    current.workspaceId !== before.workspaceId || app.workspaceId !== before.workspaceId) return "unverified";
+  if (kind === "schedule" && current.status === "destroyed" && app.state === "uninstalled") return "removed";
+  const previous = before.uninstall;
+  const record = current.uninstall;
+  if (typeof record?.id !== "string" || !record.id.trim() || !Number.isSafeInteger(record.revision) || record.revision < 1) return "unverified";
+  if (kind === "cancel") {
+    return previous?.phase === "scheduled" && previous.id === record.id &&
+        Number.isSafeInteger(previous.revision) && previous.revision > 0 && record.revision === previous.revision + 1 &&
+        record.phase === "cancelled" && typeof record.cancelledAt === "string" && Number.isFinite(Date.parse(record.cancelledAt)) &&
+        ["active", "stale", "error"].includes(record.previousStatus) &&
+        record.previousStatus === previous.previousStatus && current.status === previous.previousStatus &&
+        app.applied && !app.uninstall.scheduled && app.state !== "uninstalled" &&
+        app.state !== "uninstalling" && app.state !== "uninstall_scheduled"
+      ? "cancelled" : "unverified";
+  }
+  const scheduled = app.uninstall.scheduled;
+  return current.status === "uninstalled" && record.id !== previous?.id &&
+      (previous === undefined || previous.phase === "cancelled") &&
+      (record.phase === "scheduled" || record.phase === "destroying") &&
+      scheduled?.phase === record.phase && scheduled.requestedAt === record.requestedAt &&
+      scheduled.deleteAfter === record.scheduledDestroyAt &&
+      (app.state === "uninstall_scheduled" || app.state === "uninstalling")
+    ? "reservation" : "unverified";
 }

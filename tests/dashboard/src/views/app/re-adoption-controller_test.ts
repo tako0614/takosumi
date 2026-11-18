@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { ControlApiError, getCapsuleInstallConfigReAdoptionContext, isRevisionAlreadyCurrent } from "../../../../../dashboard/src/lib/control-api.ts";
+import { ControlApiError, getCapsuleApp, getCapsuleInstallConfigReAdoptionContext, isRevisionAlreadyCurrent } from "../../../../../dashboard/src/lib/control-api.ts";
 import { buildReAdoptionInputs, initialReAdoptionDrafts, reAdoptionRevisionFromError } from "../../../../../dashboard/src/lib/re-adoption-inputs.ts";
 import { createReAdoptionPlanSubmission } from "../../../../../dashboard/src/lib/re-adoption-plan.ts";
 import { reAdoptionContext } from "../../../fixtures/re-adoption-context.ts";
@@ -26,11 +26,12 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 function controllers() {
   let target: string | undefined, review: { planRunId: string } | undefined;
   const scope = { capsuleId: "capsule_a", revisionPlanId: "revision_failed", principalId: "person_a", busy: false };
-  const startReview = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", `${transpile(startSource)}; return startReview;`)(
+  const startReview = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "disposed", "ControlApiError", "refetchApp", `${transpile(startSource)}; return startReview;`)(
     () => scope.capsuleId, () => ({ sourceId: "source_a" }), scope, () => scope.busy, () => "owner", () => true,
     (value: unknown) => { scope.busy = value !== undefined; }, () => {}, () => {},
     (value: { planRunId: string }) => { review = value; }, (value: string) => { target = value; },
     reAdoptionRevisionFromError, isRevisionAlreadyCurrent, () => ({ message: "fixture error" }), (key: string) => key, () => {},
+    false, ControlApiError, () => getCapsuleApp(scope.capsuleId),
   ) as (section: string, purpose: string, create: () => Promise<string>) => Promise<void>;
   let dispose!: () => void;
   const formProps = {

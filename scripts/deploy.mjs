@@ -9,6 +9,7 @@
 //   bun run deploy -- takosumi-website
 //   bun run deploy -- takosumi-platform-staging plan ...
 //   bun run deploy -- takosumi-platform-staging-code apply --config <absolute>
+//   bun run deploy -- takosumi-platform-staging-code resume --config <absolute> --version <uuid> --tag <tag> --predecessor <uuid>
 //   bun run deploy -- takosumi-platform plan ...
 //   bun run deploy -- takosumi-platform-staging restore ...
 //   bun run deploy -- takosumi-platform restore ...
@@ -170,13 +171,13 @@ const CONTRACT = {
       lineage: "integration",
       obligations: {
         provenance:
-          "requires the operator-private source pin to equal the selected checkout HEAD, builds the staging dashboard once, runs the Worker-build scoped gate once, and runs two versions-upload dry runs to bind the three execution-evidence variables to the exact sealed entry digest",
+          "pins the application source to the operator-private source pin, builds the staging dashboard and Worker once through the scoped gate, and checks two sealed dry runs; resume allows only a same-repo descendant that changes deploy runner and test files, and must match the existing Version's exact tag and sealed entry digest",
         "post-conditions":
           "reads the uploaded immutable Version and then requires it alone at 100 percent, exact public version headers and discovery, unchanged secret names, binding identities, Durable Object namespace ids, Container identity/image/version/health, and exact routes, domains, schedules, subdomain, and non-versioned settings",
         reversal:
           "prints the predecessor Version and names takosumi-platform-staging as the historical rollback owner; this routine lane does not invent a second restore mechanism",
         "failure-handling":
-          "refuses any pre-upload authority drift; asset sync is the first possible mutation, so every upload or activation error is incomplete, prints the recovery tag and predecessor, and never retries either mutation",
+          "refuses any pre-upload authority drift; upload or activation errors are incomplete, print the recovery tag and predecessor, and never retry; explicitly resuming a verified Version rechecks the exact healthy predecessor and skips the upload",
       },
     },
     platformContract(PLATFORM_STAGING),

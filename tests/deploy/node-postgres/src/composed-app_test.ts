@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import {
@@ -2735,4 +2736,132 @@ test("M2 rejects an expired parent or changed capture Binding before issuing", a
   await save("fixture_data_member", parent);
   assert.ok([401, 412].includes((await m2Invocation(f)).status));
   assert.equal(effects, 0);
+});
+
+// This composition regression uses the shipped Accounts producer and the real
+// Core Plan consumer. The in-memory ledgers are local test backing, not an IdP.
+async function buildModuleVariablePlanFixture(options: {
+  readonly omitFactory?: boolean;
+  readonly omitOwner?: boolean;
+} = {}) {
+  const control = new InMemoryOpenTofuControlStore();
+  const accounts = new InMemoryAccountsStore();
+  const digest = `sha256:${"a".repeat(64)}`;
+  const seeded = await seedCapsuleModel(control, {
+    installConfig: {
+      internal: { reason: "per_install_overrides", sourceSnapshotId: "snap_fixture",
+        repositoryInstallUxDigest: digest },
+      variableMapping: { public_url: "https://module-app.example.test" },
+      installExperience: {
+        repositoryInstallUx: { status: "accepted", apiVersion: "takosumi.com/v2.6" },
+        projections: [
+          { kind: "public_endpoint", variables: { url: "public_url" } },
+          { kind: "oidc_client", variables: {
+            accountsUrl: "accounts_url", issuerUrl: "issuer_url", clientId: "client_id",
+            redirectUri: "redirect_uri", ownerSubject: "owner_sub",
+          }, callbackPath: "/auth/callback", scopes: ["openid", "profile"] },
+        ],
+      },
+      policy: { repositoryInstallUx: { allowedInterfacePermissions: [],
+        allowedOidcScopes: ["openid", "profile"] } },
+    },
+  });
+  await control.putSourceSnapshot({ ...seeded.snapshot,
+    repositoryModules: { status: "ready", scopePath: ".", modules: [
+      { path: ".", providerPackages: [], rootProviderRequirements: [] },
+    ] }, repositoryManifest: {
+    status: "present", digest, document: { apiVersion: "takosumi.com/v2.6",
+      kind: "Repository", install: { modules: { ".": { inputs: [] } } } },
+  } });
+  const capsule = { ...seeded.capsule,
+    ...(!options.omitOwner ? { installingPrincipalId: "tsub_module_owner" } : {}) };
+  await control.putCapsule(capsule);
+  const jobs: Parameters<NonNullable<OpenTofuRunner["plan"]>>[0][] = [];
+  let factoryInput: import("../../../../deploy/node-postgres/src/composed-app.ts").ModuleVariableMaterializerFactoryInput | undefined;
+  const { createTakosumiAccountsOidcModuleVariableMaterializer } = await import(
+    "../../../../deploy/platform/accounts_oidc_module_variable_materializer.ts"
+  );
+  const { buildComposedApp } = await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: { ...testConfig(), issuer: "https://accounts.example.test" },
+    store: accounts as unknown as PostgresAccountsStore,
+    accountsHandler: accountsHandlerSpy().handler,
+    opentofuControlStore: control,
+    opentofuRunner: {
+      apply: async () => { throw new Error("Plan composition test must not Apply"); },
+      readCapsuleSourceFiles: async () => [{ path: "main.tf", text:
+        ["public_url", "accounts_url", "issuer_url", "client_id", "redirect_uri", "owner_sub"]
+          .map((name) => `variable "${name}" {\n  type = string\n  default = ""\n}`).join("\n") +
+        '\noutput "launch_url" { value = var.public_url }\n' }],
+      plan: async (job) => {
+      jobs.push(job);
+      return { planDigest: `sha256:${"c".repeat(64)}`,
+        planArtifact: { kind: "runner-local", ref: "runner-local://module/plan",
+          digest: `sha256:${"c".repeat(64)}` },
+        requiredProviders: [], providerInstallation: [],
+        providerLockDigest: `sha256:${"d".repeat(64)}` };
+    } },
+    runnerProfiles: [{ ...RUNTIME_INPUT_RUNNER_PROFILE, requireProviderBindings: false }],
+    defaultRunnerProfileId: RUNTIME_INPUT_RUNNER_PROFILE.id,
+    ...(!options.omitFactory ? { createModuleVariableMaterializer: (input: NonNullable<typeof factoryInput>) => {
+      factoryInput = input;
+      return createTakosumiAccountsOidcModuleVariableMaterializer({ ...input,
+        pairwiseSubjectSecret: "fixture-module-pairwise-secret-at-least-32-bytes" });
+    } } : {}),
+  });
+  return { created, capsule, seeded, control, accounts, jobs, factoryInput };
+}
+
+test("composed module-variable factory delivers real Accounts issuer client and owner into Core Plan", async () => {
+  const fixture = await buildModuleVariablePlanFixture();
+  const { planRun } = await fixture.created.operations.createCapsulePlan(fixture.capsule.id);
+  assert.equal(planRun.status, "succeeded");
+  assert.equal(fixture.jobs.length, 1);
+  const variables = fixture.jobs[0]!.variables!;
+  assert.equal(variables.accounts_url, "https://accounts.example.test");
+  assert.equal(variables.issuer_url, variables.accounts_url);
+  assert.match(String(variables.client_id), /^tko_[A-Za-z0-9_-]{43}$/u);
+  assert.match(String(variables.owner_sub), /^tsub_[A-Za-z0-9_-]+$/u);
+  assert.notEqual(variables.owner_sub, "tsub_module_owner");
+  assert.equal(variables.redirect_uri, "https://module-app.example.test/auth/callback");
+  assert.equal(await fixture.accounts.findOidcClientForCapsule(fixture.capsule.id), undefined);
+  assert.equal(JSON.stringify(variables).includes("fixture-module-pairwise-secret"), false);
+  assert.equal(JSON.stringify(planRun).includes(String(variables.owner_sub)), false);
+  const input = fixture.factoryInput!;
+  assert.deepEqual(Object.keys(input), ["control", "accounts", "issuer"]);
+  assert.deepEqual(Object.keys(input.control), ["getCapsule", "getInstallConfig"]);
+  assert.deepEqual(Object.keys(input.accounts), ["findOidcClient", "findOidcClientForCapsule", "saveOidcClient", "revokeOidcClient"]);
+  assert.equal(Object.isFrozen(input), true);
+  assert.equal(Object.isFrozen(input.control), true);
+  assert.equal(Object.isFrozen(input.accounts), true);
+  assert.equal(await input.control.getCapsule("cap_missing"), undefined);
+  assert.equal(await input.control.getInstallConfig("cfg_missing"), undefined);
+  const failure = new Error("control unavailable");
+  fixture.control.getCapsule = async () => { throw failure; };
+  await assert.rejects(input.control.getCapsule(fixture.capsule.id), (error) => error === failure);
+});
+
+test("composed module-variable factory preserves missing authority and missing owner refusals", async () => {
+  for (const options of [{ omitFactory: true }, { omitOwner: true }]) {
+    const fixture = await buildModuleVariablePlanFixture(options);
+    await assert.rejects(fixture.created.operations.createCapsulePlan(fixture.capsule.id),
+      options.omitFactory ? /host materializer is unavailable/u : /installing Principal is missing/u);
+    assert.equal(fixture.jobs.length, 0);
+    assert.equal(await fixture.accounts.findOidcClientForCapsule(fixture.capsule.id), undefined);
+  }
+});
+
+test("composed module-variable factory refuses failed or incomplete producer initialization", async () => {
+  const { buildComposedApp } = await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const failure = new Error("module authority unavailable");
+  for (const factory of [
+    async () => { throw failure; },
+    async () => ({ materialize: async () => undefined }),
+  ]) {
+    await assert.rejects(buildComposedApp({ config: testConfig(),
+      store: new PostgresAccountsStore(stubQueryClient()), accountsHandler: accountsHandlerSpy().handler,
+      createModuleVariableMaterializer: factory as unknown as ComposedAppInput["createModuleVariableMaterializer"],
+    }), (error) => error === failure ||
+      (error instanceof TypeError && /materialize and retire/u.test(error.message)));
+  }
 });

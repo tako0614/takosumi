@@ -98,13 +98,14 @@ export class PlanResolutionService {
   async resolveCapsulePlan(
     capsule: Capsule,
     providerRequirements: readonly CapsuleProviderRequirement[],
+    destroyResolvedBindings?: readonly ResolvedCapsuleProviderBinding[],
   ): Promise<CapsulePlanContext> {
     // Run-scoped resolution so generated-root provider blocks come from the
     // reviewed ProviderBinding records.
     // The caller filters the full required provider set down to providers that
     // require credential material; no-credential providers remain on
     // PlanRun.requiredProviders but do not force a ProviderConnection.
-    const resolved = await this.#resolveCapsuleProviderBindingsForRun(
+    const resolved = destroyResolvedBindings ?? await this.#resolveCapsuleProviderBindingsForRun(
       capsule,
       providerRequirements,
     );

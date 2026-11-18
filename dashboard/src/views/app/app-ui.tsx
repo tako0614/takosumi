@@ -2,15 +2,18 @@
  * Small building blocks shared by the installed-app page sections.
  */
 import {
+  createContext,
   createEffect,
   createSignal,
   For,
   type JSX,
   onCleanup,
   Show,
+  useContext,
 } from "solid-js";
-import { ChevronDown, ExternalLink, Smartphone } from "lucide-solid";
+import { ChevronDown, ChevronRight, ExternalLink, Smartphone } from "lucide-solid";
 import { Button } from "../../components/ui/index.ts";
+import type { AppPageSection } from "../../lib/app-links.ts";
 import { formatDateTime, relativeTime, t } from "../../i18n/index.ts";
 import { type OpenRouteScreen, screenOpenRoute } from "../../lib/open-choice-state.ts";
 import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
@@ -24,7 +27,37 @@ export function RelativeTime(props: { readonly iso: string }): JSX.Element {
   );
 }
 
-/** One behavior section of the app page: a card with a real heading. */
+/** A pane remains mounted when hidden so drafts and running reviews keep their state. */
+export const AppSectionVisibility = createContext<(id: string) => boolean>();
+
+export function AppManagementRow(props: {
+  readonly section: AppPageSection;
+  readonly href: string;
+  readonly onNavigate: (event: MouseEvent, section: AppPageSection) => void;
+  readonly icon: JSX.Element;
+  readonly label: string;
+  readonly detail?: string;
+  readonly danger?: boolean;
+}): JSX.Element {
+  return (
+    <li>
+      <a
+        class="ap-menu-row"
+        classList={{ "ap-menu-row-danger": props.danger }}
+        href={props.href}
+        onClick={(event) => props.onNavigate(event, props.section)}
+        data-app-section-link={props.section}
+      >
+        <span class="ap-menu-icon" aria-hidden="true">{props.icon}</span>
+        <span class="ap-menu-label">{props.label}</span>
+        <Show when={props.detail}>{(detail) => <span class="ap-menu-detail">{detail()}</span>}</Show>
+        <ChevronRight class="ap-menu-chevron" size={16} aria-hidden="true" />
+      </a>
+    </li>
+  );
+}
+
+/** A section with a real heading; it can also render without the app menu. */
 export function AppSection(props: {
   readonly id: string;
   readonly title: string;
@@ -35,16 +68,18 @@ export function AppSection(props: {
   /** An extra class for a section that is also shown outside the app page. */
   readonly class?: string;
 }): JSX.Element {
+  const isSectionVisible = useContext(AppSectionVisibility);
   return (
     <section
       id={props.id}
+      hidden={isSectionVisible ? !isSectionVisible(props.id) : undefined}
       class={props.class ? `tg-card ap-section ${props.class}` : "tg-card ap-section"}
       aria-labelledby={`${props.id}-title`}
       data-testid={props.testId}
     >
       <div class="ap-section-head">
         <div>
-          <h2 id={`${props.id}-title`}>{props.title}</h2>
+          <h2 id={`${props.id}-title`} tabindex="-1">{props.title}</h2>
           <Show when={props.subtitle}>
             <p>{props.subtitle}</p>
           </Show>

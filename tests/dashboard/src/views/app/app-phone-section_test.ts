@@ -22,14 +22,15 @@ const run = read("views/runs/RunView.tsx");
 const indexHtml = readFileSync(resolve(root, "../index.html"), "utf8");
 
 describe("use on your phone", () => {
-  test("the app page keeps phone guidance after settings, for the screen Open offers or the URL names", () => {
+  test("the app opens phone guidance on demand for the screen Open offers or the URL names", () => {
     const attention = page.indexOf("<AppAttentionSection");
     const phone = page.indexOf("<AppPhoneSection");
     const settings = page.indexOf("<AppSettingsSection");
     expect(attention).toBeGreaterThan(0);
     expect(phone).toBeGreaterThan(attention);
     expect(phone).toBeGreaterThan(settings);
-    expect(page).toContain('view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined');
+    expect(page).toContain('sectionVisited("phone") && (view().primaryAction === "open" || secondaryScreens(view()))');
+    expect(page).toContain('? chooserScreen() : undefined');
     // The chooser is for the screen the URL (`?open=`) or Open named, else the primary one.
     expect(page).toContain("list.find((screen) => screen.interfaceId === wanted) ?? list[0]");
     // It knows the app, the screen and its server-verified native clients.

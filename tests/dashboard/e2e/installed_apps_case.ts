@@ -129,7 +129,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       await expect(page.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeEnabled();
       await expect(page.getByText(hint, { exact: true })).toBeVisible();
       expect(h.mutations).toEqual([]);
-      await installed.getByRole("link", { name: "開く: office-personal", exact: true }).click();
+      await installed.getByRole("link", { name: "開く: 共有オフィス", exact: true }).click();
       await expect(page).toHaveURL(/\/apps\/cap_repository_office$/u);
       expect(h.mutations).toEqual([]);
 
@@ -185,7 +185,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
       const installed = page.getByTestId("install-existing-apps");
-      await expect(installed.getByRole("link", { name: "開く: office-personal", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office");
+      await expect(installed.getByRole("link", { name: "開く: 共有オフィス", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office");
       await expect(page.getByText("インストール済みのアプリを確認できませんでした。", { exact: true })).toBeVisible();
       expect(h.reads).toContain("/api/v1/workspaces/ws_alpha/installed-apps");
       expect(h.errors).toEqual([]);

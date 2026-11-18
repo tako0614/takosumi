@@ -1,3 +1,4 @@
+import { registerHomeSearchCases } from "./home_search_case.ts";
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 import { registerInstallDetailCases } from "./install_detail_case.ts";
 import { registerAppPageCases } from "./app_page_case.ts";
@@ -38,6 +39,7 @@ import { registerRunDetailCases } from "./run_detail_case.ts";
 import { registerSessionIdentityCases } from "./session_identity_case.ts";
 import { registerSharedSignInCases } from "./shared_sign_in_case.ts";
 import { registerPasswordAuthCases } from "./password_auth_case.ts";
+import { registerInstallPublicUrlCases } from "./install_public_url_case.ts";
 
 type Expectations = {
   readonly appName: string;
@@ -51,6 +53,7 @@ if (rawMode !== "portable" && rawMode !== "live" && rawMode !== "public-live") {
   );
 }
 const mode: DashboardE2EMode = rawMode;
+registerHomeSearchCases(mode);
 registerInstallAuthReturnCase(mode);
 registerNavigationAccountCases(mode);
 registerAppSharingCases(mode);
@@ -58,6 +61,7 @@ registerRunDetailCases(mode);
 registerSessionIdentityCases(mode);
 registerSharedSignInCases(mode);
 registerPasswordAuthCases(mode);
+registerInstallPublicUrlCases(mode);
 
 const expectedWorkerVersionId =
   mode === "live" || mode === "public-live"
@@ -447,7 +451,7 @@ async function stubProviderDestinationFixture(
     if (path === "/api/v1/capsules/cap_provider_destination_e2e/app") return route.fulfill({ json: { app: {
       kind: "takosumi.capsule-app@v1", capsuleId: "cap_provider_destination_e2e", workspaceId: "ws_alpha",
       projectId: "prj_alpha", name: "cloudflare-service", environment: "production",
-      // Not applied until the review's Allow and install posted its Apply.
+      // Not applied until the review's Install posted its Apply.
       status: applied ? "active" : "pending", applied,
       state: applied ? "installed" : "installing", primaryAction: applied ? "view_resources" : "review", problems: [], screens: [],
       version: { updateAvailable: false, stale: false, autoUpdate: false },
@@ -627,7 +631,7 @@ async function startReadinessBrowserFixture(
       await expect(installReview(page)).toBeVisible();
       const installUrl = new URL(page.url());
       const originatingInstallPath = `${installUrl.pathname}${installUrl.search}`;
-      const allow = installReview(page).getByRole("button", { name: "Allow and install", exact: true });
+      const allow = installReview(page).getByRole("button", { name: "Install", exact: true });
       await expect(allow).toBeVisible();
       // A reviewed Plan never applies on its own.
       expect(applyPosts).toEqual([]);
@@ -900,7 +904,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       },
     );
     await fixture.startApply();
-    await expect(page.getByText("Waiting for the app's launch link to become available.")).toBeVisible();
+    await expect(page.getByText("You can open the app when it is ready.")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
     expect(activityReads.slice(0, 2)).toEqual([
       "/api/v1/capsules/cap_provider_destination_e2e/activity?limit=100",
@@ -1131,10 +1135,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByTestId("install-source-fields").locator("input")).not.toBeVisible();
     await prepareInlineFixture(page);
     const sheet = page.getByTestId("install-configuration");
-    await expect(sheet.getByTestId("install-version-choice").locator(":scope > summary")).toContainText("Latest");
+    await expect(sheet.getByTestId("install-version-choice")).not.toBeVisible();
     const connectionDetails = sheet.getByTestId("install-connections");
-    await expect(connectionDetails.locator(":scope > summary")).toHaveText("Cloud connection");
-    await expect(connectionDetails).toHaveAttribute("open", "");
+    await expect(connectionDetails).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     // Two candidates: the row asks for a choice and the Plan waits for it.
     await expect(sheet).toHaveAttribute("data-install-state", "connections");
     await expect(page.getByTestId("install-apply-reason")).toHaveText("Choose a connection to check it");
@@ -1145,8 +1149,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByLabel("Region").fill("us-west-2");
     await page.getByLabel("Region").press("Enter");
     // Nothing else to press: the Plan is made once the setting is in.
-    await expect(installReview(page).getByRole("button", { name: "Allow and install", exact: true })).toBeVisible();
-    const addButton = page.getByRole("button", { name: "Allow and install", exact: true });
+    await expect(installReview(page).getByRole("button", { name: "Install", exact: true })).toBeVisible();
+    const addButton = page.getByRole("button", { name: "Install", exact: true });
     await expect(addButton).toBeDisabled();
     // The connection choice is an answer; the setting travels only with the
     // confirmation that made the Plan.
@@ -1166,10 +1170,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     })]);
 
     // Billing is disabled here: provider pricing is explained, never "$0.00".
-    await expect(page.getByTestId("install-plan-cost")).toContainText("Cloud charges may apply. No cost estimate is available.");
+    await expect(page.getByTestId("install-plan-cost")).toContainText("No estimate. Cloud usage charges may apply.");
     await expect(page.locator("body")).not.toContainText("$0.00");
 
-    await page.getByRole("dialog", { name: "Configuration" }).getByRole("button", { name: "Close", exact: true }).click();
     await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
     await expect(addButton).toBeEnabled();
     await addButton.click();
@@ -1181,7 +1184,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Retry", exact: true }).click();
-    await expect(page.getByText("Waiting for the app's launch link to become available.")).toBeVisible();
+    await expect(page.getByText("You can open the app when it is ready.")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
     activationAction = "release_activation.succeeded";
     const openService = page.getByRole("link", { name: "Open", exact: true });
@@ -1587,7 +1590,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(
       page.getByRole("heading", {
         level: 1,
-        name: /アプリをインストール|Install an app/u,
+        name: /ストア|Store/u,
       }),
     ).toBeVisible();
     await expect(page.getByRole("region", { name: /アプリを探す|Find apps/u })).toBeVisible();
@@ -1642,9 +1645,11 @@ test.describe("Takosumi dashboard browser surface", () => {
       await page.keyboard.press("Enter");
       const versionInput = versionChoice.getByRole("textbox", { name: "バージョン（省略可）" });
       await expect(versionInput).toBeVisible();
-      await versionInput.fill("HEAD");
-      await expect(versionChoice.locator(":scope > summary")).toContainText("既定のブランチ");
-      await versionInput.fill("");
+      await versionChoice.getByRole("button", { name: "開発版" }).click();
+      await expect(versionInput).toHaveValue("HEAD");
+      await expect(versionChoice.locator(":scope > summary")).toContainText("開発版");
+      await versionChoice.getByRole("button", { name: "最新", exact: true }).click();
+      await expect(versionInput).toHaveValue("");
       await expect(versionChoice.locator(":scope > summary")).toContainText("最新");
       await versionChoice.locator(":scope > summary").click();
       await expect(versionInput).not.toBeVisible();

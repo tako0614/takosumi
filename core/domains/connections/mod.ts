@@ -17,10 +17,12 @@ import { randomUUID } from "node:crypto";
 import type {
   ProviderBinding,
   ProviderBindings,
+  DestroyProviderConnectionReplacement,
   ProviderConnectionMaterialization,
 } from "takosumi-contract/connections";
 import {
   canonicalRunCredentialSettings,
+  parseDestroyProviderConnectionReplacements,
   isWorkspaceBindableOperatorConnection,
 } from "takosumi-contract/connections";
 import {
@@ -451,6 +453,55 @@ export class ConnectionsService {
       requiredProviders,
       true,
     );
+  }
+
+  /** Resolve an explicit delete-only selection without mutating app bindings. */
+  async resolveProviderBindingsForDestroyRecovery(input: {
+    readonly capsule: Capsule;
+    readonly requiredProviders: readonly RequiredProviderBindingIdentity[];
+    readonly appliedDigest: string;
+    readonly replacements: readonly DestroyProviderConnectionReplacement[];
+    readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+    readonly includeUnusedBindings?: boolean;
+  }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const refuse = (): never => { throw new OpenTofuControllerError(
+      "failed_precondition", "The selected connection does not prove the applied provider account scope.",
+      { reason: "destroy_connection_recovery_unproven" },
+    ); };
+    if (!/^sha256:[a-f0-9]{64}$/u.test(input.appliedDigest)) refuse();
+    let selection: readonly DestroyProviderConnectionReplacement[];
+    try { selection = parseDestroyProviderConnectionReplacements(input.replacements); }
+    catch { return refuse(); }
+    const replacements = new Map(selection.map(row => [row.connectionId, row.replacementConnectionId]));
+    const bindings = await this.#validatedProviderBindings(input.capsule);
+    for (const id of replacements.keys()) {
+      if (!bindings.some(binding => binding.connectionId === id) ||
+        this.#operatorProviderConnections.has(id) || await this.#store.getConnection(id)) refuse();
+    }
+    const policy = await this.#policyForCapsule(input.capsule);
+    const resolved = await this.#resolveBindings(input.capsule, bindings.map(binding => ({
+      ...binding, connectionId: replacements.get(binding.connectionId) ?? binding.connectionId,
+    })), policy);
+    const selected = this.#selectResolvedProviderBindingsForRun(resolved, input.requiredProviders, false);
+    const originalsByReplacement = new Map<string, string>();
+    for (const [id, replacementId] of replacements) {
+      if (originalsByReplacement.has(replacementId) || !selected.some(entry => entry.connection.id === replacementId)) refuse();
+      originalsByReplacement.set(replacementId, id);
+    }
+    for (const entry of selected) {
+      if (!originalsByReplacement.has(entry.connection.id)) continue;
+      if (entry.connection.expiresAt !== undefined &&
+        (!Number.isFinite(Date.parse(entry.connection.expiresAt)) || Date.parse(entry.connection.expiresAt) <= Date.parse(this.#now()))) refuse();
+      if (!input.hasVerifiedAccountScope(entry.connection)) refuse();
+    }
+    // Only this hash preimage uses the old ID. Returned entries and mint always
+    // retain the real replacement ID, and every other binding stays pinned.
+    const comparison = selected.map(entry => {
+      const originalId = originalsByReplacement.get(entry.connection.id);
+      return originalId === undefined ? entry : { ...entry, connection: { ...entry.connection, id: originalId } };
+    });
+    if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse();
+    return input.includeUnusedBindings ? resolved : selected;
   }
 
   async #resolveProviderBindingsForRun(

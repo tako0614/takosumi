@@ -4152,7 +4152,7 @@ test("repository preflight resolves the sole indexed module before exact compati
   });
   expect(derivedInstallConfig.store).toMatchObject({
     provider: "Repository",
-    suggestedName: "repo-default",
+    suggestedName: "repository-default",
     name: { ja: "リポジトリ名", en: "Repository name" },
     description: { ja: "リポジトリの説明", en: "Repository description" },
     source: { url: seeded.source.url },
@@ -8392,6 +8392,43 @@ test("revision re-adoption context keeps the designated delegate owner boundary 
   const ownerUrl = new URL(`https://app.takosumi.test/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}`);
   const ownerResponse = await handleControlRoute({ request: new Request(ownerUrl, { headers: { cookie: f.cookie } }), url: ownerUrl, store: f.accountStore, operations: f.operations, installedAppDelegationSources: [{ url: f.source.url, path: f.source.defaultPath, refs: ["refs/heads/main"] }] });
   expect(ownerResponse?.status).toBe(200);
+});
+
+test("revision re-adoption context rechecks current member settings access before returning inputs", async () => {
+  for (const revokeMembership of [false, true]) {
+    const f = await reAdoptionInputContextFixture(`context-final-access-${revokeMembership}`);
+    const memory = f.deployStore as InMemoryOpenTofuControlStore;
+    expect(memory.setCapsuleOwnership({ capsuleId: f.seeded.capsule.id, ownerAccountId: "user_test", ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: `apps/${f.seeded.capsule.id}` })).toBe(true);
+    const subject = "context_settings_member" as TakosumiSubject;
+    const cookie = seedSession(f.accountStore, subject);
+    expect(await f.operations.appOwnership!.putMember({ capsuleId: f.seeded.capsule.id, accountId: subject, status: "active", addedBy: "user_test", createdAt: "2026-09-05T00:00:00.000Z", updatedAt: "2026-09-05T00:00:00.000Z" })).toBe(true);
+    expect(await f.operations.appAccess!.resolveAppAccess(subject, f.seeded.capsule.id)).toMatchObject({ role: "member" });
+    const readReport = f.operations.getCompatibilityReport;
+    let metadataRead = false;
+    f.operations.getCompatibilityReport = async (id) => {
+      const report = await readReport.call(f.operations, id);
+      metadataRead = true;
+      if (revokeMembership) {
+        expect(await f.operations.appOwnership!.deleteMember(f.seeded.capsule.id, subject)).toBe(true);
+      }
+      return report;
+    };
+    const url = new URL(`${ORIGIN}/api/v1/capsules/${f.seeded.capsule.id}/install-config-re-adoption-context?revisionPlanId=${f.revisionId}`);
+    const response = await handleControlRoute({ request: new Request(url, { headers: { cookie } }), url, store: f.accountStore, operations: f.operations });
+    expect(metadataRead).toBe(true);
+    expect(response?.status).toBe(revokeMembership ? 403 : 200);
+    const body = await response!.json();
+    if (revokeMembership) {
+      expect(body.error.code).toBe("app_access_denied");
+      expect(body).not.toHaveProperty("installConfigReAdoptionContext");
+      expect(await f.operations.appAccess!.resolveAppAccess(subject, f.seeded.capsule.id)).toBeUndefined();
+    } else {
+      expect(body.installConfigReAdoptionContext.capsuleId).toBe(f.seeded.capsule.id);
+      expect(response!.headers.get("cache-control")).toBe("no-store");
+    }
+    expect(f.runner.planJobs).toHaveLength(0);
+    expect(f.runner.applyJobs).toHaveLength(0);
+  }
 });
 
 test("revision re-adoption context refuses stale or cross-target coordinates without mutation", async () => {

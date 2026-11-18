@@ -33,6 +33,7 @@ function normal(req: Request, overrides: { plan?: object; capsule?: object; hist
     return Response.json(overrides.history ?? { runs: [] });
   }
   if (path === `/api/v1/runs/${plan.id}/apply`) return Response.json({ run: overrides.apply ?? apply }, { status: 201 });
+  if (path === `/api/v1/runs/${apply.id}`) return Response.json({ run: overrides.apply ?? apply });
   throw Error("unexpected fixture request");
 }
 
@@ -71,6 +72,7 @@ test("apps apply executes only the exact saved revision Plan after emitting valu
       expect(s).not.toContain("private://"); expect(s).not.toContain("synthetic-must-not-print"); sawReview = true;
     } })).toBe(0);
     expect(JSON.parse(out[0]!)).toMatchObject({ status: "succeeded", runId: apply.id, runStatus: "succeeded" });
+    expect(calls.filter(c => c.method === "GET" && new URL(c.url).pathname === `/api/v1/runs/${apply.id}`)).toHaveLength(0);
     expect(calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname)).toEqual([`/api/v1/runs/${plan.id}/apply`]);
   } finally { globalThis.fetch = before; }
 });
@@ -138,6 +140,47 @@ test("a linked failed Apply on an older page consumes the Plan; current generati
   });
   expect(r.code).toBe(1); expect(r.result).toMatchObject({ status: "failed", runId: failed.id, runStatus: "failed" });
   expect(r.calls.filter(c => c.method !== "GET")).toHaveLength(0);
+});
+
+test("linked Apply resumption requires current individual Run evidence", async () => {
+  for (const mode of ["normal", "observe", "approved-race"] as const) {
+    for (const evidence of ["failed", "denied", "mismatch"] as const) {
+      let approved = false; let historyReads = 0;
+      const otherApply = { ...apply, id: "apply_later_locator" };
+      const args = mode === "observe" ? applyArgs.filter(a => a !== "--yes").concat("--observe-only") : applyArgs;
+      const r = await invoke(args, req => {
+        const path = new URL(req.url).pathname;
+        if (path.endsWith("/approve") && req.method === "POST") {
+          approved = true;
+          return Response.json({ run: plan });
+        }
+        if (path.endsWith("/runs")) {
+          historyReads += 1;
+          return Response.json({ runs: mode === "approved-race" && !approved ? [] : mode === "approved-race" && evidence === "denied" && historyReads > 2 ? [otherApply] : [apply] });
+        }
+        if (path === `/api/v1/runs/${otherApply.id}`) return Response.json({ run: otherApply });
+        if (path === `/api/v1/runs/${apply.id}`) {
+          if (evidence === "denied") return Response.json({ error: { code: "forbidden" } }, { status: 403 });
+          return Response.json({ run: { ...apply, ...(evidence === "failed" ? { status: "failed", errorCode: "runner_execution_indeterminate" } : { planRunId: "other_plan" }) } });
+        }
+        return normal(req, { plan: mode === "approved-race" && !approved ? { ...plan, status: "waiting_approval" } : plan });
+      });
+      expect(r.code).toBe(1);
+      expect(r.result.runId).toBe(apply.id);
+      if (evidence === "failed") {
+        expect(r.result).toMatchObject({ status: "failed", runStatus: "failed", code: "runner_execution_indeterminate" });
+      } else {
+        expect(r.result.status).toBe(mode === "normal" ? "refused" : "indeterminate");
+        expect(r.result.runStatus).toBeUndefined();
+        expect(r.result.code).toBe(evidence === "denied" ? "forbidden" : "apply_identity_mismatch");
+      }
+      const mutations = r.calls.filter(c => c.method !== "GET").map(c => new URL(c.url).pathname);
+      expect(mutations).toEqual(mode === "approved-race" ? [`/api/v1/runs/${plan.id}/approve`] : []);
+      expect(r.calls.filter(c => c.method === "GET" && new URL(c.url).pathname === `/api/v1/runs/${apply.id}`)).toHaveLength(1);
+      expect(historyReads).toBe(mode === "approved-race" ? 2 : 1);
+      expect(r.calls.some(c => new URL(c.url).pathname === `/api/v1/runs/${otherApply.id}`)).toBe(false);
+    }
+  }
 });
 
 test("cycle or malformed Run history never proves absence of Apply", async () => {

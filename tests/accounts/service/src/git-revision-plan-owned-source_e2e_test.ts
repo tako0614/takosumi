@@ -27,12 +27,13 @@ import {
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { retryPlanForRun, type RetryPlanApi } from "../../../../dashboard/src/lib/run-retry.ts";
 
 setDefaultTimeout(180_000);
 
 // An app installed at an exact commit owns its Source (TASK-0118). Its Source
 // syncs carry the account that asked for them, so a version change must too.
-const OWNER = "user_owned_revision";
+const OWNER = "tsub_owned_revision";
 const SESSION = "sess_owned_revision";
 const PINNED = "a17e4f883cb90a1b2c3d4e5f60718293a4b5c6d7";
 const MAIN_HEAD = "0123456789abcdef0123456789abcdef01234567";
@@ -97,10 +98,16 @@ async function compose(backend: Backend, runner: OpenTofuRunner): Promise<{
   return { deployStore, operations };
 }
 
-async function ownedAppFixture(kind: Backend, installRef: string) {
+async function ownedAppFixture(
+  kind: Backend,
+  installRef: string,
+  options: { readonly sourceText?: string; readonly initialApplyFails?: boolean } = {},
+) {
   const branchHeads = new Map<string, string>([["main", MAIN_HEAD]]);
-  let applyFails = false;
+  let applyFails = options.initialApplyFails ?? false;
   const syncedRefs: string[] = [];
+  const planJobs: Parameters<OpenTofuRunner["plan"]>[0][] = [];
+  const applyJobs: Parameters<OpenTofuRunner["apply"]>[0][] = [];
   // Git and OpenTofu execution are the external boundary. Coordinators,
   // Sources, Capsules, ownership and the ledger are production services.
   const runner: OpenTofuRunner = {
@@ -126,9 +133,11 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
     cleanupUnusedSourceArchive: async () => {},
     readCapsuleSourceFiles: async () => [{
       path: "main.tf",
-      text: "output \"ready\" { value = \"yes\" }\n",
+      text: options.sourceText ?? "output \"ready\" { value = \"yes\" }\n",
     }],
-    plan: async () => ({
+    plan: async (job) => {
+      planJobs.push(job);
+      return ({
       planDigest: PLAN_DIGEST,
       planArtifact: {
         kind: "runner-local",
@@ -140,10 +149,13 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
       requiredProviders: [],
       providerInstallation: [],
       planResourceChanges: [],
-    }),
+    });
+    },
     // A provider failure can persist state: the StateVersion advances while
     // the Capsule becomes `error`.
-    apply: async (job) => applyFails
+    apply: async (job) => {
+      applyJobs.push(job);
+      return applyFails
       ? {
           providerExecutionFailure: {
             kind: "provider_execution_failed" as const,
@@ -162,9 +174,13 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
           rawOutputRef: job.rawOutputRef,
           providerInstallation: [],
           executionEvidence: fixtureExecutionEvidence(job, "apply"),
-        },
+        };
+    },
   };
   const { deployStore, operations } = await compose(kind, runner);
+  const appOwnership = operations.appOwnership;
+  const appAccess = operations.appAccess;
+  if (!appOwnership || !appAccess) throw new Error("owned-app fixture requires the canonical ownership and access ports");
   const workspace = await operations.workspaces.createWorkspace({
     handle: `owned-revision-${kind}`,
     displayName: "Owned revision",
@@ -187,13 +203,13 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
     expiresAt: now + 600_000,
   });
 
-  async function route(method: string, path: string, body?: unknown, key?: string) {
+  async function route(method: string, path: string, body?: unknown, key?: string, sessionId = SESSION) {
     const url = new URL(`https://app.takosumi.test${path}`);
     const response = await handleControlRoute({
       request: new Request(url, {
         method,
         headers: {
-          cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${SESSION}`,
+          cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}`,
           ...(body === undefined ? {} : { "content-type": "application/json" }),
           ...(key === undefined ? {} : { "idempotency-key": key }),
         },
@@ -242,12 +258,15 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
     installPlan = (await advanced.json()).installPlan;
   }
   expect(installPlan.planRunId).toBeString();
-  await applyPlanRun(installPlan.planRunId!);
+  const initialApply = await applyPlanRun(installPlan.planRunId!);
   const capsuleId = installPlan.capsuleId!;
   const sourceId = installPlan.sourceId!;
   const capsule = await deployStore.getCapsule(capsuleId);
-  expect(capsule).toMatchObject({ status: "active", currentStateGeneration: 1 });
-  expect((await operations.appOwnership.getOwnership(capsuleId))?.ownerAccountId).toBe(OWNER);
+  expect(capsule).toMatchObject({
+    status: options.initialApplyFails ? "error" : "active",
+    currentStateGeneration: 1,
+  });
+  expect((await appOwnership.getOwnership(capsuleId))?.ownerAccountId).toBe(OWNER);
   expect(await deployStore.getSource(sourceId)).toMatchObject({
     ownerCapsuleId: capsuleId,
     defaultRef: installRef,
@@ -264,9 +283,16 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
   return {
     operations,
     deployStore,
+    accountStore,
+    appOwnership,
+    appAccess,
+    planJobs,
+    applyJobs,
     workspace,
     capsuleId,
     sourceId,
+    initialApply,
+    initialPlanRunId: installPlan.planRunId!,
     syncedRefs,
     branchHeads,
     route,
@@ -297,6 +323,112 @@ async function ownedAppFixture(kind: Backend, installRef: string) {
     },
   };
 }
+
+test("[memory] Review again after an initial persisted Apply failure reviews the same snapshot and partial state before an explicit Apply", async () => {
+  const fixture = await ownedAppFixture("memory", PINNED, { initialApplyFails: true });
+  const failed = fixture.initialApply.run;
+  const originalPlan = await fixture.deployStore.getPlanRun(fixture.initialPlanRunId);
+  const failedLedger = await fixture.deployStore.getApplyRun(failed.id);
+  const partial = await fixture.deployStore.getStateVersion(failedLedger!.stateVersionId!);
+  expect(failed).toMatchObject({ type: "apply", status: "failed" });
+  expect(failed.outputId).toBeUndefined();
+  expect(partial).toMatchObject({
+    capsuleId: fixture.capsuleId,
+    generation: 1,
+    digest: STATE_DIGEST,
+    createdByRunId: failed.id,
+  });
+  expect(originalPlan).toMatchObject({ baseStateGeneration: 0, appliedApplyRunId: failed.id });
+  expect(failedLedger!.outputId).toBeUndefined();
+  const sourceBefore = await fixture.deployStore.getSource(fixture.sourceId);
+  const bindingsBefore = await fixture.deployStore.getProviderBindingSetByCapsule(fixture.capsuleId, "production");
+  expect(bindingsBefore).toBeDefined();
+  const syncsBefore = await fixture.sourceSyncRuns();
+
+  // Use the same owner-authenticated HTTP reads and rollback action as the
+  // dashboard. Other retry routes are mistakes for this first partial state.
+  const calls: string[] = [];
+  const unexpected = async () => { throw new Error("partial initial Apply must review its current StateVersion"); };
+  const api: RetryPlanApi = {
+    getRun: async (id) => {
+      calls.push(`read ${id}`);
+      const response = await fixture.route("GET", `/api/v1/runs/${id}`);
+      expect(response.status).toBe(200);
+      return (await response.json()).run;
+    },
+    planRollback: async (stateVersionId) => {
+      calls.push(`rollback ${stateVersionId}`);
+      const response = await fixture.route("POST", `/api/v1/state-versions/${stateVersionId}/rollback-plan`);
+      expect(response.status).toBe(201);
+      return await response.json();
+    },
+    destroyPlanCapsule: unexpected,
+    planCapsule: unexpected,
+    planRevision: unexpected,
+    planTracked: unexpected,
+  };
+  const freshCapsule = await fixture.route("GET", `/api/v1/capsules/${fixture.capsuleId}`);
+  expect(freshCapsule.status).toBe(200);
+  const capsule = (await freshCapsule.json()).capsule;
+  expect(capsule).toMatchObject({ status: "error", currentStateGeneration: 1, currentStateVersionId: partial!.id });
+  expect(capsule.currentOutputId).toBeUndefined();
+  const retryPlanId = await retryPlanForRun(await api.getRun(failed.id), capsule, api);
+  expect(calls).toEqual([`read ${failed.id}`, `read ${originalPlan!.id}`, `rollback ${partial!.id}`]);
+  expect(retryPlanId).toBeString();
+  expect(retryPlanId).not.toBe(originalPlan!.id);
+  const retryPlan = await fixture.deployStore.getPlanRun(retryPlanId!);
+  expect(retryPlan).toMatchObject({
+    capsuleId: fixture.capsuleId,
+    status: "succeeded",
+    baseStateGeneration: 1,
+    sourceSnapshotId: originalPlan!.sourceSnapshotId,
+    capsuleCurrentStateVersionId: partial!.id,
+    origin: { kind: "rollback", stateVersionId: partial!.id },
+  });
+  expect(retryPlan!.appliedApplyRunId).toBeUndefined();
+  expect(fixture.planJobs).toHaveLength(2);
+  expect(fixture.planJobs[0]!.stateScope?.priorState).toBeUndefined();
+  expect(fixture.planJobs[1]!.stateScope?.priorState).toEqual({
+    generation: 1,
+    stateRef: partial!.stateRef,
+    digest: partial!.digest,
+    createdByRunId: failed.id,
+  });
+  expect(fixture.planJobs[0]!.sourceArchive).toBeDefined();
+  expect(fixture.planJobs[1]!.sourceArchive).toEqual(fixture.planJobs[0]!.sourceArchive);
+  expect(retryPlan!.resolvedProviderBindingsDigest).toBe(originalPlan!.resolvedProviderBindingsDigest);
+  expect(fixture.applyJobs).toHaveLength(1);
+  expect(await fixture.deployStore.getApplyRun(failed.id)).toEqual(failedLedger);
+  expect(await fixture.deployStore.getPlanRun(originalPlan!.id)).toEqual(originalPlan);
+  expect(await fixture.deployStore.getSource(fixture.sourceId)).toEqual(sourceBefore);
+  expect(await fixture.deployStore.getProviderBindingSetByCapsule(fixture.capsuleId, "production")).toEqual(bindingsBefore);
+  expect(await fixture.sourceSyncRuns()).toEqual(syncsBefore);
+  expect((await fixture.appOwnership.getOwnership(fixture.capsuleId))?.ownerAccountId).toBe(OWNER);
+
+  // Reviewing never dispatches Apply. The owner makes a separate explicit
+  // Apply of the new Plan; the failed Plan and its partial state stay intact.
+  fixture.setApplyFails(false);
+  const repaired = await fixture.applyPlanRun(retryPlanId!);
+  const repairedLedger = await fixture.deployStore.getApplyRun(repaired.run.id);
+  expect(repaired.run).toMatchObject({ status: "succeeded", planRunId: retryPlanId });
+  expect(fixture.applyJobs).toHaveLength(2);
+  expect(await fixture.deployStore.getCapsule(fixture.capsuleId)).toMatchObject({
+    id: fixture.capsuleId,
+    status: "active",
+    currentStateGeneration: 2,
+    currentStateVersionId: repairedLedger!.stateVersionId,
+  });
+  expect(await fixture.deployStore.getStateVersion(repairedLedger!.stateVersionId!)).toMatchObject({
+    capsuleId: fixture.capsuleId,
+    generation: 2,
+    createdByRunId: repaired.run.id,
+  });
+  expect(await fixture.deployStore.getStateVersion(partial!.id)).toEqual(partial);
+  expect(await fixture.deployStore.getApplyRun(failed.id)).toEqual(failedLedger);
+  expect(await fixture.deployStore.getPlanRun(originalPlan!.id)).toEqual(originalPlan);
+  expect(await fixture.deployStore.getSource(fixture.sourceId)).toEqual(sourceBefore);
+  expect(await fixture.deployStore.getProviderBindingSetByCapsule(fixture.capsuleId, "production")).toEqual(bindingsBefore);
+});
 
 for (const kind of BACKENDS) {
   test(`[${kind}] a version check the previous release left claimed in syncing_source ends in one reconcile`, async () => {
@@ -459,3 +591,149 @@ for (const kind of BACKENDS) {
     });
   });
 }
+
+// This portable cohort exercises current installed-app authority. Git/Runner
+// effects and Accounts identity are synthetic; it is not native state/SSO proof.
+test("normal two-app installation keeps configuration recovery scoped to live app access and account sessions", async () => {
+  const fixture = await ownedAppFixture("postgres", PINNED, {
+    sourceText: 'variable "public_url" {\n  type = string\n  default = "https://before.example.test"\n}\noutput "launch_url" { value = var.public_url }\n',
+  });
+  const { operations, deployStore, route, capsuleId: appA } = fixture;
+  const installedB = await route("POST", `/api/v1/workspaces/${fixture.workspace.id}/install-plans`, {
+    source: { name: "other", url: "https://github.com/takos/other-app.git", ref: PINNED, path: "." },
+    capsule: { name: "other", environment: "production" },
+    options: { modulePath: ".", providerBindings: [] },
+  }, "normal-install-other-app");
+  expect(installedB.status).toBe(201);
+  const installBId = (await installedB.json()).installPlan.id as string;
+  let installB: { planRunId?: string; capsuleId?: string } = {};
+  for (let step = 0; step < 10 && !installB.planRunId; step += 1) {
+    const next = await route("POST", `/api/v1/install-plans/${installBId}/reconcile`);
+    expect(next.status).toBe(200);
+    installB = (await next.json()).installPlan;
+  }
+  expect(installB.planRunId).toBeString();
+  expect(await deployStore.getPlanRun(installB.planRunId!)).toMatchObject({ createdBy: OWNER, ownershipEpoch: 0 });
+  expect(installB.capsuleId).toBeString();
+  const appB = installB.capsuleId!;
+  expect(appB).not.toBe(appA);
+  await fixture.applyPlanRun(installB.planRunId!);
+  const beforeA = (await deployStore.getCapsule(appA))!;
+  const beforeB = (await deployStore.getCapsule(appB))!;
+  expect(beforeB).toMatchObject({ status: "active", currentStateGeneration: 1 });
+  expect(beforeB.sourceId).not.toBe(beforeA.sourceId);
+  expect(beforeB.installConfigId).not.toBe(beforeA.installConfigId);
+  for (const id of [appA, appB]) {
+    expect(await fixture.appOwnership.getOwnership(id)).toMatchObject({
+      capsuleId: id, ownerAccountId: OWNER, ownershipEpoch: 0,
+    });
+    expect(await fixture.appAccess.resolveAppAccess(OWNER, id)).toMatchObject({
+      capsuleId: id, ownerAccountId: OWNER, role: "owner", ownershipEpoch: 0,
+    });
+  }
+
+  const currentA = await route("GET", `/api/v1/capsules/${appA}`);
+  const currentB = await route("GET", `/api/v1/capsules/${appB}`);
+  expect(currentA.status).toBe(200);
+  expect(currentB.status).toBe(200);
+  const bodyA = await currentA.json();
+  const bodyB = await currentB.json();
+  const change = (authorityGuard: string) => ({
+    variablePatch: { set: { public_url: "https://after.example.test" }, remove: [] },
+    providerBindings: [], interfaceBlueprints: [], expected: { authorityGuard },
+  });
+  const oldRunIds = (await operations.listRuns(fixture.workspace.id)).map((r) => r.id).sort();
+  const planCalls = fixture.planJobs.length;
+  const applyCalls = fixture.applyJobs.length;
+  const wrongTarget = await route("POST", `/api/v1/capsules/${appA}/configuration-plans`,
+    change(bodyB.installConfigReAdoption.authorityGuard), "other-app-guard");
+  expect(wrongTarget.status).toBe(409);
+  expect((await wrongTarget.json()).error).toMatchObject({
+    code: "failed_precondition", details: { reason: "capsule_install_config_rebind_conflict" },
+  });
+  expect(fixture.planJobs).toHaveLength(planCalls);
+  expect(fixture.applyJobs).toHaveLength(applyCalls);
+  expect((await operations.listRuns(fixture.workspace.id)).map((r) => r.id).sort()).toEqual(oldRunIds);
+  expect(await deployStore.getCapsule(appA)).toEqual(beforeA);
+  expect(await deployStore.getCapsule(appB)).toEqual(beforeB);
+
+  const configured = await route("POST", `/api/v1/capsules/${appA}/configuration-plans`,
+    change(bodyA.installConfigReAdoption.authorityGuard), "normal-owned-config-update");
+  expect(configured.status).toBe(201);
+  const configurationPlan = (await configured.json()).configurationPlan;
+  const planRunId = configurationPlan.planRunId as string;
+  const savedPlan = await deployStore.getPlanRun(planRunId);
+  expect(savedPlan).toMatchObject({ capsuleId: appA, createdBy: OWNER, ownershipEpoch: 0 });
+  expect(savedPlan?.capsuleExecutionAuthorityEpoch).toBeNumber();
+  expect(fixture.planJobs).toHaveLength(planCalls + 1);
+  expect(fixture.planJobs.at(-1)?.variables.public_url).toBe("https://after.example.test");
+  expect(fixture.planJobs.at(-1)?.planRun.capsuleId).toBe(appA);
+  const applied = await route("POST", `/api/v1/runs/${planRunId}/apply`);
+  expect(applied.status).toBe(201);
+  // Discard the successful Apply body. Recovery uses the public app Run list,
+  // not that body, an invented Run ID, or a second Apply request.
+  const listed = await route("GET", `/api/v1/capsules/${appA}/runs`);
+  expect(listed.status).toBe(200);
+  const runRows = (await listed.json()).runs as { id: string; type: string; capsuleId: string }[];
+  const recoveredRows = runRows.filter((r) => r.type === "apply" && !oldRunIds.includes(r.id));
+  expect(recoveredRows).toHaveLength(1);
+  const recoveredId = recoveredRows[0]!.id;
+  expect(recoveredRows[0]!.capsuleId).toBe(appA);
+  const recovered = await route("GET", `/api/v1/runs/${recoveredId}`);
+  expect(recovered.status).toBe(200);
+  expect((await recovered.json()).run).toMatchObject({ id: recoveredId, capsuleId: appA, status: "succeeded" });
+  expect(fixture.applyJobs).toHaveLength(applyCalls + 1);
+  expect(fixture.applyJobs.at(-1)?.planRun.id).toBe(planRunId);
+  expect(await deployStore.getApplyRun(recoveredId)).toMatchObject({
+    planRunId, capsuleId: appA, createdBy: OWNER,
+    expected: { planRunId, capsuleId: appA, capsuleExecutionAuthorityEpoch: savedPlan!.capsuleExecutionAuthorityEpoch },
+  });
+  const afterApplyA = (await deployStore.getCapsule(appA))!;
+  expect(afterApplyA).toMatchObject({ id: appA, status: "active", currentStateGeneration: 2 });
+  const afterApplyConfigId = afterApplyA.installConfigId;
+  if (!afterApplyConfigId) throw new Error("successful Apply has no effective InstallConfig");
+  const afterApplyConfigA = await operations.capsules.getInstallConfig(afterApplyConfigId);
+  expect(afterApplyConfigA).toMatchObject({ id: afterApplyConfigId });
+  const afterApplyRunIds = (await operations.listRuns(fixture.workspace.id)).map((r) => r.id).sort();
+  expect(afterApplyRunIds).toContain(recoveredId);
+  expect(await deployStore.getCapsule(appB)).toEqual(beforeB);
+
+  const member = "tsub_owned_revision_member";
+  const memberSession = "sess_owned_revision_member";
+  const now = Date.now();
+  fixture.accountStore.saveAccount({ subject: member, email: "member@example.test", emailVerified: true, createdAt: now, updatedAt: now });
+  fixture.accountStore.saveAccountSession({ sessionId: memberSession, subject: member, createdAt: now, expiresAt: now + 60_000 });
+  const admitted = await route("POST", `/api/v1/capsules/${appA}/members`, {
+    email: "member@example.test", consent: "connections_and_code",
+  });
+  expect(admitted.status).toBe(202);
+  expect(await fixture.appAccess.resolveAppAccess(member, appA)).toMatchObject({ capsuleId: appA, role: "member" });
+  expect(await fixture.appAccess.resolveAppAccess(member, appB)).toBeUndefined();
+  expect((await route("GET", `/api/v1/runs/${recoveredId}`, undefined, undefined, memberSession)).status).toBe(200);
+  expect((await route("GET", `/api/v1/runs/${installB.planRunId}`, undefined, undefined, memberSession)).status).toBe(403);
+  const removed = await route("DELETE", `/api/v1/capsules/${appA}/members/${member}`);
+  expect(removed.status).toBe(204);
+  expect(await fixture.appAccess.resolveAppAccess(member, appA)).toBeUndefined();
+  expect((await route("GET", `/api/v1/runs/${recoveredId}`, undefined, undefined, memberSession)).status).toBe(403);
+  expect((await route("POST", `/api/v1/runs/${planRunId}/apply`, undefined, undefined, memberSession)).status).toBe(403);
+  expect((await route("POST", `/api/v1/capsules/${appA}/configuration-plans`,
+    change(bodyA.installConfigReAdoption.authorityGuard), "removed-member-config", memberSession)).status).toBe(403);
+  expect(fixture.planJobs).toHaveLength(planCalls + 1);
+  expect(fixture.applyJobs).toHaveLength(applyCalls + 1);
+
+  expect(await deployStore.getCapsule(appA)).toEqual(afterApplyA);
+  expect(await operations.capsules.getInstallConfig(afterApplyConfigId)).toEqual(afterApplyConfigA);
+  expect((await operations.listRuns(fixture.workspace.id)).map((r) => r.id).sort()).toEqual(afterApplyRunIds);
+
+  await fixture.accountStore.deleteAccountSession(SESSION);
+  expect((await route("GET", `/api/v1/runs/${recoveredId}`)).status).toBe(401);
+  expect((await route("POST", `/api/v1/runs/${planRunId}/apply`)).status).toBe(401);
+  expect((await route("POST", `/api/v1/capsules/${appB}/configuration-plans`,
+    change(bodyB.installConfigReAdoption.authorityGuard), "revoked-session-config")).status).toBe(401);
+  expect(fixture.planJobs).toHaveLength(planCalls + 1);
+  expect(fixture.applyJobs).toHaveLength(applyCalls + 1);
+  expect(await deployStore.getCapsule(appB)).toEqual(beforeB);
+  expect(await deployStore.getCapsule(appA)).toEqual(afterApplyA);
+  expect(await operations.capsules.getInstallConfig(afterApplyConfigId)).toEqual(afterApplyConfigA);
+  expect((await operations.listRuns(fixture.workspace.id)).map((r) => r.id).sort()).toEqual(afterApplyRunIds);
+});
