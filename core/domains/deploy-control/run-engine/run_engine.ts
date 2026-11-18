@@ -8297,19 +8297,73 @@ export class RunEngine {
     providerDispatched = false,
     lifecycleActionDispatched = false,
     lifecycleOutcome?: LifecycleActionOutcome,
+    initialCreate?: { readonly planRun: PlanRun; readonly plannedCapsule: Capsule | undefined },
   ): Promise<ApplyRun> {
     const failed = this.#failedApplyRunCandidate(
       running, profile.stateBackend, startedAt, eventType, error,
       providerDispatched, lifecycleActionDispatched, lifecycleOutcome,
     );
-    const persisted = await this.#persistTerminalRun(
-      "apply",
-      failed,
-      leaseToken,
+    const initialFailure = await this.#persistIndeterminateInitialCreateFailure({
+      failed, leaseToken, error, providerDispatched, initialCreate,
+    });
+    const persisted = initialFailure ?? await this.#persistTerminalRun(
+      "apply", failed, leaseToken,
     );
+    if (initialFailure?.won) await this.#afterTerminalRunWon("apply", failed);
     if (!persisted.won) return persisted.run;
     await this.#recordApplyFailure(failed, startedAt, eventType, error);
     return failed;
+  }
+
+  /** Keep an initial unknown mutation recoverable without asserting an outcome. */
+  async #persistIndeterminateInitialCreateFailure(input: {
+    readonly failed: ApplyRun;
+    readonly leaseToken: string;
+    readonly error: unknown;
+    readonly providerDispatched: boolean;
+    readonly initialCreate: { readonly planRun: PlanRun; readonly plannedCapsule: Capsule | undefined } | undefined;
+  }): Promise<TerminalRunPersistResult<ApplyRun> | undefined> {
+    const { failed, error, initialCreate } = input;
+    const plan = initialCreate?.planRun;
+    const planned = initialCreate?.plannedCapsule;
+    if (!input.providerDispatched || !(error instanceof OpenTofuRunnerExecutionError) ||
+      error.reason !== "runner_mutation_indeterminate" ||
+      !plan || !planned || plan.operation !== "create" || failed.operation !== "create" ||
+      plan.baseStateGeneration !== 0 || plan.capsuleCurrentStateVersionId != null ||
+      planned.status !== "pending" || planned.currentStateGeneration !== 0 ||
+      planned.currentStateVersionId !== undefined || planned.currentOutputId !== undefined ||
+      failed.capsuleId !== planned.id || failed.workspaceId !== planned.workspaceId) return undefined;
+    let current: Capsule;
+    try {
+      current = await this.#requireCurrentPlannedCapsule(plan);
+      if (current.status !== "pending" || current.currentStateGeneration !== 0 ||
+        current.currentStateVersionId !== undefined || current.currentOutputId !== undefined ||
+        !await this.#queuedRunHasCurrentManagementAuthority({ id: failed.id, workspaceId: failed.workspaceId, kind: "apply" })) return undefined;
+    } catch {
+      // Optional projection reads must not replace or prevent the original
+      // failure's existing same-lease terminal CAS.
+      return undefined;
+    }
+    let committed: Awaited<ReturnType<OpenTofuControlStore["commitRunState"]>>;
+    try {
+      // This existing unit fences the Run lease and unchanged Capsule cursor /
+      // status. No state, Output, execution receipt or provider-failure result
+      // is invented. The Plan marker consumes this attempt, not its success.
+      committed = await this.#store.commitRunState({
+        capsulePatch: { id: planned.id, patch: { status: "error", updatedAt: new Date(failed.finishedAt!).toISOString() },
+          guard: { currentStateVersionId: undefined, status: "pending" } },
+        applyRunTerminal: failed,
+        applyRunLeaseToken: input.leaseToken,
+        planRunApplied: { ...plan, appliedApplyRunId: failed.id, updatedAt: failed.updatedAt },
+      });
+    } catch {
+      // The atomic write may have committed before its response was lost.
+      // The original terminal CAS below uses the same Run/lease and therefore
+      // adopts a terminal winner without changing its outcome or Capsule.
+      return undefined;
+    }
+    return !committed.applyRunLeaseLost && committed.capsule
+      ? { won: true, run: failed } : undefined;
   }
 
   async #recordApplyFailure(
@@ -9532,9 +9586,10 @@ export class RunEngine {
     let runningForFailure = running;
     let runnerDispatched = false;
     let ledgerCommitted = false;
+    let plannedCapsule: Capsule | undefined;
 
     try {
-      const plannedCapsule = await this.#assertApplyPreconditions(
+      plannedCapsule = await this.#assertApplyPreconditions(
         planRun,
         dispatch,
         running,
@@ -9953,6 +10008,9 @@ export class RunEngine {
         "apply.failed",
         error,
         runnerDispatched,
+        false,
+        undefined,
+        { planRun, plannedCapsule },
       );
       if (
         runnerDispatched &&
