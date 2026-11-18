@@ -1,8 +1,8 @@
 import type { TakosumiAccountsAuthProvider } from "@takosjp/takosumi-accounts-contract";
 
-import { authLanguage, authPage, escapeAuthHtml as escapeHtml } from "../../../accounts/service/src/auth-page.ts";
+import { authLanguage, authPage, authSignInTitle, escapeAuthHtml as escapeHtml, stagingSignInProduct } from "../../../accounts/service/src/auth-page.ts";
+import { AUTH_STAGING_CLIENTS, AUTH_STAGING_ISSUER as stagingIssuer } from "./staging-target.ts";
 
-const stagingIssuer = "https://auth-staging.takos.jp";
 const portalCopy = {
   en: {
     title: "Sign in",
@@ -17,7 +17,7 @@ const portalCopy = {
     provider: (label: string) => `Continue with ${label}`,
   },
   ja: {
-    title: "サインイン",
+    title: "ログイン",
     stage: "ステージング",
     notFound: "ページが見つかりません。",
     method: "このページを開き直してください。",
@@ -54,7 +54,7 @@ export async function handleStagingLoginPortal(input: {
     return portalResponse(input.request, copy.method, 405, { allow: "GET, HEAD" });
   }
 
-  let continuation: { returnTo?: string; fresh: boolean; maxAge?: string };
+  let continuation: ReturnType<typeof validateContinuation>;
   try {
     continuation = validateContinuation(url);
   } catch {
@@ -87,13 +87,13 @@ export async function handleStagingLoginPortal(input: {
       return `<li><a class="auth-button auth-provider-choice" href="${escapeHtml(target.pathname + target.search)}">${icon}<span>${escapeHtml(copy.provider(provider.label))}</span></a></li>`;
     }).join("");
     const explanation = continuation.returnTo ? (continuation.fresh ? copy.fresh : "") : copy.start;
-    return portalResponse(input.request, explanation, 200, {}, `<ul class="auth-providers">${choices}</ul>`);
+    return portalResponse(input.request, explanation, 200, {}, `<ul class="auth-providers">${choices}</ul>`, continuation.product);
   } catch {
     return portalResponse(input.request, copy.unavailable, 503);
   }
 }
 
-function validateContinuation(url: URL): { returnTo?: string; fresh: boolean; maxAge?: string } {
+function validateContinuation(url: URL): { returnTo?: string; fresh: boolean; maxAge?: string; product?: string } {
   if (url.href.length > 32 * 1024) throw new TypeError("sign-in URL exceeds the limit");
   for (const name of url.searchParams.keys()) {
     if (!["return", "prompt", "max_age"].includes(name) || url.searchParams.getAll(name).length !== 1) {
@@ -133,8 +133,14 @@ function validateContinuation(url: URL): { returnTo?: string; fresh: boolean; ma
     (authorizationMaxAge !== null && (!/^\d+$/u.test(authorizationMaxAge) || !Number.isSafeInteger(Number(authorizationMaxAge))))) {
     throw new TypeError("invalid authorization freshness");
   }
+  const client = AUTH_STAGING_CLIENTS.find(({ clientId, redirectUris }) =>
+    clientId === target.searchParams.get("client_id") &&
+    redirectUris.some((uri) => uri === target.searchParams.get("redirect_uri")),
+  );
+  const product = client ? stagingSignInProduct(client.clientId) : undefined;
   return {
     returnTo: target.pathname + target.search,
+    ...(product ? { product } : {}),
     fresh: prompt === "login" || maxAge !== null || authorizationPrompt.includes("login") || authorizationMaxAge === "0",
     ...(maxAge !== null ? { maxAge } : {}),
   };
@@ -194,11 +200,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function portalResponse(request: Request, message: string, status: number, extraHeaders: Record<string, string> = {}, choices = ""): Response {
+function portalResponse(request: Request, message: string, status: number, extraHeaders: Record<string, string> = {}, choices = "", product?: string): Response {
   const language = authLanguage(request);
   const copy = portalCopy[language];
   const nonce = crypto.randomUUID();
-  const html = authPage({ language, nonce, title: copy.title, badge: copy.stage,
+  const html = authPage({ language, nonce, title: product ? authSignInTitle(language, product) : copy.title, issuer: stagingIssuer, badge: copy.stage,
     description: message, body: choices });
   return new Response(request.method === "HEAD" ? null : html, {
     status,

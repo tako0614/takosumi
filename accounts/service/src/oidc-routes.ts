@@ -35,7 +35,7 @@ import type {
 } from "./mod.ts";
 import { readEnvVar } from "./read-env.ts";
 import type { SharedHostedSessionContext } from "./shared-account-workspace.ts";
-import { authLanguage, authPage, escapeAuthHtml } from "./auth-page.ts";
+import { authLanguage, authPage, authSignInTitle, escapeAuthHtml, stagingSignInProduct } from "./auth-page.ts";
 import { requireAccountSession } from "./account-session.ts";
 import { HOSTED_CODE_TTL_MS, HOSTED_TOKEN_TTL_SECONDS, HOSTED_REFRESH_IDLE_MS, HOSTED_REFRESH_ABSOLUTE_MS, HOSTED_OIDC_SCOPES, hostedGrantIsActive, hostedIssuerSessionId, hostedOpaqueId } from "./hosted-oidc-profile.ts";
 import { findActiveAccessToken } from "./access-token-activity.ts";
@@ -1980,18 +1980,17 @@ function hostedConsentPage(
   const nonce = base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(16)));
   const redirect = new URL(redirectUri);
   const stage = url.origin === "https://auth-staging.takos.jp";
-  const stageClientName = stage && client.clientId === "takosumi-hosted-staging-v1"
-    ? "Takosumi" : stage && client.clientId === "takoserver-console-staging-v1" ? "Takoserver" : undefined;
+  const stageClientName = stage ? stagingSignInProduct(client.clientId) : undefined;
   const name = stageClientName ?? client.displayName ?? client.clientId;
   const scopes = NATIVE_CONSENT_COPY[language].scopes;
   const permissions = scope.split(/\s+/u).filter(Boolean).map((item) =>
     `<li>${escapeAuthHtml(Object.hasOwn(scopes, item) ? scopes[item]! : item)}</li>`).join("");
-  const title = NATIVE_CONSENT_COPY[language].title(name);
-  const body = `<ul class="auth-permissions">${permissions}</ul>` +
+  const title = stageClientName ? authSignInTitle(language, stageClientName) : NATIVE_CONSENT_COPY[language].title(name);
+  const body = `<ul class="auth-permissions" aria-label="${ja ? "共有される情報" : "Information to share"}">${permissions}</ul>` +
     `<dl class="auth-context"><dt>${ja ? "戻り先" : "Returns to"}</dt><dd>${escapeAuthHtml(redirect.host)}</dd></dl>` +
     `<form method="post" action="${escapeAuthHtml(url.pathname + url.search)}"><input type="hidden" name="consent_transaction" value="${escapeAuthHtml(transaction)}">` +
     `<div class="actions"><button class="auth-button auth-button--primary" type="submit" name="approve" value="yes">${ja ? "許可して続ける" : "Allow and continue"}</button></div></form>`;
-  return new Response(authPage({ language, nonce, variant: "consent", title, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
+  return new Response(authPage({ language, nonce, issuer: url.origin, title, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "content-language": language,
@@ -2264,7 +2263,7 @@ function nativeConsentPage(input: {
     `<p class="warn">${escape(copy.warning)}</p>` +
     `<form method="post" action="${escape(input.url.pathname + input.url.search)}"><input type="hidden" name="consent_transaction" value="${escape(input.transaction)}">` +
     `<div class="actions"><button class="auth-button" type="submit" name="decision" value="deny">${escape(copy.deny)}</button><button class="auth-button auth-button--primary" type="submit" name="decision" value="approve">${escape(copy.approve)}</button></div></form>`;
-  return new Response(authPage({ language, nonce, variant: "consent", title: copy.title(client), body }), {
+  return new Response(authPage({ language, nonce, issuer: input.issuer, title: copy.title(client), body }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
