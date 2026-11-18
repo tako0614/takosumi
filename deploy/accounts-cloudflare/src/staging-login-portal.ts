@@ -249,12 +249,12 @@ function portalResponse(
 
 const passwordCopy = {
   en: {
-    title: "Sign in with a password", email: "Email address", password: "Password", noScript: "Enable JavaScript to sign in with a password.",
+    title: "Sign in with a password", username: "Username", password: "Password", noScript: "Enable JavaScript to sign in with a password.",
     failed: "We couldn't complete this request. Check your details and try again.", credentials: "We couldn't verify these details. Check them and try again.",
     rateLimited: "Too many attempts. Wait a while before trying again.", unavailable: "Password sign-in is currently unavailable. Try again later or use another method.",
   },
   ja: {
-    title: "パスワードでサインイン", email: "メールアドレス", password: "パスワード", noScript: "パスワードでサインインするにはJavaScriptを有効にしてください。",
+    title: "パスワードでログイン", username: "ユーザー名", password: "パスワード", noScript: "パスワードでログインするにはJavaScriptを有効にしてください。",
     failed: "操作を完了できませんでした。入力内容を確かめて、もう一度お試しください。", credentials: "入力内容を確認できませんでした。内容を確かめて、もう一度お試しください。",
     rateLimited: "試行回数が多くなっています。しばらく待ってから、もう一度お試しください。", unavailable: "現在、パスワードによるサインインは利用できません。時間をおくか、別の方法をお使いください。",
   },
@@ -273,7 +273,7 @@ function passwordForm(language: "ja" | "en", nonce: string, returnTo: string): s
 </style>
 <section class="auth-password" id="password-root" data-return-path="${h(returnTo)}">
 <form id="password-form" method="post" action="/api/v1/auth/password/login" aria-label="${h(copy.title)}"><fieldset id="password-fields">
-<label>${h(copy.email)}<input name="email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+<label>${h(copy.username)}<input name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
 <label>${h(copy.password)}<input name="password" type="password" autocomplete="current-password" required></label>
 <button class="auth-button auth-button--primary" type="submit">${h(copy.title)}</button>
 </fieldset></form><p class="warn" id="password-error" role="alert"></p><noscript><p>${h(copy.noScript)}</p></noscript></section>
@@ -298,7 +298,7 @@ form.addEventListener("submit", async (event) => {
   try {
     const response = await fetch("/api/v1/auth/password/login", { method: "POST", credentials: "same-origin", redirect: "error", signal: controller.signal,
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ email: String(values.get("email") || "").trim(), password: String(values.get("password") || "") }) });
+      body: JSON.stringify({ username: String(values.get("username") || "").trim(), password: String(values.get("password") || "") }) });
     if (!response.ok) { error.textContent = response.status === 429 ? copy.rateLimited : response.status === 401 || response.status === 403 ? copy.credentials : response.status === 404 || response.status === 503 ? copy.unavailable : copy.failed; return; }
     const result = await response.json();
     if (!result || typeof result.subject !== "string" || !result.subject) throw new Error("invalid response");

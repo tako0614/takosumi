@@ -20,6 +20,7 @@ export default function SignInMethodsCard() {
     if (busy()) return;
     const form = event.currentTarget;
     const fields = new FormData(form);
+    const username = String(fields.get("username") ?? "").trim();
     const password = String(fields.get("password") ?? "");
     const currentPassword = String(fields.get("currentPassword") ?? "");
     setError(undefined);
@@ -28,7 +29,7 @@ export default function SignInMethodsCard() {
     if (password !== fields.get("confirmPassword")) { setError("password.error.confirm"); return; }
     setBusy(true);
     try {
-      const result = await setAccountPassword({ password, ...(currentPassword ? { currentPassword } : {}) }, controller.signal);
+      const result = await setAccountPassword({ password, ...(username ? { username } : {}), ...(currentPassword ? { currentPassword } : {}) }, controller.signal);
       if (controller.signal.aborted) return;
       form.reset();
       setSaved(true);
@@ -54,12 +55,20 @@ export default function SignInMethodsCard() {
         <Show when={methods.loading && !data()}><p role="status">{t("common.loading")}</p></Show>
         <Show when={data()}>
           {(method) => <>
-            <KVList items={[{ label: t("password.email"), value: method().email ?? t("account.profile.notSet") }]} />
+            <Show when={method().username}>
+              {(username) => <KVList items={[{ label: t("password.username"), value: username() }]} />}
+            </Show>
             <Show when={method().passwordEnabled} fallback={<p class="muted">{t("password.methods.unavailable")}</p>}>
               <Show when={method().canSetPassword} fallback={<p class="muted">
-                {t(method().email ? "password.methods.freshSession" : "password.methods.emailRequired")} <Show when={method().email}><a href={signInHref}>{t("password.methods.reauthenticate")}</a></Show>
+                {t(method().eligible ? "password.methods.freshSession" : "password.methods.linkRequired")} <Show when={method().eligible}><a href={signInHref}>{t("password.methods.reauthenticate")}</a></Show>
               </p>}>
                 <form class="password-form" onSubmit={(event) => void submit(event)} aria-label={t(method().hasPassword ? "password.methods.change" : "password.methods.set")}>
+                  <Show when={!method().hasPassword}>
+                    <FormField label={t("password.username")} required>
+                      <Input aria-label={t("password.username")} name="username" autocomplete="username" autocapitalize="none"
+                        spellcheck={false} pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,31}" title={t("password.usernameHint")} required disabled={busy()} />
+                    </FormField>
+                  </Show>
                   <Show when={method().hasPassword}>
                     <FormField label={t("password.currentPassword")}>
                       <Input aria-label={t("password.currentPassword")} name="currentPassword" type="password" autocomplete="current-password" disabled={busy()} />

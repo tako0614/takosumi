@@ -10,6 +10,7 @@ import {
 const documents = "takosumi_accounts_documents";
 const indexes = "takosumi_accounts_indexes";
 const credentials = "password_credentials";
+const usernameIndex = "password_credentials_by_username";
 const attempts = "password_auth_attempts";
 const expiryIndex = "password_auth_attempts_expiry";
 
@@ -17,7 +18,7 @@ const expiryIndex = "password_auth_attempts_expiry";
 export class D1PasswordAuthStore implements PasswordAuthStore {
   constructor(readonly db: D1Database, readonly initialize: () => Promise<void>, readonly hashSessionId: (value: string) => Promise<string>) {}
 
-  private async authorization(subject: TakosumiSubject, authorization: PasswordWriteAuthorization): Promise<{ sql: string; args: (string | number)[] }> {
+  private async authorization(subject: TakosumiSubject, authorization: PasswordWriteAuthorization): Promise<{ sql: string; args: (string | number | null)[] }> {
     assertPasswordAuthorization(authorization);
     const fence = `NOT EXISTS(SELECT 1 FROM ${documents} WHERE bucket='canonical_accounts' AND key=?)
       AND NOT EXISTS(SELECT 1 FROM ${documents} l WHERE l.bucket='identity_merge_locks' AND l.key=?
@@ -35,16 +36,25 @@ export class D1PasswordAuthStore implements PasswordAuthStore {
             WHERE r.bucket='hosted_oidc_revoked_sessions' AND r.key=COALESCE(json_extract(s.document,'$.issuerSessionId'),?))))
         AND COALESCE((SELECT json_extract(g.document,'$.generation') FROM ${documents} g WHERE g.bucket='authentication_generations' AND g.key=?),0)=?)
         AND ${fence}
-        AND EXISTS(SELECT 1 FROM ${documents} a WHERE a.bucket='accounts' AND a.key=?
+        AND (? IS NULL OR (EXISTS(SELECT 1 FROM ${documents} a WHERE a.bucket='accounts' AND a.key=?
           AND json_extract(a.document,'$.emailVerified')=1 AND lower(trim(json_extract(a.document,'$.email')))=?)
         AND NOT EXISTS(SELECT 1 FROM ${indexes} e WHERE e.index_name='accounts_by_verified_email'
-          AND e.index_key=? AND e.bucket='accounts' AND e.document_key<>?)
+          AND e.index_key=? AND e.bucket='accounts' AND e.document_key<>?)))
         AND ?>=?`,
       args: [sessionHash, subject, authorization.now, authorization.now, authorization.generation,
         authorization.now, fallbackAnchor, subject, authorization.generation, subject, subject,
-        subject, authorization.verifiedEmail, authorization.verifiedEmail, subject,
+        authorization.verifiedEmail ?? null, subject, authorization.verifiedEmail ?? null, authorization.verifiedEmail ?? null, subject,
         authorization.freshUntil ?? Number.MAX_SAFE_INTEGER, authorization.now],
     };
+  }
+
+  async findByUsername(username: string): Promise<PasswordCredential | undefined> {
+    await this.initialize();
+    const result = await this.db.prepare(`SELECT d.document FROM ${indexes} i
+      JOIN ${documents} d ON d.bucket=i.bucket AND d.key=i.document_key
+      WHERE i.index_name=? AND i.index_key=? AND i.bucket=? LIMIT 2`)
+      .bind(usernameIndex, username, credentials).all<{ document: string }>();
+    return result.results?.length === 1 ? passwordCredential(JSON.parse(result.results[0]!.document)) : undefined;
   }
 
   async findBySubject(subject: TakosumiSubject): Promise<PasswordCredential | undefined> {
@@ -59,11 +69,19 @@ export class D1PasswordAuthStore implements PasswordAuthStore {
     if (next.version !== 1) return false;
     const auth = await this.authorization(next.subject, authorization);
     await this.initialize();
-    const result = await this.db.prepare(`INSERT INTO ${documents}(bucket,key,document,updated_at)
-      SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM ${documents} WHERE bucket='accounts' AND key=?)
-      AND ${auth.sql} ON CONFLICT(bucket,key) DO NOTHING`)
-      .bind(credentials, next.subject, JSON.stringify(next), authorization.now, next.subject, ...auth.args).run();
-    return result.meta?.changes === 1;
+    const mutation = crypto.randomUUID();
+    const result = await this.db.batch<{ key: string }>([
+      this.db.prepare(`INSERT INTO ${documents}(bucket,key,document,updated_at)
+        SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM ${documents} WHERE bucket='accounts' AND key=?)
+        AND NOT EXISTS(SELECT 1 FROM ${indexes} WHERE index_name=? AND index_key=? AND bucket=?)
+        AND ${auth.sql} ON CONFLICT(bucket,key) DO NOTHING RETURNING key`)
+        .bind(credentials, next.subject, JSON.stringify({ ...next, mutation }), authorization.now,
+          next.subject, usernameIndex, next.username, credentials, ...auth.args),
+      this.db.prepare(`INSERT INTO ${indexes}(index_name,index_key,bucket,document_key,sort_key)
+        SELECT ?,?,bucket,key,0 FROM ${documents} WHERE bucket=? AND key=? AND json_extract(document,'$.mutation')=?`)
+        .bind(usernameIndex, next.username, credentials, next.subject, mutation),
+    ]);
+    return result[0]?.meta?.changes === 1;
   }
 
   async replace(expectedVersion: number, credential: PasswordCredential, now: number, authorization: PasswordWriteAuthorization): Promise<boolean> {
@@ -78,11 +96,12 @@ export class D1PasswordAuthStore implements PasswordAuthStore {
     const result = await this.db.batch<{ key: string }>([
       this.db.prepare(`UPDATE ${documents} SET document=?,updated_at=? WHERE bucket=? AND key=?
         AND json_extract(document,'$.subject')=? AND json_extract(document,'$.version')=?
+        AND json_extract(document,'$.username')=?
         AND EXISTS(SELECT 1 FROM ${documents} WHERE bucket='accounts' AND key=?)
         AND NOT EXISTS(SELECT 1 FROM ${documents} WHERE bucket='financial_source_parents'
           AND json_extract(document,'$.scope.kind')='account-generation' AND json_extract(document,'$.scope.subject')=?)
         AND ${auth.sql} RETURNING key`)
-        .bind(JSON.stringify({ ...next, mutation }), now, credentials, next.subject, next.subject, expectedVersion, next.subject, next.subject, ...auth.args),
+        .bind(JSON.stringify({ ...next, mutation }), now, credentials, next.subject, next.subject, expectedVersion, next.username, next.subject, next.subject, ...auth.args),
       this.db.prepare(`INSERT INTO ${documents}(bucket,key,document,updated_at)
         SELECT 'authentication_generations',?,?,? WHERE ${guard}
         ON CONFLICT(bucket,key) DO UPDATE SET document=json_set(document,'$.generation',json_extract(document,'$.generation')+1),updated_at=excluded.updated_at`)

@@ -37,7 +37,7 @@ export default function PasswordSignIn(props: {
     setError(undefined);
     try {
       // A session refresh failure never repeats the credential mutation.
-      const value = result() ?? await authenticateWithPassword(String(fields.get("email") ?? ""), String(fields.get("password") ?? ""), controller.signal);
+      const value = result() ?? await authenticateWithPassword(String(fields.get("username") ?? ""), String(fields.get("password") ?? ""), controller.signal);
       if (controller.signal.aborted) return;
       form.reset();
       setResult(value);
@@ -52,8 +52,8 @@ export default function PasswordSignIn(props: {
   return <form class="password-form password-sign-in" onSubmit={(event) => void submit(event)} aria-label={t("password.login")}>
     <h2>{t("password.login")}</h2>
     <Show when={!result()}>
-      <FormField label={t("password.email")} required>
-        <Input aria-label={t("password.email")} name="email" type="email" autocomplete="username" autocapitalize="none" spellcheck={false} required disabled={busy()} />
+      <FormField label={t("password.username")} required>
+        <Input aria-label={t("password.username")} name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck={false} required disabled={busy()} />
       </FormField>
       <FormField label={t("password.password")} required>
         <Input aria-label={t("password.password")} name="password" type="password" autocomplete="current-password" required disabled={busy()} />

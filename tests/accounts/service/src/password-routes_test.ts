@@ -9,6 +9,7 @@ const issuer = "http://localhost:8787";
 const login = "/api/v1/auth/password/login";
 const methods = "/api/v1/account/sign-in-methods";
 const password = "stapled green mountains in winter";
+const username = "existing-user";
 const replacement = "a blue telescope in the courtyard";
 
 function client(handler: AccountsHandler, base = issuer) {
@@ -21,11 +22,11 @@ function client(handler: AccountsHandler, base = issuer) {
 
 const cookieOf = (response: Response) => response.headers.get("set-cookie")!.split(";")[0]!;
 
-function seed(store: InMemoryAccountsStore, options: { age?: number; verified?: boolean; email?: string } = {}) {
+function seed(store: InMemoryAccountsStore, options: { age?: number; verified?: boolean; email?: string; noEmail?: boolean } = {}) {
   const subject = "tsub_existing_oauth";
   const now = Date.now();
   const account = {
-    subject, email: options.email ?? "allowed@example.test", emailVerified: options.verified ?? true,
+    subject, ...(options.noEmail ? {} : { email: options.email ?? "allowed@example.test", emailVerified: options.verified ?? true }),
     displayName: "Existing", createdAt: now, updatedAt: now,
   } as const;
   store.saveAccount(account);
@@ -43,7 +44,7 @@ function seed(store: InMemoryAccountsStore, options: { age?: number; verified?: 
 test("password login is opt-in; no public sign-up or recovery is exposed", async () => {
   const store = new InMemoryAccountsStore();
   const disabled = client(await createEphemeralAccountsHandler({ issuer, store }));
-  expect((await disabled(login, { email: "user@example.test", password })).status).toBe(404);
+  expect((await disabled(login, { username, password })).status).toBe(404);
   expect(await (await disabled("/api/v1/auth/providers")).json()).not.toHaveProperty("password");
   const enabled = client(await createEphemeralAccountsHandler({ issuer, store, passwordAuthMode: "login" }));
   expect(await (await enabled("/api/v1/auth/providers")).json()).toMatchObject({ password: { enabled: true } });
@@ -53,7 +54,7 @@ test("password login is opt-in; no public sign-up or recovery is exposed", async
   const insecure = "http://example.test";
   const other = client(await createEphemeralAccountsHandler({ issuer: insecure, store, passwordAuthMode: "login" }), insecure);
   expect(await (await other("/api/v1/auth/providers")).json()).not.toHaveProperty("password");
-  expect((await other(login, { email: "user@example.test", password })).status).toBe(404);
+  expect((await other(login, { username, password })).status).toBe(404);
 });
 
 test("OAuth and password sign in to the same account; a change revokes prior sessions", async () => {
@@ -64,17 +65,17 @@ test("OAuth and password sign in to the same account; a change revokes prior ses
   }));
   const { account, subject, cookie } = seed(store);
   expect(await (await request(methods, undefined, cookie)).json()).toEqual({
-    passwordEnabled: true, email: account.email, hasPassword: false, canSetPassword: true,
+    passwordEnabled: true, username: null, eligible: true, hasPassword: false, canSetPassword: true,
   });
   expect((await request(methods + "/password", { password }, cookie, "https://other.example.test")).status).toBe(403);
   expect((await request(methods + "/password", { password })).status).toBe(401);
-  const added = await request(methods + "/password", { password, email: "other@example.test" }, cookie);
+  const added = await request(methods + "/password", { password, username, email: "other@example.test" }, cookie);
   expect(added.status).toBe(200);
   expect(await added.json()).toEqual({ subject });
   expect(await store.findAccount(subject)).toEqual(account);
   expect((await store.passwordAuth.findBySubject(subject))?.passwordHash).toMatch(/^argon2id:v19:m19456:t2:p1:[a-f0-9]{32}:[a-f0-9]{64}$/u);
-  expect((await request(login, { email: "other@example.test", password })).status).toBe(401);
-  const signedIn = await request(login, { email: "ALLOWED@example.test", password });
+  expect((await request(login, { username: "someone-else", password })).status).toBe(401);
+  const signedIn = await request(login, { username: "EXISTING-USER", password });
   expect(signedIn.status).toBe(200);
   expect(signedIn.headers.get("set-cookie")).toContain("HttpOnly");
   expect(signedIn.headers.get("cache-control")).toBe("no-store");
@@ -82,35 +83,31 @@ test("OAuth and password sign in to the same account; a change revokes prior ses
   const changed = await request(methods + "/password", { currentPassword: password, password: replacement }, cookieOf(added));
   expect(changed.status).toBe(200);
   expect((await request(methods, undefined, cookieOf(signedIn))).status).toBe(401);
-  expect((await request(login, { email: account.email, password })).status).toBe(401);
-  expect(await (await request(login, { email: account.email, password: replacement })).json()).toEqual({ subject });
+  expect((await request(login, { username, password })).status).toBe(401);
+  expect(await (await request(login, { username, password: replacement })).json()).toEqual({ subject });
   expect((await request(methods + "/password", { currentPassword: replacement, password }, cookieOf(changed))).status).toBe(200);
 });
 
-test("an old OAuth session or an unverified or ambiguous address cannot add a password", async () => {
-  for (const mode of ["stale", "unverified", "duplicate"] as const) {
+test("existing OAuth accounts can enroll without email while stale sessions still need fresh proof", async () => {
+  for (const age of [0, 600_000]) {
     const store = new InMemoryAccountsStore();
     const request = client(await createEphemeralAccountsHandler({ issuer, store, passwordAuthMode: "login" }));
-    const { account, cookie, subject } = seed(store, {
-      age: mode === "stale" ? 600_000 : 0,
-      verified: mode !== "unverified",
-    });
-    if (mode === "duplicate") store.saveAccount({ ...account, subject: "tsub_ambiguous" });
-    expect((await request(methods + "/password", { password }, cookie)).status).toBe(403);
-    expect(await store.passwordAuth.findBySubject(subject)).toBeUndefined();
-    expect((await request(login, { email: account.email, password })).status).toBe(401);
+    const { cookie, subject } = seed(store, { age, noEmail: true });
+    expect((await request(methods + "/password", { password, username }, cookie)).status).toBe(age ? 403 : 200);
+    expect((await request(login, { username, password })).status).toBe(age ? 401 : 200);
+    expect((await store.passwordAuth.findBySubject(subject))?.username).toBe(age ? undefined : username);
   }
 });
 
-test("password attempts share a durable case-insensitive email limit across handler instances", async () => {
+test("password attempts share a durable case-insensitive username limit across handler instances", async () => {
   const store = new InMemoryAccountsStore();
   const a = client(await createEphemeralAccountsHandler({ issuer, store, passwordAuthMode: "login" }));
   const b = client(await createEphemeralAccountsHandler({ issuer, store, passwordAuthMode: "login" }));
   for (let i = 0; i < 12; i++) {
-    const input = { email: i % 2 ? "UNKNOWN@EXAMPLE.TEST" : "unknown@example.test", password: "short" };
+    const input = { username: i % 2 ? "UNKNOWN-USER" : "unknown-user", password: "short" };
     expect((await (i % 2 ? a : b)(login, input)).status).toBe(401);
   }
-  const denied = await b(login, { email: "unknown@example.test", password });
+  const denied = await b(login, { username: "unknown-user", password });
   expect(denied.status).toBe(429);
   expect(denied.headers.has("retry-after")).toBe(true);
 });
@@ -130,9 +127,9 @@ test("the Worker browser bundle can set and verify a password natively", async (
     body: JSON.stringify(data),
   });
   try {
-    const set = await call(methods + "/password", { password }, "takosumi_session=sess_worker_fixture");
+    const set = await call(methods + "/password", { username, password }, "takosumi_session=sess_worker_fixture");
     expect(set.status).toBe(200);
-    const signed = await call(login, { email: "worker-fixture@example.test", password });
+    const signed = await call(login, { username, password });
     expect(signed.status).toBe(200);
     expect(await signed.json()).toEqual({ subject: "tsub_worker_password_fixture" });
   } finally {

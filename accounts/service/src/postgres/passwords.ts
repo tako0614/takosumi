@@ -10,7 +10,7 @@ import { runQuery, type PostgresQueryClient } from "./internal.ts";
 const credentials = "accounts_v1.password_credentials";
 const attempts = "accounts_v1.password_auth_attempts";
 const identities = "accounts_v1.hosted_identity_records";
-const columns = `subject,password_hash AS "passwordHash",version`;
+const columns = `subject,username,password_hash AS "passwordHash",version`;
 const subjectFence = `NOT EXISTS(SELECT 1 FROM ${identities} WHERE bucket='canonical_accounts' AND key=$2)
   AND NOT EXISTS(SELECT 1 FROM ${identities} l WHERE l.bucket='identity_merge_locks' AND l.key=$2
     AND NOT EXISTS(SELECT 1 FROM ${identities} o WHERE o.bucket='identity_merge_operations'
@@ -24,7 +24,7 @@ export class PostgresPasswordAuthStore implements PasswordAuthStore {
     const bind = (value: unknown) => { args.push(value); return `$${args.length}`; };
     const session = bind(await hashSessionId(authorization.sessionId));
     const owner = bind(subject), now = bind(authorization.now), generation = bind(authorization.generation);
-    const email = bind(authorization.verifiedEmail);
+    const email = bind(authorization.verifiedEmail ?? null);
     const freshUntil = bind(authorization.freshUntil ?? Number.MAX_SAFE_INTEGER);
     // Lock the authorizing row so a concurrent logout/reset cannot invalidate
     // it between the final check and this write. Competing reset deadlocks
@@ -35,9 +35,9 @@ export class PostgresPasswordAuthStore implements PasswordAuthStore {
     return `authorized AS MATERIALIZED(SELECT s.session_id FROM accounts_v1.account_sessions s
       JOIN accounts_v1.accounts a ON a.subject=s.subject
       WHERE s.session_id=${session} AND s.subject=${owner} AND s.expires_at>to_timestamp(${now}/1000.0)
-      AND a.email_verified IS TRUE AND lower(btrim(a.email))=${email}
+      AND (${email}::text IS NULL OR (a.email_verified IS TRUE AND lower(btrim(a.email))=${email}
       AND NOT EXISTS(SELECT 1 FROM accounts_v1.accounts other WHERE other.email_verified IS TRUE
-        AND lower(btrim(other.email))=${email} AND other.subject<>${owner})
+        AND lower(btrim(other.email))=${email} AND other.subject<>${owner})))
       AND ${freshUntil}::bigint>=${now}
       AND (s.hosted_metadata->>'absoluteExpiresAt' IS NULL OR (s.hosted_metadata->>'absoluteExpiresAt')::bigint>${now})
       AND COALESCE((s.hosted_metadata->>'identityGeneration')::bigint,0)=${generation}
@@ -49,6 +49,12 @@ export class PostgresPasswordAuthStore implements PasswordAuthStore {
           AND o.key=l.document->>'operationId' AND o.document->>'status'='active')) FOR UPDATE OF s,a)`;
   }
 
+  async findByUsername(username: string): Promise<PasswordCredential | undefined> {
+    const record = (await runQuery<PasswordCredential>(this.client,
+      `SELECT ${columns} FROM ${credentials} WHERE username=$1`, [username])).rows[0];
+    return record ? passwordCredential({ ...record, version: Number(record.version) }) : undefined;
+  }
+
   async findBySubject(subject: TakosumiSubject): Promise<PasswordCredential | undefined> {
     const record = (await runQuery<PasswordCredential>(this.client,
       `SELECT ${columns} FROM ${credentials} WHERE subject=$1`, [subject])).rows[0];
@@ -58,14 +64,14 @@ export class PostgresPasswordAuthStore implements PasswordAuthStore {
   async create(credential: PasswordCredential, authorization: PasswordWriteAuthorization): Promise<boolean> {
     const next = passwordCredential(credential);
     if (next.version !== 1) return false;
-    const args: unknown[] = [next.passwordHash, next.subject, next.version];
+    const args: unknown[] = [next.passwordHash, next.subject, next.version, next.username];
     const auth = await this.authorization(next.subject, authorization, args);
     try {
       return (await runQuery(this.client, `WITH ${auth} INSERT INTO ${credentials}
-        (subject,password_hash,version) SELECT $2,$1,$3
+        (subject,password_hash,version,username) SELECT $2,$1,$3,$4
         WHERE EXISTS(SELECT 1 FROM accounts_v1.accounts WHERE subject=$2)
         AND EXISTS(SELECT 1 FROM authorized) AND ${subjectFence}
-        ON CONFLICT(subject) DO NOTHING RETURNING subject`, args)).rows.length === 1;
+        ON CONFLICT DO NOTHING RETURNING subject`, args)).rows.length === 1;
     } catch (error) {
       if ((error as { code?: string }).code === "40P01") return false;
       throw error;
@@ -74,7 +80,7 @@ export class PostgresPasswordAuthStore implements PasswordAuthStore {
 
   async replace(expectedVersion: number, credential: PasswordCredential, now: number, authorization: PasswordWriteAuthorization): Promise<boolean> {
     const next = passwordReplacement(expectedVersion, credential, now);
-    const args: unknown[] = [next.passwordHash, next.subject, next.version, expectedVersion, now];
+    const args: unknown[] = [next.passwordHash, next.subject, next.version, expectedVersion, now, next.username];
     const auth = await this.authorization(next.subject, authorization, args);
     const revokeTables = ["account_sessions", "authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens"];
     const revocations = revokeTables.map((table, index) => `revoked${index} AS (
@@ -86,7 +92,7 @@ export class PostgresPasswordAuthStore implements PasswordAuthStore {
         WHERE bucket='authentication_generations' AND key=$2),0) AS generation),
       changed AS (
       UPDATE ${credentials} SET password_hash=$1,version=$3
-      WHERE subject=$2 AND version=$4 AND ${subjectFence}
+      WHERE subject=$2 AND version=$4 AND username=$6 AND ${subjectFence}
       AND NOT EXISTS(SELECT 1 FROM ${identities} WHERE bucket='financial_source_parents'
         AND document->'scope'->>'kind'='account-generation' AND document->'scope'->>'subject'=$2)
       AND EXISTS(SELECT 1 FROM authorized) RETURNING subject),

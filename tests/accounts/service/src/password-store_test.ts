@@ -23,7 +23,7 @@ function account(subject = OWNER): TakosumiAccountRecord {
     displayName: "Existing profile", createdAt: 1_000, updatedAt: 1_000 };
 }
 function credential(overrides: Partial<PasswordCredential> = {}): PasswordCredential {
-  return { subject: OWNER, passwordHash: "fixture-password-verifier", version: 1, ...overrides };
+  return { subject: OWNER, username: "fixture-owner", passwordHash: "fixture-password-verifier", version: 1, ...overrides };
 }
 
 type Kind = "memory" | "d1" | "postgres";
@@ -107,6 +107,21 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
         const copy = (await f.auth.findBySubject(OWNER))!;
         copy.passwordHash = "cannot-mutate-store";
         expect((await f.auth.findBySubject(OWNER))!.passwordHash).not.toBe(copy.passwordHash);
+      } finally { await f.close(); }
+    });
+
+    test("distinct accounts cannot claim the same username concurrently", async () => {
+      const f = await fixture(kind);
+      try {
+        await f.store.saveAccount(account());
+        await f.store.saveAccount(account(OTHER));
+        const owner = await session(f.store);
+        const other = await session(f.store, OTHER);
+        const first = credential();
+        const second = credential({ subject: OTHER });
+        const claims = await Promise.all([f.auth.create(first, owner), f.peer.create(second, other)]);
+        expect(claims.filter(Boolean)).toHaveLength(1);
+        expect(await f.peer.findByUsername(first.username)).toEqual(claims[0] ? first : second);
       } finally { await f.close(); }
     });
 

@@ -45,7 +45,7 @@ async function fixture(backend: InMemoryAccountsStore) {
   const changePassword = async (cookie: string, password: string, currentPassword?: string) => {
     const response = await handler(new Request(`${issuer}/api/v1/account/sign-in-methods/password`, {
       method: "POST", headers: { cookie, "content-type": "application/json", origin: issuer },
-      body: JSON.stringify({ password, currentPassword }),
+      body: JSON.stringify({ username: "verified-user", password, currentPassword }),
     }));
     expect(response.status).toBe(200);
     return response.headers.get("set-cookie")!.split(";")[0]!;

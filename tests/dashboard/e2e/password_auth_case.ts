@@ -3,7 +3,7 @@ import type { DashboardE2EMode } from "./traffic-policy.ts";
 import { handleStagingLoginPortal } from "../../../deploy/accounts-cloudflare/src/staging-login-portal.ts";
 
 const password = "a fixture password phrase";
-const email = "person@example.test";
+const username = "person-fixture";
 
 async function passwordSignInFixture(page: Page) {
   let authenticated = false;
@@ -33,13 +33,13 @@ export function registerPasswordAuthCases(mode: DashboardE2EMode) {
       await page.goto("/sign-in?return_to=%2Faccount%3Ffrom%3Dpassword%23profile");
       await expect(page.locator(".sign-in-notice")).toHaveCount(0);
       const form = page.getByRole("form", { name: "Sign in with a password" });
-      await form.getByLabel("Email address", { exact: true }).fill(email);
+      await form.getByLabel("Username", { exact: true }).fill(username);
       await form.getByLabel("Password", { exact: true }).fill(password);
       await expect(page.getByRole("button", { name: "Create an account", exact: true })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Forgot your password?", exact: true })).toHaveCount(0);
       await form.getByRole("button", { name: "Sign in with a password" }).click();
       await expect(page).toHaveURL(/\/account\?from=password#profile$/u);
-      expect(bodies).toEqual([{ email, password }]);
+      expect(bodies).toEqual([{ username, password }]);
     });
 
     test("login errors stay generic and are retried only by an explicit submit", async ({ page }) => {
@@ -54,7 +54,7 @@ export function registerPasswordAuthCases(mode: DashboardE2EMode) {
       });
       await page.goto("/sign-in?return=%2Faccount");
       const form = page.getByRole("form", { name: "Sign in with a password" });
-      await form.getByLabel("Email address", { exact: true }).fill(email);
+      await form.getByLabel("Username", { exact: true }).fill(username);
       await form.getByLabel("Password", { exact: true }).fill(password);
       const submit = form.getByRole("button", { name: "Sign in with a password" });
       await submit.click();
@@ -76,7 +76,7 @@ export function registerPasswordAuthCases(mode: DashboardE2EMode) {
       const writes: unknown[] = [];
       await page.route(/\/api\/v1\/account\/sign-in-methods(?:\/[^/?]+)?(?:\?.*)?$/u, (route) => {
         if (route.request().method() === "GET") return route.fulfill({ json: {
-          email, hasPassword, passwordEnabled: true, canSetPassword: true,
+          username: hasPassword ? username : null, eligible: true, hasPassword, passwordEnabled: true, canSetPassword: true,
         } });
         const body = route.request().postDataJSON();
         writes.push(body);
@@ -88,6 +88,7 @@ export function registerPasswordAuthCases(mode: DashboardE2EMode) {
       });
       await page.goto("/account");
       const first = page.getByRole("form", { name: "Set a password" });
+      await first.getByLabel("Username", { exact: true }).fill(username);
       await first.getByLabel("New password", { exact: true }).fill(password);
       await first.getByLabel("Confirm new password").fill(password);
       await first.getByRole("button", { name: "Set a password" }).click();
@@ -103,7 +104,7 @@ export function registerPasswordAuthCases(mode: DashboardE2EMode) {
       await change.getByLabel("Current password", { exact: true }).fill(password);
       await change.getByRole("button", { name: "Change password" }).click();
       await expect(page.getByRole("status").filter({ hasText: "Your sign-in settings have been updated." })).toBeVisible();
-      expect(writes).toEqual([{ password }, { password, currentPassword: "wrong" }, { password, currentPassword: password }]);
+      expect(writes).toEqual([{ username, password }, { password, currentPassword: "wrong" }, { password, currentPassword: password }]);
     });
 
     const productReturn = "/oauth/authorize?client_id=takosumi-hosted-staging-v1&redirect_uri=https%3A%2F%2Fapp-staging.takosumi.com%2Fauth%2Foidc%2Fcallback&state=original&nonce=original";
@@ -138,12 +139,12 @@ export function registerPasswordAuthCases(mode: DashboardE2EMode) {
         await expect(page.getByRole("link", { name: "Continue with GitHub" })).toBeInViewport();
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
         const form = page.getByRole("form", { name: "Sign in with a password" });
-        await form.getByLabel("Email address", { exact: true }).fill(email);
+        await form.getByLabel("Username", { exact: true }).fill(username);
         await form.getByLabel("Password", { exact: true }).fill(password);
         await form.getByRole("button", { name: "Sign in with a password" }).click();
         await expect(page.getByRole("heading", { name: "Sign-in continued" })).toBeVisible();
         expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(destination);
-        expect(bodies).toEqual([{ email, password }]);
+        expect(bodies).toEqual([{ username, password }]);
       });
     }
   });

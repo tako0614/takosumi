@@ -108,13 +108,15 @@ schema/fence readiness, actual issuer/RP OIDC verification, or staging E2E.
 
 ## Existing-account password sign-in
 
-Takosumi Accounts can optionally accept a verified email address and password
-for an existing OAuth account. A signed-in user sets the password under
+Takosumi Accounts can optionally accept a username and password
+for an existing OAuth account. A signed-in user chooses a username and sets the password under
 **Sign-in methods**. The address must identify exactly one verified account
 on that issuer, and the password does not create or move its subject,
 Workspaces or identity bindings. Users who forget a password can sign in again
 with their existing OAuth provider and set another one. This feature has no
-registration or recovery-by-email endpoint.
+registration or recovery-by-email endpoint. Usernames are unique on the issuer,
+case-insensitive and fixed once claimed. They use 3–32 ASCII letters, digits,
+dots, underscores or hyphens, starting with a letter or digit.
 
 Set `TAKOSUMI_ACCOUNTS_PASSWORD_AUTH=login` on the Accounts issuer to enable it.
 The default is `disabled`. Outside a local loopback development issuer, use
@@ -125,11 +127,11 @@ existing passwords. A client that consumes an issuer uses that issuer's
 existing sign-in redirect; for the dedicated staging issuer its management
 page is `/account` on the issuer origin.
 
-Password attempts are limited by the issuer, normalized email input and
+Password attempts are limited by the issuer, normalized username and
 trusted peer address when the runtime supplies one. A self-hosted reverse
 proxy shares its peer bucket; it should also enforce its own per-client
-limit at ingress. The feature retains the issuer email allowlist and does not
-admit ambiguous or unverified email addresses. A password change invalidates
+limit at ingress. If an issuer sets an email allowlist, account admission still applies that
+policy to both OAuth and username sign-in. A password change invalidates
 existing account sessions and OAuth grants for that subject. An account with
 Financial Source enrollment cannot change its password through this flow
 until that operation can close the owned Financial Source records together

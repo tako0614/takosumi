@@ -76,7 +76,7 @@ test("the issuer account screen is opt-in and reads eligibility with the browser
       async fetch(input) {
         requests.push(input);
         return Response.json({
-          passwordEnabled: true, email: "member@example.test", hasPassword: false, canSetPassword: true,
+          passwordEnabled: true, username: null, eligible: true, hasPassword: false, canSetPassword: true,
         });
       },
     },
@@ -96,7 +96,7 @@ test("the issuer account screen is opt-in and reads eligibility with the browser
   const html = await page.text();
   expect(html).toContain("パスワードを設定");
   expect(html).toContain('autocomplete="new-password"');
-  expect(html).toContain("member@example.test");
+  expect(html).toContain('name="username" autocomplete="username"');
   expect(html).not.toContain("sess_fixture");
   expect(requests.map((input) => new URL(input.url).pathname)).toEqual(["/api/v1/account/sign-in-methods"]);
   expect(requests[0]?.headers.get("cookie")).toBe("__Host-takosumi_session=sess_fixture");

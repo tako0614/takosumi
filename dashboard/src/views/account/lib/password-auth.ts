@@ -5,7 +5,8 @@ export interface PasswordCapability { readonly enabled: boolean }
 export interface PasswordResult { readonly subject: string }
 export interface SignInMethods {
   readonly passwordEnabled: boolean;
-  readonly email: string | null;
+  readonly username: string | null;
+  readonly eligible: boolean;
   readonly hasPassword: boolean;
   readonly canSetPassword: boolean;
 }
@@ -22,15 +23,16 @@ async function passwordMutation(path: string, body: object, signal?: AbortSignal
   return result;
 }
 
-export function authenticateWithPassword(email: string, password: string, signal?: AbortSignal): Promise<PasswordResult> {
-  return passwordMutation("/api/v1/auth/password/login", { email: email.trim(), password }, signal);
+export function authenticateWithPassword(username: string, password: string, signal?: AbortSignal): Promise<PasswordResult> {
+  return passwordMutation("/api/v1/auth/password/login", { username: username.trim(), password }, signal);
 }
 
 export async function readSignInMethods(): Promise<SignInMethods | undefined> {
   try {
     const result = await apiFetch<SignInMethods>("/api/v1/account/sign-in-methods");
     if (!result || typeof result.passwordEnabled !== "boolean" || typeof result.hasPassword !== "boolean" ||
-      typeof result.canSetPassword !== "boolean" || (result.email !== null && typeof result.email !== "string")) {
+      typeof result.canSetPassword !== "boolean" || typeof result.eligible !== "boolean" ||
+      (result.username !== null && typeof result.username !== "string")) {
       throw new Error("Invalid sign-in methods response");
     }
     return result;
@@ -40,13 +42,14 @@ export async function readSignInMethods(): Promise<SignInMethods | undefined> {
   }
 }
 
-export function setAccountPassword(input: { readonly password: string; readonly currentPassword?: string }, signal?: AbortSignal): Promise<PasswordResult> {
+export function setAccountPassword(input: { readonly password: string; readonly username?: string; readonly currentPassword?: string }, signal?: AbortSignal): Promise<PasswordResult> {
   return passwordMutation("/api/v1/account/sign-in-methods/password", input, signal);
 }
 
 /** Never render server messages that could disclose an account or proof details. */
 export function passwordErrorKey(error: unknown): MessageKey {
   if (error instanceof ApiError) {
+    if (error.code === "username_unavailable") return "password.error.usernameUnavailable";
     if (error.status === 429) return "password.error.rateLimited";
     if (error.status === 404 || error.status === 503) return "password.error.unavailable";
     if (error.status === 401 || error.status === 403) return "password.error.credentials";

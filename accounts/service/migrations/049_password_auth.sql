@@ -4,6 +4,7 @@ CREATE INDEX accounts_password_verified_email_idx
 
 CREATE TABLE accounts_v1.password_credentials (
   subject text PRIMARY KEY REFERENCES accounts_v1.accounts(subject) ON DELETE RESTRICT,
+  username text NOT NULL UNIQUE CHECK (username ~ '^[a-z0-9][a-z0-9_.-]{2,31}$'),
   password_hash text NOT NULL CHECK (length(password_hash) > 0),
   version bigint NOT NULL CHECK (version > 0)
 );

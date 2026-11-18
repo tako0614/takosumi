@@ -5,6 +5,7 @@ import { hostedIssuerSessionId } from "./hosted-oidc-profile.ts";
 /** Private verifier; never include it in account projections. */
 export interface PasswordCredential {
   subject: TakosumiSubject;
+  username: string;
   passwordHash: string;
   version: number;
 }
@@ -13,12 +14,14 @@ export interface PasswordWriteAuthorization {
   sessionId: string;
   generation: number;
   now: number;
-  verifiedEmail: string;
+  /** Only required when the issuer applies an email allowlist. */
+  verifiedEmail?: string;
   /** Deadline of recent-session proof; omitted only after current-password proof. */
   freshUntil?: number;
 }
 
 export interface PasswordAuthStore {
+  findByUsername(username: string): Promise<PasswordCredential | undefined>;
   findBySubject(subject: TakosumiSubject): Promise<PasswordCredential | undefined>;
   create(credential: PasswordCredential, authorization: PasswordWriteAuthorization): Promise<boolean>;
   /** CAS plus account-session/OAuth invalidation in the same commit. */
@@ -47,8 +50,8 @@ export function memoryPasswordRevocationAllowed(records: ReadonlyMap<string, unk
 
 export function assertPasswordAuthorization(authorization: PasswordWriteAuthorization): void {
   if (!authorization || !authorization.sessionId || authorization.sessionId.length > 1024 ||
-    typeof authorization.verifiedEmail !== "string" || !authorization.verifiedEmail ||
-    authorization.verifiedEmail !== authorization.verifiedEmail.trim().toLowerCase() ||
+    (authorization.verifiedEmail !== undefined && (!authorization.verifiedEmail ||
+      authorization.verifiedEmail !== authorization.verifiedEmail.trim().toLowerCase())) ||
     !Number.isSafeInteger(authorization.generation) || authorization.generation < 0 ||
     !Number.isSafeInteger(authorization.now) || authorization.now < 0 ||
     (authorization.freshUntil !== undefined && (!Number.isSafeInteger(authorization.freshUntil) || authorization.freshUntil < 0))) {
@@ -56,12 +59,19 @@ export function assertPasswordAuthorization(authorization: PasswordWriteAuthoriz
   }
 }
 
+export function normalizePasswordUsername(input: unknown): string | undefined {
+  if (typeof input !== "string") return undefined;
+  const username = input.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$/u.test(username) ? username.toLowerCase() : undefined;
+}
+
 export function passwordCredential(credential: PasswordCredential): PasswordCredential {
-  if (!credential.subject.startsWith("tsub_") || !credential.passwordHash ||
+  if (!credential.subject.startsWith("tsub_") || !credential.username ||
+    normalizePasswordUsername(credential.username) !== credential.username || !credential.passwordHash ||
     !Number.isSafeInteger(credential.version) || credential.version < 1) {
     throw new TypeError("invalid password credential");
   }
-  return { subject: credential.subject, passwordHash: credential.passwordHash, version: credential.version };
+  return { subject: credential.subject, username: credential.username, passwordHash: credential.passwordHash, version: credential.version };
 }
 
 export function passwordReplacement(expected: number, credential: PasswordCredential, now: number): PasswordCredential {
@@ -85,6 +95,7 @@ export function assertPasswordAttempt(key: string, now: number, limit: number, w
 /** Pure reference adapter: all decisions, mutations and revocation hooks are synchronous after hashing. */
 export class MemoryPasswordAuthStore implements PasswordAuthStore {
   readonly #credentials = new Map<TakosumiSubject, PasswordCredential>();
+  readonly #usernames = new Map<string, TakosumiSubject>();
   readonly #attempts = new Map<string, { count: number; expiresAt: number }>();
   #sweep: Iterator<[string, { count: number; expiresAt: number }]> | undefined;
 
@@ -96,6 +107,11 @@ export class MemoryPasswordAuthStore implements PasswordAuthStore {
     readonly canRevoke: (subject: TakosumiSubject) => boolean = () => true,
   ) {}
 
+  async findByUsername(username: string): Promise<PasswordCredential | undefined> {
+    const subject = this.#usernames.get(username);
+    return subject ? this.findBySubject(subject) : undefined;
+  }
+
   async findBySubject(subject: TakosumiSubject): Promise<PasswordCredential | undefined> {
     return structuredClone(this.#credentials.get(subject));
   }
@@ -103,7 +119,9 @@ export class MemoryPasswordAuthStore implements PasswordAuthStore {
   private accountMatches(subject: TakosumiSubject, authorization: PasswordWriteAuthorization): boolean {
     const account = this.accounts.get(subject);
     if (authorization.freshUntil !== undefined && authorization.now > authorization.freshUntil) return false;
-    if (account?.emailVerified !== true || account.email?.trim().toLowerCase() !== authorization.verifiedEmail) return false;
+    if (!account) return false;
+    if (authorization.verifiedEmail === undefined) return true;
+    if (account.emailVerified !== true || account.email?.trim().toLowerCase() !== authorization.verifiedEmail) return false;
     for (const other of this.accounts.values()) {
       if (other.subject !== subject && other.emailVerified === true &&
         other.email?.trim().toLowerCase() === authorization.verifiedEmail) return false;
@@ -116,8 +134,10 @@ export class MemoryPasswordAuthStore implements PasswordAuthStore {
     assertPasswordAuthorization(authorization);
     const anchor = await hostedIssuerSessionId(authorization.sessionId);
     if (next.version !== 1 || !this.accountMatches(next.subject, authorization) || this.#credentials.has(next.subject) ||
+      this.#usernames.has(next.username) ||
       !this.subjectIsActive(next.subject) || !this.authorize(next.subject, authorization, anchor)) return false;
     this.#credentials.set(next.subject, next);
+    this.#usernames.set(next.username, next.subject);
     return true;
   }
 
@@ -126,7 +146,7 @@ export class MemoryPasswordAuthStore implements PasswordAuthStore {
     assertPasswordAuthorization(authorization);
     const anchor = await hostedIssuerSessionId(authorization.sessionId);
     const old = this.#credentials.get(next.subject);
-    if (!old || old.version !== expectedVersion || !this.accountMatches(next.subject, authorization) ||
+    if (!old || old.version !== expectedVersion || old.username !== next.username || !this.accountMatches(next.subject, authorization) ||
       !this.subjectIsActive(next.subject) || !this.authorize(next.subject, authorization, anchor) ||
       !this.canRevoke(next.subject)) return false;
     this.revoke(next.subject, now);

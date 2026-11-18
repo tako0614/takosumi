@@ -25,12 +25,12 @@ test("password endpoints send credentialed JSON without trimming passwords or ad
     return Response.json({ subject: "sub_fixture" });
   }) as typeof fetch;
   const password = "  sample password phrase  ";
-  await authenticateWithPassword(" person@example.test ", password);
+  await authenticateWithPassword(" person-fixture ", password);
   await setAccountPassword({ password, currentPassword: " current proof " });
   expect(calls.map((call) => call.path)).toEqual([
     "/api/v1/auth/password/login", "/api/v1/account/sign-in-methods/password",
   ]);
-  expect(JSON.parse(String(calls[0]!.init!.body))).toEqual({ email: "person@example.test", password });
+  expect(JSON.parse(String(calls[0]!.init!.body))).toEqual({ username: "person-fixture", password });
   expect(JSON.parse(String(calls[1]!.init!.body))).toEqual({ password, currentPassword: " current proof " });
   for (const { init } of calls) {
     expect(init?.method).toBe("POST");
@@ -51,7 +51,7 @@ test("wrong current-password proof does not redirect or clear the account sessio
 });
 
 test("settings discovery accepts the local password state and tolerates an older server", async () => {
-  const methods = { passwordEnabled: true, email: "person@example.test", hasPassword: false, canSetPassword: true };
+  const methods = { passwordEnabled: true, username: null, eligible: true, hasPassword: false, canSetPassword: true };
   globalThis.fetch = (async () => Response.json(methods)) as typeof fetch;
   expect(await readSignInMethods()).toEqual(methods);
   globalThis.fetch = (async () => Response.json({ error: "not_found" }, { status: 404 })) as typeof fetch;

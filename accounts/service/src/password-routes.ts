@@ -12,7 +12,7 @@ import {
 import { sha256Text } from "./encoding.ts";
 import { readBoundedRequestText, RequestBodyReadError } from "./http-helpers.ts";
 import { accountMatchesLoginAllowlist, normalizeLoginEmail, type LoginEmailAllowlist } from "./login-email-allowlist.ts";
-import type { PasswordAuthStore, PasswordCredential } from "./password-store.ts";
+import { normalizePasswordUsername, type PasswordAuthStore, type PasswordCredential } from "./password-store.ts";
 import type { AccountsStore, TakosumiAccountRecord } from "./store.ts";
 
 const LOGIN = "/api/v1/auth/password/login";
@@ -40,12 +40,6 @@ function error(code: string, status: number, extra?: Record<string, string>): Re
 const invalid = () => error("invalid_credentials", 401);
 const throttled = () => error("rate_limited", 429, { "Retry-After": "900" });
 
-function emailFrom(input: unknown): string | undefined {
-  return typeof input === "string" && input.length <= 254 && !/[\u0000-\u001f\u007f]/u.test(input)
-    ? normalizeLoginEmail(input)
-    : undefined;
-}
-
 function passwordFrom(input: unknown): string | undefined {
   if (typeof input !== "string" || /[\uD800-\uDFFF]/u.test(input)) return undefined;
   const value = input.normalize("NFC");
@@ -53,10 +47,10 @@ function passwordFrom(input: unknown): string | undefined {
   return length >= 15 && length <= 128 ? value : undefined;
 }
 
-function blocksPassword(value: string, email: string): boolean {
+function blocksPassword(value: string, username: string): boolean {
   const lowered = value.toLowerCase();
   const compact = lowered.replace(/[^a-z0-9]/gu, "");
-  return lowered.trim() === email || /^(.)\1+$/u.test(lowered) ||
+  return lowered.trim() === username || /^(.)\1+$/u.test(lowered) ||
     /^1234567890(?:1234567890)*[0-9]*$/u.test(compact) ||
     compact === "correcthorsebatterystaple" || COMMON_PASSWORD.test(compact);
 }
@@ -133,7 +127,7 @@ async function generationFor(options: PasswordRouteOptions, subject: TakosumiSub
   return generation;
 }
 
-async function issueSession(options: PasswordRouteOptions, credential: PasswordCredential, email: string, generation: number): Promise<Response> {
+async function issueSession(options: PasswordRouteOptions, credential: PasswordCredential, generation: number): Promise<Response> {
   const { store, request, hostedPolicy, secureCookie } = options;
   const now = Date.now();
   if (!await canonical(options, credential.subject)) return invalid();
@@ -153,8 +147,8 @@ async function issueSession(options: PasswordRouteOptions, credential: PasswordC
   // An identity, email, or password change can race the derivation or mint.
   // Revoke the freshly minted session and return no cookie in that case.
   const current = await store.passwordAuth!.findBySubject(credential.subject);
-  const account = await store.findAccountByVerifiedEmail(email, { unique: true });
-  if (current?.version !== credential.version || account?.subject !== credential.subject ||
+  const account = await store.findAccount(credential.subject);
+  if (current?.version !== credential.version || current.username !== credential.username || !account ||
       !accountMatchesLoginAllowlist(account, options.allowlist) ||
       generation !== await generationFor(options, credential.subject) ||
       !await canonical(options, credential.subject)) {
@@ -171,24 +165,17 @@ async function issueSession(options: PasswordRouteOptions, credential: PasswordC
 async function login(options: PasswordRouteOptions, port: PasswordAuthStore, now: number): Promise<Response> {
   const input = await body(options.request);
   if (input instanceof Response) return input;
-  const email = emailFrom(input.email);
+  const username = normalizePasswordUsername(input.username);
   const password = passwordFrom(input.password);
-  if (!await admit(port, "login", options.clientKey, email, now)) return throttled();
-  if (!email || !password) return invalid();
-  const account = await options.store.findAccountByVerifiedEmail(email, { unique: true });
-  const credential = account && await port.findBySubject(account.subject);
+  if (!await admit(port, "login", options.clientKey, username, now)) return throttled();
+  if (!username || !password) return invalid();
+  const credential = await port.findByUsername(username);
   const generation = credential ? await generationFor(options, credential.subject) : 0;
   const matches = await matchesPassword(password, credential?.passwordHash);
-  if (!matches || !credential || !account || account.emailVerified !== true ||
-      !accountMatchesLoginAllowlist(account, options.allowlist)) return invalid();
-  return issueSession(options, credential, email, generation);
-}
-
-async function eligibleEmail(options: PasswordRouteOptions, account: TakosumiAccountRecord): Promise<string | undefined> {
-  const email = account.emailVerified === true ? emailFrom(account.email) : undefined;
-  if (!email || (await options.store.findAccountByVerifiedEmail(email, { unique: true }))?.subject !== account.subject) return undefined;
-  const identities = await options.store.listCanonicalUpstreamIdentities?.(account.subject);
-  return identities?.length ? email : undefined;
+  if (!matches || !credential || credential.username !== username) return invalid();
+  const account = await options.store.findAccount(credential.subject);
+  if (!account || !accountMatchesLoginAllowlist(account, options.allowlist)) return invalid();
+  return issueSession(options, credential, generation);
 }
 
 async function management(options: PasswordRouteOptions, port: PasswordAuthStore, now: number): Promise<Response> {
@@ -204,17 +191,20 @@ async function management(options: PasswordRouteOptions, port: PasswordAuthStore
       !await canonical(options, verified.subject)) return invalid();
   const generation = await generationFor(options, verified.subject);
   if ((session.identityGeneration ?? 0) !== generation) return invalid();
-  const email = await eligibleEmail(options, account);
+  const verifiedEmail = options.allowlist ? normalizeLoginEmail(account.email ?? "") : undefined;
+  const identities = await store.listCanonicalUpstreamIdentities?.(account.subject);
+  const eligible = Boolean(identities?.length);
   const authTime = (session.reauthenticatedAt ?? session.authTime ?? Math.floor(session.createdAt / 1000)) * 1000;
   const authenticatedAt = Math.min(session.createdAt, authTime);
   const fresh = authenticatedAt <= now && now - authenticatedAt <= FRESH_MS;
   if (path === METHODS) {
     return response({
-      passwordEnabled: true, email: email ?? null, hasPassword: Boolean(current),
-      canSetPassword: Boolean(email) && (fresh || Boolean(current)),
+      passwordEnabled: true, username: current?.username ?? null, hasPassword: Boolean(current),
+      canSetPassword: eligible && (fresh || Boolean(current)),
+      eligible,
     });
   }
-  if (!email) return error("verified_email_required", 403);
+  if (!eligible) return error("linked_account_required", 403);
   if (!await admit(port, "manage", options.clientKey, verified.subject, now)) return throttled();
   const input = await body(request);
   if (input instanceof Response) return input;
@@ -224,23 +214,29 @@ async function management(options: PasswordRouteOptions, port: PasswordAuthStore
     return error("reauthentication_required", 403);
   }
   const password = passwordFrom(input.password);
-  if (!password) return error("invalid_input", 400);
-  if (blocksPassword(password, email)) return error("weak_password", 400);
+  const username = input.username === undefined ? current?.username : normalizePasswordUsername(input.username);
+  if (!username || !password) return error("invalid_input", 400);
+  if (current && current.username !== username) return error("username_immutable", 409);
+  if (!current && await port.findByUsername(username)) return error("username_unavailable", 409);
+  if (blocksPassword(password, username)) return error("weak_password", 400);
   const next: PasswordCredential = {
-    subject: verified.subject, version: (current?.version ?? 0) + 1, passwordHash: await passwordHash(password),
+    subject: verified.subject, username, version: (current?.version ?? 0) + 1, passwordHash: await passwordHash(password),
   };
   const authorization = {
     sessionId: verified.sessionId,
     generation,
     now: Date.now(),
-    verifiedEmail: email,
+    ...(verifiedEmail ? { verifiedEmail } : {}),
     ...(currentProof ? {} : { freshUntil: authenticatedAt + FRESH_MS }),
   };
   const saved = current
     ? await port.replace(current.version, next, authorization.now, authorization)
     : await port.create(next, authorization);
-  if (!saved) return error("credential_changed", 409);
-  return issueSession(options, next, email, generation + Number(Boolean(current)));
+  if (!saved) {
+    const claimed = !current && await port.findByUsername(username);
+    return error(claimed && claimed.subject !== next.subject ? "username_unavailable" : "credential_changed", 409);
+  }
+  return issueSession(options, next, generation + Number(Boolean(current)));
 }
 
 export async function handlePasswordAuth(options: PasswordRouteOptions): Promise<Response> {
