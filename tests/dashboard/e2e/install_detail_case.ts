@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { Capsule } from "takosumi-contract";
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 import {
   createInstallAttemptFixture,
@@ -47,6 +48,8 @@ async function detailFixture(
   let retryFailed = false;
   let screensUnreadable = false;
   let removalAnswerLost = false;
+  let cancellationAnswerLost = false;
+  let uninstallRecord: Capsule["uninstall"];
   const connection ={ ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), scope: "personal", ownerAccountId: "sub_portable_e2e", workspaceId: undefined, id: "conn_inline_fixture", displayName: "My Cloudflare" };
   const attempts: InstallAttemptFixture = createInstallAttemptFixture({
     capsuleId: capId,
@@ -70,7 +73,7 @@ async function detailFixture(
   ];
   const plan = () => ({ id: retryCount ? `run_retry_fixture_${retryCount}` : attempts.latest()?.planRunId ?? planId, workspaceId: "ws_alpha", capsuleId: capId, type: "plan", status: retryCount && retryFailed ? "failed" : "succeeded", summary: { add: 2, change: 0, destroy: 0 }, planResources, policyStatus: "pass", createdBy: "portable-e2e", createdAt: retryCount ? new Date(Date.parse(now) + 120000 + retryCount * 1000).toISOString() : now });
   const apply = () => ({ ...plan(), id: applyId, planRunId: planId, type: "apply", status: applyStatus, errorCode: applyStatus === "failed" ? "runner_apply_failed" : undefined, createdAt: "2026-10-27T01:01:00.000Z" });
-  const capsule = () => ({ id: capId, workspaceId: "ws_alpha", sourceId, name: "cloudflare-service", slug: "cloudflare-service", installConfigId: "cfg-default-opentofu-capsule", environment: "production", status: capsuleStatus, currentStateGeneration: capsuleStatus === "pending" ? 0 : 1, currentStateVersionId: capsuleStatus === "pending" ? undefined : "sv_inline", uninstall: capsuleStatus === "uninstalled" ? { phase: "scheduled", requestedAt: now, scheduledDestroyAt: "2026-11-03T01:00:00Z" } : undefined, createdAt: now, updatedAt: now });
+  const capsule = () => ({ id: capId, workspaceId: "ws_alpha", sourceId, name: "cloudflare-service", slug: "cloudflare-service", installConfigId: "cfg-default-opentofu-capsule", environment: "production", status: capsuleStatus, currentStateGeneration: capsuleStatus === "pending" ? 0 : 1, currentStateVersionId: capsuleStatus === "pending" ? undefined : "sv_inline", uninstall: uninstallRecord, createdAt: now, updatedAt: now });
   // The control plane's view of the app (`GET /capsules/:id/app`), derived
   // from the same fixture state the Capsule read reports.
   const appView = () => {
@@ -160,7 +163,15 @@ async function detailFixture(
         if (removalAnswerLost) return route.fulfill({ status: 503, json: { error: "fixture_answer_lost" } });
         return route.fulfill({ status: 202, json: { capsule: capsule(), abandoned: true } });
       }
-      if (request.method() === "DELETE") capsuleStatus = "uninstalled";
+      if (request.method() === "DELETE") {
+        if (capsuleStatus !== "uninstalled") {
+          uninstallRecord = { id: "uninstall_inline", revision: (uninstallRecord?.revision ?? 0) + 1,
+            phase: "scheduled", requestedAt: now, scheduledDestroyAt: "2026-11-03T01:00:00Z",
+            previousStatus: capsuleStatus as "active" | "stale" | "error" };
+          capsuleStatus = "uninstalled";
+        }
+        if (removalAnswerLost) return route.fulfill({ status: 503, json: { error: "fixture_answer_lost" } });
+      }
       // A capsule read always carries the configuration authority guard.
       return route.fulfill({ json: { capsule: capsule(), graceDays: 7, installConfigReAdoption: { authorityGuard: `sha256:${"c".repeat(64)}` } } });
     }
@@ -173,7 +184,13 @@ async function detailFixture(
     if (path === `/api/v1/capsules/${capId}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: { id: "pbs_inline", workspaceId: "ws_alpha", capsuleId: capId, environment: "production", bindings: provider ? [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: connection.id }] : [], createdAt: now, updatedAt: now } } });
     if (path === `/api/v1/capsules/${capId}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: capId, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_inline", generation: 1, applyRunId: applyId, planRunId: planId, recordedAt: now, availability: "recorded", resources: planResources.map(({ address, type }) => ({ address, type, providerSource: cloudflare })) } } });
     if (path === `/api/v1/capsules/${capId}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: capId, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
-    if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) { capsuleStatus = "active"; return route.fulfill({ json: { capsule: capsule() } }); }
+    if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) {
+      capsuleStatus = uninstallRecord?.previousStatus ?? "active";
+      if (uninstallRecord) uninstallRecord = { ...uninstallRecord, revision: uninstallRecord.revision + 1,
+        phase: "cancelled", cancelledAt: "2026-10-27T01:02:00Z" };
+      if (cancellationAnswerLost) return route.fulfill({ status: 503, json: { error: "fixture_answer_lost" } });
+      return route.fulfill({ json: { capsule: capsule() } });
+    }
     if (path === "/api/v1/state-versions/sv_inline/rollback-plan" && request.method() === "POST") { retryCount += 1; return route.fulfill({ status: 201, json: { run: plan() } }); }
     if (path === `/api/v1/capsules/${capId}/plan`) { retryCount += 1; return route.fulfill({ json: { run: plan() } }); }
     if (path === "/api/v1/workspaces/ws_alpha/runs" || path === `/api/v1/capsules/${capId}/runs`) return route.fulfill({ json: { runs: applied ? [apply(), plan()] : [plan()] } });
@@ -205,6 +222,7 @@ async function detailFixture(
     attempts,
     mutations,
     appView,
+    capsule,
     authorize: () => { connected = true; },
     finish: () => { applied = true; applyStatus = "succeeded"; capsuleStatus = "active"; },
     fail: (partialState = false) => { applyStatus = "failed"; if (partialState) capsuleStatus = "error"; },
@@ -214,6 +232,7 @@ async function detailFixture(
     screensUnreadable: (value: boolean) => { screensUnreadable = value; },
     /** The removal commits, but its answer fails on the way back. */
     loseRemovalAnswer: () => { removalAnswerLost = true; },
+    loseCancellationAnswer: () => { cancellationAnswerLost = true; },
     /** The confirming answer (`continue: true`) the page sent, if any. */
     continued: () => attempts.log.answers.find((answer) => (answer as { continue?: boolean } | undefined)?.continue === true) as
       { readonly variables?: Readonly<Record<string, unknown>>; readonly capsuleName?: string } | undefined,
@@ -1218,6 +1237,98 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       f.destroy(); await page.reload();
       await expect(appPage).toHaveAttribute("data-app-state", "uninstalled");
       await expect(page.getByTestId("app-header").getByRole("link", { name: "Install again", exact: true })).toBeVisible();
+    });
+    test("lost uninstall and cancellation answers recover the current reservation without resending", async ({ page }) => {
+      const f = await detailFixture(page, base); f.finish(); f.loseRemovalAnswer(); f.loseCancellationAnswer();
+      await page.clock.setFixedTime(new Date(now));
+      let contextReads = 0;
+      let metadata: "normal" | "other" | "missing" | "unavailable" = "normal";
+      await page.route(`**/api/v1/capsules/${capId}`, (route) => {
+        if (route.request().method() !== "GET" || f.capsule().uninstall?.phase !== "cancelled") return route.fallback();
+        if (metadata === "unavailable") return route.fulfill({ status: 503, json: { error: "fixture_read_unavailable" } });
+        const value = f.capsule();
+        return route.fulfill({ json: { capsule: { ...value, uninstall: metadata === "missing" ? undefined :
+          metadata === "other" ? { ...value.uninstall!, id: "other_reservation" } : value.uninstall },
+          installConfigReAdoption: { authorityGuard: `sha256:${"c".repeat(64)}` } } });
+      });
+      page.on("request", (request) => {
+        if (request.method() === "GET" && new URL(request.url()).pathname === `/api/v1/capsules/${capId}`) contextReads += 1;
+      });
+      await page.goto(`/apps/${capId}`);
+      const section = await openUninstall(page);
+      await section.getByRole("button", { name: "Uninstall", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Uninstall", exact: true }).click();
+      const appPage = page.getByTestId("app-page");
+      await expect(appPage).toHaveAttribute("data-app-state", "uninstall_scheduled");
+      // This is the current reservation, not proof of who created it.
+      const scheduled = f.capsule().uninstall!;
+      expect(scheduled).toMatchObject({ id: "uninstall_inline", phase: "scheduled", revision: 1 });
+      await expect(page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true })).toBeEnabled();
+      const scheduleErrors = await appPage.locator('[role="alert"].wa-error').allTextContents();
+      const before = contextReads;
+      metadata = "other";
+      await page.getByTestId("app-section-back").click();
+      await page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true }).click();
+      // The server committed exactly one cancellation, although its answer was lost.
+      await expect.poll(() => f.mutations.filter((m) => m.endsWith("/cancel-uninstall")).length).toBe(1);
+      expect(f.capsule().uninstall).toMatchObject({ id: scheduled.id, revision: 2, phase: "cancelled" });
+      await expect(appPage).toHaveAttribute("data-app-state", "installed");
+      await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
+      expect(contextReads).toBeGreaterThan(before);
+      const recovery = page.getByTestId("app-uninstall-recovery");
+      await expect(recovery).toBeVisible(); // A different cancelled record cannot confirm this cancellation.
+      for (const incomplete of ["missing", "unavailable"] as const) {
+        metadata = incomplete;
+        const count = contextReads;
+        await recovery.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect.poll(() => contextReads).toBeGreaterThan(count);
+        await expect(recovery).toBeVisible();
+      }
+      metadata = "normal";
+      await recovery.getByRole("button", { name: "Refresh", exact: true }).click();
+      await expect(recovery).toHaveCount(0);
+      expect(scheduleErrors).toEqual([]);
+      await expect(appPage.locator('[role="alert"].wa-error')).toHaveCount(0);
+      expect(f.mutations.filter((m) => m === `DELETE /api/v1/capsules/${capId}`)).toHaveLength(1);
+      expect(f.mutations.filter((m) => m.endsWith("/cancel-uninstall"))).toHaveLength(1);
+    });
+    test("a refused cancellation stays visible when a later read shows the app restored", async ({ page }) => {
+      const f = await detailFixture(page, base); f.finish();
+      await page.clock.setFixedTime(new Date(now));
+      let refused = false;
+      let cancellations = 0;
+      await page.route(`**/api/v1/capsules/${capId}/cancel-uninstall`, (route) => {
+        cancellations += 1; refused = true;
+        return route.fulfill({ status: 403, json: { error: { code: "forbidden", message: "Cancellation was refused." } } });
+      });
+      // Later public facts may change, but they cannot turn the explicit rejection into success.
+      await page.route(`**/api/v1/capsules/${capId}`, (route) => {
+        if (!refused || route.request().method() !== "GET") return route.fallback();
+        const current = f.capsule();
+        return route.fulfill({ json: { capsule: { ...current, status: "active", uninstall: {
+          ...current.uninstall!, revision: current.uninstall!.revision + 1, phase: "cancelled", cancelledAt: "2026-10-27T01:02:00Z",
+        } }, installConfigReAdoption: { authorityGuard: `sha256:${"c".repeat(64)}` } } });
+      });
+      await page.route(`**/api/v1/capsules/${capId}/app`, (route) => !refused ? route.fallback() : route.fulfill({ json: { app: {
+        ...f.appView(), status: "active", state: "installed", primaryAction: "none", problems: [],
+        uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } },
+      } } }));
+      await page.goto(`/apps/${capId}`);
+      const section = await openUninstall(page);
+      await section.getByRole("button", { name: "Uninstall", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Uninstall", exact: true }).click();
+      const appPage = page.getByTestId("app-page");
+      await expect(appPage).toHaveAttribute("data-app-state", "uninstall_scheduled");
+      await page.getByTestId("app-section-back").click();
+      await page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true }).click();
+      await expect(appPage).toHaveAttribute("data-app-state", "installed");
+      const rejection = appPage.getByRole("alert");
+      await expect(rejection).toHaveCount(1);
+      await expect(rejection).toBeVisible();
+      await expect(rejection).not.toBeEmpty();
+      await expect(page.getByTestId("app-uninstall-recovery")).toHaveCount(0);
+      expect(cancellations).toBe(1);
+      expect(f.mutations.filter((m) => m === `DELETE /api/v1/capsules/${capId}`)).toHaveLength(1);
     });
     test("returning to Store exits the installed detail without replaying any action", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();

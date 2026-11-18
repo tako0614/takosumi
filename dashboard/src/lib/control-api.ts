@@ -1185,14 +1185,14 @@ export async function getCapsule(id: string): Promise<Capsule> {
  * snapshot. Settings must echo this guard into the single Configuration Plan
  * request; separate GETs could accidentally combine different authorities.
  */
-export async function getCapsuleConfigurationContext(id: string): Promise<{
+export async function getCapsuleConfigurationContext(id: string, options: { readonly signal?: AbortSignal } = {}): Promise<{
   readonly capsule: Capsule;
   readonly authorityGuard: string;
 }> {
   const body = await controlFetch<{
     capsule: Capsule;
     installConfigReAdoption: { readonly authorityGuard: string };
-  }>(`${BASE}/capsules/${encodeURIComponent(id)}`);
+  }>(`${BASE}/capsules/${encodeURIComponent(id)}`, { signal: options.signal });
   if (
     !isCapsuleResponse(body.capsule) ||
     typeof body.installConfigReAdoption?.authorityGuard !== "string" ||

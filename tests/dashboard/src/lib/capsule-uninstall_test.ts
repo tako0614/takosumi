@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { CapsuleAppView } from "../../../../dashboard/src/lib/control-api.ts";
 import {
+  observeUninstallReadback,
   appUninstallBanner,
   appUninstallExportNote,
 } from "../../../../dashboard/src/lib/capsule-uninstall.ts";
@@ -9,6 +10,7 @@ import { formatDateTime, t } from "../../../../dashboard/src/i18n/index.ts";
 type Terms = Pick<CapsuleAppView, "uninstall" | "problems">;
 const scheduled: Terms = {
   uninstall: {
+    impact: { usedBy: [] },
     mode: "scheduled",
     graceDays: 7,
     scheduled: {
@@ -65,4 +67,41 @@ test("the export note reports what was exported, and nothing when unrecorded", (
   expect(appUninstallExportNote(exported("exported", false))).toBe(t("app.uninstall.exportExportedLedgerOnly"));
   expect(appUninstallExportNote(exported("failed"))).toBe(t("app.uninstall.exportFailed"));
   expect(appUninstallExportNote(exported("skipped"))).toBe(t("app.uninstall.exportSkipped"));
+});
+
+test("uninstall readback separates current reservations from exact cancellation and terminal removal", () => {
+  type Cap = Parameters<typeof observeUninstallReadback>[1];
+  type View = Parameters<typeof observeUninstallReadback>[3];
+  const active: Cap = { id: "cap_a", workspaceId: "ws_a", status: "active" };
+  const record = { id: "uninstall_a", revision: 1, phase: "scheduled" as const,
+    previousStatus: "active" as const, requestedAt: "2026-11-18T00:00:00Z", scheduledDestroyAt: "2026-11-25T00:00:00Z" };
+  const pending: Cap = { ...active, status: "uninstalled", uninstall: record };
+  const view: View = { capsuleId: active.id, workspaceId: "ws_a", applied: true,
+    state: "uninstall_scheduled", uninstall: { impact: { usedBy: [] }, mode: "scheduled", scheduled: {
+      phase: "scheduled", requestedAt: record.requestedAt, deleteAfter: record.scheduledDestroyAt, cancellable: true, blocked: false,
+    } } };
+  const cancelled: Cap = { ...active, uninstall: { ...record, revision: 2, phase: "cancelled", cancelledAt: "2026-11-18T00:01:00Z" } };
+  const restored: View = { ...view, state: "installed", uninstall: { mode: "scheduled", impact: { usedBy: [] } } };
+  expect(observeUninstallReadback("schedule", active, pending, view)).toBe("reservation");
+  // Seeing the same pre-existing reservation never proves our new request was accepted.
+  expect(observeUninstallReadback("schedule", pending, pending, view)).toBe("unverified");
+  expect(observeUninstallReadback("cancel", pending, cancelled, restored)).toBe("cancelled");
+  for (const changed of [
+    { ...cancelled, uninstall: undefined },
+    { ...cancelled, uninstall: { ...cancelled.uninstall!, id: "other" } },
+    { ...cancelled, uninstall: { ...cancelled.uninstall!, revision: 1 } },
+    { ...cancelled, uninstall: { ...cancelled.uninstall!, revision: 3 } },
+    { ...cancelled, uninstall: { ...cancelled.uninstall!, cancelledAt: undefined } },
+    { ...cancelled, uninstall: { ...cancelled.uninstall!, cancelledAt: "invalid" } },
+    { ...cancelled, status: "destroyed" as const },
+    { ...cancelled, workspaceId: "other" },
+    { ...cancelled, id: "other" },
+  ]) expect(observeUninstallReadback("cancel", pending, changed, restored)).toBe("unverified");
+  expect(observeUninstallReadback("cancel", pending, cancelled, view)).toBe("unverified");
+  expect(observeUninstallReadback("cancel", pending, cancelled, { ...restored, workspaceId: "other" })).toBe("unverified");
+  const removed: Cap = { ...active, status: "destroyed" };
+  const gone: View = { ...restored, state: "uninstalled", applied: false };
+  expect(observeUninstallReadback("schedule", active, removed, gone)).toBe("removed");
+  expect(observeUninstallReadback("cancel", pending, removed, gone)).toBe("unverified");
+  expect(observeUninstallReadback("schedule", active, removed, { ...gone, capsuleId: "other" })).toBe("unverified");
 });

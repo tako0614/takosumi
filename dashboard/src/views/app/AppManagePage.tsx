@@ -57,7 +57,7 @@ import {
   getCapsule,
   getAppConnectionChoices,
   resetAppOwnershipCache,
-  getCapsuleApp,
+  getCapsuleAppWithSignal,
   getCapsuleConfigurationContext,
   getCapsuleProviderBindingSet,
   getCapsuleUsageSummary,
@@ -88,6 +88,7 @@ import {
   releaseRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
+import { observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
 import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
 import {
   APP_HISTORY_RUN_TYPES,
@@ -198,7 +199,8 @@ export default function AppManagePage(props: {
   const location = useLocation();
   const { confirm } = useConfirmDialog();
   let disposed = false;
-  onCleanup(() => { disposed = true; });
+  let uninstallReadController: AbortController | undefined;
+  onCleanup(() => { disposed = true; uninstallReadController?.abort(); });
   const capsuleId = () => props.capsuleId;
   const activeSection = () => props.section;
   const [visited, setVisited] = createSignal<{
@@ -241,9 +243,9 @@ export default function AppManagePage(props: {
   };
 
   // --- the app and the server's view of it -----------------------------------
-  const [context, { refetch: refetchContext }] = createResource(
+  const [context, { refetch: refetchContext }] = createResource<Awaited<ReturnType<typeof getCapsuleConfigurationContext>>, string, AbortSignal>(
     capsuleId,
-    getCapsuleConfigurationContext,
+    (id, info) => getCapsuleConfigurationContext(id, { signal: info.refetching instanceof AbortSignal ? info.refetching : undefined }),
   );
   // Never `context()`/`.latest` directly: both throw once a read failed. A
   // failed refetch keeps the last good app on screen with a quiet notice.
@@ -268,7 +270,8 @@ export default function AppManagePage(props: {
 
 
 
-  const [appView, { refetch: refetchApp }] = createResource(capsuleId, getCapsuleApp);
+  const [appView, { refetch: refetchApp }] = createResource<CapsuleAppView, string, AbortSignal>(capsuleId, (id, info) =>
+    getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined));
   const app = createLastGoodValue(appView, (value) => value.capsuleId === capsuleId());
   const destroyed = () => app()?.state === "uninstalled";
   const applied = () => app()?.applied === true;
@@ -916,19 +919,93 @@ export default function AppManagePage(props: {
     clearCaches();
     navigate("/", { replace: true });
   };
-  /** Re-reads the app after an uninstall whose answer did not say it is gone. */
-  const removedOnReread = async (): Promise<boolean> => {
+  type UninstallAttempt = {
+    readonly kind: "schedule" | "cancel";
+    readonly before: Capsule;
+    readonly accountId: string | undefined;
+    readonly principalId: string | undefined;
+    readonly epoch: number;
+    readonly message?: string;
+  };
+  let uninstallEpoch = 0;
+  const [uninstallRecovery, setUninstallRecovery] = createSignal<UninstallAttempt>();
+  const [uninstallReadPending, setUninstallReadPending] = createSignal(false);
+  let uninstallReadFlight: Promise<unknown> | undefined;
+  const uninstallScope = createMemo(() => JSON.stringify([capsuleId(), workspaceId(), props.accountId, props.principalId]));
+  createEffect(on(uninstallScope, () => {
+    uninstallEpoch += 1;
+    uninstallReadController?.abort();
+    setUninstallBusy(false);
+    setUninstallError(undefined);
+    setUninstallRecovery(undefined);
+  }));
+  const sameUninstallScope = (operation: UninstallAttempt) => !disposed && operation.epoch === uninstallEpoch &&
+    capsuleId() === operation.before.id && workspaceId() === operation.before.workspaceId &&
+    props.accountId === operation.accountId && props.principalId === operation.principalId;
+  const ownsUninstall = (operation: UninstallAttempt) => sameUninstallScope(operation) && isOwner();
+  const uninstallAttempt = (kind: UninstallAttempt["kind"], before: Capsule): UninstallAttempt => ({
+    kind, before: structuredClone(before), accountId: props.accountId, principalId: props.principalId,
+    epoch: uninstallEpoch,
+  });
+  /** One read-only pair; it never retries a mutation or waits indefinitely. */
+  const rereadUninstall = async (operation: UninstallAttempt) => {
+    if (!ownsUninstall(operation) || uninstallReadFlight) return "unverified" as const;
     clearCaches();
-    const [, reread] = await Promise.allSettled([refetchContext(), refetchApp()]);
-    return (
-      reread.status === "fulfilled" &&
-      reread.value?.capsuleId === capsuleId() &&
-      reread.value.state === "uninstalled"
-    );
+    const controller = new AbortController();
+    uninstallReadController = controller;
+    const reads = Promise.allSettled([
+      Promise.resolve().then(() => ownsUninstall(operation) ? refetchContext(controller.signal) : undefined),
+      Promise.resolve().then(() => ownsUninstall(operation) ? refetchApp(controller.signal) : undefined),
+    ]);
+    uninstallReadFlight = reads;
+    setUninstallReadPending(true);
+    // Keep a non-cooperative transport single-flight even after our deadline.
+    void reads.finally(() => {
+      if (uninstallReadFlight !== reads) return;
+      uninstallReadFlight = undefined;
+      setUninstallReadPending(false);
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        reads,
+        new Promise<undefined>((resolve) => { timer = setTimeout(() => { controller.abort(); resolve(undefined); }, 5_000); }),
+      ]);
+      if (!ownsUninstall(operation) || !result) return "unverified" as const;
+      const [context, view] = result;
+      return context.status === "fulfilled" && context.value && view.status === "fulfilled" && view.value
+        ? observeUninstallReadback(operation.kind, operation.before, context.value.capsule, view.value)
+        : "unverified" as const;
+    } finally { clearTimeout(timer); if (uninstallReadController === controller && !uninstallReadFlight) uninstallReadController = undefined; }
+  };
+  const recoverUninstall = async (operation: UninstallAttempt) => {
+    if (!ownsUninstall(operation)) return;
+    setUninstallRecovery(operation);
+    const observed = await rereadUninstall(operation);
+    if (!ownsUninstall(operation)) return;
+    if (observed === "removed") {
+      setUninstallRecovery(undefined);
+      leaveRemovedApp();
+    } else if (observed === "cancelled") {
+      setUninstallRecovery(undefined);
+      setUninstallError(undefined);
+    } else {
+      setUninstallRecovery(operation);
+      // A newly observed reservation is displayed as fact, not attributed to our lost response.
+      setUninstallError(observed === "reservation" ? undefined : operation.message);
+    }
+  };
+  const retryUninstallRead = async () => {
+    const operation = uninstallRecovery();
+    if (!operation || !ownsUninstall(operation) || uninstallBusy() || uninstallReadPending()) return;
+    setUninstallBusy(true);
+    try { await recoverUninstall(operation); }
+    finally { if (sameUninstallScope(operation)) setUninstallBusy(false); }
   };
   const uninstall = async () => {
     const inst = capsule();
     if (!inst || !isOwner() || uninstallBusy()) return;
+    const selection = uninstallAttempt("schedule", inst);
     const days = graceDays();
     const ok = await confirm({
       title: t("app.uninstall.confirmTitle"),
@@ -950,40 +1027,53 @@ export default function AppManagePage(props: {
       cancelText: t("common.cancel"),
       danger: true,
     });
-    if (!ok) return;
+    if (!ok || !ownsUninstall(selection) || uninstallBusy()) return;
+    const operation = { ...selection, epoch: ++uninstallEpoch };
     setUninstallBusy(true);
     setUninstallError(undefined);
+    setUninstallRecovery(undefined);
     try {
       const result = await deleteCapsule(inst.id);
+      if (!ownsUninstall(operation)) return;
       if (result.capsule?.status === "destroyed" || result.abandoned) {
         leaveRemovedApp();
         return;
       }
-      if (await removedOnReread()) leaveRemovedApp();
+      if (await rereadUninstall(operation) === "removed" && ownsUninstall(operation)) leaveRemovedApp();
     } catch (cause) {
-      // The server may have committed the removal even though its answer
-      // failed on the way back: re-read the app before showing it again.
-      if (await removedOnReread()) {
-        leaveRemovedApp();
+      if (!ownsUninstall(operation)) return;
+      if (cause instanceof ControlApiError && cause.status >= 400 && cause.status < 500) {
+        setUninstallError(friendlyError(cause, t).message);
+        await rereadUninstall(operation);
         return;
       }
-      setUninstallError(friendlyError(cause, t).message);
+      await recoverUninstall({ ...operation, message: friendlyError(cause, t).message });
     } finally {
-      setUninstallBusy(false);
+      if (sameUninstallScope(operation)) setUninstallBusy(false);
     }
   };
   const cancelUninstall = async () => {
-    if (!isOwner() || uninstallBusy()) return;
+    const inst = capsule();
+    if (!inst || !isOwner() || uninstallBusy()) return;
+    const operation = { ...uninstallAttempt("cancel", inst), epoch: ++uninstallEpoch };
     setUninstallBusy(true);
     setUninstallError(undefined);
+    setUninstallRecovery(undefined);
     try {
-      await cancelCapsuleUninstall(capsuleId());
+      await cancelCapsuleUninstall(inst.id);
+      if (!ownsUninstall(operation)) return;
       clearCaches();
       await Promise.allSettled([refetchContext(), refetchApp(), refetchHistory()]);
     } catch (cause) {
-      setUninstallError(friendlyError(cause, t).message);
+      if (!ownsUninstall(operation)) return;
+      if (cause instanceof ControlApiError && cause.status >= 400 && cause.status < 500) {
+        setUninstallError(friendlyError(cause, t).message);
+        await rereadUninstall(operation);
+        return;
+      }
+      await recoverUninstall({ ...operation, message: friendlyError(cause, t).message });
     } finally {
-      setUninstallBusy(false);
+      if (sameUninstallScope(operation)) setUninstallBusy(false);
     }
   };
   // The immediate teardown is a plan reviewed in place: its removal list,
@@ -1375,6 +1465,16 @@ export default function AppManagePage(props: {
                   <Button variant="secondary" onClick={() => void refetchRole()}>{t("common.retry")}</Button>
                 </Toast>
               </Show>
+              <Show when={uninstallRecovery() && isOwner()}>
+                <div data-testid="app-uninstall-recovery" role="status">
+                  <Toast tone="neutral">{t("app.uninstall.unconfirmed")}
+                    <Button variant="secondary" busy={uninstallBusy()} disabled={uninstallReadPending()} onClick={() => void retryUninstallRead()}>{t("common.refresh")}</Button>
+                  </Toast>
+                </div>
+              </Show>
+              <Show when={uninstallError()}>
+                {(message) => <p class="wa-error" role="alert" data-testid="app-uninstall-error">{message()}</p>}
+              </Show>
               <AppAttentionSection
                 canUninstall={isOwner()}
                 app={view()}
@@ -1384,7 +1484,6 @@ export default function AppManagePage(props: {
                   ? { startingAction: starting()!.action! }
                   : {})}
                 uninstallBusy={uninstallBusy()}
-                {...(uninstallError() ? { uninstallError: uninstallError()! } : {})}
                 screenRetryBusy={screenRetryBusy()}
                 {...(screenRetryMessage() ? { screenRetryMessage: screenRetryMessage()! } : {})}
                 {...(errorFor("attention") ? { error: errorFor("attention")! } : {})}
@@ -1580,9 +1679,6 @@ export default function AppManagePage(props: {
                       </Button>
                     </Show>
                   </div>
-                  <Show when={uninstallError()}>
-                    {(message) => <p class="wa-error" role="alert">{message()}</p>}
-                  </Show>
                 </AppSection>
               </Show>
             </div>
