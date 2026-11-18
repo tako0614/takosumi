@@ -5,6 +5,104 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
   test.describe("App-owned Run details", () => {
     test.skip(mode !== "portable", "isolated app Run fixture only");
 
+    test("a cancel confirmation stays with its displayed Run", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const a = "run_confirm_a", b = "run_confirm_b";
+      const model = (id: string) => ({ id, workspaceId: "ws_alpha", capsuleId: `cap_${id}`,
+        type: "apply", status: "queued", createdBy: "portable-e2e", createdAt: "2026-11-18T00:00:00Z" });
+      const rows: Record<string, ReturnType<typeof model>> = { [a]: model(a), [b]: model(b) };
+      const mutations: string[] = [];
+      const reads: Record<string, number> = {};
+      await page.route("**/api/v1/**", (route) => {
+        const request = route.request(); const path = new URL(request.url()).pathname;
+        const id = path.split("/")[4] ?? ""; const row = rows[id];
+        if (row && path.endsWith("/cancel") && request.method() === "POST") {
+          mutations.push(`POST /api/v1/runs/${id}/cancel`); row.status = "cancelled";
+          return route.fulfill({ json: { run: row } });
+        }
+        if (row && path === `/api/v1/runs/${id}`) { reads[id] = (reads[id] ?? 0) + 1; return route.fulfill({ json: { run: row } }); }
+        if (row && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+        if (row && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        if (row && path.endsWith("/cost")) return route.fulfill({ json: { cost: { runId: id, billingMode: "disabled", ratingStatus: "not_applicable", estimatedUsdMicros: 0, blocked: false, reasons: [] } } });
+        if (path.startsWith("/api/v1/capsules/cap_run_confirm_")) {
+          if (path.endsWith("/runs")) return route.fulfill({ json: { runs: [] } });
+          return route.fulfill({ json: { capsule: { id: path.split("/")[4], workspaceId: "ws_alpha", name: "Confirmation fixture", status: "active", environment: "production", currentStateGeneration: 1, createdAt: rows[a]!.createdAt, updatedAt: rows[a]!.createdAt } } });
+        }
+        return route.fallback();
+      });
+      await page.goto(`/runs/${a}`);
+      await page.getByRole("button", { name: "Cancel this run", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog.getByRole("heading", { name: "Cancel this run?", exact: true })).toBeVisible();
+      // Same router instance, ordinary history transition; the global dialog remains open.
+      const navigateTo = async (id: string) => {
+        const before = reads[id] ?? 0;
+        await page.evaluate((target) => { history.pushState(null, "", `/runs/${target}`); window.dispatchEvent(new PopStateEvent("popstate")); }, id);
+        await expect.poll(() => reads[id] ?? 0).toBeGreaterThan(before);
+      };
+      await navigateTo(b);
+      const target = b;
+      const beforeConfirm = reads[target] ?? 0;
+      await dialog.getByRole("button", { name: "Cancel run", exact: true }).click();
+      // Use the current Run's existing fallback read as the settled UI witness.
+      await expect.poll(() => reads[target] ?? 0).toBeGreaterThan(beforeConfirm);
+      expect(mutations).toEqual([]);
+      // A fresh confirmation on this exact target remains a normal one-call action.
+      await page.getByRole("button", { name: "Cancel this run", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Cancel run", exact: true }).click();
+      await expect.poll(() => rows[target]!.status).toBe("cancelled");
+      await expect(page.getByRole("button", { name: "Cancel this run", exact: true })).toHaveCount(0);
+      expect(mutations).toEqual([`POST /api/v1/runs/${target}/cancel`]);
+    });
+
+    test("a destructive approval stays with its displayed Run", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const type = "restore";
+      const a = `run_confirm_${type}_a`, b = `run_confirm_${type}_b`;
+      const model = (id: string) => ({ id, workspaceId: "ws_alpha", capsuleId: `cap_${id}`, type,
+        status: "waiting_approval", createdBy: "portable-e2e", createdAt: "2026-11-18T00:00:00Z" });
+      const rows: Record<string, ReturnType<typeof model>> = { [a]: model(a), [b]: model(b) };
+      const mutations: string[] = [];
+      const reads: Record<string, number> = {};
+      await page.route("**/api/v1/**", (route) => {
+        const request = route.request(); const path = new URL(request.url()).pathname;
+        const id = path.split("/")[4] ?? ""; const row = rows[id];
+        if (row && path.endsWith("/approve") && request.method() === "POST") {
+          mutations.push(`POST /api/v1/runs/${id}/approve`); row.status = "queued";
+          return route.fulfill({ json: { run: row } });
+        }
+        if (row && path === `/api/v1/runs/${id}`) { reads[id] = (reads[id] ?? 0) + 1; return route.fulfill({ json: { run: row } }); }
+        if (row && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+        if (row && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        if (row && path.endsWith("/cost")) return route.fulfill({ json: { cost: { runId: id, billingMode: "disabled", ratingStatus: "not_applicable", estimatedUsdMicros: 0, blocked: false, reasons: [] } } });
+        if (path.startsWith("/api/v1/capsules/cap_run_confirm_")) {
+          if (path.endsWith("/runs")) return route.fulfill({ json: { runs: [] } });
+          return route.fulfill({ json: { capsule: { id: path.split("/")[4], workspaceId: "ws_alpha", name: "Confirmation fixture", status: "active", environment: "production", currentStateGeneration: 1, createdAt: rows[a]!.createdAt, updatedAt: rows[a]!.createdAt } } });
+        }
+        return route.fallback();
+      });
+      const navigateTo = async (id: string) => {
+        const before = reads[id] ?? 0;
+        await page.evaluate((target) => { history.pushState(null, "", `/runs/${target}`); window.dispatchEvent(new PopStateEvent("popstate")); }, id);
+        await expect.poll(() => reads[id] ?? 0).toBeGreaterThan(before);
+      };
+      const approve = () => page.getByRole("button", { name: "Approve this change", exact: true });
+      const dialog = page.getByRole("dialog");
+      await page.goto(`/runs/${a}`);
+      await approve().click();
+      await expect(dialog).toContainText("Restore from this backup?");
+      await navigateTo(b);
+      const before = reads[b] ?? 0;
+      await dialog.getByRole("button", { name: "Approve this change", exact: true }).click();
+      await expect.poll(() => reads[b] ?? 0).toBeGreaterThan(before);
+      expect(mutations).toEqual([]);
+      await approve().click();
+      await dialog.getByRole("button", { name: "Approve this change", exact: true }).click();
+      await expect.poll(() => rows[b]!.status).toBe("queued");
+      await expect(approve()).toHaveCount(0);
+      expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
+    });
+
     test("lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors: string[] = [];

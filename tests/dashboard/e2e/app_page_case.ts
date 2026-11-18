@@ -1334,6 +1334,20 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(seenMutations.some((entry) => entry.endsWith("/approve"))).toBe(false);
       expect(seenMutations.some((entry) => entry.endsWith("/apply"))).toBe(false);
 
+      // A global confirmation cannot outlive this embedded removal review.
+      await problems.getByTestId("app-review").getByRole("button", { name: "Approve this change", exact: true }).click();
+      await expect(dialog).toContainText("Run this deletion?");
+      await page.evaluate(() => {
+        history.pushState(null, "", "/apps/cap_retry_d");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
+      await expect(page.getByTestId("app-header")).toContainText("Retry Delta");
+      await dialog.getByRole("button", { name: "Approve this change", exact: true }).click();
+      // The newly mounted app's normal review is the completion witness.
+      await page.getByTestId("app-header").getByRole("button", { name: "Review again", exact: true }).click();
+      await expect(page.getByTestId("app-problems").getByTestId("app-review")).toBeVisible();
+      expect(seenMutations.some((entry) => entry.endsWith("/approve"))).toBe(false);
+
       // Try again on an installed app repeats the change that failed — the
       // same version change, or the same rollback — never a plan of the
       // Source's default ref.
@@ -1341,7 +1355,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(page.getByTestId("app-problems").locator('[data-problem="run_failed"]')).toContainText("The last change couldn't be applied");
       await page.getByTestId("app-header").getByRole("button", { name: "Review again", exact: true }).click();
       await expect(page.getByTestId("app-problems").getByTestId("app-review").getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
-      expect(revisionBodies).toEqual([{ ref: "v2" }]);
+      expect(revisionBodies).toEqual([{ ref: "v2" }, { ref: "v2" }]);
       runs.set("run_failed_retry_plan", failedPlan({ kind: "rollback", stateVersionId: "sv_retry_prev" }));
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByTestId("app-header").getByRole("button", { name: "Review again", exact: true }).click();
@@ -1350,6 +1364,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(seenMutations).toEqual([
         "DELETE /api/v1/capsules/cap_remove_c?immediate=true",
         "DELETE /api/v1/capsules/cap_remove_c?immediate=true",
+        "POST /api/v1/capsules/cap_retry_d/revision-plans",
         "POST /api/v1/capsules/cap_retry_d/revision-plans",
         "POST /api/v1/state-versions/sv_retry_prev/rollback-plan",
       ]);

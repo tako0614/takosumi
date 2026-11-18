@@ -903,11 +903,6 @@ function Inner() {
       (logs.loading && runLatest()?.status === "failed"),
   );
 
-  const approve = createAction(async () => {
-    await approveRun(runId());
-    await Promise.all([refetchRun(), refetchLogs()]);
-  });
-
   const [applied, setApplied] = createSignal(false);
   const [needsConfirm, setNeedsConfirm] = createSignal(false);
   type ApplyAttempt = { readonly plan: Run; readonly epoch: number };
@@ -919,6 +914,26 @@ function Inner() {
       current?.id === plan.id && current.capsuleId === plan.capsuleId &&
       current.workspaceId === plan.workspaceId && current.type === plan.type;
   };
+
+  const approve = createAction(async (attempt: ApplyAttempt) => {
+    if (!ownsApply(attempt) || runLatest()?.status !== "waiting_approval") return;
+    try {
+      await approveRun(attempt.plan.id);
+      if (ownsApply(attempt)) await Promise.all([refetchRun(), refetchLogs()]);
+    } catch (cause) {
+      if (ownsApply(attempt)) throw cause;
+    }
+  });
+  const cancel = createAction(async (attempt: ApplyAttempt) => {
+    const current = runLatest();
+    if (!ownsApply(attempt) || !current || !canCancelRun(current)) return;
+    try {
+      await cancelRun(attempt.plan.id);
+      if (ownsApply(attempt)) await refetchRun();
+    } catch (cause) {
+      if (ownsApply(attempt)) throw cause;
+    }
+  });
 
   // Whether this plan's deploy approval is still OPEN is not a run-local
   // fact: an apply / destroy_apply explicitly linked by planRunId consumes it
@@ -1079,6 +1094,8 @@ function Inner() {
     setCheckingApply(false);
     deploy.clearError();
     recheckApply.clearError();
+    approve.clearError();
+    cancel.clearError();
     setApplied(false);
     setNeedsConfirm(false);
   });
@@ -1175,10 +1192,6 @@ function Inner() {
     }
   });
 
-  const cancel = createAction(async () => {
-    await cancelRun(runId());
-    await refetchRun();
-  });
   // Cancelling a queued/running apply must never be one stray click — name
   // the run (service + operation) in an explicit ConfirmDialog first.
   /**
@@ -1190,8 +1203,11 @@ function Inner() {
     type === "restore" || type === "destroy_plan" || type === "destroy_apply";
   const confirmApprove = async (): Promise<void> => {
     const r = runLatest();
-    if (!overwritesLiveState(r?.type)) {
-      await approve.run();
+    if (!r || r.status !== "waiting_approval" || approve.busy()) return;
+    const attempt = { plan: r, epoch: runEpoch };
+    if (!ownsApply(attempt)) return;
+    if (!overwritesLiveState(r.type)) {
+      await approve.run(attempt);
       return;
     }
     const name = appName();
@@ -1212,11 +1228,14 @@ function Inner() {
       cancelText: t("common.cancel"),
       danger: true,
     });
-    if (!ok) return;
-    await approve.run();
+    if (!ok || !ownsApply(attempt) || runLatest()?.status !== "waiting_approval" || approve.busy()) return;
+    await approve.run(attempt);
   };
   const confirmCancel = async (): Promise<void> => {
     const r = runLatest();
+    if (!r || !canCancelRun(r) || cancel.busy()) return;
+    const attempt = { plan: r, epoch: runEpoch };
+    if (!ownsApply(attempt)) return;
     const operation = operationLabel(r?.type);
     const name = appName();
     const ok = await confirm({
@@ -1228,8 +1247,9 @@ function Inner() {
       cancelText: t("run.cancelConfirm.keep"),
       danger: true,
     });
-    if (!ok) return;
-    await cancel.run();
+    const current = runLatest();
+    if (!ok || !ownsApply(attempt) || !current || !canCancelRun(current) || cancel.busy()) return;
+    await cancel.run(attempt);
   };
   // Only the states the run API's cancel route actually accepts: a `running`
   // apply (or plan) is not stoppable, and offering the control there answered
