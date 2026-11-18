@@ -161,8 +161,10 @@ describe("installed app page", () => {
     expect(secondary).toContain('view.state !== "uninstalling" && view.state !== "uninstalled"');
     expect(page).toContain('<Match when={view().primaryAction === "reinstall"}>');
     expect(page).toContain("href={reinstallHref(reinstallInput(view(), inst()))}");
-    // A connection problem goes to the connections this app uses.
-    expect(page).toContain('if (managed()) openSection("connections");');
+    // App settings can change the binding only outside a scheduled uninstall.
+    const fixConnection = page.slice(page.indexOf("const fixConnection = () =>"), page.indexOf("// --- uninstall"));
+    expect(fixConnection).toContain('if (managed() && !app()?.uninstall.scheduled) openSection("connections");');
+    expect(fixConnection).toContain('else navigate("/connections");');
     // In-progress work the server reports is followed in place, never applied.
     expect(page).toContain("auto: true,");
     expect(page).toContain("dismissedRuns.has(target.runId)");
