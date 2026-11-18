@@ -33,6 +33,16 @@ export async function readOwnerPrivateApprovalTextFile(
   file: string,
   options: OwnerPrivateReadOptions,
 ): Promise<string> {
+  return new TextDecoder("utf-8", { fatal: true }).decode(
+    await readOwnerPrivateApprovalBytesFile(file, options),
+  );
+}
+
+/** The same protected descriptor read without changing the captured bytes. */
+export async function readOwnerPrivateApprovalBytesFile(
+  file: string,
+  options: OwnerPrivateReadOptions,
+): Promise<Uint8Array> {
   const owner = process.getuid?.();
   if (owner === undefined || process.geteuid?.() !== owner ||
     !isAbsolute(file) || options.sourceRoots.length === 0 ||
@@ -69,7 +79,7 @@ export async function readOwnerPrivateApprovalTextFile(
       throw new Error("private approval changed during read");
     }
     await assertApprovalAncestors(parent, owner);
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, count));
+    return new Uint8Array(bytes.subarray(0, count));
   } finally {
     await handle.close();
   }

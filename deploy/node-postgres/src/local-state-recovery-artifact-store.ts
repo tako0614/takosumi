@@ -98,6 +98,9 @@ export class LocalOpenTofuStateRecoveryArtifactStore implements RecoveryArtifact
     readonly failedApplyRunId: string;
     readonly recoveryRunId: string;
     readonly artifactHandle: string;
+    /** Optional exact capture approval for a local stage-receipt readback. */
+    readonly plaintextSha256?: `sha256:${string}`;
+    readonly custodyEvidenceDigest?: `sha256:${string}`;
   }): Promise<VerifiedRecoveryArtifact> {
     requireIdentifier(input.workspaceId);
     requireIdentifier(input.capsuleId);
@@ -105,7 +108,9 @@ export class LocalOpenTofuStateRecoveryArtifactStore implements RecoveryArtifact
     requireIdentifier(input.recoveryRunId);
     const parts = handleParts(input.artifactHandle);
     if (parts.workspaceId !== input.workspaceId || parts.capsuleId !== input.capsuleId ||
-      parts.failedApplyRunId !== input.failedApplyRunId || parts.recoveryRunId !== input.recoveryRunId) {
+      parts.failedApplyRunId !== input.failedApplyRunId || parts.recoveryRunId !== input.recoveryRunId ||
+      (input.plaintextSha256 !== undefined && parts.plaintextSha256 !== input.plaintextSha256) ||
+      (input.custodyEvidenceDigest !== undefined && parts.custodyEvidenceDigest !== input.custodyEvidenceDigest)) {
       throw recoveryArtifactError("staged local recovery artifact is unavailable");
     }
     const scope: LocalRecoveryStateArtifactScope = {
