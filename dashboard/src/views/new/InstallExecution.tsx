@@ -504,6 +504,11 @@ export default function InstallExecution(props: Props) {
   const approve = async () => {
     // An out-of-date Plan is never approved either.
     if (props.blockedReason) return;
+    if (approving()) return;
+    const plan = runLatest();
+    if (!plan || plan.status !== "waiting_approval") return;
+    const attempt = { plan, epoch: executionEpoch, propsPlanId: props.planRunId, initialId: props.initialRunId ?? props.planRunId };
+    if (!ownsApply(attempt)) return;
     // Approving a removal starts removing live resources: never one click.
     if (isRemoval()) {
       const ok = await confirm({
@@ -515,14 +520,16 @@ export default function InstallExecution(props: Props) {
       });
       if (!ok) return;
     }
+    if (props.blockedReason || !ownsApply(attempt) || runLatest()?.status !== "waiting_approval" || approving()) return;
     setApproving(true);
     setError(null);
     try {
-      mutate(await approveRun(runId(), { reason: "dashboard install review" }));
+      const approved = await approveRun(plan.id, { reason: "dashboard install review" });
+      if (ownsApply(attempt)) mutate(approved);
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      if (ownsApply(attempt)) setError(friendlyError(cause, t).message);
     } finally {
-      setApproving(false);
+      if (sameOwner(attempt)) setApproving(false);
     }
   };
 
@@ -600,7 +607,7 @@ export default function InstallExecution(props: Props) {
     observedInitialRun = scope;
     executionEpoch += 1;
     recoveryController?.abort();
-    setRecoverableApply(undefined); setCheckingApply(false); setApplying(false);
+    setRecoverableApply(undefined); setCheckingApply(false); setApplying(false); setApproving(false);
     setConfirmed(false); setApplyUnconfirmed(false); setError(null);
     mutate(undefined); setRunId(id);
   });
