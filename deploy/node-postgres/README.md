@@ -347,8 +347,21 @@ encrypted state/result artifact. Both the in-process and HTTP local adapters
 can adopt it, including the standard `opentofu-default` profile. Startup uses
 the same configured profile/executor snapshot as Core, ignoring stored profile
 shadows and leaving unconfigured profiles untouched. The retained
-result is replayed through Core's existing claim, authority, generation, and
-commit checks in a receipt-only async scope that cannot contact a Runner.
+result enters Core through an opaque, in-process command bound to that exact
+adapter, Apply Run and state target. Before claiming, Core rechecks the pinned
+module inputs, current provider bindings, Workspace authority, generation and
+immutable execution evidence. These checks do not mint or refresh credentials;
+recovery bypasses normal preparation, private-file renewal and Runner dispatch.
+Successful receipts still confirm the exact allocated encrypted raw-output ref
+inside local custody. A typed provider-failed receipt with persisted partial
+state instead uses the existing failed-provider ledger commit: the same Run
+becomes failed, state advances one generation, the Capsule remains in error,
+and no new raw/public Output is created. A Node-encrypted result can survive
+both API and Runner restarts; this does not turn an old Runner process's
+unconfirmed response into evidence. Original Run start and environment evidence
+are retained; the new claim is audited as receipt recovery, not another Apply.
+Unknown or changed admission is held without a new terminal failure; a lost
+commit acknowledgement returns the durable winner when it can be read.
 Missing or mismatched custody and missing or archived Workspaces are skipped.
 Recovery never triggers a new provider dispatch. Other
 concurrent API work retains its normal adapter behavior. The distribution with

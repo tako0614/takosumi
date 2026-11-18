@@ -44,6 +44,7 @@ import {
   type CapsulePlanCreationFence,
   type OpenTofuRunner,
   type OpenTofuRunnerExecutorRegistry,
+  type RunDispatchControl,
   type RunExecutionAuthority,
   type ReleaseActivator,
   type RecordMeteredUsageInput,
@@ -996,7 +997,7 @@ export interface TakosumiOperations {
       workspaceId: string;
     },
     /** Host invocation bounds, e.g. a Durable Object alarm's wall deadline. */
-    control?: { readonly deadlineAt?: number },
+    control?: RunDispatchControl,
   ): Promise<void>;
   // --- Sources (Core Specification §6) ---
   createSource(
