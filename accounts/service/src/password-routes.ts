@@ -93,14 +93,15 @@ async function body(request: Request): Promise<Record<string, unknown> | Respons
   }
 }
 
-async function admit(port: PasswordAuthStore, action: "login" | "manage", clientKey: string | undefined, identity: string | undefined, now: number): Promise<boolean> {
-  // A shared volume ceiling bounds cost and the number of new counter rows.
-  if (!await port.consumeAttempt(`${action}:all`, now, 240, WINDOW_MS)) return false;
+async function admit(port: PasswordAuthStore, action: "login" | "manage", clientKey: string | undefined, identity: string, now: number): Promise<boolean> {
   if (clientKey && !await port.consumeAttempt(`${action}:source:${await sha256Text(clientKey.slice(0, 128))}`, now, 45, WINDOW_MS)) {
     return false;
   }
-  return identity === undefined ||
-    await port.consumeAttempt(`${action}:identity:${await sha256Text(identity)}`, now, 12, WINDOW_MS);
+  if (!await port.consumeAttempt(`${action}:identity:${await sha256Text(identity)}`, now, 12, WINDOW_MS)) {
+    return false;
+  }
+  // Count only admitted requests against the issuer's verifier budget.
+  return port.consumeAttempt(`${action}:all`, now, 240, WINDOW_MS);
 }
 
 interface PasswordRouteOptions {
@@ -167,8 +168,8 @@ async function login(options: PasswordRouteOptions, port: PasswordAuthStore, now
   if (input instanceof Response) return input;
   const username = normalizePasswordUsername(input.username);
   const password = passwordFrom(input.password);
-  if (!await admit(port, "login", options.clientKey, username, now)) return throttled();
   if (!username || !password) return invalid();
+  if (!await admit(port, "login", options.clientKey, username, now)) return throttled();
   const credential = await port.findByUsername(username);
   const generation = credential ? await generationFor(options, credential.subject) : 0;
   const matches = await matchesPassword(password, credential?.passwordHash);
@@ -191,7 +192,7 @@ async function management(options: PasswordRouteOptions, port: PasswordAuthStore
       !await canonical(options, verified.subject)) return invalid();
   const generation = await generationFor(options, verified.subject);
   if ((session.identityGeneration ?? 0) !== generation) return invalid();
-  const verifiedEmail = options.allowlist ? normalizeLoginEmail(account.email ?? "") : undefined;
+  const address = options.allowlist?.emails.length ? normalizeLoginEmail(account.email) : undefined;
   const identities = await store.listCanonicalUpstreamIdentities?.(account.subject);
   const eligible = Boolean(identities?.length);
   const authTime = (session.reauthenticatedAt ?? session.authTime ?? Math.floor(session.createdAt / 1000)) * 1000;
@@ -226,7 +227,7 @@ async function management(options: PasswordRouteOptions, port: PasswordAuthStore
     sessionId: verified.sessionId,
     generation,
     now: Date.now(),
-    ...(verifiedEmail ? { verifiedEmail } : {}),
+    ...(address ? { emailAdmission: { address, requireVerified: options.allowlist?.requireVerifiedEmail !== false } } : {}),
     ...(currentProof ? {} : { freshUntil: authenticatedAt + FRESH_MS }),
   };
   const saved = current

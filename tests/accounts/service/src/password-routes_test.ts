@@ -104,7 +104,7 @@ test("password attempts share a durable case-insensitive username limit across h
   const a = client(await createEphemeralAccountsHandler({ issuer, store, passwordAuthMode: "login" }));
   const b = client(await createEphemeralAccountsHandler({ issuer, store, passwordAuthMode: "login" }));
   for (let i = 0; i < 12; i++) {
-    const input = { username: i % 2 ? "UNKNOWN-USER" : "unknown-user", password: "short" };
+    const input = { username: i % 2 ? "UNKNOWN-USER" : "unknown-user", password };
     expect((await (i % 2 ? a : b)(login, input)).status).toBe(401);
   }
   const denied = await b(login, { username: "unknown-user", password });

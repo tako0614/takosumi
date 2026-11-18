@@ -24,7 +24,8 @@ export class PostgresPasswordAuthStore implements PasswordAuthStore {
     const bind = (value: unknown) => { args.push(value); return `$${args.length}`; };
     const session = bind(await hashSessionId(authorization.sessionId));
     const owner = bind(subject), now = bind(authorization.now), generation = bind(authorization.generation);
-    const email = bind(authorization.verifiedEmail ?? null);
+    const email = bind(authorization.emailAdmission?.address ?? null);
+    const requireVerified = bind(authorization.emailAdmission?.requireVerified ?? false);
     const freshUntil = bind(authorization.freshUntil ?? Number.MAX_SAFE_INTEGER);
     // Lock the authorizing row so a concurrent logout/reset cannot invalidate
     // it between the final check and this write. Competing reset deadlocks
@@ -35,9 +36,8 @@ export class PostgresPasswordAuthStore implements PasswordAuthStore {
     return `authorized AS MATERIALIZED(SELECT s.session_id FROM accounts_v1.account_sessions s
       JOIN accounts_v1.accounts a ON a.subject=s.subject
       WHERE s.session_id=${session} AND s.subject=${owner} AND s.expires_at>to_timestamp(${now}/1000.0)
-      AND (${email}::text IS NULL OR (a.email_verified IS TRUE AND lower(btrim(a.email))=${email}
-      AND NOT EXISTS(SELECT 1 FROM accounts_v1.accounts other WHERE other.email_verified IS TRUE
-        AND lower(btrim(other.email))=${email} AND other.subject<>${owner})))
+      AND (${email}::text IS NULL OR (lower(btrim(a.email))=${email}
+        AND (NOT ${requireVerified}::boolean OR a.email_verified IS TRUE)))
       AND ${freshUntil}::bigint>=${now}
       AND (s.hosted_metadata->>'absoluteExpiresAt' IS NULL OR (s.hosted_metadata->>'absoluteExpiresAt')::bigint>${now})
       AND COALESCE((s.hosted_metadata->>'identityGeneration')::bigint,0)=${generation}

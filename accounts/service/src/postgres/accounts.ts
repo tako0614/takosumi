@@ -153,11 +153,12 @@ export async function findAccount(
 export async function findAccountByVerifiedEmail(
   client: PostgresQueryClient,
   email: string,
-  options?: { unique?: boolean },
 ): Promise<TakosumiAccountRecord | undefined> {
   const normalized = normalizeAccountEmail(email);
   if (!normalized) return undefined;
-  const query = db
+  const row = await firstDrizzle<AccountRow>(
+    client,
+    db
       .select({
         subject: accounts.subject,
         email: accounts.email,
@@ -174,14 +175,10 @@ export async function findAccountByVerifiedEmail(
       .where(
         and(
           eq(accounts.emailVerified, true),
-          options?.unique
-            ? sql`lower(btrim(${accounts.email})) = ${normalized}`
-            : sql`lower(${accounts.email}) = ${normalized}`,
+          sql`lower(${accounts.email}) = ${normalized}`,
         ),
-      ).limit(options?.unique ? 2 : 1);
-  const { sql: text, params } = query.toSQL();
-  const rows = (await runQuery<AccountRow>(client, text, params)).rows;
-  const row = options?.unique && rows.length !== 1 ? undefined : rows[0];
+      ),
+  );
   return row ? accountFromRow(row) : undefined;
 }
 

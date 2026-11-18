@@ -110,15 +110,16 @@ schema/fence readiness, actual issuer/RP OIDC verification, or staging E2E.
 
 Takosumi Accounts can optionally accept a username and password
 for an existing OAuth account. A signed-in user chooses a username and sets the password under
-**Sign-in methods**. The address must identify exactly one verified account
-on that issuer, and the password does not create or move its subject,
-Workspaces or identity bindings. Users who forget a password can sign in again
+**Sign-in methods**. The credentials attach to the existing subject, Workspaces
+and identity bindings. Users who forget a password can sign in again
 with their existing OAuth provider and set another one. This feature has no
 registration or recovery-by-email endpoint. Usernames are unique on the issuer,
 case-insensitive and fixed once claimed. They use 3–32 ASCII letters, digits,
 dots, underscores or hyphens, starting with a letter or digit.
 
 Set `TAKOSUMI_ACCOUNTS_PASSWORD_AUTH=login` on the Accounts issuer to enable it.
+For Cloudflare, set it as a Worker variable on the issuer. On the official
+staging issuer use the [reviewed authority release](auth-staging.md#private-target-and-credential-custody).
 The default is `disabled`. Outside a local loopback development issuer, use
 HTTPS. For Postgres, apply the additive Accounts migration `049_password_auth.sql`
 using the Accounts migration path before enabling the feature. D1 uses the

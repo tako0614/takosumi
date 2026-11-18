@@ -791,15 +791,15 @@ export class D1AccountsStore implements AccountsStore {
 
   async findAccountByVerifiedEmail(
     email: string,
-    options?: { unique?: boolean },
   ): Promise<TakosumiAccountRecord | undefined> {
     const normalized = normalizeAccountEmail(email);
     if (!normalized) return undefined;
-    await this.initialize();
-    const rows = await this.#documents.listByIndex<TakosumiAccountRecord>(
-      "accounts_by_verified_email", normalized, options?.unique ? 2 : 1,
-    );
-    return options?.unique && rows.length !== 1 ? undefined : rows[0];
+    return (
+      await this.#listByIndex<TakosumiAccountRecord>(
+        "accounts_by_verified_email",
+        normalized,
+      )
+    )[0];
   }
 
   linkUpstreamIdentityIfAbsent(record: UpstreamIdentityRecord): Promise<boolean> { return this.#putIfAbsent("upstream_identities", upstreamIdentityKey(record), record); }

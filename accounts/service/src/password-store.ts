@@ -15,7 +15,7 @@ export interface PasswordWriteAuthorization {
   generation: number;
   now: number;
   /** Only required when the issuer applies an email allowlist. */
-  verifiedEmail?: string;
+  emailAdmission?: { address: string; requireVerified: boolean };
   /** Deadline of recent-session proof; omitted only after current-password proof. */
   freshUntil?: number;
 }
@@ -49,9 +49,10 @@ export function memoryPasswordRevocationAllowed(records: ReadonlyMap<string, unk
 }
 
 export function assertPasswordAuthorization(authorization: PasswordWriteAuthorization): void {
+  const email = authorization?.emailAdmission;
   if (!authorization || !authorization.sessionId || authorization.sessionId.length > 1024 ||
-    (authorization.verifiedEmail !== undefined && (!authorization.verifiedEmail ||
-      authorization.verifiedEmail !== authorization.verifiedEmail.trim().toLowerCase())) ||
+    (email !== undefined && (!email.address || email.address !== email.address.trim().toLowerCase() ||
+      typeof email.requireVerified !== "boolean")) ||
     !Number.isSafeInteger(authorization.generation) || authorization.generation < 0 ||
     !Number.isSafeInteger(authorization.now) || authorization.now < 0 ||
     (authorization.freshUntil !== undefined && (!Number.isSafeInteger(authorization.freshUntil) || authorization.freshUntil < 0))) {
@@ -120,13 +121,9 @@ export class MemoryPasswordAuthStore implements PasswordAuthStore {
     const account = this.accounts.get(subject);
     if (authorization.freshUntil !== undefined && authorization.now > authorization.freshUntil) return false;
     if (!account) return false;
-    if (authorization.verifiedEmail === undefined) return true;
-    if (account.emailVerified !== true || account.email?.trim().toLowerCase() !== authorization.verifiedEmail) return false;
-    for (const other of this.accounts.values()) {
-      if (other.subject !== subject && other.emailVerified === true &&
-        other.email?.trim().toLowerCase() === authorization.verifiedEmail) return false;
-    }
-    return true;
+    const email = authorization.emailAdmission;
+    return !email || (account.email?.trim().toLowerCase() === email.address &&
+      (!email.requireVerified || account.emailVerified === true));
   }
 
   async create(credential: PasswordCredential, authorization: PasswordWriteAuthorization): Promise<boolean> {

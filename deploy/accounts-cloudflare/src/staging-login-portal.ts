@@ -7,6 +7,7 @@ const portalCopy = {
   en: {
     title: "Sign in",
     otherMethods: "or",
+    setUsername: "Set a username",
     stage: "Staging",
     notFound: "Not found",
     method: "Reopen this page to sign in.",
@@ -20,6 +21,7 @@ const portalCopy = {
   ja: {
     title: "ログイン",
     otherMethods: "または",
+    setUsername: "ユーザー名を設定",
     stage: "ステージング",
     notFound: "ページが見つかりません。",
     method: "このページを開き直してください。",
@@ -227,10 +229,13 @@ function portalResponse(
   const password = passwordReturn ? passwordForm(language, nonce, passwordReturn) : "";
   const divider = password && choices ? `<p class="auth-divider">${copy.otherMethods}</p>` : "";
   const providers = choices ? `<ul class="auth-providers">${choices}</ul>` : "";
+  const setup = passwordReturn?.startsWith("/oauth/authorize?")
+    ? `<p class="auth-summary"><a class="auth-setup-link" href="/account">${copy.setUsername}</a></p>`
+    : "";
   const html = authPage({
     language, nonce, issuer: stagingIssuer, badge: copy.stage,
     title: product ? authSignInTitle(language, product) : copy.title,
-    description: message, body: password + divider + providers,
+    description: message, body: password + divider + providers + setup,
   });
   return new Response(request.method === "HEAD" ? null : html, {
     status,
@@ -270,6 +275,7 @@ function passwordForm(language: "ja" | "en", nonce: string, returnTo: string): s
 .auth-password input { width: 100%; min-width: 0; min-height: 2.75rem; padding: .5rem; border: 1px solid var(--auth-control-border); border-radius: .5rem; background: var(--auth-panel); color: var(--auth-fg); font: 400 1rem var(--auth-font); }
 .auth-password input:focus-visible { outline: 2px solid var(--auth-accent); outline-offset: 2px; }
 #password-error:empty { display: none; }
+.auth-setup-link { color: var(--auth-fg); text-underline-offset: .2em; }
 </style>
 <section class="auth-password" id="password-root" data-return-path="${h(returnTo)}">
 <form id="password-form" method="post" action="/api/v1/auth/password/login" aria-label="${h(copy.title)}"><fieldset id="password-fields">

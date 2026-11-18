@@ -164,9 +164,8 @@ export class PostgresAccountsStore implements AccountsStore {
 
   findAccountByVerifiedEmail(
     email: string,
-    options?: { unique?: boolean },
   ): Promise<TakosumiAccountRecord | undefined> {
-    return accounts.findAccountByVerifiedEmail(this.#client, email, options);
+    return accounts.findAccountByVerifiedEmail(this.#client, email);
   }
 
   linkUpstreamIdentityIfAbsent(record: UpstreamIdentityRecord): Promise<boolean> { return accounts.linkUpstreamIdentityIfAbsent(this.#client, record); }

@@ -36,14 +36,14 @@ export class D1PasswordAuthStore implements PasswordAuthStore {
             WHERE r.bucket='hosted_oidc_revoked_sessions' AND r.key=COALESCE(json_extract(s.document,'$.issuerSessionId'),?))))
         AND COALESCE((SELECT json_extract(g.document,'$.generation') FROM ${documents} g WHERE g.bucket='authentication_generations' AND g.key=?),0)=?)
         AND ${fence}
-        AND (? IS NULL OR (EXISTS(SELECT 1 FROM ${documents} a WHERE a.bucket='accounts' AND a.key=?
-          AND json_extract(a.document,'$.emailVerified')=1 AND lower(trim(json_extract(a.document,'$.email')))=?)
-        AND NOT EXISTS(SELECT 1 FROM ${indexes} e WHERE e.index_name='accounts_by_verified_email'
-          AND e.index_key=? AND e.bucket='accounts' AND e.document_key<>?)))
+        AND (? IS NULL OR EXISTS(SELECT 1 FROM ${documents} a WHERE a.bucket='accounts' AND a.key=?
+          AND lower(trim(json_extract(a.document,'$.email')))=?
+          AND (?=0 OR json_extract(a.document,'$.emailVerified')=1)))
         AND ?>=?`,
       args: [sessionHash, subject, authorization.now, authorization.now, authorization.generation,
         authorization.now, fallbackAnchor, subject, authorization.generation, subject, subject,
-        authorization.verifiedEmail ?? null, subject, authorization.verifiedEmail ?? null, authorization.verifiedEmail ?? null, subject,
+        authorization.emailAdmission?.address ?? null, subject, authorization.emailAdmission?.address ?? null,
+        Number(authorization.emailAdmission?.requireVerified === true),
         authorization.freshUntil ?? Number.MAX_SAFE_INTEGER, authorization.now],
     };
   }

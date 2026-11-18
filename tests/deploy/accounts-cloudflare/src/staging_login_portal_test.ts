@@ -24,7 +24,8 @@ async function render(url: URL = signInUrl(), providers: unknown = descriptors, 
 }
 
 function links(html: string): URL[] {
-  return [...html.matchAll(/href="([^"]+)"/gu)].map((match) => new URL(match[1]!.replace(/&amp;/gu, "&"), issuer));
+  return [...html.matchAll(/href="([^"]+)"/gu)].map((match) => new URL(match[1]!.replace(/&amp;/gu, "&"), issuer))
+    .filter((url) => url.pathname !== "/account");
 }
 
 test("stage login uses only configured public providers and preserves the entire authorize continuation", async () => {
@@ -323,6 +324,7 @@ test("enabled password login retains OAuth continuation and permits only exact a
     const html = await response!.text();
     expect(links(html).map((target) => target.searchParams.get("return_to"))).toEqual([continuation, continuation]);
     expect(html).toContain(`data-return-path="${continuation.replaceAll("&", "&amp;")}"`);
+    expect(html.includes('href="/account"')).toBe(continuation !== "/account");
   }
   for (const continuation of ["/account?next=bad", "/account/", "https://auth-staging.takos.jp/account"]) {
     const response = await handleStagingLoginPortal({ request: new Request(signInUrl(continuation)), issuer,

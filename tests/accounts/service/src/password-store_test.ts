@@ -81,7 +81,7 @@ async function session(store: AccountsStore, subject = OWNER): Promise<PasswordW
   const sessionId = `session-${subject}-${generation}`;
   await store.saveAccountSession({ sessionId, subject, identityGeneration: generation,
     createdAt: 1_000, expiresAt: 50_000 });
-  return { sessionId, generation, now: 2_000, verifiedEmail: `${subject}@example.test` };
+  return { sessionId, generation, now: 2_000, emailAdmission: { address: `${subject}@example.test`, requireVerified: true } };
 }
 
 for (const kind of ["memory", "d1", "postgres"] as const) {
@@ -89,7 +89,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
     test("setting a password needs an existing account and exact live owner session; cannot create identities", async () => {
       const f = await fixture(kind);
       try {
-        const auth = { sessionId: "missing", generation: 0, now: 2_000, verifiedEmail: account().email! };
+        const auth = { sessionId: "missing", generation: 0, now: 2_000, emailAdmission: { address: account().email!, requireVerified: true } };
         expect(await f.auth.create(credential(), auth)).toBe(false);
         expect(await f.store.findAccount(OWNER)).toBeUndefined();
         await f.store.saveAccount(account());
@@ -191,7 +191,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
             ...(explicit ? { issuerSessionId: anchor } : {}) });
           await f.store.revokeHostedOidcSessionGrants!(anchor, 1_500);
           expect(await f.store.findAccountSession(sessionId)).toBeDefined();
-          expect(await f.auth.replace(1, next, 2_000, { sessionId, generation: 0, now: 2_000, verifiedEmail: account().email! })).toBe(false);
+          expect(await f.auth.replace(1, next, 2_000, { sessionId, generation: 0, now: 2_000, emailAdmission: { address: account().email!, requireVerified: true } })).toBe(false);
         }
         expect(await f.auth.findBySubject(OWNER)).toEqual(credential());
         const fresh = await session(f.store);
@@ -207,7 +207,7 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
       } finally { await f.close(); }
     });
 
-    test("verified email, uniqueness and recent-proof deadline are rechecked on each write", async () => {
+    test("configured email admission and recent-proof deadline are rechecked on each write", async () => {
       const f = await fixture(kind);
       try {
         await f.store.saveAccount(account());
@@ -219,8 +219,6 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
         expect(await f.auth.create(credential(), auth)).toBe(false);
         await f.store.saveAccount({ ...account(), email: `  ${account().email!.toUpperCase()}  ` });
         await f.store.saveAccount({ ...account(OTHER), email: account().email });
-        expect(await f.auth.create(credential(), auth)).toBe(false);
-        await f.store.saveAccount(account(OTHER));
         expect(await f.auth.create(credential(), { ...auth, freshUntil: 2_000 })).toBe(true);
         const next = credential({ version: 2 });
         expect(await f.auth.replace(1, next, 2_000, { ...auth, freshUntil: 1_999 })).toBe(false);
@@ -228,15 +226,13 @@ for (const kind of ["memory", "d1", "postgres"] as const) {
         expect(await f.auth.replace(1, next, 2_000, auth)).toBe(false);
         await f.store.saveAccount({ ...account(), emailVerified: false });
         expect(await f.auth.replace(1, next, 2_000, auth)).toBe(false);
-        await f.store.saveAccount(account());
-        await f.store.saveAccount({ ...account(OTHER), email: account().email });
-        expect(await f.auth.replace(1, next, 2_000, auth)).toBe(false);
         expect(await f.auth.findBySubject(OWNER)).toEqual(credential());
         expect(await f.store.getAccountAuthenticationGeneration!(OWNER)).toBe(0);
         expect(await f.store.findAccountSession(auth.sessionId)).toBeDefined();
-        await f.store.saveAccount(account(OTHER));
-        // Current-password proof has no recent-session deadline.
-        expect(await f.auth.replace(1, next, 2_000, auth)).toBe(true);
+        // An operator may admit an unverified address. Current-password proof
+        // has no recent-session deadline.
+        const relaxed = { ...auth, emailAdmission: { address: account().email!, requireVerified: false } };
+        expect(await f.auth.replace(1, next, 2_000, relaxed)).toBe(true);
       } finally { await f.close(); }
     });
 
@@ -338,14 +334,14 @@ test("PostgreSQL email updates without a verification claim clear prior verified
   const f = await fixture("postgres");
   try {
     await f.store.saveAccount(account());
-    expect((await f.store.findAccountByVerifiedEmail(account().email!, { unique: true }))?.subject).toBe(OWNER);
+    expect((await f.store.findAccountByVerifiedEmail(account().email!))?.subject).toBe(OWNER);
     const { emailVerified: _verified, ...withoutClaim } = account();
     await f.store.saveAccount({ ...withoutClaim, email: "different@example.test" });
-    expect(await f.store.findAccountByVerifiedEmail(account().email!, { unique: true })).toBeUndefined();
-    expect(await f.store.findAccountByVerifiedEmail("different@example.test", { unique: true })).toBeUndefined();
+    expect(await f.store.findAccountByVerifiedEmail(account().email!)).toBeUndefined();
+    expect(await f.store.findAccountByVerifiedEmail("different@example.test")).toBeUndefined();
     await f.store.saveAccount(account());
     await f.store.saveAccount({ ...account(), emailVerified: undefined });
-    expect(await f.store.findAccountByVerifiedEmail(account().email!, { unique: true })).toBeUndefined();
+    expect(await f.store.findAccountByVerifiedEmail(account().email!)).toBeUndefined();
   } finally { await f.close(); }
 });
 
@@ -362,7 +358,7 @@ test("memory policy rejects aliases and Financial enrollment without breaking ac
   const auth = new MemoryPasswordAuthStore(accounts, () => { revocations++; }, () => true,
     (subject) => memoryPasswordSubjectActive(records, subject),
     (subject) => memoryPasswordRevocationAllowed(records, subject));
-  const authorization = { sessionId: "synthetic-policy-test", generation: 0, now: 2_000, verifiedEmail: account().email! };
+  const authorization = { sessionId: "synthetic-policy-test", generation: 0, now: 2_000, emailAdmission: { address: account().email!, requireVerified: true } };
   records.set(`identity_merge_locks\n${OWNER}`, { operationId: "merge" });
   expect(await auth.create(credential(), authorization)).toBe(false);
   records.set("identity_merge_operations\nmerge", { status: "active" });

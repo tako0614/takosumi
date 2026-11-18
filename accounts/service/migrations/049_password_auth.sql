@@ -1,7 +1,4 @@
 -- Additive credentials for existing OAuth accounts. No signup or recovery identity.
-CREATE INDEX accounts_password_verified_email_idx
-  ON accounts_v1.accounts (lower(btrim(email))) WHERE email_verified IS TRUE;
-
 CREATE TABLE accounts_v1.password_credentials (
   subject text PRIMARY KEY REFERENCES accounts_v1.accounts(subject) ON DELETE RESTRICT,
   username text NOT NULL UNIQUE CHECK (username ~ '^[a-z0-9][a-z0-9_.-]{2,31}$'),
