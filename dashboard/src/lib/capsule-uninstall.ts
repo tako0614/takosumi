@@ -1,4 +1,4 @@
-import type { CapsuleAppView } from "./control-api.ts";
+import type { Capsule, CapsuleAppView } from "./control-api.ts";
 import { formatDateTime, t } from "../i18n/index.ts";
 
 /**
@@ -42,4 +42,37 @@ export function appUninstallExportNote(
     default:
       return undefined;
   }
+}
+
+/** Public readback facts, never evidence that this caller created a reservation. */
+export function observeUninstallReadback(
+  kind: "schedule" | "cancel",
+  before: Pick<Capsule, "id" | "workspaceId" | "status" | "uninstall">,
+  current: Pick<Capsule, "id" | "workspaceId" | "status" | "uninstall">,
+  app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "state" | "applied" | "uninstall">,
+): "removed" | "reservation" | "cancelled" | "unverified" {
+  if (current.id !== before.id || app.capsuleId !== before.id ||
+    current.workspaceId !== before.workspaceId || app.workspaceId !== before.workspaceId) return "unverified";
+  if (kind === "schedule" && current.status === "destroyed" && app.state === "uninstalled") return "removed";
+  const previous = before.uninstall;
+  const record = current.uninstall;
+  if (typeof record?.id !== "string" || !record.id.trim() || !Number.isSafeInteger(record.revision) || record.revision < 1) return "unverified";
+  if (kind === "cancel") {
+    return previous?.phase === "scheduled" && previous.id === record.id &&
+        Number.isSafeInteger(previous.revision) && previous.revision > 0 && record.revision === previous.revision + 1 &&
+        record.phase === "cancelled" && typeof record.cancelledAt === "string" && Number.isFinite(Date.parse(record.cancelledAt)) &&
+        ["active", "stale", "error"].includes(record.previousStatus) &&
+        record.previousStatus === previous.previousStatus && current.status === previous.previousStatus &&
+        app.applied && !app.uninstall.scheduled && app.state !== "uninstalled" &&
+        app.state !== "uninstalling" && app.state !== "uninstall_scheduled"
+      ? "cancelled" : "unverified";
+  }
+  const scheduled = app.uninstall.scheduled;
+  return current.status === "uninstalled" && record.id !== previous?.id &&
+      (previous === undefined || previous.phase === "cancelled") &&
+      (record.phase === "scheduled" || record.phase === "destroying") &&
+      scheduled?.phase === record.phase && scheduled.requestedAt === record.requestedAt &&
+      scheduled.deleteAfter === record.scheduledDestroyAt &&
+      (app.state === "uninstall_scheduled" || app.state === "uninstalling")
+    ? "reservation" : "unverified";
 }

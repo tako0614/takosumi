@@ -107,7 +107,6 @@ export default function AppAttentionSection(props: {
   readonly startingAction?: CapsuleAppAction | "continue_revision";
   readonly canUninstall?: boolean;
   readonly uninstallBusy: boolean;
-  readonly uninstallError?: string;
   readonly screenRetryBusy: boolean;
   readonly screenRetryMessage?: string;
   readonly error?: string;
@@ -336,9 +335,6 @@ export default function AppAttentionSection(props: {
                   )}
                 </Show>
               </div>
-              <Show when={props.uninstallError}>
-                {(message) => <p class="wa-error" role="alert">{message()}</p>}
-              </Show>
             </article>
           </Show>
 

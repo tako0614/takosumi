@@ -77,7 +77,7 @@ describe("installed app page", () => {
   });
 
   test("state, problems, screens and history come from the server's per-app reads", () => {
-    expect(page).toContain("createResource(capsuleId, getCapsuleApp)");
+    expect(page).toContain("getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined)");
     expect(page).toContain("listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES })");
     expect(page).toContain("data-app-state={view().state}");
     expect(page).toContain("t(appStateSentence(view()))");
@@ -231,7 +231,7 @@ describe("installed app page", () => {
 
   test("uninstall is one implementation: grace period stated first and cancellable", () => {
     expect(page).toContain("await deleteCapsule(inst.id);");
-    expect(page).toContain("await cancelCapsuleUninstall(capsuleId());");
+    expect(page).toContain("await cancelCapsuleUninstall(inst.id);");
     expect(page).toContain("deleteCapsule(capsuleId(), { immediate: true })");
     expect(page).not.toContain("dependencyWarning");
     expect(page).not.toContain("dependencyCheck");
