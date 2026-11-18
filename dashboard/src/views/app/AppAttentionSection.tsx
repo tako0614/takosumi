@@ -23,7 +23,7 @@ import {
 } from "../../lib/app-page.ts";
 import { installAttemptHref } from "../../lib/app-links.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
-import { appUninstallBanner, appUninstallExportNote } from "../../lib/capsule-uninstall.ts";
+import { appUninstallBanner, appUninstallConnectionNotice, appUninstallExportNote } from "../../lib/capsule-uninstall.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
@@ -124,7 +124,13 @@ export default function AppAttentionSection(props: {
     return action !== undefined && app().primaryAction === action &&
       primary !== undefined && problemKey(primary) === problemKey(problem);
   };
-  const cards = () => app().problems.filter((problem) => !UNINSTALL_CODES.has(problem.code));
+  const scheduled = () => app().uninstall.scheduled;
+  const uninstallFailed = () => app().problems.find((problem) => problem.code === "uninstall_failed");
+  const uninstallBlocked = () => app().problems.find((problem) => problem.code === "uninstall_blocked");
+  const showUninstallCard = () => Boolean(scheduled() || uninstallFailed() || uninstallBlocked());
+  const uninstallConnectionNotice = () => showUninstallCard() ? appUninstallConnectionNotice(app()) : undefined;
+  const cards = () => app().problems.filter((problem) => !UNINSTALL_CODES.has(problem.code) &&
+    !(problem.code === "connection_unavailable" && uninstallConnectionNotice()));
   /** The app asking for a link, by the usedBy row the problem names. */
   const requesterName = (problem: CapsuleAppProblem) => {
     const row = app().links?.usedBy.find((link) =>
@@ -135,10 +141,6 @@ export default function AppAttentionSection(props: {
   };
   const cardKeys = createMemo(() => cards().map(problemKey), undefined, { equals: sameKeys });
   const cardByKey = () => new Map(cards().map((problem) => [problemKey(problem), problem]));
-  const scheduled = () => app().uninstall.scheduled;
-  const uninstallFailed = () => app().problems.find((problem) => problem.code === "uninstall_failed");
-  const uninstallBlocked = () => app().problems.find((problem) => problem.code === "uninstall_blocked");
-  const showUninstallCard = () => Boolean(scheduled() || uninstallFailed() || uninstallBlocked());
   const pendingReview = () => {
     const review = app().progress.review;
     // A review the server is waiting on that is not already open here.
@@ -284,6 +286,7 @@ export default function AppAttentionSection(props: {
           <Show when={showUninstallCard()}>
             <article class="ap-problem ap-problem-warn" data-problem="uninstall">
               <strong>{banner()}</strong>
+              <Show when={uninstallConnectionNotice()}>{(notice) => <p>{t(notice())}</p>}</Show>
               <Show when={uninstallFailed()}>
                 {(problem) => <p>{runFailureHint(problem().errorCode)}</p>}
               </Show>
@@ -304,7 +307,7 @@ export default function AppAttentionSection(props: {
                 <Show
                   when={uninstallFailed()}
                   fallback={
-                    <Show when={offerUninstallNow()}>
+                    <Show when={offerUninstallNow() && !uninstallConnectionNotice()}>
                       <Button
                         variant="secondary"
                         type="button"
@@ -319,7 +322,7 @@ export default function AppAttentionSection(props: {
                 >
                   {(problem) => (
                     <>
-                      <Show when={props.canUninstall !== false && !isPrimary(problem(), "retry")}>
+                      <Show when={props.canUninstall !== false && !isPrimary(problem(), "retry") && !uninstallConnectionNotice()}>
                         <Button
                           variant="secondary"
                           type="button"
@@ -333,6 +336,9 @@ export default function AppAttentionSection(props: {
                       <Show when={problem().runId}>{(runId) => detailsLink(runId())}</Show>
                     </>
                   )}
+                </Show>
+                <Show when={uninstallConnectionNotice() && props.canUninstall !== false && app().primaryAction !== "fix_connection"}>
+                  <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
                 </Show>
               </div>
             </article>

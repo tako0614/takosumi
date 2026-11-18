@@ -401,9 +401,6 @@ export default function ConnectionsTab(props: {
       providerConnectionDisplayName(connection) ||
       providerConnectionProviderLabel(connection, providerOptions());
     const apps = appsUsing(connection.id);
-    // The consequence is stated with the apps it affects: their next update,
-    // settings change or uninstall needs another connection. Removing never
-    // deletes what the apps created.
     const consequence =
       apps === undefined
         ? t("conn.remove.appsUnknown")

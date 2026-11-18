@@ -736,6 +736,10 @@ export const ja = {
   "app.uninstall.bannerDue": "{name} の猶予期間が終わりました。まもなくアンインストールします。",
   "app.uninstall.bannerDestroying": "{name} をアンインストールしています。",
   "app.uninstall.bannerBlocked": "{name} の自動のアンインストールを止めました。安全に取り除けることを確かめられなかったためです。取り消すか、今すぐアンインストールしてください。",
+  "app.uninstall.bannerConnection": "{name} のアンインストールにはクラウド接続の復旧が必要です。",
+  "app.uninstall.connectionRemoved": "このアプリが使っていた接続は削除されています。新しい接続を追加しても、自動では切り替わりません。",
+  "app.uninstall.connectionUnavailable": "このアプリのクラウド接続が使える状態になるまで、リソースは残ります。",
+  "app.uninstall.viewConnections": "クラウド接続を確認",
   "app.uninstall.exportExported": "アンインストールの前にデータを書き出しました。",
   "app.uninstall.exportExportedLedgerOnly": "アンインストールの前に、アプリの設定と状態を書き出しました。このアプリは自身のデータの書き出しに対応していません。",
   "app.uninstall.bannerFailed": "{name} のアンインストールが完了しませんでした。「今すぐアンインストール」で、取り除く内容を確認してやり直せます。",
@@ -1071,10 +1075,10 @@ export const ja = {
   "conn.remove.cta": "削除",
   "conn.remove.confirm": "削除する",
   "conn.remove.affectsApps":
-    "次のアプリがこの接続を使っています: {apps}。これらのアプリは、次に更新・設定変更・アンインストールするとき、別の接続を選ぶ必要があります。",
+    "{apps} がこの接続を使っています。取り除きたいアプリがあれば、アンインストールが完了してから接続を削除してください。先に接続を削除すると、予約済みのアンインストールも止まります。",
   "conn.remove.noApps": "この接続を使っているアプリはありません。",
   "conn.remove.appsUnknown":
-    "使っているアプリを確認できませんでした。使っているアプリがあれば、次に更新・設定変更・アンインストールするとき、別の接続を選ぶ必要があります。",
+    "この接続を使っているアプリを確認できませんでした。使っているアプリがあれば、更新やアンインストールが止まることがあります。",
   "conn.remove.keepsResources": "保存したキーは削除され、元に戻せません。アプリが作ったリソースは削除されません。",
   "conn.expiresAt": "期限: {date}",
   "conn.oauth.manual": "キーを入力して接続する",

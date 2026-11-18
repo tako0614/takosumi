@@ -724,6 +724,10 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.bannerDue": "The grace period for {name} has ended. It will be uninstalled shortly.",
   "app.uninstall.bannerDestroying": "Uninstalling {name}.",
   "app.uninstall.bannerBlocked": "Automatic uninstall of {name} was stopped because it couldn't be confirmed safe. Cancel it, or uninstall now.",
+  "app.uninstall.bannerConnection": "Uninstalling {name} requires a working cloud connection.",
+  "app.uninstall.connectionRemoved": "This app's cloud connection was removed. Adding a connection doesn't switch the app to it automatically.",
+  "app.uninstall.connectionUnavailable": "Resources stay in your cloud until this app's connection works again.",
+  "app.uninstall.viewConnections": "View cloud connections",
   "app.uninstall.exportExported": "Data was exported before uninstalling.",
   "app.uninstall.exportExportedLedgerOnly": "The app's settings and state were exported before uninstalling. This app doesn't support exporting its own data.",
   "app.uninstall.bannerFailed": "Uninstalling {name} didn't finish. Use Uninstall now to review what will be removed and try again.",
@@ -1063,10 +1067,10 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.remove.cta": "Remove",
   "conn.remove.confirm": "Remove",
   "conn.remove.affectsApps":
-    "These apps use this connection: {apps}. Their next update, settings change or uninstall needs another connection.",
+    "{apps} use this connection. Finish uninstalling any apps you want to remove before removing this connection. Removing it first also stops scheduled uninstalls.",
   "conn.remove.noApps": "No app uses this connection.",
   "conn.remove.appsUnknown":
-    "Which apps use it couldn't be checked. Any app that does will need another connection for its next update, settings change or uninstall.",
+    "Which apps use this connection couldn't be checked. Removing it may stop updates and uninstalls for those apps.",
   "conn.remove.keepsResources":
     "The saved keys are deleted and can't be recovered. Resources your apps created are not deleted.",
   "conn.expiresAt": "Expires: {date}",
