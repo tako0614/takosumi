@@ -1839,10 +1839,12 @@ export async function getCapsuleProviderBindingSet(
 export function createCapsuleDestroyRecoveryPlan(
   capsuleId: string,
   replacements: readonly DestroyProviderConnectionReplacement[],
+  options: { readonly isCurrent?: () => boolean } = {},
 ): Promise<unknown> {
   return controlFetch(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`, {
     method: "POST",
     body: { destroyProviderConnectionReplacements: replacements },
+    ...options,
   });
 }
 
@@ -2149,10 +2151,11 @@ export function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> {
   return getCapsuleAppWithSignal(capsuleId);
 }
 
-export async function getCapsuleAppWithSignal(capsuleId: string, signal?: AbortSignal): Promise<CapsuleAppView> {
+export async function getCapsuleAppWithSignal(capsuleId: string, signal?: AbortSignal, options: { readonly isCurrent?: () => boolean } = {}): Promise<CapsuleAppView> {
   const body = await controlFetch<{ app?: CapsuleAppView }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`, { signal },
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`, { signal, ...options },
   );
+  throwIfReadRetired({ signal, ...options });
   const app = body.app;
   if (
     !isRecord(app) ||

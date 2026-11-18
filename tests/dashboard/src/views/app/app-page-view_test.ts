@@ -77,7 +77,8 @@ describe("installed app page", () => {
   });
 
   test("state, problems, screens and history come from the server's per-app reads", () => {
-    expect(page).toContain("getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined)");
+    expect(page).toContain("getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined,");
+    expect(page).toContain('!(info.refetching instanceof AbortSignal) ? info.refetching : {}');
     expect(page).toContain("listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES })");
     expect(page).toContain("data-app-state={view().state}");
     expect(page).toContain("t(appStateSentence(view()))");
@@ -348,7 +349,8 @@ describe("installed app page", () => {
     expect(route).toContain("<Show when={params.id ?? \"\"} keyed>");
     // Defense in depth inside the page.
     expect(page).toContain("const forCapsule = capsuleId();");
-    expect(page).toContain("if (capsuleId() !== forCapsule) return;");
+    expect(page).toContain("const isCurrent = () => capsuleId() === forCapsule && (!options.isCurrent || options.isCurrent());");
+    expect(page).toContain("if (!isCurrent()) return;");
     const reset = page.slice(page.indexOf("on(\n      capsuleId,"), page.indexOf("{ defer: true }", page.indexOf("on(\n      capsuleId,")));
     for (const signal of [
       "setReview(undefined)",
