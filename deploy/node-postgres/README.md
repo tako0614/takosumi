@@ -316,3 +316,27 @@ The architectural claim that the Takosumi account plane is substrate-neutral nee
 than a spec promise. This distribution is that second working substrate for the same composed-origin account-plane
 handler. See `takosumi/docs/concepts/self-host.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability
 table.
+
+### Startup adoption of committed local Apply results
+
+The composed Node server makes two nonblocking recovery passes: at startup and
+once more after Core's existing ten-minute heartbeat window. Each pass examines
+at most 25 recoverable rows using the existing durable sweep cursor, excluding
+queued and terminal accounting work, and admits work for at most five seconds;
+this is a bounded window, not a full-ledger sweep. It considers only stale
+Capsule Apply runs whose last heartbeat predates this startup. Fresh running
+work, queued work, accounting tails, Destroy, lifecycle commands, and private
+Run file grants stay with their existing consumers.
+
+Recovery requires the configured local adapter and an exact authenticated
+encrypted state/result artifact. Both the in-process and HTTP local adapters
+can adopt it, including the standard `opentofu-default` profile. Startup uses
+the same configured profile/executor snapshot as Core, ignoring stored profile
+shadows and leaving unconfigured profiles untouched. The retained
+result is replayed through Core's existing claim, authority, generation, and
+commit checks in a receipt-only async scope that cannot contact a Runner.
+Missing or mismatched custody and missing or archived Workspaces are skipped.
+Recovery never triggers a new provider dispatch. Other
+concurrent API work retains its normal adapter behavior. The distribution with
+no configured Runner performs no recovery. A slow SQL call may finish after
+the admission budget; it cannot admit another Run after that deadline.
