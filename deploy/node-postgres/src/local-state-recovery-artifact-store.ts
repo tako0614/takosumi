@@ -309,7 +309,7 @@ function validateOpenTofuState(bytes: Uint8Array): void {
   }
   if (!isRecord(value) || value.version !== 4 || !Number.isSafeInteger(value.serial) ||
     (value.serial as number) < 0 || typeof value.lineage !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.lineage) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value.lineage) ||
     typeof value.terraform_version !== "string" ||
     !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(value.terraform_version) ||
     !isRecord(value.outputs) || !Array.isArray(value.resources) ||
