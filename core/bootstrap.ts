@@ -836,6 +836,7 @@ export interface TakosumiOperations {
   createCapsuleDestroyPlan(
     capsuleId: string,
     options?: {
+      readonly destroyProviderConnectionReplacements?: readonly import("takosumi-contract/connections").DestroyProviderConnectionReplacement[];
       readonly runnerProfileId?: string;
       readonly actor?: string;
     },
@@ -2084,9 +2085,10 @@ export async function createTakosumiService(
       opentofuController.createCapsuleDestroyPlan(
         capsuleId,
         options?.actor ? { actor: options.actor } : {},
-        options?.runnerProfileId
-          ? { runnerProfileId: options.runnerProfileId }
-          : {},
+        {
+          ...(options?.runnerProfileId ? { runnerProfileId: options.runnerProfileId } : {}),
+          ...(options?.destroyProviderConnectionReplacements !== undefined ? { destroyProviderConnectionReplacements: options.destroyProviderConnectionReplacements } : {}),
+        },
       ),
     createCapsuleDriftCheck: (capsuleId, options) =>
       opentofuController.createCapsuleDriftCheck(capsuleId, {

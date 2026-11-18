@@ -1378,6 +1378,7 @@ function planRunPreparationIdentity(run: PlanRun) {
     driftCheck: run.driftCheck,
     refreshOnly: run.refreshOnly,
     autoApplyRequested: run.autoApplyRequested,
+    ...(run.destroyConnectionRecovery ? { destroyConnectionRecovery: run.destroyConnectionRecovery } : {}),
   };
 }
 

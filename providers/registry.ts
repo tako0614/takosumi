@@ -38,6 +38,7 @@ import {
 import {
   CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
   CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
+  hasCloudflareVerifiedAccountScope,
 } from "./cloudflare/credentials.ts";
 import { cloudflareProviderSettings } from "./cloudflare/settings.ts";
 import { assertCloudflareOAuthScopes, cloudflareOAuthExpiresAt, cloudflareOAuthRefreshRequired, refreshCloudflareOAuthValues } from "./cloudflare/oauth.ts";
@@ -227,6 +228,7 @@ export function connectionOAuthDescriptorsFromEnv(
 }
 
 const cloudflareDriver: CredentialRecipeRuntimeDriver = {
+  hasVerifiedAccountScope: hasCloudflareVerifiedAccountScope,
   evidenceIssuer: "cloudflare_api_token_vending",
   verifierId: CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
   verificationCapabilities: [

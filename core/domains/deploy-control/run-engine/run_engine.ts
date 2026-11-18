@@ -1686,6 +1686,7 @@ export interface RunEngineDependencies {
   readonly runEnv: RunEnvResolver;
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
+  readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
   readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   readonly privateRunFileGrantNow?: () => number;
   readonly privateRunFileRefreshIntervalMs?: number;
@@ -1729,6 +1730,7 @@ export class RunEngine {
   readonly #runEnv: RunEnvResolver;
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
+  readonly #hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
   readonly #privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   readonly #privateRunFileGrantNow: () => number;
   readonly #privateRunFileRefreshIntervalMs: number;
@@ -1784,6 +1786,7 @@ export class RunEngine {
     this.#runEnv = deps.runEnv;
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
+    this.#hasVerifiedAccountScope = deps.hasVerifiedAccountScope;
     this.#privateRunFileGrantMinter = deps.privateRunFileGrantMinter;
     this.#privateRunFileGrantNow = deps.privateRunFileGrantNow ?? Date.now;
     const privateRefreshIntervalMs = deps.privateRunFileRefreshIntervalMs ?? 10_000;
@@ -2396,13 +2399,11 @@ export class RunEngine {
         currentInstallConfig,
         variables,
       );
-      const resolvedProviderBindings =
-        await this.#resolveCapsuleProviderBindingsForRun(
+      const resolvedProviderBindings = internal.destroyConnectionRecovery
+        ? await this.#resolveDestroyConnectionRecovery(capsule, providerBindingResolutionRequirements(requiredProviderRequirements, profile), internal.destroyConnectionRecovery)
+        : await this.#resolveCapsuleProviderBindingsForRun(
           capsule,
-          providerBindingResolutionRequirements(
-            requiredProviderRequirements,
-            profile,
-          ),
+          providerBindingResolutionRequirements(requiredProviderRequirements, profile),
         );
       let rematerialized: CapsuleModuleVariableMaterialization | undefined;
       try {
@@ -2448,6 +2449,8 @@ export class RunEngine {
         profile,
         capsule,
         requiredProviders: declaredProviders,
+        requiredProviderRequirements,
+        ...(internal.destroyConnectionRecovery ? { destroyConnectionRecovery: internal.destroyConnectionRecovery } : {}),
       });
     const policyReasons = [
       ...basePolicy.reasons,
@@ -2564,6 +2567,7 @@ export class RunEngine {
       ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
       ...(compatibilityReportId ? { compatibilityReportId } : {}),
       ...(capsuleContext ? { capsuleContext } : {}),
+      ...(internal.destroyConnectionRecovery ? { destroyConnectionRecovery: internal.destroyConnectionRecovery } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
       ...(internal.origin ? { origin: internal.origin } : {}),
       ...(internal.refreshOnly ? { refreshOnly: true as const } : {}),
@@ -2810,6 +2814,7 @@ export class RunEngine {
       | "planRunId"
       | "expectedWorkspaceManagementAuthority"
       | "origin"
+      | "destroyProviderConnectionReplacements"
     > = {},
   ): Promise<PlanRunResponse> {
     return await this.#createCapsulePlanRun(capsuleId, true, context, internal);
@@ -2849,6 +2854,9 @@ export class RunEngine {
     internal: CreateCapsulePlanInternal = {},
   ): Promise<PlanRunResponse> {
     requireNonEmptyString(capsuleId, "capsuleId");
+    if (!destroy && internal.destroyProviderConnectionReplacements !== undefined) {
+      throw new OpenTofuControllerError("invalid_argument", "Connection recovery is available only for a new destroy Plan.");
+    }
     // Refuse before compatibility checks, source/configuration preparation, or
     // Run creation, including destroy/uninstall and drift-check plans.
     await this.#assertCapsuleHasNoRetiredDependencies(capsuleId);
@@ -2920,6 +2928,9 @@ export class RunEngine {
       runnerProfile,
     );
     if (destroy && !capsule.sourceId) {
+      if (internal.destroyProviderConnectionReplacements !== undefined) {
+        throw new OpenTofuControllerError("failed_precondition", "Source-less legacy teardown cannot recover a connection.", { reason: "destroy_connection_recovery_unproven" });
+      }
       return await this.#createLegacySourcelessDestroyPlan({
         capsule,
         runnerProfile,
@@ -2955,6 +2966,12 @@ export class RunEngine {
         { reason: "destroy_source_snapshot_missing" },
       );
     }
+    const destroyConnectionRecovery = internal.destroyProviderConnectionReplacements === undefined
+      ? undefined
+      : appliedPlan?.resolvedProviderBindingsDigest && appliedPlan.requiredProviderRequirements !== undefined
+        ? { appliedPlanRunId: appliedPlan.id, appliedProviderBindingsDigest: appliedPlan.resolvedProviderBindingsDigest,
+            replacements: structuredClone(internal.destroyProviderConnectionReplacements) }
+        : (() => { throw new OpenTofuControllerError("failed_precondition", "Applied provider account evidence is unavailable.", { reason: "destroy_connection_recovery_unproven" }); })();
     const destroyProviderRequirements = appliedPlan
       ? (() => {
           const inventory = normalizeDestroyProviderInventory(
@@ -3202,6 +3219,7 @@ export class RunEngine {
         source,
         snapshot,
         operation,
+        ...(destroyConnectionRecovery ? { destroyConnectionRecovery } : {}),
         modulePath:
           destroy && appliedPlan ? appliedModulePath : installConfig.modulePath,
         ...(runnerProfileId ? { runnerProfileId } : {}),
@@ -3239,6 +3257,7 @@ export class RunEngine {
           ? { expectedWorkspaceManagementAuthority: workspaceManagementAuthority }
           : {}),
         sourceSnapshotId: snapshot.id,
+        ...(destroyConnectionRecovery ? { destroyConnectionRecovery } : {}),
         ...(internal.planRunId ? { planRunId: internal.planRunId } : {}),
         baseStateGeneration,
         ...(compatibilityReport
@@ -3718,6 +3737,8 @@ export class RunEngine {
     readonly profile: RunnerProfile;
     readonly capsule?: Capsule;
     readonly requiredProviders: readonly string[];
+    readonly requiredProviderRequirements?: readonly CapsuleProviderRequirement[];
+    readonly destroyConnectionRecovery?: PlanRun["destroyConnectionRecovery"];
   }): Promise<{ readonly reasons: readonly string[] }> {
     if (!input.capsule) return { reasons: [] };
     this.#connectionsService ??= new ConnectionsService({
@@ -3727,9 +3748,9 @@ export class RunEngine {
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
     });
-    const resolved = await this.#connectionsService.resolveProviderBindings(
-      input.capsule,
-    );
+    const resolved = input.destroyConnectionRecovery
+      ? await this.#resolveDestroyConnectionRecovery(input.capsule, providerBindingResolutionRequirements(input.requiredProviderRequirements ?? [], input.profile), input.destroyConnectionRecovery, true)
+      : await this.#connectionsService.resolveProviderBindings(input.capsule);
     const declaredEnvConnections = resolved
       .map((entry) => entry.connection)
       .filter(
@@ -3853,6 +3874,7 @@ export class RunEngine {
     readonly source: Source;
     readonly snapshot: SourceSnapshot;
     readonly operation: "create" | "update" | "destroy";
+    readonly destroyConnectionRecovery?: PlanRun["destroyConnectionRecovery"];
     readonly modulePath: string | undefined;
     readonly runnerProfileId?: string;
     readonly requiredProviders?: readonly string[];
@@ -3891,6 +3913,7 @@ export class RunEngine {
       readonly capsule: Capsule;
       readonly installConfig: InstallConfig;
       readonly operation: "create" | "update" | "destroy";
+      readonly destroyConnectionRecovery?: PlanRun["destroyConnectionRecovery"];
       readonly modulePath: string | undefined;
       readonly runnerProfileId?: string;
       readonly requiredProviders?: readonly string[];
@@ -3958,6 +3981,9 @@ export class RunEngine {
         requiredProviderRequirements,
         profile,
       ),
+      input.destroyConnectionRecovery
+        ? await this.#resolveDestroyConnectionRecovery(input.capsule, providerBindingResolutionRequirements(requiredProviderRequirements, profile), input.destroyConnectionRecovery)
+        : undefined,
     );
     const sourceFiles = await this.#sourceModuleFilesForGenericCapsule(
       input.compatibilityReport,
@@ -6476,6 +6502,10 @@ export class RunEngine {
       requiredProviderRequirements,
       profile,
     );
+    if (planRun.destroyConnectionRecovery) {
+      if (planRun.operation !== "destroy") throw new OpenTofuControllerError("failed_precondition", "Connection recovery requires a destroy Plan.");
+      return await this.#resolveDestroyConnectionRecovery(capsule, bindingRequirements, planRun.destroyConnectionRecovery);
+    }
     const resolved =
       planRun.requiredProviderRequirements === undefined ||
       planRun.source.kind === "operator_module"
@@ -6493,6 +6523,30 @@ export class RunEngine {
           requiredProviderRequirements,
         )
       : resolved;
+  }
+
+  async #resolveDestroyConnectionRecovery(
+    capsule: Capsule,
+    requiredProviders: readonly CapsuleProviderRequirement[],
+    recovery: NonNullable<PlanRun["destroyConnectionRecovery"]>,
+    includeUnusedBindings = false,
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
+    if (!appliedPlan || appliedPlan.id !== recovery.appliedPlanRunId ||
+      appliedPlan.resolvedProviderBindingsDigest !== recovery.appliedProviderBindingsDigest ||
+      appliedPlan.requiredProviderRequirements === undefined) {
+      throw new OpenTofuControllerError("failed_precondition", "Applied provider account evidence changed or is unavailable.", { reason: "destroy_connection_recovery_unproven" });
+    }
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store, appOwnership: this.#appOwnership,
+      operatorProviderConnections: this.#operatorProviderConnections,
+      allowOperatorScopedProviderConnections: this.#allowOperatorScopedProviderConnections,
+    });
+    return await this.#connectionsService.resolveProviderBindingsForDestroyRecovery({
+      capsule, requiredProviders, appliedDigest: recovery.appliedProviderBindingsDigest,
+      replacements: recovery.replacements, hasVerifiedAccountScope: this.#hasVerifiedAccountScope,
+      includeUnusedBindings,
+    });
   }
 
   /**
@@ -12315,8 +12369,28 @@ export class RunEngine {
       if (!installConfig) {
         throw new TypeError("InstallConfig is missing");
       }
-      const resolvedProviderBindings =
-        (await this.#resolveRunProviderBindings(input.planRun)) ?? [];
+      let resolvedProviderBindings: readonly ResolvedCapsuleProviderBinding[];
+      if (input.planRun.destroyConnectionRecovery) {
+        // Retirement runs after the atomic destroy commit. Verify that exact
+        // commit, then read the immutable pre-destroy cursor for its account
+        // proof; never use this historical projection for mint or dispatch.
+        const committed = await this.#currentStatePlanRunForCapsule(capsule);
+        const priorId = input.planRun.capsuleCurrentStateVersionId;
+        const prior = priorId ? await this.#store.getStateVersion(priorId) : undefined;
+        if (!committed || committed.id !== input.planRun.id || committed.appliedApplyRunId !== input.applyRun.id ||
+          input.applyRun.status !== "succeeded" || !prior || !stateVersionMatchesCapsuleScope(capsule, prior) ||
+          prior.generation !== input.planRun.baseStateGeneration || input.planRun.requiredProviderRequirements === undefined) {
+          throw new TypeError("destroy retirement provenance is unavailable");
+        }
+        const profile = await this.#requireRunnerProfile(input.planRun.runnerProfileId);
+        resolvedProviderBindings = await this.#resolveDestroyConnectionRecovery(
+          { ...capsule, currentStateVersionId: prior.id, currentStateGeneration: prior.generation },
+          providerBindingResolutionRequirements(input.planRun.requiredProviderRequirements, profile),
+          input.planRun.destroyConnectionRecovery,
+        );
+      } else {
+        resolvedProviderBindings = (await this.#resolveRunProviderBindings(input.planRun)) ?? [];
+      }
       await retire.call(this.#moduleVariableMaterializer, {
         expectedDigest,
         plannedVariables: moduleVariableMaterializerPlannedVariables(
