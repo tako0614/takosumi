@@ -7,6 +7,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { registerCommittedLocalApplyRecovery } from "./local-apply-recovery-capability.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
@@ -637,14 +639,39 @@ function privateRunFileRefreshUnavailable(): OpenTofuRunnerExecutionError {
 }
 
 class LocalOpenTofuRunner implements OpenTofuRunner {
+  readonly #recovery = new AsyncLocalStorage<LocalOpenTofuStateArtifact>();
+  readonly transport: RunnerTransport;
   readonly #privateRunFileSessions = new Map<string, LocalPrivateRunFileSession>();
   readonly #appSourceArchiveRoots = cachedRunnerCapabilityProbe(() => this.#probeAppSourceArchiveRoots());
 
   constructor(
     private readonly archiveStore: SourceArchiveStore,
     private readonly stateStore: LocalOpenTofuStateArtifactStore,
-    private readonly transport: RunnerTransport,
-  ) {}
+    transport: RunnerTransport,
+  ) {
+    this.transport = {
+      ...transport,
+      fetch: (path, init) => {
+        if (this.#recovery.getStore()) {
+          throw new Error("committed local Apply recovery cannot contact a Runner");
+        }
+        return transport.fetch(path, init);
+      },
+    };
+    registerCommittedLocalApplyRecovery(this, (input, consume) => this.recoverCommittedApply(input, consume));
+  }
+
+  private async recoverCommittedApply(
+    input: { readonly runId: string; readonly stateScope: DispatchStateScope },
+    consume: () => Promise<void>,
+  ): Promise<boolean> {
+    const receipt = await this.adoptCommittedStateMutation(input.runId, "apply", input.stateScope);
+    if (!receipt || (receipt.result as OpenTofuApplyResult).providerExecutionFailure) return false;
+    // Retain authenticated immutable bytes, rather than check existence and then
+    // let a second read fall through to a new provider mutation (TOCTOU).
+    await this.#recovery.run(receipt, consume);
+    return true;
+  }
 
   async cleanupUnusedSourceArchive(input: {
     readonly runId: string;
@@ -1989,6 +2016,14 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       throw new Error(
         `local OpenTofu ${action} ${runId} requires a durable stateScope`,
       );
+    }
+    const held = this.#recovery.getStore();
+    if (held) {
+      assertLocalMutationScope(held, scope, runId, action);
+      if (action !== "apply" || held.createdByRunId !== runId || held.action !== action) {
+        throw new Error("committed local Apply recovery identity changed");
+      }
+      return held;
     }
     const existing = await this.stateStore.read(scope.stateRef);
     if (!existing) return undefined;
