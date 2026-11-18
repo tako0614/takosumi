@@ -49,6 +49,7 @@ import type {
 } from "takosumi-contract/install-configs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
+import { parseDestroyProviderConnectionReplacements } from "takosumi-contract/connections";
 import type {
   ProviderBinding,
   ProviderBindings,
@@ -394,7 +395,14 @@ export async function handleCapsules(
     }
     if (leaf === "destroy-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const body = await readJsonObject(request.clone()).catch(() => null);
+      let body: Awaited<ReturnType<typeof readJsonObject>> | null;
+      try { body = request.body === null ? null : await readJsonObject(request.clone()); }
+      catch { return errorJson("invalid_argument", "Destroy Plan body must be a JSON object.", 400); }
+      let destroyProviderConnectionReplacements: ReturnType<typeof parseDestroyProviderConnectionReplacements> | undefined;
+      if (body && Object.hasOwn(body, "destroyProviderConnectionReplacements")) {
+        try { destroyProviderConnectionReplacements = parseDestroyProviderConnectionReplacements(body.destroyProviderConnectionReplacements); }
+        catch { return errorJson("invalid_argument", "Invalid destroy Provider Connection replacement selection.", 400); }
+      }
       const runnerProfileId =
         typeof body?.runnerId === "string" && body.runnerId.trim()
           ? body.runnerId.trim()
@@ -402,9 +410,16 @@ export async function handleCapsules(
               body.runnerProfileId.trim()
             ? body.runnerProfileId.trim()
             : undefined;
+      if (destroyProviderConnectionReplacements &&
+        (!ctx.session.uninstallRequester ||
+          !((ctx.session.credential === "session" && ctx.session.uninstallRequester.grant === undefined) ||
+            (ctx.session.credential === "personal-access-token" && ctx.session.uninstallRequester.grant?.kind === "personal-access-token")))) {
+        return errorJson("forbidden", "Connection recovery requires an account session or personal access token.", 403, request);
+      }
       const response = await operations.createCapsuleDestroyPlan(
         capsuleId,
         {
+          ...(destroyProviderConnectionReplacements ? { destroyProviderConnectionReplacements } : {}),
           ...(runnerProfileId ? { runnerProfileId } : {}),
           actor: ctx.session.subject,
         },

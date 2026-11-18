@@ -261,6 +261,8 @@ export interface CapsuleProviderBindingMintOptions {
 }
 
 export interface ConnectionVault {
+  /** Pure host-driver account predicate; absence refuses destroy reconnection. */
+  hasVerifiedAccountScope?(connection: ProviderConnection): boolean;
   register(
     input: RegisterConnectionInput,
     expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
@@ -2458,6 +2460,21 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       onIssued(exact.token);
       return exact;
     };
+  }
+
+  hasVerifiedAccountScope(connection: ProviderConnection): boolean {
+    const driver = this.#credentialDriver(connection);
+    if (!driver?.hasVerifiedAccountScope || connection.status !== "verified") return false;
+    if (connection.expiresAt !== undefined &&
+      (!Number.isFinite(Date.parse(connection.expiresAt)) || Date.parse(connection.expiresAt) <= this.#now().getTime())) return false;
+    try {
+      const expected = credentialVerificationForDriver(driver);
+      const actual = connection.credentialVerification;
+      if (!expected || !actual || actual.kind !== expected.kind ||
+        actual.verifierId !== expected.verifierId ||
+        JSON.stringify([...(actual.capabilities ?? [])].sort()) !== JSON.stringify([...(expected.capabilities ?? [])].sort())) return false;
+      return driver.hasVerifiedAccountScope(structuredClone(connection)) === true;
+    } catch { return false; }
   }
 
   #credentialDriver(

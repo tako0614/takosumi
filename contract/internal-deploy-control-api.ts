@@ -371,6 +371,12 @@ export interface PlanRun {
    * Absent for runs with no Capsule context.
    */
   readonly resolvedProviderBindingsDigest?: string;
+  /** Delete-only explicit reconnection, bound to the Plan that made current state. */
+  readonly destroyConnectionRecovery?: {
+    readonly appliedPlanRunId: string;
+    readonly appliedProviderBindingsDigest: string;
+    readonly replacements: readonly import("./connections.ts").DestroyProviderConnectionReplacement[];
+  };
   /**
    * Resolved SourceSnapshot this plan was created against. Set for runs created
    * through the Capsule plan/destroy-plan path. The apply consumer

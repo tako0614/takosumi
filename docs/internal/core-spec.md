@@ -368,6 +368,28 @@ state cursor, execution epoch, Workspace management, and policy as for any
 Apply. A finalizer-created Plan additionally requires its matching live
 uninstall request at preparation, atomic admission, and pre-dispatch; a cancel
 or replacement request permanently invalidates the old system approval.
+A person using an account session or personal access token may explicitly select
+replacement Connections for a new manual `POST /api/v1/capsules/{id}/destroy-plan`:
+`{"destroyProviderConnectionReplacements":[{"connectionId":"old-id","replacementConnectionId":"new-id"}]}`.
+This never changes the app's ProviderBindingSet, InstallConfig, applied module,
+variables, state, or scheduled uninstall request. The current StateVersion must
+identify an applied Plan with exact provider rows and a pinned resolved-binding
+digest. The old Connection must be absent. Current scope, ownership, provider,
+credential policy, readiness and expiry are checked for the selected replacement.
+The trusted credential driver must explicitly prove its verified account scope;
+the reference Cloudflare driver requires its exact-account verification capability
+and matching account metadata. The complete binding digest must match the applied
+Plan after substituting the old ID **only in the comparison preimage**. Other
+bindings, aliases, settings, recipe and verification remain exact; minting always
+uses the real new ID. Missing/legacy evidence, changed account or other metadata,
+same IDs and ambiguous selections are refused. This option is not available to
+create/update, source-less legacy teardown, or automatic scheduled retries.
+The new destroy Plan still needs explicit approval and Apply, which recheck the
+same evidence and current authority. A blocked reservation can coexist with this
+manual recovery; it is not rewritten or automatically resumed. Existing no-body
+destroy requests retain their usual behavior. The Web selection form is separate
+from this API contract.
+
 Approval writes `approvedBy` and `approvedAt` together with the `plan.approved`
 audit event in the Plan transition; Activity exposes the same actor and approval
 time. An unverifiable or non-delete Plan, a Plan the owner cancelled, repeated
