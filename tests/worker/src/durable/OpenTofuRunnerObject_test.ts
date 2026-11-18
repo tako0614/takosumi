@@ -8698,3 +8698,46 @@ test("runner DO rejects retired dependency envelopes before container or artifac
   assert.equal(modern.status, 200);
   assert.ok(containerCalls > 0);
 });
+
+
+test("completed adoption binds the durable receipt to immutable R2 evidence and is read-only", async () => {
+  const planRunId = "plan_exact_completed_integrity";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new FakeR2Bucket(), state = new FakeR2Bucket(), storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  let providerCalls = 0, puts = 0;
+  const container = mutationSuccessContainer(planRunId, () => { providerCalls++; });
+  const options = { storage, stateBucket: state, env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET } };
+  const scope = capsuleStateScope(), rawOutputRef = rawOutputRefFor(planRunId);
+  const token = await signedMutationToken(planRunId, { jti: "exact-completed-integrity" });
+  assert.equal((await runnerWithContainer(artifacts, container, options).fetch(
+    signedMutationRequest(planRunId, token, { stateScope: scope, rawOutputRef }),
+  )).status, 200);
+  const original = structuredClone(await storage.get<Record<string, unknown>>("runner-mutation-authority"))!;
+  const originalPut = state.put.bind(state);
+  state.put = async (...args: Parameters<typeof state.put>) => { puts++; return await originalPut(...args); };
+  const object = runnerWithContainer(artifacts, container, options);
+  for (const [field, value] of [
+    ["contentDigest", `sha256:${"9".repeat(64)}`], ["ciphertextLength", 1],
+    ["evidenceRef", "other-evidence"], ["evidenceDigest", `sha256:${"8".repeat(64)}`],
+    ["providerExecutionFailed", true], ["version", 2], ["fence", 2],
+  ] as const) {
+    const changed = structuredClone(original);
+    (changed.completion as Record<string, unknown>)[field] = value;
+    // A valid authority with an internally consistent but different fence is
+    // still not the authority that authenticated the immutable evidence.
+    if (field === "version" || field === "fence") changed[field] = value;
+    await storage.put("runner-mutation-authority", changed);
+    assert.equal((await object.adoptDeterminedMutation(applyRunId, "apply", { stateScope: scope, rawOutputRef })).status, 409, field);
+    const replay = await object.fetch(signedMutationRequest(planRunId,
+      await signedMutationToken(planRunId, { jti: `integrity-replay-${field}` }),
+      { stateScope: scope, rawOutputRef },
+    ));
+    assert.equal(replay.status, 409, `ordinary replay ${field}`);
+    assertMutationIndeterminateResponse(await replay.text(), "apply");
+  }
+  await storage.put("runner-mutation-authority", original);
+  assert.equal((await object.adoptDeterminedMutation(applyRunId, "apply", { stateScope: scope, rawOutputRef })).status, 200);
+  assert.equal(puts, 0);
+  assert.equal(providerCalls, 1);
+});

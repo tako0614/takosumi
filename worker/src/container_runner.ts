@@ -1,3 +1,5 @@
+import { committedApplyReceiptProbeCommand } from "../../core/domains/deploy-control/committed_apply_receipt.ts";
+import type { RunnerMutationAuthorityInspection } from "./durable/OpenTofuRunnerObject.ts";
 import type {
   ServiceDataArtifactPointer,
   ServiceDataBackupRunner,
@@ -417,6 +419,43 @@ export class CloudflareContainerOpenTofuRunner
     };
   }
 
+  /** RunOwner-only observation; no capability probe, prepare, fetch or container start. */
+  committedApplyReceiptProbe(runId: string) {
+    const namespace = this.env.RUNNER;
+    const stub = namespace?.get(namespace.idFromName(runId)) as unknown as {
+      inspectMutationAuthority?: (id: string, action: "apply") => Promise<RunnerMutationAuthorityInspection>;
+      adoptDeterminedMutation?: (id: string, action: "apply", allocation: { stateScope: unknown; rawOutputRef: string }) => Promise<Response>;
+    } | undefined;
+    let completed = false;
+    return committedApplyReceiptProbeCommand({ runner: this, runId,
+      inspect: async () => {
+        if (!stub?.inspectMutationAuthority || !stub.adoptDeterminedMutation) return "hold";
+        const inspection = await stub.inspectMutationAuthority(runId, "apply");
+        if (inspection.kind !== "takosumi.runner-mutation-inspection@v1" || inspection.runId !== runId) return "hold";
+        const authority = inspection.authority;
+        if (authority.status === "absent") return "ordinary";
+        if (authority.status !== "valid" || authority.action !== "apply") return "hold";
+        if (authority.phase === "completed") {
+          completed = authority.completion !== undefined;
+          return completed ? "completed" : "hold";
+        }
+        // No observation grants dispatch. The existing DO prepare fence still
+        // owns preparing/new work, typed pre-dispatch refusal and legacy R2 replay.
+        return ["preparing", "not_dispatched", "dispatched", "indeterminate", "orphaned"].includes(authority.phase) ? "ordinary" : "hold";
+      },
+      read: async (allocation) => {
+        if (!completed || !stub?.adoptDeterminedMutation) return undefined;
+        const response = await stub.adoptDeterminedMutation(runId, "apply", allocation);
+        const { payload } = await readResponseJsonObject(response);
+        const failure = providerExecutionFailureFromContainerResult(payload);
+        if (failure) {
+          if (response.status !== 500 || payload.status !== "failed" || failure.statePersistence !== "persisted") return undefined;
+        } else if (!response.ok || payload.status !== "succeeded") return undefined;
+        return applyResultFromContainerResult(payload);
+      },
+    });
+  }
+
   async apply(
     job: OpenTofuApplyJob,
     control?: RunExecutionControl,
@@ -443,66 +482,7 @@ export class CloudflareContainerOpenTofuRunner
         },
       },
     );
-    // The DO echoes the persisted state digest and opaque raw-output ref. Thread
-    // both onto the result so the controller
-    // records them on the StateVersion / Output.
-    const state = recordFromRecord(result, "state");
-    const providerExecutionFailure =
-      providerExecutionFailureFromContainerResult(result);
-    if (providerExecutionFailure) {
-      const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
-      if (
-        (providerExecutionFailure.statePersistence === "persisted") !==
-        Boolean(stateDigest)
-      ) {
-        throw new Error(
-          "runner failed-state persistence evidence is inconsistent",
-        );
-      }
-      return {
-        providerExecutionFailure,
-        ...(executionEvidenceFromContainerResult(result)
-          ? {
-              executionEvidence:
-                executionEvidenceFromContainerResult(result),
-            }
-          : {}),
-        ...(stateDigest ? { stateDigest } : {}),
-        ...(providerInstallationFromContainerResult(result)
-          ? {
-              providerInstallation:
-                providerInstallationFromContainerResult(result),
-            }
-          : {}),
-        diagnostics: diagnosticsFromContainerResult(result),
-      };
-    }
-    return {
-      ...(recordFromRecord(result, "outputs")
-        ? {
-            outputs: recordFromRecord(
-              result,
-              "outputs",
-            ) as OpenTofuApplyResult["outputs"],
-          }
-        : {}),
-      ...(state && stringFromRecord(state, "digest")
-        ? { stateDigest: stringFromRecord(state, "digest") }
-        : {}),
-      ...(stringFromRecord(result, "rawOutputRef")
-        ? { rawOutputRef: stringFromRecord(result, "rawOutputRef") }
-        : {}),
-      ...(executionEvidenceFromContainerResult(result)
-        ? { executionEvidence: executionEvidenceFromContainerResult(result) }
-        : {}),
-      ...(providerInstallationFromContainerResult(result)
-        ? {
-            providerInstallation:
-              providerInstallationFromContainerResult(result),
-          }
-        : {}),
-      diagnostics: diagnosticsFromContainerResult(result),
-    };
+    return applyResultFromContainerResult(result);
   }
 
   async destroy(
@@ -2218,4 +2198,68 @@ async function digestJson(value: unknown): Promise<string> {
   return `sha256:${Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")}`;
+}
+
+function applyResultFromContainerResult(result: Record<string, unknown>): OpenTofuApplyResult {
+    // The DO echoes the persisted state digest and opaque raw-output ref. Thread
+    // both onto the result so the controller
+    // records them on the StateVersion / Output.
+    const state = recordFromRecord(result, "state");
+    const providerExecutionFailure =
+      providerExecutionFailureFromContainerResult(result);
+    if (providerExecutionFailure) {
+      const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+      if (
+        (providerExecutionFailure.statePersistence === "persisted") !==
+        Boolean(stateDigest)
+      ) {
+        throw new Error(
+          "runner failed-state persistence evidence is inconsistent",
+        );
+      }
+      return {
+        providerExecutionFailure,
+        ...(executionEvidenceFromContainerResult(result)
+          ? {
+              executionEvidence:
+                executionEvidenceFromContainerResult(result),
+            }
+          : {}),
+        ...(stateDigest ? { stateDigest } : {}),
+        ...(providerInstallationFromContainerResult(result)
+          ? {
+              providerInstallation:
+                providerInstallationFromContainerResult(result),
+            }
+          : {}),
+        diagnostics: diagnosticsFromContainerResult(result),
+      };
+    }
+    return {
+      ...(recordFromRecord(result, "outputs")
+        ? {
+            outputs: recordFromRecord(
+              result,
+              "outputs",
+            ) as OpenTofuApplyResult["outputs"],
+          }
+        : {}),
+      ...(state && stringFromRecord(state, "digest")
+        ? { stateDigest: stringFromRecord(state, "digest") }
+        : {}),
+      ...(stringFromRecord(result, "rawOutputRef")
+        ? { rawOutputRef: stringFromRecord(result, "rawOutputRef") }
+        : {}),
+      ...(executionEvidenceFromContainerResult(result)
+        ? { executionEvidence: executionEvidenceFromContainerResult(result) }
+        : {}),
+      ...(providerInstallationFromContainerResult(result)
+        ? {
+            providerInstallation:
+              providerInstallationFromContainerResult(result),
+          }
+        : {}),
+      diagnostics: diagnosticsFromContainerResult(result),
+    };
+
 }

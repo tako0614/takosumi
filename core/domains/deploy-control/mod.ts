@@ -1,5 +1,5 @@
 import { capsuleWithOwnershipForAdmission } from "./store.ts";
-import type { CommittedApplyReceiptCommand } from "./committed_apply_receipt.ts";
+import type { CommittedApplyReceiptCommand, CommittedApplyReceiptProbeCommand } from "./committed_apply_receipt.ts";
 /**
  * OpenTofu-native deployment-control-plane domain.
  *
@@ -527,6 +527,7 @@ export interface RunDispatchControl {
   readonly deadlineAt?: number;
   /** Trusted in-process adoption of one exact adapter/Run receipt; no public boolean. */
   readonly committedApplyReceipt?: CommittedApplyReceiptCommand;
+  readonly committedApplyReceiptProbe?: CommittedApplyReceiptProbeCommand;
 }
 
 export interface OpenTofuPlanJob
