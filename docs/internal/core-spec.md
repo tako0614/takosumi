@@ -1130,7 +1130,14 @@ reference/digest, outcome, raw-output range and immutable execution
 version/fence/operation ID. This private read retains StoredService owner
 resolution, does not write the current-state cache or contact a container, and
 settles through the same current admission, no-mint environment checks and
-lease/CAS as Node receipt adoption. An unreadable/malformed authority, changed
+lease/CAS as Node receipt adoption.
+New completed success receipts also retain the raw Output plaintext digest and
+the ciphertext length actually accepted at its immutable reference. Both the
+private reader and ordinary completed re-entry require that pair to match the
+read bytes. A conditional-write acknowledgement can adopt an older encryption
+format for the same digest, so its actual stored length is retained. Historical
+receipts without the pair keep their existing guards. No fingerprint is inferred
+or backfilled from their current object metadata. An unreadable/malformed authority, changed
 admission, elapsed dispatch deadline or invalid completed artifact holds the
 original Run without a new failure, credential or mutation. A noncompleted
 valid phase (or absent authority) does not grant dispatch: the unchanged normal

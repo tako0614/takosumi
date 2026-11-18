@@ -28,6 +28,7 @@ import {
   digestBytes,
   StateArtifactCrypto,
 } from "../../../../worker/src/state_crypto.ts";
+import { selectSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { createRunCredentialToken } from "../../../../core/shared/run_credential_tokens.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -8740,4 +8741,137 @@ test("completed adoption binds the durable receipt to immutable R2 evidence and 
   assert.equal((await object.adoptDeterminedMutation(applyRunId, "apply", { stateScope: scope, rawOutputRef })).status, 200);
   assert.equal(puts, 0);
   assert.equal(providerCalls, 1);
+});
+
+
+async function completedRawOutputProofFixture(legacyConflict = false) {
+  const planRunId = legacyConflict ? "plan_raw_proof_legacy" : "plan_raw_proof_exact";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new HookedR2Bucket();
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const scope = capsuleStateScope();
+  const rawOutputRef = rawOutputRefFor(planRunId);
+  const outputs = { result_label: { value: "fixture-output", type: "string", sensitive: false } };
+  const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
+  let providerCalls = 0;
+  let legacyBytes: Uint8Array | undefined;
+  if (legacyConflict) {
+    artifacts.beforePut = async (key, options) => {
+      if (key !== rawOutputRef || legacyBytes) return;
+      legacyBytes = await selectSecretBoundaryCrypto({ env: { TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE } })
+        .seal(Buffer.from(plaintext).toString("base64"), "global");
+      const customMetadata = { ...options?.customMetadata };
+      delete customMetadata["takosumi-ciphertext-length"];
+      delete customMetadata["takosumi-encryption-format"];
+      await FakeR2Bucket.prototype.put.call(artifacts, key, legacyBytes, {
+        ...options, onlyIf: undefined, customMetadata,
+      });
+    };
+  }
+  const originalContainer = mutationSuccessContainer(planRunId, () => { providerCalls++; });
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request, port) {
+      const response = await originalContainer.containerFetch(request, port);
+      if (request.method === "POST" && new URL(request.url).pathname === `/runs/${planRunId}`) {
+        return Response.json({ ...(await response.json() as Record<string, unknown>), outputs });
+      }
+      return response;
+    },
+  };
+  const options = { storage, stateBucket: state, env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET } };
+  const first = await runnerWithContainer(artifacts, container, options).fetch(
+    signedMutationRequest(planRunId, await signedMutationToken(planRunId, { jti: "raw-proof-first" }), { stateScope: scope, rawOutputRef }),
+  );
+  assert.equal(first.status, 200);
+  const record = structuredClone(await storage.get<Record<string, unknown>>("runner-mutation-authority"))!;
+  const rawObject = await artifacts.head(rawOutputRef);
+  assert.ok(rawObject);
+  const rawBytes = artifacts.body(rawOutputRef)!.slice();
+  const metadata = { ...rawObject.customMetadata };
+  const object = () => runnerWithContainer(artifacts, container, options);
+  let replayCount = 0;
+  return { planRunId, applyRunId, artifacts, state, storage, scope, rawOutputRef, plaintext, record, rawBytes, metadata,
+    legacyBytes: () => legacyBytes,
+    providerCalls: () => providerCalls,
+    adopt: () => object().adoptDeterminedMutation(applyRunId, "apply", { stateScope: scope, rawOutputRef }),
+    replay: async () => object().fetch(signedMutationRequest(planRunId,
+      await signedMutationToken(planRunId, { jti: `raw-proof-replay-${++replayCount}` }), { stateScope: scope, rawOutputRef })),
+  };
+}
+
+test("completed raw output fingerprint mismatch holds both private adoption and completed reentry", async () => {
+  const f = await completedRawOutputProofFixture();
+  const replacement = await restoreTestCrypto().seal(new TextEncoder().encode(JSON.stringify({
+    result_label: { value: "different-fixture-output", type: "string", sensitive: false },
+  })));
+  await f.artifacts.put(f.rawOutputRef, replacement.ciphertext, { customMetadata: {
+    ...f.metadata, "takosumi-content-digest": replacement.contentDigest,
+    "takosumi-ciphertext-length": String(replacement.ciphertextLength),
+  } });
+  let stateWrites = 0;
+  const put = f.state.put.bind(f.state);
+  f.state.put = async (...args: Parameters<typeof f.state.put>) => { stateWrites++; return await put(...args); };
+  assert.deepEqual([(await f.adopt()).status, (await f.replay()).status], [409, 409]);
+  assert.equal(stateWrites, 0);
+  assert.equal(f.providerCalls(), 1);
+  await f.artifacts.put(f.rawOutputRef, f.rawBytes, { customMetadata: f.metadata });
+  const receipt = f.record.completion as Record<string, unknown>;
+  assert.equal(receipt.rawOutputDigest, await digestBytes(f.plaintext));
+  assert.equal(receipt.rawOutputCiphertextLength, f.rawBytes.byteLength);
+  const adopted = await f.adopt();
+  assert.equal(adopted.status, 200);
+  const payload = await adopted.json() as Record<string, unknown>;
+  assert.equal(await digestBytes(new TextEncoder().encode(JSON.stringify(payload.outputs))), await digestBytes(f.plaintext));
+  assert.equal(stateWrites, 0);
+  assert.equal((await f.replay()).status, 200);
+  assert.equal(f.providerCalls(), 1);
+});
+
+test("completed raw output proof is an optional whole pair and keeps legacy receipt guards", async () => {
+  const f = await completedRawOutputProofFixture();
+  const cases: readonly ((row: Record<string, unknown>) => void)[] = [
+    (row) => { delete row.rawOutputDigest; },
+    (row) => { delete row.rawOutputCiphertextLength; },
+    (row) => { row.rawOutputDigest = "invalid"; },
+    (row) => { row.rawOutputCiphertextLength = 0; },
+    (row) => { row.rawOutputCiphertextLength = 1.5; },
+    (row) => { row.rawOutputCiphertextLength = "length"; },
+    (row) => { row.rawOutputDigest = `sha256:${"9".repeat(64)}`; },
+    (row) => { row.rawOutputCiphertextLength = f.rawBytes.byteLength + 1; },
+  ];
+  for (const change of cases) {
+    const changed = structuredClone(f.record);
+    change(changed.completion as Record<string, unknown>);
+    await f.storage.put("runner-mutation-authority", changed);
+    assert.equal((await f.adopt()).status, 409);
+    assert.equal((await f.replay()).status, 409);
+  }
+  const legacy = structuredClone(f.record);
+  delete (legacy.completion as Record<string, unknown>).rawOutputDigest;
+  delete (legacy.completion as Record<string, unknown>).rawOutputCiphertextLength;
+  await f.storage.put("runner-mutation-authority", legacy);
+  assert.equal((await f.adopt()).status, 200);
+  const retained = await f.storage.get<Record<string, unknown>>("runner-mutation-authority");
+  assert.equal(Object.hasOwn(retained!.completion as object, "rawOutputDigest"), false);
+  assert.equal(Object.hasOwn(retained!.completion as object, "rawOutputCiphertextLength"), false);
+  assert.equal(f.providerCalls(), 1);
+});
+
+test("completed raw output proof records the accepted legacy ciphertext length after conditional conflict", async () => {
+  const f = await completedRawOutputProofFixture(true);
+  const legacy = f.legacyBytes();
+  assert.ok(legacy);
+  const prepared = await restoreTestCrypto().seal(f.plaintext);
+  assert.notEqual(legacy.byteLength, prepared.ciphertextLength);
+  const receipt = f.record.completion as Record<string, unknown>;
+  assert.equal(receipt.rawOutputDigest, await digestBytes(f.plaintext));
+  assert.equal(receipt.rawOutputCiphertextLength, legacy.byteLength);
+  assert.equal(f.metadata["takosumi-ciphertext-length"], undefined);
+  const response = await f.adopt();
+  assert.equal(response.status, 200);
+  const payload = await response.json() as Record<string, unknown>;
+  assert.equal(await digestBytes(new TextEncoder().encode(JSON.stringify(payload.outputs))), await digestBytes(f.plaintext));
+  assert.equal(f.providerCalls(), 1);
 });
