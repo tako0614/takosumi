@@ -6823,7 +6823,7 @@ async function seedRecoveredRestoreSource(state: FakeR2Bucket, ledger: FakeResto
 }> {
   const plaintext = new TextEncoder().encode(JSON.stringify({
     version: 4, terraform_version: "1.9.8", serial: 2,
-    lineage: "b8d6c5f4-8f27-4d16-8b90-839c7f770001", outputs: {},
+    lineage: "b8d6c5f4-8f27-0d16-0b90-839c7f770001", outputs: {},
     resources: [{ mode: "managed", type: "example_resource", name: "fixture",
       provider: 'provider["registry.example/example"]',
       instances: [{ schema_version: 0, attributes: {} }] }],

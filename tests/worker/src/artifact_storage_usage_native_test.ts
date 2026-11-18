@@ -204,7 +204,7 @@ test("workerd recovery verify gates existing handle adoption on the original ret
       import {ObjectKeyArtifactReferenceAllocator} from ${JSON.stringify(allocator)};
       export default {async fetch(request,env){
         const route=new URL(request.url).pathname;
-        const plaintext=new TextEncoder().encode(JSON.stringify({version:4,terraform_version:"1.9.8",serial:1,lineage:"7a651571-502c-47d3-b737-cecc3877d714",resources:[{mode:"managed",type:"fixture_resource",name:"fixture",provider:"provider[\\\"registry.example/fixture\\\"]",instances:[{schema_version:0,attributes:{}}]}],outputs:{}}));
+        const plaintext=new TextEncoder().encode(JSON.stringify({version:4,terraform_version:"1.9.8",serial:1,lineage:"7a651571-502c-07d3-0737-cecc3877d714",resources:[{mode:"managed",type:"fixture_resource",name:"fixture",provider:"provider[\\\"registry.example/fixture\\\"]",instances:[{schema_version:0,attributes:{}}]}],outputs:{}}));
         const input={workspaceId:"ws_native",capsuleId:route==="/missing"?"historical":"confirmed",environment:"stage",generation:1,
           failedApplyRunId:"failed",recoveryRunId:"recovery",plaintextSha256:await digestBytes(plaintext),custodyEvidenceDigest:"sha256:"+"a".repeat(64),plaintext};
         const common={bucket:env.STATE,allocator:new ObjectKeyArtifactReferenceAllocator(),
