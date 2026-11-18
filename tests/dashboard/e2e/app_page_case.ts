@@ -846,6 +846,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === `/api/v1/runs/${planId}`) return route.fulfill({ json: { run: plan } });
         if (path === `/api/v1/runs/${applyId}`) {
           applyReads += 1;
+          // The recovery authorizes the exact Run first; hold the separate
+          // in-place resource read after that identity has been accepted.
+          if (applyReads === 1) return route.fulfill({ json: { run: apply } });
           await new Promise<void>((resolve) => {
             held.release = async () => { await route.fulfill({ json: { run: apply } }); resolve(); };
           });
@@ -864,7 +867,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await review.getByRole("button", { name: "Allow and update", exact: true }).click();
       await expect.poll(() => attempts).toBe(2);
       await expect.poll(() => historyReads).toBe(1);
-      await expect.poll(() => applyReads).toBeGreaterThan(0);
+      await expect.poll(() => applyReads).toBe(2);
       await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toHaveCount(0);
       await expect(review.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
       await held.release?.();
