@@ -88,7 +88,7 @@ import {
   releaseRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
-import { observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
+import { appUninstallConnectionNotice, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
 import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
 import {
   APP_HISTORY_RUN_TYPES,
@@ -900,13 +900,17 @@ export default function AppManagePage(props: {
     }
   };
   const fixConnection = () => {
-    if (managed()) openSection("connections");
+    if (managed() && !app()?.uninstall.scheduled) openSection("connections");
     else navigate("/connections");
   };
 
   // --- uninstall -------------------------------------------------------------------
   const [uninstallBusy, setUninstallBusy] = createSignal(false);
   const [uninstallError, setUninstallError] = createSignal<string>();
+  const uninstallConnectionNotice = () => {
+    const view = app();
+    return view && appUninstallConnectionNotice(view);
+  };
   const graceDays = () => {
     const terms = app()?.uninstall;
     return terms?.mode === "scheduled" ? terms.graceDays : undefined;
@@ -1007,6 +1011,7 @@ export default function AppManagePage(props: {
     if (!inst || !isOwner() || uninstallBusy()) return;
     const selection = uninstallAttempt("schedule", inst);
     const days = graceDays();
+    const connectionNotice = uninstallConnectionNotice();
     const ok = await confirm({
       title: t("app.uninstall.confirmTitle"),
       message: [
@@ -1015,6 +1020,7 @@ export default function AppManagePage(props: {
           : days !== undefined
             ? t("app.uninstall.confirmGrace", { name: displayName(), days })
             : t("app.uninstall.confirmMessage", { name: displayName() }),
+        connectionNotice ? t(connectionNotice) : undefined,
         app()?.uninstall.impact?.usedBy.length
           ? t("app.links.uninstallImpact", {
               apps: app()!.uninstall.impact.usedBy.map((row) => row.otherApp?.displayName?.[locale()] || row.otherApp?.name || row.consumerCapsuleId).join(locale() === "ja" ? "、" : ", "),
@@ -1079,7 +1085,7 @@ export default function AppManagePage(props: {
   // The immediate teardown is a plan reviewed in place: its removal list,
   // the explicit check and the approval dialog all stay in front of it.
   const uninstallNow = () => {
-    if (!isOwner()) return;
+    if (!isOwner() || uninstallConnectionNotice()) return;
     void startReview(
       "attention",
       "uninstall",
@@ -1653,7 +1659,13 @@ export default function AppManagePage(props: {
                   }
                   testId="app-uninstall"
                 >
+                  <Show when={uninstallConnectionNotice()}>
+                    {(notice) => <p role="status">{t(notice())}</p>}
+                  </Show>
                   <div class="ap-row-actions">
+                    <Show when={uninstallConnectionNotice()}>
+                      <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
+                    </Show>
                     <Show
                       when={view().uninstall.mode !== "none"}
                       fallback={
@@ -1661,7 +1673,7 @@ export default function AppManagePage(props: {
                           variant="danger"
                           type="button"
                           busy={starting()?.action === "uninstall_now"}
-                          disabled={reviewBusy() || uninstallBusy()}
+                          disabled={reviewBusy() || uninstallBusy() || Boolean(uninstallConnectionNotice())}
                           onClick={uninstallNow}
                         >
                           {t("app.uninstall.now")}

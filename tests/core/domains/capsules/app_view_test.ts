@@ -388,6 +388,17 @@ const ROWS: readonly Row[] = [
     problems: ["uninstall_scheduled"],
   },
   {
+    name: "the grace period reports a missing bound connection even before the finalizer runs",
+    facts: facts({
+      capsule: uninstalled(SCHEDULED),
+      uninstallCancellable: true,
+      connectionIssues: [{ provider: "test/provider", connectionId: "conn_removed", status: "missing" }],
+    }),
+    state: "uninstall_scheduled",
+    action: "cancel_uninstall",
+    problems: ["connection_unavailable", "uninstall_scheduled"],
+  },
+  {
     name: "the finalizer's teardown plan is waiting for the finalizer, not the person",
     facts: facts({
       capsule: uninstalled(WITH_PLAN),

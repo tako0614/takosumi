@@ -3,6 +3,7 @@ import type { CapsuleAppView } from "../../../../dashboard/src/lib/control-api.t
 import {
   observeUninstallReadback,
   appUninstallBanner,
+  appUninstallConnectionNotice,
   appUninstallExportNote,
 } from "../../../../dashboard/src/lib/capsule-uninstall.ts";
 import { formatDateTime, t } from "../../../../dashboard/src/i18n/index.ts";
@@ -49,6 +50,27 @@ test("failed and blocked teardown use actual failure banners rather than a sched
     problems: [],
   };
   expect(appUninstallBanner(destroying, "App")).toBe(t("app.uninstall.bannerDestroying", { name: "App" }));
+});
+
+test("a broken bound connection takes precedence over the countdown only when teardown can use it", () => {
+  const needsConnection: Terms = {
+    ...scheduled,
+    problems: [{ code: "connection_unavailable", severity: "error", connectionStatus: "missing" }, ...scheduled.problems],
+  };
+  expect(appUninstallBanner(needsConnection, "App")).toBe(t("app.uninstall.bannerConnection", { name: "App" }));
+  expect(appUninstallConnectionNotice(needsConnection)).toBe("app.uninstall.connectionRemoved");
+  expect(appUninstallConnectionNotice({
+    ...needsConnection,
+    problems: [{ code: "connection_unavailable", severity: "error", connectionStatus: "expired" }],
+  })).toBe("app.uninstall.connectionUnavailable");
+  expect(appUninstallConnectionNotice({
+    ...needsConnection,
+    uninstall: { ...scheduled.uninstall, scheduled: { ...scheduled.uninstall.scheduled!, phase: "destroying" } },
+  })).toBeUndefined();
+  expect(appUninstallConnectionNotice({
+    ...needsConnection,
+    uninstall: { mode: "discard", impact: { usedBy: [] } },
+  })).toBeUndefined();
 });
 
 test("the export note reports what was exported, and nothing when unrecorded", () => {

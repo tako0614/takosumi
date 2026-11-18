@@ -1,5 +1,19 @@
 import type { Capsule, CapsuleAppView } from "./control-api.ts";
-import { formatDateTime, t } from "../i18n/index.ts";
+import { formatDateTime, t, type MessageKey } from "../i18n/index.ts";
+
+export function appUninstallConnectionNotice(
+  app: Pick<CapsuleAppView, "uninstall" | "problems">,
+): MessageKey | undefined {
+  if (app.uninstall.mode === "discard") return;
+  const record = app.uninstall.scheduled;
+  if (record?.phase === "destroying" && !record.blocked &&
+    !app.problems.some((problem) => problem.code === "uninstall_failed")) return;
+  const issues = app.problems.filter((problem) => problem.code === "connection_unavailable");
+  if (issues.some((problem) => problem.connectionStatus === "missing" || problem.connectionStatus === "revoked")) {
+    return "app.uninstall.connectionRemoved";
+  }
+  if (issues.length > 0) return "app.uninstall.connectionUnavailable";
+}
 
 /**
  * The one sentence that says where an app's uninstall stands, from the
@@ -12,6 +26,7 @@ export function appUninstallBanner(
   now: number = Date.now(),
 ): string {
   const record = app.uninstall.scheduled;
+  if (appUninstallConnectionNotice(app)) return t("app.uninstall.bannerConnection", { name });
   if (app.problems.some((problem) => problem.code === "uninstall_failed")) {
     return t("app.uninstall.bannerFailed", { name });
   }

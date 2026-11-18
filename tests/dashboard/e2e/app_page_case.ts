@@ -1386,6 +1386,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const now = "2026-10-20T00:00:00.000Z";
       type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = "uninstall_scheduled";
+      let connectionRemoved = false;
+      const connectionProblem = {
+        code: "connection_unavailable", severity: "error", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionId: "conn_removed", connectionStatus: "missing",
+      } as const;
       let attemptAwaitsInput = false;
       let viewUnavailable = false;
       const capsule = () => ({
@@ -1433,7 +1437,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           case "uninstall_scheduled":
             return appView(ID, NAME, {
               status: "uninstalled", state: "uninstall_scheduled", primaryAction: "cancel_uninstall", screens: [screen],
-              problems: [{ code: "uninstall_scheduled", severity: "warning" }],
+              problems: [...(connectionRemoved ? [connectionProblem] : []), { code: "uninstall_scheduled", severity: "warning" }],
               uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "scheduled", requestedAt: now, deleteAfter, cancellable: true, blocked: false, preDestroyExport: { status: "skipped" } } },
             });
           case "updating":
@@ -1494,7 +1498,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               progress: { revisionPreparing: false, review: { runId: revisionPlanRun.id, runType: "plan" } },
             });
           case "incomplete":
-            return appView(ID, NAME, { incomplete: ["screens", "version"] });
+            return appView(ID, NAME, { incomplete: ["screens", "version"], ...(connectionRemoved ? { problems: [connectionProblem] } : {}) });
           case "uninstalled":
             return appView(ID, NAME, {
               // A screen listed for a removed app is never offered.
@@ -1618,6 +1622,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app.getByTestId("app-uninstall")).toHaveCount(0);
       await expect(appOverviewRow(page, "danger")).toHaveCount(0);
       await capture(page, "app-page-uninstall-scheduled");
+      connectionRemoved = true;
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(scheduled).toContainText(`Uninstalling ${NAME} requires a working cloud connection.`);
+      await expect(scheduled).toContainText("This app's cloud connection was removed.");
+      await expect(scheduled.getByRole("link", { name: "View cloud connections" })).toHaveAttribute("href", "/connections");
+      await expect(scheduled.getByRole("button", { name: "Uninstall now", exact: true })).toHaveCount(0);
+      await expect(problems.locator('[data-problem="connection_unavailable"]')).toHaveCount(0);
       await header.getByRole("button", { name: "Cancel uninstall", exact: true }).click();
       await expect(app).toHaveAttribute("data-app-state", "installed");
 
@@ -1632,7 +1643,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
       await app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true }).click();
       await expect(page.getByRole("dialog")).toContainText("keeps its data for 7 days");
+      await expect(page.getByRole("dialog")).toContainText("This app's cloud connection was removed.");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+      connectionRemoved = false;
 
       // An update in progress is followed in place; nothing is applied from here.
       await showAppOverview(page);
