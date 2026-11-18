@@ -224,6 +224,12 @@ interface PreparedRawOutputs {
   readonly sealed: SealedArtifact;
 }
 
+interface PersistedRawOutputs {
+  readonly ref: string;
+  readonly contentDigest: string;
+  readonly ciphertextLength: number;
+}
+
 export class RunnerArtifactSizeLimitError extends Error {
   readonly code = "artifact_size_limit_exceeded";
 
@@ -489,6 +495,9 @@ export interface RunnerMutationCompletionReceipt {
   readonly evidenceDigest: string;
   /** Core-allocated raw output coordinate, when the mutation declared one. */
   readonly rawOutputRef?: string;
+  /** New writers pin raw bytes independently; older receipts omit both. */
+  readonly rawOutputDigest?: string;
+  readonly rawOutputCiphertextLength?: number;
   /** Determined provider failure: the state is persisted, values are not. */
   readonly providerExecutionFailed: boolean;
 }
@@ -3605,9 +3614,10 @@ const createOpenTofuRunnerObjectClass = (
       action === "apply" && !providerExecutionFailed
         ? await this.#prepareRawOutputs(rawOutputRef!, payload)
         : undefined;
-    const persistedRawOutputRef = preparedRawOutputs
+    const persistedRawOutputs = preparedRawOutputs
       ? await this.#persistPreparedRawOutputs(applyRunId, preparedRawOutputs, expectedLeaseToken)
       : undefined;
+    const persistedRawOutputRef = persistedRawOutputs?.ref;
     try {
       await putR2ObjectWithRetry(
         bucket,
@@ -3694,9 +3704,13 @@ const createOpenTofuRunnerObjectClass = (
       ciphertextLength: sealed.ciphertextLength,
       evidenceRef: evidenceArtifact.ref,
       evidenceDigest: evidenceArtifact.digest,
-      ...(persistedRawOutputRef === undefined
-        ? {}
-        : { rawOutputRef: persistedRawOutputRef }),
+      ...(persistedRawOutputs
+        ? {
+            rawOutputRef: persistedRawOutputs.ref,
+            rawOutputDigest: persistedRawOutputs.contentDigest,
+            rawOutputCiphertextLength: persistedRawOutputs.ciphertextLength,
+          }
+        : {}),
       providerExecutionFailed,
     });
     const persistedState = {
@@ -3758,7 +3772,8 @@ const createOpenTofuRunnerObjectClass = (
     runId: string,
     prepared: PreparedRawOutputs,
     expectedLeaseToken?: string,
-  ): Promise<string> {
+  ): Promise<PersistedRawOutputs> {
+    let ciphertextLength = prepared.sealed.ciphertextLength;
     try {
       await putR2ObjectWithRetry(
         this.#storedBucket("artifacts", runId, undefined, expectedLeaseToken),
@@ -3801,8 +3816,19 @@ const createOpenTofuRunnerObjectClass = (
       // same immutable key and matching this ApplyRun plus plaintext digest.
       // Doing so here lets the state object commit continue without replaying
       // provider work merely because raw-output acknowledgement was lost.
+      // An older valid ciphertext can use another encoding for the same
+      // plaintext. Bind the receipt to the object actually accepted, rather
+      // than this call's newly sealed bytes or optional old length metadata.
+      if (!Number.isSafeInteger(existing.size) || existing.size < 1) {
+        throw new Error("raw output target has no valid ciphertext length");
+      }
+      ciphertextLength = existing.size;
     }
-    return prepared.key;
+    return {
+      ref: prepared.key,
+      contentDigest: prepared.sealed.contentDigest,
+      ciphertextLength,
+    };
   }
 
   async #adoptCompletedStateMutationFromR2(
@@ -3895,6 +3921,7 @@ const createOpenTofuRunnerObjectClass = (
           applyRunId,
           action,
           recordedRawOutputRef,
+          expected?.receipt,
         )
       : undefined;
     if (recordedRawOutputRef && !rawOutputs) {
@@ -3971,6 +3998,7 @@ const createOpenTofuRunnerObjectClass = (
     applyRunId: string,
     action: "apply" | "destroy",
     rawOutputRef: string,
+    expected?: Pick<RunnerMutationCompletionReceipt, "rawOutputDigest" | "rawOutputCiphertextLength">,
   ): Promise<
     | { readonly ref: string; readonly outputs: Record<string, unknown> }
     | undefined
@@ -3989,13 +4017,23 @@ const createOpenTofuRunnerObjectClass = (
     if (!digest) {
       throw new Error("raw output artifact has no canonical digest");
     }
+    const expectedDigest = expected?.rawOutputDigest;
+    const expectedLength = expected?.rawOutputCiphertextLength;
+    if ((expectedDigest === undefined) !== (expectedLength === undefined) ||
+      (expectedDigest !== undefined && digest !== expectedDigest)) {
+      throw new Error("completed raw output receipt digest mismatch");
+    }
+    const ciphertext = await readBoundedR2ObjectBytes(
+      object,
+      "output",
+      maxStateArtifactCiphertextBytes(this.#artifactLimits.output),
+    );
+    if (expectedLength !== undefined && ciphertext.byteLength !== expectedLength) {
+      throw new Error("completed raw output receipt ciphertext length mismatch");
+    }
     const plaintext = await this.#stateCrypto().open(
-      await readBoundedR2ObjectBytes(
-        object,
-        "output",
-        maxStateArtifactCiphertextBytes(this.#artifactLimits.output),
-      ),
-      digest,
+      ciphertext,
+      expectedDigest ?? digest,
     );
     assertArtifactSize(
       "output",
@@ -7483,6 +7521,10 @@ function parseRunnerMutationCompletionReceipt(
   const evidenceRef = stringField(value, "evidenceRef");
   const evidenceDigest = stringField(value, "evidenceDigest");
   const rawOutputRef = stringField(value, "rawOutputRef");
+  const hasRawDigest = Object.hasOwn(value, "rawOutputDigest");
+  const hasRawLength = Object.hasOwn(value, "rawOutputCiphertextLength");
+  const rawOutputDigest = stringField(value, "rawOutputDigest");
+  const rawOutputCiphertextLength = value.rawOutputCiphertextLength;
   const stateGeneration = value.stateGeneration;
   const ciphertextLength = value.ciphertextLength;
   if (
@@ -7498,6 +7540,12 @@ function parseRunnerMutationCompletionReceipt(
     !evidenceDigest ||
     !/^sha256:[0-9a-f]{64}$/u.test(evidenceDigest) ||
     (rawOutputRef !== undefined && rawOutputRef.length === 0) ||
+    hasRawDigest !== hasRawLength ||
+    (hasRawDigest && (
+      action !== "apply" || value.providerExecutionFailed !== false || !rawOutputRef ||
+      !rawOutputDigest || !/^sha256:[0-9a-f]{64}$/u.test(rawOutputDigest) ||
+      !Number.isSafeInteger(rawOutputCiphertextLength) || (rawOutputCiphertextLength as number) < 1
+    )) ||
     typeof value.providerExecutionFailed !== "boolean" ||
     !Number.isSafeInteger(stateGeneration) ||
     (stateGeneration as number) < 1 ||
@@ -7522,6 +7570,10 @@ function parseRunnerMutationCompletionReceipt(
     evidenceRef,
     evidenceDigest,
     ...(rawOutputRef === undefined ? {} : { rawOutputRef }),
+    ...(rawOutputDigest === undefined ? {} : {
+      rawOutputDigest,
+      rawOutputCiphertextLength: rawOutputCiphertextLength as number,
+    }),
     providerExecutionFailed: value.providerExecutionFailed,
   };
 }
