@@ -3724,7 +3724,7 @@ function validLocalRecoveryStateBytes(bytes: Uint8Array): boolean {
   if (state.version !== 4 || !Number.isSafeInteger(state.serial) ||
     (state.serial as number) < 0 ||
     typeof state.lineage !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(state.lineage) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(state.lineage) ||
     typeof state.terraform_version !== "string" ||
     !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(state.terraform_version) ||
     !state.outputs || typeof state.outputs !== "object" || Array.isArray(state.outputs) ||

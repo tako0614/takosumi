@@ -457,3 +457,41 @@ test("staged local recovery commits Core generation one and local Plan receives 
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("local recovery round-trips OpenTofu opaque hex lineages without RFC bit restrictions", async () => {
+  type StateInput = Parameters<LocalOpenTofuStateRecoveryArtifactStore["stage"]>[0];
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-recovery-lineage-"));
+  try {
+    const lineages = [
+      "123e4567-e89b-42d3-a456-426614174000",
+      "00112233-4455-0677-0022-334455667788",
+      "00112233-4455-f677-f022-334455667788",
+      "00112233-4455-9677-c022-334455667788",
+      "00112233-4455-F677-F022-334455667788",
+    ];
+    for (const [index, lineage] of lineages.entries()) {
+      const bytes = new TextEncoder().encode(JSON.stringify({ ...JSON.parse(new TextDecoder().decode(TEST_STATE)), lineage }));
+      const fileStore = createFileOpenTofuStateArtifactStore(join(tempDir, "state-" + index), TEST_STATE_CRYPTO);
+      const recoveryStore = await adapter(fileStore);
+      const input: StateInput = { ...scope(), plaintextSha256: await sha256Digest(bytes) as StateInput["plaintextSha256"], plaintext: bytes };
+      const staged = await recoveryStore.stage(input);
+      expect((await fileStore.readRecovery(staged.artifact.stateRef))?.stateBytes).toEqual(bytes);
+      expect(await recoveryStore.verify({
+        workspaceId: input.workspaceId, capsuleId: input.capsuleId,
+        failedApplyRunId: input.failedApplyRunId, recoveryRunId: input.recoveryRunId,
+        artifactHandle: staged.handle,
+      })).toEqual(staged.artifact);
+      expect(await recoveryStore.stage(input)).toEqual(staged);
+    }
+    const invalidStore = await adapter(createFileOpenTofuStateArtifactStore(join(tempDir, "invalid"), TEST_STATE_CRYPTO));
+    for (const lineage of [
+      "", "00112233445566778899aabbccddeeff00",
+      "00112233-4455-6677-8899-aabbccddeefg",
+      "0011223-4455-6677-8899-aabbccddeeff",
+      "00112233-4455-6677-8899-aabbccddeeff-extra",
+    ]) {
+      const bytes = new TextEncoder().encode(JSON.stringify({ ...JSON.parse(new TextDecoder().decode(TEST_STATE)), lineage }));
+      await expect(invalidStore.stage({ ...scope(), plaintextSha256: await sha256Digest(bytes) as StateInput["plaintextSha256"], plaintext: bytes })).rejects.toThrow();
+    }
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+});

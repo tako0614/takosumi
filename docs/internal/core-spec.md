@@ -478,6 +478,16 @@ Unix OS account, selected target label, fixed command timestamp and exact
 already-staged artifact digests. It calls the existing local verifier and ledger
 primitive without staging or runner dispatch. A shared/root UID is account
 privilege, not personal identity; the target label is not a cross-host proof.
+Its separate `--stage-case` mode requires a different private approval purpose
+for one fixed failed Apply, Capsule/Workspace/environment, pinned SourceSnapshot,
+recovery identity, original captured-state digest and operator-confirmed custody
+evidence digest. It reads a protected, bounded raw capture and stages through the
+same encrypted local adapter. An immutable private receipt contains the verified
+handle/digests for a separately issued commit approval; it is not that approval.
+Stage admission reads the current initial failure and rejects known stale scope,
+generation, authority or later work. These reads are not an atomic ledger fence;
+the unchanged commit primitive checks full provenance, history and CAS authority.
+Neither mode supplies missing capture provenance or performs provider execution.
 The Worker/R2 authorization entrypoint remains dormant. Its Worker R2 adapter can
 stage operator-selected, bounded OpenTofu state bytes and verify an opaque
 handle against an immutable encrypted generation-1 object. It does not accept

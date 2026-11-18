@@ -14,12 +14,18 @@ import {
   commitApprovedLocalStateRecovery,
   LocalStateRecoveryRefusal,
 } from "./lib/local-operator-state-recovery.ts";
+import {
+  checkLocalStateRecoveryStageApproval,
+  stageApprovedLocalStateRecovery,
+} from "./lib/local-operator-state-stage.ts";
 
-const USAGE = "bun --no-env-file scripts/operator-state-recovery.ts --case <approved-case-id>";
+const USAGE = "bun --no-env-file scripts/operator-state-recovery.ts --case <approved-case-id>\n" +
+  "bun --no-env-file scripts/operator-state-recovery.ts --stage-case <approved-stage-case-id>";
 
 export async function operatorStateRecoveryCommand(args: readonly string[]): Promise<void> {
   if (args.length === 1 && args[0] === "--help") { console.log(USAGE); return; }
-  if (args.length !== 2 || args[0] !== "--case") throw new LocalStateRecoveryRefusal();
+  if (args.length !== 2 || (args[0] !== "--case" && args[0] !== "--stage-case")) throw new LocalStateRecoveryRefusal();
+  const staging = args[0] === "--stage-case";
   const env = { ...process.env };
   const approvalDirectory = env.TAKOSUMI_OPERATOR_STATE_RECOVERY_APPROVAL_DIR;
   const selectedTargetId = env.TAKOSUMI_OPERATOR_STATE_RECOVERY_TARGET_ID;
@@ -31,17 +37,19 @@ export async function operatorStateRecoveryCommand(args: readonly string[]): Pro
   const selection = { approvalDirectory, selectedTargetId, caseId: args[1]!,
     sourceRoots: [resolve(dirname(fileURLToPath(import.meta.url)), "..")] };
   // No SQL pool, key readback or artifact access before explicit case approval.
-  await checkLocalStateRecoveryApproval(selection);
+  if (staging) await checkLocalStateRecoveryStageApproval(selection);
+  else await checkLocalStateRecoveryApproval(selection);
   const crypto = selectSecretBoundaryCrypto({ env });
   if (!(crypto instanceof PartitionedSecretBoundaryCrypto)) throw new LocalStateRecoveryRefusal();
   const pool = createPostgresPool({ databaseUrl }, env);
-  let result: CommitRecoveredStateResult;
+  let result: CommitRecoveredStateResult | undefined;
   let closeFailed = false;
   try {
     const store = new SqlOpenTofuControlStore({ client: wrapServiceSqlClient(pool) });
     const verifier = new LocalOpenTofuStateRecoveryArtifactStore({ store: createFileOpenTofuStateArtifactStore(stateRoot, crypto),
       allocator: new ObjectKeyArtifactReferenceAllocator(), capsules: store });
-    result = await commitApprovedLocalStateRecovery({ ...selection, store, verifier });
+    if (staging) await stageApprovedLocalStateRecovery({ ...selection, store, verifier });
+    else result = await commitApprovedLocalStateRecovery({ ...selection, store, verifier });
   } finally {
     try { await pool.end(); } catch {
       closeFailed = true;
@@ -49,6 +57,11 @@ export async function operatorStateRecoveryCommand(args: readonly string[]): Pro
       process.exitCode = 1;
     }
   }
+  if (staging) {
+    console.log(JSON.stringify({ status: closeFailed ? "connection_close_failed" : "staged", commitApprovalIssued: false }));
+    return;
+  }
+  if (!result) throw new LocalStateRecoveryRefusal();
   const recovery = result.status === "conflict" ? { status: "conflict" } : {
     status: result.status, recoveryRunId: result.run.id,
     stateVersionId: result.stateVersion.id, capsuleId: result.capsule.id,

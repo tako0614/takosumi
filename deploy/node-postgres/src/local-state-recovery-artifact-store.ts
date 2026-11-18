@@ -98,6 +98,9 @@ export class LocalOpenTofuStateRecoveryArtifactStore implements RecoveryArtifact
     readonly failedApplyRunId: string;
     readonly recoveryRunId: string;
     readonly artifactHandle: string;
+    /** Optional exact capture approval for a local stage-receipt readback. */
+    readonly plaintextSha256?: `sha256:${string}`;
+    readonly custodyEvidenceDigest?: `sha256:${string}`;
   }): Promise<VerifiedRecoveryArtifact> {
     requireIdentifier(input.workspaceId);
     requireIdentifier(input.capsuleId);
@@ -105,7 +108,9 @@ export class LocalOpenTofuStateRecoveryArtifactStore implements RecoveryArtifact
     requireIdentifier(input.recoveryRunId);
     const parts = handleParts(input.artifactHandle);
     if (parts.workspaceId !== input.workspaceId || parts.capsuleId !== input.capsuleId ||
-      parts.failedApplyRunId !== input.failedApplyRunId || parts.recoveryRunId !== input.recoveryRunId) {
+      parts.failedApplyRunId !== input.failedApplyRunId || parts.recoveryRunId !== input.recoveryRunId ||
+      (input.plaintextSha256 !== undefined && parts.plaintextSha256 !== input.plaintextSha256) ||
+      (input.custodyEvidenceDigest !== undefined && parts.custodyEvidenceDigest !== input.custodyEvidenceDigest)) {
       throw recoveryArtifactError("staged local recovery artifact is unavailable");
     }
     const scope: LocalRecoveryStateArtifactScope = {
@@ -304,7 +309,7 @@ function validateOpenTofuState(bytes: Uint8Array): void {
   }
   if (!isRecord(value) || value.version !== 4 || !Number.isSafeInteger(value.serial) ||
     (value.serial as number) < 0 || typeof value.lineage !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.lineage) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value.lineage) ||
     typeof value.terraform_version !== "string" ||
     !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(value.terraform_version) ||
     !isRecord(value.outputs) || !Array.isArray(value.resources) ||
