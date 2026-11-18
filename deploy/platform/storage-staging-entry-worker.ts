@@ -3,7 +3,7 @@
 import platformEntry, {
   CoordinationObject,
   LocalSubstrateOpenTofuRunnerProxyObject,
-  OpenTofuRunOwnerObject,
+  OpenTofuRunOwnerObject as PlatformOpenTofuRunOwnerObject,
   OpenTofuRunnerObject as PlatformOpenTofuRunnerObject,
   TakosumiRuntimeBindingMaterializerEntrypoint,
 } from "./entry-worker.ts";
@@ -13,7 +13,16 @@ import type { StoredBucketRole } from "../../worker/src/stored-service-usage.ts"
 import { composeStorageStagingEnv, readStorageRuntimeVersion, requireStorageStagingProfile, storageWorkspacesReader, type StorageStagingEnv } from "./storage-staging-profile.ts";
 import type { PlatformExecutionContext } from "./worker.ts";
 
-export { CoordinationObject, LocalSubstrateOpenTofuRunnerProxyObject, OpenTofuRunOwnerObject, TakosumiRuntimeBindingMaterializerEntrypoint };
+export { CoordinationObject, LocalSubstrateOpenTofuRunnerProxyObject, TakosumiRuntimeBindingMaterializerEntrypoint };
+
+/** RunOwner constructors receive raw bindings, independently of fetch/scheduled. */
+export class OpenTofuRunOwnerObject extends PlatformOpenTofuRunOwnerObject {
+  constructor(...args: ConstructorParameters<typeof PlatformOpenTofuRunOwnerObject>) {
+    const [state, env, deps] = args;
+    requireStorageStagingProfile(env as StorageStagingEnv);
+    super(state, composeStorageStagingEnv(env as StorageStagingEnv), deps);
+  }
+}
 
 /** The same local owner resolver is installed in the actual Container DO. */
 export class OpenTofuRunnerObject extends PlatformOpenTofuRunnerObject {

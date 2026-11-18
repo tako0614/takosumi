@@ -339,3 +339,120 @@ test("Takoserver Hosted connection descriptor remains publicly discoverable", as
       "https://app-staging.takosumi.com/api/v1/account/subscription",
   });
 });
+
+// Link the entry in portable Bun without a global compatibility preload.
+// Only the unused Cloudflare base is stubbed; RunOwner inheritance, constructor
+// and both composers are actual source. Real DO execution is a separate test.
+type StorageEntry = typeof import("../../../deploy/platform/storage-staging-entry-worker.ts");
+type StorageEnv = import("../../../deploy/platform/storage-staging-profile.ts").StorageStagingEnv;
+let storageEntry: Promise<StorageEntry> | undefined;
+async function storageProfileEntry(): Promise<StorageEntry> {
+  return await (storageEntry ??= (async () => {
+    const result = await Bun.build({
+      entrypoints: [new URL("../../../deploy/platform/storage-staging-entry-worker.ts", import.meta.url).pathname],
+      target: "bun",
+      format: "esm",
+      plugins: [{
+        name: "portable-unused-workers-base",
+        setup(build) {
+          build.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+            path: "workers", namespace: "portable-workers",
+          }));
+          build.onLoad({ filter: /.*/, namespace: "portable-workers" }, () => ({
+            loader: "js",
+            contents: `
+              export class WorkerEntrypoint {
+                constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+              }
+              export class DurableObject extends WorkerEntrypoint {}
+              export class RpcTarget {}
+              export const env = {};
+              export function waitUntil() {}
+            `,
+          }));
+        },
+      }],
+    });
+    if (!result.success) throw new AggregateError(result.logs, "portable entry bundle failed");
+    const bytes = Buffer.from(await result.outputs[0]!.text());
+    return await import(`data:text/javascript;base64,${bytes.toString("base64")}`) as StorageEntry;
+  })());
+}
+function selectedStorageEnv() {
+  const unused = async () => { throw new Error("constructor must not call custody"); };
+  const usage = {
+    readStoredSource: unused,
+    readStoredObject: unused,
+    prepareStoredObject: unused,
+    confirmStoredObject: unused,
+    cancelStoredObject: unused,
+  };
+  return {
+    TAKOSUMI_OSS_STORAGE_PROFILE: "stored-service-staging-v1",
+    TAKOSUMI_ENVIRONMENT: "staging",
+    TAKOSUMI_CONTROL_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_VERSION_METADATA: { id: "11111111-2222-3333-4444-555555555555" },
+    TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}` as const,
+    TAKOSUMI_RUNNER_ARTIFACT_DIGEST: `sha256:${"b".repeat(64)}` as const,
+    TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: `sha256:${"c".repeat(64)}` as const,
+    TAKOSUMI_CONTROL_DB: {},
+    R2_STATE: {}, R2_ARTIFACTS: {}, R2_SOURCE: {}, R2_BACKUPS: {},
+    TAKOSUMI_STORED_SERVICE_USAGE: usage,
+    TAKOSUMI_STORED_INVENTORY_FENCES: {},
+    TAKOSUMI_STORED_ORIGINAL_OWNERS: { readOriginalStoredObjectOwner: async () => null },
+  };
+}
+test("storage profile RunOwner dispatch receives the same qualified owner composition as its Runner", async () => {
+  const entry = await storageProfileEntry();
+  const raw = selectedStorageEnv();
+  const values = new Map<string, unknown>();
+  let received: unknown;
+  let calls = 0;
+  const storage = {
+    get: async <T>(key: string) => values.get(key) as T | undefined,
+    put: async <T>(key: string, value: T) => { values.set(key, value); },
+    delete: async (key: string) => values.delete(key),
+    setAlarm: async () => {},
+    deleteAlarm: async () => {},
+  };
+  const owner = new entry.OpenTofuRunOwnerObject({ storage }, raw as never, {
+    now: () => 0,
+    dispatch: async (_dispatch, env) => {
+      calls++;
+      received = env;
+    },
+    readRunStatus: async () => "succeeded",
+  });
+  const response = await owner.fetch(new Request("https://run-owner/start", {
+    method: "POST",
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run-owner.start@v1",
+      action: "apply", runId: "apply_storage_profile", workspaceId: "workspace_storage_profile",
+    }),
+  }));
+  expect(response.status).toBe(202);
+  await owner.alarm();
+  expect(calls).toBe(1);
+  expect(received).toBe(owner.env);
+  const composed = owner.env as StorageEnv;
+  expect(composed.TAKOSUMI_STORED_SERVICE_USAGE).toBe(raw.TAKOSUMI_STORED_SERVICE_USAGE);
+  expect(composed.TAKOSUMI_STORED_ORIGINAL_OWNERS).toBe(raw.TAKOSUMI_STORED_ORIGINAL_OWNERS);
+  expect(typeof composed.TAKOSUMI_STORED_OBJECT_OWNERS?.resolveStoredObjectOwner).toBe("function");
+  expect(raw).not.toHaveProperty("TAKOSUMI_STORED_OBJECT_OWNERS");
+  const options = deployControlServiceOptions(composed);
+  expect(options.runnerProfiles.length).toBeGreaterThan(0);
+  expect(options.executionEvidenceAuthority?.controllerArtifact.digest).toBe(raw.TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST);
+  expect(options.executionEvidenceAuthority?.runnerArtifact.digest).toBe(raw.TAKOSUMI_RUNNER_ARTIFACT_DIGEST);
+  expect(options.executionEvidenceAuthority?.executorArtifact.digest).toBe(raw.TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST);
+});
+test("storage profile RunOwner refuses missing selector or incomplete graph before dispatch", async () => {
+  const entry = await storageProfileEntry();
+  const raw = selectedStorageEnv();
+  const withoutOwner: Partial<typeof raw> = { ...raw };
+  delete withoutOwner.TAKOSUMI_STORED_ORIGINAL_OWNERS;
+  const withoutSelector: Partial<typeof raw> = { ...raw };
+  delete withoutSelector.TAKOSUMI_OSS_STORAGE_PROFILE;
+  for (const invalid of [withoutOwner, withoutSelector, { ...raw, TAKOSUMI_ENVIRONMENT: "production" }]) {
+    expect(() => new entry.OpenTofuRunOwnerObject({ storage: {} } as never, invalid as never)).toThrow();
+  }
+});
