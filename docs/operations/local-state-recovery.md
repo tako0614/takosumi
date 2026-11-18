@@ -127,3 +127,67 @@ An unknown acknowledgement is not proof that the database did not commit.
 After state-only commit, the original Apply remains failed, Capsule remains error, runtime outcome/inventory remain unknown, and no Output or runner-success evidence is invented.
 Use the existing reviewed Destroy/lineage path where appropriate; ordinary Apply/update is still constrained by the unknown outcome.
 This command does not complete Host pre-ACK reconciliation or authorize a deployed environment by itself.
+
+## Private Worker composition (unmounted)
+
+The portable Worker operator source has no default mount, public HTTP route,
+deploy catalog entry or production approval issuer. It does not reuse the Unix
+approval files above, an Accounts identity-merge approval, session/admin role or
+deploy control token. The owner must supply a separately qualified private
+authority and actual selected-target D1/R2/key/storage custody.
+
+An owner alternate module can export a named class using
+`composePrivateStateRecoveryWorker<OwnerEnv>(env => createPrivateR2StateRecoveryOperator(...))`
+from `worker/src/private-state-recovery-worker.ts` and
+`worker/src/private-state-recovery.ts`. The lexical owner closure provides the
+real environment bindings to `openBindings`; it does not place an in-process
+function object into a Cloudflare binding. The resulting RPC prototype exposes
+`stageRecoveryState`, `commitRecoveryState` and a fetch handler returning 404.
+No normal Worker, Platform or Hosted export or configuration selects this class.
+
+The factory takes a fixed `selectedTargetId`, a
+`QualifiedStateRecoveryApprovalPort` and lazy `openBindings`. Bindings include the
+actual database/bucket, `cryptoEnv` and an explicit `storageProfile`: `oss-r2`,
+`artifact-retention` with its capability, or `stored-service` with both existing
+custody capabilities. Missing or unsupported profiles cannot silently become
+unmetered OSS custody. Only existing encryption key/partition-key fields are
+forwarded; development-placeholder flags are ignored and a missing key refuses
+before ledger/R2 access. D1 uses `predeployed` verification only. Prepare the
+current schema separately; this entry performs no bootstrap migration.
+
+The only stage request fields are `{ approvalRef, plaintext: Uint8Array }`; the
+bounded raw bytes are copied before awaiting the authority. Commit accepts only
+`{ approvalRef }`. Scope, stable actor and command identity come from the
+qualified port's closed approved record, never caller-supplied IDs or roles.
+`approvalRef` is a locator for a private proof: the authority must authenticate
+its holder/channel, current effect, purpose and revocation. A public case-ID
+lookup or possession of a named Service Binding alone is insufficient.
+
+Both approval records use `format: takosumi.private-worker-state-recovery-approval/v1`
+and contain exactly `purpose`, `approvedOperatorId`, `selectedTargetId`,
+`workspaceId`, `capsuleId`, `environment`, `failedApplyRunId`, `recoveryRunId`,
+`sourceSnapshotId`, `commandTimestamp`, `expiresAt`, `plaintextSha256` and
+`custodyEvidenceDigest`, plus that format. Stage purpose is
+`stage-initial-create-state`. Commit purpose is
+`commit-staged-initial-create-state` and additionally binds `artifactHandle`,
+`encryptedDigest` and `evidenceDigest`. The qualified authority issues the two
+approvals separately. A stage receipt has a different format/purpose and cannot
+be passed back as commit authority.
+
+Invalid, absent, expired or changed approval refuses with the value-free
+`private_state_recovery_refused` error. Approval is reread before resource
+access and around artifact/ledger operations. Stage checks the current failed
+initial create, gen0/error/no Output, pinned snapshot and observed authority;
+it changes no ledger. The existing encrypted R2 adapter preserves the original
+immutable object on exact retry. Commit checks approved plaintext/custody and
+actual ciphertext/evidence digests before retention acknowledgement, then uses
+the unchanged Core provenance/history/epoch CAS. Success returns only `status`,
+`recoveryRunId`, `stateVersionId` and `capsuleId`; conflict returns only its status.
+
+Approval rechecks and D1 commit are not atomic with one another. A lost response
+or refusal after commit is an unknown acknowledgement, not evidence of no
+effect. Retain the same approved actor, command timestamp, recovery identity and
+artifact. A separately valid explicit retry can reconcile the exact commit;
+there is no automatic retry or new recovery identity. The original Apply stays
+failed, Capsule stays error, runtime stays unknown and no Output or execution
+success evidence is produced.

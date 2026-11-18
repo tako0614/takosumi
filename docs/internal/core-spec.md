@@ -488,7 +488,25 @@ Stage admission reads the current initial failure and rejects known stale scope,
 generation, authority or later work. These reads are not an atomic ledger fence;
 the unchanged commit primitive checks full provenance, history and CAS authority.
 Neither mode supplies missing capture provenance or performs provider execution.
-The Worker/R2 authorization entrypoint remains dormant. Its Worker R2 adapter can
+The default Worker/R2 authorization entrypoint remains dormant. An explicit
+owner alternate module may export the named-only class from
+`composePrivateStateRecoveryWorker` with a same-realm
+`createPrivateR2StateRecoveryOperator` composition. Fetch returns 404. Its
+purpose-specific qualified approval port authenticates a private proof's
+holder/channel and current effect; named RPC access, a public case lookup,
+session/admin/deploy credentials and Accounts identity-merge review do not
+authorize this operation. No production approval issuer or default binding is
+provided. The selected target and storage profile are operator configuration;
+target-label equality is a misselection fence, not physical custody proof.
+Invalid approval is rejected before opening keys/storage. Stage and commit use
+separate closed records, fixed command identity and expiry, rechecked around
+I/O. Stage's receipt is not commit approval. The lazy concrete composition
+requires real encryption key fields, an explicit storage profile and an already
+deployed, verified D1 ledger schema; it cannot bootstrap or migrate that schema.
+The external approval and D1 CAS are not one atomic transaction. Refusal after a
+commit may hide an already committed effect; only the same explicitly authorized
+command can reconcile it. See the [private Worker composition](../operations/local-state-recovery.md#private-worker-composition-unmounted).
+Its Worker R2 adapter can
 stage operator-selected, bounded OpenTofu state bytes and verify an opaque
 handle against an immutable encrypted generation-1 object. It does not accept
 an arbitrary URL or object key, overwrite an occupied coordinate, or infer
