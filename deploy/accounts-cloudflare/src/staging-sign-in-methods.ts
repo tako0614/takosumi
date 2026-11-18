@@ -66,7 +66,7 @@ export async function handleStagingSignInMethods(
     <p id="password-status" role="status" data-failed="${esc(labels.failed)}">${esc(url.searchParams.get("saved") === "1" ? labels.saved : !methods.email ? labels.unavailable : !methods.canSetPassword ? labels.stale : "")}</p>
     <a href="/sign-in?return=%2Faccount">${esc(labels.again)}</a>
   </div>${form ? `<script nonce="${nonce}">${settingsScript}</script>` : ""}`;
-  return new Response(request.method === "HEAD" ? null : authPage({ language: lang, nonce, title: labels.title, body }), {
+  return new Response(request.method === "HEAD" ? null : authPage({ language: lang, nonce, title: labels.title, issuer: url.origin, body }), {
     headers: {
       "content-type": "text/html; charset=utf-8", "content-language": lang,
       "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff",

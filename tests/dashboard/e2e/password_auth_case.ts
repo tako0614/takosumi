@@ -106,14 +106,21 @@ export function registerPasswordAuthCases(mode: DashboardE2EMode) {
       expect(writes).toEqual([{ password }, { password, currentPassword: "wrong" }, { password, currentPassword: password }]);
     });
 
-    for (const destination of ["/account", "/oauth/authorize?client_id=fixture&state=original&nonce=original"]) {
+    const productReturn = "/oauth/authorize?client_id=takosumi-hosted-staging-v1&redirect_uri=https%3A%2F%2Fapp-staging.takosumi.com%2Fauth%2Foidc%2Fcallback&state=original&nonce=original";
+    for (const destination of ["/account", productReturn]) {
       test(`issuer password login continues to ${destination.split("?")[0]}`, async ({ page }) => {
         const path = "/__e2e/issuer-password";
         const issuer = "https://auth-staging.takos.jp";
         const requestUrl = new URL("/sign-in", issuer);
         if (destination !== "/account") requestUrl.searchParams.set("return", destination);
         const portal = await handleStagingLoginPortal({ request: new Request(requestUrl), issuer,
-          accountsHandler: () => Response.json({ providers: [], password: { enabled: true } }) });
+          accountsHandler: () => Response.json({
+            providers: [
+              { id: "google", label: "Google", protocol: "oidc", enabled: true },
+              { id: "github", label: "GitHub", protocol: "oauth2", enabled: true },
+            ],
+            password: { enabled: true },
+          }) });
         const html = await portal!.text();
         await page.route(`**${path}`, (route) => route.fulfill({ body: html, headers: Object.fromEntries(portal!.headers) }));
         await page.route((url) => url.pathname + url.search === destination, (route) => route.fulfill({ contentType: "text/html", body: "<h1>Sign-in continued</h1>" }));
@@ -122,7 +129,14 @@ export function registerPasswordAuthCases(mode: DashboardE2EMode) {
           bodies.push(route.request().postDataJSON());
           return route.fulfill({ json: { subject: "sub_fixture" } });
         });
+        await page.setViewportSize({ width: 320, height: 568 });
         await page.goto(path);
+        const heading = destination === productReturn ? "Sign in to Takosumi" : "Sign in";
+        await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+        await expect(page.getByText("TAKOS INC.", { exact: true })).toBeVisible();
+        await expect(page.getByRole("link", { name: "Continue with Google" })).toBeInViewport();
+        await expect(page.getByRole("link", { name: "Continue with GitHub" })).toBeInViewport();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
         const form = page.getByRole("form", { name: "Sign in with a password" });
         await form.getByLabel("Email address", { exact: true }).fill(email);
         await form.getByLabel("Password", { exact: true }).fill(password);

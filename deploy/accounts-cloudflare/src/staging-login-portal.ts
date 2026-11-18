@@ -1,11 +1,12 @@
 import type { TakosumiAccountsAuthProvider } from "@takosjp/takosumi-accounts-contract";
 
-import { authLanguage, authPage, escapeAuthHtml as escapeHtml } from "../../../accounts/service/src/auth-page.ts";
+import { authLanguage, authPage, authSignInTitle, escapeAuthHtml as escapeHtml, stagingSignInProduct } from "../../../accounts/service/src/auth-page.ts";
+import { AUTH_STAGING_CLIENTS, AUTH_STAGING_ISSUER as stagingIssuer } from "./staging-target.ts";
 
-const stagingIssuer = "https://auth-staging.takos.jp";
 const portalCopy = {
   en: {
     title: "Sign in",
+    otherMethods: "or",
     stage: "Staging",
     notFound: "Not found",
     method: "Reopen this page to sign in.",
@@ -17,7 +18,8 @@ const portalCopy = {
     provider: (label: string) => `Continue with ${label}`,
   },
   ja: {
-    title: "サインイン",
+    title: "ログイン",
+    otherMethods: "または",
     stage: "ステージング",
     notFound: "ページが見つかりません。",
     method: "このページを開き直してください。",
@@ -54,7 +56,7 @@ export async function handleStagingLoginPortal(input: {
     return portalResponse(input.request, copy.method, 405, { allow: "GET, HEAD" });
   }
 
-  let continuation: { returnTo?: string; fresh: boolean; maxAge?: string };
+  let continuation: ReturnType<typeof validateContinuation>;
   try {
     continuation = validateContinuation(url);
   } catch {
@@ -89,13 +91,17 @@ export async function handleStagingLoginPortal(input: {
       return `<li><a class="auth-button auth-provider-choice" href="${escapeHtml(target.pathname + target.search)}">${icon}<span>${escapeHtml(copy.provider(provider.label))}</span></a></li>`;
     }).join("");
     const explanation = returnTo ? (continuation.fresh ? copy.fresh : "") : copy.start;
-    return portalResponse(input.request, explanation, 200, {}, `<ul class="auth-providers">${choices}</ul>`, passwordEnabled ? returnTo : undefined);
+    return portalResponse(input.request, explanation, 200, {}, {
+      choices,
+      passwordReturn: passwordEnabled ? returnTo : undefined,
+      product: continuation.product,
+    });
   } catch {
     return portalResponse(input.request, copy.unavailable, 503);
   }
 }
 
-function validateContinuation(url: URL): { returnTo?: string; fresh: boolean; maxAge?: string } {
+function validateContinuation(url: URL): { returnTo?: string; fresh: boolean; maxAge?: string; product?: string } {
   if (url.href.length > 32 * 1024) throw new TypeError("sign-in URL exceeds the limit");
   for (const name of url.searchParams.keys()) {
     if (!["return", "prompt", "max_age"].includes(name) || url.searchParams.getAll(name).length !== 1) {
@@ -138,8 +144,14 @@ function validateContinuation(url: URL): { returnTo?: string; fresh: boolean; ma
     (authorizationMaxAge !== null && (!/^\d+$/u.test(authorizationMaxAge) || !Number.isSafeInteger(Number(authorizationMaxAge))))) {
     throw new TypeError("invalid authorization freshness");
   }
+  const client = AUTH_STAGING_CLIENTS.find(({ clientId, redirectUris }) =>
+    clientId === target.searchParams.get("client_id") &&
+    redirectUris.some((uri) => uri === target.searchParams.get("redirect_uri")),
+  );
+  const product = client ? stagingSignInProduct(client.clientId) : undefined;
   return {
     returnTo: target.pathname + target.search,
+    ...(product ? { product } : {}),
     fresh: prompt === "login" || maxAge !== null || authorizationPrompt.includes("login") || authorizationMaxAge === "0",
     ...(maxAge !== null ? { maxAge } : {}),
   };
@@ -202,12 +214,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function portalResponse(request: Request, message: string, status: number, extraHeaders: Record<string, string> = {}, choices = "", passwordReturn?: string): Response {
+function portalResponse(
+  request: Request,
+  message: string,
+  status: number,
+  extraHeaders: Record<string, string> = {},
+  { choices = "", passwordReturn, product }: { choices?: string; passwordReturn?: string; product?: string } = {},
+): Response {
   const language = authLanguage(request);
   const copy = portalCopy[language];
   const nonce = crypto.randomUUID();
-  const html = authPage({ language, nonce, title: copy.title, badge: copy.stage,
-    description: message, body: choices + (passwordReturn ? passwordForm(language, nonce, passwordReturn) : "") });
+  const password = passwordReturn ? passwordForm(language, nonce, passwordReturn) : "";
+  const divider = password && choices ? `<p class="auth-divider">${copy.otherMethods}</p>` : "";
+  const providers = choices ? `<ul class="auth-providers">${choices}</ul>` : "";
+  const html = authPage({
+    language, nonce, issuer: stagingIssuer, badge: copy.stage,
+    title: product ? authSignInTitle(language, product) : copy.title,
+    description: message, body: password + divider + providers,
+  });
   return new Response(request.method === "HEAD" ? null : html, {
     status,
     headers: {
@@ -241,15 +265,14 @@ function passwordForm(language: "ja" | "en", nonce: string, returnTo: string): s
   const h = escapeHtml;
   const messages = JSON.stringify(copy).replace(/</gu, "\\u003c");
   return `<style nonce="${h(nonce)}">
-.auth-password { margin-top: var(--auth-space-lg); border-top: 1px solid var(--auth-border); padding-top: var(--auth-space-lg); }
-.auth-password fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: var(--auth-space-md); min-width: 0; }
-.auth-password label { display: grid; gap: var(--auth-space-xs); font-size: .875rem; }
-.auth-password input { width: 100%; min-width: 0; min-height: 2.75rem; padding: .5rem; border: 1px solid var(--auth-control-border); border-radius: .5rem; background: var(--auth-panel); color: var(--auth-fg); font: inherit; }
+.auth-password fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: var(--auth-space-sm); min-width: 0; }
+.auth-password label { display: grid; gap: .25rem; font-size: .8125rem; }
+.auth-password input { width: 100%; min-width: 0; min-height: 2.75rem; padding: .5rem; border: 1px solid var(--auth-control-border); border-radius: .5rem; background: var(--auth-panel); color: var(--auth-fg); font: 400 1rem var(--auth-font); }
 .auth-password input:focus-visible { outline: 2px solid var(--auth-accent); outline-offset: 2px; }
-.auth-password h2 { font-size: 1rem; margin: 0 0 var(--auth-space-md); }
+#password-error:empty { display: none; }
 </style>
-<section class="auth-password" id="password-root" data-return-path="${h(returnTo)}"><h2 id="password-heading">${h(copy.title)}</h2>
-<form id="password-form" method="post" action="/api/v1/auth/password/login" aria-labelledby="password-heading"><fieldset id="password-fields">
+<section class="auth-password" id="password-root" data-return-path="${h(returnTo)}">
+<form id="password-form" method="post" action="/api/v1/auth/password/login" aria-label="${h(copy.title)}"><fieldset id="password-fields">
 <label>${h(copy.email)}<input name="email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
 <label>${h(copy.password)}<input name="password" type="password" autocomplete="current-password" required></label>
 <button class="auth-button auth-button--primary" type="submit">${h(copy.title)}</button>
@@ -264,7 +287,9 @@ const error = document.getElementById("password-error");
 const controller = new AbortController();
 let busy = false;
 addEventListener("pagehide", () => { controller.abort(); form.reset(); });
-document.querySelectorAll(".auth-providers a").forEach((link) => link.addEventListener("click", (event) => { if (busy) event.preventDefault(); }));
+document.addEventListener("click", (event) => {
+  if (busy && event.target instanceof Element && event.target.closest(".auth-providers a")) event.preventDefault();
+});
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (busy) return;

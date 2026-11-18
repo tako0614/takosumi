@@ -6067,7 +6067,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(48);
+  expect(plan.migrations.length).toEqual(49);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",
@@ -6128,6 +6128,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
   );
   expect(plan.migrations[46].name).toEqual("047_notification_pushers.sql");
   expect(plan.migrations[47].name).toEqual("048_notification_deliveries.sql");
+  expect(plan.migrations[48].name).toEqual("049_password_auth.sql");
   expect(plan.migrations[44].checksum.startsWith("sha256:")).toEqual(true);
   expect(plan.migrations[0].checksum.startsWith("sha256:")).toEqual(true);
   expect(stdout.join("\n").includes("accounts:secret")).toEqual(false);

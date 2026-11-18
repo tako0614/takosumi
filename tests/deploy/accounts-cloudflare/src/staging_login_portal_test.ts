@@ -49,6 +49,19 @@ test("stage login uses only configured public providers and preserves the entire
   expect(html).not.toContain("client_secret");
 });
 
+test("the portal names the registered product and TAKOS INC. using the client and callback pair", async () => {
+  const continuation = new URL(returnTo, issuer);
+  continuation.searchParams.set("client_id", "takosumi-hosted-staging-v1");
+  continuation.searchParams.set("redirect_uri", "https://app-staging.takosumi.com/auth/oidc/callback");
+  const page = await render(signInUrl(continuation.pathname + continuation.search));
+  const html = await page!.text();
+  expect(html).toContain("<title>Sign in to Takosumi · TAKOS INC.</title>");
+  expect(html).toContain("<h1>Sign in to Takosumi</h1>");
+  continuation.searchParams.set("redirect_uri", "https://unregistered.test/auth/oidc/callback");
+  const unregistered = await render(signInUrl(continuation.pathname + continuation.search));
+  expect(await unregistered!.text()).toContain("<h1>Sign in</h1>");
+});
+
 test("Japanese browser preferences localize the portal and failed sign-in without changing the continuation", async () => {
   const headers = { "accept-language": "en-US;q=0.5, ja-JP;q=0.9" };
   const renderJapanese = (url: URL) => handleStagingLoginPortal({
@@ -325,6 +338,8 @@ test("password mode activates direct OAuth choices and localizes email login", a
   const html = await response!.text();
   expect(html).toContain("メールアドレス");
   expect(html).toContain("パスワードでサインイン");
+  expect(html.indexOf('id="password-form"')).toBeLessThan(html.indexOf('class="auth-providers"'));
+  expect(html).toContain('<p class="auth-divider">または</p>');
   expect(links(html).map((target) => target.searchParams.get("return_to"))).toEqual(["/account", "/account"]);
 });
 
