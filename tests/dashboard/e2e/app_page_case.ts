@@ -1387,6 +1387,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = "uninstall_scheduled";
       let connectionRemoved = false;
+      const replacementPlanBodies: unknown[] = [];
       const connectionProblem = {
         code: "connection_unavailable", severity: "error", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionId: "conn_removed", connectionStatus: "missing",
       } as const;
@@ -1424,9 +1425,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         policyStatus: "pass", summary: { add: 0, change: 1, destroy: 0 }, origin: { kind: "revision", ref: "v2" },
         planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["update"] }],
       };
+      const recoveryPlan = {
+        ...lifecycleRun("run_states_destroy_recovery", "destroy_plan", "waiting_approval", now, { capsuleId: ID }),
+        policyStatus: "pass", requiresApproval: true, summary: { add: 0, change: 0, destroy: 1 },
+        planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["delete"] }],
+      };
       const runsById = new Map<string, Record<string, unknown>>([
         [blockedPlan.id, blockedPlan], [updateApply.id, updateApply], [installPlan.id, installPlan],
-        [revisionPlanRun.id, revisionPlanRun],
+        [revisionPlanRun.id, revisionPlanRun], [recoveryPlan.id, recoveryPlan],
       ]);
       // Older history: thirty-two applied changes, read twenty at a time.
       const olderRuns = Array.from({ length: 32 }, (_, index) =>
@@ -1527,6 +1533,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           }] } });
         }
         const base = `/api/v1/capsules/${ID}`;
+        if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
+          { id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified" },
+          { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
+          { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "verified" },
+        ] } });
+        if (path === `${base}/destroy-plan` && request.method() === "POST") {
+          replacementPlanBodies.push(request.postDataJSON());
+          return route.fulfill({ status: 201, json: { run: recoveryPlan } });
+        }
         if (path === `${base}/members`) return route.fulfill({ json: { owner: { accountId: "sub_portable_e2e", displayName: "Portable E2E", email: "portable-e2e@example.test" }, members: [] } });
         if (path === base) return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
         if (path === `${base}/app`) {
@@ -1624,11 +1639,22 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await capture(page, "app-page-uninstall-scheduled");
       connectionRemoved = true;
       await page.reload({ waitUntil: "domcontentloaded" });
-      await expect(scheduled).toContainText(`Uninstalling ${NAME} requires a working cloud connection.`);
-      await expect(scheduled).toContainText("This app's cloud connection was removed.");
-      await expect(scheduled.getByRole("link", { name: "View cloud connections" })).toHaveAttribute("href", "/connections");
+      await expect(scheduled).toContainText(`Uninstalling ${NAME} is on hold.`);
+      await expect(scheduled).toContainText("The cloud connection for this uninstall was removed.");
+      await expect(scheduled.getByRole("link", { name: "View cloud connections" })).toHaveCount(0);
       await expect(scheduled.getByRole("button", { name: "Uninstall now", exact: true })).toHaveCount(0);
       await expect(problems.locator('[data-problem="connection_unavailable"]')).toHaveCount(0);
+      await scheduled.getByRole("button", { name: "Choose connection for uninstall" }).click();
+      const choices = scheduled.getByRole("combobox", { name: "Cloudflare" });
+      await expect(choices.getByRole("option")).toHaveCount(2);
+      const preview = scheduled.getByRole("button", { name: "Review removal" });
+      await expect(preview).toBeDisabled();
+      await choices.selectOption("conn_saved");
+      await preview.click();
+      await expect(problems.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+      expect(replacementPlanBodies).toEqual([{ destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }] }]);
+      expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+      await page.reload({ waitUntil: "domcontentloaded" });
       await header.getByRole("button", { name: "Cancel uninstall", exact: true }).click();
       await expect(app).toHaveAttribute("data-app-state", "installed");
 
@@ -1643,7 +1669,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
       await app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true }).click();
       await expect(page.getByRole("dialog")).toContainText("keeps its data for 7 days");
-      await expect(page.getByRole("dialog")).toContainText("This app's cloud connection was removed.");
+      await expect(page.getByRole("dialog")).toContainText("The cloud connection for this uninstall was removed.");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
       connectionRemoved = false;
 
@@ -1806,6 +1832,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await showAppOverview(page);
 
       expect(seenMutations).toEqual([
+        `POST /api/v1/capsules/${ID}/destroy-plan`,
         `POST /api/v1/capsules/${ID}/cancel-uninstall`,
         "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
         "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",

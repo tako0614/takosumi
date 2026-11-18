@@ -57,12 +57,14 @@ test("a broken bound connection takes precedence over the countdown only when te
     ...scheduled,
     problems: [{ code: "connection_unavailable", severity: "error", connectionStatus: "missing" }, ...scheduled.problems],
   };
-  expect(appUninstallBanner(needsConnection, "App")).toBe(t("app.uninstall.bannerConnection", { name: "App" }));
+  expect(appUninstallBanner(needsConnection, "App")).toBe(t("app.uninstall.bannerConnectionRemoved", { name: "App" }));
   expect(appUninstallConnectionNotice(needsConnection)).toBe("app.uninstall.connectionRemoved");
-  expect(appUninstallConnectionNotice({
+  const expired: Terms = {
     ...needsConnection,
     problems: [{ code: "connection_unavailable", severity: "error", connectionStatus: "expired" }],
-  })).toBe("app.uninstall.connectionUnavailable");
+  };
+  expect(appUninstallConnectionNotice(expired)).toBe("app.uninstall.connectionUnavailable");
+  expect(appUninstallBanner(expired, "App")).toBe(t("app.uninstall.bannerConnection", { name: "App" }));
   expect(appUninstallConnectionNotice({
     ...needsConnection,
     uninstall: { ...scheduled.uninstall, scheduled: { ...scheduled.uninstall.scheduled!, phase: "destroying" } },

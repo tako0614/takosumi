@@ -16,6 +16,7 @@
  * types remain assignable to the dashboard view models.
  */
 
+import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import { randomUuid } from "./random-uuid.ts";
 import {
   preflightSharedAuthSession,
@@ -1833,6 +1834,16 @@ export async function getCapsuleProviderBindingSet(
     providerBindingSet: ProviderBindingSet | null;
   }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-bindings`);
   return body.providerBindingSet;
+}
+
+export function createCapsuleDestroyRecoveryPlan(
+  capsuleId: string,
+  replacements: readonly DestroyProviderConnectionReplacement[],
+): Promise<unknown> {
+  return controlFetch(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`, {
+    method: "POST",
+    body: { destroyProviderConnectionReplacements: replacements },
+  });
 }
 
 // --- Capsule configs -------------------------------------------------------
