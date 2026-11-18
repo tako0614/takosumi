@@ -1,3 +1,4 @@
+import { registerRunOwnerApplyReceiptReader } from "./committed_apply_recovery.ts";
 import {
   type CreateTakosumiServiceOptions,
   type CreatedTakosumiService,
@@ -503,6 +504,7 @@ export async function createWorkerServiceApp(
     ...(backupArtifactStore ? { serviceDataBackupRunner: opentofuRunner } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
   });
+  registerRunOwnerApplyReceiptReader(service.operations, opentofuRunner);
   ownNotificationOperations = service.operations;
   return service;
 }

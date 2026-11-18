@@ -1,3 +1,4 @@
+import { dispatchRunOwnerWithApplyReceipts } from "../committed_apply_recovery.ts";
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "../bindings.ts";
 import { cachedRunOwnerDeployControlService } from "../deploy_control_seam.ts";
 import {
@@ -832,7 +833,7 @@ async function dispatchToController(
   control: RunOwnerDispatchControl = {},
 ): Promise<void> {
   const service = await cachedRunOwnerDeployControlService(env);
-  await service.operations.dispatchQueuedRun(dispatch, control);
+  await dispatchRunOwnerWithApplyReceipts(service.operations, dispatch, control);
 }
 
 async function readRunStatusFromController(

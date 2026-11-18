@@ -1,5 +1,5 @@
 import { convergeOwnedSourceLane } from "../../sources/owned-lane.ts";
-import { readCommittedApplyReceiptCommand } from "../committed_apply_receipt.ts";
+import { readCommittedApplyReceiptCommand, readCommittedApplyReceiptProbeCommand } from "../committed_apply_receipt.ts";
 /**
  * Run / Capsule-lifecycle orchestration engine (P3 god-file split).
  *
@@ -5194,7 +5194,7 @@ export class RunEngine {
     dispatch: OpenTofuRunDispatch,
     control: RunDispatchControl = {},
   ): Promise<void> {
-    if (control.committedApplyReceipt !== undefined) {
+    if (control.committedApplyReceipt !== undefined || control.committedApplyReceiptProbe !== undefined) {
       if (dispatch.action !== "apply") throw new Error("committed Apply receipt cannot authorize another action");
       const run = await this.#store.getApplyRun(dispatch.runId);
       if (!run || run.workspaceId !== dispatch.workspaceId) throw new Error("committed Apply receipt dispatch scope mismatch");
@@ -5919,7 +5919,11 @@ export class RunEngine {
     runId: string,
     control: RunDispatchControl = {},
   ): Promise<ApplyRunResponse> {
-    const receiptOnly = control.committedApplyReceipt !== undefined;
+    let receiptOnly = control.committedApplyReceipt !== undefined;
+    let observedCompletion = false;
+    const probeCommand = control.committedApplyReceiptProbe;
+    const probe = probeCommand === undefined ? undefined : readCommittedApplyReceiptProbeCommand(probeCommand, runId);
+    if (probeCommand !== undefined && !probe) throw new Error("committed Apply receipt probe mismatch");
     let applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun) {
       throw new OpenTofuControllerError(
@@ -5964,6 +5968,12 @@ export class RunEngine {
       ? readCommittedApplyReceiptCommand(control.committedApplyReceipt!, runner, applyRun.id)
       : undefined;
     if (receiptOnly && !receipt) throw new Error("committed Apply receipt command mismatch");
+    const observesReceipt = !receipt && probe?.runner === runner && applyRun.status === "running" && applyRun.operation !== "destroy";
+    const inspectReceipt = async () => {
+      if (control.deadlineAt !== undefined && Date.now() >= control.deadlineAt) return "hold";
+      const determination = await probe!.inspect().catch(() => "hold" as const);
+      return control.deadlineAt !== undefined && Date.now() >= control.deadlineAt ? "hold" : determination;
+    };
     // Generated-root dispatch for apply: re-read and authenticate the retained
     // preparation bundle so apply runs tofu in the SAME generated root and
     // policy/runtime context that the plan reviewed.
@@ -5972,6 +5982,7 @@ export class RunEngine {
       try {
         inputs = await this.#requirePreparedPlanRunInputs(planRun);
       } catch (error) {
+        if (observesReceipt && await inspectReceipt() !== "ordinary") return await this.getApplyRun(runId);
         if (receiptOnly) throw error;
         // These are Plan-owned inputs, shared with other admitted Apply Runs.
         // Neither a failed read nor winning this Apply's CAS owns their deletion.
@@ -5985,6 +5996,15 @@ export class RunEngine {
       }
     }
     const dispatch = moduleDispatchFromInputs(inputs);
+    // Only the explicit host observation selects this lane. Fresh/queued work,
+    // Destroy and a different configured adapter retain ordinary execution.
+    if (observesReceipt && inputs && !dispatch.lifecycleActions?.length && !dispatch.privateRunFileSlots?.length) {
+      const determination = await inspectReceipt();
+      if (determination === "hold") return await this.getApplyRun(runId);
+      observedCompletion = determination === "completed";
+      receiptOnly ||= observedCompletion;
+    }
+
     if (receipt && (!inputs || dispatch.lifecycleActions?.length || dispatch.privateRunFileSlots?.length)) {
       throw new Error("committed Apply receipt cannot authorize lifecycle or private-file effects");
     }
@@ -5996,6 +6016,7 @@ export class RunEngine {
         { kind: "apply", id: applyRun.id },
       );
     } catch (error) {
+      if (observedCompletion) return await this.getApplyRun(runId);
       if (receiptOnly) throw error;
       const result = await this.#failUnclaimedApplyRun(applyRun, error);
       if (!result.run) return await this.getApplyRun(runId);
@@ -6016,6 +6037,27 @@ export class RunEngine {
     // while a single blocking runner fetch is in flight.
     const runWork = (handle?: LeaseHandle) =>
       this.#runSerialized(key, async () => {
+        if (observedCompletion && probe) {
+          try {
+            const context = await this.#prepareApplyReceiptObservation(applyRun, planRun, profile, dispatch, inputs, control.deadlineAt);
+            const stateScope = context.envDispatch.stateScope;
+            const rawOutputRef = context.envDispatch.rawOutputRef;
+            if (!stateScope || !rawOutputRef) return await this.getApplyRun(runId);
+            const result = await probe.read({ stateScope, rawOutputRef });
+            if (!result || (control.deadlineAt !== undefined && Date.now() >= control.deadlineAt)) return await this.getApplyRun(runId);
+            const recovered = await this.#validateCommittedApplyReceipt({ runner, runId, stateScope, result,
+              confirm: async (ref) => {
+                if (ref !== rawOutputRef) throw new Error("committed Apply receipt raw output mismatch");
+                return structuredClone(result);
+              },
+            }, context, applyRun, planRun, profile, control.deadlineAt);
+            return await this.#executeApply(applyRun, planRun, profile, dispatch, inputs, handle, control.deadlineAt, recovered);
+          } catch {
+            // An observation can neither fail the Run nor grant dispatch on a
+            // missing/changed receipt, current admission, or deadline.
+            return await this.getApplyRun(runId);
+          }
+        }
         const recovered = receipt ? await this.#prepareCommittedApplyReceipt(
           receipt, applyRun, planRun, profile, dispatch, inputs, control.deadlineAt,
         ) : undefined;
@@ -10347,6 +10389,14 @@ export class RunEngine {
     run: ApplyRun, plan: PlanRun, profile: RunnerProfile, dispatch: RunModuleDispatch,
     inputs: PlanRunInputs | undefined, deadlineAt?: number,
   ): Promise<RecoveredApplyReceipt> {
+    const context = await this.#prepareApplyReceiptObservation(run, plan, profile, dispatch, inputs, deadlineAt);
+    return await this.#validateCommittedApplyReceipt(receipt, context, run, plan, profile, deadlineAt);
+  }
+
+  async #prepareApplyReceiptObservation(
+    run: ApplyRun, plan: PlanRun, profile: RunnerProfile, dispatch: RunModuleDispatch,
+    inputs: PlanRunInputs | undefined, deadlineAt?: number,
+  ) {
     const inBudget = () => deadlineAt === undefined || Date.now() < deadlineAt;
     if (!inBudget() || run.status !== "running" || run.operation === "destroy" || run.operation !== plan.operation ||
       run.workspaceId !== plan.workspaceId || run.capsuleId !== plan.capsuleId ||
@@ -10361,6 +10411,15 @@ export class RunEngine {
     // minting, refreshing or materializing a new credential bundle.
     await this.#runEnv.resolveRunEnvironment({ planRun: plan, phase: "apply", auditRunId: run.id, mintCredentials: false });
     const context = await this.#prepareApplyReceiptDispatch(run, plan, profile, dispatch);
+    return context;
+  }
+
+  async #validateCommittedApplyReceipt(
+    receipt: NonNullable<ReturnType<typeof readCommittedApplyReceiptCommand>>,
+    context: Omit<RecoveredApplyReceipt, "result" | "confirm">,
+    run: ApplyRun, plan: PlanRun, profile: RunnerProfile, deadlineAt?: number,
+  ): Promise<RecoveredApplyReceipt> {
+    const inBudget = () => deadlineAt === undefined || Date.now() < deadlineAt;
     const scope = context.envDispatch.stateScope;
     if (!scope || scope.workspaceId !== receipt.stateScope.workspaceId ||
       scope.subject?.kind !== receipt.stateScope.subject?.kind || scope.subject?.id !== receipt.stateScope.subject?.id ||

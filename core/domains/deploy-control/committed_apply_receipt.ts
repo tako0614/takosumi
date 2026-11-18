@@ -31,3 +31,25 @@ export function readCommittedApplyReceiptCommand(
   const receipt = receipts.get(command);
   return receipt?.runner === runner && receipt.runId === runId ? receipt : undefined;
 }
+
+/** Host-only, run-bound observation. It is never a public dispatch option. */
+declare const receiptProbe: unique symbol;
+export interface CommittedApplyReceiptProbeCommand { readonly [receiptProbe]: true }
+interface ReceiptProbe {
+  readonly runner: OpenTofuRunner;
+  readonly runId: string;
+  /** Ordinary still relies on the original runner preparation/dispatch fence. */
+  readonly inspect: () => Promise<"ordinary" | "completed" | "hold">;
+  /** Core, not the observer, allocates both immutable artifact coordinates. */
+  readonly read: (allocation: { readonly stateScope: DispatchStateScope; readonly rawOutputRef: string }) => Promise<OpenTofuApplyResult | undefined>;
+}
+const probes = new WeakMap<CommittedApplyReceiptProbeCommand, Readonly<ReceiptProbe>>();
+export function committedApplyReceiptProbeCommand(input: ReceiptProbe): CommittedApplyReceiptProbeCommand {
+  const command = Object.freeze({}) as CommittedApplyReceiptProbeCommand;
+  probes.set(command, Object.freeze({ ...input }));
+  return command;
+}
+export function readCommittedApplyReceiptProbeCommand(command: CommittedApplyReceiptProbeCommand, runId: string): Readonly<ReceiptProbe> | undefined {
+  const probe = probes.get(command);
+  return probe?.runId === runId ? probe : undefined;
+}

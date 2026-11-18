@@ -1283,8 +1283,11 @@ const createOpenTofuRunnerObjectClass = (
         scope,
         action,
         rawOutputRef,
+        undefined,
+        { receipt, readOnly: true },
       );
-      return adopted ?? indeterminate();
+      const current = await this.inspectMutationAuthority(applyRunId, action);
+      return JSON.stringify(current) === JSON.stringify(inspection) ? adopted ?? indeterminate() : indeterminate();
     } catch (error) {
       // The receipt named an artifact that no longer authenticates under this
       // run's identity. That is a conflict, not a completion: stay fenced.
@@ -2588,7 +2591,11 @@ const createOpenTofuRunnerObjectClass = (
                 envelope.action,
                 rawOutputRef,
                 originalLease?.leaseToken,
-              )
+                completion ? { receipt: completion } : undefined,
+              ).catch((error: unknown) => {
+                if (completion) return undefined;
+                throw error;
+              })
             : undefined;
         // A durably terminal mutation has no live container left to serve: the
         // dispatch is fenced forever and every later read is answered from R2.
@@ -3804,6 +3811,7 @@ const createOpenTofuRunnerObjectClass = (
     action: "apply" | "destroy",
     rawOutputRef: string | undefined,
     expectedLeaseToken?: string,
+    expected?: { readonly receipt: RunnerMutationCompletionReceipt; readonly readOnly?: boolean },
   ): Promise<Response | undefined> {
     assertStateRefForScope(scope);
     const bucket = this.#r2State(applyRunId, scope, undefined, undefined, expectedLeaseToken);
@@ -3833,14 +3841,19 @@ const createOpenTofuRunnerObjectClass = (
         `completed ${action} target generation does not match stateScope`,
       );
     }
-    const completedState = await this.#stateCrypto().open(
-      await readBoundedR2ObjectBytes(
-        object,
-        "state",
-        maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
-      ),
-      metadataDigest,
+    const ciphertext = await readBoundedR2ObjectBytes(
+      object, "state", maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
     );
+    if (expected && (
+      metadataDigest !== expected.receipt.contentDigest ||
+      ciphertext.byteLength !== expected.receipt.ciphertextLength ||
+      Number(object.customMetadata?.["takosumi-ciphertext-length"]) !== expected.receipt.ciphertextLength ||
+      object.customMetadata?.["takosumi-execution-evidence-ref"] !== expected.receipt.evidenceRef ||
+      object.customMetadata?.["takosumi-execution-evidence-digest"] !== expected.receipt.evidenceDigest ||
+      object.customMetadata?.["takosumi-raw-output-ref"] !== expected.receipt.rawOutputRef ||
+      (object.customMetadata?.["takosumi-provider-execution"] === "failed") !== expected.receipt.providerExecutionFailed
+    )) throw new Error("completed mutation receipt artifact mismatch");
+    const completedState = await this.#stateCrypto().open(ciphertext, metadataDigest);
     assertArtifactSize(
       "state",
       this.#artifactLimits.state,
@@ -3856,6 +3869,13 @@ const createOpenTofuRunnerObjectClass = (
       applyRunId,
       action,
     );
+    if (expected && (!executionEvidence ||
+      executionEvidence.runId !== applyRunId || executionEvidence.action !== action ||
+      executionEvidence.receipt.operationId !== applyRunId ||
+      executionEvidence.receipt.version !== expected.receipt.version ||
+      executionEvidence.receipt.fence !== expected.receipt.fence ||
+      executionEvidence.outcome !== (providerExecutionFailed ? "provider_failed_state_persisted" : "committed")
+    )) throw new Error("completed mutation receipt execution evidence mismatch");
     if (action === "destroy" && recordedRawOutputRef) {
       throw new Error(
         "completed destroy target unexpectedly records raw output authority",
@@ -3888,7 +3908,7 @@ const createOpenTofuRunnerObjectClass = (
     const ciphertextLength = Number(
       object.customMetadata?.["takosumi-ciphertext-length"],
     );
-    await writeCurrentStateCache(bucket, scope, {
+    if (!expected?.readOnly) await writeCurrentStateCache(bucket, scope, {
       generation: scope.generation,
       objectKey: scope.stateRef,
       digest: metadataDigest,

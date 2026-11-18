@@ -1122,6 +1122,22 @@ state-only execution commit, then uses the existing partial-state failure CAS:
 same Run failed, next state generation, Capsule error and no new Output.
 Neither a heartbeat timeout nor a missing Runner is a failure receipt.
 
+The Worker RunOwner uses an explicitly composed, host-only receipt observer for
+stale non-destroy Apply Runs without lifecycle or private-file effects. Core
+allocates the state and raw-output coordinates; the selected Runner object's
+completed receipt must authenticate the exact R2 content/length, evidence
+reference/digest, outcome, raw-output range and immutable execution
+version/fence/operation ID. This private read retains StoredService owner
+resolution, does not write the current-state cache or contact a container, and
+settles through the same current admission, no-mint environment checks and
+lease/CAS as Node receipt adoption. An unreadable/malformed authority, changed
+admission, elapsed dispatch deadline or invalid completed artifact holds the
+original Run without a new failure, credential or mutation. A noncompleted
+valid phase (or absent authority) does not grant dispatch: the unchanged normal
+DO preparation fence still owns pre-dispatch admission and legacy R2 replay.
+Fresh/queued, Destroy, lifecycle/private-file and other configured executors
+keep their existing paths. No new public route or sweep is enabled.
+
 The private local HTTP preparation-v2 candidate is opt-in and is not yet the
 default advertised runner protocol. It permits an exact byte-identical
 Apply/Destroy request to reprepare before the POST dispatch marker only within
