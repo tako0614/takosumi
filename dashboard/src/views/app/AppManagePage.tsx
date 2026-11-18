@@ -36,6 +36,7 @@ import {
   type JSX,
 } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
+import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import {
   ChevronLeft, Clock3, FolderOpen, Link2, Plug, RefreshCw, Settings2, Smartphone, Trash2, Users,
 } from "lucide-solid";
@@ -48,6 +49,7 @@ import {
   type CapsuleAppView,
   type Capsule,
   ControlApiError,
+  createCapsuleDestroyRecoveryPlan,
   createReviewableGitRevisionPlan,
   createStateVersionRollbackPlan,
   advanceGitInstallPlan,
@@ -602,7 +604,7 @@ export default function AppManagePage(props: {
         } else {
           setSectionError({ section, message: friendlyError(cause, t).message });
         }
-        if (!disposed && purpose === "update" && props.accountId === forAccount && props.principalId === forPrincipal &&
+        if (!disposed && (purpose === "update" || purpose === "uninstall") && props.accountId === forAccount && props.principalId === forPrincipal &&
           (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
             : cause instanceof TypeError)) {
@@ -1093,6 +1095,17 @@ export default function AppManagePage(props: {
       { restartable: false, action: "uninstall_now" },
     );
   };
+  const reviewUninstallWithConnection = (replacements: readonly DestroyProviderConnectionReplacement[]) => {
+    const view = app();
+    if (!view || !isOwner() || uninstallConnectionNotice() !== "app.uninstall.connectionRemoved" ||
+      review() || view.progress.run || view.progress.review) return;
+    void startReview(
+      "attention",
+      "uninstall",
+      async () => extractRunId(await createCapsuleDestroyRecoveryPlan(view.capsuleId, replacements)),
+      { restartable: false, action: "uninstall_now" },
+    );
+  };
 
   // --- the one primary action ---------------------------------------------------------
   const runPrimary = (view: CapsuleAppView) => {
@@ -1510,6 +1523,7 @@ export default function AppManagePage(props: {
                   continueInstall,
                   cancelUninstall: () => void cancelUninstall(),
                   uninstallNow,
+                  reviewUninstallWithConnection,
                   openReview: openRunReview,
                   continueRevision,
                 }}

@@ -8,6 +8,7 @@
  */
 import { createMemo, For, type JSX, Match, Show, Switch } from "solid-js";
 import { ExternalLink } from "lucide-solid";
+import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import { Button } from "../../components/ui/index.ts";
 import type {
   CapsuleAppAction,
@@ -28,6 +29,7 @@ import { runFailureHint } from "../../lib/run-errors.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
+import AppUninstallConnectionRecovery from "./AppUninstallConnectionRecovery.tsx";
 
 export interface AttentionActions {
   readonly retry: (problem: CapsuleAppProblem) => void;
@@ -37,6 +39,7 @@ export interface AttentionActions {
   readonly continueInstall: () => void;
   readonly cancelUninstall: () => void;
   readonly uninstallNow: () => void;
+  readonly reviewUninstallWithConnection: (replacements: readonly DestroyProviderConnectionReplacement[]) => void;
   readonly openReview: (runId: string, runType: RunType) => void;
   /** Continues a revision coordinator that stopped moving. */
   readonly continueRevision: (revisionPlanId: string) => void;
@@ -341,6 +344,13 @@ export default function AppAttentionSection(props: {
                   <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
                 </Show>
               </div>
+              <Show when={props.canUninstall && uninstallConnectionNotice() === "app.uninstall.connectionRemoved" && app().capsuleId} keyed>
+                {(_capsuleId) => <AppUninstallConnectionRecovery
+                  app={app()}
+                  disabled={props.busy || Boolean(app().progress.run || app().progress.review || props.reviewRunId)}
+                  onReview={props.actions.reviewUninstallWithConnection}
+                />}
+              </Show>
             </article>
           </Show>
 
