@@ -9,7 +9,7 @@ import {
   type OpenTofuRunnerExecutorRegistry,
 } from "../../../core/domains/deploy-control/mod.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
-import { withCommittedLocalApplyRecovery } from "./local-opentofu-runner.ts";
+import { withCommittedLocalApplyRecovery } from "./local-apply-recovery-capability.ts";
 
 type Operations = Pick<Awaited<ReturnType<typeof buildComposedApp>>["operations"], "controller" | "dispatchQueuedRun">;
 type Store = Pick<OpenTofuControlStore, "getApplyRun" | "getPlanRun" | "getPlanRunInputs" | "getCapsule" | "getCapsuleStorageRoot" | "getWorkspace">;

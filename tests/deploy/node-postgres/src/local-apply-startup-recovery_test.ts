@@ -9,7 +9,8 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/s
 import { stableJsonDigest, sha256Digest } from "../../../../core/adapters/source/digest.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { seedCapsuleModel, FIXTURE_EXECUTION_EVIDENCE_AUTHORITY, fixtureExecutionEvidence } from "../../../helpers/deploy-control/model_fixture.ts";
-import { createFileOpenTofuStateArtifactStore, createHttpOpenTofuRunner, createLocalOpenTofuRunner, withCommittedLocalApplyRecovery } from "../../../../deploy/node-postgres/src/local-opentofu-runner.ts";
+import { createFileOpenTofuStateArtifactStore, createHttpOpenTofuRunner, createLocalOpenTofuRunner } from "../../../../deploy/node-postgres/src/local-opentofu-runner.ts";
+import { withCommittedLocalApplyRecovery } from "../../../../deploy/node-postgres/src/local-apply-recovery-capability.ts";
 import { recoverLocalAppliesAtStartup, startLocalApplyStartupRecovery } from "../../../../deploy/node-postgres/src/local-apply-startup-recovery.ts";
 
 const DIGEST = `sha256:${"a".repeat(64)}` as const;

@@ -7,6 +7,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { registerCommittedLocalApplyRecovery } from "./local-apply-recovery-capability.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -592,16 +593,6 @@ export function createHttpOpenTofuRunner(input: {
   );
 }
 
-/** Receipt-only capability: an arbitrary runner cannot opt into startup replay. */
-export async function withCommittedLocalApplyRecovery(
-  runner: OpenTofuRunner | undefined,
-  input: { readonly runId: string; readonly stateScope: DispatchStateScope },
-  consume: () => Promise<void>,
-): Promise<boolean> {
-  if (!(runner instanceof LocalOpenTofuRunner)) return false;
-  return await runner.recoverCommittedApply(input, consume);
-}
-
 export function createLocalOpenTofuRunnerProfile(
   now = Date.now(),
 ): RunnerProfile {
@@ -667,9 +658,10 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         return transport.fetch(path, init);
       },
     };
+    registerCommittedLocalApplyRecovery(this, (input, consume) => this.recoverCommittedApply(input, consume));
   }
 
-  async recoverCommittedApply(
+  private async recoverCommittedApply(
     input: { readonly runId: string; readonly stateScope: DispatchStateScope },
     consume: () => Promise<void>,
   ): Promise<boolean> {
