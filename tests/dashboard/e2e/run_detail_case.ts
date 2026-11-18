@@ -103,11 +103,14 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
     });
 
-    test("lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
+    for (const individualReadRefused of [false, true]) {
+    test(individualReadRefused
+      ? "an individual Run refusal keeps a lost Apply unconfirmed without another mutation"
+      : "lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      for (const outcome of ["accepted", "absent", "ambiguous", "foreign", "wrong-kind", "wrong-plan", "incomplete", "pending", "retired", "rejected", "normal"] as const) {
+      for (const outcome of individualReadRefused ? ["read-refused"] as const : ["accepted", "absent", "ambiguous", "foreign", "wrong-kind", "wrong-plan", "incomplete", "pending", "retired", "rejected", "normal"] as const) {
         const capsuleId = `cap_apply_${outcome}`;
         const planId = `plan_apply_${outcome}`;
         const applyId = outcome === "accepted" ? "apply/accepted?result#opaque" : `apply_${outcome}`;
@@ -145,7 +148,10 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             return route.fulfill({ json: { run: { ...plan, id: replacementId } } });
           }
           if (path === `/api/v1/runs/${planId}` || path === `/api/v1/runs/${applyPathId}`) {
-            if (path === `/api/v1/runs/${applyPathId}`) applyReads += 1;
+            if (path === `/api/v1/runs/${applyPathId}`) {
+              applyReads += 1;
+              if (outcome === "read-refused") return route.fulfill({ status: 403, json: { error: "forbidden" } });
+            }
             return route.fulfill({ json: { run: path.endsWith(`/${planId}`) ? plan : apply } });
           }
           if (path === `/api/v1/runs/${planId}/stream` || path === `/api/v1/runs/${applyPathId}/stream` || path === `/api/v1/runs/${replacementId}/stream`) {
@@ -230,6 +236,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             await expect(allow).toHaveCount(0);
             const retry = page.getByRole("button", { name: "Retry", exact: true });
             await expect(retry).toBeEnabled();
+            if (outcome === "read-refused") expect(applyReads).toBe(1);
             if (outcome === "pending") await held.release?.();
             if (outcome === "absent") {
               await retry.click();
@@ -245,6 +252,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       }
       expect(errors).toEqual([]);
     });
+
+    }
 
     for (const initial of ["consumed", "incomplete", "unavailable"] as const) {
     test(`a shared app's consumed approval is found beyond its first history page (${initial})`, async ({ page }) => {
