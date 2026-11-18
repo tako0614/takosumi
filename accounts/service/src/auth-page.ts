@@ -22,56 +22,15 @@ export function escapeAuthHtml(value: string): string {
     .replace(/"/gu, "&quot;").replace(/'/gu, "&#39;");
 }
 
-// Shared account presentation. The pixel mark matches Takoserver Console;
-// inline SVG keeps every screen within the existing nonce-only style CSP.
-const authMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34" shape-rendering="crispEdges" class="auth-mark" width="30" height="30" aria-hidden="true">
-  <rect x="9" y="0" width="17" height="8" fill="currentColor"/>
-  <rect x="8" y="1" width="1" height="30" fill="currentColor"/>
-  <rect x="26" y="1" width="1" height="33" fill="currentColor"/>
-  <rect x="7" y="2" width="1" height="30" fill="currentColor"/>
-  <rect x="27" y="2" width="1" height="30" fill="currentColor"/>
-  <rect x="6" y="3" width="1" height="31" fill="currentColor"/>
-  <rect x="28" y="3" width="1" height="22" fill="currentColor"/>
-  <rect x="29" y="4" width="1" height="20" fill="currentColor"/>
-  <rect x="5" y="5" width="1" height="29" fill="currentColor"/>
-  <rect x="4" y="6" width="1" height="15" fill="currentColor"/>
-  <rect x="30" y="6" width="1" height="17" fill="currentColor"/>
-  <rect x="3" y="7" width="1" height="13" fill="currentColor"/>
-  <rect x="31" y="7" width="1" height="15" fill="currentColor"/>
-  <rect x="2" y="8" width="1" height="9" fill="currentColor"/>
-  <rect x="9" y="8" width="4" height="23" fill="currentColor"/>
-  <rect x="15" y="8" width="5" height="3" fill="currentColor"/>
-  <rect x="22" y="8" width="4" height="23" fill="currentColor"/>
-  <rect x="32" y="8" width="1" height="13" fill="currentColor"/>
-  <rect x="1" y="10" width="1" height="4" fill="currentColor"/>
-  <rect x="13" y="10" width="2" height="21" fill="currentColor"/>
-  <rect x="20" y="10" width="2" height="24" fill="currentColor"/>
-  <rect x="33" y="10" width="1" height="10" fill="currentColor"/>
-  <rect x="17" y="11" width="3" height="20" fill="currentColor"/>
-  <rect x="16" y="12" width="1" height="1" fill="currentColor"/>
-  <rect x="15" y="14" width="1" height="20" fill="currentColor"/>
-  <rect x="16" y="16" width="1" height="18" fill="currentColor"/>
-  <rect x="0" y="20" width="3" height="2" fill="currentColor"/>
-  <rect x="1" y="22" width="2" height="2" fill="currentColor"/>
-  <rect x="3" y="23" width="2" height="8" fill="currentColor"/>
-  <rect x="2" y="24" width="1" height="2" fill="currentColor"/>
-  <rect x="28" y="27" width="1" height="4" fill="currentColor"/>
-  <rect x="29" y="28" width="1" height="3" fill="currentColor"/>
-  <rect x="2" y="29" width="1" height="2" fill="currentColor"/>
-  <rect x="30" y="29" width="1" height="2" fill="currentColor"/>
-  <rect x="1" y="30" width="1" height="1" fill="currentColor"/>
-  <rect x="31" y="30" width="1" height="1" fill="currentColor"/>
-  <rect x="10" y="31" width="3" height="1" fill="currentColor"/>
-  <rect x="17" y="31" width="1" height="1" fill="currentColor"/>
-  <rect x="22" y="31" width="1" height="1" fill="currentColor"/>
-  <rect x="25" y="31" width="1" height="3" fill="currentColor"/>
-  <rect x="10" y="32" width="2" height="2" fill="currentColor"/>
-  <rect x="13" y="8" width="2" height="2" fill="var(--auth-mark-face)"/>
-  <rect x="20" y="8" width="2" height="2" fill="var(--auth-mark-face)"/>
-  <rect x="15" y="11" width="2" height="1" fill="var(--auth-mark-face)"/>
-  <rect x="15" y="12" width="1" height="2" fill="var(--auth-mark-face)"/>
-  <rect x="16" y="13" width="1" height="3" fill="var(--auth-mark-face)"/>
-</svg>`;
+export function stagingSignInProduct(clientId: string | null): string | undefined {
+  if (clientId === "takosumi-hosted-staging-v1") return "Takosumi";
+  if (clientId === "takoserver-console-staging-v1") return "Takoserver";
+}
+
+export function authSignInTitle(language: AuthLanguage, product: string): string {
+  return language === "ja" ? `${product} にログイン` : `Sign in to ${product}`;
+}
+
 const authStyle = `
 :root {
   color-scheme: light dark;
@@ -86,7 +45,6 @@ const authStyle = `
   --auth-action: var(--auth-accent);
   --auth-action-hover: #94281a;
   --auth-action-text: #ffffff;
-  --auth-mark-face: #17100f;
   --auth-google-blue: #4285f4;
   --auth-google-green: #34a853;
   --auth-google-yellow: #fbbc05;
@@ -97,7 +55,6 @@ const authStyle = `
   --auth-space-md: 1rem;
   --auth-space-lg: 1.5rem;
   --auth-space-xl: 2rem;
-  --auth-space-2xl: 2.5rem;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -112,25 +69,23 @@ const authStyle = `
     --auth-action: #e0533c;
     --auth-action-hover: #ef6349;
     --auth-action-text: #150907;
-    --auth-mark-face: #0b0b0c;
   }
 }
 * { box-sizing: border-box; }
 html, body { overflow-x: clip; }
 body { min-height: 100svh; margin: 0; display: flex; flex-direction: column; background: var(--auth-bg); color: var(--auth-fg); font: 400 .9375rem/1.65 var(--auth-font); -webkit-font-smoothing: antialiased; }
-.auth-shell { width: min(100%, 25.5rem); margin: auto; padding: var(--auth-space-2xl) var(--auth-space-lg) 5rem; }
-.auth-shell--consent { width: min(100%, 29rem); }
-.auth-brand { display: flex; align-items: center; justify-content: center; gap: var(--auth-space-sm); margin-bottom: var(--auth-space-xl); }
-.auth-mark { flex: 0 0 auto; color: var(--auth-accent); }
-.auth-wordmark { font-size: 1.5rem; line-height: 1; letter-spacing: -.045em; font-weight: 650; }
+.auth-shell { width: min(100%, 25.5rem); margin: auto; padding: var(--auth-space-xl) var(--auth-space-lg); }
+.auth-brand { margin: 0 0 var(--auth-space-md); text-align: center; font-weight: 750; font-size: .8125rem; letter-spacing: .09em; color: var(--auth-muted); }
 .auth-badge { color: var(--auth-muted); text-align: center; margin: var(--auth-space-lg) 0 0; font-size: .6875rem; }
-h1 { margin: 0; font-size: 1.25rem; font-weight: 600; font-style: normal; line-height: 1.5; letter-spacing: -.025em; text-align: center; text-wrap: balance; word-break: keep-all; overflow-wrap: anywhere; }
+h1 { margin: 0; font-size: 1.5rem; font-weight: 650; font-style: normal; line-height: 1.5; letter-spacing: -.025em; text-align: center; text-wrap: balance; word-break: keep-all; overflow-wrap: anywhere; }
 .auth-summary { margin: var(--auth-space-sm) 0 0; color: var(--auth-muted); font-size: .875rem; line-height: 1.8; text-align: center; text-wrap: balance; word-break: keep-all; overflow-wrap: anywhere; }
-.auth-task { margin-top: var(--auth-space-xl); min-width: 0; overflow-wrap: anywhere; }
+.auth-task { margin-top: var(--auth-space-lg); min-width: 0; overflow-wrap: anywhere; }
 .auth-providers, .auth-permissions { list-style: none; padding: 0; margin: 0; }
-.auth-providers { display: grid; gap: var(--auth-space-sm); }
+.auth-providers { display: grid; gap: var(--auth-space-xs); }
+.auth-divider { display: flex; align-items: center; gap: var(--auth-space-sm); margin: var(--auth-space-md) 0; color: var(--auth-muted); font-size: .75rem; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--auth-border); }
 .auth-provider-label { display: flex; justify-content: center; align-items: center; gap: var(--auth-space-sm); padding: var(--auth-space-xs) 0; color: var(--auth-muted); }
-.auth-button { display: flex; align-items: center; justify-content: center; gap: var(--auth-space-sm); min-height: 3rem; width: 100%; padding: var(--auth-space-sm) var(--auth-space-md); border: 1px solid var(--auth-control-border); border-radius: .5rem; background: var(--auth-panel); color: var(--auth-fg); text-align: center; text-decoration: none; font: 500 .875rem/1.5 var(--auth-font); cursor: pointer; }
+.auth-button { display: flex; align-items: center; justify-content: center; gap: var(--auth-space-sm); min-height: 2.75rem; width: 100%; padding: var(--auth-space-xs) var(--auth-space-md); border: 1px solid var(--auth-control-border); border-radius: .5rem; background: var(--auth-panel); color: var(--auth-fg); text-align: center; text-decoration: none; font: 500 .875rem/1.5 var(--auth-font); cursor: pointer; }
 .auth-provider-icon { flex: 0 0 auto; width: 1.125rem; height: 1.125rem; }
 .auth-button:hover:not(:disabled) { background: var(--auth-hover); }
 .auth-button:active:not(:disabled) { border-color: var(--auth-muted); }
@@ -142,8 +97,8 @@ h1 { margin: 0; font-size: 1.25rem; font-weight: 600; font-style: normal; line-h
 .auth-hint, dt { color: var(--auth-muted); }
 .auth-hint { margin: var(--auth-space-xs) 0 0; font-size: .75rem; }
 .auth-permissions { padding-block: var(--auth-space-sm); border-block: 1px solid var(--auth-border); }
-.auth-permissions li { position: relative; padding: var(--auth-space-xs) 0 var(--auth-space-xs) var(--auth-space-lg); font-size: .875rem; }
-.auth-permissions li::before { content: ''; position: absolute; top: 1.1em; left: .125rem; width: .625rem; height: .3125rem; border-bottom: 1.5px solid var(--auth-muted); border-left: 1.5px solid var(--auth-muted); transform: rotate(-45deg); }
+.auth-permissions li { position: relative; padding: .25rem 0 .25rem var(--auth-space-lg); font-size: .875rem; }
+.auth-permissions li::before { content: ''; position: absolute; top: .8em; left: .125rem; width: .625rem; height: .3125rem; border-bottom: 1.5px solid var(--auth-muted); border-left: 1.5px solid var(--auth-muted); transform: rotate(-45deg); }
 .auth-context { margin: var(--auth-space-md) 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--auth-space-xs) var(--auth-space-sm); font-size: .75rem; }
 .auth-context dd { margin: 0; overflow-wrap: anywhere; }
 .warn { font-size: .8125rem; margin: var(--auth-space-md) 0 0; }
@@ -151,7 +106,7 @@ h1 { margin: 0; font-size: 1.25rem; font-weight: 600; font-style: normal; line-h
 .actions { display: flex; flex-wrap: wrap; gap: var(--auth-space-sm); margin-top: var(--auth-space-lg); }
 .actions > * { flex: 1 1 8rem; width: auto; }
 @media (max-width: 43rem) {
-  .auth-shell { padding-block: var(--auth-space-2xl) 4rem; }
+  .auth-shell { padding: var(--auth-space-lg) var(--auth-space-md); }
 }
 `;
 
@@ -162,11 +117,13 @@ export function authPage(input: {
   body?: string;
   description?: string;
   badge?: string;
-  variant?: "consent";
+  issuer?: string;
 }): string {
   const title = escapeAuthHtml(input.title);
   const badge = input.badge ? `<p class="auth-badge">${escapeAuthHtml(input.badge)}</p>` : "";
   const description = input.description ? `<p class="auth-summary">${escapeAuthHtml(input.description)}</p>` : "";
   const task = input.body ? `<div class="auth-task">${input.body}</div>` : "";
-  return `<!doctype html><html lang="${input.language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Takos</title><style nonce="${escapeAuthHtml(input.nonce)}">${authStyle}</style></head><body><main class="auth-shell${input.variant === "consent" ? " auth-shell--consent" : ""}"><div class="auth-brand">${authMark}<span class="auth-wordmark">Takos</span></div><h1>${title}</h1>${description}${task}${badge}</main></body></html>`;
+  const companyIssuer = input.issuer === "https://auth-staging.takos.jp" || input.issuer === "https://auth.takos.jp";
+  const company = companyIssuer ? '<p class="auth-brand">TAKOS INC.</p>' : "";
+  return `<!doctype html><html lang="${input.language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}${companyIssuer ? " · TAKOS INC." : ""}</title><style nonce="${escapeAuthHtml(input.nonce)}">${authStyle}</style></head><body><main class="auth-shell">${company}<h1>${title}</h1>${description}${task}${badge}</main></body></html>`;
 }
