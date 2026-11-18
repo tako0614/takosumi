@@ -87,9 +87,9 @@ async function recoverPass(input: Parameters<typeof recoverLocalAppliesAtStartup
         }),
       };
       if (Date.now() >= deadlineAt) return;
-      await withCommittedLocalApplyRecovery(runner, { runId: run.id, stateScope }, async () => {
+      await withCommittedLocalApplyRecovery(runner, { runId: run.id, stateScope }, async (committedApplyReceipt) => {
         if (Date.now() >= deadlineAt) return;
-        await input.operations.dispatchQueuedRun({ action: "apply", runId: run.id, workspaceId: run.workspaceId }, { deadlineAt });
+        await input.operations.dispatchQueuedRun({ action: "apply", runId: run.id, workspaceId: run.workspaceId }, { deadlineAt, committedApplyReceipt });
       });
     } catch {
       // Missing, corrupt or mismatched custody is not execution authority. Do

@@ -9,6 +9,7 @@ import {
 import { Buffer } from "node:buffer";
 import { createFileLocalApplyDispatchCustodyStore, type LocalApplyDispatchCustodyStore, type LocalMutationEvidenceIdentity } from "./local-apply-dispatch-custody.ts";
 import { registerCommittedLocalApplyRecovery } from "./local-apply-recovery-capability.ts";
+import { committedApplyReceiptCommand, type CommittedApplyReceiptCommand } from "../../../core/domains/deploy-control/committed_apply_receipt.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -666,14 +667,21 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
 
   private async recoverCommittedApply(
     input: { readonly runId: string; readonly stateScope: DispatchStateScope },
-    consume: () => Promise<void>,
+    consume: (command: CommittedApplyReceiptCommand) => Promise<void>,
   ): Promise<boolean> {
     const receipt = await this.adoptCommittedStateMutation(input.runId, "apply", input.stateScope)
       ?? await this.adoptCompletedApplyDispatch(input);
-    if (!receipt || (receipt.result as OpenTofuApplyResult).providerExecutionFailure) return false;
+    if (!receipt) return false;
+    const result = receipt.result as OpenTofuApplyResult;
+    if (result.providerExecutionFailure && result.providerExecutionFailure.statePersistence !== "persisted") return false;
     // Retain authenticated immutable bytes, rather than check existence and then
     // let a second read fall through to a new provider mutation (TOCTOU).
-    await this.#recovery.run(receipt, consume);
+    await this.#recovery.run(receipt, () => consume(committedApplyReceiptCommand({
+      runner: this, ...input, result,
+      confirm: (rawOutputRef) => result.providerExecutionFailure
+        ? Promise.resolve(result)
+        : this.confirmRawOutput({ applyRun: { id: input.runId }, stateScope: input.stateScope, rawOutputRef }, receipt),
+    })));
     return true;
   }
 
@@ -2129,7 +2137,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   }
 
   private async confirmRawOutput(
-    job: OpenTofuApplyJob,
+    job: Pick<OpenTofuApplyJob, "stateScope" | "rawOutputRef"> & { readonly applyRun: { readonly id: string } },
     state: LocalOpenTofuStateArtifact,
   ): Promise<OpenTofuApplyResult> {
     const scope = job.stateScope;

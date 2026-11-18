@@ -1111,6 +1111,17 @@ hostile or multi-tenant at-most-once guarantee. The exact request digest also
 includes credential bytes: refreshed equivalent credentials can make an
 otherwise recoverable failure indeterminate rather than authorizing adoption.
 
+Node startup can also adopt an already authenticated encrypted Apply result
+without contacting the Runner or issuing credentials. Its host-only opaque
+command binds the exact adapter, Run and state coordinate. Current pinned input,
+provider-binding, management and execution-evidence checks precede the normal
+lease claim and ledger CAS; missing or mismatched proof cannot fall through to
+execution or a new failed Run. Successful results retain local raw-output
+confirmation. A typed provider-failed result requires persisted state and the
+state-only execution commit, then uses the existing partial-state failure CAS:
+same Run failed, next state generation, Capsule error and no new Output.
+Neither a heartbeat timeout nor a missing Runner is a failure receipt.
+
 The private local HTTP preparation-v2 candidate is opt-in and is not yet the
 default advertised runner protocol. It permits an exact byte-identical
 Apply/Destroy request to reprepare before the POST dispatch marker only within

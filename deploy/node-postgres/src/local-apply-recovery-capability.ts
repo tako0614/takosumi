@@ -1,10 +1,11 @@
 /** Host-internal receipt capability; keeps Runner implementation out of the service image. */
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
 import type { DispatchStateScope } from "@takosumi/internal/deploy-control-api";
+import type { CommittedApplyReceiptCommand } from "../../../core/domains/deploy-control/committed_apply_receipt.ts";
 
 type Recovery = (
   input: { readonly runId: string; readonly stateScope: DispatchStateScope },
-  consume: () => Promise<void>,
+  consume: (command: CommittedApplyReceiptCommand) => Promise<void>,
 ) => Promise<boolean>;
 const committedRecoveries = new WeakMap<OpenTofuRunner, Recovery>();
 
@@ -16,7 +17,7 @@ export function registerCommittedLocalApplyRecovery(runner: OpenTofuRunner, reco
 export async function withCommittedLocalApplyRecovery(
   runner: OpenTofuRunner | undefined,
   input: Parameters<Recovery>[0],
-  consume: () => Promise<void>,
+  consume: Parameters<Recovery>[1],
 ): Promise<boolean> {
   const recover = runner && committedRecoveries.get(runner);
   return recover ? await recover(input, consume) : false;
