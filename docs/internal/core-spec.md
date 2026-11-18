@@ -495,7 +495,13 @@ owner alternate module may export the named-only class from
 purpose-specific qualified approval port authenticates a private proof's
 holder/channel and current effect; named RPC access, a public case lookup,
 session/admin/deploy credentials and Accounts identity-merge review do not
-authorize this operation. No production approval issuer or default binding is
+authorize this operation. The independent signing helper and public-key reader
+use a Worker recovery-specific ES256 domain, a private 32-byte holder proof and
+fresh current lookup of its digest. Stage and commit are explicitly signed
+separately; a stage receipt is never promoted automatically. The reader accepts
+only canonical exact signed payload bytes, the fixed issuer/key/target/purpose,
+current non-revoked evidence and current expiry. It has no signing key or cached
+decision. Real key/holder/current-store custody and default binding are not
 provided. The selected target and storage profile are operator configuration;
 target-label equality is a misselection fence, not physical custody proof.
 Invalid approval is rejected before opening keys/storage. Stage and commit use

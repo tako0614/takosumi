@@ -131,7 +131,7 @@ This command does not complete Host pre-ACK reconciliation or authorize a deploy
 ## Private Worker composition (unmounted)
 
 The portable Worker operator source has no default mount, public HTTP route,
-deploy catalog entry or production approval issuer. It does not reuse the Unix
+deploy catalog entry or configured production approval authority. It does not reuse the Unix
 approval files above, an Accounts identity-merge approval, session/admin role or
 deploy control token. The owner must supply a separately qualified private
 authority and actual selected-target D1/R2/key/storage custody.
@@ -191,3 +191,62 @@ artifact. A separately valid explicit retry can reconcile the exact commit;
 there is no automatic retry or new recovery identity. The original Apply stays
 failed, Capsule stays error, runtime stays unknown and no Output or execution
 success evidence is produced.
+
+## Signed private holder approvals
+
+`worker/src/signed-state-recovery-approval.ts` supplies an explicit issuer helper
+and a public-key-only reader for the private Worker port. This is a distinct
+Worker state-recovery signature domain. Accounts identity-merge signatures,
+session/admin roles and deploy tokens are not accepted. No real key, holder
+handoff, current store, HTTP route or operational binding is configured.
+
+The operator qualifies an independent P-256 key pair and its fixed `issuer`,
+`keyId` and `selectedTargetId` out of band. The issuer takes only the explicit
+private signing `CryptoKey`. The reader takes only the corresponding public
+verification `CryptoKey`; it has neither a signing key nor issuer/admin binding.
+Key rotation and public-key custody are operator configuration, not dynamic
+discovery from a record.
+
+Call `createSignedStateRecoveryApprovalIssuer({ issuer, keyId, selectedTargetId, signingKey })`,
+then `issueStageApproval(reviewedStageApproval)` with the complete closed stage
+record. After independently reviewing the staged result, explicitly call
+`issueCommitApproval(reviewedCommitApproval)` with the complete closed commit
+record. Neither method derives the second decision from a receipt or publishes
+an active record. No key is generated or persisted by the helper.
+
+Each explicit issuance generates a fresh 32-byte random holder proof. Its
+private result is `{ approvalRef, holderProofDigest, record }`. Retain the original
+proof privately and hand it only to the intended holder over the qualified
+channel. Do not log it, place it in URLs or source, use a public case ID in its
+place, or rerun issuance merely to retry a command. Only the domain-separated
+digest enters the signed record and the trusted current lookup.
+
+The record has exactly `format`, `payload` and `signature`. Its format is
+`takosumi.worker.signed-state-recovery-approval/v1`. The bounded canonical JSON
+payload contains the recovery-specific domain, `algorithm: ES256`, fixed issuer
+and key ID, holder digest and the existing closed approval DTO. Its UTF-8 bytes
+are signed with ECDSA P-256/SHA-256. The 64-byte signature and 32-byte proof use
+canonical unpadded base64url. Unknown fields, noncanonical JSON/encodings and
+cross-effect domains are refused.
+
+The trusted owner separately installs the issued record under its digest in an
+authoritative current store. The read-only
+`readCurrentSignedStateRecoveryApproval({ holderProofDigest })` port returns
+`{ status: "active", record }` only for the current active decision; revoked or
+absent entries refuse. Never serve a cached superseded active decision.
+Publication, revocation, storage/channel custody and persistence are separate
+operator duties; this helper adds no database schema or implicit grant.
+
+`createSignedStateRecoveryApprovalReader({ issuer, keyId, selectedTargetId, publicKey, currentLookup })`
+implements the existing `QualifiedStateRecoveryApprovalPort`. For each call it
+validates the private proof, awaits fresh lookup, snapshots signed scalar data,
+verifies exact bytes and scope, then awaits a second fresh lookup and requires
+the same active record and current expiry. There is no decision cache, signing
+capability, fallback issuer or automatic retry. Raw proof never crosses the
+current-lookup port.
+
+The reader and existing operator revalidation do not make external revocation
+and Core CAS atomic. A still-current proof can explicitly repeat only its fixed
+command; Core reconciles the exact existing commit. A revoked or expired proof
+does not authorize even that replay. Unknown acknowledgement handling and all
+state-only safety limits above remain unchanged.

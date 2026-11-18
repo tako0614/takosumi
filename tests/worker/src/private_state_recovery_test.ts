@@ -8,6 +8,8 @@ import type { ArtifactStorageUsagePort } from "../../../worker/src/artifact-stor
 import type { R2Bucket, R2Object, R2ObjectBody, R2PutOptions, D1Database } from "../../../worker/src/bindings.ts";
 import { R2RecoveryStateArtifactStore } from "../../../worker/src/state_recovery_artifact_store.ts";
 import { StateArtifactCrypto, digestBytes } from "../../../worker/src/state_crypto.ts";
+import { createSignedStateRecoveryApprovalIssuer, createSignedStateRecoveryApprovalReader,
+  type CurrentSignedStateRecoveryApprovalLookup } from "../../../worker/src/signed-state-recovery-approval.ts";
 import { createPrivateStateRecoveryOperator, createPrivateR2StateRecoveryOperator,
   type PrivateStateStageApproval, type PrivateStateCommitApproval,
   type PrivateStateStageReceipt } from "../../../worker/src/private-state-recovery.ts";
@@ -280,5 +282,43 @@ test("private R2 composition cannot downgrade missing key or selected storage pr
     await expect(missingProfile.stageRecoveryState({ approvalRef: "stage-proof", plaintext: STATE })).rejects.toThrow();
     expect(dbReads).toBe(0);
     expect(f.bucket.puts).toBe(0);
+  });
+});
+
+test("signed holder approval drives the existing private stage and separate commit while revocation blocks exact replay admission", async () => {
+  await use(async f => {
+    const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+    const identity = { issuer: "test-private-recovery-issuer", keyId: "test-p256", selectedTargetId: f.stage.selectedTargetId };
+    const issuer = createSignedStateRecoveryApprovalIssuer({ ...identity, signingKey: keys.privateKey });
+    const rows = new Map<string, unknown>();
+    const lookups: string[][] = [];
+    const currentLookup: CurrentSignedStateRecoveryApprovalLookup = {
+      async readCurrentSignedStateRecoveryApproval(input) {
+        lookups.push(Object.keys(input));
+        return rows.get(input.holderProofDigest);
+      },
+    };
+    const approvals = createSignedStateRecoveryApprovalReader({ ...identity, publicKey: keys.publicKey, currentLookup });
+    let opens = 0;
+    const operator = createPrivateStateRecoveryOperator({ selectedTargetId: f.stage.selectedTargetId, approvals,
+      openResources: async () => { opens++; return { store: f.store, artifacts: f.artifacts }; } });
+    const stage = await issuer.issueStageApproval(f.stage);
+    rows.set(stage.holderProofDigest, { status: "active", record: stage.record }); // Explicit test publication.
+    const receipt = await operator.stageRecoveryState({ approvalRef: stage.approvalRef, plaintext: STATE });
+    expect(receipt.plaintextSha256).toBe(f.stage.plaintextSha256);
+    expect(f.bucket.puts).toBe(1);
+    const commitRecord = f.issueCommit(receipt); // Human-intent fixture action, never automatic issuance.
+    const commit = await issuer.issueCommitApproval(commitRecord);
+    rows.set(commit.holderProofDigest, { status: "active", record: commit.record });
+    expect((await operator.commitRecoveryState({ approvalRef: commit.approvalRef })).status).toBe("committed");
+    expect((await operator.commitRecoveryState({ approvalRef: commit.approvalRef })).status).toBe("replayed");
+    const before = opens;
+    rows.set(commit.holderProofDigest, { status: "revoked" });
+    await expect(operator.commitRecoveryState({ approvalRef: commit.approvalRef })).rejects.toThrow();
+    expect(opens).toBe(before);
+    expect(lookups.every(keys => keys.join(",") === "holderProofDigest")).toBeTrue();
+    expect(f.bucket.puts).toBe(1);
+    expect(f.bucket.deletes).toBe(0);
+    expect((await f.store.getCapsule(f.stage.capsuleId))?.currentStateGeneration).toBe(1);
   });
 });
