@@ -175,6 +175,11 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     readonly failedApplyRunId: string;
     readonly recoveryRunId: string;
     readonly artifactHandle: string;
+    /** Private approval expectations; ordinary verifier callers remain unchanged. */
+    readonly plaintextSha256?: RecoveryStateArtifactScope["plaintextSha256"];
+    readonly custodyEvidenceDigest?: RecoveryStateArtifactScope["custodyEvidenceDigest"];
+    readonly encryptedDigest?: VerifiedRecoveryArtifact["encryptedDigest"];
+    readonly evidenceDigest?: VerifiedRecoveryArtifact["evidenceDigest"];
   }): Promise<VerifiedRecoveryArtifact> {
     const metadataScope = {
       workspaceId: input.workspaceId,
@@ -186,10 +191,16 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     requireIdentifier(input.capsuleId);
     requireIdentifier(input.failedApplyRunId);
     requireIdentifier(input.recoveryRunId);
+    const expectations = [input.plaintextSha256, input.custodyEvidenceDigest, input.encryptedDigest, input.evidenceDigest];
+    if (expectations.some(value => value !== undefined && !SHA256.test(value))) {
+      throw recoveryArtifactError("staged recovery artifact is unavailable");
+    }
     const handleParts = recoveryHandleParts(input.artifactHandle);
     if (
       handleParts.workspaceId !== input.workspaceId || handleParts.capsuleId !== input.capsuleId ||
-      handleParts.failedApplyRunId !== input.failedApplyRunId || handleParts.recoveryRunId !== input.recoveryRunId
+      handleParts.failedApplyRunId !== input.failedApplyRunId || handleParts.recoveryRunId !== input.recoveryRunId ||
+      (input.plaintextSha256 !== undefined && input.plaintextSha256 !== handleParts.plaintextSha256) ||
+      (input.custodyEvidenceDigest !== undefined && input.custodyEvidenceDigest !== handleParts.custodyEvidenceDigest)
     ) throw recoveryArtifactError("staged recovery artifact is unavailable");
     const environment = handleParts.environment;
     const provisionalScope = {
@@ -215,12 +226,23 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     if (allocated !== object.key || await handleFor(scope, allocated) !== input.artifactHandle) {
       throw recoveryArtifactError("staged recovery artifact scope is invalid");
     }
+    // Private approval mismatches must not prepare/confirm a metered retention.
+    const verified = expectations.some(value => value !== undefined)
+      ? await this.#verifyObject(object, scope, allocated, input.artifactHandle) : undefined;
+    if (verified && ((input.encryptedDigest !== undefined && input.encryptedDigest !== verified.encryptedDigest) ||
+      (input.evidenceDigest !== undefined && input.evidenceDigest !== verified.evidenceDigest))) {
+      throw recoveryArtifactError("staged recovery artifact is unavailable");
+    }
     const prepared = await prepareArtifactRetention(this.#storageUsage, {
       owner: await this.#owner(scope, allocated),
       allocatedKey: allocated,
       ciphertextBytes: object.size,
       replayOnly: true,
     });
+    if (verified) {
+      await confirmArtifactRetention(this.#storageUsage, prepared, verified.encryptedDigest);
+      return verified;
+    }
     return await this.#verifyAndConfirmStorage(object, scope, allocated, input.artifactHandle, prepared);
   }
 
