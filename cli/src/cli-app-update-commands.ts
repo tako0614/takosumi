@@ -219,11 +219,15 @@ function applyIdentity(run: PublicRun, scope: Scope): PublicRun {
   return run;
 }
 
+async function readApply(request: Client, id: string, scope: Scope): Promise<PublicRun> {
+  return applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(id)}`), scope.appId, id), scope);
+}
+
 async function watch(request: Client, run: PublicRun, scope: Scope, signal: AbortSignal): Promise<PublicRun> {
   let current = applyIdentity(run, scope);
   while (!SETTLED.has(current.status)) {
     await pause(1_000, signal);
-    current = applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(run.id)}`), scope.appId, run.id), scope);
+    current = await readApply(request, run.id, scope);
   }
   return current;
 }
@@ -243,7 +247,7 @@ function applyPlanIdentity(plan: PublicRun): string {
 export async function runAppApply(args: string[], io: CliIo): Promise<number> {
   let options: CliOptions = {}; let appId: string | undefined; let planId: string | undefined;
   let scope: Scope | undefined; let lastRun: PublicRun | undefined; let lastPlan: PublicRun | undefined; let mutationAttempted = false;
-  let expectedPlanIdentity: string | undefined;
+  let expectedPlanIdentity: string | undefined; let locatedApplyId: string | undefined;
   try {
     const parsed = argumentsFor(args, "apply");
     if (parsed.help) { io.stdout(applyHelp()); return 0; }
@@ -259,7 +263,11 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       expectedPlanIdentity = initialIdentity;
       scope = { appId: selectedApp, planId: selectedPlan, workspaceId: plan.workspaceId };
       const existing = await linkedApply(request, scope);
-      if (existing) { lastRun = existing; return await watch(request, existing, scope, signal); }
+      if (existing) {
+        locatedApplyId = existing.id;
+        lastRun = await readApply(request, existing.id, scope);
+        return await watch(request, lastRun, scope, signal);
+      }
       if (options.observeOnly === true) throw new Refusal("linked_apply_not_observed");
       const body = await request(`/api/v1/capsules/${encodeURIComponent(selectedApp)}`);
       const cap = isRecord(body) ? body.capsule : undefined;
@@ -281,7 +289,11 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
         plan = approvedPlan;
         lastPlan = plan;
         const raced = await linkedApply(request, scope);
-        if (raced) { lastRun = raced; return await watch(request, raced, scope, signal); }
+        if (raced) {
+          locatedApplyId = raced.id;
+          lastRun = await readApply(request, raced.id, scope);
+          return await watch(request, lastRun, scope, signal);
+        }
       }
       signal.throwIfAborted(); mutationAttempted = true;
       lastRun = applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}/apply`, "POST", {}), selectedApp), scope);
@@ -293,8 +305,8 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
     // separately bounded reads can observe its exact linked Apply only.
     // Keep recovery evidence local: a late response from the aborted command
     // must not change its result while a fresh readback is being refused.
-    let observedRun = lastRun; let observedPlan = lastPlan; let readbackConfirmed = false;
-    if (scope && mutationAttempted) {
+    let observedRun = lastRun; const observedApplyId = locatedApplyId; let observedPlan = lastPlan; let readbackConfirmed = false;
+    if (scope && mutationAttempted && observedApplyId === undefined) {
       try { observedRun = await within(5_000, async signal => {
         const request = client(options, signal);
         const freshPlan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(scope!.planId)}`), scope!.appId, scope!.planId));
@@ -302,12 +314,12 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
         observedPlan = freshPlan;
         const observed = await linkedApply(request, scope!);
         if (!observed) return undefined;
-        return applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(observed.id)}`), scope!.appId, observed.id), scope!);
+        return await readApply(request, observed.id, scope!);
       }); readbackConfirmed = true; } catch { /* unavailable readback is not proof of no effect */ }
     }
     if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
     write(io, options, { status: observedRun && !SETTLED.has(observedRun.status) ? "pending" : mutationAttempted || options.observeOnly === true ? "indeterminate" : "refused",
-      appId, planRunId: planId, lastObservedPlanStatus: observedPlan?.status, runId: observedRun?.id, runStatus: observedRun?.status, code: errorCode(error),
+      appId, planRunId: planId, lastObservedPlanStatus: observedPlan?.status, runId: observedRun?.id ?? observedApplyId, runStatus: observedRun?.status, code: errorCode(error),
       recovery: "Use apps apply with the same app/plan and --observe-only for readback; no new Plan, key, approval or Apply is created by observation." });
     return error instanceof Refusal && ["app_id_required", "unknown_option", "option_value_required", "invalid_boolean_option", "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes", "saved_plan_and_explicit_confirmation_required"].includes(error.code) ? 2 : 1;
   }

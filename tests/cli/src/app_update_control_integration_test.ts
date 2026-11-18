@@ -250,7 +250,7 @@ test("apps update saves a reviewable revision Plan; apps apply separately reache
 
 test("actual coordinator replays the retained create key and lost Apply ACK observes one Core execution", async () => {
   const h = await fixture(); const originalFetch = globalThis.fetch;
-  const requests: Request[] = []; let loseCreate = true; let loseApply = true; let createdId: string | undefined;
+  const requests: Request[] = []; let loseCreate = true; let loseApply = true; let createdId: string | undefined; let revokeAfterHistory = false; let revoked = false; let currentReadStatus: number | undefined;
   globalThis.fetch = (async (input, init) => {
     const req = new Request(input, init); requests.push(req.clone());
     const response = await h.dispatch(req); const path = new URL(req.url).pathname;
@@ -261,6 +261,11 @@ test("actual coordinator replays the retained create key and lost Apply ACK obse
     if (req.method === "POST" && path.endsWith("/apply") && loseApply && response.ok) {
       loseApply = false; throw Error("synthetic lost Apply response after actual commit");
     }
+    if (req.method === "GET" && path === `/api/v1/capsules/${h.appId}/runs` && revokeAfterHistory && response.ok) {
+      revokeAfterHistory = false; revoked = true;
+      h.accounts.revokePersonalAccessToken({ subject: OWNER, tokenId: h.pat.tokenId, revokedAt: Date.now() });
+    }
+    if (revoked && req.method === "GET" && path.startsWith("/api/v1/runs/")) currentReadStatus = response.status;
     return response;
   }) as typeof fetch;
   const output: string[] = []; const io = { stdout: (s: string) => output.push(s), stderr() {} };
@@ -292,6 +297,24 @@ test("actual coordinator replays the retained create key and lost Apply ACK obse
     expect(JSON.parse(output[0]!).runId).toBe(runId);
     expect(requests.slice(beforeObservation).every(r => r.method === "GET")).toBe(true);
     expect(h.runnerCalls.apply - before.apply).toBe(1);
+
+    // Listing a completed Apply is only its locator. Current individual Run
+    // authority is re-evaluated after the list response has been produced.
+    const beforeRevokedRead = requests.length;
+    const completedCalls = { ...h.runnerCalls };
+    revokeAfterHistory = true;
+    output.length = 0;
+    expect(await main(["apps", "apply", h.appId, "--plan", planId, "--observe-only", "--url", ORIGIN, "--token", TOKEN, "--json"], io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "indeterminate", runId });
+    expect(JSON.parse(output[0]!).runStatus).toBeUndefined();
+    expect(currentReadStatus).toBe(401);
+    expect(requests.slice(beforeRevokedRead).map(r => `${r.method} ${new URL(r.url).pathname}`)).toEqual([
+      `GET /api/v1/runs/${planId}`,
+      `GET /api/v1/capsules/${h.appId}/runs`,
+      `GET /api/v1/runs/${runId}`,
+    ]);
+    expect(h.runnerCalls).toEqual(completedCalls);
+    expect((await h.ledger.getCapsule(h.appId))?.currentStateGeneration).toBe(2);
   } finally { globalThis.fetch = originalFetch; }
 });
 
