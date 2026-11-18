@@ -68,7 +68,7 @@ async function detailFixture(
     { address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["create"] },
     { address: "cloudflare_d1_database.data", type: "cloudflare_d1_database", actions: ["create"] },
   ];
-  const plan = () => ({ id: retryCount ? `run_retry_fixture_${retryCount}` : planId, workspaceId: "ws_alpha", capsuleId: capId, type: "plan", status: retryCount && retryFailed ? "failed" : "succeeded", summary: { add: 2, change: 0, destroy: 0 }, planResources, policyStatus: "pass", createdBy: "portable-e2e", createdAt: retryCount ? new Date(Date.parse(now) + 120000 + retryCount * 1000).toISOString() : now });
+  const plan = () => ({ id: retryCount ? `run_retry_fixture_${retryCount}` : attempts.latest()?.planRunId ?? planId, workspaceId: "ws_alpha", capsuleId: capId, type: "plan", status: retryCount && retryFailed ? "failed" : "succeeded", summary: { add: 2, change: 0, destroy: 0 }, planResources, policyStatus: "pass", createdBy: "portable-e2e", createdAt: retryCount ? new Date(Date.parse(now) + 120000 + retryCount * 1000).toISOString() : now });
   const apply = () => ({ ...plan(), id: applyId, planRunId: planId, type: "apply", status: applyStatus, errorCode: applyStatus === "failed" ? "runner_apply_failed" : undefined, createdAt: "2026-10-27T01:01:00.000Z" });
   const capsule = () => ({ id: capId, workspaceId: "ws_alpha", sourceId, name: "cloudflare-service", slug: "cloudflare-service", installConfigId: "cfg-default-opentofu-capsule", environment: "production", status: capsuleStatus, currentStateGeneration: capsuleStatus === "pending" ? 0 : 1, currentStateVersionId: capsuleStatus === "pending" ? undefined : "sv_inline", uninstall: capsuleStatus === "uninstalled" ? { phase: "scheduled", requestedAt: now, scheduledDestroyAt: "2026-11-03T01:00:00Z" } : undefined, createdAt: now, updatedAt: now });
   // The control plane's view of the app (`GET /capsules/:id/app`), derived
@@ -204,6 +204,7 @@ async function detailFixture(
   return {
     attempts,
     mutations,
+    appView,
     authorize: () => { connected = true; },
     finish: () => { applied = true; applyStatus = "succeeded"; capsuleStatus = "active"; },
     fail: (partialState = false) => { applyStatus = "failed"; if (partialState) capsuleStatus = "error"; },
@@ -1024,6 +1025,103 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(installSheet(page)).toBeVisible();
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(2);
     });
+    test("a saved review never substitutes another Plan for its saved operation", async ({ page }) => {
+      const otherPlanId = "run_other_explicit_review";
+      const otherApplyId = "run_other_explicit_apply";
+      const f = await detailFixture(page, base, false, false, "not_applicable", {
+        planRunIdFor: (sequence) => sequence === 1 ? planId : otherPlanId,
+      });
+      const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+      let mode: "other_plan" | "other_apply" | "saved" | "accepted" = "other_plan";
+      let reads = 0;
+      let applyPosts = 0;
+      let releaseRead: (() => void) | undefined;
+      let pendingRead: Promise<void> | undefined;
+      const actual = (id: string, type: "plan" | "apply", parent?: string) => ({
+        id, workspaceId: "ws_alpha", capsuleId: capId, type, status: type === "apply" ? "running" : "succeeded",
+        ...(parent ? { planRunId: parent } : {}),
+        summary: { add: 1, change: 0, destroy: 0 }, policyStatus: "pass", createdBy: "portable-e2e", createdAt: now,
+        planResources: [{ address: "fixture.other_operation", type: "cloudflare_workers_script", actions: ["create"] }],
+      });
+      await page.route(`**/api/v1/capsules/${capId}/app`, async (route) => {
+        await pendingRead;
+        if (mode === "saved") return route.fallback();
+        const id = mode === "other_plan" ? otherPlanId : mode === "other_apply" ? otherApplyId : applyId;
+        const type = mode === "other_plan" ? "plan" : "apply";
+        const latest = { id, type, status: type === "plan" ? "succeeded" : "running", createdAt: now };
+        return route.fulfill({ json: { app: { ...f.appView(), latestRun: latest,
+          progress: { revisionPreparing: false, ...(type === "plan"
+            ? { review: { runId: id, runType: "plan" } } : { run: latest }) },
+        } } });
+      });
+      await page.route("**/api/v1/runs/*", (route) => {
+        const id = new URL(route.request().url()).pathname.split("/").at(-1);
+        if (id === otherPlanId) { reads += 1; return route.fulfill({ json: { run: actual(id, "plan") } }); }
+        if (id === otherApplyId || id === applyId) return route.fulfill({ json: { run: actual(id, "apply", id === applyId ? planId : otherPlanId) } });
+        return route.fallback();
+      });
+      await page.route(`**/api/v1/runs/${planId}/apply`, (route) => {
+        applyPosts += 1;
+        mode = "accepted"; // One accepted effect; its response alone is lost.
+        return route.fulfill({ status: 503, json: { error: "fixture_lost_answer" } });
+      });
+      await page.goto(sourceUrl);
+      await openInstallSheet(page);
+      await expect.poll(() => reads).toBeGreaterThan(0);
+      // A normal different Plan has no durable link to this saved attempt.
+      await expect(page.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Stop installing", exact: true })).toHaveCount(0);
+      const issue = page.getByTestId("install-review-unverified");
+      await expect(issue).toBeVisible();
+      await expect(issue.getByRole("link", { name: "Technical details", exact: true })).toHaveAttribute("href", `/runs/${otherPlanId}`);
+      await expandDetails(page, "install-customization");
+      await expect(installSheet(page).getByTestId("install-app-name")).toBeDisabled();
+      const mutations = [...f.mutations];
+      mode = "other_apply";
+      await issue.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(issue.getByRole("link", { name: "Technical details", exact: true })).toHaveAttribute("href", `/runs/${otherApplyId}`);
+      await expect(page.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
+      expect(f.mutations).toEqual(mutations);
+      expect(applyPosts).toBe(0);
+      // A verified fresh saved Plan stays editable; the hold is temporary.
+      mode = "saved";
+      await issue.getByRole("button", { name: "Retry", exact: true }).click();
+      const review = await waitForPlan(page);
+      await expect(installSheet(page).getByTestId("install-app-name")).toBeEnabled();
+      await review.getByRole("button", { name: "Install", exact: true }).click();
+      await expect(review.getByRole("alert")).toContainText("The execution could not be confirmed.");
+      expect(applyPosts).toBe(1);
+      // A reload first holds the outer sheet too, then follows the exact accepted Apply.
+      pendingRead = new Promise<void>((resolve) => { releaseRead = resolve; });
+      await page.reload();
+      await expect(page.getByTestId("install-review")).toBeVisible();
+      await expandDetails(page, "install-customization");
+      await expect(installSheet(page).getByTestId("install-app-name")).toBeDisabled();
+      await expect(installSheet(page).getByTestId("install-review-edit")).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
+      releaseRead!(); pendingRead = undefined;
+      await expect(planReview(page)).toContainText("Installing");
+      await expect(page.getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
+      expect(applyPosts).toBe(1);
+      expect(f.mutations).toEqual(mutations);
+      // A new explicit attempt's own canonical P2 is valid, even though P1 could not adopt it.
+      mode = "other_plan";
+      await page.goto(sourceUrl);
+      await page.getByRole("button", { name: "Install another", exact: true }).click();
+      await expect(installSheet(page)).toBeVisible();
+      await expect((await waitForPlan(page)).getByRole("button", { name: "Install", exact: true })).toBeEnabled();
+      expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(2);
+      expect(f.mutations.some((m) => m.startsWith("DELETE "))).toBe(false);
+      expect(applyPosts).toBe(1);
+      // A definitive rejection retains the existing explicit Stop action.
+      await page.route(`**/api/v1/runs/${otherPlanId}/apply`, (route) => route.fulfill({ status: 403, json: { error: "forbidden" } }));
+      await planReview(page).getByRole("button", { name: "Install", exact: true }).click();
+      const stop = planReview(page).getByRole("button", { name: "Stop installing", exact: true });
+      await expect(stop).toBeEnabled();
+      await stop.click();
+      await expect.poll(() => f.mutations.filter((m) => m.startsWith("DELETE ")).length).toBe(1);
+      expect(errors).toEqual([]);
+    });
     test("review blocks Install while the app's current state cannot be read and retries the read", async ({ page }) => {
       const f = await detailFixture(page, base);
       let unavailable = true;
@@ -1057,6 +1155,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect.poll(() => f.mutations.filter((m) => m.endsWith(`/${capId}/plan`)).length).toBe(1);
       expect(f.mutations.filter((m) => m === applyMutation)).toHaveLength(1);
       expect(f.mutations.some((m) => m.includes("/abandon") || m.startsWith("DELETE "))).toBe(false);
+      await expect(review.getByRole("link", { name: "Technical details", exact: true })).toHaveAttribute("href", "/runs/run_retry_fixture_1");
     });
     test("an unconfirmed Apply is held and reload does not restore consent", async ({ page }) => {
       await detailFixture(page, base);

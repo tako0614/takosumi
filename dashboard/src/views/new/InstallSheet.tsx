@@ -34,7 +34,7 @@ import {
   Textarea,
 } from "../../components/ui/index.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
-import { getCapsuleApp, testConnection } from "../../lib/control-api.ts";
+import { getCapsuleApp, getRun, testConnection } from "../../lib/control-api.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { interfaceLabel } from "../../lib/interface-labels.ts";
 import { providerConnectionStatusLabel } from "../../lib/labels.ts";
@@ -307,40 +307,82 @@ function PlanReview(props: {
   readonly action: ReviewRun;
   readonly onDone: (capsuleId: string) => void;
 }) {
-  const [app, { refetch: refetchApp }] = createResource(
-    () => props.action.capsuleId,
-    (capsuleId) => getCapsuleApp(capsuleId),
-  );
-  const currentApp = () => app.error ? undefined : app.latest;
-  createEffect(() => {
-    if (currentApp()?.applied) props.onDone(props.action.capsuleId);
+  // The coordinator owns the saved Plan ID. Capsule-wide latest work is not
+  // retry lineage: only an actual Apply's exact planRunId can replace it.
+  let releaseHold: (() => void) | undefined = props.attempt.holdReview();
+  let disposed = false;
+  let readEpoch = 0;
+  onCleanup(() => { disposed = true; readEpoch += 1; releaseHold?.(); });
+  // Replacing a response object with the same canonical binding must not
+  // remount execution and roll back a Retry's locally retained Plan ID.
+  const binding = createMemo(() => [props.action.capsuleId, props.action.planRunId] as const, undefined, {
+    equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
   });
-  const entryRunId = () => {
-    const view = currentApp();
-    const run = view?.progress.run ?? view?.latestRun;
-    return run && (run.type === "apply" || run.type === "plan") && run.id !== props.action.planRunId
-      ? run.id
-      : undefined;
-  };
+  const [entry, { refetch }] = createResource(
+    binding,
+    async ([capsuleId, planRunId]) => {
+      const epoch = ++readEpoch;
+      const current = () => !disposed && epoch === readEpoch &&
+        props.action.capsuleId === capsuleId && props.action.planRunId === planRunId;
+      const app = await getCapsuleApp(capsuleId);
+      if (!current()) throw new Error(t("installStore.recoveryUnverified"));
+      if (app.applied) return { app, verified: true };
+      const latest = app.progress.run ?? app.latestRun;
+      const candidateId = latest?.id ?? app.progress.review?.runId;
+      if (!candidateId || candidateId === planRunId) return { app, verified: !app.progress.revisionPreparing };
+      const candidate = await getRun(candidateId);
+      if (!current() || candidate.id !== candidateId || candidate.capsuleId !== capsuleId ||
+        candidate.workspaceId !== app.workspaceId) {
+        throw new Error(t("installStore.recoveryUnverified"));
+      }
+      return {
+        app,
+        verified: !app.progress.revisionPreparing && candidate.type === "apply" && candidate.planRunId === planRunId,
+        initialRunId: candidate.id,
+      };
+    },
+  );
+  const resolved = () => entry.error ? undefined : entry.latest;
+  createEffect(() => {
+    const value = resolved();
+    if (entry.loading || !value?.verified) {
+      releaseHold ??= props.attempt.holdReview();
+    } else {
+      // Keep answers locked across releasing the temporary resolution hold.
+      if (value.initialRunId) props.attempt.lockAnswers();
+      releaseHold?.();
+      releaseHold = undefined;
+      if (value.app.applied) props.onDone(props.action.capsuleId);
+    }
+  });
   const block = () => props.attempt.view().applyBlock;
   return (
     <section class="iv-plan-review" data-testid="install-review" data-apply-block={block() ?? ""}>
-      <Show when={app.error}>
+      <Show when={entry.error}>
         <div class="iv-error" role="alert" data-testid="install-review-read-error">
-          <span>{friendlyError(app.error, t).message}</span>
-          <Button type="button" variant="secondary" busy={app.loading} onClick={() => void refetchApp()}>{t("common.retry")}</Button>
+          <span>{friendlyError(entry.error, t).message}</span>
+          <Button type="button" variant="secondary" busy={entry.loading} onClick={() => void refetch()}>{t("common.retry")}</Button>
         </div>
       </Show>
-      <Show when={!app.error}>
+      <Show when={!entry.error}>
       <Show
-        when={!app.loading}
+        when={!entry.loading}
         fallback={<div class="iv-status" role="status"><Spinner size={18} /><span>{t("common.loading")}</span></div>}
       >
-        <Show when={!currentApp()?.applied}>
+        <Show when={!resolved()?.app.applied}>
+          <Show when={resolved()?.verified} fallback={
+            <div class="iv-error" role="alert" data-testid="install-review-unverified">
+              <p>{t("installStore.recoveryUnverifiedHint")}</p>
+              <Button type="button" variant="secondary" onClick={() => void refetch()}>{t("common.retry")}</Button>
+              <Show when={resolved()?.initialRunId}>{(id) =>
+                <Button href={`/runs/${encodeURIComponent(id())}`} variant="ghost">{t("installStore.runDetails")}</Button>
+              }</Show>
+            </div>
+          }>
           <InstallExecution
             showPolicyReasons
             planRunId={props.action.planRunId}
-            initialRunId={entryRunId()}
+            initialRunId={resolved()?.initialRunId}
             capsuleId={props.action.capsuleId}
             blockedReason={block() ? t(APPLY_WAIT_TEXT[block()!]) : undefined}
             blockedReasonId={props.attempt.view().progress ? APPLY_REASON_ID : undefined}
@@ -356,6 +398,7 @@ function PlanReview(props: {
               await props.attempt.discard();
             }}
           />
+          </Show>
         </Show>
       </Show>
       </Show>

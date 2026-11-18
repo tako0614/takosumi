@@ -134,14 +134,14 @@ describe("attempt-driven install page", () => {
   test("a reopened review asks the app where it stands before offering the apply", () => {
     const review = between(sheet, "function PlanReview(", "export function InstallScreen(");
     expect(review).toContain("getCapsuleApp(capsuleId)");
-    expect(review.indexOf("<Show\n        when={!app.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
-    expect(review).toContain("if (currentApp()?.applied) props.onDone(props.action.capsuleId);");
-    expect(review).toContain("view?.progress.run ?? view?.latestRun");
+    expect(review.indexOf("<Show\n        when={!entry.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
+    expect(review).toContain("if (value.app.applied) props.onDone(props.action.capsuleId);");
+    expect(review).toContain("app.progress.run ?? app.latestRun");
     expect(review).toContain("showPolicyReasons");
     expect(review).not.toContain("getCapsuleApp(capsuleId).catch");
     expect(review).toContain('data-testid="install-review-read-error"');
-    expect(review.indexOf('<Show when={!app.error}>')).toBeLessThan(review.indexOf("<InstallExecution"));
-    expect(review).toContain("onClick={() => void refetchApp()}");
+    expect(review.indexOf('<Show when={!entry.error}>')).toBeLessThan(review.indexOf("<InstallExecution"));
+    expect(review).toContain("onClick={() => void refetch()}");
   });
 
   test("installed apps are linked at /apps/:id", () => {
@@ -183,7 +183,7 @@ describe("attempt-driven install page", () => {
 
   test("discarding never runs alongside another request", () => {
     const discard = between(controller, "const discard = async", "const restart = async");
-    expect(discard).toContain("if (!current || mutating()) return false;");
+    expect(discard).toContain("if (!current || mutating() || reviewHeld()) return false;");
     expect(discard.indexOf("await stopDriving()")).toBeLessThan(discard.indexOf("discardInstallAttempt("));
     // Stopping aborts the reconcile in flight instead of waiting it out.
     expect(between(controller, "const halt = () =>", "onCleanup(")).toContain("driveAbort?.abort();");
