@@ -328,6 +328,18 @@ Capsule Apply runs whose last heartbeat predates this startup. Fresh running
 work, queued work, accounting tails, Destroy, lifecycle commands, and private
 Run file grants stay with their existing consumers.
 
+Before an HTTP local Apply dispatch, the file artifact store also encrypts
+only the original receipt lookup identity and execution-evidence projection.
+It retains an immutable entry for each legitimate preparation epoch (at most
+64), without the raw job or credential values. When the generation result is
+not yet stored, startup can read the same configured live Runner's completion
+and state using that original identity, verify their digests, and commit the
+normal encrypted state/result artifact before asking Core to adopt it. These
+bounded read-only requests do not follow redirects. An incomplete, evicted,
+corrupt or superseded receipt, another Runner process or binding, or missing
+custody cannot start a new dispatch. This does not persist the Runner's bounded
+in-memory success cache across a Runner restart.
+
 Recovery requires the configured local adapter and an exact authenticated
 encrypted state/result artifact. Both the in-process and HTTP local adapters
 can adopt it, including the standard `opentofu-default` profile. Startup uses

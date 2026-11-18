@@ -7,6 +7,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { createFileLocalApplyDispatchCustodyStore, type LocalApplyDispatchCustodyStore, type LocalMutationEvidenceIdentity } from "./local-apply-dispatch-custody.ts";
 import { registerCommittedLocalApplyRecovery } from "./local-apply-recovery-capability.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants } from "node:fs";
@@ -83,7 +84,7 @@ import { RUN_EXECUTION_EVIDENCE_CONTRACT } from "../../../contract/runs.ts";
 import { assertRunExecutionEvidence } from "../../../contract/runs.ts";
 import { handleRunnerRequestWithDependencies } from "../../../runner/entrypoint.ts";
 import { readResponseBytesWithCap } from "../../../runner/lib/exec.ts";
-import { SAVED_PLAN_PREFLIGHT_MAX_BYTES } from "../../../runner/lib/saved_plan_state_metadata.ts";
+import { SAVED_PLAN_PREFLIGHT_MAX_BYTES, SAVED_PLAN_TFSTATE_MAX_BYTES } from "../../../runner/lib/saved_plan_state_metadata.ts";
 import { mutationRequestDigest } from "../../../runner/lib/run_completion.ts";
 import {
   ABSENT_OPENTOFU_STATE_METADATA,
@@ -103,6 +104,7 @@ const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
 interface RunnerTransport {
   fetch(path: string, init?: RequestInit): Promise<Response>;
   readonly requiresCustodyModeHandshake?: boolean;
+  readonly bindingDigest?: Promise<string>;
 }
 
 interface LocalPrivateRunFileSession {
@@ -200,7 +202,7 @@ export interface LocalOpenTofuProviderLockfileArtifact {
  * is immutable: replay by the same ApplyRun adopts it, while a different run
  * is fenced before OpenTofu can execute provider side effects.
  */
-export interface LocalOpenTofuStateArtifactStore {
+export interface LocalOpenTofuStateArtifactStore extends Partial<LocalApplyDispatchCustodyStore> {
   read(stateRef: string): Promise<LocalOpenTofuStateArtifact | LocalOpenTofuRecoveryStateArtifact | undefined>;
   commit(
     artifact: LocalOpenTofuStateArtifact,
@@ -305,6 +307,7 @@ export function createFileOpenTofuStateArtifactStore(
     );
   };
   return {
+    ...createFileLocalApplyDispatchCustodyStore(normalizedRoot, cryptoBoundary),
     read,
     readRecovery,
     commitRecovery: async (artifact) => {
@@ -665,7 +668,8 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     input: { readonly runId: string; readonly stateScope: DispatchStateScope },
     consume: () => Promise<void>,
   ): Promise<boolean> {
-    const receipt = await this.adoptCommittedStateMutation(input.runId, "apply", input.stateScope);
+    const receipt = await this.adoptCommittedStateMutation(input.runId, "apply", input.stateScope)
+      ?? await this.adoptCompletedApplyDispatch(input);
     if (!receipt || (receipt.result as OpenTofuApplyResult).providerExecutionFailure) return false;
     // Retain authenticated immutable bytes, rather than check existence and then
     // let a second read fall through to a new provider mutation (TOCTOU).
@@ -1215,11 +1219,28 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         reservation,
       );
       const privateDispatch = this.#privateRunFileDispatch(job, privateSession);
+      // Only a transient wire snapshot is retained in memory. Its digest,
+      // never the request/credential values, enters the encrypted custody file.
+      const dispatchRequest = reservation.kind === "v2" && this.stateStore.commitApplyDispatchCustody
+        ? JSON.parse(JSON.stringify(privateDispatch.request)) as unknown
+        : privateDispatch.request;
+      if (reservation.kind === "v2" && this.transport.bindingDigest && this.stateStore.commitApplyDispatchCustody) {
+        if (!job.stateScope) throw localSuccessReadbackIndeterminate();
+        await this.stateStore.commitApplyDispatchCustody({
+          runId: job.applyRun.id,
+          stateScope: job.stateScope,
+          runnerBindingDigest: await this.transport.bindingDigest,
+          requestDigest: await mutationRequestDigest(job.applyRun.id, "apply", dispatchRequest, restoredProviderLockDigest),
+          ...(restoredProviderLockDigest ? { restoredProviderLockDigest } : {}),
+          reservation,
+          identity: mutationEvidenceIdentity(job, job.executionEvidenceCommit),
+        });
+      }
       const dispatched = await runLocalMutationWithCustody(
         this.transport,
         "apply",
         job.applyRun.id,
-        privateDispatch.request,
+        dispatchRequest,
         control?.signal,
         restoredProviderLockDigest,
         reservation,
@@ -2040,6 +2061,46 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     return existing;
   }
 
+  private async adoptCompletedApplyDispatch(
+    input: { readonly runId: string; readonly stateScope: DispatchStateScope },
+  ): Promise<LocalOpenTofuStateArtifact | undefined> {
+    if (!this.transport.bindingDigest || !this.stateStore.readApplyDispatchCustody) return undefined;
+    const custody = await this.stateStore.readApplyDispatchCustody({
+      ...input, runnerBindingDigest: await this.transport.bindingDigest,
+    });
+    if (!custody) return undefined;
+    const completionPath = `/runs/${encodeURIComponent(input.runId)}/completion`;
+    const statePath = `/runs/${encodeURIComponent(input.runId)}/artifacts/tfstate`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    const deadline = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener("abort", () => reject(localSuccessReadbackIndeterminate()), { once: true });
+    });
+    const within = <T>(work: Promise<T>): Promise<T> => Promise.race([work, deadline]);
+    const readOnly: RunnerTransport = {
+      fetch: async (path, init) => {
+        if (init?.method !== "GET" || (path !== completionPath && path !== statePath) || controller.signal.aborted) throw localSuccessReadbackIndeterminate();
+        return await within(this.transport.fetch(path, { ...init, signal: controller.signal, redirect: "error" }));
+      },
+    };
+    try {
+      const success = await within(readLocalMutationSuccessByDigest(readOnly, "apply", input.runId,
+        custody.requestDigest, custody.restoredProviderLockDigest, custody.reservation));
+      const bytes = await within(fetchRunnerArtifact(readOnly, input.runId, statePath, controller.signal, SAVED_PLAN_TFSTATE_MAX_BYTES));
+      const stateDigest = await digestBytes(bytes);
+      if (stateDigest !== success.stateDigest || controller.signal.aborted) throw localSuccessReadbackIndeterminate();
+      const installation = providerInstallation(success.result);
+      const result: OpenTofuApplyResult = {
+        ...(recordValue(success.result, "outputs") ? { outputs: recordValue(success.result, "outputs") as OpenTofuApplyResult["outputs"] } : {}),
+        stateDigest,
+        ...(installation ? { providerInstallation: installation } : {}),
+        diagnostics: diagnostics(success.result),
+        executionEvidence: mutationExecutionEvidenceFromIdentity(custody.identity, "apply", { providerInstallation: installation }, "committed"),
+      };
+      return await this.commitStateMutation(input.runId, "apply", input.stateScope, bytes, result);
+    } finally { clearTimeout(timeout); }
+  }
+
   private async commitStateMutation(
     runId: string,
     action: "apply" | "destroy",
@@ -2128,6 +2189,29 @@ type LocalMutationJob = Pick<
   | "executionEvidenceAuthority"
 >;
 
+function mutationEvidenceIdentity(
+  job: LocalMutationJob,
+  commit: RunExecutionCommit | undefined,
+  action: "apply" | "destroy" = "apply",
+): LocalMutationEvidenceIdentity {
+  const authority = job.executionEvidenceAuthority;
+  if (!authority) throw new Error(`local OpenTofu ${action} ${job.applyRun.id} requires immutable execution evidence authority`);
+  if (!commit) throw new Error(`local OpenTofu ${action} ${job.applyRun.id} requires an execution evidence commit coordinate`);
+  if (Object.keys(authority).sort().join(",") !== "controllerArtifact,executorArtifact,runnerArtifact") {
+    throw new TypeError("run execution evidence authority fields are invalid");
+  }
+  const planDigest = job.planRun.planDigest;
+  if (!planDigest || !/^sha256:[0-9a-f]{64}$/u.test(planDigest) || !/^sha256:[0-9a-f]{64}$/u.test(job.planArtifact.digest)) {
+    throw new Error(`local OpenTofu ${action} ${job.applyRun.id} lacks immutable plan artifact evidence`);
+  }
+  return {
+    runId: job.applyRun.id, planRunId: job.planRun.id,
+    runnerProfileId: job.runnerProfile.id, executorId: job.runnerProfile.executorId,
+    authority: { controllerArtifact: authority.controllerArtifact, runnerArtifact: authority.runnerArtifact, executorArtifact: authority.executorArtifact },
+    plan: { digest: planDigest as `sha256:${string}`, artifactDigest: job.planArtifact.digest as `sha256:${string}` }, commit,
+  };
+}
+
 function mutationExecutionEvidence(
   job: LocalMutationJob,
   action: "apply" | "destroy",
@@ -2135,17 +2219,15 @@ function mutationExecutionEvidence(
   commit: RunExecutionCommit | undefined,
   outcome: "committed" | "provider_failed_state_persisted",
 ): RunExecutionEvidence {
-  const authority = job.executionEvidenceAuthority;
-  if (!authority) {
-    throw new Error(
-      `local OpenTofu ${action} ${job.applyRun.id} requires immutable execution evidence authority`,
-    );
-  }
-  if (!commit) {
-    throw new Error(
-      `local OpenTofu ${action} ${job.applyRun.id} requires an execution evidence commit coordinate`,
-    );
-  }
+  return mutationExecutionEvidenceFromIdentity(mutationEvidenceIdentity(job, commit, action), action, result, outcome);
+}
+
+function mutationExecutionEvidenceFromIdentity(
+  identity: LocalMutationEvidenceIdentity,
+  action: "apply" | "destroy",
+  result: OpenTofuApplyResult | OpenTofuDestroyResult | undefined,
+  outcome: "committed" | "provider_failed_state_persisted",
+): RunExecutionEvidence {
   const providerArtifacts = (result?.providerInstallation ?? [])
     .map((installation) => {
       if (
@@ -2154,7 +2236,7 @@ function mutationExecutionEvidence(
         !/^sha256:[0-9a-f]{64}$/u.test(installation.installedDigest)
       ) {
         throw new Error(
-          `local OpenTofu ${action} ${job.applyRun.id} lacks immutable provider artifact evidence`,
+          `local OpenTofu ${action} ${identity.runId} lacks immutable provider artifact evidence`,
         );
       }
       return {
@@ -2168,34 +2250,12 @@ function mutationExecutionEvidence(
         ? left.digest.localeCompare(right.digest)
         : left.source.localeCompare(right.source),
     );
-  const planDigest = job.planRun.planDigest;
-  if (
-    !planDigest ||
-    !/^sha256:[0-9a-f]{64}$/u.test(planDigest) ||
-    !/^sha256:[0-9a-f]{64}$/u.test(job.planArtifact.digest)
-  ) {
-    throw new Error(
-      `local OpenTofu ${action} ${job.applyRun.id} lacks immutable plan artifact evidence`,
-    );
-  }
   return assertRunExecutionEvidence({
     format: RUN_EXECUTION_EVIDENCE_CONTRACT,
-    runId: job.applyRun.id,
-    planRunId: job.planRun.id,
-    action,
-    outcome,
-    authority: {
-      ...authority,
-      runnerProfileId: job.runnerProfile.id,
-      executorId: job.runnerProfile.executorId,
-      providerArtifacts,
-    },
-    plan: {
-      digest: planDigest as `sha256:${string}`,
-      artifactDigest: job.planArtifact.digest as `sha256:${string}`,
-    },
-    commit,
-    receipt: { operationId: job.applyRun.id, version: 1, fence: 1 },
+    runId: identity.runId, planRunId: identity.planRunId, action, outcome,
+    authority: { ...identity.authority, runnerProfileId: identity.runnerProfileId, executorId: identity.executorId, providerArtifacts },
+    plan: identity.plan, commit: identity.commit,
+    receipt: { operationId: identity.runId, version: 1, fence: 1 },
     committedAt: new Date().toISOString(),
   });
 }
@@ -2228,6 +2288,7 @@ function httpRunnerTransport(baseUrl: string): RunnerTransport {
   return {
     fetch: async (path, init) => await fetch(new URL(path, endpoint), init),
     requiresCustodyModeHandshake: true,
+    bindingDigest: digestBytes(new TextEncoder().encode(JSON.stringify({ kind: "local-http-v2", endpoint: endpoint.href }))),
   };
 }
 
@@ -2589,9 +2650,18 @@ async function readLocalMutationSuccessAfterLostAck(
   restoredProviderLockDigest: string | undefined,
   reservation: Extract<LocalMutationReservation, { kind: "v2" }>,
 ): Promise<LocalMutationSuccessReadback> {
-  const requestDigest = await mutationRequestDigest(
-    runId, action, request, restoredProviderLockDigest,
-  );
+  const requestDigest = await mutationRequestDigest(runId, action, request, restoredProviderLockDigest);
+  return await readLocalMutationSuccessByDigest(transport, action, runId, requestDigest, restoredProviderLockDigest, reservation);
+}
+
+async function readLocalMutationSuccessByDigest(
+  transport: RunnerTransport,
+  action: "apply" | "destroy",
+  runId: string,
+  requestDigest: string,
+  restoredProviderLockDigest: string | undefined,
+  reservation: Extract<LocalMutationReservation, { kind: "v2" }>,
+): Promise<LocalMutationSuccessReadback> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   const deadline = new Promise<never>((_, reject) => {
