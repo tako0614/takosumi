@@ -20,6 +20,8 @@ jobs:
     name: static and build
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    outputs:
+      dashboard_artifact_id: ${{ steps.dashboard_build.outputs.artifact-id }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2 (2026)
@@ -56,6 +58,7 @@ jobs:
         run: bun run check --except tests,dashboard-browser,docs-browser
 
       - name: Upload dashboard build for browser checks
+        id: dashboard_build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # pinned: v7.0.1
         with:
           name: dashboard-dist-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -152,10 +155,20 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
+      - name: Validate dashboard build artifact
+        shell: bash
+        env:
+          DASHBOARD_BUILD_ARTIFACT_ID: ${{ needs.static.outputs.dashboard_artifact_id }}
+        run: |
+          if [[ ! "${DASHBOARD_BUILD_ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Dashboard build artifact ID is unavailable or invalid." >&2
+            exit 1
+          fi
+
       - name: Download dashboard build
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # pinned: v7.0.0
         with:
-          name: dashboard-dist-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.static.outputs.dashboard_artifact_id }}
           path: dashboard/dist
 
       - name: Prepare private dashboard timings
