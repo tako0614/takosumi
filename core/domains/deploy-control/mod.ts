@@ -1327,6 +1327,7 @@ export interface GenericRootDispatchContext {
  * it empty.
  */
 export interface PlanRunInternalContext {
+  readonly destroyConnectionRecovery?: PlanRun["destroyConnectionRecovery"];
   readonly capsuleContext?: PlanRunCapsuleContext;
   readonly sourceSnapshotId?: string;
   /**
@@ -1406,6 +1407,8 @@ export interface CreateCapsulePlanRequest {
  * carry `runGroupId`, which reads project unchanged.)
  */
 export interface CreateCapsulePlanInternal {
+  /** Explicit selection for new destroy Plans only; never modifies app bindings. */
+  readonly destroyProviderConnectionReplacements?: readonly import("takosumi-contract/connections").DestroyProviderConnectionReplacement[];
   /** Private management authority retained from outer configuration preparation. */
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   /**
@@ -1768,6 +1771,7 @@ export class OpenTofuController {
       runEnv: this.#runEnv,
       verification: this.#verification,
       planResolution: this.#planResolution,
+      hasVerifiedAccountScope: (connection) => this.#vault?.hasVerifiedAccountScope?.(connection) === true,
       ...(dependencies.privateRunFileGrantMinter
         ? { privateRunFileGrantMinter: dependencies.privateRunFileGrantMinter }
         : {}),
@@ -1955,6 +1959,7 @@ export class OpenTofuController {
       | "sourceSnapshotId"
       | "planRunId"
       | "expectedWorkspaceManagementAuthority"
+      | "destroyProviderConnectionReplacements"
     > = {},
   ): Promise<PlanRunResponse> {
     return this.#runEngine.createCapsuleDestroyPlan(

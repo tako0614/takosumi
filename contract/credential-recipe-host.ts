@@ -125,6 +125,12 @@ export interface CredentialRecipeRuntimeDriver {
   readonly verificationCapabilities?: readonly string[];
   /** Closed key ownership for verifier-produced non-secret scope hints. */
   readonly verifiedScopeHintKeys?: CredentialRecipeVerifiedScopeHintKeys;
+  /**
+   * Pure host-owned predicate proving a verified Connection's account scope.
+   * Opt-in for delete-only reconnection: no secret access, I/O, or rebinding.
+   * A host without this predicate cannot authorize account-scope recovery.
+   */
+  readonly hasVerifiedAccountScope?: (connection: ProviderConnection) => boolean;
   verify?(
     input: CredentialRecipeDriverContext,
   ): Promise<CredentialRecipeDriverVerifyResult>;
@@ -512,6 +518,8 @@ function isCredentialRecipeDriverRegistry(
       ((driver as { readonly verify?: unknown }).verify === undefined ||
         typeof (driver as { readonly verify?: unknown }).verify ===
           "function") &&
+      ((driver as { readonly hasVerifiedAccountScope?: unknown }).hasVerifiedAccountScope === undefined ||
+        typeof (driver as { readonly hasVerifiedAccountScope?: unknown }).hasVerifiedAccountScope === "function") &&
       ((driver as { readonly mint?: unknown }).mint === undefined ||
         typeof (driver as { readonly mint?: unknown }).mint === "function"),
   );
@@ -539,6 +547,8 @@ function hasValidCredentialVerificationDescriptor(
 ): boolean {
   const verifierId = driver.verifierId;
   const capabilities = driver.verificationCapabilities;
+  if (driver.hasVerifiedAccountScope !== undefined &&
+    (typeof driver.hasVerifiedAccountScope !== "function" || verifierId === undefined || capabilities === undefined)) return false;
   const declaresVerificationAuthority =
     verifierId !== undefined ||
     capabilities !== undefined ||

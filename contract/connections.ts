@@ -323,6 +323,32 @@ export interface ListProviderConnectionsResponse {
  * Capsule. The binding points directly at the selected Provider Connection;
  * no parallel resolver entity or alias identifier exists.
  */
+/** Explicit replacement used only by a new destroy Plan; never changes app bindings. */
+export interface DestroyProviderConnectionReplacement {
+  readonly connectionId: string;
+  readonly replacementConnectionId: string;
+}
+
+/** Strict public input: opaque IDs only, no account claims or binding edits. */
+export function parseDestroyProviderConnectionReplacements(value: unknown): readonly DestroyProviderConnectionReplacement[] {
+  const invalid = (): never => { throw new TypeError("destroyProviderConnectionReplacements must be a nonempty unique list of exact connectionId/replacementConnectionId pairs"); };
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) invalid();
+  const sourceIds = new Set<string>();
+  const targetIds = new Set<string>();
+  return (value as unknown[]).map(entry => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) invalid();
+    const row = entry as Record<string, unknown>;
+    if (Object.keys(row).length !== 2 || !Object.hasOwn(row, "connectionId") || !Object.hasOwn(row, "replacementConnectionId")) invalid();
+    const source = row.connectionId;
+    const target = row.replacementConnectionId;
+    if (typeof source !== "string" || !source.trim() || source !== source.trim() ||
+      typeof target !== "string" || !target.trim() || target !== target.trim() ||
+      source === target || sourceIds.has(source) || targetIds.has(target)) invalid();
+    sourceIds.add(source as string); targetIds.add(target as string);
+    return { connectionId: source as string, replacementConnectionId: target as string };
+  });
+}
+
 export interface ProviderBinding {
   /** Exact provider source address. */
   readonly provider: string;

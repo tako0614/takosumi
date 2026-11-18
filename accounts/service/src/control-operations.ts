@@ -726,6 +726,7 @@ export interface ControlPlaneOperations {
   createCapsuleDestroyPlan(
     capsuleId: string,
     options?: {
+      readonly destroyProviderConnectionReplacements?: readonly import("takosumi-contract/connections").DestroyProviderConnectionReplacement[];
       readonly runnerProfileId?: string;
       /** Server-owned authenticated caller; never accepted from request JSON. */
       readonly actor?: string;
