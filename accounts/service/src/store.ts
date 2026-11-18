@@ -365,7 +365,6 @@ export interface AccountsStore
     | Promise<TakosumiAccountRecord | undefined>;
   findAccountByVerifiedEmail(
     email: string,
-    options?: { unique?: boolean },
   ):
     | TakosumiAccountRecord
     | undefined
@@ -833,21 +832,18 @@ export class InMemoryAccountsStore implements AccountsStore {
     return this.#accounts.get(subject);
   }
 
-  findAccountByVerifiedEmail(email: string, options?: { unique?: boolean }): TakosumiAccountRecord | undefined {
+  findAccountByVerifiedEmail(email: string): TakosumiAccountRecord | undefined {
     const normalized = normalizeAccountEmail(email);
     if (!normalized) return undefined;
-    let match: TakosumiAccountRecord | undefined;
     for (const account of this.#accounts.values()) {
       if (
         account.emailVerified === true &&
         normalizeAccountEmail(account.email) === normalized
       ) {
-        if (!options?.unique) return account;
-        if (match) return undefined;
-        match = account;
+        return account;
       }
     }
-    return match;
+    return undefined;
   }
 
   linkUpstreamIdentityIfAbsent(record: UpstreamIdentityRecord): boolean { const key=upstreamIdentityKey(record); if(this.#upstreamIdentities.has(key))return false; this.#upstreamIdentities.set(key,{...record}); return true; }
