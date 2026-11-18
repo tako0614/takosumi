@@ -1105,12 +1105,12 @@
   justify-items: center;
 }
 .av-tile-face, .av-tile-add .av-tile-icon, .av-tile-skel {
-  width: min(100%, 4.75rem);
+  width: min(100%, 7rem);
 }
 .av-tile { min-width: 0; gap: var(--tg-s-2); padding: var(--tg-s-1); }
 .av-tile-wrap { min-width: 0; }
 .av-home-grid {
-  grid-auto-rows: 13rem;
+  grid-auto-rows: 15rem;
   padding-block: 0;
   align-content: start;
   overflow-anchor: none;

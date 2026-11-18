@@ -290,6 +290,8 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       await page.goto(`/apps/${SHARED_APP}`, { waitUntil: "domcontentloaded" });
       await page.getByTestId("app-management").locator('[data-app-section-link="sharing"]').click();
       const sharing = page.getByTestId("app-sharing");
+      await expect(page).toHaveURL(/#sharing$/u);
+      await expect(sharing).toBeVisible();
       await expect(sharing.locator('input[name="ownership-transfer-id"]')).toHaveCount(0);
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(sharing).toContainText("所有権の譲渡が届いています");
