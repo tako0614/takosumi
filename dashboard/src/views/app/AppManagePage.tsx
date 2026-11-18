@@ -272,8 +272,9 @@ export default function AppManagePage(props: {
 
 
 
-  const [appView, { refetch: refetchApp }] = createResource<CapsuleAppView, string, AbortSignal>(capsuleId, (id, info) =>
-    getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined));
+  const [appView, { refetch: refetchApp }] = createResource<CapsuleAppView, string, AbortSignal | { readonly isCurrent: () => boolean }>(capsuleId, (id, info) =>
+    getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined,
+      typeof info.refetching === "object" && info.refetching !== null && !(info.refetching instanceof AbortSignal) ? info.refetching : {}));
   const app = createLastGoodValue(appView, (value) => value.capsuleId === capsuleId());
   const destroyed = () => app()?.state === "uninstalled";
   const applied = () => app()?.applied === true;
@@ -566,19 +567,21 @@ export default function AppManagePage(props: {
     purpose: ReviewPurpose,
     /** The Plan Run to review; `null` when the work continues elsewhere. */
     create: () => Promise<string | null | undefined>,
-    options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction | "continue_revision" } = {},
+    options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction | "continue_revision"; readonly isCurrent?: () => boolean } = {},
   ) => {
     if (reviewBusy() || appRole() === undefined || (purpose === "uninstall" && !isOwner())) return;
     // A result that arrives after the page moved to another app is dropped.
     const forCapsule = capsuleId();
     const forAccount = props.accountId;
     const forPrincipal = props.principalId;
-    setStarting({ section, ...(options.action ? { action: options.action } : {}) });
+    const heldStarting = { section, ...(options.action ? { action: options.action } : {}) };
+    setStarting(heldStarting);
+    const isCurrent = () => capsuleId() === forCapsule && (!options.isCurrent || options.isCurrent());
     setSectionError(undefined);
     setNotice(undefined);
     try {
       const planRunId = await create();
-      if (capsuleId() !== forCapsule) return;
+      if (!isCurrent()) return;
       // The work continues elsewhere (an install that waits on its own page).
       if (planRunId === null) return;
       if (!planRunId) throw new Error(t("app.review.notStarted"));
@@ -593,7 +596,7 @@ export default function AppManagePage(props: {
         document.getElementById("app-review")?.scrollIntoView({ block: "nearest", behavior: "instant" }),
       );
     } catch (cause) {
-      if (capsuleId() === forCapsule) {
+      if (isCurrent()) {
         if (purpose === "update") {
           const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
           if (target) setReAdoptionRevisionId(target);
@@ -611,14 +614,16 @@ export default function AppManagePage(props: {
           // Acceptance may precede a lost response. Only this app's current
           // server view can name existing work; never repeat the mutation.
           try {
-            void Promise.resolve(refetchApp()).catch(() => {});
+            void Promise.resolve(refetchApp(options.isCurrent ? { isCurrent: options.isCurrent } : undefined)).catch(() => {});
           } catch {
             // Keep the original update error when its readback also fails.
           }
         }
       }
     } finally {
-      if (capsuleId() === forCapsule) setStarting(undefined);
+      // A retired replacement intent may release its own busy state, but
+      // must never clear an action that replaced it on the same app.
+      if (capsuleId() === forCapsule && (!options.isCurrent || starting() === heldStarting)) setStarting(undefined);
     }
   };
 
@@ -1099,11 +1104,14 @@ export default function AppManagePage(props: {
     const view = app();
     if (!view || !isOwner() || uninstallConnectionNotice() !== "app.uninstall.connectionRemoved" ||
       review() || view.progress.run || view.progress.review) return;
+    const heldScope = uninstallScope();
+    const heldEpoch = uninstallEpoch;
+    const isCurrent = () => !disposed && isOwner() && uninstallEpoch === heldEpoch && uninstallScope() === heldScope;
     void startReview(
       "attention",
       "uninstall",
-      async () => extractRunId(await createCapsuleDestroyRecoveryPlan(view.capsuleId, replacements)),
-      { restartable: false, action: "uninstall_now" },
+      async () => extractRunId(await createCapsuleDestroyRecoveryPlan(view.capsuleId, replacements, { isCurrent })),
+      { restartable: false, action: "uninstall_now", isCurrent },
     );
   };
 
