@@ -458,6 +458,19 @@ Current Capsule lifecycle code does not release historical public-host
 reservation rows or perform unrelated bulk OIDC-client cleanup; physical
 retirement of those historical rows waits for operator inventory.
 
+When an initial create reaches dispatch but returns the typed
+`runner_mutation_indeterminate` failure, the original failed Apply and consumed
+Plan can commit with an unchanged, generation-0 `pending` Capsule becoming
+`error`. This uses the existing Run-lease and Capsule cursor/status ledger
+fences after current authority checks. It creates no StateVersion, Output,
+execution receipt or assertion of provider success or failure; runtime safety
+remains `unknown`. Reopening the consumed Plan returns the same failed Apply.
+Read-only planning can still run, but normal mutation admission remains fenced
+by runtime safety. Pre-provider retryable refusals keep the initial Capsule
+pending, and an update's existing generation and Output remain unchanged.
+None of these status projections supplies recovery approval or a staged state
+artifact.
+
 The state-only recovery Core primitive is operator-only and has no public route
 or default service mount. The explicit [local Bun/Postgres command](../operations/local-state-recovery.md)
 uses a protected, purpose-specific single-case approval matched to the actual

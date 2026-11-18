@@ -13614,3 +13614,154 @@ test("destroy explicitly recovers a deleted connection only for its confirmed ap
   expect(await store.getConnection(old.id)).toBeUndefined();
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
+
+test("initial create with an indeterminate dispatched Apply atomically remains unknown in Capsule error", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  runner.apply = async job => {
+    runner.applyJobs.push(job);
+    throw new OpenTofuRunnerExecutionError("original mutation result is unavailable", {
+      reason: "runner_mutation_indeterminate",
+    });
+  };
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner);
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  expect(planRun.operation).toBe("create");
+  const response = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const failed = (await store.getApplyRun(response.applyRun.id))!;
+  expect(failed.status).toBe("failed");
+  expect(failed.diagnostics).toContainEqual(expect.objectContaining({ code: "runner_mutation_indeterminate" }));
+  expect(failed.executionEvidence).toBeUndefined();
+  expect(failed.stateVersionId).toBeUndefined();
+  expect(failed.outputId).toBeUndefined();
+  const failure = failed.auditEvents.find(event => event.type === "apply.failed");
+  expect(failure?.data?.providerDispatched).toBe(true);
+  expect(failure?.data).not.toHaveProperty("providerApplySucceeded");
+  expect(failure?.data).not.toHaveProperty("statePersistence");
+  expect(await store.getCapsuleRuntimeSafety("cap_fixture1")).toMatchObject({ phase: "unknown", runId: failed.id });
+  expect(await store.getCapsule("cap_fixture1")).toMatchObject({ status: "error", currentStateGeneration: 0 });
+  expect((await store.getCapsule("cap_fixture1"))?.currentStateVersionId).toBeUndefined();
+  expect((await store.getCapsule("cap_fixture1"))?.currentOutputId).toBeUndefined();
+  expect(await store.getPlanRun(planRun.id)).toMatchObject({ appliedApplyRunId: failed.id });
+  const replay = await controller.createApplyRun({ planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun) });
+  expect(replay.applyRun.id).toBe(failed.id);
+  expect(replay.applyRun.status).toBe("failed");
+  const retry = await controller.createCapsulePlan("cap_fixture1");
+  expect(retry.planRun.status).toBe("succeeded");
+  const denied = await controller.createApplyRun({ planRunId: retry.planRun.id, expected: applyExpectedGuardFromPlanRun(retry.planRun) });
+  expect(denied.applyRun.status).toBe("failed");
+  expect(denied.applyRun.diagnostics).toContainEqual(expect.objectContaining({ code: "runtime_safety_mismatch" }));
+  expect(runner.applyJobs).toHaveLength(1);
+  expect(runner.planJobs).toHaveLength(2);
+});
+
+test("initial unknown projection reads or commit response loss preserve the original failed Run", async () => {
+  for (const phase of ["read", "before-commit", "after-commit"] as const) {
+    const store = new InMemoryOpenTofuControlStore();
+    const runner = recordingRunner();
+    await seedRunnableCapsuleModel(store, { environment: "preview" });
+    const controller = controllerWith(store, runner);
+    const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+    const read = store.getCapsuleExecutionAuthorityEpoch.bind(store);
+    const commit = store.commitRunState.bind(store);
+    runner.apply = async job => {
+      runner.applyJobs.push(job);
+      if (phase === "read") store.getCapsuleExecutionAuthorityEpoch = async () => { throw new Error("fixture read unavailable"); };
+      else store.commitRunState = async input => {
+        if (phase === "before-commit") throw new Error("fixture commit unavailable");
+        await commit(input);
+        throw new Error("fixture committed response lost");
+      };
+      throw new OpenTofuRunnerExecutionError("original indeterminate result", { reason: "runner_mutation_indeterminate" });
+    };
+    const response = await controller.createApplyRun({ planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun) });
+    store.getCapsuleExecutionAuthorityEpoch = read;
+    const failed = (await store.getApplyRun(response.applyRun.id))!;
+    expect(failed.status).toBe("failed");
+    expect(failed.diagnostics).toContainEqual(expect.objectContaining({ code: "runner_mutation_indeterminate" }));
+    expect(failed.auditEvents.filter(event => event.type === "apply.failed")).toHaveLength(1);
+    expect(failed.executionEvidence).toBeUndefined();
+    expect(failed.stateVersionId).toBeUndefined();
+    expect(failed.outputId).toBeUndefined();
+    expect(await store.getCapsule("cap_fixture1")).toMatchObject({ status: phase === "after-commit" ? "error" : "pending", currentStateGeneration: 0 });
+    expect(runner.applyJobs).toHaveLength(1);
+  }
+});
+
+test("indeterminate update preserves the existing generation and output", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner);
+  const first = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({ planRunId: first.planRun.id, expected: applyExpectedGuardFromPlanRun(first.planRun) });
+  const original = (await store.getCapsule("cap_fixture1"))!;
+  expect(original.currentStateGeneration).toBe(1);
+  runner.apply = async job => {
+    runner.applyJobs.push(job);
+    throw new OpenTofuRunnerExecutionError("unknown update result", { reason: "runner_mutation_indeterminate" });
+  };
+  const update = await controller.createCapsulePlan("cap_fixture1");
+  const failed = await controller.createApplyRun({ planRunId: update.planRun.id, expected: applyExpectedGuardFromPlanRun(update.planRun) });
+  expect(failed.applyRun.status).toBe("failed");
+  expect(await store.getCapsule("cap_fixture1")).toEqual(original);
+  expect((await store.getPlanRun(update.planRun.id))?.appliedApplyRunId).toBeUndefined();
+  expect(await store.getCapsuleRuntimeSafety("cap_fixture1")).toMatchObject({ phase: "unknown", runId: failed.applyRun.id });
+  expect(runner.applyJobs).toHaveLength(2);
+});
+
+test("initial unknown projection respects current authority and a winning Run or Capsule CAS", async () => {
+  for (const race of ["epoch", "workspace", "capsule", "lease"] as const) {
+    const store = new InMemoryOpenTofuControlStore();
+    const runner = recordingRunner();
+    await seedRunnableCapsuleModel(store, { environment: "preview" });
+    const controller = controllerWith(store, runner);
+    const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+    const originalCommit = store.commitRunState.bind(store);
+    const management = await store.getWorkspaceManagement(planRun.workspaceId);
+    runner.apply = async job => {
+      runner.applyJobs.push(job);
+      if (race === "epoch") store.getCapsuleExecutionAuthorityEpoch = async () => (planRun.capsuleExecutionAuthorityEpoch ?? 1) + 1;
+      if (race === "workspace") store.getWorkspaceManagement = async () => ({ ...management!, managementState: "draining" });
+      if (race === "capsule" || race === "lease") store.commitRunState = async input => {
+        if (race === "capsule") await store.patchCapsule("cap_fixture1", { status: "active", currentStateGeneration: 1, currentStateVersionId: "state_other_winner", currentOutputId: "output_other_winner" });
+        else {
+          const current = (await store.getApplyRun(job.applyRun.id))!;
+          await store.transitionRun({ id: current.id, kind: "apply", expectFrom: ["running"], run: { ...current, status: "cancelled" }, clearLeaseToken: true });
+        }
+        return await originalCommit(input);
+      };
+      throw new OpenTofuRunnerExecutionError("unknown original result", { reason: "runner_mutation_indeterminate" });
+    };
+    const response = await controller.createApplyRun({ planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun) });
+    expect(response.applyRun.status).toBe(race === "lease" ? "cancelled" : "failed");
+    expect(await store.getCapsule("cap_fixture1")).toMatchObject({ status: race === "capsule" ? "active" : "pending", currentStateGeneration: race === "capsule" ? 1 : 0 });
+    if (race === "capsule") expect((await store.getCapsule("cap_fixture1"))?.currentStateVersionId).toBe("state_other_winner");
+    expect((await store.getPlanRun(planRun.id))?.appliedApplyRunId).toBeUndefined();
+    expect(runner.applyJobs).toHaveLength(1);
+  }
+});
+
+test("pre-provider Apply refusal leaves initial Capsule pending and retryable", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  runner.apply = async job => {
+    runner.applyJobs.push(job);
+    throw new OpenTofuRunnerInfrastructureError("owned fixture has no provider capacity", { reason: "capacity_exhausted" });
+  };
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, { enqueueRun: async () => {} });
+  const queuedPlan = await controller.createCapsulePlan("cap_fixture1");
+  await controller.dispatchQueuedRun({ action: "plan", runId: queuedPlan.planRun.id, workspaceId: queuedPlan.planRun.workspaceId });
+  const plan = (await store.getPlanRun(queuedPlan.planRun.id))!;
+  const queuedApply = await controller.createApplyRun({ planRunId: plan.id, expected: applyExpectedGuardFromPlanRun(plan) });
+  await expect(controller.dispatchQueuedRun({ action: "apply", runId: queuedApply.applyRun.id, workspaceId: queuedApply.applyRun.workspaceId })).rejects.toThrow("retryable_runner_infrastructure_error");
+  expect((await store.getApplyRun(queuedApply.applyRun.id))?.status).toBe("queued");
+  expect(await store.getCapsule("cap_fixture1")).toMatchObject({ status: "pending", currentStateGeneration: 0 });
+  expect((await store.getPlanRun(plan.id))?.appliedApplyRunId).toBeUndefined();
+  expect(runner.applyJobs).toHaveLength(1);
+});
