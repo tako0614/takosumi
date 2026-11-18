@@ -188,6 +188,8 @@
   margin-bottom: 0;
 }
 .tg-settings-page .tg-page-title {
+  font-size: var(--tg-page-heading);
+  line-height: 1.2;
   overflow-wrap: anywhere;
 }
 .tg-settings-section {

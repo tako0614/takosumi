@@ -1,5 +1,5 @@
 /**
- * Primary navigation: a persistent left rail with home, store, connections and account.
+ * Primary navigation: product identity and the desktop links with home, store, connections and account.
  */
 import { A, useLocation } from "@solidjs/router";
 import { ArrowLeft } from "lucide-solid";
@@ -12,12 +12,12 @@ import {
   isTakosEmbeddedRuntime,
 } from "../../../../lib/runtime-capabilities.ts";
 
-export default function Sidebar() {
+export default function PrimaryNavigation() {
   const loc = useLocation();
   const takosEmbedded = () => isTakosEmbeddedRuntime();
 
   return (
-    <aside class="sidebar">
+    <div class="sidebar">
       <div class="sidebar-brand">
         <Wordmark
           href={takosEmbedded() ? undefined : "/"}
@@ -29,7 +29,7 @@ export default function Sidebar() {
         </Show>
       </div>
       <Show when={takosEmbedded()}>
-        <a href="/" class="sidebar-link sidebar-link-back">
+        <a href="/" class="sidebar-link sidebar-link-back" aria-label={t("nav.backToTakos")}>
           <ArrowLeft size={18} />
           <span class="sidebar-link-label">{t("nav.backToTakos")}</span>
         </a>
@@ -45,12 +45,12 @@ export default function Sidebar() {
                 isNavActive(loc.pathname, item) ? "page" : undefined
               }
             >
-              <item.icon size={18} />
+              <item.icon size={18} aria-hidden="true" />
               <span class="sidebar-link-label">{t(item.labelKey)}</span>
             </A>
           )}
         </For>
       </nav>
-    </aside>
+    </div>
   );
 }

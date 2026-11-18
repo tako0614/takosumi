@@ -223,7 +223,7 @@ function AppStartPanel() {
   return (
     <section class="av-start" aria-label={t("apps.start.aria")}>
       <div class="av-start-copy">
-        <h2 class="av-start-title">{t("apps.start.titleEmpty")}</h2>
+        <h1 class="av-start-title">{t("apps.start.titleEmpty")}</h1>
       </div>
       <a href="/new" class="av-start-action">
         <span>{t("apps.start.optionStore")}</span>

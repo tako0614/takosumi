@@ -1,6 +1,5 @@
 import { createEffect, type JSX, on, Suspense } from "solid-js";
 import { useIsRouting, useLocation } from "@solidjs/router";
-import Sidebar from "./Sidebar.tsx";
 import TopBar from "./TopBar.tsx";
 import MobileTabs from "./MobileTabs.tsx";
 import { ConfirmDialogRenderer } from "../../../../components/ConfirmDialogRenderer.tsx";
@@ -21,9 +20,7 @@ interface Props {
 }
 
 /**
- * Dashboard chrome: a persistent left sidebar (primary nav: home / store /
- * connections / account) + a top bar (section title / notifications / profile menu) over the
- * content well, with mobile bottom tabs carrying the same destinations.
+ * Desktop destinations and account controls share the header. Phones use bottom tabs.
  */
 export default function AppShell(props: Props) {
   const location = useLocation();
@@ -78,14 +75,13 @@ export default function AppShell(props: Props) {
       >
         {t("shell.skipToContent")}
       </a>
-      <Sidebar />
+      <TopBar />
       <div class="app-shell-main">
         <div
           class="route-progress"
           classList={{ active: isRouting() }}
           aria-hidden="true"
         />
-        <TopBar />
         <main
           class="app-shell-content"
           classList={{ routing: isRouting() }}

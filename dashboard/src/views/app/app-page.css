@@ -1,7 +1,7 @@
 /* App overview: one launch action and grouped navigation. Detail panes
    retain the same-app controls and only show the selected section. */
 
-.ap-page { width: min(100%, 48rem); margin-inline: auto; display: grid; gap: var(--tg-s-5); min-width: 0; }
+.ap-page { width: min(100%, 48rem); display: grid; gap: var(--tg-s-5); min-width: 0; }
 .ap-muted { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; margin: 0; }
 .ap-notice { margin: 0; padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-success); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); color: var(--tg-fg); font-size: var(--tg-fs-sm); }
 .ap-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); }
@@ -13,7 +13,7 @@
 .ap-icon { width: 4.5rem; height: 4.5rem; flex: none; display: grid; place-items: center; overflow: hidden; border-radius: var(--tg-r-lg); background: var(--tg-bg-subtle); border: 1px solid var(--tg-line); font-size: 1.5rem; font-weight: 700; }
 .ap-icon img { width: 100%; height: 100%; object-fit: cover; }
 .ap-title { min-width: 0; }
-.ap-title h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); line-height: 1.2; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.ap-title h1 { margin: 0; font-size: var(--tg-page-heading); line-height: 1.2; letter-spacing: -0.02em; overflow-wrap: anywhere; }
 .ap-state { margin: var(--tg-s-2) 0 0; color: var(--tg-fg-muted); }
 .ap-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--tg-s-2); }
 

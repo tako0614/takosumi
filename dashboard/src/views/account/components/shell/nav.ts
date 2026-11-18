@@ -6,9 +6,7 @@
  *   ストア   — find an app and install it (`/new`)
  *   接続     — connect your personal cloud accounts
  *   アカウント — your profile and personal usage
- * The desktop sidebar and the mobile bottom bar render this list verbatim, and
- * the top bar names the section from the same table, so a route rename cannot
- * desync the chrome. Nothing else is a top-level destination: run history,
+ * The desktop header and mobile bottom bar share these destinations. Nothing else is a top-level destination: run history,
  * activity, recovery and created resources belong to each app's
  * page, and workspace-wide tools that no behavior needs stay in the API and CLI.
  */
@@ -40,20 +38,6 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
   { href: "/new", labelKey: "nav.store", icon: Store },
   { href: "/connections", labelKey: "nav.connections", icon: Plug },
   { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
-];
-
-/** Section title shown in the top bar, by route. Detail routes show the
- * section they belong to (the item's own name stays in the page header). */
-export const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
-  [/^\/$/, "nav.home"],
-  // An installed app's page is titled アプリ / App; ホーム stays selected.
-  [/^\/apps(\/|$)/, "nav.app"],
-  [/^\/runs(\/|$)/, "nav.home"],
-  [/^\/run-groups(\/|$)/, "nav.home"],
-  [/^\/new(\/|$)/, "nav.store"],
-  [/^\/connections(\/|$)/, "nav.connections"],
-  [/^\/account(\/|$)/, "nav.account"],
-  [/^\/notifications(\/|$)/, "nav.notifications"],
 ];
 
 /** Route-active test shared by the sidebar and the bottom bar. */

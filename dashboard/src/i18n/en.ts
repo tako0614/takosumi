@@ -293,7 +293,6 @@ export const en: Record<keyof typeof ja, string> = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Home",
   "nav.store": "Store",
-  "nav.app": "App",
   "nav.connections": "Connections",
   "nav.primary": "Main menu",
   "nav.notifications": "Notifications",
