@@ -1213,6 +1213,52 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
+  test("saved-review holds pause answers and replanning without changing permanent-lock discard semantics", async () => {
+    const sheet = () => inputs({ connections: [], missing: [], variables: [{ name: "domain", type: "string", required: false, sensitive: false }] });
+    reset({
+      getGitInstallPlan: async () => respond(sheet(), 3),
+      answerGitInstallAttempt: async () => respond({ kind: "wait", phase: "planning" }, 4),
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 5),
+      discardGitInstallAttempt: async () => respond({ kind: "none" }, 6, "discarded"),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    try {
+      await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+      const first = page.attempt.holdReview();
+      const second = page.attempt.holdReview();
+      page.attempt.resume();
+      await page.attempt.confirm();
+      page.attempt.setDraft("domain", "blocked.example.test");
+      await pause(30);
+      expect(page.attempt.drafts()).toEqual({});
+      expect(answerBodies()).toEqual([]);
+      expect(await page.attempt.discard()).toBe(false);
+      expect(await page.attempt.restart()).toBe(false);
+      first(); first();
+      expect(page.attempt.locked()).toBe(true);
+      expect(page.attempt.view().canDiscard).toBe(false);
+      second();
+      page.attempt.resume();
+      await until(() => page.attempt.view().stage === "review", "the unheld confirmation");
+      expect(answerBodies()).toEqual([{ expectedGeneration: 3, continue: true }]);
+      expect(page.attempt.locked()).toBe(false);
+      page.attempt.setDraft("domain", "changed.example.test");
+      page.attempt.commitDraft("domain");
+      const pending = page.attempt.holdReview();
+      await pause(30);
+      expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toEqual([]);
+      expect(await page.attempt.restart()).toBe(false);
+      expect(await page.attempt.discard()).toBe(false);
+      // Releasing a read hold cannot undo the permanent lock established by Apply.
+      page.attempt.lockAnswers(); pending();
+      expect(page.attempt.locked()).toBe(true);
+      // That old lock alone never prohibited a definitive-rejection Stop.
+      expect(page.attempt.view().canDiscard).toBe(true);
+      expect(await page.attempt.discard()).toBe(true);
+      expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toHaveLength(1);
+    } finally { page.dispose(); }
+  });
+
   test("a change after the Plan prepares the install again once, with the same answers", async () => {
     const SECOND = "gip_00000000000000b2";
     let creates = 0;

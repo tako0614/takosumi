@@ -392,7 +392,21 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   /** The install is being prepared again until its new Plan (or the person) is needed. */
   const [replanning, setReplanning] = createSignal(false);
   /** An Apply started: the answers it applies can no longer change here. */
-  const [locked, setLocked] = createSignal(false);
+  const [answersLocked, setLocked] = createSignal(false);
+  /** Pending saved-review reads hold edits without permanently locking a fresh Plan. */
+  const [reviewHolds, setReviewHolds] = createSignal<ReadonlySet<symbol>>(new Set());
+  const reviewHeld = () => reviewHolds().size > 0;
+  const locked = () => answersLocked() || reviewHeld();
+  const holdReview = () => {
+    const token = Symbol();
+    setReviewHolds((held) => new Set([...held, token]));
+    return () => setReviewHolds((held) => {
+      if (!held.has(token)) return held;
+      const next = new Set(held);
+      next.delete(token);
+      return next;
+    });
+  };
   /** Preparing again did not go through; Continue tries it again. */
   const [replanStalled, setReplanStalled] = createSignal(false);
   /**
@@ -494,7 +508,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   const view = createMemo<InstallView>(() => {
     const current = mutating();
-    return deriveInstallView(response(), {
+    const derived = deriveInstallView(response(), {
       starting: current === "start",
       driving: driving(),
       mutating: current !== undefined && current !== "answer",
@@ -512,6 +526,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       nameInvalid: nameInvalid(),
       answersKept: sheet() !== undefined,
     });
+    return { ...derived, canDiscard: derived.canDiscard && !reviewHeld() };
   });
 
   /** The connection rows as the person last chose them. */
@@ -892,7 +907,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * that failed, or try a Plan that failed again with the same answers.
    */
   const resume = () => {
-    if (mutating()) return;
+    if (mutating() || reviewHeld()) return;
     setArmed(true);
     if (interfaceLinksToSend() !== undefined && response()?.userAction.kind === "provide_inputs") {
       setInterfaceSendBlocked(false);
@@ -1186,10 +1201,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * settle; it only makes a Plan.
    */
   const confirm = async (): Promise<void> => {
-    if (confirming()) return;
+    if (confirming() || locked()) return;
     setConfirming(true);
     try {
       while (answerRun) await answerRun.catch(() => undefined);
+      if (locked()) return;
       if (interfaceLinksToSend() !== undefined) return;
       const current = response();
       if (current?.userAction.kind !== "provide_inputs") return;
@@ -1399,7 +1415,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const current = response();
     const ready = view().readyToConfirm;
     const version = editVersion();
-    if (current?.userAction.kind !== "provide_inputs" || !ready) return;
+    if (current?.userAction.kind !== "provide_inputs" || !ready || locked()) return;
     if (!armed() || mutating() || confirming() || editing() || nameInvalid() || outdated()) return;
     if (bindingsToSend() !== undefined || interfaceLinksToSend() !== undefined) return;
     const key = `${current.installPlan.id}:${version}`;
@@ -1475,7 +1491,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   /** 「やめる」: throw the whole attempt away. Never alongside another request. */
   const discard = async (): Promise<boolean> => {
     const current = response();
-    if (!current || mutating()) return false;
+    if (!current || mutating() || reviewHeld()) return false;
     setMutating("discard");
     setError(undefined);
     try {
@@ -1512,7 +1528,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    */
   const restart = async (): Promise<boolean> => {
     const current = response();
-    if (!current || mutating()) return false;
+    if (!current || mutating() || reviewHeld()) return false;
     if (sheet()) return await replan();
     setMutating("restart");
     setError(undefined);
@@ -1559,7 +1575,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * it applies until the install finishes.
    */
   const lockAnswers = () => {
-    if (!locked()) setLocked(true);
+    setLocked(true);
   };
 
   /** The install is done: nothing typed for it stays in memory. */
@@ -1602,6 +1618,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     replanning,
     locked,
     lockAnswers,
+    holdReview,
     start,
     resume,
     chooseModule,
