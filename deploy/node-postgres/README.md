@@ -246,10 +246,12 @@ a commercial host extension and are not part of this public distribution.
   historical v2 reader remains uncapped for compatibility and requires a
   trusted operator-owned local filesystem; this bound is not a general file
   store guarantee.
-  This is a composition library, not an enabled CLI or authenticated recovery
-  route. An operator workflow must use the same control store, crypto boundary
-  and artifact root as the selected deployment, authorize the exact recovery
-  scope, and preserve stable retry identity and custody outside Git. See the
+  The explicit local command has separate stage-only and commit-only approval
+  modes; follow the [local recovery runbook](../../docs/operations/local-state-recovery.md).
+  There is no default authenticated recovery route or automatic recovery action.
+  Use the same control store, crypto boundary and artifact root as the selected
+  deployment, authorize each exact stage/commit scope separately, and preserve
+  stable retry identity and custody outside Git. See the
   [Core state contract](../../docs/internal/core-spec.md). A recovered partial
   state does not prove a complete resource inventory or provider success.
 - Apply both schemas before first start: `bun run db:migrate --env=production` (control plane, reads `DATABASE_URL`)
