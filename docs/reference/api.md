@@ -130,6 +130,27 @@ scope は `openid profile offline_access capsules:read capsules:write`、PKCE S2
 この client への許可には毎回同意の画面が出ます。運用者が
 `TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` で組み込みの client を止め、
 `TAKOSUMI_MOBILE_OIDC_CLIENT_ID` も設定していない endpoint は `oidcClientId` を返しません。
+
+共有アカウントの構成 (Hosted、`TAKOSUMI_SHARED_AUTH_PROFILE=shared-account`) の product の host は、
+`oidcClientId` を返しません。この host で人がサインインするのは private RP からだけで、この Worker
+自身の Accounts の authorize は人には出ていないからです。代わりに、運用者が Takosumi Mobile の
+サインインを設定したとき (`TAKOSUMI_SHARED_AUTH_ISSUER` と `TAKOSUMI_SHARED_AUTH_MOBILE_CLIENT_ID`)
+だけ、`shared_account_sign_in` を返します。
+
+```json
+"shared_account_sign_in": {
+  "issuer": "https://auth.example.com",
+  "client_id": "takosumi-mobile-v1",
+  "redirect_uri": "https://app.example.com/auth/oidc/native/callback",
+  "session_exchange": "https://app.example.com/api/v1/account/session/mobile-exchange",
+  "session_header": "x-takosumi-native-session",
+  "scope": "openid email offline_access"
+}
+```
+
+`issuer` は private RP がブラウザのサインインに使う issuer、`client_id` はそこに登録した
+Takosumi Mobile の client です。手順は下の「共有アカウントの host での Takosumi Mobile のサインイン」
+にあります。
 追加の endpoint family を公開する
 endpoint は `endpoints.extensions` を併せて返します。
 
@@ -195,6 +216,56 @@ opaque で、malformed または subject に属する exact anchor が失われ�
 `workspace_membership_inactive` です。この read は `last_used_at`、audit、session、Control
 schema、Workspace / Project / TargetPool を更新・bootstrap しません。
 
+### 共有アカウントの host での Takosumi Mobile のサインイン
+
+共有アカウントの構成の product の host では、人の bearer (PAT・OAuth) を受け付けません。Takosumi
+Mobile は、ブラウザと同じ issuer でサインインし、ブラウザと同じ種類の RP の session を受け取ります。
+
+1. discovery の `shared_account_sign_in` を読む。
+2. `issuer` で authorization code の流れを始める。`client_id`、`redirect_uri`、`scope`、
+   PKCE (S256)、`state`、`nonce`、`prompt=consent` を付ける。`redirect_uri` は接続先の host と
+   同じ origin でなければならない。
+3. issuer は `redirect_uri` (この host の HTTPS の page) へ戻し、その page が
+   `takosumi://oauth/callback?code=…&state=…&iss=…` へ渡す。page は応答をそのまま渡すだけで、
+   別の宛先へは渡さない。`iss` がこの host の issuer でない応答は 400 です。
+4. app は code を自分では引き換えない。`POST /api/v1/account/session/mobile-exchange` に
+   `{"code":"…","code_verifier":"…","nonce":"…"}` を送る。
+5. private RP が、自分だけが持つ client secret で code を引き換え、ID token を検証し
+   (issuer の JWKS による署名、`iss`、`aud`・`azp` が Takosumi Mobile の client であること、`exp`・`iat`、
+   `nonce`)、ブラウザの callback と同じく正規の account を確かめて session を作る。
+
+| メソッド | パス                                          | 説明                                         |
+| -------- | --------------------------------------------- | -------------------------------------------- |
+| GET      | `/auth/oidc/native/callback`                  | issuer の応答を `takosumi://oauth/callback` へ渡す page |
+| POST     | `/api/v1/account/session/mobile-exchange`     | code を RP の session に替える               |
+| GET      | `/api/v1/account/session/me`                  | session の account (`x-takosumi-native-session` で) |
+| DELETE   | `/api/v1/account/session/me`                  | session を RP で失効する (`x-takosumi-native-session` で) |
+
+- 交換の成功 (200): `{"token_type":"takosumi-native-session","session_token":"…","session_header":"x-takosumi-native-session","account_id":"tsub_…","expires_at":<epoch 秒>}`。
+  `expires_at` は RP の session の絶対の期限で、使わない時間が RP の idle の期限 (今の RP では 12 時間) を超えると先に切れます (ブラウザと同じ)。
+  refresh token はありません。切れたら (401) サインインし直します。
+- 交換の失敗: 本文の形が違えば 400 `invalid_request`。RP が拒んだとき (issuer・audience・署名・
+  期限・nonce の不一致、使用済みの code) は、どれでも 401 `sign_in_refused`。RP に届かなければ
+  503 `authentication_unavailable`。資格 (`Authorization`、`x-takosumi-account-session`、
+  `x-takosumi-native-session`) を付けた要求は 401、ブラウザからの要求 (`Sec-Fetch-*`、web の
+  `Origin`) は 403 `native_client_required`、同じ送り元から 1 分に 10 回を超えると 429 です。
+  応答はすべて `Cache-Control: no-store` で、cookie は付けません。
+- 以後、app は管理の API (アプリの一覧、Run の承認、通知の端末の登録など) に
+  `x-takosumi-native-session: <session_token>` を付けて呼びます。RP には、この header だけを渡します
+  (cookie・`Origin`・fetch metadata は渡さない)。RP は、この交換で作った session だけをこの header で
+  受け付け、ブラウザの cookie の session は受け付けません (逆も同じ)。
+- この header の要求は、`Authorization`・`x-takosumi-account-session` と一緒なら、`Sec-Fetch-*` が
+  付いていれば、`Origin` が native app のもの (無し、`null`、`tauri://localhost`、
+  `http(s)://tauri.localhost`) 以外なら、形が違えば、どの path でも 401 です。
+- CSRF: この header はブラウザが自分で付けることがなく、ほかの origin から付けるには CORS の preflight
+  が要り、この host はそれを許しません。ambient な資格が無いので、cookie の書き込みに課す同一 origin
+  の検査をこの header の要求には課しません (Tauri は `Origin` を常に webview の origin にするので、
+  課すと app から書き込めません)。cookie の書き込みは、従来どおり product の origin からだけです。
+- ブラウザのサインインの route (`/auth/oidc/login`・`callback`・`logout`・`session`) は、この header を
+  付けた要求を 401 にします。
+- 自分で動かす instance (共有アカウントの構成でない) では、これらの route はどれも無く、
+  Takosumi Mobile は従来どおり `oidcClientId` で直接サインインします。
+
 ### Takosumi Mobile の通知の登録
 
 Takosumi Mobile は、この instance 自身の通知（承認待ち、Run の失敗など）を標準の Web Push
@@ -224,10 +295,8 @@ push の endpoint、`data.auth` は購読の `auth` です。product が native 
     同じ store を読みます。
   - 別の URL（workers.dev や preview）では 404 です。この path の下の、一覧と一件以外の path
     （末尾の `/` や 2 段以上）も 404 で、issuer の資格を評価することはありません。
-  - **この host では、まだ Takosumi Mobile から登録できません。** Takosumi Mobile は必ず
-    `Authorization` を付けるので 401 になります。この構成で端末が管理の API を呼ぶ資格は未決です
-    （takos-control `docs/platform/takosumi-app-clients.md` の「未決の点」）。今使えるのは、
-    この host の dashboard（RP の session）だけです。
+  - Takosumi Mobile は、上の「共有アカウントの host での Takosumi Mobile のサインイン」で得た
+    session を `x-takosumi-native-session` に付けて登録します。`Origin` は問いません。
 - POST の本文: `{"kind":"webpush","app_id":"com.takosumi","pushkey":"<p256dh>","data":{"url":"<endpoint>","auth":"<auth>"},"device_display_name":"Pixel 9","lang":"ja-JP"}`。
   `pushkey` は曲線上の P-256 非圧縮点、`auth` は 16 byte（どちらも padding 無しの base64url）。
   知らない欄は 400。新規は 201、同じ pusher の更新は 200 です。

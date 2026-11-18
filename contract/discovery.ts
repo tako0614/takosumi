@@ -25,6 +25,7 @@ export type {
   TakosumiOperatorCapabilities,
   TakosumiProductCapabilities,
   TakosumiResourceCapabilities,
+  TakosumiSharedAccountSignIn,
   TakosumiWellKnownDocument,
   TakosumiWellKnownEndpoints,
   TakosumiWellKnownFeatures,

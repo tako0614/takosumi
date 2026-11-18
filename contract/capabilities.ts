@@ -15,6 +15,30 @@ export interface TakosumiWellKnownDocument {
   readonly api_versions: readonly [typeof TAKOSUMI_API_VERSION];
   readonly features: TakosumiWellKnownFeatures;
   readonly endpoints: TakosumiWellKnownEndpoints;
+  /**
+   * Present only on a host whose people sign in through a shared account
+   * (the Hosted shared-account profile, ADR 0025), when Takosumi Mobile's
+   * sign-in is configured there. Such a host offers no `oidcClientId`.
+   */
+  readonly shared_account_sign_in?: TakosumiSharedAccountSignIn;
+}
+
+/**
+ * Takosumi Mobile's sign-in on a shared-account host. The app runs an
+ * authorization-code flow with PKCE (S256), `prompt=consent` and a nonce at
+ * `issuer` as `client_id`, with `redirect_uri` (an HTTPS page on this host
+ * that hands the response to `takosumi://oauth/callback`). It does not redeem
+ * the code itself: it posts `{code, code_verifier, nonce}` to
+ * `session_exchange`, which answers with a session of the browser's kind, and
+ * then presents that session in `session_header`.
+ */
+export interface TakosumiSharedAccountSignIn {
+  readonly issuer: string;
+  readonly client_id: string;
+  readonly redirect_uri: string;
+  readonly session_exchange: string;
+  readonly session_header: "x-takosumi-native-session";
+  readonly scope: "openid email offline_access";
 }
 
 export interface TakosumiWellKnownFeatures {
@@ -113,6 +137,15 @@ export interface CreateTakosumiDiscoveryOptions {
   readonly oidcIssuer?: string;
   /** Exact public PKCE client id advertised to the standalone mobile app. */
   readonly mobileOidcClientId?: string;
+  /** Takosumi Mobile's sign-in on a shared-account host (camelCase input). */
+  readonly sharedAccountSignIn?: {
+    readonly issuer: string;
+    readonly clientId: string;
+    readonly redirectUri: string;
+    readonly sessionExchange: string;
+    readonly sessionHeader: "x-takosumi-native-session";
+    readonly scope: "openid email offline_access";
+  };
   readonly resources?: Partial<TakosumiResourceCapabilities>;
   readonly adapters?: Partial<TakosumiAdapterCapabilities>;
   readonly identity?: Partial<TakosumiIdentityCapabilities>;
@@ -170,6 +203,18 @@ export function createTakosumiWellKnownDocument(
         ? { extensions: { ...options.endpoints } }
         : {}),
     },
+    ...(options.sharedAccountSignIn
+      ? {
+          shared_account_sign_in: {
+            issuer: options.sharedAccountSignIn.issuer,
+            client_id: options.sharedAccountSignIn.clientId,
+            redirect_uri: options.sharedAccountSignIn.redirectUri,
+            session_exchange: options.sharedAccountSignIn.sessionExchange,
+            session_header: options.sharedAccountSignIn.sessionHeader,
+            scope: options.sharedAccountSignIn.scope,
+          },
+        }
+      : {}),
   };
 }
 

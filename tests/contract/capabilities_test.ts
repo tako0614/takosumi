@@ -52,6 +52,31 @@ test("Takosumi discovery advertises only the configured native PKCE client", () 
   assert.equal(document.endpoints.oidc_issuer, "https://app.takosumi.com");
 });
 
+test("Takosumi discovery publishes a shared-account host's Takosumi Mobile sign-in only when given", () => {
+  const plain = createTakosumiWellKnownDocument({ origin: "https://app.example.test" });
+  assert.equal("shared_account_sign_in" in plain, false);
+  const document = createTakosumiWellKnownDocument({
+    origin: "https://app.example.test",
+    sharedAccountSignIn: {
+      issuer: "https://auth.example.test",
+      clientId: "takosumi-mobile-v1",
+      redirectUri: "https://app.example.test/auth/oidc/native/callback",
+      sessionExchange: "https://app.example.test/api/v1/account/session/mobile-exchange",
+      sessionHeader: "x-takosumi-native-session",
+      scope: "openid email offline_access",
+    },
+  });
+  assert.equal(document.oidcClientId, undefined);
+  assert.deepEqual(document.shared_account_sign_in, {
+    issuer: "https://auth.example.test",
+    client_id: "takosumi-mobile-v1",
+    redirect_uri: "https://app.example.test/auth/oidc/native/callback",
+    session_exchange: "https://app.example.test/api/v1/account/session/mobile-exchange",
+    session_header: "x-takosumi-native-session",
+    scope: "openid email offline_access",
+  });
+});
+
 test("Takosumi discovery publishes the configured Accounts issuer, not the request origin", () => {
   const document = createTakosumiWellKnownDocument({
     origin: "http://internal.worker:8787",

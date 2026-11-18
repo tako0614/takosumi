@@ -24,6 +24,12 @@ Workspace→Takoserver Organization の初回 binding は既存 opaque reference
    `takosumi-hosted-staging-v1` と `takoserver-console-staging-v1` です。実際の callback
    origin は各 RP owner の private preflight で確認し、wildcard や prod callback を
    混ぜません。secret 値、private JWK、session salt と実現 config は public repo 外です。
+   Takosumi Mobile のサインインを使うときは、同じ形の shared-account client（提案 ID は
+   `takosumi-mobile-staging-v1`、redirect は product origin の `/auth/oidc/native/callback` だけ）を
+   別に登録し、その secret は private RP だけに渡します。product の host には
+   `TAKOSUMI_SHARED_AUTH_ISSUER` と `TAKOSUMI_SHARED_AUTH_MOBILE_CLIENT_ID` を設定します
+   （[shared-account authentication](./shared-account-authentication.md#takosumi-mobile-sessions)）。
+   staging の issuer の固定した client 一覧への追加は、auth release lane の変更として扱います。
 5. descriptor の `profile:"shared-account"`, `enabled:true`, HTTPS redirect allowlist,
    `client_secret_basic`, identity scope allowlist と個別 `clientSecretEnv` を検証します。
    `TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY=true` は exact-v5 検証後に有効化します。
