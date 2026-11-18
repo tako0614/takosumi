@@ -2025,11 +2025,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
         await page.setViewportSize(size);
         const columns = () => page.locator(".av-home-grid").evaluate((grid) => getComputedStyle(grid).gridTemplateColumns.split(" ").length);
-        if (size.width > 640) await expect.poll(columns).toBeGreaterThan(1);
-        else {
-          await expect.poll(columns).toBe(1);
-          await expect.poll(() => page.getByTestId("home-app").evaluateAll((tiles) => new Set(tiles.map((tile) => Math.round(tile.getBoundingClientRect().x))).size)).toBe(1);
-        }
+        await expect.poll(columns).toBeGreaterThanOrEqual(3);
         await expect.poll(() => page.getByTestId("home-app").evaluateAll((tiles) => tiles.every((tile) => {
           const row = tile.getBoundingClientRect();
           const content = tile.querySelector(".av-tile-wrap")!.getBoundingClientRect();

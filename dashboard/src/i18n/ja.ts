@@ -304,7 +304,6 @@ export const ja = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "ホーム",
   "nav.store": "ストア",
-  "nav.app": "アプリ",
   "nav.connections": "接続",
   "nav.primary": "主なメニュー",
   "nav.notifications": "通知",

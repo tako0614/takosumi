@@ -30,6 +30,7 @@ import {
   removeTcsServer,
 } from "../../lib/tcs-servers.ts";
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
+import { Search, SlidersHorizontal } from "lucide-solid";
 import { openModalDialog } from "../../lib/modal-dialog.ts";
 import AppFace from "../../components/AppFace.tsx";
 import { matchingInstalledApps, type InstalledAppSummary } from "takosumi-contract";
@@ -66,6 +67,8 @@ const STR = {
   },
   retry: { ja: "再試行", en: "Retry" },
   sortLabel: { ja: "並び順", en: "Sort" },
+  filteredOptions: { ja: "絞り込み中", en: "Filtered" },
+  displayOptions: { ja: "表示設定", en: "Display options" },
   servers: { ja: "ストア取得元", en: "Store sources" },
   serversAdvanced: { ja: "詳細", en: "Advanced" },
   addServer: { ja: "追加", en: "Add" },
@@ -189,11 +192,12 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const [selected, setSelected] = createSignal<AggregatedTcsListing | null>(
     null,
   );
-  const [showServers, setShowServers] = createSignal(false);
+  const [optionsOpen, setOptionsOpen] = createSignal(false);
   const [serverDraft, setServerDraft] = createSignal("");
   const [serverError, setServerError] = createSignal(false);
   // Associates the invalid-server alert text with the URL input for AT.
   const serverErrorId = createUniqueId();
+  const displayOptionsId = createUniqueId();
   const showSourceControls = () => props.showSourceControls ?? true;
   const showSortControl = () => props.showSortControl ?? true;
 
@@ -416,7 +420,8 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   return (
     <div class="tcs-root" classList={{ "tcs-page-list": Boolean(props.onSelectListing) }}>
       <div class="tcs-controls">
-        <form class="tcs-search" onSubmit={onSearch}>
+        <form class="tcs-search" role="search" onSubmit={onSearch}>
+          <Search size={17} aria-hidden="true" />
           <input
             name="storeSearch"
             type="search"
@@ -426,48 +431,16 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             aria-label={s("search", props.locale)}
           />
         </form>
-        <Show when={showSortControl()}>
-          <select
-            name="storeSort"
-            class="tcs-sort"
-            aria-label={s("sortLabel", props.locale)}
-            value={sort()}
-            onChange={(e) => onSort(e.currentTarget.value as TcsSort)}
-          >
-            <option value="updated">{s("sortUpdated", props.locale)}</option>
-            <option value="created">{s("sortCreated", props.locale)}</option>
-          </select>
-        </Show>
-        <Show when={storeChoices().length > 1}>
-          <label class="tcs-select-label">
-            <span>{s("storeFilter", props.locale)}</span>
-            <select
-              name="storeSource"
-              class="tcs-sort"
-              value={activeStore()}
-              onChange={(e) => setActiveStore(e.currentTarget.value)}
-            >
-              <option value="">{s("allStores", props.locale)}</option>
-              {/* Mask the default store as 既定のストア, exactly like the
-                  Store sources list — not its raw base URL. */}
-              <For each={agg().status}>
-                {(st) => (
-                  <option value={st.base}>
-                    {st.isDefault ? s("defaultStore", props.locale) : st.base}
-                  </option>
-                )}
-              </For>
-            </select>
-          </label>
-        </Show>
-        <Show when={showSourceControls()}>
+        <Show when={showSortControl() || showSourceControls() || storeChoices().length > 1}>
           <button
             type="button"
-            class="tcs-btn tcs-quiet"
-            aria-expanded={showServers()}
-            onClick={() => setShowServers((v) => !v)}
+            class="tcs-btn tcs-display-options"
+            aria-expanded={optionsOpen()}
+            aria-controls={displayOptionsId}
+            onClick={() => setOptionsOpen((open) => !open)}
           >
-            {s("servers", props.locale)} ({agg().status.length})
+            <SlidersHorizontal size={16} aria-hidden="true" />
+            {s(activeStore() ? "filteredOptions" : "displayOptions", props.locale)}
           </button>
         </Show>
       </div>
@@ -485,68 +458,109 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               )}
       </p>
 
-      <Show when={showSourceControls() && showServers()}>
-        <div class="tcs-servers">
-          <ul>
-            <For each={agg().status}>
-              {(st) => (
-                <li>
-                  <span
-                    class="tcs-dot"
-                    classList={{ ok: st.ok, bad: !st.ok }}
-                    aria-hidden="true"
-                  />
-                  {/* The green dot is color-only; mirror the ok state as
-                      text (the bad state already shows "unreachable"). */}
-                  <Show when={st.ok}>
-                    <span class="sr-only">{s("reachable", props.locale)}</span>
-                  </Show>
-                  <span class="tcs-mono">
-                    {st.isDefault ? s("defaultStore", props.locale) : st.base}
-                  </span>
-                  <Show when={!st.ok}>
-                    <span class="tcs-muted">
-                      {s("unreachable", props.locale)}
-                    </span>
-                  </Show>
-                  <Show when={!st.isDefault}>
-                    <button
-                      type="button"
-                      class="tcs-btn tcs-sm"
-                      onClick={() => onRemoveServer(st.base)}
-                    >
-                      {s("remove", props.locale)}
-                    </button>
-                  </Show>
-                </li>
-              )}
-            </For>
-          </ul>
-          <form class="tcs-add" onSubmit={onAddServer}>
-            <input
-              name="storeServerUrl"
-              type="url"
-              value={serverDraft()}
-              onInput={(e) => {
-                setServerDraft(e.currentTarget.value);
-                setServerError(false);
-              }}
-              placeholder={s("serverPlaceholder", props.locale)}
-              aria-label={s("serverPlaceholder", props.locale)}
-              aria-invalid={serverError() ? "true" : undefined}
-              aria-describedby={serverError() ? serverErrorId : undefined}
-            />
-            <button type="submit" class="tcs-btn tcs-sm">
-              {s("addServer", props.locale)}
-            </button>
-          </form>
-          <Show when={serverError()}>
-            <p class="tcs-err" role="alert" id={serverErrorId}>
-              {s("invalidServer", props.locale)}
-            </p>
+      <div id={displayOptionsId} class="tcs-options-panel" hidden={!optionsOpen()}>
+        <div class="tcs-options-row">
+          <Show when={showSortControl()}>
+            <label class="tcs-select-label">
+              <span>{s("sortLabel", props.locale)}</span>
+              <select
+                name="storeSort"
+                class="tcs-sort"
+                value={sort()}
+                onChange={(e) => onSort(e.currentTarget.value as TcsSort)}
+              >
+                <option value="updated">{s("sortUpdated", props.locale)}</option>
+                <option value="created">{s("sortCreated", props.locale)}</option>
+              </select>
+            </label>
+          </Show>
+          <Show when={storeChoices().length > 1}>
+            <label class="tcs-select-label">
+              <span>{s("storeFilter", props.locale)}</span>
+              <select
+                name="storeSource"
+                class="tcs-sort"
+                value={activeStore()}
+                onChange={(e) => setActiveStore(e.currentTarget.value)}
+              >
+                <option value="">{s("allStores", props.locale)}</option>
+                {/* Mask the default store as 既定のストア, exactly like the
+                    Store sources list — not its raw base URL. */}
+                <For each={agg().status}>
+                  {(st) => (
+                    <option value={st.base}>
+                      {st.isDefault ? s("defaultStore", props.locale) : st.base}
+                    </option>
+                  )}
+                </For>
+              </select>
+            </label>
           </Show>
         </div>
-      </Show>
+        <Show when={showSourceControls()}>
+          <div class="tcs-servers">
+            <strong>{s("servers", props.locale)}</strong>
+            <ul>
+              <For each={agg().status}>
+                {(st) => (
+                  <li>
+                    <span
+                      class="tcs-dot"
+                      classList={{ ok: st.ok, bad: !st.ok }}
+                      aria-hidden="true"
+                    />
+                    {/* The green dot is color-only; mirror the ok state as
+                        text (the bad state already shows "unreachable"). */}
+                    <Show when={st.ok}>
+                      <span class="sr-only">{s("reachable", props.locale)}</span>
+                    </Show>
+                    <span class="tcs-mono">
+                      {st.isDefault ? s("defaultStore", props.locale) : st.base}
+                    </span>
+                    <Show when={!st.ok}>
+                      <span class="tcs-muted">
+                        {s("unreachable", props.locale)}
+                      </span>
+                    </Show>
+                    <Show when={!st.isDefault}>
+                      <button
+                        type="button"
+                        class="tcs-btn tcs-sm"
+                        onClick={() => onRemoveServer(st.base)}
+                      >
+                        {s("remove", props.locale)}
+                      </button>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <form class="tcs-add" onSubmit={onAddServer}>
+              <input
+                name="storeServerUrl"
+                type="url"
+                value={serverDraft()}
+                onInput={(e) => {
+                  setServerDraft(e.currentTarget.value);
+                  setServerError(false);
+                }}
+                placeholder={s("serverPlaceholder", props.locale)}
+                aria-label={s("serverPlaceholder", props.locale)}
+                aria-invalid={serverError() ? "true" : undefined}
+                aria-describedby={serverError() ? serverErrorId : undefined}
+              />
+              <button type="submit" class="tcs-btn tcs-sm">
+                {s("addServer", props.locale)}
+              </button>
+            </form>
+            <Show when={serverError()}>
+              <p class="tcs-err" role="alert" id={serverErrorId}>
+                {s("invalidServer", props.locale)}
+              </p>
+            </Show>
+          </div>
+        </Show>
+      </div>
 
       {/* Persistent polite region: the visible partial-outage notice below is
           conditionally mounted, and a role=status inserted together with its
@@ -597,7 +611,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                           <button
                             type="button"
                             class="tcs-btn"
-                            onClick={() => setShowServers(true)}
+                            onClick={() => setOptionsOpen(true)}
                           >
                             {s("noStoreCta", props.locale)}
                           </button>

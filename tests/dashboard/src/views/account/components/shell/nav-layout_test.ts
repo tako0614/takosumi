@@ -26,18 +26,16 @@ const indexSource = read("index.tsx");
 const shellCssSource = read("styles/shell.css");
 
 describe("dashboard shell navigation layout", () => {
-  test("composes a persistent sidebar + top bar + mobile tabs over the content", () => {
-    expect(appShellSource).toContain("import Sidebar");
+  test("composes one product header and mobile tabs around the content", () => {
+    expect(topBarSource).toContain("import PrimaryNavigation");
     expect(appShellSource).toContain("import MobileTabs");
-    expect(appShellSource).toContain("<Sidebar />");
+    expect(topBarSource).toContain("<PrimaryNavigation />");
     expect(appShellSource).toContain("<MobileTabs />");
     expect(appShellSource).toContain('class="app-shell-main"');
     expect(appShellSource).toContain('class="app-shell-content"');
     expect(shellCssSource).toContain(".sidebar");
     expect(shellCssSource).toContain(".mobile-tabs");
-    expect(shellCssSource).toContain(
-      "grid-template-columns: var(--tg-sidebar-w) 1fr;",
-    );
+    expect(appShellSource).toContain("<TopBar />");
   });
 
   test("keeps focus within account sections and announces prefix-active navigation", () => {
@@ -74,7 +72,7 @@ describe("dashboard shell navigation layout", () => {
   test("the primary nav is home / store / connections / account", () => {
     const primary = navSource.slice(
       navSource.indexOf("export const PRIMARY_NAV"),
-      navSource.indexOf("export const SECTION_TITLES"),
+      navSource.indexOf("export function isNavActive"),
     );
     const hrefs = [...primary.matchAll(/href: "([^"]+)"/gu)].map((m) => m[1]);
     expect(hrefs).toEqual(["/", "/new", "/connections", "/account"]);
@@ -92,8 +90,6 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).not.toContain('href: "/');
     expect(mobileTabsSource).toContain("PRIMARY_NAV");
     expect(mobileTabsSource).not.toContain('href: "/');
-    expect(topBarSource).toContain('import { SECTION_TITLES } from "./nav.ts"');
-    expect(topBarSource).not.toContain("const SECTION_TITLES");
     expect(ja["nav.home"]).toBe("ホーム");
     expect(ja["nav.store"]).toBe("ストア");
     const connections = read("views/workspace/ConnectionsView.tsx");
@@ -103,20 +99,6 @@ describe("dashboard shell navigation layout", () => {
     expect(ja["nav.connections"]).toBe("接続");
     expect(ja["nav.account"]).toBe("アカウント");
     expect(en["nav.account"]).toBe("Account");
-  });
-
-  test("top bar titles follow the primary destinations", () => {
-    for (const [pattern, key] of [
-      ["/^\\/$/", "nav.home"],
-      ["/^\\/apps(\\/|$)/", "nav.app"],
-      ["/^\\/runs(\\/|$)/", "nav.home"],
-      ["/^\\/new(\\/|$)/", "nav.store"],
-      ["/^\\/connections(\\/|$)/", "nav.connections"],
-      ["/^\\/account(\\/|$)/", "nav.account"],
-      ["/^\\/notifications(\\/|$)/", "nav.notifications"],
-    ] as const) {
-      expect(navSource).toContain(`[${pattern}, "${key}"]`);
-    }
   });
 
   test("browse and install are ONE page: /new is the store tab, /store only redirects", () => {

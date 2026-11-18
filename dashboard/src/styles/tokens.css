@@ -280,8 +280,9 @@
   --tg-z-skip: 2000; /* skip-to-content, must beat everything */
 
   /* Content well */
-  --tg-content-pad: 24px;
-  --tg-content-max: 1180px;
+  --tg-content-pad: clamp(1rem, 4vw, 3rem);
+  --tg-page-heading: clamp(1.55rem, 3vw, 2rem);
+  --tg-content-max: 70rem;
 
   /* Alias for text on the accent fill (some views reference --tg-on-accent). */
   --tg-on-accent: var(--tg-accent-fg);

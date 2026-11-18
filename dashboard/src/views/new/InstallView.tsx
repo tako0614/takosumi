@@ -145,7 +145,7 @@ function StorePage(props: {
     navigate(`/new?${buildNewQuery(listing)}`);
   };
   return (
-    <main class="iv-page iv-browse-page">
+    <div class="iv-page iv-browse-page">
       <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
       <Show when={props.rejectedInstallLink}>
         <div class="iv-error" role="alert" data-testid="install-link-refusal">
@@ -189,7 +189,7 @@ function StorePage(props: {
           <Show when={gitError()}>{(message) => <p class="iv-muted" role="alert">{message()}</p>}</Show>
         </details>
       </section>
-    </main>
+    </div>
   );
 }
 
@@ -370,7 +370,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   }, { defer: true }));
 
   return (
-    <main class="iv-page iv-configure-page" data-install-state={stage()}>
+    <div class="iv-page iv-configure-page" data-install-state={stage()}>
       <a class="iv-back-link" href="/new"><ArrowLeft size={18} aria-hidden="true" />{t("installStore.back")}</a>
       <article class="iv-app-surface" aria-labelledby="iv-app-title">
         <header class="iv-app-detail" data-testid="install-app-header">
@@ -570,7 +570,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
           </details>
         </Show>
       </article>
-    </main>
+    </div>
   );
 }
 

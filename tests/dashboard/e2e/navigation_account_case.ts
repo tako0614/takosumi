@@ -217,6 +217,19 @@ export function registerNavigationAccountCases(mode: string): void {
           await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
           const primary = page.locator(target).first();
           await expect(primary).toBeVisible();
+          await expect(page.getByRole("main")).toHaveCount(1);
+          if (name === "store") {
+            const options = page.getByRole("button", { name: language === "ja" ? "表示設定" : "Display options" });
+            const order = page.getByRole("combobox", { name: language === "ja" ? "並び順" : "Sort", exact: true });
+            await expect(order).toBeHidden();
+            await options.click();
+            await order.selectOption("created");
+            await options.click();
+            await expect(order).toBeHidden();
+            await options.click();
+            await expect(order).toHaveValue("created");
+            await options.click();
+          }
           for (const width of [320, 375, 414, 768, 1440]) {
             const label = `${name}-${language}-${theme}-${width}`;
             await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
@@ -224,8 +237,8 @@ export function registerNavigationAccountCases(mode: string): void {
               // The virtual grid recomputes its columns on the next animation frame.
               const grid = page.locator(".av-home-grid");
               await expect.poll(() => grid.evaluate((node) =>
-                getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/u).length === 1
-              ), `${label} Home row layout`).toBe(width <= 640);
+                getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/u).length
+              ), `${label} Home columns`).toBeGreaterThanOrEqual(3);
             }
             await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth), label).toBeLessThanOrEqual(1);
             const size = await primary.boundingBox();

@@ -1,13 +1,4 @@
-/**
- * TopBar — chrome over the content well: the current section title on the left;
- * [bell + needs-attention badge] [profile menu] on the right. Brand and primary
- * nav live in the sidebar; this bar names where you are (important on mobile,
- * where the sidebar is hidden) and carries the global notifications / account
- * affordances (the profile avatar opens the account page and preferences).
- * The bell badge and the /notifications 要対応 banner derive the same failure
- * count from lib/notifications.ts. App-owned hosts share one TTL-throttled
- * feed; legacy hosts refresh only their selected Workspace.
- */
+/** Product navigation, notifications and the current account. */
 import { A, useLocation } from "@solidjs/router";
 import {
   createEffect,
@@ -20,7 +11,7 @@ import {
 import { Bell } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
 import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
-import { SECTION_TITLES } from "./nav.ts";
+import PrimaryNavigation from "./Sidebar.tsx";
 import {
   attentionCount,
   notificationFeed,
@@ -38,11 +29,6 @@ export default function TopBar() {
   const [personalApps] = createResource(() => appOwnershipAvailable());
   const appNotifications = () => !personalApps.error && personalApps() === true;
   const legacyNotifications = () => !personalApps.error && personalApps() === false;
-  const sectionTitle = () => {
-    const hit = SECTION_TITLES.find(([re]) => re.test(loc.pathname));
-    return hit ? t(hit[1]) : "";
-  };
-
   // Refresh the app feed (or the legacy selected Workspace) on navigation,
   // TTL-throttled in lib/notifications.ts. Errors are non-fatal for chrome:
   // the badge simply keeps its last known count.
@@ -70,28 +56,28 @@ export default function TopBar() {
 
   return (
     <header class="topbar">
-      <Show when={sectionTitle()}>
-        {(title) => <span class="topbar-title">{title()}</span>}
-      </Show>
-      <div class="topbar-actions">
-        <WorkspaceSwitcher />
-        <A
-          href="/notifications"
-          class="topbar-icon-btn topbar-bell"
-          aria-label={
-            badge() > 0
-              ? t("shell.notificationsAria", { n: badge() })
-              : t("nav.notifications")
-          }
-        >
-          <Bell size={18} />
-          <Show when={badge() > 0}>
-            <span class="topbar-badge" aria-hidden="true">
-              {badge() > 9 ? "9+" : badge()}
-            </span>
-          </Show>
-        </A>
-        <UserMenu />
+      <div class="topbar-inner">
+        <PrimaryNavigation />
+        <div class="topbar-actions">
+          <WorkspaceSwitcher />
+          <A
+            href="/notifications"
+            class="topbar-icon-btn topbar-bell"
+            aria-label={
+              badge() > 0
+                ? t("shell.notificationsAria", { n: badge() })
+                : t("nav.notifications")
+            }
+          >
+            <Bell size={18} />
+            <Show when={badge() > 0}>
+              <span class="topbar-badge" aria-hidden="true">
+                {badge() > 9 ? "9+" : badge()}
+              </span>
+            </Show>
+          </A>
+          <UserMenu />
+        </div>
       </div>
     </header>
   );

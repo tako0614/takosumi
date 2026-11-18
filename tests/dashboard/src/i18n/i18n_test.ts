@@ -193,9 +193,6 @@ describe("i18n dictionaries", () => {
         retiredAlias: false,
       });
     }
-    // The app page is titled as an app in the top bar.
-    expect(ja["nav.app"]).toBe("アプリ");
-    expect(en["nav.app"]).toBe("App");
   });
 
   test("the settings hub, manage catalog and removed workspace tools have no copy left", () => {
