@@ -373,3 +373,43 @@ class FakeR2Bucket implements R2Bucket {
     } as R2Object;
   }
 }
+
+
+test("recovery accepts OpenTofu opaque hex lineages without weakening encrypted immutable custody", async () => {
+  for (const lineage of [
+    "b8d6c5f4-8f27-4d16-8b90-839c7f770001",
+    "00000000-0000-0000-0000-000000000000",
+    "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    "A1B2C3D4-E5F6-9ABC-CDEF-0123456789AB",
+  ]) {
+    const { bucket, crypto, store, input } = await fixture(stateBytes({ lineage }));
+    const staged = await store.stage(input);
+    assert.deepEqual(await store.verify({
+      workspaceId: input.workspaceId,
+      capsuleId: input.capsuleId,
+      failedApplyRunId: input.failedApplyRunId,
+      recoveryRunId: input.recoveryRunId,
+      artifactHandle: staged.handle,
+    }), staged.artifact);
+    assert.deepEqual(await crypto.open(bucket.bytesFor(staged.artifact.stateRef)!, input.plaintextSha256), input.plaintext);
+    assert.equal(staged.artifact.encryptedDigest, await digestBytes(bucket.bytesFor(staged.artifact.stateRef)!));
+    assert.deepEqual(await store.stage(input), staged);
+    assert.equal(bucket.putCount, 1);
+    assert.equal(bucket.deleteCount, 0);
+  }
+  for (const lineage of [
+    "00000000000000000000000000000000",
+    "00000000-0000-0000-0000-00000000000",
+    "00000000-0000-0000-0000-0000000000000",
+    "00000000-0000-0000-0000-00000000000g",
+    "00000000_0000_0000_0000_000000000000",
+    " 00000000-0000-0000-0000-000000000000",
+    "00000000-0000-0000-0000-000000000000\n",
+    null,
+  ]) {
+    const { bucket, store, input } = await fixture(stateBytes({ lineage }));
+    await assert.rejects(() => store.stage(input), /recovery state payload is invalid/u);
+    assert.equal(bucket.putCount, 0);
+    assert.equal(bucket.deleteCount, 0);
+  }
+});
