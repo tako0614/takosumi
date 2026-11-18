@@ -203,6 +203,8 @@ function controlErrorDetails(body: unknown): unknown {
 }
 
 interface RequestOpts {
+  readonly cache?: "no-store";
+  readonly isCurrent?: () => boolean;
   readonly method?: string;
   readonly body?: unknown;
   readonly signal?: AbortSignal;
@@ -213,6 +215,12 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new DOMException("Request was aborted.", "AbortError");
   }
+}
+
+function throwIfReadRetired(options: RequestOpts): void {
+  if (!options.isCurrent) return;
+  throwIfAborted(options.signal);
+  if (!options.isCurrent()) throw new DOMException("Read owner was retired.", "AbortError");
 }
 
 export async function controlFetch<T>(
@@ -236,14 +244,19 @@ export async function controlFetch<T>(
   const preflight = preflightSharedAuthSession(opts.signal);
   if (preflight) await preflight;
   throwIfSharedAuthCallerAborted(opts.signal);
+  throwIfReadRetired(opts);
   const res = await fetch(path, {
     method: opts.method ?? "GET",
     headers,
     body,
     credentials: "include",
     signal: opts.signal,
+    ...(opts.cache ? { cache: opts.cache } : {}),
   });
 
+  // Recovery owns a particular UI scope. A late read must not redirect a
+  // replacement screen or clear its ownership cache after that scope retires.
+  throwIfReadRetired(opts);
   if (res.status === 401) {
     resetAppOwnershipCache();
     // The control routes share the account-plane session gate. On expiry, send
@@ -2267,6 +2280,7 @@ export async function listCapsuleRuns(
     readonly cursor?: string;
     readonly types?: readonly RunType[];
     readonly signal?: AbortSignal;
+    readonly isCurrent?: () => boolean;
   } = {},
 ): Promise<CapsuleRunPage> {
   const params = new URLSearchParams();
@@ -2278,7 +2292,7 @@ export async function listCapsuleRuns(
   const search = params.toString();
   const body = await controlFetch<{ runs?: unknown; nextCursor?: unknown }>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/runs${search ? `?${search}` : ""}`,
-    { signal: options.signal },
+    { signal: options.signal, ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}) },
   );
   // A page without its list is unreadable, never an empty history.
   if (
@@ -2795,13 +2809,13 @@ export async function destroyPlanCapsule(capsuleId: string): Promise<unknown> {
   );
 }
 
-async function getRunWithOptions(
+export async function getRunWithOptions(
   id: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: { readonly signal?: AbortSignal; readonly cache?: "no-store"; readonly isCurrent?: () => boolean } = {},
 ): Promise<Run> {
   const body = await controlFetch<{ run: Run }>(
     `${BASE}/runs/${encodeURIComponent(id)}`,
-    { signal: options.signal },
+    { signal: options.signal, ...(options.cache ? { cache: options.cache } : {}), ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}) },
   );
   return body.run;
 }

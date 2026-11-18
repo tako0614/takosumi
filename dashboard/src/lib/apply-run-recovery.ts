@@ -1,4 +1,4 @@
-import { CAPSULE_RUN_PAGE_MAX, listCapsuleRuns, type Run } from "./control-api.ts";
+import { CAPSULE_RUN_PAGE_MAX, getRunWithOptions, listCapsuleRuns, type Run } from "./control-api.ts";
 
 export const APPLY_RECOVERY_RUN_LIMIT = 200;
 const APPLY_RECOVERY_TIMEOUT_MS = 5_000;
@@ -11,39 +11,58 @@ export async function recoverApplyRun(
   plan: ApplyPlan,
   options: { readonly signal?: AbortSignal; readonly isCurrent: () => boolean },
 ): Promise<Run | undefined> {
-  if (!options.isCurrent() || options.signal?.aborted || !plan.id ||
-    !plan.capsuleId || !plan.workspaceId ||
+  const { id: planId, capsuleId, workspaceId } = plan;
+  if (!options.isCurrent() || options.signal?.aborted || !planId ||
+    !capsuleId || !workspaceId ||
     (plan.type !== "plan" && plan.type !== "destroy_plan")) return;
   const type = plan.type === "plan" ? "apply" : "destroy_apply";
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  let abort!: () => void;
+  const stopped = new Promise<undefined>((resolve) => {
+    abort = () => { controller.abort(); resolve(undefined); };
+  });
   options.signal?.addEventListener("abort", abort, { once: true });
   const timeout = setTimeout(abort, APPLY_RECOVERY_TIMEOUT_MS);
-  try {
+  const read = async () => {
     const rows: Run[] = [];
     let cursor: string | undefined;
     for (let pageIndex = 0; pageIndex < Math.ceil(APPLY_RECOVERY_RUN_LIMIT / CAPSULE_RUN_PAGE_MAX); pageIndex++) {
       if (!options.isCurrent() || controller.signal.aborted) return;
-      const page = await listCapsuleRuns(plan.capsuleId, {
+      const page = await listCapsuleRuns(capsuleId, {
         limit: CAPSULE_RUN_PAGE_MAX,
         types: [type],
         ...(cursor ? { cursor } : {}),
         signal: controller.signal,
+        isCurrent: options.isCurrent,
       });
       if (!options.isCurrent() || controller.signal.aborted || page.runs.length > CAPSULE_RUN_PAGE_MAX) return;
       rows.push(...page.runs);
       if (!page.nextCursor) {
         const matches = rows.filter((candidate) =>
           typeof candidate.id === "string" && candidate.id !== "" &&
-          candidate.id !== plan.id && candidate.type === type &&
-          candidate.workspaceId === plan.workspaceId &&
-          candidate.capsuleId === plan.capsuleId && candidate.planRunId === plan.id
+          candidate.id !== planId && candidate.type === type &&
+          candidate.workspaceId === workspaceId &&
+          candidate.capsuleId === capsuleId && candidate.planRunId === planId
         );
-        return matches.length === 1 ? matches[0] : undefined;
+        if (matches.length !== 1) return;
+        const candidate = matches[0]!;
+        // History locates a candidate only. Re-evaluate current access and
+        // exact lineage before either caller leaves its unconfirmed state.
+        const current = await getRunWithOptions(candidate.id, { signal: controller.signal, cache: "no-store", isCurrent: options.isCurrent });
+        if (!options.isCurrent() || controller.signal.aborted) return;
+        return current?.id === candidate.id && current.type === type &&
+            current.workspaceId === workspaceId &&
+            current.capsuleId === capsuleId && current.planRunId === planId
+          ? current : undefined;
       }
       if (page.nextCursor === cursor) return;
       cursor = page.nextCursor;
     }
+  };
+  try {
+    // The shared five-second budget covers pages and the individual read,
+    // including a fetch/body that does not cooperate with AbortSignal.
+    return await Promise.race([read(), stopped]);
   } catch {
     // Failed, aborted, incomplete and ambiguous reads remain unconfirmed.
   } finally {
