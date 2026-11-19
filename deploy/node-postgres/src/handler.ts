@@ -1,3 +1,4 @@
+import { parsePasswordAuthMode, type PasswordAuthMode } from "../../../accounts/service/src/password-auth-config.ts";
 /**
  * Env parsing for the Bun + Postgres Takosumi Accounts reference
  * distribution. Mirrors the Cloudflare worker handler's env shape so
@@ -50,6 +51,7 @@ export interface NodeAccountsServerConfig {
   readonly clients: readonly OidcClientRegistration[] | undefined;
   readonly mobileOidcClientId: string | undefined;
   readonly loginEmailAllowlist: LoginEmailAllowlist | undefined;
+  readonly passwordAuthMode?: PasswordAuthMode;
   readonly passkeys: PasskeyHttpOptions | undefined;
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;
   readonly stableOidc: NodeAccountsStableOidcConfig | undefined;
@@ -102,6 +104,7 @@ export function parseEnv(
     clients,
     mobileOidcClientId,
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
+    ...(env.TAKOSUMI_ACCOUNTS_PASSWORD_AUTH !== undefined ? {passwordAuthMode: parsePasswordAuthMode(env.TAKOSUMI_ACCOUNTS_PASSWORD_AUTH)} : {}),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
     stableOidc: parseStableOidc(env),

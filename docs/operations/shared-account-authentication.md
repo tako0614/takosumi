@@ -105,3 +105,41 @@ and stream revocation. A native workerd test crosses a named Worker service
 binding, a Durable Object session store and a D1 membership store. Its isolated
 database uses bootstrap mode; it does not establish an operator's predeployed
 schema/fence readiness, actual issuer/RP OIDC verification, or staging E2E.
+
+## Existing-account password sign-in
+
+Takosumi Accounts can optionally accept a username and password
+for an existing OAuth account. A signed-in user chooses a username and sets the password under
+**Sign-in methods**. The credentials attach to the existing subject, Workspaces
+and identity bindings. Users who forget a password can sign in again
+with their existing OAuth provider and set another one. This feature has no
+registration or recovery-by-email endpoint. Usernames are unique on the issuer,
+case-insensitive and fixed once claimed. They use 3–32 ASCII letters, digits,
+dots, underscores or hyphens, starting with a letter or digit.
+
+Set `TAKOSUMI_ACCOUNTS_PASSWORD_AUTH=login` on the Accounts issuer to enable it.
+For Cloudflare, set it as a Worker variable on the issuer. On the official
+staging issuer use the [reviewed authority release](auth-staging.md#private-target-and-credential-custody).
+The default is `disabled`. Outside a local loopback development issuer, use
+HTTPS. For Postgres, apply the additive Accounts migration `049_password_auth.sql`
+using the Accounts migration path before enabling the feature. D1 uses the
+existing Accounts document storage. Changing the setting does not delete
+existing passwords. A client that consumes an issuer uses that issuer's
+existing sign-in redirect; for the dedicated staging issuer its management
+page is `/account` on the issuer origin.
+
+Password attempts are limited by the issuer, normalized username and
+trusted peer address when the runtime supplies one. A self-hosted reverse
+proxy shares its peer bucket; it should also enforce its own per-client
+limit at ingress. If an issuer sets an email allowlist, account admission still applies that
+policy to both OAuth and username sign-in. A password change invalidates
+existing account sessions and OAuth grants for that subject. An account with
+Financial Source enrollment cannot change its password through this flow
+until that operation can close the owned Financial Source records together
+with grant revocation. Hosted session password writes are supported only
+with D1; self-hosted Postgres uses the ordinary Accounts profile. The
+existing OAuth login remains available in either case.
+
+Password verifiers remain private Accounts data. An approved account erasure
+must cover its verifier as well as the account; a Postgres delete refuses
+until that separate row is removed by the erasure owner.

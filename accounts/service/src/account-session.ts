@@ -1,3 +1,4 @@
+import { accountAuthenticationGenerationMatches, authenticationGenerationMatchesSnapshot, readOrdinaryAccountAuthenticationGeneration } from "./account-authentication-generation.ts";
 import { isInterfaceOAuthRole } from "../../../contract/internal-interface-invocation-source.ts";
 import type {
   TakosumiAccountsPatScope,
@@ -98,6 +99,8 @@ export async function requireAccountSession(input: {
     if (!input.store.touchHostedAccountSession || !(await input.store.touchHostedAccountSession(sessionId, now, Math.min(now + HOSTED_SESSION_IDLE_MS, session.absoluteExpiresAt!)))) {
       return { ok: false, response: bearerChallenge("invalid_session") };
     }
+  } else if (!await ordinarySessionGenerationIsCurrent(input.store, session)) {
+    return { ok: false, response: bearerChallenge("invalid_session") };
   }
   return { ok: true, subject: session.subject, sessionId };
 }
@@ -198,7 +201,9 @@ export async function rotateAccountSession(input: {
     const account = await input.store.findCanonicalAccount?.(input.subject);
     if (!account || account.subject !== input.subject || await input.store.isAccountAuthenticationFenced?.(input.subject)) throw new Error("hosted account authentication is unavailable");
   }
-  const identityGeneration = input.hostedPolicy ? await input.store.getAccountAuthenticationGeneration?.(input.subject) : undefined;
+  const identityGeneration = input.hostedPolicy
+    ? await input.store.getAccountAuthenticationGeneration?.(input.subject)
+    : await readOrdinaryAccountAuthenticationGeneration(input.store, input.subject);
   const sessionId = input.hostedPolicy ? hostedOpaqueId("sess_h_") : mintAccountSessionId();
   const expiresAt = input.now + (input.hostedPolicy ? HOSTED_SESSION_IDLE_MS : input.ttlMs);
   const previous = input.oldSessionId ? await input.store.findAccountSession(input.oldSessionId) : undefined;
@@ -221,6 +226,7 @@ export async function rotateAccountSession(input: {
     subject: input.subject,
     createdAt: input.now,
     expiresAt,
+    ...(identityGeneration ? { identityGeneration } : {}),
     ...(input.hostedPolicy ? {
       policy: "hosted" as const,
       issuerSessionId,
@@ -459,6 +465,7 @@ export async function requireAccountsBearer(input: {
           store: input.store,
           token,
           record: resolved.accessToken,
+          authenticationGeneration: resolved.accessAuthenticationGeneration,
           now,
           ...(assertActive ? { assertActive } : {}),
         }),
@@ -487,7 +494,11 @@ export async function requireAccountsBearer(input: {
         ? resolved.sessionAccount
         : await input.store.findAccount(sessionRecord.subject);
       assertActive?.();
-      let current = Boolean(account) && sessionRecord.policy !== "hosted";
+      let current = Boolean(account) && sessionRecord.policy !== "hosted" &&
+        (resolved?.sessionAuthenticationGeneration === undefined
+          ? await ordinarySessionGenerationIsCurrent(input.store, sessionRecord)
+          : authenticationGenerationMatchesSnapshot(resolved.sessionAuthenticationGeneration, sessionRecord.identityGeneration));
+      assertActive?.();
       if (account && sessionRecord.policy === "hosted" &&
         await hostedSessionIsCurrent(input.store, sessionRecord, now, assertActive)) {
         assertActive?.();
@@ -498,7 +509,7 @@ export async function requireAccountsBearer(input: {
       }
       if (current) {
         sessionSubject = sessionRecord.subject;
-      } else {
+      } else if (!account || sessionRecord.policy === "hosted") {
         assertActive?.();
         await input.store.deleteAccountSession(token);
         assertActive?.();
@@ -752,6 +763,10 @@ export async function handleHostedGlobalLogout(input: {
   return new Response(null, { status: 204, headers: {
     "set-cookie": clearAccountSessionCookie(true, true), "cache-control": "no-store",
   } });
+}
+
+async function ordinarySessionGenerationIsCurrent(store: AccountsStore, session: AccountSessionRecord): Promise<boolean> {
+  return accountAuthenticationGenerationMatches(store, session.subject, session.identityGeneration);
 }
 
 async function hostedSessionIsCurrent(store: AccountsStore, session: AccountSessionRecord, now: number, assertActive?: () => void): Promise<boolean> {

@@ -1,3 +1,5 @@
+import { D1PasswordAuthStore } from "./d1-passwords.ts";
+import type { PasswordAuthStore } from "./password-store.ts";
 import type { ConnectionOAuthAttemptRecord, ConnectionOAuthAttemptSweepInput, ConnectionOAuthAttemptSweepResult } from "./connection-oauth-attempt.ts";
 import { prepareInterfaceInvocationAccessRecord } from "../../../contract/internal-interface-invocation-source.ts";
 import { HostedIdentityRecords } from "./hosted-identity-records.ts";
@@ -183,6 +185,7 @@ interface D1DocumentRow {
 
 interface D1AccountsBearerCandidateRow extends D1DocumentRow {
   readonly kind: "session" | "session_account" | "access_token" | "pat";
+  readonly authentication_generation: number;
 }
 
 const RESOLVE_ACCOUNTS_BEARER_CANDIDATES_SQL = `with
@@ -198,17 +201,23 @@ const RESOLVE_ACCOUNTS_BEARER_CANDIDATES_SQL = `with
     select document from takosumi_accounts_documents
     where bucket = 'personal_access_token_secrets' and key = ? limit 1
   )
-select 'session' as kind, document from presented_session
+select 'session' as kind, document, coalesce((select json_extract(g.document, '$.generation')
+  from takosumi_accounts_documents g where g.bucket='authentication_generations'
+  and g.key=json_extract(presented_session.document, '$.subject')), 0) as authentication_generation
+from presented_session
 union all
-select 'session_account' as kind, account.document
+select 'session_account' as kind, account.document, 0
 from presented_session
 join takosumi_accounts_documents as account
   on account.bucket = 'accounts'
  and account.key = json_extract(presented_session.document, '$.subject')
 union all
-select 'access_token' as kind, document from presented_access_token
+select 'access_token' as kind, document, coalesce((select json_extract(g.document, '$.generation')
+  from takosumi_accounts_documents g where g.bucket='authentication_generations'
+  and g.key=json_extract(presented_access_token.document, '$.takosumiSubject')), 0)
+from presented_access_token
 union all
-select 'pat' as kind, pat.document
+select 'pat' as kind, pat.document, 0
 from presented_pat_secret
 join takosumi_accounts_documents as pat
   on pat.bucket = 'personal_access_tokens'
@@ -419,8 +428,8 @@ class D1AccountsDocumentIndexStore {
       .run();
   }
 
-  async listByIndex<T>(indexName: string, indexKey: string): Promise<T[]> {
-    const rows = await this.#db
+  async listByIndex<T>(indexName: string, indexKey: string, limit?: number): Promise<T[]> {
+    const query = this.#db
       .select({ document: d1AccountsDocuments.document })
       .from(d1AccountsIndexes)
       .innerJoin(
@@ -440,6 +449,7 @@ class D1AccountsDocumentIndexStore {
         asc(d1AccountsIndexes.sortKey),
         asc(d1AccountsIndexes.documentKey),
       );
+    const rows = await (limit === undefined ? query : query.limit(limit));
     return rows.map((row) => JSON.parse(row.document) as T);
   }
 
@@ -579,6 +589,7 @@ interface PasskeyChallengeDocument {
 }
 
 export class D1AccountsStore implements AccountsStore {
+  readonly passwordAuth: PasswordAuthStore;
   readonly #db: D1Database;
   readonly #documents: D1AccountsDocumentIndexStore;
   readonly #schemaMode: D1AccountsSchemaMode;
@@ -590,6 +601,7 @@ export class D1AccountsStore implements AccountsStore {
 
   constructor(db: D1Database, options: D1AccountsStoreOptions = {}) {
     this.#db = db;
+    this.passwordAuth = new D1PasswordAuthStore(db, () => this.initialize(), (value) => this.#hashSessionId(value));
     this.#notificationPushers = new D1NotificationPusherRecords(db, () => this.initialize());
     this.#notificationDeliveries = new D1NotificationDeliveryRecords(db, () => this.initialize());
     this.#hosted = new HostedIdentityRecords(new D1IdentityRecordRepository(db, () => this.initialize(), (value) => this.#hashSessionId(value)), this);
@@ -718,7 +730,9 @@ export class D1AccountsStore implements AccountsStore {
 
     let session: AccountSessionRecord | undefined;
     let sessionAccount: TakosumiAccountRecord | undefined;
+    let sessionAuthenticationGeneration: number | undefined;
     let accessToken: TokenRecord | undefined;
+    let accessAuthenticationGeneration: number | undefined;
     let personalAccessToken: PersonalAccessTokenRecord | undefined;
     for (const row of result.results) {
       if (row.kind === "session") {
@@ -727,12 +741,14 @@ export class D1AccountsStore implements AccountsStore {
           ...(JSON.parse(row.document) as AccountSessionRecord),
           sessionId: token,
         };
+        sessionAuthenticationGeneration = row.authentication_generation;
       } else if (row.kind === "session_account") {
         if (sessionAccount) throw duplicateBearerCandidate(row.kind);
         sessionAccount = JSON.parse(row.document) as TakosumiAccountRecord;
       } else if (row.kind === "access_token") {
         if (accessToken) throw duplicateBearerCandidate(row.kind);
         accessToken = JSON.parse(row.document) as TokenRecord;
+        accessAuthenticationGeneration = row.authentication_generation;
       } else if (row.kind === "pat") {
         if (personalAccessToken) throw duplicateBearerCandidate(row.kind);
         personalAccessToken = JSON.parse(
@@ -747,7 +763,9 @@ export class D1AccountsStore implements AccountsStore {
     return {
       ...(session ? { session } : {}),
       ...(sessionAccount ? { sessionAccount } : {}),
+      ...(sessionAuthenticationGeneration !== undefined ? { sessionAuthenticationGeneration } : {}),
       ...(accessToken ? { accessToken } : {}),
+      ...(accessAuthenticationGeneration !== undefined ? { accessAuthenticationGeneration } : {}),
       ...(personalAccessToken ? { personalAccessToken } : {}),
     };
   }

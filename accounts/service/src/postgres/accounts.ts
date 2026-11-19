@@ -93,8 +93,7 @@ export async function saveAccount(
         subject: record.subject,
         email: record.email ?? null,
         // Tri-state: persist NULL when genuinely unknown so a re-read returns
-        // `undefined`, never a coerced `false`. The COALESCE on update keeps a
-        // previously-asserted value when a later save omits the claim.
+        // `undefined`, never a coerced `false`.
         emailVerified: record.emailVerified ?? null,
         displayName: record.displayName ?? null,
         picture: record.picture ?? null,
@@ -110,7 +109,11 @@ export async function saveAccount(
         target: accounts.subject,
         set: {
           email: sql`excluded.email`,
-          emailVerified: sql`coalesce(excluded.email_verified, ${accounts.emailVerified})`,
+          // Verification may be kept for a profile-only write with the exact
+          // same address. An explicit upstream observation can clear it.
+          emailVerified: Object.hasOwn(record, "emailVerified")
+            ? sql`excluded.email_verified`
+            : sql`case when excluded.email is not distinct from ${accounts.email} then ${accounts.emailVerified} else null end`,
           displayName: sql`excluded.display_name`,
           picture: sql`coalesce(excluded.picture, ${accounts.picture})`,
           termsVersion: sql`coalesce(excluded.terms_version, ${accounts.termsVersion})`,

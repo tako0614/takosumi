@@ -24,7 +24,8 @@ async function render(url: URL = signInUrl(), providers: unknown = descriptors, 
 }
 
 function links(html: string): URL[] {
-  return [...html.matchAll(/href="([^"]+)"/gu)].map((match) => new URL(match[1]!.replace(/&amp;/gu, "&"), issuer));
+  return [...html.matchAll(/href="([^"]+)"/gu)].map((match) => new URL(match[1]!.replace(/&amp;/gu, "&"), issuer))
+    .filter((url) => url.pathname !== "/account");
 }
 
 test("stage login uses only configured public providers and preserves the entire authorize continuation", async () => {
@@ -296,4 +297,64 @@ test("real Accounts navigation reaches durable GitHub callback, issuer session a
   const replay = await accountsHandler(callbackRequest);
   expect(replay.status).toBe(400);
   expect(upstreamRequests).toHaveLength(3);
+});
+
+test("password-only issuer exposes username login with a nonced script and direct account return", async () => {
+  const response = await handleStagingLoginPortal({ request: new Request(`${issuer}/sign-in`), issuer,
+    accountsHandler: () => Response.json({ providers: [], password: { enabled: true } }) });
+  expect(response?.status).toBe(200);
+  const html = await response!.text();
+  expect(html).toContain('data-return-path="/account"');
+  expect(html).toContain('name="username" type="text" autocomplete="username"');
+  expect(html).toContain('autocomplete="current-password"');
+  expect(html).toContain('method="post" action="/api/v1/auth/password/login"');
+  expect(html).not.toMatch(/password\/(?:register|recover)|localStorage|sessionStorage|turnstile/u);
+  const script = html.match(/<script nonce="([^"]+)">([\s\S]*?)<\/script>/u)!;
+  expect(script).toBeTruthy();
+  expect(() => new Function(script[2]!)).not.toThrow();
+  expect(response!.headers.get("content-security-policy")).toContain(`script-src 'nonce-${script[1]}'`);
+  expect(response!.headers.get("content-security-policy")).toContain("connect-src 'self'");
+});
+
+test("enabled password login retains OAuth continuation and permits only exact account management return", async () => {
+  for (const continuation of [returnTo, "/account"]) {
+    const response = await handleStagingLoginPortal({ request: new Request(signInUrl(continuation)), issuer,
+      accountsHandler: () => Response.json({ providers: descriptors, password: { enabled: true } }) });
+    expect(response?.status).toBe(200);
+    const html = await response!.text();
+    expect(links(html).map((target) => target.searchParams.get("return_to"))).toEqual([continuation, continuation]);
+    expect(html).toContain(`data-return-path="${continuation.replaceAll("&", "&amp;")}"`);
+    expect(html.includes('href="/account"')).toBe(continuation !== "/account");
+  }
+  for (const continuation of ["/account?next=bad", "/account/", "https://auth-staging.takos.jp/account"]) {
+    const response = await handleStagingLoginPortal({ request: new Request(signInUrl(continuation)), issuer,
+      accountsHandler: () => Response.json({ providers: descriptors, password: { enabled: true } }) });
+    expect(response?.status).toBe(400);
+  }
+  expect((await render(signInUrl("/account")))?.status).toBe(400);
+});
+
+test("password mode activates direct OAuth choices and localizes username login", async () => {
+  const response = await handleStagingLoginPortal({ request: new Request(`${issuer}/sign-in`, { headers: { "accept-language": "ja" } }), issuer,
+    accountsHandler: () => Response.json({ providers: descriptors, password: { enabled: true } }) });
+  const html = await response!.text();
+  expect(html).toContain("ユーザー名");
+  expect(html).toContain("パスワードでログイン");
+  expect(html.indexOf('id="password-form"')).toBeLessThan(html.indexOf('class="auth-providers"'));
+  expect(html).toContain('<p class="auth-divider">または</p>');
+  expect(links(html).map((target) => target.searchParams.get("return_to"))).toEqual(["/account", "/account"]);
+});
+
+test("malformed password capability fails closed and disabled capability leaves OAuth alone", async () => {
+  for (const password of [null, true, { enabled: "true" }, {}]) {
+    const response = await handleStagingLoginPortal({ request: new Request(signInUrl()), issuer,
+      accountsHandler: () => Response.json({ providers: descriptors, password }) });
+    expect(response?.status).toBe(503);
+  }
+  const disabled = await handleStagingLoginPortal({ request: new Request(`${issuer}/sign-in`), issuer,
+    accountsHandler: () => Response.json({ providers: descriptors, password: { enabled: false } }) });
+  const html = await disabled!.text();
+  expect(html).not.toContain("password-form");
+  expect(html).not.toContain("<script");
+  expect(links(html)).toEqual([]);
 });

@@ -1,3 +1,5 @@
+import { parsePasswordAuthMode, permitsPasswordTransport } from "../../../accounts/service/src/password-auth-config.ts";
+import { isPasswordAuthPath } from "../../../accounts/service/src/password-routes.ts";
 import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   normalizeIssuer,
@@ -132,6 +134,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST?: string;
+  readonly TAKOSUMI_ACCOUNTS_PASSWORD_AUTH?: string;
   readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED?: string;
   /** `open` | `closed`. `closed` requires a non-empty login email allowlist. */
   readonly TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS?: string;
@@ -481,9 +484,13 @@ export function createCloudflareWorker<
           );
         }
         try {
+          const passwordMode = parsePasswordAuthMode(env.TAKOSUMI_ACCOUNTS_PASSWORD_AUTH);
           return handleAuthProvidersRequest({
             upstreamOAuth: parseUpstreamOAuthForProviderList(env),
             passkeys: parsePasskeysForProviderList(env),
+            password: passwordMode === "login" && env.TAKOSUMI_ACCOUNTS_DB &&
+              permitsPasswordTransport(optionalString(env.TAKOSUMI_ACCOUNTS_ISSUER) ?? url.origin)
+              ? { enabled: true } : undefined,
           });
         } catch {
           // Discovery is public and must not reveal which endpoint, binding,
@@ -944,6 +951,7 @@ async function observeAccountsHandlerInitialization(
 }
 
 function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
+  if (isPasswordAuthPath(pathname)) return true;
   // These OAuth endpoints can carry a Capsule-owned dynamic client or token.
   // Every mint/use operation must therefore revalidate the live Capsule,
   // InstallConfig and Workspace grant against canonical Core. Routing any of
@@ -1343,6 +1351,8 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     upstreamOAuth: parseUpstreamOAuthFailClosed(env),
     passkeys: parsePasskeysFailClosed(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
+    passwordAuthMode: parsePasswordAuthMode(env.TAKOSUMI_ACCOUNTS_PASSWORD_AUTH),
+    passwordClientAddress: (request: Request) => request.headers.get("cf-connecting-ip") ?? undefined,
     ...(!identityOnly && options.controlPlaneOperations
       ? {
           resolveControlPlaneOperations: () =>

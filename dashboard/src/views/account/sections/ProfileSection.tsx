@@ -3,6 +3,7 @@ import { createResource, createSignal, For, Show, type JSX } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { ExternalLink } from "lucide-solid";
 import { clearSession, type SessionRecord } from "../lib/session.ts";
+import SignInMethodsCard from "../components/SignInMethodsCard.tsx";
 import { intlLocale, locale, setLocale, t } from "../../../i18n/index.ts";
 import type { MessageKey } from "../../../i18n/index.ts";
 import {
@@ -104,6 +105,7 @@ export default function ProfileSection(props: {
         <p class="tg-settings-note">{t("account.profile.nameHint")}</p>
       </section>
 
+      <SignInMethodsCard />
       {props.children}
 
       <section class="tg-settings-section" aria-labelledby="account-preferences-heading">

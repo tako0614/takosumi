@@ -37,6 +37,7 @@ import { readEnvVar } from "./read-env.ts";
 import type { SharedHostedSessionContext } from "./shared-account-workspace.ts";
 import { authLanguage, authPage, authSignInTitle, escapeAuthHtml, stagingSignInProduct } from "./auth-page.ts";
 import { requireAccountSession } from "./account-session.ts";
+import { accountAuthenticationGenerationMatches } from "./account-authentication-generation.ts";
 import { HOSTED_CODE_TTL_MS, HOSTED_TOKEN_TTL_SECONDS, HOSTED_REFRESH_IDLE_MS, HOSTED_REFRESH_ABSOLUTE_MS, HOSTED_OIDC_SCOPES, hostedGrantIsActive, hostedIssuerSessionId, hostedOpaqueId } from "./hosted-oidc-profile.ts";
 import { findActiveAccessToken } from "./access-token-activity.ts";
 import type { InterfaceOAuthActivityValidator } from "./access-token-activity.ts";
@@ -234,6 +235,7 @@ type OidcTokenDenialStage =
   | "authorization_code_missing"
   | "authorization_code_reused"
   | "authorization_code_unknown_or_expired"
+  | "authentication_generation_changed"
   | "client_id_mismatch"
   | "client_registration_missing"
   | "client_authentication_failed"
@@ -684,6 +686,7 @@ async function handleAuthorizeUncached(input: {
   // Consent is never remembered for these clients, so a silent request cannot succeed.
   if (nativeConsentPrompts.includes("none")) return nativeAuthorizeError(redirectUri, input.url.searchParams.get("state"), "consent_required", input.issuer ?? input.url.origin);
   const sessionRecord = await input.store.findAccountSession(session.sessionId);
+  if (!sessionRecord || sessionRecord.subject !== session.subject) return authorizeSignInRedirect(input.url);
   let reauthenticationStartedAt: number | undefined;
   if (client.profile === "shared-account") {
     if (sessionRecord?.policy !== "hosted" || !Number.isSafeInteger(sessionRecord.authTime)) return authorizeSignInRedirect(input.url);
@@ -841,6 +844,8 @@ async function handleAuthorizeUncached(input: {
   }
   await input.store.saveAuthorizationCode(code, {
     ...hostedMetadata,
+    ...(client.profile !== "shared-account" && subject.record.takosumiSubject && (sessionRecord.identityGeneration ?? 0) > 0
+      ? { identityGeneration: sessionRecord.identityGeneration } : {}),
     clientId,
     redirectUri,
     scope,
@@ -985,6 +990,9 @@ async function handleTokenUncached(input: {
           "authorization_code_unknown_or_expired",
           "invalid_grant",
         );
+      }
+      if (record.oidcProfile !== "shared-account" && !await accountAuthenticationGenerationMatches(input.store, record.takosumiSubject, record.identityGeneration)) {
+        return oidcTokenDenial("authentication_generation_changed", "invalid_grant");
       }
 
       if (credentials.clientId !== record.clientId) {
@@ -1172,7 +1180,8 @@ async function handleRefreshToken(input: {
     }
     const requestedScope = input.params.get("scope");
     if (requestedScope !== null && requestedScope !== record.scope) return json({error:"invalid_scope"},400);
-  } else if (hostedRefresh || client.profile === "shared-account") return json({error:"invalid_grant"},400);
+  } else if (hostedRefresh || client.profile === "shared-account" ||
+    !await accountAuthenticationGenerationMatches(input.store, record.takosumiSubject, record.identityGeneration)) return json({error:"invalid_grant"},400);
   const operations = await operationsForLiveGrant({
     operations: input.operations,
     resolveOperations: input.resolveOperations,
@@ -1391,6 +1400,10 @@ async function issueTokenResponse(input: {
       if (input.refreshToken) await input.store.revokeRefreshChain(input.refreshToken);
       return json({error:"invalid_grant"},400);
     }
+  } else if (!await accountAuthenticationGenerationMatches(input.store, input.takosumiSubject, input.identityGeneration)) {
+    await input.store.deleteToken(accessToken);
+    if (input.refreshToken) await input.store.revokeRefreshChain(input.refreshToken);
+    return json({ error: "invalid_grant" }, 400);
   }
   const body: Record<string, unknown> = {
     access_token: accessToken,
@@ -1762,6 +1775,7 @@ async function handleIntrospectUncached(input: {
       return json({ active: false });
     }
     if (!(await hostedGrantIsActive({store:input.store,record:refreshRecord,client:auth.client,issuer:input.issuer})) || refreshRecord.expiresAt <= Date.now() || (refreshRecord.oidcProfile === "shared-account" && (await input.store.getRefreshChainChild(token) !== undefined || await input.store.isRefreshRootRevoked(token)))) return json({active:false});
+    if (refreshRecord.oidcProfile !== "shared-account" && !await accountAuthenticationGenerationMatches(input.store, refreshRecord.takosumiSubject, refreshRecord.identityGeneration)) return json({ active: false });
     const operations = await operationsForLiveGrant({
       operations: input.operations,
       resolveOperations: input.resolveOperations,
@@ -2006,7 +2020,7 @@ function hostedConsentPage(
 function hostedRecordMetadata(record: {
   identityGeneration?: number; issuer?: string; oidcProfile?: "shared-account"; authTime?: number; sid?: string; issuerSessionId?: string; nonce?: string; familyStartedAt?: number; familyExpiresAt?: number;
 }): Partial<TokenRecord> {
-  return record.oidcProfile === "shared-account" ? {identityGeneration:record.identityGeneration,issuer:record.issuer,oidcProfile:record.oidcProfile,authTime:record.authTime,sid:record.sid,issuerSessionId:record.issuerSessionId,nonce:record.nonce,familyStartedAt:record.familyStartedAt,familyExpiresAt:record.familyExpiresAt} : {};
+  return record.oidcProfile === "shared-account" ? {identityGeneration:record.identityGeneration,issuer:record.issuer,oidcProfile:record.oidcProfile,authTime:record.authTime,sid:record.sid,issuerSessionId:record.issuerSessionId,nonce:record.nonce,familyStartedAt:record.familyStartedAt,familyExpiresAt:record.familyExpiresAt} : (record.identityGeneration ?? 0) > 0 ? { identityGeneration: record.identityGeneration } : {};
 }
 async function hostedEmailVerified(store: AccountsStore, account: TakosumiAccountRecord|undefined): Promise<boolean> {
   if (!account?.email || account.emailVerified !== true) return false;
