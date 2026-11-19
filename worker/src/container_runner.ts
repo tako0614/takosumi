@@ -423,30 +423,43 @@ export class CloudflareContainerOpenTofuRunner
   committedApplyReceiptProbe(runId: string) {
     const namespace = this.env.RUNNER;
     const stub = namespace?.get(namespace.idFromName(runId)) as unknown as {
-      inspectMutationAuthority?: (id: string, action: "apply") => Promise<RunnerMutationAuthorityInspection>;
-      adoptDeterminedMutation?: (id: string, action: "apply", allocation: { stateScope: unknown; rawOutputRef: string }) => Promise<Response>;
+      inspectMutationAuthority?: (id: string, action: "apply" | "destroy") => Promise<RunnerMutationAuthorityInspection>;
+      adoptDeterminedMutation?: (id: string, action: "apply" | "destroy", allocation: { stateScope: unknown; rawOutputRef?: string }) => Promise<Response>;
     } | undefined;
-    let completed = false;
+    let completedAction: "apply" | "destroy" | undefined;
     return committedApplyReceiptProbeCommand({ runner: this, runId,
-      inspect: async () => {
+      inspect: async (action) => {
+        completedAction = undefined;
+        // The local substrate's fetch-only proxy does not expose these RPCs.
+        if (action === "destroy" && this.env.LOCAL_SUBSTRATE_TEST_BED === "1" &&
+          this.env.TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL?.trim()) return "ordinary";
         if (!stub?.inspectMutationAuthority || !stub.adoptDeterminedMutation) return "hold";
-        const inspection = await stub.inspectMutationAuthority(runId, "apply");
+        const inspection = await stub.inspectMutationAuthority(runId, action);
         if (inspection.kind !== "takosumi.runner-mutation-inspection@v1" || inspection.runId !== runId) return "hold";
         const authority = inspection.authority;
         if (authority.status === "absent") return "ordinary";
-        if (authority.status !== "valid" || authority.action !== "apply") return "hold";
+        if (authority.status !== "valid" || authority.action !== action) return "hold";
         if (authority.phase === "completed") {
-          completed = authority.completion !== undefined;
-          return completed ? "completed" : "hold";
+          if (authority.completion === undefined) return "hold";
+          completedAction = action;
+          return "completed";
         }
         // No observation grants dispatch. The existing DO prepare fence still
         // owns preparing/new work, typed pre-dispatch refusal and legacy R2 replay.
         return ["preparing", "not_dispatched", "dispatched", "indeterminate", "orphaned"].includes(authority.phase) ? "ordinary" : "hold";
       },
       read: async (allocation) => {
-        if (!completed || !stub?.adoptDeterminedMutation) return undefined;
-        const response = await stub.adoptDeterminedMutation(runId, "apply", allocation);
+        const action = completedAction;
+        if (!action || !stub?.adoptDeterminedMutation ||
+          (action === "destroy" ? allocation.rawOutputRef !== undefined : !allocation.rawOutputRef)) return undefined;
+        const response = await stub.adoptDeterminedMutation(runId, action, allocation);
         const { payload } = await readResponseJsonObject(response);
+        if (action === "destroy") {
+          const state = recordFromRecord(payload, "state");
+          if ("rawOutputRef" in payload || "outputs" in payload || !state ||
+            state.generation !== allocation.stateScope.generation ||
+            state.stateRef !== allocation.stateScope.stateRef) return undefined;
+        }
         const failure = providerExecutionFailureFromContainerResult(payload);
         if (failure) {
           if (response.status !== 500 || payload.status !== "failed" || failure.statePersistence !== "persisted") return undefined;
