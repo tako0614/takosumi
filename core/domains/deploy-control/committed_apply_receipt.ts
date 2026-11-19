@@ -1,5 +1,6 @@
 /** Host-only receipt capability. No public request field or execution fallback. */
 import type { DispatchStateScope } from "@takosumi/internal/deploy-control-api";
+import type { RunExecutionAuthority } from "takosumi-contract/runs";
 import type { OpenTofuApplyResult, OpenTofuRunner } from "./mod.ts";
 
 declare const receiptCommand: unique symbol;
@@ -35,13 +36,18 @@ export function readCommittedApplyReceiptCommand(
 /** Host-only, run-bound observation. It is never a public dispatch option. */
 declare const receiptProbe: unique symbol;
 export interface CommittedApplyReceiptProbeCommand { readonly [receiptProbe]: true }
+type ExecutionArtifacts = Pick<RunExecutionAuthority, "controllerArtifact" | "runnerArtifact" | "executorArtifact">;
 interface ReceiptProbe {
   readonly runner: OpenTofuRunner;
   readonly runId: string;
   /** Ordinary still relies on the original runner preparation/dispatch fence. */
   readonly inspect: (action: "apply" | "destroy") => Promise<"ordinary" | "completed" | "hold">;
   /** Core allocates the immutable state coordinate and any Apply output. */
-  readonly read: (allocation: { readonly stateScope: DispatchStateScope; readonly rawOutputRef?: string }) => Promise<OpenTofuApplyResult | undefined>;
+  readonly read: (allocation: { readonly stateScope: DispatchStateScope; readonly rawOutputRef?: string }) => Promise<{
+    readonly result: OpenTofuApplyResult;
+    /** Independently recorded on admission, before the dispatch wrote a result. */
+    readonly admittedExecutionAuthority?: ExecutionArtifacts;
+  } | undefined>;
 }
 const probes = new WeakMap<CommittedApplyReceiptProbeCommand, Readonly<ReceiptProbe>>();
 export function committedApplyReceiptProbeCommand(input: ReceiptProbe): CommittedApplyReceiptProbeCommand {

@@ -12,7 +12,7 @@ import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { seedCapsuleModel, FIXTURE_EXECUTION_EVIDENCE_AUTHORITY, fixtureExecutionEvidence } from "../../helpers/deploy-control/model_fixture.ts";
 
 const DIGEST = `sha256:${"a".repeat(64)}` as const;
-async function fixture(failure = false) {
+async function fixture(failure = false, afterWorkerUpdate = false) {
   const store = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(store, { requiredProviders: [] });
   const profile = createDefaultRunnerProfiles(1)[0]!;
@@ -28,7 +28,12 @@ async function fixture(failure = false) {
       inspectMutationAuthority: async (id: string, action: string) => {
         inspections++;
         return { kind: "takosumi.runner-mutation-inspection@v1", runId: id,
-          authority: { status, action, phase, version: 1, fence: 1, redispatchBlocked: true, completion: phase === "completed" ? {} : undefined } };
+          authority: {
+            status, action, phase, version: 1, fence: 1, redispatchBlocked: true,
+            completion: phase === "completed" ? {} : undefined,
+            ...(afterWorkerUpdate ? { admittedExecutionAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY } : {}),
+          },
+        };
       },
       adoptDeterminedMutation: async (id: string, action: string, allocation: { stateScope: unknown; rawOutputRef: string }) => {
         reads++; await release?.(); expect(id).toBe(job.applyRun.id); expect(action).toBe("apply");
@@ -52,7 +57,13 @@ async function fixture(failure = false) {
   const { planRun } = await planning.createCapsulePlan(seeded.capsule.id);
   expect(planRun.status).toBe("succeeded");
   const controller = new OpenTofuController({ store, runner, runnerProfiles: [profile], defaultRunnerProfileId: profile.id,
-    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(), executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY, enqueueRun: async () => {},
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    executionEvidenceAuthority: afterWorkerUpdate ? {
+      ...FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      controllerArtifact: { digest: `sha256:${"1".repeat(64)}`, immutable: true },
+      runnerArtifact: { digest: `sha256:${"1".repeat(64)}`, immutable: true },
+    } : FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    enqueueRun: async () => {},
   });
   const { applyRun } = await controller.createApplyRun({ planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun) });
   const heartbeatAt = Date.now() - RUN_HEARTBEAT_STALE_MS - 2_000;
@@ -94,6 +105,26 @@ for (const failure of [false, true]) test(`RunOwner private route settles exact 
     expect(environment.mock.calls.every(([input]) => input.mintCredentials === false)).toBe(true);
     for (const spy of [mint, renew, apply]) expect(spy).not.toHaveBeenCalled();
   } finally { for (const spy of [environment, mint, renew, apply]) spy.mockRestore(); }
+});
+
+test("RunOwner settles a completed Apply from its admitted artifacts across a Worker update", async () => {
+  const f = await fixture(false, true);
+  const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+  const apply = spyOn(f.runner, "apply");
+  try {
+    await f.dispatch();
+    expect(await f.store.getApplyRun(f.run.id)).toMatchObject({
+      id: f.run.id, status: "succeeded",
+      executionEvidence: { authority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY },
+    });
+    expect((await f.store.getCapsule(f.run.capsuleId!))?.currentStateGeneration).toBe(1);
+    expect(f.counts()).toEqual({ calls: 0, reads: 1, inspections: 1 });
+    expect(mint).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+  } finally {
+    mint.mockRestore();
+    apply.mockRestore();
+  }
 });
 
 test("completed unreadable/mismatched receipt holds the original Run without claim, mint or dispatch", async () => {

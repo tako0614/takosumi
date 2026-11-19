@@ -6049,14 +6049,18 @@ export class RunEngine {
             const stateScope = context.envDispatch.stateScope;
             const rawOutputRef = context.envDispatch.rawOutputRef;
             if (!stateScope || (receiptAction === "apply" && !rawOutputRef)) return await this.getApplyRun(runId);
-            const result = await probe.read({ stateScope, ...(rawOutputRef ? { rawOutputRef } : {}) });
-            if (!result || (control.deadlineAt !== undefined && Date.now() >= control.deadlineAt)) return await this.getApplyRun(runId);
+            const observation = await probe.read({ stateScope, ...(rawOutputRef ? { rawOutputRef } : {}) });
+            if (!observation || (control.deadlineAt !== undefined && Date.now() >= control.deadlineAt)) return await this.getApplyRun(runId);
+            const { result, admittedExecutionAuthority } = observation;
             const recovered = await this.#validateCommittedApplyReceipt({ runner, runId, stateScope, result,
               confirm: async (ref) => {
                 if (ref !== rawOutputRef) throw new Error("committed Apply receipt raw output mismatch");
                 return structuredClone(result);
               },
-            }, context, applyRun, planRun, profile, control.deadlineAt);
+            }, {
+              ...context,
+              executionEvidenceAuthority: admittedExecutionAuthority ?? context.executionEvidenceAuthority,
+            }, applyRun, planRun, profile, control.deadlineAt);
             return await this.#executeApply(applyRun, planRun, profile, dispatch, inputs, handle, control.deadlineAt, recovered);
           } catch {
             // An observation can neither fail the Run nor grant dispatch on a
@@ -9820,6 +9824,7 @@ export class RunEngine {
             result,
             envDispatch,
             persistGeneration,
+            admittedExecutionAuthority: recovered?.executionEvidenceAuthority,
             providerInstallationPolicy,
             leaseToken,
             startedAt,
@@ -9876,6 +9881,7 @@ export class RunEngine {
         outputCount: Object.keys(projected.output.publicOutputs).length,
         result,
         executionEvidenceCommit,
+        admittedExecutionAuthority: recovered?.executionEvidenceAuthority,
         providerInstallationPolicy,
         startedAt,
         now,
@@ -10270,6 +10276,7 @@ export class RunEngine {
     readonly action: "apply" | "destroy";
     readonly outcome: "committed" | "provider_failed_state_persisted";
     readonly commit: RunExecutionCommit;
+    readonly admittedExecutionAuthority?: PreparedApplyReceiptDispatch["executionEvidenceAuthority"] | undefined;
   }): RunExecutionEvidence {
     // Reject OpenTofu's builtin runtime capability before comparing the
     // provider set.  The audit helper is the single source of this
@@ -10292,7 +10299,7 @@ export class RunEngine {
       );
     }
     const parsed = assertRunExecutionEvidence(evidence);
-    const authority = this.#executionEvidenceAuthorityFor(input.profile);
+    const authority = input.admittedExecutionAuthority ?? this.#executionEvidenceAuthorityFor(input.profile);
     if (
       parsed.runId !== input.applyRun.id ||
       parsed.planRunId !== input.planRun.id ||
@@ -10447,6 +10454,7 @@ export class RunEngine {
     const evidence = this.#requireExecutionEvidence({ result, applyRun: run, planRun: plan, profile, action: destroy ? "destroy" : "apply",
       outcome: failure ? "provider_failed_state_persisted" : "committed",
       commit: failure ? { stateVersionId: await stateVersionIdForApplyRun(run.id) } : context.executionEvidenceCommit,
+      admittedExecutionAuthority: context.executionEvidenceAuthority,
     });
     if (destroy && (run.startedAt === undefined || Date.parse(evidence.committedAt) < run.startedAt ||
       Date.parse(evidence.committedAt) > this.#now())) {
@@ -10696,6 +10704,7 @@ export class RunEngine {
     readonly result: OpenTofuApplyResult | OpenTofuDestroyResult;
     readonly envDispatch: RunExecutionDispatch;
     readonly persistGeneration: number;
+    readonly admittedExecutionAuthority?: PreparedApplyReceiptDispatch["executionEvidenceAuthority"] | undefined;
     readonly providerInstallationPolicy:
       | { readonly requireMirror: boolean }
       | undefined;
@@ -10751,6 +10760,7 @@ export class RunEngine {
           action,
           outcome: "provider_failed_state_persisted",
           commit: { stateVersionId: stateVersion.id },
+          admittedExecutionAuthority: input.admittedExecutionAuthority,
         })
       : undefined;
     const nextStateGeneration = stateVersion
@@ -11616,6 +11626,7 @@ export class RunEngine {
     readonly outputCount: number;
     readonly result: OpenTofuApplyResult;
     readonly executionEvidenceCommit: RunExecutionCommit;
+    readonly admittedExecutionAuthority?: PreparedApplyReceiptDispatch["executionEvidenceAuthority"] | undefined;
     readonly providerInstallationPolicy: { requireMirror: boolean } | undefined;
     readonly startedAt: number;
     readonly now: number;
@@ -11637,6 +11648,7 @@ export class RunEngine {
         action: "apply",
         outcome: "committed",
         commit: input.executionEvidenceCommit,
+        admittedExecutionAuthority: input.admittedExecutionAuthority,
       }),
       status: "succeeded",
       stateLock:
@@ -12187,6 +12199,7 @@ export class RunEngine {
             result,
             envDispatch,
             persistGeneration,
+            admittedExecutionAuthority: recovered?.executionEvidenceAuthority,
             providerInstallationPolicy,
             leaseToken,
             startedAt,
@@ -12253,6 +12266,7 @@ export class RunEngine {
             action: "destroy",
             outcome: "committed",
             commit: executionEvidenceCommit,
+            admittedExecutionAuthority: recovered?.executionEvidenceAuthority,
           }),
           status: "succeeded",
           stateLock: stateLockEvidence(

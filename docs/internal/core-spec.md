@@ -1025,8 +1025,15 @@ require a freshly verified credential and an exact semantic match against that
 pre-existing post-dispatch record. RunOwner can additionally settle a running
 Apply or eligible ordinary Git Destroy through a private, read-only runner
 receipt under the current Run and Capsule lease. It rechecks the retained Plan,
-current execution authority and exact state generation. Destroy reads only
-the committed state and execution evidence. Scheduled uninstall, connection
+current management and execution admission, and the exact state generation.
+The Runner DO records the admitted controller, runner and executor artifact
+digests with the dispatch fence before sending the mutation to the Container. Receipt
+observation compares the completion evidence with those recorded digests and
+the original Run, action, receipt version and fence. A Worker code update can
+therefore settle a completed mutation under its original artifacts. Older
+dispatch records without the admitted digests still require the completion to
+match the current configured artifact digests. Destroy reads only the
+committed state and execution evidence. Scheduled uninstall, connection
 replacement, and runs with lifecycle actions or private files continue through
 the ordinary mutation entry point. An R2 target cannot mint its own adoption
 authority. A transport failure after
