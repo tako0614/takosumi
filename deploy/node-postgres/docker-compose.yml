@@ -34,7 +34,8 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U takosumi -d takosumi_accounts"]
+      # The initdb postmaster only serves Unix sockets. Wait for the TCP server.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U takosumi -d takosumi_accounts"]
       interval: 5s
       timeout: 5s
       retries: 10

@@ -235,10 +235,17 @@ test("node-postgres compose applies both schemas and passes only declared servic
         environment?: Record<string, string>;
         command?: unknown;
         depends_on?: Record<string, { condition: string }>;
+        healthcheck?: { test: string[] };
       }
     >;
   };
   const migrations = compose.services.migrations!;
+  expect(migrations.depends_on?.postgres?.condition).toBe("service_healthy");
+  // The image starts a socket-only postmaster before the long-lived server.
+  expect(compose.services.postgres?.healthcheck?.test).toEqual([
+    "CMD-SHELL",
+    "pg_isready -h 127.0.0.1 -U takosumi -d takosumi_accounts",
+  ]);
   const migrationCommand = JSON.stringify(migrations.command);
   expect(migrationCommand).toContain("/app/core/scripts/db-migrate.ts --env=production");
   expect(migrationCommand).toContain("/app/cli/src/main.ts accounts migrate");
