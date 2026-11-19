@@ -888,6 +888,7 @@ export const ja = {
   "run.summary.queued": "実行を待っています…",
   "run.summary.waitingApproval":
     "この変更の実行には承認が必要です。内容を確認して承認してください。",
+  "run.summary.restoreApprovalRetired": "旧方式の復元リクエストの承認受付は終了しました。",
   "run.summary.ready": "「{name}」に適用する準備ができました。",
   "run.summary.readyGeneric": "このアプリに適用する準備ができました。",
   "run.summary.readyChanges": "作成 {create} / 変更 {update} / 削除 {delete}",
@@ -995,10 +996,6 @@ export const ja = {
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
   "run.stopGoBack": "やめて戻る",
   "run.cancel": "この実行をキャンセル",
-  "run.approveConfirm.restoreTitle": "バックアップから復元しますか？",
-  "run.approveConfirm.restoreMessage":
-    "{name} を選んだバックアップの内容に戻します。現在の状態は置き換わり、元に戻せません。",
-  "run.approveConfirm.restoreMessageGeneric": "選んだバックアップの内容に戻します。いまの状態は置き換わり、元に戻せません。",
   "run.approveConfirm.destroyTitle": "この削除を実行しますか？",
   "run.approveConfirm.destroyMessage":
     "{name} のリソースを削除します。元に戻せません。",

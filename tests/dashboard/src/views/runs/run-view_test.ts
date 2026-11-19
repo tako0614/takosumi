@@ -70,6 +70,20 @@ describe("RunView", () => {
     expect(en["run.summary.alreadyApplied"].length).toBeGreaterThan(0);
   });
 
+  test("a retained Restore Run has a history message and both approval guards apply", () => {
+    expect(source).toContain('<Show when={canApproveRun(r())}>');
+    expect(source).toContain('if (!r || !canApproveRun(r) || approve.busy()) return;');
+    expect(source).toContain('if (!ownsApply(attempt) || !canApproveRun(runLatest())) return;');
+    expect(source).toContain('if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest())');
+    expect(source).toContain('if (r.type === "restore" && r.status === "waiting_approval")');
+    expect(source).toContain('t("run.summary.restoreApprovalRetired")');
+    expect(source).not.toContain('run.approveConfirm.restore');
+    expect(source).toContain('if (r.type !== "destroy_plan")');
+    expect(source).toContain('title: t("run.approveConfirm.destroyTitle")');
+    expect(en["run.summary.restoreApprovalRetired"]).toContain("legacy restore request");
+    expect(ja["run.summary.restoreApprovalRetired"]).toContain("承認受付は終了");
+  });
+
   test("timeout recovery uses the exact Apply Run -> Plan Run relation", () => {
     const recovery = readFileSync(resolve(import.meta.dir, "../../../../../dashboard/src/lib/apply-run-recovery.ts"), "utf8");
     expect(source).toContain("recoverApplyRun(attempt.plan,");

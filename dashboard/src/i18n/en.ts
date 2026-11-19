@@ -875,6 +875,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.queued": "Waiting to run…",
   "run.summary.waitingApproval":
     "This change needs approval before it can run. Review it and approve.",
+  "run.summary.restoreApprovalRetired": "Approval has ended for this legacy restore request.",
   "run.summary.ready": "“{name}” is ready to apply.",
   "run.summary.readyGeneric": "Ready to apply to this app.",
   "run.summary.readyChanges":
@@ -984,10 +985,6 @@ export const en: Record<keyof typeof ja, string> = {
   "run.destructiveConfirm": "Run destructive changes anyway",
   "run.stopGoBack": "Go back",
   "run.cancel": "Cancel this run",
-  "run.approveConfirm.restoreTitle": "Restore from this backup?",
-  "run.approveConfirm.restoreMessage":
-    "This replaces {name} with the contents of the selected backup. The current state is overwritten and cannot be recovered.",
-  "run.approveConfirm.restoreMessageGeneric": "This replaces the app with the contents of the selected backup. The current state is overwritten and can't be recovered.",
   "run.approveConfirm.destroyTitle": "Run this deletion?",
   "run.approveConfirm.destroyMessage":
     "This deletes {name}'s resources. It cannot be undone.",

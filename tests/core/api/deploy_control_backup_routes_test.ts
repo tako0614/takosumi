@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 
 import { createApiApp } from "../../../core/api/app.ts";
-import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuController,
+  type OpenTofuRunDispatch,
+} from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { SourcesService } from "../../../core/domains/sources/mod.ts";
 import { ActivityService } from "../../../core/domains/activity/mod.ts";
@@ -17,6 +20,7 @@ const TS = "2026-06-06T00:00:00.000Z";
 async function makeApp(options: {
   readonly withArtifactStore?: boolean;
   readonly onAuthorize?: (store: InMemoryOpenTofuControlStore) => Promise<void> | void;
+  readonly enqueueRun?: (dispatch: OpenTofuRunDispatch) => Promise<void>;
 } = {}) {
   const store = new InMemoryOpenTofuControlStore();
   await seedCapsuleModel(store, {
@@ -33,6 +37,7 @@ async function makeApp(options: {
     store,
     sourcesService,
     artifactReferenceAllocator,
+    ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
   });
   const activity = new ActivityService({ store, now: () => new Date(TS) });
   const artifactStore =
@@ -290,6 +295,36 @@ test("GET /internal/v1/workspaces/:workspaceId/backups lists backups newest-firs
   for (const backup of body.backups) {
     expect(backup.workspaceId).toBe("ws_aaaaaaaa");
   }
+});
+
+test("a retained backup Restore Run cannot transition through internal HTTP approval", async () => {
+  const dispatches: OpenTofuRunDispatch[] = [];
+  const { app, store } = await makeApp({
+    enqueueRun: async (dispatch) => { dispatches.push(dispatch); },
+  });
+  const management = await store.getWorkspaceManagement("ws_aaaaaaaa");
+  expect(management?.managementState).toBe("active");
+  const restore = {
+    id: "restore_retained", workspaceId: "ws_aaaaaaaa", capsuleId: "cap_aaaaaaaa",
+    type: "restore" as const, status: "waiting_approval" as const,
+    backupId: "bkp_retained", restoreStateGeneration: 1, createdBy: "acct_1", createdAt: TS,
+  };
+  await store.beginRestoreRun(restore, management!);
+  expect((await store.getBackupRun(restore.id))?.status).toBe("waiting_approval");
+
+  const path = "/internal/v1/runs/" + restore.id;
+  const get = await app.request(path, { headers: HEADERS });
+  expect(get.status).toBe(200);
+  expect(await get.json()).toMatchObject({ run: { id: restore.id, type: "restore", status: "waiting_approval" } });
+  const approval = await app.request(path + "/approve", {
+    method: "POST", headers: HEADERS, body: "{}",
+  });
+  expect(approval.status).toBe(409);
+  expect(await approval.json()).toMatchObject({ error: {
+    code: "failed_precondition", details: { reason: "legacy_restore_approval_unavailable" },
+  } });
+  expect(await store.getBackupRun(restore.id)).toEqual(restore);
+  expect(dispatches).toEqual([]);
 });
 
 test("legacy internal backup restore route is not mounted", async () => {
