@@ -506,6 +506,113 @@ test("OpenTofu run owner reschedules lease-busy work without burning attempts", 
   assert.equal(record?.attempts, 0);
   assert.equal(record?.lastError, "Capsule lease busy");
   assert.equal(storage.alarmAt, now + 10_000);
+  const scheduled = record;
+  await start(owner, "apply", "controller_retry");
+  assert.deepEqual(await storage.get("run"), scheduled);
+  assert.equal(storage.alarmAt, now + 10_000);
+
+  const legacy = { ...scheduled, pollAttempts: undefined, pollingSince: undefined, lastPolledStatus: undefined };
+  await storage.put("run", legacy);
+  await start(owner, "apply", "controller_retry");
+  assert.deepEqual(await storage.get("run"), legacy);
+  assert.equal(storage.alarmAt, now + 10_000);
+});
+
+for (const settleBy of ["release", "cancel"] as const) {
+  test(`OpenTofu run owner slows down prolonged lease contention until ${settleBy}`, async () => {
+    const startedAt = Date.parse("2026-06-22T08:00:00.000Z");
+    const deadline = startedAt + 15 * 60 * 1000;
+    const settleAt = deadline + 3 * 60 * 1000;
+    const clock = createVirtualAlarmClock({
+      startedAt,
+      maxDispatches: 91,
+      minDelayMs: 10_000,
+    });
+    const probes: number[] = [];
+    const ledgerReads: number[] = [];
+    let ledgerFailures = 0;
+    const makeOwner = () => new OpenTofuRunOwnerObject(
+      { storage: clock.storage },
+      {} as CloudflareWorkerEnv,
+      {
+        now: clock.now,
+        dispatch: async () => {
+          probes.push(clock.now());
+          if (settleBy === "cancel" || clock.now() < settleAt) {
+            throw new CapsuleLeaseBusyError("capsule:inst_1:production");
+          }
+        },
+        readRunStatus: async () => {
+          ledgerReads.push(clock.now());
+          if (ledgerReads.length === 1) throw new Error("read unavailable");
+          if (clock.now() < settleAt) return "running";
+          return settleBy === "release" ? "succeeded" : "cancelled";
+        },
+        markRetriesExhausted: async () => { ledgerFailures += 1; },
+      },
+    );
+
+    await start(makeOwner(), "apply");
+    const result = await clock.drain(() => makeOwner().alarm());
+
+    assert.equal(result.dispatches, probes.length);
+    assert.ok(result.delaysMs.some((delay) => delay > 10_000));
+    assert.ok(result.delaysMs.every((delay) => delay <= 60_000));
+    const slowProbes = probes.filter((at) => at >= deadline);
+    assert.ok(slowProbes.length >= 3);
+    for (let index = 1; index < slowProbes.length; index++) {
+      assert.equal(slowProbes[index]! - slowProbes[index - 1]!, 60_000);
+    }
+    assert.ok(ledgerReads[0]! >= deadline);
+    assert.ok(clock.now() >= settleAt && clock.now() < settleAt + 60_000);
+    const settled = await clock.storage.get<Record<string, unknown>>("run");
+    const expected = settleBy === "release" ? "succeeded" : "cancelled";
+    assert.equal(settled?.status, expected);
+    assert.equal(settled?.observedRunStatus, expected);
+    assert.equal(settled?.attempts, settleBy === "release" ? 1 : 0);
+    assert.equal(settled?.pollingSince, undefined);
+    assert.equal(ledgerFailures, 0);
+    assert.equal(await clock.storage.getAlarm(), null);
+  });
+}
+
+test("OpenTofu run owner preserves the lease wait during an interrupted probe and repair wake", async () => {
+  const storage = new FakeDoStorage();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  let calls = 0;
+  const entered = Promise.withResolvers<void>();
+  const interrupt = Promise.withResolvers<void>();
+  const makeOwner = () => new OpenTofuRunOwnerObject({ storage }, {} as CloudflareWorkerEnv, {
+    now: () => now,
+    dispatch: async () => {
+      if (++calls === 2) {
+        entered.resolve();
+        await interrupt.promise;
+      }
+      throw new CapsuleLeaseBusyError("capsule:inst_1:production");
+    },
+  });
+  await start(makeOwner(), "apply");
+  await makeOwner().alarm();
+  const waiting = await storage.get<Record<string, unknown>>("run");
+  now = storage.alarmAt!;
+  const current = makeOwner().alarm();
+  await entered.promise;
+  try {
+    const probing = await storage.get<Record<string, unknown>>("run");
+    assert.equal(probing?.status, "running");
+    assert.equal(probing?.pollingSince, waiting?.pollingSince);
+    assert.equal(probing?.pollAttempts, waiting?.pollAttempts);
+    await start(makeOwner(), "apply", "controller_retry");
+    assert.deepEqual(await storage.get("run"), probing);
+    assert.equal(storage.alarmAt, now + 90_000);
+  } finally {
+    interrupt.resolve();
+    await current;
+  }
+  const resumed = await storage.get<Record<string, unknown>>("run");
+  assert.equal(resumed?.pollingSince, waiting?.pollingSince);
+  assert.equal(resumed?.pollAttempts, 2);
 });
 
 test("OpenTofu run owner marks retries exhausted after owner retry budget", async () => {
@@ -908,6 +1015,7 @@ test("OpenTofu run owner stops re-dispatching a run that stays queued", async ()
 async function start(
   owner: OpenTofuRunOwnerObject,
   action: "plan" | "apply" | "destroy" | "source_sync",
+  cause?: "controller_retry",
 ): Promise<void> {
   const response = await owner.fetch(
     new Request("https://run-owner/start", {
@@ -917,6 +1025,7 @@ async function start(
         action,
         runId: "run_1",
         workspaceId: "space_1",
+        cause,
       }),
     }),
   );
