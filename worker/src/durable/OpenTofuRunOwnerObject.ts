@@ -78,12 +78,20 @@ const RUN_OWNER_STALE_REENTRY_MAX_ATTEMPTS = 1;
  */
 /** Synthetic observed-status token for a runner-infrastructure requeue. */
 const CONTROLLER_REQUEUE_STATUS = "runner_requeued";
+const CAPSULE_LEASE_BUSY_STATUS = "capsule_lease_busy";
+const CAPSULE_LEASE_BUSY_REASON = "Capsule lease busy";
 
 const RUN_OWNER_CONTROLLER_POLL = new PollSchedule({
   minDelayMs: RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS,
   maxDelayMs: RUN_OWNER_CONTROLLER_POLL_MAX_DELAY_MS,
   deadlineMs: RUN_OWNER_CONTROLLER_POLL_DEADLINE_MS,
   jitter: "full",
+});
+const RUN_OWNER_CAPSULE_LEASE_POLL = new PollSchedule({
+  minDelayMs: RUN_OWNER_LEASE_BUSY_DELAY_MS,
+  maxDelayMs: RUN_OWNER_CONTROLLER_POLL_MAX_DELAY_MS,
+  deadlineMs: RUN_OWNER_CONTROLLER_POLL_DEADLINE_MS,
+  jitter: "equal",
 });
 // This is the recovery window for a RunOwner DO that resets after the
 // controller already put the run ledger back to queued. Normal long dispatches
@@ -323,7 +331,13 @@ export class OpenTofuRunOwnerObject {
     }
     const existing = await this.#readRecord();
     if (existing) {
-      if (input.cause === "controller_retry") {
+      // A repair wake can restore a missing alarm, but should not accelerate a
+      // wait for an exclusive lease that has already been scheduled.
+      if (
+        input.cause === "controller_retry" &&
+        existing.lastPolledStatus !== CAPSULE_LEASE_BUSY_STATUS &&
+        !(existing.status === "scheduled" && existing.lastError === CAPSULE_LEASE_BUSY_REASON)
+      ) {
         const now = this.#now();
         const { finishedAt, observedRunStatus, ...retryBase } = existing;
         void finishedAt;
@@ -440,6 +454,14 @@ export class OpenTofuRunOwnerObject {
     const base = clearRetryState(record);
     await this.#writeRecord({
       ...base,
+      // Retain the lease wait across a reset during the next dispatch probe.
+      ...(record.lastPolledStatus === CAPSULE_LEASE_BUSY_STATUS
+        ? {
+          lastPolledStatus: record.lastPolledStatus,
+          pollingSince: record.pollingSince,
+          pollAttempts: record.pollAttempts,
+        }
+        : {}),
       status: "running",
       startedAt: record.startedAt ?? startedAt,
       updatedAt: startedAt,
@@ -481,22 +503,13 @@ export class OpenTofuRunOwnerObject {
         });
         return;
       }
-      const finishedAt = new Date(this.#now()).toISOString();
-      await this.#writeRecord({
-        ...base,
-        status: runStatus,
-        observedRunStatus: runStatus,
-        attempts: record.attempts + 1,
-        startedAt: record.startedAt ?? startedAt,
-        finishedAt,
-        updatedAt: finishedAt,
-      });
-      await this.state.storage.deleteAlarm?.();
+      await this.#finishObservedRun(base, runStatus, record.attempts + 1, startedAt);
     } catch (error) {
       const retryReady = await this.#recordDispatchFailure(
         record,
         error,
         options.drainControllerRetry === true,
+        startedAt,
       );
       if (retryReady && options.drainControllerRetry === true) {
         // Inside an alarm the retry belongs to the next invocation:
@@ -522,13 +535,14 @@ export class OpenTofuRunOwnerObject {
     readonly startedAt: string;
     /**
      * The ledger status this poll observed, or a synthetic token when the
-     * ledger could not be read (`unknown`) or answered with a requeue
-     * (`runner_requeued`). Only a real in-flight status is evidence that a run
-     * is still there to re-enter.
+     * ledger could not be read or the dispatch hit an infrastructure requeue
+     * or a busy Capsule lease. Only a real in-flight status is evidence that
+     * a run is still there to re-enter.
      */
     readonly observedStatus:
       | RunStatus
       | "unknown"
+      | typeof CAPSULE_LEASE_BUSY_STATUS
       | typeof CONTROLLER_REQUEUE_STATUS;
     readonly reason: string;
   }): Promise<void> {
@@ -541,7 +555,11 @@ export class OpenTofuRunOwnerObject {
       progressed || !input.record.pollingSince
         ? new Date(now).toISOString()
         : input.record.pollingSince;
-    const decision = RUN_OWNER_CONTROLLER_POLL.next({
+    const waitingForLease = input.observedStatus === CAPSULE_LEASE_BUSY_STATUS;
+    const schedule = waitingForLease
+      ? RUN_OWNER_CAPSULE_LEASE_POLL
+      : RUN_OWNER_CONTROLLER_POLL;
+    const decision = schedule.next({
       polls,
       elapsedMs: now - parseIsoMs(pollingSince, now),
       now,
@@ -553,7 +571,24 @@ export class OpenTofuRunOwnerObject {
       action: input.record.action,
       observedStatus: input.observedStatus,
     };
-    if (decision.kind === "deadline-exceeded") {
+    if (decision.kind === "deadline-exceeded" && waitingForLease) {
+      // A different holder may renew the lease. Keep this Run recoverable on
+      // hosts without a repair cron, at the slowest cadence, until the lease
+      // can be acquired or the canonical ledger reports a settled Run.
+      const status = await this.#readRunStatus(input.record, this.env).catch(
+        () => undefined,
+      );
+      if (status !== undefined && !isRunStillDispatchable(status)) {
+        await this.#finishObservedRun(
+          input.base,
+          status,
+          input.record.attempts,
+          input.startedAt,
+        );
+        return;
+      }
+    }
+    if (decision.kind === "deadline-exceeded" && !waitingForLease) {
       log.error("takosumi.run_owner.controller_poll_deadline_exceeded", {
         ...fields,
         poll: decision.poll,
@@ -631,10 +666,16 @@ export class OpenTofuRunOwnerObject {
       await this.state.storage.deleteAlarm?.();
       return;
     }
+    const delayMs = decision.kind === "poll"
+      ? decision.delayMs
+      : RUN_OWNER_CONTROLLER_POLL_MAX_DELAY_MS;
+    const nextAttemptAt = decision.kind === "poll"
+      ? decision.at
+      : this.#now() + delayMs;
     log.warn("takosumi.run_owner.controller_poll_scheduled", {
       ...fields,
       poll: decision.poll,
-      delayMs: decision.delayMs,
+      delayMs,
       reason: decision.reason,
     });
     await this.#writeRecord({
@@ -642,33 +683,49 @@ export class OpenTofuRunOwnerObject {
       status: "scheduled",
       startedAt: input.record.startedAt ?? input.startedAt,
       updatedAt: new Date(now).toISOString(),
-      nextAttemptAt: new Date(decision.at).toISOString(),
+      nextAttemptAt: new Date(nextAttemptAt).toISOString(),
       lastScheduleCause: "controller_retry",
       lastError: decision.reason,
       pollAttempts: decision.poll,
       pollingSince,
       lastPolledStatus: input.observedStatus,
     });
-    await this.#scheduleAlarm(decision.at);
+    await this.#scheduleAlarm(nextAttemptAt);
+  }
+
+  async #finishObservedRun(
+    record: RunOwnerRecord,
+    status: NonNullable<RunOwnerRecord["observedRunStatus"]>,
+    attempts: number,
+    startedAt: string,
+  ): Promise<void> {
+    const finishedAt = new Date(this.#now()).toISOString();
+    await this.#writeRecord({
+      ...record,
+      status,
+      observedRunStatus: status,
+      attempts,
+      startedAt: record.startedAt ?? startedAt,
+      finishedAt,
+      updatedAt: finishedAt,
+    });
+    await this.state.storage.deleteAlarm?.();
   }
 
   async #recordDispatchFailure(
     record: RunOwnerRecord,
     error: unknown,
     immediateControllerRetry: boolean,
+    startedAt: string,
   ): Promise<boolean> {
     if (error instanceof CapsuleLeaseBusyError) {
-      const nextAttemptAt = new Date(
-        this.#now() + RUN_OWNER_LEASE_BUSY_DELAY_MS,
-      ).toISOString();
-      await this.#writeRecord({
-        ...record,
-        status: "scheduled",
-        updatedAt: new Date(this.#now()).toISOString(),
-        nextAttemptAt,
-        lastError: "Capsule lease busy",
+      await this.#pollController({
+        record,
+        base: clearRetryState(record),
+        startedAt,
+        observedStatus: CAPSULE_LEASE_BUSY_STATUS,
+        reason: CAPSULE_LEASE_BUSY_REASON,
       });
-      await this.#scheduleAlarm(Date.parse(nextAttemptAt));
       return false;
     }
     if (isControllerManagedRetryError(error)) {
