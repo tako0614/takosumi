@@ -39,9 +39,9 @@ interface ReceiptProbe {
   readonly runner: OpenTofuRunner;
   readonly runId: string;
   /** Ordinary still relies on the original runner preparation/dispatch fence. */
-  readonly inspect: () => Promise<"ordinary" | "completed" | "hold">;
-  /** Core, not the observer, allocates both immutable artifact coordinates. */
-  readonly read: (allocation: { readonly stateScope: DispatchStateScope; readonly rawOutputRef: string }) => Promise<OpenTofuApplyResult | undefined>;
+  readonly inspect: (action: "apply" | "destroy") => Promise<"ordinary" | "completed" | "hold">;
+  /** Core allocates the immutable state coordinate and any Apply output. */
+  readonly read: (allocation: { readonly stateScope: DispatchStateScope; readonly rawOutputRef?: string }) => Promise<OpenTofuApplyResult | undefined>;
 }
 const probes = new WeakMap<CommittedApplyReceiptProbeCommand, Readonly<ReceiptProbe>>();
 export function committedApplyReceiptProbeCommand(input: ReceiptProbe): CommittedApplyReceiptProbeCommand {

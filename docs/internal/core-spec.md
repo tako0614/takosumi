@@ -1020,9 +1020,16 @@ not change identity. Opaque credential material is bound by a one-way digest
 and is never stored. A matching durable `preparing` record may therefore resume
 with a freshly issued equivalent credential, but `dispatched`, `indeterminate`,
 or any semantic mismatch never grants another provider dispatch. Completed
-state/output readback and adoption also require a freshly verified credential
-and an exact semantic match against that pre-existing post-dispatch record; an
-R2 target cannot mint its own adoption authority. A transport failure after
+state/output readback and adoption through the mutation entry point also
+require a freshly verified credential and an exact semantic match against that
+pre-existing post-dispatch record. RunOwner can additionally settle a running
+Apply or eligible ordinary Git Destroy through a private, read-only runner
+receipt under the current Run and Capsule lease. It rechecks the retained Plan,
+current execution authority and exact state generation. Destroy reads only
+the committed state and execution evidence. Scheduled uninstall, connection
+replacement, and runs with lifecycle actions or private files continue through
+the ordinary mutation entry point. An R2 target cannot mint its own adoption
+authority. A transport failure after
 dispatch returns the typed `runner_mutation_indeterminate` outcome. Redelivery
 may complete only by adopting the exact immutable state/output target already
 written for that Run; without that authoritative readback, it remains

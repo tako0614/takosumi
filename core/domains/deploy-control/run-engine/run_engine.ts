@@ -5968,10 +5968,16 @@ export class RunEngine {
       ? readCommittedApplyReceiptCommand(control.committedApplyReceipt!, runner, applyRun.id)
       : undefined;
     if (receiptOnly && !receipt) throw new Error("committed Apply receipt command mismatch");
-    const observesReceipt = !receipt && probe?.runner === runner && applyRun.status === "running" && applyRun.operation !== "destroy";
+    const receiptAction = applyRun.operation === "destroy" ? "destroy" : "apply";
+    const supportsDestroyReceipt = planRun.operation === "destroy" &&
+      planRun.source.kind === "git" && Boolean(planRun.sourceSnapshotId) &&
+      planRun.origin?.kind !== "scheduled_uninstall" &&
+      planRun.createdBy !== "system:scheduled-uninstall" && !planRun.destroyConnectionRecovery;
+    const observesReceipt = !receipt && probe?.runner === runner && applyRun.status === "running" &&
+      (receiptAction === "apply" || supportsDestroyReceipt);
     const inspectReceipt = async () => {
       if (control.deadlineAt !== undefined && Date.now() >= control.deadlineAt) return "hold";
-      const determination = await probe!.inspect().catch(() => "hold" as const);
+      const determination = await probe!.inspect(receiptAction).catch(() => "hold" as const);
       return control.deadlineAt !== undefined && Date.now() >= control.deadlineAt ? "hold" : determination;
     };
     // Generated-root dispatch for apply: re-read and authenticate the retained
@@ -5996,15 +6002,15 @@ export class RunEngine {
       }
     }
     const dispatch = moduleDispatchFromInputs(inputs);
-    // Only the explicit host observation selects this lane. Fresh/queued work,
-    // Destroy and a different configured adapter retain ordinary execution.
-    if (observesReceipt && inputs && !dispatch.lifecycleActions?.length && !dispatch.privateRunFileSlots?.length) {
+    // Unsupported configurations use their existing preflight and runner
+    // mutation fence. Only the configured host can select receipt settlement.
+    if (observesReceipt && inputs && !dispatch.lifecycleActions?.length && !dispatch.privateRunFileSlots?.length &&
+      (receiptAction === "apply" || !dispatch.operatorModule)) {
       const determination = await inspectReceipt();
       if (determination === "hold") return await this.getApplyRun(runId);
       observedCompletion = determination === "completed";
       receiptOnly ||= observedCompletion;
     }
-
     if (receipt && (!inputs || dispatch.lifecycleActions?.length || dispatch.privateRunFileSlots?.length)) {
       throw new Error("committed Apply receipt cannot authorize lifecycle or private-file effects");
     }
@@ -6042,8 +6048,8 @@ export class RunEngine {
             const context = await this.#prepareApplyReceiptObservation(applyRun, planRun, profile, dispatch, inputs, control.deadlineAt);
             const stateScope = context.envDispatch.stateScope;
             const rawOutputRef = context.envDispatch.rawOutputRef;
-            if (!stateScope || !rawOutputRef) return await this.getApplyRun(runId);
-            const result = await probe.read({ stateScope, rawOutputRef });
+            if (!stateScope || (receiptAction === "apply" && !rawOutputRef)) return await this.getApplyRun(runId);
+            const result = await probe.read({ stateScope, ...(rawOutputRef ? { rawOutputRef } : {}) });
             if (!result || (control.deadlineAt !== undefined && Date.now() >= control.deadlineAt)) return await this.getApplyRun(runId);
             const recovered = await this.#validateCommittedApplyReceipt({ runner, runId, stateScope, result,
               confirm: async (ref) => {
@@ -9725,6 +9731,7 @@ export class RunEngine {
           leaseToken,
           lease,
           deadlineAt,
+          recovered,
         );
       }
       // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
@@ -10346,10 +10353,8 @@ export class RunEngine {
       dispatch.stateAdoption,
       dispatch.priorState,
     );
-    const rawOutputRef = await this.#allocateRawOutputRef(
-      running,
-      verifiedDispatch,
-    );
+    const destroy = planRun.operation === "destroy";
+    const rawOutputRef = destroy ? undefined : await this.#allocateRawOutputRef(running, verifiedDispatch);
     const executionEvidenceAuthority =
       this.#executionEvidenceAuthorityFor(profile);
     const executionEvidenceStateVersionId = await stateVersionIdForApplyRun(
@@ -10357,11 +10362,11 @@ export class RunEngine {
     );
     const executionEvidenceCommit: RunExecutionCommit = {
       stateVersionId: executionEvidenceStateVersionId,
-      outputId: await outputIdForApplyRun(running.id),
+      ...(destroy ? { destroyed: true as const } : { outputId: await outputIdForApplyRun(running.id) }),
     };
     const envDispatch: RunExecutionDispatch = {
       ...verifiedDispatch,
-      rawOutputRef,
+      ...(rawOutputRef ? { rawOutputRef } : {}),
     };
     const planPolicy = await this.#policyForPlanRun(planRun);
     const providerInstallationPolicy =
@@ -10389,6 +10394,7 @@ export class RunEngine {
     run: ApplyRun, plan: PlanRun, profile: RunnerProfile, dispatch: RunModuleDispatch,
     inputs: PlanRunInputs | undefined, deadlineAt?: number,
   ): Promise<RecoveredApplyReceipt> {
+    if (run.operation === "destroy") throw new Error("Apply receipt command cannot settle Destroy");
     const context = await this.#prepareApplyReceiptObservation(run, plan, profile, dispatch, inputs, deadlineAt);
     return await this.#validateCommittedApplyReceipt(receipt, context, run, plan, profile, deadlineAt);
   }
@@ -10398,7 +10404,8 @@ export class RunEngine {
     inputs: PlanRunInputs | undefined, deadlineAt?: number,
   ) {
     const inBudget = () => deadlineAt === undefined || Date.now() < deadlineAt;
-    if (!inBudget() || run.status !== "running" || run.operation === "destroy" || run.operation !== plan.operation ||
+    const destroy = run.operation === "destroy";
+    if (!inBudget() || run.status !== "running" || run.operation !== plan.operation ||
       run.workspaceId !== plan.workspaceId || run.capsuleId !== plan.capsuleId ||
       run.planRunId !== plan.id || run.runnerProfileId !== profile.id || plan.runnerProfileId !== profile.id ||
       !inputs || dispatch.lifecycleActions?.length || dispatch.privateRunFileSlots?.length ||
@@ -10406,10 +10413,10 @@ export class RunEngine {
       throw new Error("committed Apply receipt admission unavailable");
     }
     await this.#assertApplyPreconditions(plan, dispatch, run);
-    await this.#revalidateModuleVariableMaterialization(plan, inputs, "apply");
+    await this.#revalidateModuleVariableMaterialization(plan, inputs, destroy ? "apply_check" : "apply");
     // Preserve the normal pinned ProviderBinding/current policy checks without
     // minting, refreshing or materializing a new credential bundle.
-    await this.#runEnv.resolveRunEnvironment({ planRun: plan, phase: "apply", auditRunId: run.id, mintCredentials: false });
+    await this.#runEnv.resolveRunEnvironment({ planRun: plan, phase: destroy ? "destroy" : "apply", auditRunId: run.id, mintCredentials: false });
     const context = await this.#prepareApplyReceiptDispatch(run, plan, profile, dispatch);
     return context;
   }
@@ -10432,11 +10439,19 @@ export class RunEngine {
     if (failure && (failure.kind !== "provider_execution_failed" || failure.statePersistence !== "persisted")) {
       throw new Error("committed Apply receipt has no persisted provider outcome");
     }
+    const destroy = run.operation === "destroy";
+    if (destroy && (!/^sha256:[a-f0-9]{64}$/u.test(result.stateDigest ?? "") || result.rawOutputRef !== undefined || result.outputs !== undefined)) {
+      throw new Error("committed Destroy receipt state evidence is invalid");
+    }
     this.#assertApplyReceiptResult(result, run.id);
-    this.#requireExecutionEvidence({ result, applyRun: run, planRun: plan, profile, action: "apply",
+    const evidence = this.#requireExecutionEvidence({ result, applyRun: run, planRun: plan, profile, action: destroy ? "destroy" : "apply",
       outcome: failure ? "provider_failed_state_persisted" : "committed",
       commit: failure ? { stateVersionId: await stateVersionIdForApplyRun(run.id) } : context.executionEvidenceCommit,
     });
+    if (destroy && (run.startedAt === undefined || Date.parse(evidence.committedAt) < run.startedAt ||
+      Date.parse(evidence.committedAt) > this.#now())) {
+      throw new Error("committed Destroy receipt timing is outside the original Run window");
+    }
     if (!inBudget()) throw new Error("committed Apply receipt deadline elapsed");
     return { ...context, result, confirm: receipt.confirm };
   }
@@ -10848,14 +10863,15 @@ export class RunEngine {
     readonly planRun: PlanRun;
     readonly startedAt: number;
     readonly now: number;
+    readonly receiptTiming?: { readonly startedAt: number; readonly finishedAt: number };
   }): Promise<ApplyRunResponse> {
     try {
       await this.#billing.releaseApplyBilling(input.planRun);
       if (input.action === "destroy") {
         await this.#recordDestroyRunnerMinuteUsage({
           run: input.failed,
-          startedAt: input.startedAt,
-          finishedAt: input.now,
+          startedAt: input.receiptTiming?.startedAt ?? input.startedAt,
+          finishedAt: input.receiptTiming?.finishedAt ?? input.now,
           current: "execution",
         });
       } else {
@@ -11927,6 +11943,7 @@ export class RunEngine {
     leaseToken: string,
     lease?: LeaseHandle,
     deadlineAt?: number,
+    recovered?: RecoveredApplyReceipt,
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -11949,24 +11966,13 @@ export class RunEngine {
       await this.#runtimeSecretRetirementIntent(capsule);
     // A destroy_apply persists the post-teardown state at `base + 1`. Empty for
     // runs without capsule context.
-    const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
-    const envDispatch = await this.#verification.executionDispatch(
-      planRun,
-      persistGeneration,
-      dispatch.stateAdoption,
-      dispatch.priorState,
-    );
-    const planPolicy = await this.#policyForPlanRun(planRun);
-    const providerInstallationPolicy =
-      planPolicy?.providerInstallation?.requireMirror === true
-        ? { requireMirror: true }
-        : undefined;
-    const executionEvidenceAuthority =
-      this.#executionEvidenceAuthorityFor(profile);
-    const executionEvidenceCommit: RunExecutionCommit = {
-      destroyed: true,
-      stateVersionId: await stateVersionIdForApplyRun(running.id),
-    };
+    const { persistGeneration, envDispatch, providerInstallationPolicy,
+      executionEvidenceAuthority, executionEvidenceCommit } = recovered ??
+      await this.#prepareApplyReceiptDispatch(running, planRun, profile, dispatch);
+    const receiptTiming = recovered ? {
+      startedAt: running.startedAt!,
+      finishedAt: Date.parse(recovered.result.executionEvidence!.committedAt),
+    } : undefined;
     let runnerDispatched = false;
     let effectiveRunning = running;
     let ledgerCommitted = false;
@@ -11981,7 +11987,7 @@ export class RunEngine {
           "runner does not implement destroy; refusing to mark capsule destroyed without teardown",
         );
       }
-      const lifecycleOutcome = await this.#withRunRenewal(
+      const lifecycleOutcome = recovered ? undefined : await this.#withRunRenewal(
         "apply",
         running,
         leaseToken,
@@ -12073,7 +12079,13 @@ export class RunEngine {
       // Renewal harness: destroy is ONE awaited blocking fetch for the whole
       // tofu teardown; re-stamp the heartbeat + renew the lease around it so a
       // long destroy is not taken over by a sibling. clearInterval on every exit.
-      const result = await this.#withRunRenewal(
+      const result = recovered ? await this.#withRunRenewal(
+        "apply",
+        effectiveRunning,
+        leaseToken,
+        lease,
+        async () => recovered.result,
+      ) : await this.#withRunRenewal(
         "apply",
         effectiveRunning,
         leaseToken,
@@ -12151,6 +12163,9 @@ export class RunEngine {
             (outcome) => Boolean(outcome.providerExecutionFailure),
           ),
       );
+      if (recovered && deadlineAt !== undefined && Date.now() >= deadlineAt) {
+        return { applyRun: (await this.getApplyRun(running.id)).applyRun };
+      }
       const now = this.#now();
       if (result.providerExecutionFailure) {
         const stateWasPersisted =
@@ -12187,6 +12202,7 @@ export class RunEngine {
           planRun,
           startedAt,
           now,
+          receiptTiming,
         });
       }
       // Build the post-teardown StateVersion at the generation persisted by the
@@ -12315,8 +12331,8 @@ export class RunEngine {
       try {
         await this.#recordDestroyRunnerMinuteUsage({
           run: completed,
-          startedAt,
-          finishedAt: now,
+          startedAt: receiptTiming?.startedAt ?? startedAt,
+          finishedAt: receiptTiming?.finishedAt ?? now,
           current: "execution",
         });
         await this.#recordDeployOperationMetric({
@@ -12368,6 +12384,11 @@ export class RunEngine {
           applyRun: finalized,
           capsule: publicCapsule(currentCapsule ?? capsule),
         };
+      }
+      if (recovered) {
+        // Lost commit acknowledgements converge on the durable winner. An
+        // observation failure cannot trigger provider retries or fail a Run.
+        return { applyRun: (await this.getApplyRun(running.id)).applyRun };
       }
       if (error instanceof ArtifactLedgerTailAmbiguousError) {
         const recovered =
