@@ -558,6 +558,16 @@ async function approveRun(ctx: ControlDispatchContext, runId: string): Promise<R
   if (!auth.ok) return auth.response;
   const refused = await runMutationCredentialRefusal(ctx);
   if (refused) return refused;
+  if (current.type === "restore") {
+    return errorJson(
+      "failed_precondition",
+      "Legacy backup Restore Runs are read-only.",
+      409,
+      request,
+      {},
+      { reason: "legacy_restore_approval_unavailable" },
+    );
+  }
   ctx.assertActive?.();
   const reason = body ? stringValue(body.reason) : undefined;
   const run = await operations.approveRun(runId, {

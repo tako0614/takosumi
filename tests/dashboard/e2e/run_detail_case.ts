@@ -57,18 +57,18 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
 
     test("a destructive approval stays with its displayed Run", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
-      const type = "restore";
-      const a = `run_confirm_${type}_a`, b = `run_confirm_${type}_b`;
-      const model = (id: string) => ({ id, workspaceId: "ws_alpha", capsuleId: `cap_${id}`, type,
+      const a = "run_confirm_destroy_a", b = "run_confirm_destroy_b";
+      const retired = "run_confirm_restore_retired";
+      const model = (id: string, type = "destroy_plan") => ({ id, workspaceId: "ws_alpha", capsuleId: `cap_${id}`, type,
         status: "waiting_approval", createdBy: "portable-e2e", createdAt: "2026-11-18T00:00:00Z" });
-      const rows: Record<string, ReturnType<typeof model>> = { [a]: model(a), [b]: model(b) };
+      const rows: Record<string, ReturnType<typeof model>> = { [a]: model(a), [b]: model(b), [retired]: model(retired, "restore") };
       const mutations: string[] = [];
       const reads: Record<string, number> = {};
       await page.route("**/api/v1/**", (route) => {
         const request = route.request(); const path = new URL(request.url()).pathname;
         const id = path.split("/")[4] ?? ""; const row = rows[id];
         if (row && path.endsWith("/approve") && request.method() === "POST") {
-          mutations.push(`POST /api/v1/runs/${id}/approve`); row.status = "queued";
+          mutations.push(`POST /api/v1/runs/${id}/approve`); row.status = "succeeded";
           return route.fulfill({ json: { run: row } });
         }
         if (row && path === `/api/v1/runs/${id}`) { reads[id] = (reads[id] ?? 0) + 1; return route.fulfill({ json: { run: row } }); }
@@ -90,7 +90,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       const dialog = page.getByRole("dialog");
       await page.goto(`/runs/${a}`);
       await approve().click();
-      await expect(dialog).toContainText("Restore from this backup?");
+      await expect(dialog.getByRole("heading", { name: "Run this deletion?", exact: true })).toBeVisible();
       await navigateTo(b);
       const before = reads[b] ?? 0;
       await dialog.getByRole("button", { name: "Approve this change", exact: true }).click();
@@ -98,8 +98,15 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([]);
       await approve().click();
       await dialog.getByRole("button", { name: "Approve this change", exact: true }).click();
-      await expect.poll(() => rows[b]!.status).toBe("queued");
+      await expect.poll(() => rows[b]!.status).toBe("succeeded");
       await expect(approve()).toHaveCount(0);
+      expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
+
+      await navigateTo(retired);
+      await expect(page.getByText("Approval has ended for this legacy restore request.", { exact: true })).toBeVisible();
+      await expect(approve()).toHaveCount(0);
+      await expect(dialog).toHaveCount(0);
+      expect(rows[retired]!.status).toBe("waiting_approval");
       expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
     });
 

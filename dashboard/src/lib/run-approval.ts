@@ -20,6 +20,11 @@ export function isReviewRun(run: Run): boolean {
   return run.type === "plan" || run.type === "destroy_plan";
 }
 
+/** Explicit approval is available for Plans awaiting review. */
+export function canApproveRun(run: Run | undefined): boolean {
+  return run !== undefined && isReviewRun(run) && run.status === "waiting_approval";
+}
+
 /** Run-local part of the predicate: a succeeded, policy-passed review run.
  * Only these runs CAN await a deploy approval; whether the approval is still
  * open additionally depends on the sibling runs (see

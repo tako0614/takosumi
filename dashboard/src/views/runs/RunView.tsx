@@ -9,10 +9,9 @@
  * lives in folded detail sections below — except diagnostics, which unfold
  * automatically when the run failed.
  *
- * Flow logic is unchanged from the legacy run screen: poll while non-terminal,
- * approve `waiting_approval`, apply a finished policy-passed plan
- * (destructive plans need an explicit second confirmation), billing `blocked`
- * gates the deploy button.
+ * Poll while non-terminal, approve a plan awaiting review, and apply a
+ * finished policy-passed plan. Destructive plans need an explicit second
+ * confirmation. Billing `blocked` gates the deploy button.
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
@@ -79,6 +78,7 @@ import {
 } from "../../lib/run-logs.ts";
 import {
   awaitsDeployApproval,
+  canApproveRun,
   isDeployApprovalCandidate,
   isReviewRun,
 } from "../../lib/run-approval.ts";
@@ -916,7 +916,7 @@ function Inner() {
   };
 
   const approve = createAction(async (attempt: ApplyAttempt) => {
-    if (!ownsApply(attempt) || runLatest()?.status !== "waiting_approval") return;
+    if (!ownsApply(attempt) || !canApproveRun(runLatest())) return;
     try {
       await approveRun(attempt.plan.id);
       if (ownsApply(attempt)) await Promise.all([refetchRun(), refetchLogs()]);
@@ -1192,43 +1192,26 @@ function Inner() {
     }
   });
 
-  // Cancelling a queued/running apply must never be one stray click — name
-  // the run (service + operation) in an explicit ConfirmDialog first.
-  /**
-   * Run operations whose approval immediately replaces or removes live state.
-   * A plan/apply of ordinary changes is already gated by the destructive-count
-   * review; these bypass that because there is no plan to read.
-   */
-  const overwritesLiveState = (type: string | undefined): boolean =>
-    type === "restore" || type === "destroy_plan" || type === "destroy_apply";
   const confirmApprove = async (): Promise<void> => {
     const r = runLatest();
-    if (!r || r.status !== "waiting_approval" || approve.busy()) return;
+    if (!r || !canApproveRun(r) || approve.busy()) return;
     const attempt = { plan: r, epoch: runEpoch };
     if (!ownsApply(attempt)) return;
-    if (!overwritesLiveState(r.type)) {
+    if (r.type !== "destroy_plan") {
       await approve.run(attempt);
       return;
     }
     const name = appName();
     const ok = await confirm({
-      title:
-        r?.type === "restore"
-          ? t("run.approveConfirm.restoreTitle")
-          : t("run.approveConfirm.destroyTitle"),
-      message:
-        r?.type === "restore"
-          ? name
-            ? t("run.approveConfirm.restoreMessage", { name })
-            : t("run.approveConfirm.restoreMessageGeneric")
-          : name
-            ? t("run.approveConfirm.destroyMessage", { name })
-            : t("run.approveConfirm.destroyMessageGeneric"),
+      title: t("run.approveConfirm.destroyTitle"),
+      message: name
+        ? t("run.approveConfirm.destroyMessage", { name })
+        : t("run.approveConfirm.destroyMessageGeneric"),
       confirmText: t("run.approve"),
       cancelText: t("common.cancel"),
       danger: true,
     });
-    if (!ok || !ownsApply(attempt) || runLatest()?.status !== "waiting_approval" || approve.busy()) return;
+    if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest()) || approve.busy()) return;
     await approve.run(attempt);
   };
   const confirmCancel = async (): Promise<void> => {
@@ -1271,7 +1254,7 @@ function Inner() {
 
   // --- summary layer ---------------------------------------------------------
 
-  type SummaryKind = "progress" | "action" | "ok" | "danger" | "error";
+  type SummaryKind = "progress" | "action" | "ok" | "danger" | "error" | "history";
   interface Summary {
     readonly kind: SummaryKind;
     readonly text: string;
@@ -1281,6 +1264,9 @@ function Inner() {
   const summary = createMemo((): Summary | null => {
     const r = runLatest();
     if (!r) return null;
+    if (r.type === "restore" && r.status === "waiting_approval") {
+      return { kind: "history", text: t("run.summary.restoreApprovalRetired") };
+    }
     // Terminal, non-failure statuses: render a settled line (no spinner). A
     // cancelled/expired run has stopped polling, so a "progress" fallback would
     // spin forever and contradict the terminal badge in the header.
@@ -1745,15 +1731,10 @@ function Inner() {
 
                   {/* primary action */}
                   <div class="wa-form-actions">
-                    <Show when={r().status === "waiting_approval"}>
-                      {/* `restore` and the destroy family overwrite or remove
-                          live state the moment this is pressed, so they get
-                          the danger treatment and an explicit confirmation —
-                          previously a backup restore was a single quiet
-                          primary click. */}
+                    <Show when={canApproveRun(r())}>
                       <Button
                         variant={
-                          overwritesLiveState(r().type) ? "danger" : "primary"
+                          r().type === "destroy_plan" ? "danger" : "primary"
                         }
                         type="button"
                         busy={approve.busy()}
