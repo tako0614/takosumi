@@ -43,6 +43,7 @@ import {
   type PrivateRunFileRefreshOwner,
 } from "../../../core/shared/private_run_file_refresh.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
+import { executionEvidenceAuthoritiesEqual } from "../../../core/domains/deploy-control/runner_profiles.ts";
 import {
   recoveryPlanForStateVersion,
   stateVersionIdForRecoveryRun,
@@ -63,6 +64,7 @@ import { redactString } from "takosumi-contract/redaction";
 import {
   assertRunExecutionEvidence,
   RUN_EXECUTION_EVIDENCE_CONTRACT,
+  type RunExecutionAuthority,
   type RunExecutionEvidence,
 } from "takosumi-contract/runs";
 
@@ -502,6 +504,11 @@ export interface RunnerMutationCompletionReceipt {
   readonly providerExecutionFailed: boolean;
 }
 
+type AdmittedExecutionAuthority = Pick<
+  RunExecutionAuthority,
+  "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+>;
+
 /**
  * Read-only view of one run's mutation authority.
  *
@@ -524,6 +531,7 @@ export type RunnerMutationAuthorityInspection = {
         readonly fence: number;
         readonly redispatchBlocked: true;
         readonly completion?: RunnerMutationCompletionReceipt;
+        readonly admittedExecutionAuthority?: AdmittedExecutionAuthority;
       };
 };
 
@@ -556,6 +564,8 @@ interface RunnerMutationDispatchRecord {
    * that lets a lost completion converge instead of ending indeterminate.
    */
   readonly completion?: RunnerMutationCompletionReceipt;
+  /** Fixed with the dispatch fence, before the container can execute. */
+  readonly admittedExecutionAuthority?: AdmittedExecutionAuthority;
   /**
    * Present exactly when `phase` is `not_dispatched`: the value-free failure
    * class every replay of these semantics answers with.
@@ -1217,6 +1227,9 @@ const createOpenTofuRunnerObjectClass = (
         fence: record.fence,
         redispatchBlocked: true,
         ...(record.completion ? { completion: record.completion } : {}),
+        ...(record.completion && record.admittedExecutionAuthority
+          ? { admittedExecutionAuthority: record.admittedExecutionAuthority }
+          : {}),
       },
     };
   }
@@ -1293,7 +1306,11 @@ const createOpenTofuRunnerObjectClass = (
         action,
         rawOutputRef,
         undefined,
-        { receipt, readOnly: true },
+        {
+          receipt,
+          admittedExecutionAuthority: inspection.authority.admittedExecutionAuthority,
+          readOnly: true,
+        },
       );
       const current = await this.inspectMutationAuthority(applyRunId, action);
       return JSON.stringify(current) === JSON.stringify(inspection) ? adopted ?? indeterminate() : indeterminate();
@@ -1841,6 +1858,7 @@ const createOpenTofuRunnerObjectClass = (
 
   async #markMutationDispatched(
     preparation: RunnerMutationDispatchRecord,
+    admittedExecutionAuthority: AdmittedExecutionAuthority | undefined,
   ): Promise<RunnerMutationDispatchRecord | undefined> {
     const current = parseRunnerMutationDispatchRecord(
       await this.ctx.storage.get<unknown>(
@@ -1858,6 +1876,7 @@ const createOpenTofuRunnerObjectClass = (
     }
     const dispatched: RunnerMutationDispatchRecord = {
       ...current,
+      ...(admittedExecutionAuthority ? { admittedExecutionAuthority } : {}),
       phase: "dispatched",
     };
     await this.#writeMutationDispatchRecord(dispatched);
@@ -2558,7 +2577,16 @@ const createOpenTofuRunnerObjectClass = (
     let releasePreparation: RunnerReleaseDispatchRecord | undefined;
     let releaseDispatch: RunnerReleaseDispatchRecord | undefined;
     let releaseRequest: Request | undefined;
+    let admittedExecutionAuthority: AdmittedExecutionAuthority | undefined;
     if (isRunnerMutationAction(envelope.action)) {
+      if (stateScope) {
+        admittedExecutionAuthority = parseAdmittedExecutionAuthority(
+          recordField(envelope.request, "executionEvidenceAuthority"),
+        );
+        if (!admittedExecutionAuthority) {
+          return runnerMutationIndeterminateResponse(envelope.action);
+        }
+      }
       const claim = await this.#claimMutationPreparation(
         runId,
         envelope.action,
@@ -2600,7 +2628,10 @@ const createOpenTofuRunnerObjectClass = (
                 envelope.action,
                 rawOutputRef,
                 originalLease?.leaseToken,
-                completion ? { receipt: completion } : undefined,
+                completion ? {
+                  receipt: completion,
+                  admittedExecutionAuthority: claim.record.admittedExecutionAuthority,
+                } : undefined,
               ).catch((error: unknown) => {
                 if (completion) return undefined;
                 throw error;
@@ -2748,8 +2779,10 @@ const createOpenTofuRunnerObjectClass = (
         // refused here, while it provably never reached a provider, instead
         // of being dispatched and cut off with its caller.
         assertDispatchBudget(RUNNER_MIN_EXECUTION_DISPATCH_BUDGET_MS);
-        mutationDispatch =
-          await this.#markMutationDispatched(mutationPreparation);
+        mutationDispatch = await this.#markMutationDispatched(
+          mutationPreparation,
+          admittedExecutionAuthority,
+        );
         if (!mutationDispatch) {
           return runnerMutationIndeterminateResponse(
             mutationPreparation.action,
@@ -3837,7 +3870,11 @@ const createOpenTofuRunnerObjectClass = (
     action: "apply" | "destroy",
     rawOutputRef: string | undefined,
     expectedLeaseToken?: string,
-    expected?: { readonly receipt: RunnerMutationCompletionReceipt; readonly readOnly?: boolean },
+    expected?: {
+      readonly receipt: RunnerMutationCompletionReceipt;
+      readonly admittedExecutionAuthority?: AdmittedExecutionAuthority;
+      readonly readOnly?: boolean;
+    },
   ): Promise<Response | undefined> {
     assertStateRefForScope(scope);
     const bucket = this.#r2State(applyRunId, scope, undefined, undefined, expectedLeaseToken);
@@ -3900,6 +3937,8 @@ const createOpenTofuRunnerObjectClass = (
       executionEvidence.receipt.operationId !== applyRunId ||
       executionEvidence.receipt.version !== expected.receipt.version ||
       executionEvidence.receipt.fence !== expected.receipt.fence ||
+      (expected.admittedExecutionAuthority !== undefined &&
+        !executionEvidenceAuthoritiesEqual(executionEvidence.authority, expected.admittedExecutionAuthority)) ||
       executionEvidence.outcome !== (providerExecutionFailed ? "provider_failed_state_persisted" : "committed")
     )) throw new Error("completed mutation receipt execution evidence mismatch");
     if (action === "destroy" && recordedRawOutputRef) {
@@ -7416,6 +7455,18 @@ function parseRunnerMutationDispatchRecord(
   ) {
     return undefined;
   }
+  const admittedExecutionAuthority = parseAdmittedExecutionAuthority(
+    value.admittedExecutionAuthority,
+  );
+  if (
+    Object.hasOwn(value, "admittedExecutionAuthority") &&
+    (!admittedExecutionAuthority ||
+      (phase !== "dispatched" &&
+        phase !== "completed" &&
+        phase !== "indeterminate"))
+  ) {
+    return undefined;
+  }
   const notDispatched =
     value.notDispatched === undefined
       ? undefined
@@ -7452,8 +7503,35 @@ function parseRunnerMutationDispatchRecord(
     phase,
     ...(completion ? { completion } : {}),
     ...(notDispatched ? { notDispatched } : {}),
+    ...(admittedExecutionAuthority ? { admittedExecutionAuthority } : {}),
     redispatchBlocked: true,
   };
+}
+
+function parseAdmittedExecutionAuthority(
+  value: unknown,
+): AdmittedExecutionAuthority | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== 3) return undefined;
+  const controllerArtifact = parseAdmittedExecutionArtifact(value.controllerArtifact);
+  const runnerArtifact = parseAdmittedExecutionArtifact(value.runnerArtifact);
+  const executorArtifact = parseAdmittedExecutionArtifact(value.executorArtifact);
+  if (controllerArtifact && runnerArtifact && executorArtifact) {
+    return { controllerArtifact, runnerArtifact, executorArtifact };
+  }
+}
+
+function parseAdmittedExecutionArtifact(
+  value: unknown,
+): RunExecutionAuthority["controllerArtifact"] | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 2 ||
+    value.immutable !== true
+  ) {
+    return undefined;
+  }
+  const digest = stringField(value, "digest");
+  if (isSha256Digest(digest)) return { digest, immutable: true };
 }
 
 function parseRunnerMutationNotDispatchedEvidence(
@@ -7632,10 +7710,9 @@ function mutationExecutionEvidenceFromRunnerPayload(
   const planRun = recordField(requestPayload, "planRun");
   const planArtifact = recordField(requestPayload, "planArtifact");
   const runnerProfile = recordField(requestPayload, "runnerProfile");
-  const rawAuthority = recordField(
-    requestPayload,
-    "executionEvidenceAuthority",
-  );
+  const { controllerArtifact, runnerArtifact, executorArtifact } =
+    mutationDispatch.admittedExecutionAuthority ??
+    recordField(requestPayload, "executionEvidenceAuthority") ?? {};
   const runId = applyRun && stringField(applyRun, "id");
   const planRunId = planRun && stringField(planRun, "id");
   const runnerProfileId = runnerProfile && stringField(runnerProfile, "id");
@@ -7654,15 +7731,6 @@ function mutationExecutionEvidenceFromRunnerPayload(
       `runner ${action} response lacks immutable run/plan evidence inputs`,
     );
   }
-  const controllerArtifact = rawAuthority
-    ? recordField(rawAuthority, "controllerArtifact")
-    : undefined;
-  const runnerArtifact = rawAuthority
-    ? recordField(rawAuthority, "runnerArtifact")
-    : undefined;
-  const executorArtifact = rawAuthority
-    ? recordField(rawAuthority, "executorArtifact")
-    : undefined;
   if (!controllerArtifact || !runnerArtifact || !executorArtifact) {
     throw new Error(
       `runner ${action} ${runId} lacks immutable execution evidence authority`,

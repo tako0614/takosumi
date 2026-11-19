@@ -426,10 +426,10 @@ export class CloudflareContainerOpenTofuRunner
       inspectMutationAuthority?: (id: string, action: "apply" | "destroy") => Promise<RunnerMutationAuthorityInspection>;
       adoptDeterminedMutation?: (id: string, action: "apply" | "destroy", allocation: { stateScope: unknown; rawOutputRef?: string }) => Promise<Response>;
     } | undefined;
-    let completedAction: "apply" | "destroy" | undefined;
+    let completed: Extract<RunnerMutationAuthorityInspection["authority"], { status: "valid" }> | undefined;
     return committedApplyReceiptProbeCommand({ runner: this, runId,
       inspect: async (action) => {
-        completedAction = undefined;
+        completed = undefined;
         // The local substrate's fetch-only proxy does not expose these RPCs.
         if (action === "destroy" && this.env.LOCAL_SUBSTRATE_TEST_BED === "1" &&
           this.env.TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL?.trim()) return "ordinary";
@@ -441,7 +441,7 @@ export class CloudflareContainerOpenTofuRunner
         if (authority.status !== "valid" || authority.action !== action) return "hold";
         if (authority.phase === "completed") {
           if (authority.completion === undefined) return "hold";
-          completedAction = action;
+          completed = structuredClone(authority);
           return "completed";
         }
         // No observation grants dispatch. The existing DO prepare fence still
@@ -449,8 +449,9 @@ export class CloudflareContainerOpenTofuRunner
         return ["preparing", "not_dispatched", "dispatched", "indeterminate", "orphaned"].includes(authority.phase) ? "ordinary" : "hold";
       },
       read: async (allocation) => {
-        const action = completedAction;
-        if (!action || !stub?.adoptDeterminedMutation ||
+        if (!completed) return undefined;
+        const { action, version, fence, admittedExecutionAuthority } = completed;
+        if (!stub?.adoptDeterminedMutation ||
           (action === "destroy" ? allocation.rawOutputRef !== undefined : !allocation.rawOutputRef)) return undefined;
         const response = await stub.adoptDeterminedMutation(runId, action, allocation);
         const { payload } = await readResponseJsonObject(response);
@@ -464,7 +465,14 @@ export class CloudflareContainerOpenTofuRunner
         if (failure) {
           if (response.status !== 500 || payload.status !== "failed" || failure.statePersistence !== "persisted") return undefined;
         } else if (!response.ok || payload.status !== "succeeded") return undefined;
-        return applyResultFromContainerResult(payload);
+        const result = applyResultFromContainerResult(payload);
+        // The pin was observed in the private dispatch record. Keep it bound to
+        // the exact completion adopted by the runner, separately from its result.
+        if (admittedExecutionAuthority && (
+          result.executionEvidence?.receipt.version !== version ||
+          result.executionEvidence.receipt.fence !== fence
+        )) return undefined;
+        return { result, ...(admittedExecutionAuthority ? { admittedExecutionAuthority } : {}) };
       },
     });
   }

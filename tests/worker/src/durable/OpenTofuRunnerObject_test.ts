@@ -7137,6 +7137,92 @@ test("OpenTofu runner records a value-free completion receipt a lost caller can 
   assert.equal(providerCalls, 1);
 });
 
+for (const action of ["apply", "destroy"] as const) {
+  test(`OpenTofu runner fences the original ${action} artifact identities before dispatch`, async () => {
+    const planRunId = `plan_${action}_admitted_artifacts`;
+    const applyRunId = `apply_${planRunId}`;
+    const authorityKey = "runner-mutation-authority";
+    const artifacts = new FakeR2Bucket();
+    await seedEncryptedPlan(artifacts, planRunId);
+    const target = {
+      stateScope: capsuleStateScope(),
+      ...(action === "apply" ? { rawOutputRef: rawOutputRefFor(planRunId) } : {}),
+    };
+    const dispatch = signedMutationRequest(
+      planRunId,
+      await signedMutationToken(planRunId, { action, jti: "admitted-artifacts" }),
+      { action, ...target },
+    );
+    const { request } = await dispatch.clone().json() as {
+      request: { executionEvidenceAuthority: Record<string, unknown> };
+    };
+    const original = request.executionEvidenceAuthority;
+
+    const syncedPins: unknown[] = [];
+    const storage = new class extends FakeDoStorage {
+      override async sync() {
+        const record = await this.get<Record<string, unknown>>(authorityKey);
+        if (record?.phase === "dispatched") {
+          syncedPins.push(record.admittedExecutionAuthority);
+        }
+        await super.sync();
+      }
+    }();
+    let calls = 0;
+    const container = mutationSuccessContainer(planRunId, () => {
+      assert.deepEqual(syncedPins, [original]);
+      calls += 1;
+    });
+    const options = {
+      stateBucket: new FakeR2Bucket(),
+      storage,
+      env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+    };
+    const first = await runnerWithContainer(artifacts, container, options).fetch(dispatch);
+    assert.equal(first.status, 200);
+    const runner = runnerWithContainer(artifacts, container, options);
+    const inspect = () => runner.inspectMutationAuthority(applyRunId, action);
+    const adopt = () => runner.adoptDeterminedMutation(applyRunId, action, target);
+    const { authority } = await inspect();
+    assert.ok(authority.status === "valid" && authority.phase === "completed");
+    assert.deepEqual(authority.admittedExecutionAuthority, original);
+    assert.equal((await runner.inspectMutationAuthority("another_run", action)).authority.status, "mismatch");
+    const adopted = await adopt();
+    assert.equal(adopted.status, 200);
+    const { executionEvidence } = await adopted.json() as {
+      executionEvidence: { authority: Record<string, unknown> };
+    };
+    for (const [name, pin] of Object.entries(original)) {
+      assert.deepEqual(executionEvidence.authority[name], pin);
+    }
+
+    const completed = (await storage.get<Record<string, unknown>>(authorityKey))!;
+    await storage.put(authorityKey, {
+      ...completed,
+      admittedExecutionAuthority: { ...original, runnerArtifact: { immutable: false } },
+    });
+    assert.equal((await inspect()).authority.status, "malformed");
+    assert.equal((await adopt()).status, 409);
+    await storage.put(authorityKey, {
+      ...completed,
+      admittedExecutionAuthority: {
+        ...original,
+        runnerArtifact: { immutable: true, digest: `sha256:${"9".repeat(64)}` },
+      },
+    });
+    assert.equal((await adopt()).status, 409);
+
+    const legacy = { ...completed };
+    delete legacy.admittedExecutionAuthority;
+    await storage.put(authorityKey, legacy);
+    const legacyInspection = (await inspect()).authority;
+    assert.ok(legacyInspection.status === "valid" && legacyInspection.phase === "completed");
+    assert.equal(legacyInspection.admittedExecutionAuthority, undefined);
+    assert.equal((await adopt()).status, 200);
+    assert.equal(calls, 1);
+  });
+}
+
 test("OpenTofu runner refuses determined adoption for a dispatch that never completed", async () => {
   const planRunId = "plan_completion_absent";
   const applyRunId = `apply_${planRunId}`;
@@ -7177,6 +7263,7 @@ test("OpenTofu runner refuses determined adoption for a dispatch that never comp
   if (inspection.authority.status !== "valid") throw new Error("unreachable");
   assert.equal(inspection.authority.phase, "indeterminate");
   assert.equal(inspection.authority.completion, undefined);
+  assert.equal(inspection.authority.admittedExecutionAuthority, undefined);
   const adopted = await runner.adoptDeterminedMutation(applyRunId, "apply", {
     stateScope,
     rawOutputRef,

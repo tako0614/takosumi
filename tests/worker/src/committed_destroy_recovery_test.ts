@@ -37,12 +37,19 @@ const PLAN_DIGEST = `sha256:${"a".repeat(64)}` as const;
 const DESTROY_STATE_DIGEST = `sha256:${"d".repeat(64)}` as const;
 const LEGACY_PROVIDER = "registry.opentofu.org/hashicorp/random";
 const LOCK_DIGEST = `sha256:${"e".repeat(64)}` as const;
+const UPDATED_WORKER_AUTHORITY = {
+  ...FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  controllerArtifact: { digest: `sha256:${"1".repeat(64)}`, immutable: true },
+  runnerArtifact: { digest: `sha256:${"1".repeat(64)}`, immutable: true },
+} as const;
 
 async function fixture(options: {
   readonly phase?: "queued" | "fresh" | "preparing";
   readonly persistedFailure?: boolean;
   readonly responseStatus?: number;
   readonly legacy?: boolean;
+  readonly afterWorkerUpdate?: boolean;
+  readonly admittedExecutionAuthority?: typeof FIXTURE_EXECUTION_EVIDENCE_AUTHORITY;
   readonly capsuleCoordination?: CapsuleCoordination;
   readonly changeReceipt?: (receipt: Record<string, unknown>) => void;
 } = {}) {
@@ -130,6 +137,7 @@ async function fixture(options: {
     authority: {
       status: "valid", action, version: 1, fence: 1, redispatchBlocked: true,
       ...(options.phase === "preparing" ? { phase: "preparing" } : { phase: "completed", completion: {} }),
+      ...(options.admittedExecutionAuthority ? { admittedExecutionAuthority: options.admittedExecutionAuthority } : {}),
     },
   }));
   const adopt = mock(async (_id: string, _action: string, allocation: { stateScope: DispatchStateScope }) => {
@@ -157,6 +165,7 @@ async function fixture(options: {
   } } as unknown as CloudflareWorkerEnv);
   const controller = new OpenTofuController({
     ...composition,
+    executionEvidenceAuthority: options.afterWorkerUpdate ? UPDATED_WORKER_AUTHORITY : composition.executionEvidenceAuthority,
     runner,
     capsuleCoordination: options.capsuleCoordination,
     enqueueRun: async () => {},
@@ -303,6 +312,48 @@ test("invalid completed Destroy receipts hold without claiming the Run", async (
     receipt.providerExecutionFailure = { kind: "provider_execution_failed", statePersistence: "unavailable" };
     delete receipt.state;
   } }), 1);
+});
+
+test("completed Destroy settles against its admitted artifacts across a Worker update", async () => {
+  for (const persistedFailure of [false, true]) {
+    const f = await fixture({
+      afterWorkerUpdate: true, persistedFailure,
+      admittedExecutionAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    });
+    const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+    const destroy = spyOn(f.runner, "destroy");
+    try {
+      await f.dispatch();
+      expect(await f.store.getApplyRun(f.run.id)).toMatchObject({
+        id: f.run.id, status: persistedFailure ? "failed" : "succeeded",
+        stateVersionId: f.stateVersionId,
+        executionEvidence: { authority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY },
+      });
+      expect(f.adopt).toHaveBeenCalledTimes(1);
+      expect(mint).not.toHaveBeenCalled();
+      expect(destroy).not.toHaveBeenCalled();
+      expect(f.fetch).not.toHaveBeenCalled();
+    } finally {
+      mint.mockRestore();
+      destroy.mockRestore();
+    }
+  }
+});
+
+test("an older Destroy receipt stays fenced if the original authority or matching completion is missing", async () => {
+  await expectHeld(await fixture({ afterWorkerUpdate: true }), 1);
+  await expectHeld(await fixture({
+    afterWorkerUpdate: true,
+    admittedExecutionAuthority: UPDATED_WORKER_AUTHORITY,
+  }), 1);
+  await expectHeld(await fixture({
+    afterWorkerUpdate: true,
+    admittedExecutionAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    changeReceipt: (receipt) => {
+      const evidence = receipt.executionEvidence as ReturnType<typeof fixtureExecutionEvidence>;
+      receipt.executionEvidence = { ...evidence, receipt: { ...evidence.receipt, fence: 2 } };
+    },
+  }), 1);
 });
 
 test("completed ordinary Destroy holds when prepared inputs cannot be read", async () => {
