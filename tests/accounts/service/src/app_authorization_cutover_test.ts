@@ -106,6 +106,7 @@ async function fixture(options: { readonly owned?: boolean; readonly legacy?: bo
     ["run_plan", runFixture("run_plan", { origin: { kind: "update" } })],
     ["run_destroy", runFixture("run_destroy", { type: "destroy_plan" })],
     ["run_restore", runFixture("run_restore", { type: "restore" })],
+    ["run_rollback", runFixture("run_rollback", { origin: { kind: "rollback", stateVersionId: "sv_authz" } })],
     ["run_sync", runFixture("run_sync", { type: "source_sync", capsuleId: undefined, sourceId: "src_owned", status: "running" })],
     ["run_workspace", runFixture("run_workspace", { type: "source_sync", capsuleId: undefined, sourceId: "src_unowned", status: "running" })],
     ["run_legacy_sync", runFixture("run_legacy_sync", { type: "source_sync", capsuleId: undefined, sourceId: "src_authz", status: "running" })],
@@ -360,7 +361,7 @@ describe("per-app authorization after the ownership row exists", () => {
 });
 
 describe("resources addressed by their own id resolve their app first", () => {
-  test("Runs decide on their Capsule, destroy work is owner-only and restore is rollback", async () => {
+  test("Runs use app access, destruction requires the owner, and version rollback can be approved", async () => {
     const h = await fixture();
     const member = h.headers.session(APP_MEMBER);
     const owner = h.headers.session(APP_OWNER);
@@ -371,7 +372,10 @@ describe("resources addressed by their own id resolve their app first", () => {
     expect(await h.call("POST", "/runs/run_destroy/approve", member, {})).toMatchObject({ status: 403, code: "app_owner_only" });
     expect(await h.call("POST", "/runs/run_destroy/cancel", member, {})).toMatchObject({ status: 403, code: "app_owner_only" });
     expect(await h.call("POST", "/runs/run_destroy/approve", owner, {})).toMatchObject({ status: 409, message: "reached" });
-    expect(await h.call("POST", "/runs/run_restore/approve", member, {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await h.call("POST", "/runs/run_rollback/approve", member, {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await h.call("POST", "/runs/run_rollback/approve", admin, {})).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect((await h.call("GET", "/runs/run_restore", member)).status).toBe(200);
+    expect(await h.call("POST", "/runs/run_restore/approve", member, {})).toMatchObject({ status: 409, code: "failed_precondition", message: "Legacy backup Restore Runs are read-only." });
     expect(await h.call("POST", "/runs/run_plan/approve", admin, {})).toMatchObject({ status: 403, code: "app_access_denied" });
   }, 180_000);
 
