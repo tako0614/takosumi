@@ -1,4 +1,4 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -1879,6 +1879,59 @@ function forwardExecuteCommand(
   };
 }
 
+function transientForwardExecuteCommand(
+  fixture: ReturnType<typeof forwardExecuteFixture>,
+  events: string[],
+  providerMutations: {
+    upload: number;
+    migration: number;
+    secret: number;
+    traffic: number;
+  },
+  retryServingVersionId: string,
+) {
+  const predecessor = fixture.plan.predecessorContainer;
+  const scenario: { kind: "state"; current: PlatformContainerState } = {
+    kind: "state",
+    current: {
+      ...predecessor,
+      health: { ...predecessor.health, starting: 1 },
+    },
+  };
+  const original = forwardExecuteCommand(
+    fixture,
+    scenario,
+    events,
+    providerMutations,
+  );
+  let servingReads = 0;
+  const command: PlatformReleaseCommand = async (argv) => {
+    if (argv[1] === "deployments" && argv[2] === "status") {
+      servingReads++;
+      if (servingReads > 1) {
+        events.push(`worker-retry:${commandConfig(argv)}`);
+        expect(
+          readPlatformMutationFence(fixture.planPath, fixture.plan.confirmation),
+        ).toEqual({ outcome: "unknown", versionId: null });
+        return successfulCommand(
+          JSON.stringify({
+            id: "deployment-id",
+            versions: [
+              { version_id: retryServingVersionId, percentage: 100 },
+            ],
+          }),
+        );
+      }
+    }
+    return original(argv);
+  };
+  return {
+    command,
+    scenario,
+    servingReads: () => servingReads,
+  };
+}
+
 test("real completeRelease refuses late predecessor Container drift with zero provider mutation", async () => {
   const scenarios: readonly Readonly<{
     label: string;
@@ -2195,6 +2248,107 @@ test("real completeRelease performs the final Container read on fresh custody im
   ).toEqual({ outcome: "unknown", versionId: null });
   const evidence = JSON.parse(readFileSync(fixture.evidencePath, "utf8"));
   expect(evidence.diagnostic.message).toBe("synthetic forward upload boundary");
+});
+
+test("real completeRelease retries only transient Runner startup and then uploads once", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-transient-runner-");
+  const events: string[] = [];
+  const mutations = { upload: 0, migration: 0, secret: 0, traffic: 0 };
+  const retry = transientForwardExecuteCommand(
+    fixture,
+    events,
+    mutations,
+    fixture.plan.predecessorVersionId,
+  );
+  const sleep = spyOn(Bun, "sleep").mockImplementation(async (milliseconds) => {
+    events.push(`sleep:${milliseconds}`);
+    retry.scenario.current = fixture.plan.predecessorContainer;
+  });
+  try {
+    await expect(
+      completeRelease(
+        {
+          action: "execute",
+          plan: fixture.planPath,
+          confirmation: fixture.plan.confirmation,
+          reviewer: "operator:test-reviewer",
+          evidence: fixture.evidencePath,
+        },
+        fixture.plan,
+        true,
+        undefined,
+        retry.command,
+        observedPlatformUploadCustody(fixture, events),
+      ),
+    ).rejects.toThrow("platform_worker_release_incomplete");
+  } finally {
+    sleep.mockRestore();
+  }
+  expect(events.filter((event) => event === "sleep:5000")).toHaveLength(1);
+  expect(retry.servingReads()).toBe(2);
+  const retryWorker = events.findIndex((event) =>
+    event.startsWith("worker-retry:"),
+  );
+  expect(events[retryWorker + 1]).toStartWith("custody-scan:unknown:");
+  expect(events[retryWorker + 2]).toStartWith("container-list:");
+  expect(events[retryWorker + 3]).toStartWith("container-info:");
+  expect(events[retryWorker + 4]).toStartWith("forward-upload:");
+  expect(mutations).toEqual({ upload: 1, migration: 1, secret: 1, traffic: 1 });
+  expect(readPlatformMutationFence(fixture.planPath, fixture.plan.confirmation)).toEqual(
+    { outcome: "unknown", versionId: null },
+  );
+  expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+    mutationOutcome: "unknown",
+    diagnostic: { message: "synthetic forward upload boundary" },
+  });
+});
+
+test("real completeRelease stops transient Runner retry when the Worker predecessor changes", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-transient-worker-");
+  const events: string[] = [];
+  const mutations = { upload: 0, migration: 0, secret: 0, traffic: 0 };
+  const retry = transientForwardExecuteCommand(
+    fixture,
+    events,
+    mutations,
+    CONCURRENT,
+  );
+  const sleep = spyOn(Bun, "sleep").mockImplementation(async (milliseconds) => {
+    events.push(`sleep:${milliseconds}`);
+    retry.scenario.current = fixture.plan.predecessorContainer;
+  });
+  try {
+    await expect(
+      completeRelease(
+        {
+          action: "execute",
+          plan: fixture.planPath,
+          confirmation: fixture.plan.confirmation,
+          reviewer: "operator:test-reviewer",
+          evidence: fixture.evidencePath,
+        },
+        fixture.plan,
+        true,
+        undefined,
+        retry.command,
+        observedPlatformUploadCustody(fixture, events),
+      ),
+    ).rejects.toThrow("platform_worker_release_incomplete");
+  } finally {
+    sleep.mockRestore();
+  }
+  expect(events.filter((event) => event === "sleep:5000")).toHaveLength(1);
+  expect(retry.servingReads()).toBe(2);
+  expect(events.filter((event) => event.startsWith("container-list:"))).toHaveLength(1);
+  expect(events.filter((event) => event.startsWith("container-info:"))).toHaveLength(1);
+  expect(mutations).toEqual({ upload: 0, migration: 0, secret: 0, traffic: 0 });
+  expect(readPlatformMutationFence(fixture.planPath, fixture.plan.confirmation)).toEqual(
+    { outcome: "unknown", versionId: null },
+  );
+  expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+    mutationOutcome: "unknown",
+    diagnostic: { message: "platform_worker_release_predecessor_drift" },
+  });
 });
 
 test("real completeRelease refuses a third serving Version after the target Runner image is ready", async () => {
