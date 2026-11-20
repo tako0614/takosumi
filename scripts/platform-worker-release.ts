@@ -2074,6 +2074,7 @@ export type PlatformWorkerCodeRuntime = Readonly<{
   ) => Promise<DashboardAssetSeal>;
   runScopedGate?: () => Promise<void>;
   nativeRead?: PlatformWorkerCodeNativeRead;
+  waitForServingVersionRetry?: (milliseconds: number) => Promise<void>;
   publicReadback?: (
     environment: PlatformEnvironment,
     versionId: string,
@@ -2235,7 +2236,12 @@ async function runPlatformWorkerCodePublication(
         workerName,
         command,
       ));
-    const readAuthority = (path: string, source: string, priorPins: boolean) =>
+    const readAuthority = (
+      path: string,
+      source: string,
+      priorPins: boolean,
+      servingVersionId?: string,
+    ) =>
       readPlatformWorkerCodeAuthority(
         path,
         source,
@@ -2243,6 +2249,7 @@ async function runPlatformWorkerCodePublication(
         priorPins,
         command,
         nativeRead,
+        servingVersionId,
       );
     const baseline = await readAuthority(initialConfig.path, predecessorSource, true);
     predecessorVersionId = baseline.versionId;
@@ -2389,19 +2396,18 @@ async function runPlatformWorkerCodePublication(
       undefined,
       root,
     );
-    const deployed = await readAuthority(
+    const servingVersionId = await waitForExactServingVersion(
       finalConfig.path,
-      finalSource,
-      false,
+      deployedVersionId,
+      predecessorVersionId,
+      command,
+      {
+        delays: [1_000, 2_000, 4_000, 8_000, ...Array<number>(11).fill(15_000)],
+        wait: runtime.waitForServingVersionRetry,
+      },
     );
+    const deployed = await readAuthority(finalConfig.path, finalSource, false, servingVersionId);
     observedServingVersionId = deployed.versionId;
-    if (deployed.versionId !== deployedVersionId) {
-      throw new Error(
-        deployed.versionId === predecessorVersionId
-          ? "platform_worker_release_predecessor_unchanged"
-          : "platform_worker_release_concurrent_version",
-      );
-    }
     assertPlatformWorkerCodeAuthorityUnchanged(baseline, deployed, false);
     assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
     activationConfig.assertUnchanged();
@@ -2466,13 +2472,14 @@ async function readPlatformWorkerCodeAuthority(
   allowPriorPins: boolean,
   command: PlatformReleaseCommand,
   nativeRead: PlatformWorkerCodeNativeRead,
+  servingVersionId?: string,
 ): Promise<PlatformWorkerCodeAuthority> {
   const topology = await readPlatformWorkerCodeTopology(
     source,
     platformTargetForEnvironment(environment).workerName,
     nativeRead,
   );
-  const versionId = await readServingVersion(configPath, command);
+  const versionId = servingVersionId ?? await readServingVersion(configPath, command);
   const [versionSource, secrets, container] = await Promise.all([
     readPlatformWorkerCodeVersion(configPath, versionId, command),
     readSecretNames(configPath, command),
@@ -7253,22 +7260,20 @@ async function waitForExactServingVersion(
   expectedVersionId: string,
   predecessorVersionId: string,
   command: PlatformReleaseCommand = requiredCommand,
-): Promise<void> {
-  for (let attempt = 1; attempt <= 8; attempt += 1) {
-    const result = await command([
-      WRANGLER,
-      "deployments",
-      "status",
-      "--config",
-      config,
-      "--json",
-    ]);
-    const current = parseServingVersion(result.stdout);
-    if (current === expectedVersionId) return;
+  retry: {
+    delays: readonly number[];
+    wait?: (milliseconds: number) => Promise<void>;
+  } = { delays: [1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000] },
+): Promise<string> {
+  const wait = retry.wait ?? Bun.sleep;
+  for (const delay of [...retry.delays, undefined]) {
+    const current = await readServingVersion(config, command);
+    if (current === expectedVersionId) return current;
     if (current !== predecessorVersionId) {
       throw new Error("platform_worker_release_concurrent_version");
     }
-    if (attempt < 8) await Bun.sleep(attempt * 1_000);
+    if (delay === undefined) break;
+    await wait(delay);
   }
   throw new Error("platform_worker_release_predecessor_unchanged");
 }

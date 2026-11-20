@@ -285,8 +285,13 @@ replay a Durable Object migration.
 without applying triggers or a Container rollout. After immutable Version
 readback, `wrangler versions deploy` routes it at 100% using a transient config
 with only the exact account and Worker name, so activation cannot patch
-observability, logpush, or tail consumers. Final readback repeats every
-Version, topology, secret, Container, public-header, and discovery invariant.
+observability, logpush, or tail consumers. After activation is acknowledged,
+deployment status is read again while it reports only the exact predecessor
+at 100%, with at most 180 seconds of retry delays. An unexpected Version,
+split deployment, read error, or unchanged predecessor at the retry limit
+stops the release. When status shows the candidate at 100%, final readback
+repeats every Version, topology, secret, Container, public-header, and
+discovery invariant.
 
 Asset synchronization is the first possible mutation. A lost acknowledgement
 from upload or activation is `incomplete`. The JSON result includes the
