@@ -18,7 +18,7 @@ const ARGUMENT_REFUSALS = new Set([
   "app_id_required", "unknown_option", "option_value_required", "invalid_boolean_option",
   "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes",
   "exact_ref_and_idempotency_key_required", "saved_plan_and_explicit_confirmation_required",
-  "invalid_connection_replacements",
+  "invalid_connection_replacements", "destroy_plan_id_required",
 ]);
 
 /** Preserve inline '=' values, reject unknown flags and extra positionals. */
@@ -27,7 +27,7 @@ function argumentsFor(args: readonly string[], kind: "update" | "apply" | "recov
   if (appId === "--help" || appId === "-h" || rest.includes("--help") || rest.includes("-h")) return { help: true } as const;
   if (!bounded(appId, 256) || appId.startsWith("--")) throw new Refusal("app_id_required");
   const operationOptions = { update: ["ref", "idempotencyKey"], apply: ["plan", "destroyPlan"],
-    "recover-uninstall": ["connections"] }[kind];
+    "recover-uninstall": ["connections", "destroyPlan"] }[kind];
   const strings = new Set(["url", "deployControlUrl", "token", "timeoutMs", ...operationOptions]);
   const booleans = new Set(["json", ...(kind === "apply" ? ["yes", "allowDestroy", "observeOnly"] : [])]);
   const options: CliOptions = {};
@@ -237,7 +237,7 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
   }
 }
 
-/** Create a recovery Plan for review through the existing Accounts route. */
+/** Create a recovery Plan or read an exact Plan through the existing Accounts routes. */
 export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise<number> {
   let options: CliOptions = {};
   let appId: string | undefined;
@@ -248,12 +248,22 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
     if (parsed.help) { io.stdout(recoverUninstallHelp()); return 0; }
     ({ appId, options } = parsed);
     const selectedApp = appId;
-    const replacements = connectionReplacements(options.connections);
+    const existingPlanId = options.destroyPlan;
+    if (existingPlanId !== undefined) {
+      if (options.connections !== undefined) throw new Refusal("conflicting_modes");
+      if (!bounded(existingPlanId, 256)) throw new Refusal("destroy_plan_id_required");
+      planRunId = existingPlanId;
+    }
+    const replacements = existingPlanId === undefined ? connectionReplacements(options.connections) : undefined;
     options = selectTarget(options);
     const plan = await within(parsed.wait, async signal => {
       signal.throwIfAborted();
+      const request = client(options, signal);
+      if (existingPlanId !== undefined) {
+        return runFrom(await request(`/api/v1/runs/${encodeURIComponent(existingPlanId)}`), selectedApp, existingPlanId);
+      }
       submitted = true;
-      return runFrom(await client(options, signal)(
+      return runFrom(await request(
         `/api/v1/capsules/${encodeURIComponent(selectedApp)}/destroy-plan`, "POST",
         { destroyProviderConnectionReplacements: replacements },
       ), selectedApp);
@@ -439,7 +449,9 @@ export function applyHelp(): string {
 export function recoverUninstallHelp(): string {
   return ["takosumi apps recover-uninstall <app-id> --connections '<JSON array of replacement pairs>'",
     '[{"connectionId":"old-id","replacementConnectionId":"new-id"}]',
-    isJapaneseCli() ? "接続を選び直した削除Planを準備します。返却されたPlanを確認してから、別コマンドで実行します。" : "Prepare and review an uninstall Plan with replacement Connections. Use a separate command to execute it.",
-    "--url <origin> --token <Accounts PAT with read,write> --json --timeout-ms <1..120000>",
+    "takosumi apps recover-uninstall <app-id> --destroy-plan <saved-destroy-plan-run-id>",
+    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read the same saved Plan. Execution is a separate command.",
+    "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>",
+    "Scopes: read,write to prepare; read to review.",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
 }

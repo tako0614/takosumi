@@ -26,6 +26,8 @@ const destroyPairs = [
 ];
 const recoverArgs = ["apps", "recover-uninstall", "cap_owned", "--connections", JSON.stringify(destroyPairs),
   "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const reviewDestroyArgs = ["apps", "recover-uninstall", "cap_owned", "--destroy-plan", destroyPlan.id,
+  "--token", "synthetic-account-pat", "--url", origin, "--json"];
 const destroyApplyArgs = ["apps", "apply", "cap_owned", "--destroy-plan", destroyPlan.id,
   "--yes", "--token", "synthetic-account-pat", "--url", origin, "--json"];
 
@@ -116,7 +118,13 @@ test("recover-uninstall rejects malformed pairs and confirmation flags before HT
     expect(r.code).toBe(2);
     expect(r.calls).toHaveLength(0);
   }
-  for (const args of [recoverArgs.filter((_, index) => index < 3 || index > 4), [...recoverArgs, "--yes"]]) {
+  for (const args of [
+    recoverArgs.filter((_, index) => index < 3 || index > 4),
+    [...recoverArgs, "--yes"],
+    [...recoverArgs, "--destroy-plan", destroyPlan.id],
+    [...reviewDestroyArgs, "--yes"],
+    reviewDestroyArgs.map(value => value === destroyPlan.id ? " " : value),
+  ]) {
     const r = await invoke(args, () => { throw Error("must not send recovery HTTP"); });
     expect(r.code).toBe(2);
     expect(r.calls).toHaveLength(0);
@@ -130,6 +138,49 @@ test("recovery Plan submission with a lost response sends only the original requ
   expect(r.result.recovery).toContain("Run history");
   expect(r.calls.map(c => [c.method, new URL(c.url).pathname]))
     .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
+});
+
+test("an exact existing recovery Plan can be reviewed by GET after an uncertain submission", async () => {
+  const acceptedPlan = { ...destroyPlan, providerResolutions: [{
+    requirement: { providerSource: "registry.opentofu.org/cloudflare/cloudflare", alias: "default" },
+    status: "resolved_provider_connection", connectionId: "conn_shared",
+  }] };
+  const issued = await invoke(recoverArgs, () => {
+    throw Error("synthetic acknowledgement lost after Plan was accepted");
+  });
+  expect(issued.result.status).toBe("unconfirmed");
+  expect(issued.calls.map(c => c.method)).toEqual(["POST"]);
+
+  const resumed = await invoke(reviewDestroyArgs, () => Response.json({ run: acceptedPlan }));
+  expect(resumed.code).toBe(0);
+  expect(resumed.result).toMatchObject({ status: "review_required", appId: "cap_owned", planRunId: acceptedPlan.id,
+    plan: { providerConnections: [{ alias: "default", connectionId: "conn_shared" }] } });
+  expect(resumed.calls.map(c => [c.method, new URL(c.url).pathname]))
+    .toEqual([["GET", `/api/v1/runs/${acceptedPlan.id}`]]);
+});
+
+test("existing recovery review reports pending and failed Runs without guessing a new Plan", async () => {
+  for (const [status, resultStatus, exitCode] of [["queued", "plan_pending", 0], ["failed", "failed", 1]] as const) {
+    const run = { ...destroyPlan, status, planDigest: undefined, errorCode: status === "failed" ? "provider_refused" : undefined };
+    const result = await invoke(reviewDestroyArgs, () => Response.json({ run }));
+    expect(result.code).toBe(exitCode);
+    expect(result.result).toMatchObject({ status: resultStatus, planRunId: run.id, planStatus: status });
+    expect(result.result.plan).toBeUndefined();
+    expect(result.calls.map(c => c.method)).toEqual(["GET"]);
+  }
+
+  for (const run of [
+    { ...destroyPlan, id: "another_plan" },
+    { ...destroyPlan, capsuleId: "cap_other" },
+    { ...destroyPlan, type: "plan" },
+    { ...destroyPlan, planDigest: undefined },
+  ]) {
+    const result = await invoke(reviewDestroyArgs, () => Response.json({ run }));
+    expect(result.code).toBe(1);
+    expect(result.result).toMatchObject({ status: "refused", planRunId: destroyPlan.id });
+    expect(result.result.plan).toBeUndefined();
+    expect(result.calls.map(c => c.method)).toEqual(["GET"]);
+  }
 });
 
 test("uninstall review shows the effective Connections, including a carried-forward replacement", async () => {
