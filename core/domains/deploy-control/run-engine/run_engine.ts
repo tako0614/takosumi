@@ -133,7 +133,10 @@ import {
 } from "../../sources/capsule_compatibility.ts";
 import type { ObservabilitySink } from "../../observability/mod.ts";
 import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
-import { capsuleRunRuntimeSafetyMatches } from "../run_credential_context.ts";
+import {
+  capsuleRunRuntimeSafetyMatches,
+  readPersistedProviderPartialDestroyPlan,
+} from "../run_credential_context.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
 import { recoveryPlanForStateVersion, stateVersionIdForRecoveryRun } from "../operator_state_recovery.ts";
 import {
@@ -2981,7 +2984,12 @@ export class RunEngine {
       );
     }
     let destroyConnectionRecovery: PlanRun["destroyConnectionRecovery"];
-    if (internal.destroyProviderConnectionReplacements !== undefined) {
+    const retryWithOriginalConnections = internal.destroyProviderConnectionReplacements === undefined &&
+      appliedPlan?.operation === "destroy" && appliedPlan.destroyConnectionRecovery !== undefined &&
+      capsule.status === "error" && capsule.currentOutputId === undefined &&
+      internal.origin === undefined && internal.sourceSnapshotId === undefined &&
+      context.actorOwnershipEpoch !== undefined && context.actor !== "system:scheduled-uninstall";
+    if (internal.destroyProviderConnectionReplacements !== undefined || retryWithOriginalConnections) {
       const refuse = () =>
         new OpenTofuControllerError(
           "failed_precondition",
@@ -2994,15 +3002,27 @@ export class RunEngine {
       ) {
         throw refuse();
       }
+      if (retryWithOriginalConnections) {
+        const safety = await this.#store.getCapsuleRuntimeSafety(capsule.id);
+        if (safety?.phase !== "unknown" || safety.runType !== "destroy_apply" ||
+          capsule.currentStateVersionId === undefined ||
+          (await readPersistedProviderPartialDestroyPlan(
+            this.#store, safety.runId, capsule, capsule.currentStateVersionId,
+          ))?.id !== appliedPlan.id) throw refuse();
+      }
       try {
-        const selected = parseDestroyProviderConnectionReplacements(
-          internal.destroyProviderConnectionReplacements,
-        );
         const prior = appliedPlan.destroyConnectionRecovery
           ? parseDestroyProviderConnectionReplacements(
               appliedPlan.destroyConnectionRecovery.replacements,
+              { allowOriginalConnection: true },
             )
           : [];
+        // An ordinary manual Destroy uses the original bindings. Record that
+        // choice against the exact partial state, without inheriting a key the
+        // person previously chose for a different Plan.
+        const selected = retryWithOriginalConnections
+          ? prior.map(({ connectionId }) => ({ connectionId, replacementConnectionId: connectionId }))
+          : parseDestroyProviderConnectionReplacements(internal.destroyProviderConnectionReplacements);
         // Persist the effective selection once so subsequent Apply and
         // recovery resolve exactly the connections reviewed in this Plan.
         const effective = new Map(prior.map((row) => [row.connectionId, row]));
@@ -3012,6 +3032,7 @@ export class RunEngine {
           appliedProviderBindingsDigest: appliedPlan.resolvedProviderBindingsDigest,
           replacements: parseDestroyProviderConnectionReplacements(
             [...effective.values()],
+            { allowOriginalConnection: true },
           ),
         };
       } catch {

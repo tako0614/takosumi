@@ -329,8 +329,11 @@ export interface DestroyProviderConnectionReplacement {
   readonly replacementConnectionId: string;
 }
 
-/** Strict public input: opaque IDs only, no account claims or binding edits. */
-export function parseDestroyProviderConnectionReplacements(value: unknown): readonly DestroyProviderConnectionReplacement[] {
+/** Opaque IDs only. The original ID is legal only in server-owned Plan evidence. */
+export function parseDestroyProviderConnectionReplacements(
+  value: unknown,
+  options: { readonly allowOriginalConnection?: boolean } = {},
+): readonly DestroyProviderConnectionReplacement[] {
   const invalid = (): never => { throw new TypeError("destroyProviderConnectionReplacements must be a nonempty unique list of exact connectionId/replacementConnectionId pairs"); };
   if (!Array.isArray(value) || value.length < 1 || value.length > 64) invalid();
   const sourceIds = new Set<string>();
@@ -342,7 +345,7 @@ export function parseDestroyProviderConnectionReplacements(value: unknown): read
     const target = row.replacementConnectionId;
     if (typeof source !== "string" || !source.trim() || source !== source.trim() ||
       typeof target !== "string" || !target.trim() || target !== target.trim() ||
-      source === target || sourceIds.has(source)) invalid();
+      (source === target && !options.allowOriginalConnection) || sourceIds.has(source)) invalid();
     sourceIds.add(source as string);
     return { connectionId: source as string, replacementConnectionId: target as string };
   });

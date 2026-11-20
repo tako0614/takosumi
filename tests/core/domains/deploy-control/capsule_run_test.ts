@@ -13640,14 +13640,28 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
 
-test.each(["1", "2", "2-selective"] as const)("destroy recovery rotates %s bindings again after a failed apply persists partial state", async (variant) => {
+test.each(["1", "2", "2-selective", "1-original", "1-original-repeat"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
   const selective = variant === "2-selective";
-  const bindingCount = variant === "1" ? 1 : 2;
+  const repeatOriginal = variant === "1-original-repeat";
+  const useOriginal = variant === "1-original" || repeatOriginal;
+  const bindingCount = variant === "2" || selective ? 2 : 1;
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
   const store = new InMemoryOpenTofuControlStore();
   const seeded = await seedRunnableCapsuleModel(store, { environment: "preview", installConfig: oidcMaterializedInstallConfig() });
+  const { InMemoryAppOwnershipStore } = await import("../../../../core/domains/app-ownership/store.ts");
+  const { InMemoryAppMintLeaseStore } = await import("../../../../core/domains/app-authorization/mint-leases.ts");
+  const appOwnership = new InMemoryAppOwnershipStore(store);
+  const ownership = {
+    capsuleId: seeded.capsule.id,
+    ownerAccountId: seeded.workspace.ownerUserId!,
+    ownershipEpoch: 1,
+    managementState: "active" as const,
+    managementEpoch: 1,
+    storageRoot: `apps/${seeded.capsule.id}`,
+  };
+  const actorContext = useOriginal ? { actor: ownership.ownerAccountId } : {};
   let sequence = 0;
   const vault = new StaticSecretConnectionVault({
     store,
@@ -13656,6 +13670,11 @@ test.each(["1", "2", "2-selective"] as const)("destroy recovery rotates %s bindi
     newId: () => `conn_partial_rotation_${++sequence}`,
     credentialRecipeResolver: id => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(recipe => recipe.id === id),
     credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    ...(useOriginal ? {
+      appOwnership,
+      appAccessResolver: appOwnership,
+      appMintLeases: new InMemoryAppMintLeaseStore(store),
+    } : {}),
     fetch: async input => {
       const account = /\/accounts\/([a-f0-9]{32})/.exec(input)?.[1];
       return Response.json({ success: true, result: input.endsWith("/workers/subdomain") ? { subdomain: "synthetic-team" } : account ? { id: account } : { status: "active" } });
@@ -13719,11 +13738,11 @@ test.each(["1", "2", "2-selective"] as const)("destroy recovery rotates %s bindi
     return await mint(...args);
   };
   const runner = recordingRunner();
-  let firstDestroy = true;
+  let failuresRemaining = repeatOriginal ? 2 : 1;
   runner.destroy = job => {
     runner.destroyJobs.push(job);
-    if (firstDestroy) {
-      firstDestroy = false;
+    if (failuresRemaining > 0) {
+      failuresRemaining -= 1;
       return Promise.resolve({
         providerExecutionFailure: {
           kind: "provider_execution_failed",
@@ -13747,12 +13766,18 @@ test.each(["1", "2", "2-selective"] as const)("destroy recovery rotates %s bindi
     ...fixtureAuthorityBoundModuleVariableMaterializer(),
     async retire(input) { retiredBindings.push(input.resolvedProviderBindings.map(entry => entry.connection.id)); },
   };
-  const controller = controllerWith(store, runner, { vault, moduleVariableMaterializer });
-  const initialPlan = await controller.createCapsulePlan(seeded.capsule.id);
+  if (useOriginal) expect(await appOwnership.initializeOwnershipIfMissing(ownership)).toBe(true);
+  const controller = controllerWith(store, runner, {
+    vault,
+    moduleVariableMaterializer,
+    ...(useOriginal ? { appOwnership } : {}),
+  });
+  const initialPlan = await controller.createCapsulePlan(seeded.capsule.id, actorContext);
+  expect(initialPlan.planRun.status, JSON.stringify(initialPlan.planRun.diagnostics)).toBe("succeeded");
   const initialApply = await controller.createApplyRun({
     planRunId: initialPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(initialPlan.planRun),
-  });
+  }, actorContext);
   expect(initialApply.applyRun.status).toBe("succeeded");
 
   const { CapsulesService } = await import("../../../../core/domains/capsules/mod.ts");
@@ -13760,16 +13785,16 @@ test.each(["1", "2", "2-selective"] as const)("destroy recovery rotates %s bindi
   const scheduled = await capsules.scheduleCapsuleUninstall(seeded.capsule.id, { requester: { subject: seeded.workspace.ownerUserId } });
   await capsules.advanceCapsuleUninstall(seeded.capsule.id, { uninstallId: scheduled.uninstall!.id, revision: scheduled.uninstall!.revision }, { blockedReason: "destroy_plan_refused" });
 
-  const firstRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+  const firstRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
     destroyProviderConnectionReplacements: replacementsFor(firstReplacement.id),
   });
   expect(firstRecovery.planRun.resolvedProviderBindingsDigest).toBeDefined();
   expect(mints.at(-1)).toEqual(expectedMint(firstReplacement.id));
-  await controller.approveRun(firstRecovery.planRun.id);
+  await controller.approveRun(firstRecovery.planRun.id, { approvedBy: actorContext.actor });
   const partial = await controller.createApplyRun({
     planRunId: firstRecovery.planRun.id,
     expected: applyExpectedGuardFromPlanRun(firstRecovery.planRun),
-  });
+  }, actorContext);
   expect(partial.applyRun.status).toBe("failed");
   expect(partial.applyRun.operation).toBe("destroy");
   expect(mints.at(-1)).toEqual(expectedMint(firstReplacement.id));
@@ -13790,6 +13815,77 @@ test.each(["1", "2", "2-selective"] as const)("destroy recovery rotates %s bindi
   if (selective) {
     expect((await store.getPlanRun(firstRecovery.planRun.id))?.destroyConnectionRecovery?.replacements)
       .toEqual(replacementsFor(firstReplacement.id));
+  }
+
+  if (useOriginal) {
+    await store.putConnection({ ...firstReplacement, status: "revoked" });
+    const { handleCapsules } = await import("../../../../accounts/service/src/control/capsules.ts");
+    const { InMemoryAccountsStore } = await import("../../../../accounts/service/src/store.ts");
+    const { controllerErrorResponse } = await import("../../../../accounts/service/src/control/shared.ts");
+    const accountsStore = new InMemoryAccountsStore();
+    type Operations = import("../../../../accounts/service/src/control-operations.ts").ControlPlaneOperations;
+    const operations = {
+      capsules: { getCapsule: async () => (await store.getCapsule(seeded.capsule.id))! },
+      workspaces: { captureManagementAuthority: () => store.getWorkspaceManagement(seeded.workspace.id) },
+      appOwnership,
+      appAccess: { resolveAppAccess: async (account: string) => ({
+        ...ownership, role: account === ownership.ownerAccountId ? "owner" : "member",
+      }) },
+      createCapsuleDestroyPlan: (id: string, options?: Parameters<Operations["createCapsuleDestroyPlan"]>[1]) =>
+        controller.createCapsuleDestroyPlan(id, {
+          actor: options?.actor, actorOwnershipEpoch: options?.actorOwnershipEpoch,
+        }),
+      getRun: (id: string) => controller.getRun(id),
+      getRunCost: async () => undefined,
+    } as unknown as Operations;
+    const startReview = async (actor = ownership.ownerAccountId) => {
+      const request = new Request(`https://fixture.invalid/api/v1/capsules/${seeded.capsule.id}?immediate=true`, { method: "DELETE" });
+      return (await handleCapsules({
+        request, url: new URL(request.url), operations, store: accountsStore,
+        session: { subject: actor, credential: "session", uninstallRequester: { subject: actor } },
+      }, ["capsules", seeded.capsule.id], "DELETE").catch(controllerErrorResponse))!;
+    };
+    const beforeRetry = { plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mints.length };
+    expect((await startReview("fixture-app-member")).status).toBe(403);
+    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {
+      actor: ownership.ownerAccountId,
+      actorOwnershipEpoch: ownership.ownershipEpoch + 1,
+    })).rejects.toMatchObject({ details: { reason: "app_owner_changed" } });
+    await store.putApplyRun({ ...partial.applyRun, executionEvidence: undefined });
+    const withoutReceipt = await startReview();
+    expect(withoutReceipt.status).toBe(409);
+    expect(await withoutReceipt.json()).toMatchObject({ error: { details: { reason: "destroy_connection_recovery_unproven" } } });
+    await store.putApplyRun(partial.applyRun);
+    await store.putConnection({ ...foreign, id: original.id });
+    expect((await startReview()).status).toBe(409);
+    await store.putConnection(original);
+    expect({ plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mints.length }).toEqual(beforeRetry);
+
+    const finalBaseGeneration = repeatOriginal ? 3 : 2;
+    for (let generation = 2; generation <= finalBaseGeneration; generation += 1) {
+      const requested = await startReview();
+      expect(requested.status).toBe(202);
+      const { run } = await requested.json() as { run: Run };
+      const { planRun: retry } = await controller.getPlanRun(run.id);
+      expect(retry.status).toBe("waiting_approval");
+      expect(retry.baseStateGeneration).toBe(generation);
+      expect(retry.destroyConnectionRecovery?.replacements).toEqual(replacementsFor(original.id));
+      expect(mints.at(-1)).toEqual(expectedMint(original.id));
+      await controller.approveRun(retry.id, { approvedBy: ownership.ownerAccountId });
+
+      const result = await controller.createApplyRun({
+        planRunId: retry.id,
+        expected: applyExpectedGuardFromPlanRun(retry),
+      }, actorContext);
+      const last = generation === finalBaseGeneration;
+      expect(result.applyRun.status).toBe(last ? "succeeded" : "failed");
+      expect(result.capsule.status).toBe(last ? "destroyed" : "error");
+      expect(mints.at(-1)).toEqual(expectedMint(original.id));
+    }
+    expect(runner.destroyJobs).toHaveLength(finalBaseGeneration);
+    expect(retiredBindings).toEqual([[original.id]]);
+    expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
+    return;
   }
 
   const nextSelection = selective

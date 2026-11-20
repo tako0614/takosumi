@@ -840,6 +840,7 @@ export interface TakosumiOperations {
       readonly destroyProviderConnectionReplacements?: readonly import("takosumi-contract/connections").DestroyProviderConnectionReplacement[];
       readonly runnerProfileId?: string;
       readonly actor?: string;
+      readonly actorOwnershipEpoch?: number;
     },
   ): Promise<PlanRunResponse>;
   /**
@@ -2085,7 +2086,12 @@ export async function createTakosumiService(
     createCapsuleDestroyPlan: (capsuleId, options) =>
       opentofuController.createCapsuleDestroyPlan(
         capsuleId,
-        options?.actor ? { actor: options.actor } : {},
+        {
+          ...(options?.actor ? { actor: options.actor } : {}),
+          ...(options?.actorOwnershipEpoch !== undefined
+            ? { actorOwnershipEpoch: options.actorOwnershipEpoch }
+            : {}),
+        },
         {
           ...(options?.runnerProfileId ? { runnerProfileId: options.runnerProfileId } : {}),
           ...(options?.destroyProviderConnectionReplacements !== undefined ? { destroyProviderConnectionReplacements: options.destroyProviderConnectionReplacements } : {}),
