@@ -57,9 +57,25 @@ takosumi apps update cap_example --ref release/v2 --idempotency-key update-examp
   --url https://takosumi.example.com --json
 ```
 
-Both `--ref` and `--idempotency-key` are required. After a lost response, retain the same identity, target, app, ref and key for a manual retry.
-Do not repeat an unknown operation with a new key. Reconciliation advances only the same returned coordinator. Inline `--ref=release=v2` retains its complete value.
-An initial definite admission rejection is `refused`; post-create reconcile conflicts or read failures retain the coordinator as `unconfirmed`. Both exit 1.
+`--ref` is required. Use `--idempotency-key` to start an update. If the initial
+response is lost, retry with the same identity, target, app, ref, and key.
+Inline `--ref=release=v2` retains its complete value.
+
+If you have the existing update's `revisionPlanId`, continue with that ID.
+The update ID and its eventual `planRunId` are separate.
+
+```bash
+takosumi apps update cap_example --ref release/v2 --revision-plan grp_example \
+  --url https://takosumi.example.com --json
+```
+
+The CLI first reads the existing update and checks the app and ref. It
+advances that coordinator when necessary, using current app update
+permission. A prepared Plan can be reviewed with reads alone.
+`--revision-plan` and `--idempotency-key` are mutually exclusive. A definite
+admission rejection returns `refused`, an uncertain outcome for an accepted
+update returns `unconfirmed`, and a saved Plan that can no longer be reviewed
+returns `plan_not_reviewable`. These outcomes exit 1.
 
 `review_required` is not update completion. Review the app, `planRunId`, ref, source snapshot, Plan digest, change counts, resource actions and policy.
 `reviewUrl` opens that saved Plan. Missing counts are `null`, never zero. Only after deciding to execute it, use the returned Plan ID separately:

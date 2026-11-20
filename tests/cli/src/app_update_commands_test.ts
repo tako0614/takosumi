@@ -565,6 +565,78 @@ test("exact retained update key survives a lost create response across manual in
   expect(await lost.calls[0]!.json()).toEqual(await retry.calls[0]!.json());
 });
 
+const resumeUpdateArgs = [
+  "apps", "update", "cap_owned", "--ref", ref, "--revision-plan", revision.id,
+  "--url", origin, "--token", "synthetic-account-pat", "--json",
+];
+const revisionPath = `/api/v1/revision-plans/${revision.id}`;
+const revisionRunPath = `/api/v1/runs/${plan.id}`;
+
+test("apps update resumes the exact existing coordinator without another create", async () => {
+  const result = await invoke(resumeUpdateArgs, request => {
+    switch (new URL(request.url).pathname) {
+      case revisionPath:
+        return Response.json({ revisionPlan: revision, nextAction: "reconcile" });
+      case `${revisionPath}/reconcile`:
+        return Response.json({ revisionPlan: revision, nextAction: "review_run" });
+      case revisionRunPath:
+        return Response.json({ run: plan });
+      default:
+        throw Error("unexpected request");
+    }
+  });
+  expect(result.code).toBe(0);
+  expect(result.result).toMatchObject({ status: "review_required", revisionPlanId: revision.id, planRunId: plan.id });
+  expect(result.calls.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", revisionPath], ["POST", `${revisionPath}/reconcile`], ["GET", revisionRunPath],
+  ]);
+  expect(result.calls.every(request => !request.headers.has("idempotency-key"))).toBe(true);
+});
+
+test("a mismatched saved coordinator is never reconciled", async () => {
+  for (const record of [
+    { ...revision, id: "revision_other" },
+    { ...revision, capsuleId: "cap_other" },
+    { ...revision, revision: { ...revision.revision, targetRef: "release/other" } },
+  ]) {
+    const result = await invoke(resumeUpdateArgs, () =>
+      Response.json({ revisionPlan: record, nextAction: "reconcile" }));
+    expect(result.code).toBe(1);
+    expect(result.result).toMatchObject({ status: "refused", code: "revision_identity_mismatch" });
+    expect(result.calls.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", revisionPath],
+    ]);
+  }
+});
+
+test("saved coordinator mode refuses a create key and invalid IDs before HTTP", async () => {
+  for (const [args, code] of [
+    [[...resumeUpdateArgs, "--idempotency-key", "key"], "conflicting_modes"],
+    [resumeUpdateArgs.map(value => value === revision.id ? ".." : value), "revision_plan_id_required"],
+  ] as const) {
+    const result = await invoke(args, () => { throw Error("must not send HTTP"); });
+    expect(result.code).toBe(2);
+    expect(result.result).toMatchObject({ status: "refused", code });
+    expect(result.calls).toHaveLength(0);
+  }
+});
+
+test("an expired saved revision Run is no longer ready for review", async () => {
+  const replayArgs = [...resumeUpdateArgs];
+  replayArgs.splice(5, 2, "--idempotency-key", "retained-key");
+  for (const [args, firstMethod] of [[replayArgs, "POST"], [resumeUpdateArgs, "GET"]] as const) {
+    const result = await invoke(args, request => new URL(request.url).pathname === revisionRunPath
+      ? Response.json({ run: { ...plan, status: "expired" } })
+      : Response.json({ revisionPlan: revision, nextAction: "review_run" }));
+    expect(result.code).toBe(1);
+    expect(result.result).toMatchObject({
+      status: "plan_not_reviewable", revisionPlanId: revision.id, planRunId: plan.id, planStatus: "expired",
+    });
+    expect(result.result.plan).toBeUndefined();
+    expect(result.calls.map(request => request.method)).toEqual([firstMethod, "GET"]);
+  }
+});
+
 test("deadline covers an unfinished JSON body and no followup request occurs after abort", async () => {
   let finish: (() => void) | undefined; let sawAbort = false;
   const r = await invoke(["apps", "update", "cap_owned", "--ref", ref, "--idempotency-key", "same-key", "--url", origin, "--token", "pat", "--json", "--timeout-ms", "15"], req => {

@@ -57,9 +57,19 @@ takosumi apps update cap_example --ref release/v2 --idempotency-key update-examp
   --url https://takosumi.example.com --json
 ```
 
-`--ref`と`--idempotency-key`は必須です。応答を失った場合も同じ本人・接続先・app・ref・keyを保持して再実行します。
-不明な操作を新keyでやり直しません。reconcileは返却された同じcoordinatorだけを進めます。`--ref=release=v2`も値全体を保ちます。
-最初の明確な受付拒否は`refused`、作成後のreconcile競合・読取失敗などは元coordinatorを保持した`unconfirmed`で、いずれもexit 1です。
+`--ref`は必須です。更新を開始するときは`--idempotency-key`を指定します。
+受付応答を失った場合は、同じ本人・接続先・アプリ・ref・キーで再実行します。`--ref=release=v2`も値全体を保ちます。
+
+既存の更新ID `revisionPlanId` が分かる場合は、次のコマンドで続けられます。更新IDは`planRunId`と別です。
+
+```bash
+takosumi apps update cap_example --ref release/v2 --revision-plan grp_example \
+  --url https://takosumi.example.com --json
+```
+
+`--revision-plan`を指定すると、最初に同じ接続先でその更新を読み、アプリとrefの一致を確認します。
+続行が必要な場合は現在の更新権限で同じ処理を進めます。Planがすでに準備済みなら読取りだけで内容を確認できます。
+`--revision-plan`と`--idempotency-key`は排他です。明確な受付拒否は`refused`、受付済み更新の進行や結果を確認できない場合は`unconfirmed`、保存Planが期限切れなどで確認できない状態なら`plan_not_reviewable`で、いずれもexit 1です。
 
 `review_required`は更新完了ではありません。表示されたapp、`planRunId`、ref、source snapshot、Plan digest、変更数、
 resource actions、policyを確認します。`reviewUrl`でも同じ保存Planを開けます。欠けた変更数は`null`で、0とは扱いません。
