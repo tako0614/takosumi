@@ -35,6 +35,7 @@ interface ObservedTable {
 }
 const observations = new WeakMap<SourceOwnershipMigrationGroup, readonly ObservedTable[]>();
 const encoder = new TextEncoder();
+const D1_READ_PAGE_SIZE = 100;
 const D1_ROW_MAX_BYTES = 2_000_000;
 const D1_GUARD_BIND_MAX_BYTES = 2_000_000;
 const scopes = (sourceId: string): readonly Omit<ObservedTable, "rows">[] => [
@@ -108,7 +109,7 @@ async function pagedRows(
   let after = "";
   for (;;) {
     const page = await rows(db,
-      `select * from ${table} where (${where}) and id > ? order by id limit 100`,
+      `select * from ${table} where (${where}) and id > ? order by id limit ${D1_READ_PAGE_SIZE}`,
       [...args, after]);
     if (page.length === 0) return collected;
     for (const row of page) {
@@ -122,7 +123,7 @@ async function pagedRows(
     if (typeof last !== "string" || last <= after) throw new Error(`D1 Source ownership ${table} page did not advance`);
     collected.push(...page);
     after = last;
-    if (page.length < 100) return collected;
+    if (page.length < D1_READ_PAGE_SIZE) return collected;
   }
 }
 
@@ -360,33 +361,44 @@ function fence(db: D1Database, observed: ObservedTable): D1PreparedStatement[] {
     (select count(*) from ${observed.table} where ${observed.where}) = ?
     then 1 else json_extract('source_ownership_conflict', '$') end as guard`)
     .bind(...observed.args, observed.rows.length)];
-  for (let i = 0; i < observed.rows.length;) {
-    const chunk: PhysicalRow[] = [];
-    while (i < observed.rows.length && chunk.length < 10) {
-      const candidate = observed.rows[i]!;
-      const next = [...chunk, candidate];
-      const nextBytes = encoder.encode(JSON.stringify(next)).byteLength;
-      if (nextBytes > D1_GUARD_BIND_MAX_BYTES) {
-        if (chunk.length === 0) {
-          statements.push(physicalRowFence(db, observed.table, candidate));
-          i++;
-        }
-        break;
-      }
-      chunk.push(candidate);
-      i++;
-    }
-    if (chunk.length === 0) continue;
-    const columns = Object.keys(chunk[0]!);
-    if (!columns.every((name) => /^[a-z_]+$/u.test(name))) throw new Error("D1 Source ownership unexpected column");
-    const mismatch = columns.map((name) =>
-      `t.${name} is not json_extract(e.value, '$.${name}')`).join(" or ");
+  if (observed.rows.length === 0) return statements;
+  const columns = Object.keys(observed.rows[0]!);
+  if (!columns.every((name) => /^[a-z_]+$/u.test(name))) throw new Error("D1 Source ownership unexpected column");
+  const mismatch = columns.map((name) =>
+    `t.${name} is not json_extract(e.value, '$.${name}')`).join(" or ");
+  const chunk: string[] = [];
+  let chunkBytes = 2; // JSON array brackets
+  const flush = () => {
+    if (chunk.length === 0) return;
     statements.push(db.prepare(`select case when not exists (
       select 1 from json_each(?) e left join ${observed.table} t on t.id = json_extract(e.value, '$.id')
       where t.id is null or ${mismatch}
     ) then 1 else json_extract('source_ownership_conflict', '$') end as guard`)
-      .bind(checkedJson(chunk, `${observed.table} guard chunk`)));
+      .bind(`[${chunk.join(",")}]`));
+    chunk.length = 0;
+    chunkBytes = 2;
+  };
+  for (const row of observed.rows) {
+    if (Object.keys(row).length !== columns.length ||
+      columns.some((name) => !Object.hasOwn(row, name))) {
+      throw new Error("D1 Source ownership inconsistent physical columns");
+    }
+    const encoded = JSON.stringify(row);
+    const rowBytes = encoder.encode(encoded).byteLength;
+    if (rowBytes + 2 > D1_GUARD_BIND_MAX_BYTES) {
+      flush();
+      statements.push(physicalRowFence(db, observed.table, row));
+      continue;
+    }
+    const separatorBytes = chunk.length > 0 ? 1 : 0;
+    if (chunk.length >= D1_READ_PAGE_SIZE ||
+      chunkBytes + separatorBytes + rowBytes > D1_GUARD_BIND_MAX_BYTES) {
+      flush();
+    }
+    chunkBytes += (chunk.length > 0 ? 1 : 0) + rowBytes;
+    chunk.push(encoded);
   }
+  flush();
   return statements;
 }
 

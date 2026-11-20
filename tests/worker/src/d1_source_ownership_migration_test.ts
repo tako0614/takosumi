@@ -79,6 +79,86 @@ test("operator inventory prepares one Source per request against isolated native
   }
 }, 30_000);
 
+test("operator retires a 3,000-snapshot native D1 group in one bounded batch", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [{ type: "ESModule", path: "source-ownership-bulk-retire.mjs",
+      contents: "export default {fetch(){return new Response('ok')}}" }],
+    d1Databases: { CONTROL: "source-ownership-bulk-retire" },
+  });
+  try {
+    const db = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+    const store = new CloudflareD1OpenTofuControlStore(db);
+    await store.putWorkspace({ id: workspaceId, handle: "migration-d1", displayName: "Migration D1",
+      type: "personal", ownerUserId: "owner_migration_d1", createdAt: t0, updatedAt: t0 });
+    await store.putSource({ id: sourceId, workspaceId, name: "bulk retire", url, defaultRef: "main",
+      defaultPath: ".", status: "active", autoSync: false, hookSecretHash: "a".repeat(64),
+      createdAt: t0, updatedAt: t0 });
+    const snapshot: SourceSnapshot = { id: "snap_bulk_0000", origin: "git", workspaceId, sourceId, url,
+      ref: "main", path: ".", resolvedCommit: "a".repeat(40),
+      archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_bulk_0000/source.tar.zst`,
+      archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+      fetchedByRunId: "ssr_historical", fetchedAt: t0 };
+    await db.prepare(`with recursive seq(n) as (
+      select 1 union all select n + 1 from seq where n < 3000
+    ) insert into source_snapshots (id, source_id, record_json, fetched_at)
+    select 'snap_bulk_' || printf('%04d', n), ?,
+      json_set(?, '$.id', 'snap_bulk_' || printf('%04d', n),
+        '$.archiveRef', 'workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_bulk_'
+          || printf('%04d', n) || '/source.tar.zst'), ?
+    from seq`).bind(sourceId, JSON.stringify(snapshot), t0).run();
+    const rows = async () => (await db.prepare(
+      "select id, source_id, record_json, fetched_at from source_snapshots order by id",
+    ).all()).results;
+    const before = await rows();
+    expect(before).toHaveLength(3_000);
+
+    const batchSizes: number[] = [];
+    const countedDb = new Proxy(db, {
+      get(target, key) {
+        if (key === "batch") return async (statements: readonly D1PreparedStatement[]) => {
+          batchSizes.push(statements.length);
+          return target.batch(statements);
+        };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as D1Database;
+    const token = "test-operator-bulk-retire-token";
+    const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: token, TAKOSUMI_CONTROL_DB: countedDb } as CloudflareWorkerEnv;
+    const target = `https://operator.test${SOURCE_OWNERSHIP_MIGRATION_PATH}`;
+    const now = () => new Date("2026-10-28T00:00:00.000Z");
+    const fetchFixture = async (input: RequestInfo | URL, init?: RequestInit) =>
+      (await handleSourceOwnershipMigrationOperatorRequest(new Request(String(input), init), env, { now }))!;
+    const reviewed = await runOperatorSourceOwnership(
+      { baseUrl: target, sourceId, apply: false }, token, fetchFixture as typeof fetch);
+    expect(reviewed.status).toBe(200);
+    const review = reviewed.body as { preparedAt: string; reportDigest: string;
+      results: Array<{ status: string; inventory: { action: string; snapshotCount: number } }> };
+    expect(review.results).toHaveLength(1);
+    expect(review.results[0]).toMatchObject({
+      status: "dry_run", inventory: { action: "retire", snapshotCount: 3_000 },
+    });
+    expect(batchSizes).toEqual([]);
+
+    const applied = await runOperatorSourceOwnership(
+      { baseUrl: target, sourceId, apply: true,
+        preparedAt: review.preparedAt, reportDigest: review.reportDigest },
+      token, fetchFixture as typeof fetch);
+    expect(applied.status).toBe(200);
+    expect(applied.body).toMatchObject({ results: [{ status: "committed" }] });
+    expect(batchSizes).toHaveLength(1);
+    expect(batchSizes[0]).toBeLessThanOrEqual(50);
+    console.info("source ownership native batch statements", batchSizes[0]);
+    expect(await rows()).toEqual(before);
+    expect(await store.getSource(sourceId)).toMatchObject({
+      status: "disabled", autoSync: false,
+    });
+  } finally {
+    await runtime.dispose();
+  }
+}, 45_000);
+
 class InterleavedD1 extends SqliteFakeD1 {
   beforeNextBatch?: () => Promise<void>;
   override async batch<T = unknown>(statements: readonly D1PreparedStatement[]): Promise<readonly D1Result<T>[]> {
