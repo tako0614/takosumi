@@ -117,12 +117,14 @@ test("replacement can be offered after a failed removal even with verified conne
     ...failed,
     progress: { revisionPreparing: false, review: { runId: "new_plan", runType: "destroy_plan" } },
   })).toBeUndefined();
-  expect(appUninstallRecoveryMode({
+  const withUnavailableBinding = {
     ...failed,
     problems: [...failed.problems, {
       code: "connection_unavailable", severity: "error", connectionId: "old", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionStatus: "expired",
     }],
-  })).toBe("unavailable");
+  } as const;
+  expect(appUninstallRecoveryMode(withUnavailableBinding)).toBe("failed");
+  expect(appUninstallRecoveryMode({ ...withUnavailableBinding, latestRun: undefined })).toBe("unavailable");
 });
 
 test("the export note reports what was exported, and nothing when unrecorded", () => {

@@ -51,13 +51,11 @@ export default function AppUninstallConnectionRecovery(props: {
     }
     const current = available();
     if (!current) return [];
-    const originals = new Map((props.mode === "refused" ? current.connections : current.verified)
-      .map((connection) => [connection.id, connection]));
+    const originals = new Map(current.connections.map((connection) => [connection.id, connection]));
     const rows = new Map<string, { connectionId: string; provider: string; label: string }>();
     for (const { connectionId, provider } of current.bindings) {
       const original = originals.get(connectionId);
-      if ((!original && props.mode !== "refused") ||
-        (original && (original.scope === "operator" || !sameProviderSource(provider, original.providerSource))) ||
+      if ((original && (original.scope === "operator" || !sameProviderSource(provider, original.providerSource))) ||
         options(provider, connectionId).length === 0) continue;
       rows.set(connectionId, {
         connectionId,
