@@ -667,9 +667,10 @@ link は雛形の `{origin}` と `{url}` にその画面の URL を入れた後�
 `POST /api/v1/install-plans/{installPlanId}/reconcile` でその試みを進めます。管理の権限を記録する前に
 書かれた試みは進められないため、名前は返しません。試みが作った人の入力を待っている間は
 `progress.installPlanAwaitingInput` が `viewer`（呼び出した本人が始めた）か `other` になり、
-その間は reconcile しても進みません。版の更新処理が計画の Run を作らないまま止まった場合は
-`progress.revisionPlanId` に名前が入り、`POST /api/v1/revision-plans/{revisionPlanId}/reconcile`
-で続けられます。版の更新処理は、始めたときの状態の世代と InstallConfig がいまの Capsule と同じ間だけ
+その間は reconcile しても進みません。版の更新処理が計画の Run を作る前は、開始した本人に
+`progress.revisionPlanId` を返します。準備が止まった場合は、アプリを読める他の利用者にも返します。
+アプリを更新できる利用者は `POST /api/v1/revision-plans/{revisionPlanId}/reconcile` で同じ処理を続けられます。
+版の更新処理は、始めたときの状態の世代と InstallConfig がいまの Capsule と同じ間だけ
 数えます。その後にほかの変更が適用された処理や、設定の変更で InstallConfig が付け替わった処理
 （世代は変わりません）は reconcile しても失敗するだけなので、準備中にも
 `revisionPlanId` にもなりません。Workspace のメンバーなら誰でもこれらを reconcile できますが、作られる計画の Run の

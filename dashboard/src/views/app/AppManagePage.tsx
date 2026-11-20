@@ -862,8 +862,8 @@ export default function AppManagePage(props: {
       },
       { action: "continue_install" },
     );
-  // A version change whose preparation stopped is continued through its own
-  // coordinator, then reviewed in place like any update.
+  // Continue the existing version change through its own coordinator, then
+  // review it in place like any update.
   const continueRevision = (revisionPlanId: string) =>
     void startReview(
       "attention",

@@ -922,14 +922,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             });
           }
           return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
-            primaryAction: committed ? "review" : "view_resources",
+            primaryAction: committed ? "review" : retireUpdate && submitted ? "none" : "view_resources",
+            ...(retireUpdate && submitted && !committed ? { state: "updating" } : {}),
             version: {
               current: { sourceSnapshotId: "snap_update_response", ref: "main", path: ".", commit: PORTABLE_SOURCE_COMMIT },
               updateAvailable: false, stale: false, autoUpdate: false,
             },
             progress: committed
               ? { revisionPreparing: false, review: { runId: planId, runType: "plan" } }
-              : { revisionPreparing: false, ...(retireUpdate && submitted ? { revisionPlanId: revisionId } : {}) },
+              : {
+                revisionPreparing: retireUpdate && submitted,
+                ...(retireUpdate && submitted ? { revisionPlanId: revisionId } : {}),
+              },
           }) } });
         }
         if (path === `/api/v1/capsules/${CAPSULE_ID}/revision-plans` && request.method() === "POST") {
@@ -981,13 +985,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           response.url().endsWith(`/capsules/${CAPSULE_ID}/revision-plans`));
         await releaseCreation!();
         await (await accepted).finished();
-        await page.goBack();
-        await showAppOverview(page);
+        // Reload a fresh owner view rather than relying on local controller state.
+        await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+        await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-section", "overview");
 
-        const stopped = page.locator('[data-problem="revision-stalled"]');
-        await expect(stopped).toBeVisible();
+        await expect(page.locator('[data-progress="preparing"]')).toBeVisible();
+        const resume = page.getByRole("button", { name: "Continue", exact: true });
+        await expect(resume).toBeVisible();
         expect(mutations).toEqual([`POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`]);
-        await stopped.getByRole("button", { name: "Continue", exact: true }).click();
+        await resume.click();
         const review = page.getByTestId("app-review");
         await expect(review).toContainText("existing_update");
         await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeVisible();
