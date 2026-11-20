@@ -327,8 +327,7 @@ async function fetchAllPages<T>(
   extract: (
     body: { nextCursor?: string } & Record<string, unknown>,
   ) => readonly T[],
-  opts: {
-    readonly signal?: AbortSignal;
+  opts: Pick<RequestOpts, "signal" | "isCurrent"> & {
     readonly readPage?: (path: string) => Promise<{ nextCursor?: string } & Record<string, unknown>>;
   } = {},
 ): Promise<readonly T[]> {
@@ -342,7 +341,7 @@ async function fetchAllPages<T>(
         : `${basePath}${sep}cursor=${encodeURIComponent(cursor)}`;
     const body = opts.readPage ? await opts.readPage(path) : await controlFetch<
       { nextCursor?: string } & Record<string, unknown>
-    >(path, { signal: opts.signal });
+    >(path, opts);
     all.push(...extract(body));
     if (typeof body.nextCursor !== "string" || body.nextCursor === "") break;
     cursor = body.nextCursor;
@@ -1829,10 +1828,11 @@ export async function deleteCapsule(
 
 export async function getCapsuleProviderBindingSet(
   capsuleId: string,
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<ProviderBindingSet | null> {
   const body = await controlFetch<{
     providerBindingSet: ProviderBindingSet | null;
-  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-bindings`);
+  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-bindings`, options);
   return body.providerBindingSet;
 }
 
@@ -3134,13 +3134,14 @@ export async function listConnections(
 export async function listConnectionsWithSignal(
   workspaceId?: string,
   signal?: AbortSignal,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
   if (await appOwnershipAvailable(signal)) {
     try {
       return await fetchAllPages<ProviderConnection>(
         `${BASE}/connections`,
         (body) => (body.connections as readonly ProviderConnection[]) ?? [],
-        { signal },
+        { signal, ...options },
       );
     } catch (error) {
       if (!isMissingControlRoute(error)) throw error;
@@ -3151,7 +3152,7 @@ export async function listConnectionsWithSignal(
   return await fetchAllPages<ProviderConnection>(
     `${BASE}/connections${query({ workspaceId: normalized })}`,
     (body) => (body.connections as readonly ProviderConnection[]) ?? [],
-    { signal },
+    { signal, ...options },
   );
 }
 
@@ -3164,24 +3165,26 @@ export async function listProviderConnections(
 export async function listProviderConnectionsWithSignal(
   workspaceId?: string,
   signal?: AbortSignal,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
-  if (await appOwnershipAvailable(signal)) return await listConnectionsWithSignal(workspaceId, signal);
+  if (await appOwnershipAvailable(signal)) return await listConnectionsWithSignal(workspaceId, signal, options);
   const normalized = await legacyWorkspaceFor404(workspaceId);
   if (!normalized) return [];
-  return await listLegacyProviderConnectionsWithSignal(normalized, signal);
+  return await listLegacyProviderConnectionsWithSignal(normalized, signal, options);
 }
 
 /** Only for a legacy OAuth start that explicitly returned this client context. */
 export async function listLegacyProviderConnectionsWithSignal(
   workspaceId: string,
   signal?: AbortSignal,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
   const normalized = normalizedWorkspaceId(workspaceId);
   if (!normalized) return [];
   const body = await controlFetch<{
     providerConnections?: readonly ProviderConnection[];
   }>(`${BASE}/provider-connections${query({ workspaceId: normalized })}`, {
-    signal,
+    signal, ...options,
   });
   return body.providerConnections ?? [];
 }

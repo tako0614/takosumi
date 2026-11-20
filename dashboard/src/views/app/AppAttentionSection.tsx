@@ -24,7 +24,7 @@ import {
 } from "../../lib/app-page.ts";
 import { installAttemptHref } from "../../lib/app-links.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
-import { appUninstallBanner, appUninstallConnectionNotice, appUninstallExportNote, appUninstallRecoveryConnections } from "../../lib/capsule-uninstall.ts";
+import { appUninstallBanner, appUninstallConnectionNotice, appUninstallExportNote, appUninstallFailure, appUninstallRecoveryMode } from "../../lib/capsule-uninstall.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
@@ -103,6 +103,7 @@ function failedRunTitle(problem: CapsuleAppProblem): MessageKey {
 
 export default function AppAttentionSection(props: {
   readonly app: CapsuleAppView;
+  readonly uninstallScope: string;
   readonly displayName: string;
   /** A review or change is being started, so other changes wait. */
   readonly busy: boolean;
@@ -128,11 +129,18 @@ export default function AppAttentionSection(props: {
       primary !== undefined && problemKey(primary) === problemKey(problem);
   };
   const scheduled = () => app().uninstall.scheduled;
-  const uninstallFailed = () => app().problems.find((problem) => problem.code === "uninstall_failed");
+  const uninstallFailed = createMemo(() => appUninstallFailure(app()));
+  const recoveryMode = createMemo(() => appUninstallRecoveryMode(app()));
+  const recoveryKey = createMemo(() => {
+    const mode = recoveryMode();
+    return props.canUninstall && mode
+      ? JSON.stringify([props.uninstallScope, mode, mode === "failed" ? app().latestRun?.id : undefined])
+      : undefined;
+  });
   const uninstallBlocked = () => app().problems.find((problem) => problem.code === "uninstall_blocked");
   const showUninstallCard = () => Boolean(scheduled() || uninstallFailed() || uninstallBlocked());
   const uninstallConnectionNotice = () => showUninstallCard() ? appUninstallConnectionNotice(app()) : undefined;
-  const cards = () => app().problems.filter((problem) => !UNINSTALL_CODES.has(problem.code) &&
+  const cards = () => app().problems.filter((problem) => !UNINSTALL_CODES.has(problem.code) && problem !== uninstallFailed() &&
     !(problem.code === "connection_unavailable" && uninstallConnectionNotice()));
   /** The app asking for a link, by the usedBy row the problem names. */
   const requesterName = (problem: CapsuleAppProblem) => {
@@ -344,10 +352,11 @@ export default function AppAttentionSection(props: {
                   <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
                 </Show>
               </div>
-              <Show when={props.canUninstall && Boolean(uninstallConnectionNotice()) && appUninstallRecoveryConnections(app()).length > 0 && app().capsuleId} keyed>
-                {(_capsuleId) => <AppUninstallConnectionRecovery
+              <Show when={recoveryKey()} keyed>
+                {(_scope) => <AppUninstallConnectionRecovery
                   app={app()}
-                  disabled={props.busy || Boolean(app().progress.run || app().progress.review || props.reviewRunId)}
+                  mode={recoveryMode()!}
+                  disabled={props.busy || Boolean(props.reviewRunId)}
                   onReview={props.actions.reviewUninstallWithConnection}
                 />}
               </Show>

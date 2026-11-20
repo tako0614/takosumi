@@ -1,4 +1,5 @@
 import type { Capsule, CapsuleAppView } from "./control-api.ts";
+import { isAppRemovalRun } from "./app-access.ts";
 import { formatDateTime, t, type MessageKey } from "../i18n/index.ts";
 
 export function appUninstallConnectionNotice(
@@ -33,6 +34,29 @@ export function appUninstallRecoveryConnections(
   });
 }
 
+export function appUninstallFailure(app: Pick<CapsuleAppView, "problems">) {
+  return app.problems.find((problem) =>
+    problem.code === "uninstall_failed" ||
+    (problem.code === "run_failed" && isAppRemovalRun(problem.runType)),
+  );
+}
+
+export function appUninstallRecoveryMode(
+  app: Pick<CapsuleAppView, "applied" | "state" | "progress" | "uninstall" | "problems" | "latestRun">,
+): "unavailable" | "failed" | undefined {
+  if (app.uninstall.mode === "discard" || app.progress.run || app.progress.review) return;
+  if (appUninstallConnectionNotice(app) && appUninstallRecoveryConnections(app).length > 0) return "unavailable";
+
+  // A failed teardown can leave the connected key marked verified. Let the
+  // owner try another key without guessing which provider caused the failure.
+  const run = app.latestRun;
+  if (!app.applied || app.state !== "needs_attention" || run?.status !== "failed" ||
+    !isAppRemovalRun(run.type) || run.errorCode === "runner_mutation_indeterminate" ||
+    run.errorCode === "policy_denied" || app.problems.some((problem) =>
+      problem.code === "policy_blocked" && problem.runId === run.id)) return;
+  return "failed";
+}
+
 /**
  * The one sentence that says where an app's uninstall stands, from the
  * control plane's app view: a teardown that failed or was stopped says so
@@ -47,7 +71,7 @@ export function appUninstallBanner(
   const notice = appUninstallConnectionNotice(app);
   if (notice === "app.uninstall.connectionRemoved") return t("app.uninstall.bannerConnectionRemoved", { name });
   if (notice === "app.uninstall.connectionUnavailable") return t("app.uninstall.bannerConnection", { name });
-  if (app.problems.some((problem) => problem.code === "uninstall_failed")) {
+  if (appUninstallFailure(app)) {
     return t("app.uninstall.bannerFailed", { name });
   }
   if (record?.blocked || app.problems.some((problem) => problem.code === "uninstall_blocked")) {
