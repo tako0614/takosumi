@@ -564,9 +564,15 @@ export default function AppManagePage(props: {
     purpose: ReviewPurpose,
     /** The Plan Run to review; `null` when the work continues elsewhere. */
     create: () => Promise<string | null | undefined>,
-    options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction | "continue_revision"; readonly isCurrent?: () => boolean } = {},
+    options: {
+      readonly restartable?: boolean;
+      readonly action?: CapsuleAppAction | "continue_revision";
+      readonly isCurrent?: () => boolean;
+      readonly replaceReview?: ActiveReview;
+    } = {},
   ) => {
-    if (reviewBusy() || appRole() === undefined || (purpose === "uninstall" && !isOwner())) return;
+    const busy = options.replaceReview ? starting() !== undefined || review() !== options.replaceReview : reviewBusy();
+    if (busy || appRole() === undefined || (purpose === "uninstall" && !isOwner())) return;
     // A result that arrives after the page moved to another app is dropped.
     const forCapsule = capsuleId();
     const forAccount = props.accountId;
@@ -690,6 +696,10 @@ export default function AppManagePage(props: {
             {...(active().initialRunId ? { initialRunId: active().initialRunId! } : {})}
             capsuleId={capsuleId()}
             onDone={() => finishReview(active())}
+            {...(active().purpose === "uninstall" ? {
+              uninstallConnectionScope: uninstallScope(),
+              uninstallConnectionRecovery: (planRunId: string) => refusedUninstallRecovery(active(), planRunId),
+            } : {})}
             // An install review has nothing to cancel on this page: the app
             // stays installable, and Uninstall removes it.
             {...(active().purpose === "install" ? {} : { onDiscard: async () => closeReview(active()) })}
@@ -1084,6 +1094,41 @@ export default function AppManagePage(props: {
       { restartable: false, action: "uninstall_now" },
     );
   };
+  const refusedUninstallRecovery = (heldReview: ActiveReview, planRunId: string) => {
+    const scope = uninstallScope();
+    const epoch = uninstallEpoch;
+    const isCurrent = () => !disposed && isOwner() && uninstallScope() === scope &&
+      uninstallEpoch === epoch && review() === heldReview && heldReview.planRunId === planRunId;
+    const reviewedApp = (view: CapsuleAppView | null | undefined) =>
+      view?.applied && view.capsuleId === capsuleId() && view.workspaceId === workspaceId() &&
+        !view.progress.run && !view.progress.revisionPreparing &&
+        view.progress.review?.runType === "destroy_plan" && view.progress.review.runId === planRunId &&
+        view.latestRun?.id === planRunId && view.latestRun.type === "destroy_plan" && view.latestRun.status === "succeeded"
+        ? view
+        : undefined;
+    return (
+      <Show when={isCurrent() && reviewedApp(app())}>
+        {(view) => (
+          <AppUninstallConnectionRecovery
+            app={view()}
+            mode="refused"
+            disabled={starting() !== undefined}
+            onReview={(replacements) => {
+              if (!isCurrent() || !reviewedApp(app())) return;
+              void startReview("attention", "uninstall", async () => {
+                const fresh = reviewedApp(await refetchApp({ isCurrent }));
+                if (!isCurrent() || !fresh) {
+                  throw new Error(t("installStore.recoveryUnverified"));
+                }
+                return extractRunId(await createCapsuleDestroyRecoveryPlan(fresh.capsuleId, replacements, { isCurrent }));
+              }, { restartable: false, action: "uninstall_now", replaceReview: heldReview, isCurrent });
+            }}
+          />
+        )}
+      </Show>
+    );
+  };
+
   const reviewUninstallWithConnection = (replacements: readonly DestroyProviderConnectionReplacement[]) => {
     const view = app();
     if (!view || !isOwner() || !appUninstallRecoveryMode(view) || review()) return;
