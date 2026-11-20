@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -485,7 +485,10 @@ async function exerciseCodeLane(options: {
   readonly topologyDriftAt?: number;
   readonly routeDrift?: CodeRouteDrift;
   readonly containerDrift?: boolean;
+  readonly containerFailsAfterActivation?: boolean;
   readonly uploadFails?: boolean;
+  readonly uploadReadbackFails?: boolean;
+  readonly activationFails?: boolean;
   readonly resume?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-version" | "wrong-predecessor" | "already-serving" | "unhealthy" | "source-drift";
   readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
   readonly loginSmokeFails?: boolean;
@@ -573,6 +576,7 @@ async function exerciseCodeLane(options: {
         "utf8",
       );
       activated = true;
+      if (options.activationFails) throw new Error("lost activation acknowledgement");
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     if (argv[1] === "deployments" && argv[2] === "status") {
@@ -589,7 +593,10 @@ async function exerciseCodeLane(options: {
       };
     }
     if (argv[1] === "versions" && argv[2] === "view") {
-      if (argv[3] === CODE_DEPLOYED_ID) operationOrder.push("candidate");
+      if (argv[3] === CODE_DEPLOYED_ID) {
+        operationOrder.push("candidate");
+        if (options.uploadReadbackFails) throw new Error("uploaded Version not visible yet");
+      }
       return {
         exitCode: 0,
         stdout: JSON.stringify(argv[3] === CODE_PREDECESSOR_ID ? predecessor : deployed),
@@ -607,11 +614,24 @@ async function exerciseCodeLane(options: {
       return { exitCode: 0, stdout: JSON.stringify([container.summary]), stderr: "" };
     }
     if (argv[1] === "containers" && argv[2] === "info") {
-      return { exitCode: 0, stdout: JSON.stringify(container.detail), stderr: "" };
+      const detail = activated && options.containerFailsAfterActivation
+        ? statusContainerSource({ failed: 1 }).detail
+        : container.detail;
+      return { exitCode: 0, stdout: JSON.stringify(detail), stderr: "" };
     }
     throw new Error(`unexpected command: ${argv.slice(1).join(" ")}`);
   };
   const cleanNativeRead = codeNativeRead(source);
+  const resultLines: string[] = [];
+  const write = process.stdout.write;
+  const stdout = spyOn(process.stdout, "write").mockImplementation((...args) => {
+    const [chunk] = args;
+    if (typeof chunk === "string" && chunk.startsWith('{"kind":"takosumi.platform-worker-staging-')) {
+      resultLines.push(chunk);
+      return true;
+    }
+    return Reflect.apply(write, process.stdout, args);
+  });
   let error: unknown;
   try {
     await (options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
@@ -664,10 +684,12 @@ async function exerciseCodeLane(options: {
   } catch (caught) {
     error = caught;
   } finally {
+    stdout.mockRestore();
     rmSync(directory, { recursive: true, force: true });
   }
   return {
     error,
+    results: resultLines.map((line) => JSON.parse(line) as Record<string, unknown>),
     uploadCount,
     activationCount,
     buildCount,
@@ -1147,6 +1169,51 @@ test("routine code never retries a lost acknowledgement", async () => {
   expect(lost.error).toBeInstanceOf(Error);
   expect((lost.error as Error).message).toBe("platform_worker_code_release_incomplete");
   expect(lost).toMatchObject({ uploadCount: 1, activationCount: 0 });
+  const [result] = lost.results;
+  expect(lost.results).toHaveLength(1);
+  expect(result).toMatchObject({ status: "incomplete", mutation: "upload" });
+  expect(result).not.toHaveProperty("candidateVersionId");
+  expect(result).not.toHaveProperty("observedServingVersionId");
+});
+
+test("incomplete staging code output retains the Version from the upload acknowledgement", async () => {
+  const result = await exerciseCodeLane({ uploadReadbackFails: true });
+  expect(result).toMatchObject({ uploadCount: 1, activationCount: 0 });
+  expect(result.results).toHaveLength(1);
+  expect(result.results[0]).toMatchObject({
+    kind: "takosumi.platform-worker-staging-code@v1",
+    status: "incomplete",
+    mutation: "upload",
+    predecessorVersionId: CODE_PREDECESSOR_ID,
+    candidateVersionId: CODE_DEPLOYED_ID,
+    entryDigest: platformExecutionEvidenceReleasePins(CODE_BUNDLE, STATUS_CONTAINER_IMAGE).controllerArtifactDigest,
+    dashboardDigest: `sha256:${"d".repeat(64)}`,
+    releaseTag: `tks-stg-code-${"1".repeat(32)}`,
+  });
+  expect(result.results[0]).not.toHaveProperty("observedServingVersionId");
+  expect(result.results[0]).not.toHaveProperty("authorityDrift");
+});
+
+test("incomplete resume reports observed serving Version and drift sections after activation", async () => {
+  const options = { resume: "valid", topologyDriftAt: 3, containerFailsAfterActivation: true } as const;
+  const result = await exerciseCodeLane(options);
+  expect(result).toMatchObject({ uploadCount: 0, activationCount: 1 });
+  expect(result.results).toHaveLength(1);
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "activate",
+    candidateVersionId: CODE_DEPLOYED_ID,
+    observedServingVersionId: CODE_DEPLOYED_ID,
+    authorityDrift: ["container", "topology"],
+  });
+  expect(((result.error as Error).cause as Error).message).toBe("platform_worker_code_authority_drift");
+  const before = await exerciseCodeLane({ ...options, topologyDriftAt: 2 });
+  expect(before).toMatchObject({ results: [], uploadCount: 0, activationCount: 0 });
+  const lost = await exerciseCodeLane({ resume: "valid", activationFails: true });
+  expect(lost).toMatchObject({ uploadCount: 0, activationCount: 1 });
+  expect(lost.results).toHaveLength(1);
+  expect(lost.results[0]).toMatchObject({ status: "incomplete", candidateVersionId: CODE_DEPLOYED_ID });
+  expect(lost.results[0]).not.toHaveProperty("observedServingVersionId");
 });
 
 test("platform release owns isolated staging and production targets", () => {
