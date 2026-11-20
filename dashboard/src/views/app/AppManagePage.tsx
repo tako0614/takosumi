@@ -90,7 +90,7 @@ import {
   releaseRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
-import { appUninstallConnectionNotice, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
+import { appUninstallConnectionNotice, appUninstallRecoveryConnections, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
 import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
 import {
   APP_HISTORY_RUN_TYPES,
@@ -133,6 +133,7 @@ import AppCreatedSection from "./AppCreatedSection.tsx";
 import AppHistorySection from "./AppHistorySection.tsx";
 import AppLinkedSection from "./AppLinkedSection.tsx";
 import AppSharingSection from "./AppSharingSection.tsx";
+import AppUninstallConnectionRecovery from "./AppUninstallConnectionRecovery.tsx";
 import { appPrimaryAllowed, isAppRemovalRun, resolveAppRole } from "../../lib/app-access.ts";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
 
@@ -1102,7 +1103,8 @@ export default function AppManagePage(props: {
   };
   const reviewUninstallWithConnection = (replacements: readonly DestroyProviderConnectionReplacement[]) => {
     const view = app();
-    if (!view || !isOwner() || uninstallConnectionNotice() !== "app.uninstall.connectionRemoved" ||
+    if (!view || !isOwner() || !uninstallConnectionNotice() ||
+      appUninstallRecoveryConnections(view).length === 0 ||
       review() || view.progress.run || view.progress.review) return;
     const heldScope = uninstallScope();
     const heldEpoch = uninstallEpoch;
@@ -1687,6 +1689,13 @@ export default function AppManagePage(props: {
                 >
                   <Show when={uninstallConnectionNotice()}>
                     {(notice) => <p role="status">{t(notice())}</p>}
+                  </Show>
+                  <Show when={view().uninstall.mode === "none" && appUninstallRecoveryConnections(view()).length > 0}>
+                    <AppUninstallConnectionRecovery
+                      app={view()}
+                      disabled={reviewBusy() || uninstallBusy() || Boolean(review() || view().progress.run || view().progress.review)}
+                      onReview={reviewUninstallWithConnection}
+                    />
                   </Show>
                   <div class="ap-row-actions">
                     <Show when={uninstallConnectionNotice() === "app.uninstall.connectionUnavailable"}>

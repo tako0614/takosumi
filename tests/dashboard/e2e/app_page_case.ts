@@ -1384,12 +1384,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const ID = "cap_states_e";
       const NAME = "State Echo";
       const now = "2026-10-20T00:00:00.000Z";
-      type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
+      type Scene = "uninstall_scheduled" | "uninstall_immediate" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = "uninstall_scheduled";
       let connectionRemoved = false;
       const replacementPlanBodies: unknown[] = [];
       const connectionProblem = {
-        code: "connection_unavailable", severity: "error", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionId: "conn_removed", connectionStatus: "missing",
+        code: "connection_unavailable", severity: "error", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionId: "conn_removed", connectionStatus: "revoked",
       } as const;
       let attemptAwaitsInput = false;
       let viewUnavailable = false;
@@ -1445,6 +1445,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               status: "uninstalled", state: "uninstall_scheduled", primaryAction: "cancel_uninstall", screens: [screen],
               problems: [...(connectionRemoved ? [connectionProblem] : []), { code: "uninstall_scheduled", severity: "warning" }],
               uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "scheduled", requestedAt: now, deleteAfter, cancellable: true, blocked: false, preDestroyExport: { status: "skipped" } } },
+            });
+          case "uninstall_immediate":
+            return appView(ID, NAME, {
+              screens: [screen],
+              ...(connectionRemoved ? { problems: [connectionProblem] } : {}),
+              uninstall: { mode: "none", impact: { usedBy: [] } },
             });
           case "updating":
             return appView(ID, NAME, {
@@ -1534,6 +1540,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         const base = `/api/v1/capsules/${ID}`;
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
+          { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified" },
           { id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified" },
           { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
           { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "verified" },
@@ -1657,6 +1664,26 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await page.reload({ waitUntil: "domcontentloaded" });
       await header.getByRole("button", { name: "Cancel uninstall", exact: true }).click();
       await expect(app).toHaveAttribute("data-app-state", "installed");
+
+      // An immediate-mode app with a revoked binding can still start a reviewed
+      // recovery plan; it does not skip directly to destructive uninstall.
+      scene = "uninstall_immediate";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await openAppPane(page, "danger");
+      const immediate = page.getByTestId("app-uninstall");
+      await expect(immediate.getByRole("button", { name: "Choose connection for uninstall" })).toBeVisible();
+      await expect(immediate.getByRole("button", { name: "Uninstall now", exact: true })).toBeDisabled();
+      const immediateChoices = immediate.getByRole("combobox", { name: "Cloudflare" });
+      await immediate.getByRole("button", { name: "Choose connection for uninstall" }).click();
+      await immediateChoices.selectOption("conn_saved");
+      const mutationCountBeforeImmediateRecovery = seenMutations.length;
+      await immediate.getByRole("button", { name: "Review removal" }).click();
+      await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+      expect(seenMutations.slice(mutationCountBeforeImmediateRecovery)).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+
+      scene = "incomplete";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await showAppOverview(page);
 
       // Parts the server could not read say so instead of showing nothing.
       await expect(header.getByRole("alert")).toHaveText("Couldn't read its screens.");
@@ -1834,6 +1861,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(seenMutations).toEqual([
         `POST /api/v1/capsules/${ID}/destroy-plan`,
         `POST /api/v1/capsules/${ID}/cancel-uninstall`,
+        `POST /api/v1/capsules/${ID}/destroy-plan`,
         "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
         "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
         "POST /api/v1/revision-plans/grp_states_e/reconcile",

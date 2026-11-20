@@ -6,6 +6,7 @@ import { t } from "../../i18n/index.ts";
 import { providerName } from "../../lib/app-page.ts";
 import { listProviderConnections, type CapsuleAppView } from "../../lib/control-api.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
+import { appUninstallRecoveryConnections } from "../../lib/capsule-uninstall.ts";
 
 export default function AppUninstallConnectionRecovery(props: {
   readonly app: Pick<CapsuleAppView, "workspaceId" | "problems">;
@@ -18,24 +19,18 @@ export default function AppUninstallConnectionRecovery(props: {
     ({ workspaceId }) => listProviderConnections(workspaceId),
   );
   const rows = createMemo(() => {
-    const missing = new Map<string, string>();
-    for (const problem of props.app.problems) {
-      if (problem.code === "connection_unavailable" && problem.connectionStatus === "missing" &&
-        problem.connectionId && problem.provider) {
-        missing.set(problem.connectionId, problem.provider);
-      }
-    }
-    return [...missing].map(([connectionId, provider]) => ({ connectionId, provider }));
+    return appUninstallRecoveryConnections(props.app);
   });
   const [selection, setSelection] = createSignal<ReadonlyMap<string, string>>(new Map());
-  const options = (provider: string) => (choices.state === "ready" ? choices() ?? [] : []).filter((connection) =>
+  const options = (provider: string, originalConnectionId: string) => (choices.state === "ready" ? choices() ?? [] : []).filter((connection) =>
+    connection.id !== originalConnectionId &&
     connection.scope !== "operator" && connection.status === "verified" &&
     (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.now()) &&
     sameProviderSource(provider, connection.providerSource));
   const replacements = createMemo(() => {
     const selected = rows().flatMap(({ connectionId, provider }) => {
       const replacementConnectionId = selection().get(connectionId);
-      return replacementConnectionId && options(provider).some((connection) => connection.id === replacementConnectionId)
+      return replacementConnectionId && options(provider, connectionId).some((connection) => connection.id === replacementConnectionId)
         ? [{ connectionId, replacementConnectionId }] : [];
     });
     return selected.length > 0 && selected.length === rows().length &&
@@ -57,7 +52,7 @@ export default function AppUninstallConnectionRecovery(props: {
               <p role="alert">{t("app.uninstall.replacementLoadFailed")}</p>
               <Button variant="secondary" type="button" onClick={() => void refetch()}>{t("common.retry")}</Button>
             </Match>
-            <Match when={rows().some(({ provider }) => options(provider).length === 0)}>
+            <Match when={rows().some(({ provider, connectionId }) => options(provider, connectionId).length === 0)}>
               <p>{t("app.uninstall.noReplacement")}</p>
             </Match>
             <Match when={choices.state === "ready"}>
@@ -67,7 +62,7 @@ export default function AppUninstallConnectionRecovery(props: {
                   <Select value={selection().get(connectionId) ?? ""} disabled={props.disabled} onChange={(event) =>
                     setSelection(new Map(selection()).set(connectionId, event.currentTarget.value))}>
                     <option value="">{t("app.uninstall.replacementPlaceholder")}</option>
-                    <For each={options(provider)}>{(connection) => (
+                    <For each={options(provider, connectionId)}>{(connection) => (
                       <option value={connection.id} disabled={[...selection()].some(([id, selected]) => id !== connectionId && selected === connection.id)}>
                         {providerConnectionDisplayName(connection)}
                       </option>

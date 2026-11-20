@@ -13441,7 +13441,7 @@ test("v2.6 marked repository Plan refuses a different snapshot API before materi
 });
 
 
-test("destroy explicitly recovers a deleted connection only for its confirmed applied account", async () => {
+test.each(["deleted", "expired", "verified"] as const)("destroy explicitly replaces a %s connection only for its confirmed applied account", async (originalStatus) => {
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -13464,7 +13464,7 @@ test("destroy explicitly recovers a deleted connection only for its confirmed ap
     const row = await vault.register({
       workspaceId: seeded.workspace.id, provider: FIXTURE_CLOUDFLARE_PROVIDER,
       credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
-      values: { CLOUDFLARE_API_TOKEN: "synthetic-fixture-token", CLOUDFLARE_ACCOUNT_ID: accountId },
+      values: { CLOUDFLARE_API_TOKEN: `synthetic-fixture-token-${sequence}`, CLOUDFLARE_ACCOUNT_ID: accountId },
     }, undefined, null);
     expect((await vault.test(row.id, undefined, null)).status).toBe("verified");
     return (await store.getConnection(row.id))!;
@@ -13504,9 +13504,12 @@ test("destroy explicitly recovers a deleted connection only for its confirmed ap
   const configBefore = await store.getInstallConfig(capsuleBefore.installConfigId);
   const appliedPlanBefore = await store.getPlanRun(created.planRun.id);
   const stateBefore = await store.getStateVersion(capsuleBefore.currentStateVersionId!);
-  expect(await vault.revoke(old.id, undefined, null)).toBe(true);
-  expect(await store.getConnection(old.id)).toBeUndefined();
-  await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id)).rejects.toMatchObject({ code: "not_found" });
+  if (originalStatus === "deleted") {
+    expect(await vault.revoke(old.id, undefined, null)).toBe(true);
+  } else if (originalStatus === "expired") {
+    await store.putConnection({ ...old, status: "expired" });
+  }
+  const originalBeforeRecovery = await store.getConnection(old.id);
   const selection = [{ connectionId: old.id, replacementConnectionId: replacement.id }];
   const { PlanRunPreparationConflictError } = await import("../../../../core/domains/deploy-control/store.ts");
   const noDispatch = async (work: () => Promise<unknown>, expected: typeof OpenTofuControllerError | typeof PlanRunPreparationConflictError = OpenTofuControllerError) => {
@@ -13527,6 +13530,21 @@ test("destroy explicitly recovers a deleted connection only for its confirmed ap
     await store.putConnection(row); await noDispatch(attempt);
   }
   await store.putConnection(replacement);
+  const foreignOwner = {
+    ...replacement,
+    id: "conn_other_owner",
+    scope: "personal" as const,
+    ownerAccountId: "unrelated-fixture-owner",
+  };
+  await store.putConnection(foreignOwner);
+  await noDispatch(() => controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+    destroyProviderConnectionReplacements: [{ connectionId: old.id, replacementConnectionId: foreignOwner.id }],
+  }));
+  if (originalBeforeRecovery) {
+    await store.putConnection({ ...originalBeforeRecovery, scope: "operator" });
+    await noDispatch(attempt);
+    await store.putConnection(originalBeforeRecovery);
+  }
   for (const legacy of [
     { ...appliedPlanBefore!, resolvedProviderBindingsDigest: undefined },
     { ...appliedPlanBefore!, requiredProviderRequirements: undefined },
@@ -13566,15 +13584,17 @@ test("destroy explicitly recovers a deleted connection only for its confirmed ap
   }
   expect((await request({ destroyProviderConnectionReplacements: selection }, "oauth-access-token"))!.status).toBe(403);
   expect(routeDispatches).toBe(0);
-  // No-body callers retain the ordinary path, which still cannot use a deleted row.
-  expect((await request(undefined))!.status).toBe(404);
-  expect(routeDispatches).toBe(1);
+  // No-body callers still use the original connection, without falling back.
+  if (originalStatus !== "verified") {
+    expect((await request(undefined))!.status).toBe(originalStatus === "deleted" ? 404 : 409);
+    expect(routeDispatches).toBe(1);
+  }
   const routed = await request({ destroyProviderConnectionReplacements: selection });
   expect(routed!.status).toBe(201);
   const routedBody = await routed!.json() as { run: Run };
   expect(routedBody.run.type).toBe("destroy_plan");
   expect(routedBody.run.capsuleId).toBe(seeded.capsule.id);
-  expect(routeDispatches).toBe(2);
+  expect(routeDispatches).toBe(originalStatus === "verified" ? 1 : 2);
   const destroy = await controller.getPlanRun(routedBody.run.id);
   expect(destroy.planRun.createdBy).toBe(seeded.workspace.ownerUserId);
   const repeated = await controller.createCapsuleDestroyPlan(seeded.capsule.id, { actor: seeded.workspace.ownerUserId }, {
@@ -13611,7 +13631,7 @@ test("destroy explicitly recovers a deleted connection only for its confirmed ap
   expect(mintIds.at(-1)).toEqual([replacement.id]);
   expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
   expect(await store.getInstallConfig(capsuleBefore.installConfigId)).toEqual(configBefore);
-  expect(await store.getConnection(old.id)).toBeUndefined();
+  expect(await store.getConnection(old.id)).toEqual(originalBeforeRecovery);
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
 
