@@ -1304,6 +1304,8 @@ export const ja = {
   "account.signOut.title": "サインアウト",
   "account.signOut.cta": "このブラウザからサインアウト",
   "account.signOut.confirm": "サインアウトしますか？",
+  "account.signOut.pending": "サインアウトしています…",
+  "account.signOut.unavailable": "サインアウトを確認できませんでした。通信状態を確認して再試行してください。",
   "account.apiKeys.subtitle":
     "Takosumi CLI や自動化から、あなたとして操作するためのキーです。CLI では --token にキーを渡します。",
   "account.apiKeys.apiHelp":
