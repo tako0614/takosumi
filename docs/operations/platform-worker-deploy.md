@@ -691,6 +691,16 @@ must still be well-formed. Native
 fallback reads use only the fixed provider origin and in-memory credentials;
 Wrangler authentication output and its disk logging are never retained.
 
+On execute and recover, a reviewed change to a different immutable Runner
+image allows deployment readback to poll for up to 16 minutes, reflecting
+Cloudflare's instance drain and startup. Readback starts at five-second
+intervals and slows to 15 seconds after the normal window. A read already
+in flight keeps its existing command deadline. Another Container application
+or image, or reported failed instances or errors, stops the check. Once the
+exact target image is healthy, the command rechecks the candidate's 100-percent
+Worker deployment and the public entry before recording ready. Releases that
+keep the same image retain the normal polling budget.
+
 If provider acknowledgement is lost, recovery lists the bounded recent Version
 set and accepts exactly one post-plan Version carrying that unique plan tag.
 Zero or multiple matches remain incomplete. The exact predecessor stays in the
