@@ -612,12 +612,15 @@ export default function InstallExecution(props: Props) {
         setApplyUnconfirmed(true);
         setError(t("installStore.applyUnconfirmed"));
       } else {
-        setError(friendlyError(cause, t).message);
         // These typed refusals also occur before Apply admission while
         // checking materialized inputs against the selected connection.
-        if (props.uninstallConnectionRecovery && plan.type === "destroy_plan" && cause.status === 409 &&
+        const canReplaceConnection = props.uninstallConnectionRecovery && plan.type === "destroy_plan" && cause.status === 409 &&
           cause.code === "failed_precondition" && (cause.reason === "provider_connection_not_ready" ||
-            cause.reason === "destroy_connection_recovery_unproven")) {
+            cause.reason === "destroy_connection_recovery_unproven");
+        setError(canReplaceConnection && cause.reason === "provider_connection_not_ready"
+          ? t("app.uninstall.reviewConnectionUnavailable")
+          : friendlyError(cause, t).message);
+        if (canReplaceConnection) {
           setConfirmed(false);
           setRefusedConnectionPlanId(plan.id);
         }

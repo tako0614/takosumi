@@ -1719,7 +1719,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             staleReviewApplyAttempts += 1;
             return route.fulfill({ status: 409, json: { error: {
               code: "failed_precondition",
-              message: staleReviewApplyAttempts === 1 ? "An unrelated conflict." : "The selected connection is unavailable.",
+              message: staleReviewApplyAttempts === 1 ? "An unrelated conflict." : "connection conn_old_missing is revoked (not verified)",
               details: { reason: staleReviewApplyAttempts === 1 ? "unrelated_conflict" : "provider_connection_not_ready" },
             } } });
           }
@@ -1749,7 +1749,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await expect(chooseAgain).toHaveCount(0);
 
         await allowUninstall.click();
-        await expect(rejectedReview.getByRole("alert")).toContainText("The selected connection is unavailable.");
+        await expect(rejectedReview.getByRole("alert")).toContainText(
+          "The connection used for this review is no longer available. Choose a verified connection for the same cloud account to review removal again.",
+        );
+        await expect(rejectedReview.getByRole("alert")).not.toContainText("conn_old_missing");
         await expect(allowUninstall).toHaveCount(0);
         expect(seenMutations).toEqual([
           `POST /api/v1/runs/${refusedPlan.id}/apply`, `POST /api/v1/runs/${refusedPlan.id}/apply`,
