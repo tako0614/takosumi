@@ -1034,7 +1034,7 @@ or any semantic mismatch never grants another provider dispatch. Completed
 state/output readback and adoption through the mutation entry point also
 require a freshly verified credential and an exact semantic match against that
 pre-existing post-dispatch record. RunOwner can additionally settle a running
-Apply or eligible ordinary Git Destroy through a private, read-only runner
+Apply or eligible Git Destroy through a private, read-only runner
 receipt under the current Run and Capsule lease. It rechecks the retained Plan,
 current management and execution admission, and the exact state generation.
 The Runner DO records the admitted controller, runner and executor artifact
@@ -1046,8 +1046,10 @@ dispatch records without the admitted digests still require the completion to
 match the current configured artifact digests. Destroy reads only the
 committed state and execution evidence. An approved manual replacement also
 rechecks the selected Connection against the applied provider account and the
-reviewed binding digest before settling. Scheduled uninstall and runs with
-lifecycle actions or private files continue through the ordinary mutation
+reviewed binding digest before settling. A scheduled Destroy must name the
+current uninstall reservation, have its owner's approval, and still pass
+requester authorization. Legacy schedule markers without an origin and runs
+with lifecycle actions or private files continue through the ordinary mutation
 entry point. An R2 target cannot mint its own adoption
 authority. A transport failure after
 dispatch returns the typed `runner_mutation_indeterminate` outcome. Redelivery

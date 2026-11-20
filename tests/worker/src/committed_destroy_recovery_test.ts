@@ -4,6 +4,9 @@ import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-s
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
+import { InMemoryAppOwnershipStore } from "../../../core/domains/app-ownership/store.ts";
+import { CapsulesService } from "../../../core/domains/capsules/mod.ts";
+import { finalizeDueCapsuleUninstalls, scheduledDestroyRunId } from "../../../core/domains/capsules/uninstall_finalize.ts";
 import {
   InMemoryCapsuleCoordination,
   type CapsuleCoordination,
@@ -56,19 +59,23 @@ async function fixture(options: {
   readonly responseStatus?: number;
   readonly legacy?: boolean;
   readonly replacement?: boolean;
+  readonly scheduled?: boolean;
   readonly afterWorkerUpdate?: boolean;
   readonly admittedExecutionAuthority?: typeof FIXTURE_EXECUTION_EVIDENCE_AUTHORITY;
   readonly capsuleCoordination?: CapsuleCoordination;
   readonly changeReceipt?: (receipt: Record<string, unknown>) => void;
 } = {}) {
   const store = new InMemoryOpenTofuControlStore();
-  const { capsule } = await seedCapsuleModel(store, {
+  const { capsule, workspace } = await seedCapsuleModel(store, {
     requiredProviders: options.replacement ? [FIXTURE_CLOUDFLARE_PROVIDER] : [],
   });
   const profile = createDefaultRunnerProfiles(1)[0]!;
   const artifactReferenceAllocator = new ObjectKeyArtifactReferenceAllocator();
   const currentTime = Date.now();
-  let now = currentTime - RUN_HEARTBEAT_STALE_MS - 3_000;
+  const claimedAt = currentTime - RUN_HEARTBEAT_STALE_MS - 3_000;
+  let now = claimedAt - (options.scheduled ? 7 * 24 * 60 * 60 * 1000 : 0);
+  const appOwnership = options.scheduled ? new InMemoryAppOwnershipStore(store) : undefined;
+  const validateUninstallRequester = mock(async () => true);
   const providerFetch = mock(async (input: string) => Response.json({
     success: true,
     result: input.endsWith("/workers/subdomain") ? { subdomain: "synthetic-team" }
@@ -104,6 +111,7 @@ async function fixture(options: {
   }
   const composition = {
     store,
+    ...(appOwnership ? { appOwnership, validateUninstallRequester } : {}),
     ...(vault ? { vault } : {}),
     runnerProfiles: [profile],
     defaultRunnerProfileId: profile.id,
@@ -118,6 +126,9 @@ async function fixture(options: {
         planDigest: PLAN_DIGEST,
         planArtifact: { kind: "runner-local", ref: "opaque-plan", digest: PLAN_DIGEST },
         requiredProviders: planRun.requiredProviders,
+        ...(options.scheduled && planRun.operation === "destroy" ? { planResourceChanges: [{
+          address: "terraform_data.app", type: "terraform_data", actions: ["delete"] as const,
+        }] } : {}),
         ...(planRun.requiredProviders.length === 0 ? { providerLockArtifact: null } : {
           providerLockDigest: LOCK_DIGEST,
           providerLockArtifact: {
@@ -165,20 +176,8 @@ async function fixture(options: {
     await store.putCapsule({ ...active, sourceId: undefined as never });
   }
 
-  if (vault && replacement) expect(await vault.revoke(replacement.connectionId, undefined, null)).toBe(true);
-  const { planRun: waiting } = await planning.createCapsuleDestroyPlan(capsule.id, {}, replacement
-    ? { destroyProviderConnectionReplacements: [replacement] }
-    : {});
-  expect(waiting).toMatchObject({ status: "waiting_approval" });
-  expect(waiting.source.kind).toBe(options.legacy ? "operator_module" : "git");
-  await planning.approveRun(waiting.id);
-  const planRun = (await store.getPlanRun(waiting.id))!;
-  expect(planRun.baseStateGeneration).toBe(priorState.generation);
-  if (!options.legacy) expect(planRun.sourceSnapshotId).toBeDefined();
-  expect(await store.getPlanRunInputs(planRun.id)).toBeDefined();
-
   let job!: OpenTofuDestroyJob;
-  const receiptCommittedAt = new Date(now + 1_500).toISOString();
+  const receiptCommittedAt = new Date(claimedAt + 1_500).toISOString();
   const inspect = mock(async (id: string, action: string) => ({
     kind: "takosumi.runner-mutation-inspection@v1",
     runId: id,
@@ -219,10 +218,47 @@ async function fixture(options: {
     capsuleCoordination: options.capsuleCoordination,
     enqueueRun: async () => {},
   });
-  const { applyRun } = await controller.createApplyRun({
-    planRunId: planRun.id,
-    expected: applyExpectedGuardFromPlanRun(planRun),
-  });
+
+  let applyRun;
+  if (appOwnership) {
+    const owner = workspace.ownerUserId;
+    expect(await appOwnership.putOwnership({
+      capsuleId: capsule.id, ownerAccountId: owner, ownershipEpoch: 0,
+      managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsule.id}`,
+    }, 0)).toBe(true);
+    const capsules = new CapsulesService({ store, appOwnership, now: () => new Date(now) });
+    const scheduled = await capsules.scheduleCapsuleUninstall(capsule.id, {
+      requester: { subject: owner, managementAuthority: "app", appOwnershipEpoch: 0 },
+    });
+    expect((await store.getCapsule(capsule.id))?.status).toBe("uninstalled");
+    now = claimedAt;
+    const finalized = await finalizeDueCapsuleUninstalls({
+      store, capsules, appOwnership, validateUninstallRequester, now: () => new Date(now),
+      controller: {
+        createCapsuleDestroyPlan: planning.createCapsuleDestroyPlan.bind(planning),
+        approveRun: planning.approveRun.bind(planning),
+        createApplyRun: controller.createApplyRun.bind(controller),
+      },
+    });
+    expect(finalized).toMatchObject({ destroyPlansCreated: 1, destroysStarted: 1, failures: 0, blocked: 0 });
+    applyRun = (await store.getApplyRun(scheduledDestroyRunId("apply", scheduled.uninstall!.id, 1)))!;
+  } else {
+    if (vault && replacement) expect(await vault.revoke(replacement.connectionId, undefined, null)).toBe(true);
+    const { planRun: waiting } = await planning.createCapsuleDestroyPlan(capsule.id, {}, replacement
+      ? { destroyProviderConnectionReplacements: [replacement] }
+      : {});
+    expect(waiting).toMatchObject({ status: "waiting_approval" });
+    await planning.approveRun(waiting.id);
+    const approved = (await store.getPlanRun(waiting.id))!;
+    ({ applyRun } = await controller.createApplyRun({
+      planRunId: approved.id, expected: applyExpectedGuardFromPlanRun(approved),
+    }));
+  }
+  const planRun = (await store.getPlanRun(applyRun.planRunId))!;
+  expect(planRun.source.kind).toBe(options.legacy ? "operator_module" : "git");
+  expect(planRun.baseStateGeneration).toBe(priorState.generation);
+  if (!options.legacy) expect(planRun.sourceSnapshotId).toBeDefined();
+  expect(await store.getPlanRunInputs(planRun.id)).toBeDefined();
   expect(applyRun).toMatchObject({ operation: "destroy", status: "queued" });
   let run = applyRun;
   if (options.phase !== "queued") {
@@ -250,7 +286,7 @@ async function fixture(options: {
     operations, { action: "apply", runId: run.id, workspaceId: run.workspaceId }, { deadlineAt: Date.now() + 5_000 },
   );
   providerFetch.mockClear();
-  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, providerFetch };
+  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, providerFetch, validateUninstallRequester };
 }
 
 for (const persistedFailure of [false, true]) {
@@ -396,6 +432,57 @@ async function expectHeld(f: Awaited<ReturnType<typeof fixture>>, adoptionReads:
   }
 }
 
+test("an approved scheduled teardown settles its original receipt after a Worker restart", async () => {
+  const f = await fixture({ scheduled: true, capsuleCoordination: new InMemoryCapsuleCoordination() });
+  const pending = (await f.store.getCapsule(f.capsule.id))!.uninstall!;
+  expect(pending).toMatchObject({ phase: "destroying", destroyPlanRunId: f.planRun.id });
+  expect(f.planRun.approval?.approvedBy).toBe("user_test");
+  const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+  const destroy = spyOn(f.runner, "destroy");
+  try {
+    await f.dispatch();
+    const settled = await f.store.getApplyRun(f.run.id);
+    expect(settled).toMatchObject({
+      status: "succeeded", stateVersionId: f.stateVersionId, startedAt: f.run.startedAt,
+    });
+    expect(await f.store.getCapsule(f.capsule.id)).toMatchObject({
+      status: "destroyed", currentStateGeneration: 2, uninstall: pending,
+    });
+    await f.dispatch();
+    expect(await f.store.getApplyRun(f.run.id)).toEqual(settled!);
+    expect(f.inspect.mock.calls).toEqual([[f.run.id, "destroy"]]);
+    expect(f.adopt).toHaveBeenCalledTimes(1);
+    expect(mint).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(f.fetch).not.toHaveBeenCalled();
+  } finally {
+    mint.mockRestore();
+    destroy.mockRestore();
+  }
+});
+
+test("a scheduled teardown receipt holds when its requester loses authority", async () => {
+  const f = await fixture({ scheduled: true });
+  f.validateUninstallRequester.mockResolvedValue(false);
+  await expectHeld(f, 0);
+});
+
+test("a scheduled teardown receipt holds for a different reservation or approval", async () => {
+  const wrongReservation = await fixture({ scheduled: true });
+  const capsule = (await wrongReservation.store.getCapsule(wrongReservation.capsule.id))!;
+  await wrongReservation.store.putCapsule({
+    ...capsule, uninstall: { ...capsule.uninstall!, id: "uninstall_replacement_fixture" },
+  });
+  await expectHeld(wrongReservation, 0);
+
+  const wrongApproval = await fixture({ scheduled: true });
+  await wrongApproval.store.putPlanRun({
+    ...wrongApproval.planRun,
+    approval: { ...wrongApproval.planRun.approval!, approvedBy: "different_fixture_user" },
+  });
+  await expectHeld(wrongApproval, 0);
+});
+
 test("invalid completed Destroy receipts hold without claiming the Run", async () => {
   const changes: ReadonlyArray<(receipt: Record<string, unknown>) => void> = [
     receipt => { delete receipt.executionEvidence; },
@@ -511,10 +598,10 @@ async function expectOrdinaryDestroy(
   }
 }
 
-test("known scheduled, legacy, lifecycle and private-file paths retain ordinary Destroy handling", async () => {
+test("legacy schedule markers, operator modules, lifecycle and private files retain ordinary Destroy handling", async () => {
   const scheduled = await fixture();
   await scheduled.store.putPlanRun({
-    ...scheduled.planRun, origin: { kind: "scheduled_uninstall", uninstallId: "uninstall_fixture" },
+    ...scheduled.planRun, createdBy: "system:scheduled-uninstall",
   });
   await expectOrdinaryDestroy(scheduled, "failed");
   await expectOrdinaryDestroy(await fixture({ legacy: true }), "succeeded");

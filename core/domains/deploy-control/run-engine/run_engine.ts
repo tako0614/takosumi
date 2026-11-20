@@ -5971,8 +5971,8 @@ export class RunEngine {
     const receiptAction = applyRun.operation === "destroy" ? "destroy" : "apply";
     const supportsDestroyReceipt = planRun.operation === "destroy" &&
       planRun.source.kind === "git" && Boolean(planRun.sourceSnapshotId) &&
-      planRun.origin?.kind !== "scheduled_uninstall" &&
-      planRun.createdBy !== "system:scheduled-uninstall";
+      (planRun.createdBy !== "system:scheduled-uninstall" ||
+        planRun.origin?.kind === "scheduled_uninstall");
     const observesReceipt = !receipt && probe?.runner === runner && applyRun.status === "running" &&
       (receiptAction === "apply" || supportsDestroyReceipt);
     const inspectReceipt = async () => {
@@ -9690,6 +9690,7 @@ export class RunEngine {
         planRun,
         dispatch,
         running,
+        recovered !== undefined,
       );
       await this.#revalidateModuleVariableMaterialization(
         planRun,
@@ -10174,6 +10175,7 @@ export class RunEngine {
     planRun: PlanRun,
     dispatch: RunModuleDispatch,
     applyRun: ApplyRun,
+    recoveringReceipt = false,
   ): Promise<Capsule | undefined> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -10196,10 +10198,21 @@ export class RunEngine {
     const plannedCapsule = planRun.capsuleId
       ? await this.#requireCurrentPlannedCapsule(planRun)
       : undefined;
+    const recoveringScheduledDestroy =
+      recoveringReceipt && planRun.origin?.kind === "scheduled_uninstall";
+    if (recoveringScheduledDestroy &&
+      (plannedCapsule?.uninstall?.phase !== "destroying" ||
+        planRun.approval?.approvedBy !== planRun.createdBy)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Scheduled uninstall receipt does not match an approved teardown.",
+        { reason: "capsule_uninstall_changed" },
+      );
+    }
     // An Apply queued before the Capsule was uninstalled must not provision
-    // into the grace state. A takeover of an attempt that already reached the
-    // provider is exempt: its outcome must still be recorded.
-    if (plannedCapsule && !applyRunMutationDispatched(applyRun)) {
+    // into the grace state. A scheduled receipt must still match the live
+    // reservation and requester, even if dispatch was already recorded.
+    if (plannedCapsule && (!applyRunMutationDispatched(applyRun) || recoveringScheduledDestroy)) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
       await this.#scheduledUninstallPlanIdentity(planRun, plannedCapsule);
       if (planRun.origin?.kind === "scheduled_uninstall" || planRun.createdBy === "system:scheduled-uninstall") {
@@ -10422,7 +10435,7 @@ export class RunEngine {
       !(await this.#queuedRunHasCurrentManagementAuthority({ id: run.id, workspaceId: run.workspaceId, kind: "apply" }))) {
       throw new Error("committed Apply receipt admission unavailable");
     }
-    await this.#assertApplyPreconditions(plan, dispatch, run);
+    await this.#assertApplyPreconditions(plan, dispatch, run, true);
     await this.#revalidateModuleVariableMaterialization(plan, inputs, destroy ? "apply_check" : "apply");
     // Preserve the normal pinned ProviderBinding/current policy checks without
     // minting, refreshing or materializing a new credential bundle.
