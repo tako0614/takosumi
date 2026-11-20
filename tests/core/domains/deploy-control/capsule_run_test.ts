@@ -13640,7 +13640,7 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
 
-test("destroy recovery can rotate again after its first failed apply persists partial state", async () => {
+test.each([1, 2])("destroy recovery rotates %i bindings again after a failed apply persists partial state", async (bindingCount) => {
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -13659,29 +13659,60 @@ test("destroy recovery can rotate again after its first failed apply persists pa
       return Response.json({ success: true, result: input.endsWith("/workers/subdomain") ? { subdomain: "synthetic-team" } : account ? { id: account } : { status: "active" } });
     },
   });
-  const register = async (accountId = "0123456789abcdef0123456789abcdef") => {
+  const register = async (
+    accountId = "0123456789abcdef0123456789abcdef",
+    token = `synthetic-fixture-token-${sequence}`,
+  ) => {
     const row = await vault.register({
       workspaceId: seeded.workspace.id, provider: FIXTURE_CLOUDFLARE_PROVIDER,
       credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
-      values: { CLOUDFLARE_API_TOKEN: `synthetic-fixture-token-${sequence}`, CLOUDFLARE_ACCOUNT_ID: accountId },
+      values: { CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: accountId },
     }, undefined, null);
     expect((await vault.test(row.id, undefined, null)).status).toBe("verified");
     return (await store.getConnection(row.id))!;
   };
-  const original = await register();
+  const original = await register(undefined, "synthetic-original-token");
   const firstReplacement = await register();
   const nextReplacement = await register();
   const foreign = await register("fedcba9876543210fedcba9876543210");
   const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
-  await transitionProviderBindingSetForFixture(store, {
-    ...originalBinding,
-    bindings: originalBinding.bindings.map(binding => ({ ...binding, connectionId: original.id })),
-  });
+  const bindings = originalBinding.bindings.map(binding => ({ ...binding, connectionId: original.id }));
+  if (bindingCount === 2) {
+    // The two stored IDs refer to aliases on the same verified account.
+    // Their initial process environment agrees, as does the shared replacement.
+    const sibling = await register(undefined, "synthetic-original-token");
+    bindings.push({ ...bindings[0]!, connectionId: sibling.id, childAlias: "zone", rootAlias: "zone" });
+    const reportId = "caprep_destroy_shared_connection";
+    const cloudflare = { source: FIXTURE_CLOUDFLARE_PROVIDER, moduleLocalName: "cloudflare" };
+    await store.putCapsuleCompatibilityReport({
+      id: reportId,
+      sourceId: seeded.source.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      modulePath: ".",
+      level: "ready",
+      findings: [],
+      providerPackages: [{ source: FIXTURE_CLOUDFLARE_PROVIDER, allowed: true }],
+      rootProviderRequirements: [cloudflare, { ...cloudflare, childAlias: "zone" }],
+      resources: [],
+      dataSources: [],
+      provisioners: [],
+      createdAt: seeded.capsule.createdAt,
+    });
+    await store.putCapsule({
+      ...(await store.getCapsule(seeded.capsule.id))!,
+      compatibilityStatus: "ready",
+      compatibilityReportId: reportId,
+    });
+  }
+  await transitionProviderBindingSetForFixture(store, { ...originalBinding, bindings });
+  const replacementsFor = (replacementConnectionId: string) =>
+    bindings.map(({ connectionId }) => ({ connectionId, replacementConnectionId }));
   const bindingBefore = await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment);
-  const mintIds: string[][] = [];
+  const mints: { alias?: string; connectionId: string }[][] = [];
   const mint = vault.mintForCapsuleProviderBindings.bind(vault);
+  const expectedMint = (connectionId: string) => bindings.map(({ rootAlias: alias }) => ({ alias, connectionId }));
   vault.mintForCapsuleProviderBindings = async (...args) => {
-    mintIds.push(args[1].map(entry => entry.connectionId));
+    mints.push(args[1].map(({ alias, connectionId }) => ({ alias, connectionId })));
     return await mint(...args);
   };
   const runner = recordingRunner();
@@ -13727,9 +13758,10 @@ test("destroy recovery can rotate again after its first failed apply persists pa
   await capsules.advanceCapsuleUninstall(seeded.capsule.id, { uninstallId: scheduled.uninstall!.id, revision: scheduled.uninstall!.revision }, { blockedReason: "destroy_plan_refused" });
 
   const firstRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
-    destroyProviderConnectionReplacements: [{ connectionId: original.id, replacementConnectionId: firstReplacement.id }],
+    destroyProviderConnectionReplacements: replacementsFor(firstReplacement.id),
   });
   expect(firstRecovery.planRun.resolvedProviderBindingsDigest).toBeDefined();
+  expect(mints.at(-1)).toEqual(expectedMint(firstReplacement.id));
   await controller.approveRun(firstRecovery.planRun.id);
   const partial = await controller.createApplyRun({
     planRunId: firstRecovery.planRun.id,
@@ -13737,6 +13769,7 @@ test("destroy recovery can rotate again after its first failed apply persists pa
   });
   expect(partial.applyRun.status).toBe("failed");
   expect(partial.applyRun.operation).toBe("destroy");
+  expect(mints.at(-1)).toEqual(expectedMint(firstReplacement.id));
   const partialState = await store.getStateVersion(partial.applyRun.stateVersionId!);
   expect(partialState).toMatchObject({
     capsuleId: seeded.capsule.id,
@@ -13752,19 +13785,31 @@ test("destroy recovery can rotate again after its first failed apply persists pa
   expect((await store.getPlanRun(firstRecovery.planRun.id))?.resolvedProviderBindingsDigest)
     .toBe(firstRecovery.planRun.resolvedProviderBindingsDigest);
 
-  const nextSelection = [{ connectionId: original.id, replacementConnectionId: nextReplacement.id }];
+  const nextSelection = replacementsFor(nextReplacement.id);
   const planCount = runner.planJobs.length;
   const destroyCount = runner.destroyJobs.length;
-  const mintCount = mintIds.length;
+  const mintCount = mints.length;
   await store.putConnection({ ...foreign, id: nextReplacement.id });
   await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
     destroyProviderConnectionReplacements: nextSelection,
   })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "destroy_connection_recovery_unproven" } });
   expect(runner.planJobs).toHaveLength(planCount);
   expect(runner.destroyJobs).toHaveLength(destroyCount);
-  expect(mintIds).toHaveLength(mintCount);
+  expect(mints).toHaveLength(mintCount);
 
   await store.putConnection(nextReplacement);
+  if (bindingCount === 2) {
+    const mixedSelection = [
+      nextSelection[0]!,
+      { ...nextSelection[1]!, replacementConnectionId: foreign.id },
+    ];
+    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+      destroyProviderConnectionReplacements: mixedSelection,
+    })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "destroy_connection_recovery_unproven" } });
+    expect(runner.planJobs).toHaveLength(planCount);
+    expect(runner.destroyJobs).toHaveLength(destroyCount);
+    expect(mints).toHaveLength(mintCount);
+  }
   const secondRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
     destroyProviderConnectionReplacements: nextSelection,
   });
@@ -13775,7 +13820,7 @@ test("destroy recovery can rotate again after its first failed apply persists pa
     appliedPlanRunId: firstRecovery.planRun.id,
     replacements: nextSelection,
   });
-  expect(mintIds.at(-1)).toEqual([nextReplacement.id]);
+  expect(mints.at(-1)).toEqual(expectedMint(nextReplacement.id));
   expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
   await controller.approveRun(secondRecovery.planRun.id);
   const safetyProbeId = "apply_partial_rotation_receipt_probe";
@@ -13817,14 +13862,17 @@ test("destroy recovery can rotate again after its first failed apply persists pa
   omitPriorExecutionEvidence = true;
   expect(await capsuleRunRuntimeSafetyMatches(safetyLedger, safetyInput)).toBe(false);
   expect(runner.destroyJobs).toHaveLength(destroyCountBeforeReceiptProbe);
-  expect(mintIds).toHaveLength(mintCount + 1);
+  expect(mints).toHaveLength(mintCount + 1);
   const completed = await controller.createApplyRun({
     planRunId: secondRecovery.planRun.id,
     expected: applyExpectedGuardFromPlanRun(secondRecovery.planRun),
   });
   expect(completed.applyRun.status).toBe("succeeded");
+  expect(completed.capsule.status).toBe("destroyed");
   expect(runner.destroyJobs).toHaveLength(2);
-  expect(retiredBindings).toEqual([[nextReplacement.id]]);
+  expect(mints.at(-1)).toEqual(expectedMint(nextReplacement.id));
+  expect(retiredBindings).toEqual([bindings.map(() => nextReplacement.id)]);
+  expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
 });
 
 test("initial create with an indeterminate dispatched Apply atomically remains unknown in Capsule error", async () => {

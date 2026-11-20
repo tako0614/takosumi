@@ -386,8 +386,11 @@ current StateVersion was produced by a prior recovery Plan, the comparison first
 uses that exact PlanRun's recorded effective replacement ID for each stored
 logical binding, then compares the newly selected replacement against the pinned
 digest. Other bindings, aliases, settings, recipe and verification remain exact;
-minting always uses the real new ID. Missing/legacy evidence, changed account or
-other metadata, same IDs and ambiguous selections are refused. This option is not available to
+minting always uses the real new ID. Each original Connection can have one
+replacement. Several original Connections may use the same replacement when
+the account and configuration match for every affected binding. Missing or
+legacy evidence, changed metadata, self-replacements and ambiguous selections
+are refused. This option is not available to
 create/update, source-less legacy teardown, or automatic scheduled retries.
 The new destroy Plan still needs explicit approval and Apply, which recheck the
 same evidence and current authority. A blocked reservation can coexist with this

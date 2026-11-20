@@ -1703,8 +1703,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
       expect(seenMutations.slice(mutationCountBeforeImmediateRecovery)).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
 
-      // A provider-rejected key may still be shown as verified. Open the
-      // chooser explicitly and leave the second bound connection alone.
+      // A provider-rejected key may still be shown as verified. The
+      // chooser lets both bindings use the same verified replacement.
       scene = "uninstall_failed";
       await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
       const failed = problems.locator('[data-problem="uninstall"]');
@@ -1719,12 +1719,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(recovery).toBeDisabled();
       await expect(original.getByRole("option", { name: "Original Cloudflare connection" })).toHaveCount(0);
       await original.selectOption("conn_saved");
+      await secondary.selectOption("conn_saved");
       await recovery.click();
       await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
       expect(failedUninstallBindingReads).toBe(1);
       expect(seenMutations.slice(mutationCountBeforeRetry)).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
       expect(replacementPlanBodies.at(-1)).toEqual({
-        destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
+        destroyProviderConnectionReplacements: [
+          { connectionId: "conn_removed", replacementConnectionId: "conn_saved" },
+          { connectionId: "conn_second", replacementConnectionId: "conn_saved" },
+        ],
       });
 
       scene = "incomplete";

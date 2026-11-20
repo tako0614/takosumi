@@ -71,8 +71,7 @@ export default function AppUninstallConnectionRecovery(props: {
       return replacementConnectionId && options(provider, connectionId).some((connection) => connection.id === replacementConnectionId)
         ? [{ connectionId, replacementConnectionId }] : [];
     });
-    return selected.length > 0 && (props.mode === "failed" || selected.length === rows().length) &&
-      new Set(selected.map(({ replacementConnectionId }) => replacementConnectionId)).size === selected.length
+    return selected.length > 0 && (props.mode === "failed" || selected.length === rows().length)
       ? selected : undefined;
   });
 
@@ -102,7 +101,7 @@ export default function AppUninstallConnectionRecovery(props: {
                     ? "app.uninstall.keepConnection"
                     : "app.uninstall.replacementPlaceholder")}</option>
                   <For each={options(provider, connectionId)}>{(connection) => (
-                    <option value={connection.id} disabled={[...selection()].some(([id, selected]) => id !== connectionId && selected === connection.id)}>
+                    <option value={connection.id}>
                       {providerConnectionDisplayName(connection)}
                     </option>
                   )}</For>
