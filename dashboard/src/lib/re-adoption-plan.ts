@@ -52,7 +52,7 @@ export function createReAdoptionPlanSubmission(
     // A different person/app/selection must never inherit a pending answer.
     assertCurrent();
     planKey ??= randomUuid();
-    const result = await createReviewableGitRevisionPlan(capsuleId, { ref: targetRef }, { idempotencyKey: planKey });
+    const result = await createReviewableGitRevisionPlan(capsuleId, { ref: targetRef }, { idempotencyKey: planKey, isCurrent });
     assertCurrent();
     const plan = result?.revisionPlan;
     if (result?.nextAction !== "review_run" || !plan?.planRunId || plan.capsuleId !== capsuleId || plan.sourceId !== sourceId ||

@@ -25,13 +25,14 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 function controllers() {
   let target: string | undefined, review: { planRunId: string } | undefined;
+  let starting: unknown;
   const scope = { capsuleId: "capsule_a", revisionPlanId: "revision_failed", principalId: "person_a", busy: false };
-  const startReview = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "disposed", "ControlApiError", "refetchApp", `${transpile(startSource)}; return startReview;`)(
+  const startReview = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "disposed", "ControlApiError", "refetchApp", "reviewScopeEpoch", "starting", "review", `${transpile(startSource)}; return startReview;`)(
     () => scope.capsuleId, () => ({ sourceId: "source_a" }), scope, () => scope.busy, () => "owner", () => true,
-    (value: unknown) => { scope.busy = value !== undefined; }, () => {}, () => {},
+    (value: unknown) => { starting = value; scope.busy = value !== undefined; }, () => {}, () => {},
     (value: { planRunId: string }) => { review = value; }, (value: string) => { target = value; },
     reAdoptionRevisionFromError, isRevisionAlreadyCurrent, () => ({ message: "fixture error" }), (key: string) => key, () => {},
-    false, ControlApiError, () => getCapsuleApp(scope.capsuleId),
+    false, ControlApiError, () => getCapsuleApp(scope.capsuleId), 0, () => starting, () => review,
   ) as (section: string, purpose: string, create: () => Promise<string>) => Promise<void>;
   let dispose!: () => void;
   const formProps = {
