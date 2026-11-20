@@ -21,6 +21,10 @@ bind 値の 2 MB 制限を超える場合がある。その行だけは全 physi
 group は単一の DB batch で適用する。D1 では batch 呼び出しが一件のクエリとして数えられ、
 各SQL文の上限と batch 全体の実行期限が適用される。 [D1 の limits](https://developers.cloudflare.com/d1/platform/limits/)
 
+snapshot と SourceSyncRun の書込み、移動するアプリの PlanRun 参照更新は、既存の処理順に沿って
+複数行のSQL文にまとめる。各文のバインドは100個以内で、文字列は元の値を直接渡す。
+行の比較、履歴の書込み、所有権の変更は引き続き一つのトランザクションで確定する。
+
 D1 の archive 棚卸し例（実行結果は operator の管理領域へ保存する）:
 
 ```sql
