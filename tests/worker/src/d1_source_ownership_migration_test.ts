@@ -159,6 +159,162 @@ test("operator retires a 3,000-snapshot native D1 group in one bounded batch", a
   }
 }, 45_000);
 
+test("native D1 splits 3,000 snapshots and producer runs in one bounded commit", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [{ type: "ESModule", path: "source-ownership-bulk-split.mjs",
+      contents: "export default {fetch(){return new Response('ok')}}" }],
+    d1Databases: { CONTROL: "source-ownership-bulk-split" },
+  });
+  try {
+    await runtime.ready;
+    const db = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+    const store = new CloudflareD1OpenTofuControlStore(db);
+    await store.putWorkspace({ id: workspaceId, handle: "migration-d1", displayName: "Migration D1",
+      type: "personal", ownerUserId: "owner_migration_d1", createdAt: t0, updatedAt: t0 });
+    await store.putSource({ id: sourceId, workspaceId, name: "bulk split", url, defaultRef: "main",
+      defaultPath: ".", status: "active", autoSync: true, hookSecretHash: "a".repeat(64),
+      createdAt: t0, updatedAt: t0 });
+    for (const id of ["cap_a", "cap_b"]) {
+      const capsule: Capsule = { id, workspaceId, projectId: "prj_migration_d1", name: id, slug: id,
+        sourceId, installConfigId: `cfg_${id}`, environment: "production", currentStateGeneration: 0,
+        status: "active", createdAt: t0, updatedAt: t0 };
+      await store.putCapsule(capsule);
+      const config = { id: capsule.installConfigId, workspaceId, name: `config ${id}`,
+        createdAt: t0, updatedAt: t0 };
+      await db.prepare(`insert into install_configs (id, space_id, record_json, created_at, updated_at)
+        values (?, ?, ?, ?, ?)`).bind(config.id, workspaceId, JSON.stringify(config), t0, t0).run();
+    }
+    const snapshot: SourceSnapshot = { id: "snap_split_0000", origin: "git", workspaceId, sourceId, url,
+      ref: "main", path: ".", resolvedCommit: "a".repeat(40),
+      archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_split_0000/source.tar.zst`,
+      archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+      fetchedByRunId: "ssr_split_0000", fetchedAt: t0 };
+    const run: SourceSyncRun = { id: "ssr_split_0000", kind: "source_sync", workspaceId, sourceId, url,
+      ref: "main", path: ".", archiveRef: snapshot.archiveRef, status: "succeeded",
+      snapshotId: snapshot.id, createdAt: t0, updatedAt: t0 };
+    await db.prepare(`with recursive seq(n) as (
+      select 1 union all select n + 1 from seq where n < 3000
+    ) insert into source_snapshots (id, source_id, record_json, fetched_at)
+    select 'snap_split_' || printf('%04d', n), ?,
+      json_set(?, '$.id', 'snap_split_' || printf('%04d', n),
+        '$.fetchedByRunId', 'ssr_split_' || printf('%04d', n),
+        '$.archiveRef', 'workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_split_'
+          || printf('%04d', n) || '/source.tar.zst'), ?
+    from seq`).bind(sourceId, JSON.stringify(snapshot), t0).run();
+    await db.prepare(`with recursive seq(n) as (
+      select 1 union all select n + 1 from seq where n < 3000
+    ) insert into runs (id, space_id, source_id, type, status, run_json, created_at)
+    select 'ssr_split_' || printf('%04d', n), ?, ?, 'source_sync', 'succeeded',
+      json_set(?, '$.id', 'ssr_split_' || printf('%04d', n),
+        '$.snapshotId', 'snap_split_' || printf('%04d', n),
+        '$.archiveRef', 'workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_split_'
+          || printf('%04d', n) || '/source.tar.zst'), ?
+    from seq`).bind(workspaceId, sourceId, JSON.stringify(run), t0).run();
+    const movedPlans = [1, 1_500, 3_000].map((number) => {
+      const id = `plan_split_${number}`;
+      const sourceSnapshotId = `snap_split_${String(number).padStart(4, "0")}`;
+      return { id, workspaceId, capsuleId: "cap_b", status: "succeeded",
+        operation: "apply", sourceSnapshotId,
+        source: { kind: "git", url, ref: "main", commit: "a".repeat(40) },
+        sourceDigest: "digest", variablesDigest: "digest" } as unknown as PlanRun;
+    });
+    for (const plan of movedPlans) await store.putPlanRun(plan);
+    const physicalRows = async (table: "source_snapshots" | "runs", owner: string) => {
+      const columns = table === "source_snapshots"
+        ? "id, source_id, record_json, fetched_at" : "id, source_id, run_json, status";
+      const result: Record<string, unknown>[] = [];
+      let after = "";
+      for (;;) {
+        const page = (await db.prepare(`select ${columns} from ${table}
+          where source_id = ? and id > ? order by id limit 100`)
+          .bind(owner, after).all<Record<string, unknown>>()).results;
+        result.push(...page);
+        if (page.length < 100) return result;
+        after = String(page[page.length - 1]!.id);
+      }
+    };
+    const originalSnapshots = await physicalRows("source_snapshots", sourceId);
+    const originalRuns = await physicalRows("runs", sourceId);
+    expect(originalSnapshots).toHaveLength(3_000);
+    expect(originalRuns).toHaveLength(3_000);
+
+    const batchSizes: number[] = [];
+    const countedDb = new Proxy(db, {
+      get(target, key) {
+        if (key === "batch") return async (statements: readonly D1PreparedStatement[]) => {
+          batchSizes.push(statements.length);
+          // This regression's statement budget keeps the large native commit
+          // bounded. Refuse before mutation if any layout exceeds it.
+          expect(statements.length).toBeLessThanOrEqual(1_250);
+          return target.batch(statements);
+        };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as D1Database;
+    const countedStore = new CloudflareD1OpenTofuControlStore(countedDb, { schemaMode: "predeployed" });
+    const group = await countedStore.readGroup(sourceId);
+    expect(group?.snapshots).toHaveLength(3_000);
+    expect(group?.syncRuns).toHaveLength(3_000);
+    const mutation = await prepareSourceOwnershipMigration(
+      group!, new ObjectKeyArtifactReferenceAllocator(), "2026-10-28T00:00:00.000Z");
+    expect(mutation?.action).toBe("split");
+    expect(mutation?.splits).toHaveLength(1);
+    expect(mutation?.splits[0]?.capsuleId).toBe("cap_b");
+    expect(mutation?.splits[0]?.snapshots).toHaveLength(3_000);
+    expect(mutation?.splits[0]?.syncRuns).toHaveLength(3_000);
+    expect(mutation?.splits[0]?.planRuns).toHaveLength(3);
+    expect(mutation?.archiveCopies).toHaveLength(3_000);
+    const copied = new Set<string>();
+    for (const copy of mutation!.archiveCopies) {
+      if (!copy.from.startsWith(`workspaces/${workspaceId}/sources/${sourceId}/snapshots/`) ||
+        copy.to === copy.from || copy.digest !== snapshot.archiveDigest) {
+        throw new Error("planned archive copy scope mismatch");
+      }
+      copied.add(copy.to);
+    }
+    expect(copied.size).toBe(3_000);
+    expect(batchSizes).toEqual([]);
+
+    expect(await countedStore.commitGroup(mutation!)).toBe("committed");
+    expect(batchSizes).toHaveLength(1);
+    console.info("source ownership native split batch statements", batchSizes[0]);
+    expect((await store.getSource(sourceId))?.ownerCapsuleId).toBe("cap_a");
+    const moved = (await store.getCapsule("cap_b"))!;
+    expect(moved.sourceId).not.toBe(sourceId);
+    expect((await store.getSource(moved.sourceId))?.ownerCapsuleId).toBe("cap_b");
+    expect((await store.getCapsule("cap_a"))?.sourceId).toBe(sourceId);
+    expect(await physicalRows("source_snapshots", sourceId)).toEqual(originalSnapshots);
+    expect(await physicalRows("runs", sourceId)).toEqual(originalRuns);
+    const counts = async (id: string) => ({
+      snapshots: (await db.prepare("select count(*) as count from source_snapshots where source_id = ?")
+        .bind(id).first<{ count: number }>())!.count,
+      runs: (await db.prepare("select count(*) as count from runs where source_id = ? and type = 'source_sync'")
+        .bind(id).first<{ count: number }>())!.count,
+    });
+    expect(await counts(sourceId)).toEqual({ snapshots: 3_000, runs: 3_000 });
+    expect(await counts(moved.sourceId)).toEqual({ snapshots: 3_000, runs: 3_000 });
+    for (const index of [0, 1_499, 2_999]) {
+      const expected = mutation!.splits[0]!.snapshots[index]!;
+      const actual = await store.getSourceSnapshot(expected.id);
+      expect(actual).toEqual(expected);
+      const producer = await store.getSourceSyncRun(expected.fetchedByRunId);
+      expect(producer?.sourceId).toBe(moved.sourceId);
+      expect(producer?.snapshotId).toBe(expected.id);
+      expect(producer?.archiveRef).toBe(expected.archiveRef);
+    }
+    for (const plan of movedPlans) {
+      const copiedPlan = await store.getPlanRun(plan.id);
+      expect(copiedPlan?.sourceSnapshotId).not.toBe(plan.sourceSnapshotId);
+      expect(mutation!.splits[0]!.snapshots.some((snapshot) =>
+        snapshot.id === copiedPlan?.sourceSnapshotId)).toBe(true);
+    }
+  } finally {
+    await runtime.dispose();
+  }
+}, 60_000);
+
 class InterleavedD1 extends SqliteFakeD1 {
   beforeNextBatch?: () => Promise<void>;
   override async batch<T = unknown>(statements: readonly D1PreparedStatement[]): Promise<readonly D1Result<T>[]> {
