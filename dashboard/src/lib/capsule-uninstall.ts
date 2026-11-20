@@ -45,16 +45,15 @@ export function appUninstallRecoveryMode(
   app: Pick<CapsuleAppView, "applied" | "state" | "progress" | "uninstall" | "problems" | "latestRun">,
 ): "unavailable" | "failed" | undefined {
   if (app.uninstall.mode === "discard" || app.progress.run || app.progress.review) return;
-  if (appUninstallConnectionNotice(app) && appUninstallRecoveryConnections(app).length > 0) return "unavailable";
 
-  // A failed teardown can leave the connected key marked verified. Let the
-  // owner try another key without guessing which provider caused the failure.
+  // A failed teardown may have used replacement keys. The reported issues
+  // describe the applied bindings, so use the full binding set when retrying.
   const run = app.latestRun;
-  if (!app.applied || app.state !== "needs_attention" || run?.status !== "failed" ||
-    !isAppRemovalRun(run.type) || run.errorCode === "runner_mutation_indeterminate" ||
-    run.errorCode === "policy_denied" || app.problems.some((problem) =>
-      problem.code === "policy_blocked" && problem.runId === run.id)) return;
-  return "failed";
+  if (app.applied && app.state === "needs_attention" && run?.status === "failed" &&
+    isAppRemovalRun(run.type) && run.errorCode !== "runner_mutation_indeterminate" &&
+    run.errorCode !== "policy_denied" && !app.problems.some((problem) =>
+      problem.code === "policy_blocked" && problem.runId === run.id)) return "failed";
+  if (appUninstallConnectionNotice(app) && appUninstallRecoveryConnections(app).length > 0) return "unavailable";
 }
 
 /**
