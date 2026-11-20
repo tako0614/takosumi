@@ -142,7 +142,8 @@ describe("RunView", () => {
   test("try again re-plans through the shared retry selector", () => {
     // Behavior lives in lib/run-retry.ts (tests/dashboard/src/views/runs/
     // run-retry_test.ts); the run page and the app page both call it.
-    expect(source).toContain("retryPlanForRun(currentRun, capsule)");
+    expect(source).toContain("defaultRetryPlanApi(revisionRetryAttempts)");
+    expect(source).toContain("retryPlanForRun(currentRun, capsule, retryApi, isCurrent)");
     expect(source).toContain("const capsule = await getCapsule(instId);");
   });
 
