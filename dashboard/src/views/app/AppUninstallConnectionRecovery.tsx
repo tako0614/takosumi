@@ -1,85 +1,123 @@
-import { createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js";
+import { createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
 import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { Button, FormField, Select } from "../../components/ui/index.ts";
 import { t } from "../../i18n/index.ts";
 import { providerName } from "../../lib/app-page.ts";
-import { listProviderConnections, type CapsuleAppView } from "../../lib/control-api.ts";
+import { getCapsuleProviderBindingSet, listProviderConnectionsWithSignal, type CapsuleAppView } from "../../lib/control-api.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
 import { appUninstallRecoveryConnections } from "../../lib/capsule-uninstall.ts";
 
 export default function AppUninstallConnectionRecovery(props: {
-  readonly app: Pick<CapsuleAppView, "workspaceId" | "problems">;
+  readonly app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "problems" | "latestRun">;
+  readonly mode: "unavailable" | "failed";
   readonly disabled: boolean;
   readonly onReview: (replacements: readonly DestroyProviderConnectionReplacement[]) => void;
 }) {
   const [open, setOpen] = createSignal(false);
-  const [choices, { refetch }] = createResource(
-    () => open() ? { workspaceId: props.app.workspaceId } : false,
-    ({ workspaceId }) => listProviderConnections(workspaceId),
-  );
+  const capsuleId = createMemo(() => props.app.capsuleId);
+  const workspaceId = createMemo(() => props.app.workspaceId);
+  const failedRunId = createMemo(() => props.mode === "failed" ? props.app.latestRun?.id : undefined);
+  const request = createMemo(() => open() ? {
+    capsuleId: capsuleId(), workspaceId: workspaceId(), failedRunId: failedRunId(),
+  } : false);
+  const reads = new AbortController();
+  onCleanup(() => reads.abort());
+  const [inventory, { refetch }] = createResource(request, async (target) => {
+    const isCurrent = () => !reads.signal.aborted && request() === target;
+    const [connections, bindingSet] = await Promise.all([
+      listProviderConnectionsWithSignal(target.workspaceId, reads.signal, { isCurrent }),
+      target.failedRunId
+        ? getCapsuleProviderBindingSet(target.capsuleId, { signal: reads.signal, isCurrent })
+        : undefined,
+    ]);
+    if (bindingSet && (bindingSet.capsuleId !== target.capsuleId || bindingSet.workspaceId !== target.workspaceId)) {
+      throw new Error("Provider bindings do not match this app.");
+    }
+    const verified = connections.filter((connection) =>
+      connection.scope !== "operator" && connection.status === "verified" &&
+      (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.now()));
+    return { verified, bindings: bindingSet?.bindings ?? [] };
+  });
+  const available = () => inventory.state === "ready" ? inventory() : undefined;
+  const options = (provider: string, originalConnectionId: string) =>
+    (available()?.verified ?? []).filter((connection) =>
+      connection.id !== originalConnectionId && sameProviderSource(provider, connection.providerSource));
   const rows = createMemo(() => {
-    return appUninstallRecoveryConnections(props.app);
+    if (props.mode === "unavailable") {
+      return appUninstallRecoveryConnections(props.app).map(({ connectionId, provider }) => ({
+        connectionId, provider, label: providerName(provider),
+      }));
+    }
+    const current = available();
+    if (!current) return [];
+    const originals = new Map(current.verified.map((connection) => [connection.id, connection]));
+    const rows = new Map<string, { connectionId: string; provider: string; label: string }>();
+    for (const { connectionId, provider } of current.bindings) {
+      const original = originals.get(connectionId);
+      if (!original || !sameProviderSource(provider, original.providerSource) || options(provider, connectionId).length === 0) continue;
+      rows.set(connectionId, {
+        connectionId,
+        provider,
+        label: `${providerName(provider)} · ${providerConnectionDisplayName(original)}`,
+      });
+    }
+    return [...rows.values()];
   });
   const [selection, setSelection] = createSignal<ReadonlyMap<string, string>>(new Map());
-  const options = (provider: string, originalConnectionId: string) => (choices.state === "ready" ? choices() ?? [] : []).filter((connection) =>
-    connection.id !== originalConnectionId &&
-    connection.scope !== "operator" && connection.status === "verified" &&
-    (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.now()) &&
-    sameProviderSource(provider, connection.providerSource));
   const replacements = createMemo(() => {
     const selected = rows().flatMap(({ connectionId, provider }) => {
       const replacementConnectionId = selection().get(connectionId);
       return replacementConnectionId && options(provider, connectionId).some((connection) => connection.id === replacementConnectionId)
         ? [{ connectionId, replacementConnectionId }] : [];
     });
-    return selected.length > 0 && selected.length === rows().length &&
+    return selected.length > 0 && (props.mode === "failed" || selected.length === rows().length) &&
       new Set(selected.map(({ replacementConnectionId }) => replacementConnectionId)).size === selected.length
       ? selected : undefined;
   });
 
   return (
-    <Show when={rows().length > 0}>
-      <Show when={open()} fallback={
-        <Button variant="secondary" type="button" disabled={props.disabled} onClick={() => setOpen(true)}>
-          {t("app.uninstall.chooseReplacement")}
-        </Button>
-      }>
-        <div class="wa-stack">
-          <Switch>
-            <Match when={choices.loading}><p role="status">{t("common.loading")}</p></Match>
-            <Match when={choices.error}>
-              <p role="alert">{t("app.uninstall.replacementLoadFailed")}</p>
-              <Button variant="secondary" type="button" onClick={() => void refetch()}>{t("common.retry")}</Button>
-            </Match>
-            <Match when={rows().some(({ provider, connectionId }) => options(provider, connectionId).length === 0)}>
-              <p>{t("app.uninstall.noReplacement")}</p>
-            </Match>
-            <Match when={choices.state === "ready"}>
-              <p>{t("app.uninstall.replacementHint")}</p>
-              <For each={rows()}>{({ connectionId, provider }) => (
-                <FormField label={providerName(provider)}>
-                  <Select value={selection().get(connectionId) ?? ""} disabled={props.disabled} onChange={(event) =>
-                    setSelection(new Map(selection()).set(connectionId, event.currentTarget.value))}>
-                    <option value="">{t("app.uninstall.replacementPlaceholder")}</option>
-                    <For each={options(provider, connectionId)}>{(connection) => (
-                      <option value={connection.id} disabled={[...selection()].some(([id, selected]) => id !== connectionId && selected === connection.id)}>
-                        {providerConnectionDisplayName(connection)}
-                      </option>
-                    )}</For>
-                  </Select>
-                </FormField>
-              )}</For>
-              <Button variant="primary" type="button" disabled={props.disabled || !replacements()} onClick={() => {
-                const selected = replacements();
-                if (selected && !props.disabled) props.onReview(selected);
-              }}>
-                {t("app.uninstall.replacementReview")}
-              </Button>
-            </Match>
-          </Switch>
-        </div>
-      </Show>
+    <Show when={open()} fallback={
+      <Button variant="secondary" type="button" disabled={props.disabled} onClick={() => setOpen(true)}>
+        {t("app.uninstall.chooseReplacement")}
+      </Button>
+    }>
+      <div class="wa-stack">
+        <Switch>
+          <Match when={inventory.loading}><p role="status">{t("common.loading")}</p></Match>
+          <Match when={inventory.error}>
+            <p role="alert">{t("app.uninstall.replacementLoadFailed")}</p>
+            <Button variant="secondary" type="button" onClick={() => void refetch()}>{t("common.retry")}</Button>
+          </Match>
+          <Match when={inventory.state === "ready" && (rows().length === 0 || rows().some(({ provider, connectionId }) => options(provider, connectionId).length === 0))}>
+            <p>{t("app.uninstall.noReplacement")}</p>
+          </Match>
+          <Match when={inventory.state === "ready"}>
+            <p>{t("app.uninstall.replacementHint")}</p>
+            <For each={rows()}>{({ connectionId, provider, label }) => (
+              <FormField label={label}>
+                <Select value={selection().get(connectionId) ?? ""} disabled={props.disabled} onChange={(event) =>
+                  setSelection(new Map(selection()).set(connectionId, event.currentTarget.value))}>
+                  <option value="">{t(props.mode === "failed" && rows().length > 1
+                    ? "app.uninstall.keepConnection"
+                    : "app.uninstall.replacementPlaceholder")}</option>
+                  <For each={options(provider, connectionId)}>{(connection) => (
+                    <option value={connection.id} disabled={[...selection()].some(([id, selected]) => id !== connectionId && selected === connection.id)}>
+                      {providerConnectionDisplayName(connection)}
+                    </option>
+                  )}</For>
+                </Select>
+              </FormField>
+            )}</For>
+            <Button variant="primary" type="button" disabled={props.disabled || !replacements()} onClick={() => {
+              const selected = replacements();
+              if (selected && !props.disabled) props.onReview(selected);
+            }}>
+              {t("app.uninstall.replacementReview")}
+            </Button>
+          </Match>
+        </Switch>
+      </div>
     </Show>
   );
 }

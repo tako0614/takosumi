@@ -90,7 +90,7 @@ import {
   releaseRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
-import { appUninstallConnectionNotice, appUninstallRecoveryConnections, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
+import { appUninstallConnectionNotice, appUninstallRecoveryMode, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
 import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
 import {
   APP_HISTORY_RUN_TYPES,
@@ -330,7 +330,7 @@ export default function AppManagePage(props: {
 
   const [bindingSet, { refetch: refetchBindings }] = createResource(
     () => (managed() && (settingsVisited() || resourcesVisited()) ? capsuleId() : null),
-    getCapsuleProviderBindingSet,
+    (id) => getCapsuleProviderBindingSet(id),
   );
   const [connections, { refetch: refetchConnections }] = createResource(
     () => (managed() && isOwner() && (settingsVisited() || resourcesVisited() || sectionVisited("sharing"))
@@ -1103,9 +1103,7 @@ export default function AppManagePage(props: {
   };
   const reviewUninstallWithConnection = (replacements: readonly DestroyProviderConnectionReplacement[]) => {
     const view = app();
-    if (!view || !isOwner() || !uninstallConnectionNotice() ||
-      appUninstallRecoveryConnections(view).length === 0 ||
-      review() || view.progress.run || view.progress.review) return;
+    if (!view || !isOwner() || !appUninstallRecoveryMode(view) || review()) return;
     const heldScope = uninstallScope();
     const heldEpoch = uninstallEpoch;
     const isCurrent = () => !disposed && isOwner() && uninstallEpoch === heldEpoch && uninstallScope() === heldScope;
@@ -1511,6 +1509,7 @@ export default function AppManagePage(props: {
               <AppAttentionSection
                 canUninstall={isOwner()}
                 app={view()}
+                uninstallScope={uninstallScope()}
                 displayName={displayName()}
                 busy={reviewBusy() || uninstallBusy()}
                 {...(starting()?.section === "attention" && starting()?.action
@@ -1690,12 +1689,13 @@ export default function AppManagePage(props: {
                   <Show when={uninstallConnectionNotice()}>
                     {(notice) => <p role="status">{t(notice())}</p>}
                   </Show>
-                  <Show when={view().uninstall.mode === "none" && appUninstallRecoveryConnections(view()).length > 0}>
-                    <AppUninstallConnectionRecovery
+                  <Show when={view().uninstall.mode === "none" && appUninstallRecoveryMode(view()) === "unavailable" && uninstallScope()} keyed>
+                    {(_scope) => <AppUninstallConnectionRecovery
                       app={view()}
-                      disabled={reviewBusy() || uninstallBusy() || Boolean(review() || view().progress.run || view().progress.review)}
+                      mode="unavailable"
+                      disabled={reviewBusy() || uninstallBusy() || Boolean(review())}
                       onReview={reviewUninstallWithConnection}
-                    />
+                    />}
                   </Show>
                   <div class="ap-row-actions">
                     <Show when={uninstallConnectionNotice() === "app.uninstall.connectionUnavailable"}>

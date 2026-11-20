@@ -4,6 +4,7 @@ import {
   observeUninstallReadback,
   appUninstallBanner,
   appUninstallConnectionNotice,
+  appUninstallRecoveryMode,
   appUninstallRecoveryConnections,
   appUninstallExportNote,
 } from "../../../../dashboard/src/lib/capsule-uninstall.ts";
@@ -94,6 +95,34 @@ test("actionable uninstall recovery rows cover unavailable bound connection stat
     ["connection-expired", "expired"],
     ["connection-error", "error"],
   ]);
+});
+
+test("replacement can be offered after a failed removal even with verified connection status", () => {
+  const latestRun = { id: "run_destroy", type: "destroy_apply", status: "failed", createdAt: "2026-10-01T00:00:00.000Z", errorCode: "apply_failed" } as const;
+  const failed = {
+    ...scheduled,
+    applied: true,
+    state: "needs_attention",
+    progress: { revisionPreparing: false },
+    problems: [{ code: "run_failed", severity: "error", runId: latestRun.id, runType: latestRun.type }],
+    latestRun,
+  } as const;
+  expect(appUninstallRecoveryMode(failed)).toBe("failed");
+  expect(appUninstallBanner(failed, "App")).toBe(t("app.uninstall.bannerFailed", { name: "App" }));
+  expect(appUninstallRecoveryMode({ ...failed, latestRun: { ...latestRun, type: "destroy_plan" } })).toBe("failed");
+  expect(appUninstallRecoveryMode({ ...failed, latestRun: { ...latestRun, type: "apply" } })).toBeUndefined();
+  expect(appUninstallRecoveryMode({ ...failed, latestRun: { ...latestRun, errorCode: "runner_mutation_indeterminate" } })).toBeUndefined();
+  expect(appUninstallRecoveryMode({ ...failed, latestRun: { ...latestRun, errorCode: "policy_denied" } })).toBeUndefined();
+  expect(appUninstallRecoveryMode({
+    ...failed,
+    progress: { revisionPreparing: false, review: { runId: "new_plan", runType: "destroy_plan" } },
+  })).toBeUndefined();
+  expect(appUninstallRecoveryMode({
+    ...failed,
+    problems: [...failed.problems, {
+      code: "connection_unavailable", severity: "error", connectionId: "old", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionStatus: "expired",
+    }],
+  })).toBe("unavailable");
 });
 
 test("the export note reports what was exported, and nothing when unrecorded", () => {

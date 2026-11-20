@@ -1384,10 +1384,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const ID = "cap_states_e";
       const NAME = "State Echo";
       const now = "2026-10-20T00:00:00.000Z";
-      type Scene = "uninstall_scheduled" | "uninstall_immediate" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
+      type Scene = "uninstall_scheduled" | "uninstall_immediate" | "uninstall_failed" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = "uninstall_scheduled";
       let connectionRemoved = false;
       const replacementPlanBodies: unknown[] = [];
+      let failedUninstallBindingReads = 0;
       const connectionProblem = {
         code: "connection_unavailable", severity: "error", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionId: "conn_removed", connectionStatus: "revoked",
       } as const;
@@ -1425,6 +1426,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         policyStatus: "pass", summary: { add: 0, change: 1, destroy: 0 }, origin: { kind: "revision", ref: "v2" },
         planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["update"] }],
       };
+      const failedRemoval = lifecycleRun("run_failed_removal", "destroy_apply", "failed", now, { capsuleId: ID, errorCode: "apply_failed" });
       const recoveryPlan = {
         ...lifecycleRun("run_states_destroy_recovery", "destroy_plan", "waiting_approval", now, { capsuleId: ID }),
         policyStatus: "pass", requiresApproval: true, summary: { add: 0, change: 0, destroy: 1 },
@@ -1432,7 +1434,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       };
       const runsById = new Map<string, Record<string, unknown>>([
         [blockedPlan.id, blockedPlan], [updateApply.id, updateApply], [installPlan.id, installPlan],
-        [revisionPlanRun.id, revisionPlanRun], [recoveryPlan.id, recoveryPlan],
+        [revisionPlanRun.id, revisionPlanRun], [recoveryPlan.id, recoveryPlan], [failedRemoval.id, failedRemoval],
       ]);
       // Older history: thirty-two applied changes, read twenty at a time.
       const olderRuns = Array.from({ length: 32 }, (_, index) =>
@@ -1450,6 +1452,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return appView(ID, NAME, {
               screens: [screen],
               ...(connectionRemoved ? { problems: [connectionProblem] } : {}),
+              uninstall: { mode: "none", impact: { usedBy: [] } },
+            });
+          case "uninstall_failed":
+            return appView(ID, NAME, {
+              state: "needs_attention", primaryAction: "retry", screens: [screen],
+              latestRun: failedRemoval,
+              problems: [{ code: "run_failed", severity: "error", runId: failedRemoval.id, runType: "destroy_apply" }],
               uninstall: { mode: "none", impact: { usedBy: [] } },
             });
           case "updating":
@@ -1544,6 +1553,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           { id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified" },
           { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
           { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "verified" },
+          ...(scene === "uninstall_failed" ? [{
+            id: "conn_second", displayName: "Secondary Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified",
+          }] : []),
         ] } });
         if (path === `${base}/destroy-plan` && request.method() === "POST") {
           replacementPlanBodies.push(request.postDataJSON());
@@ -1605,6 +1617,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === `${base}/state-versions`) {
           return route.fulfill({ json: { stateVersions: scene === "installing" || scene === "uninstalled" ? [] : [{ id: "sv_states_e", workspaceId: "ws_alpha", capsuleId: ID, environment: "production", generation: 1, createdByRunId: "run_old_00", createdAt: now }] } });
+        }
+        if (path === `${base}/provider-bindings` && scene === "uninstall_failed") {
+          failedUninstallBindingReads += 1;
+          return route.fulfill({ json: { providerBindingSet: {
+            id: "pbs_fixture", capsuleId: ID, workspaceId: "ws_alpha", environment: "production",
+            bindings: [
+              { connectionId: "conn_removed", provider: connectionProblem.provider },
+              { connectionId: "conn_second", provider: connectionProblem.provider, rootAlias: "secondary" },
+            ],
+          } } });
         }
         if (path === `${base}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: null } });
         if (path === `${base}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: ID, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_states_e", generation: 1, applyRunId: "run_old_00", planRunId: "run_old_plan", recordedAt: now, availability: "legacy_unavailable" } } });
@@ -1681,9 +1703,32 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
       expect(seenMutations.slice(mutationCountBeforeImmediateRecovery)).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
 
+      // A provider-rejected key may still be shown as verified. Open the
+      // chooser explicitly and leave the second bound connection alone.
+      scene = "uninstall_failed";
+      await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+      const failed = problems.locator('[data-problem="uninstall"]');
+      await expect(failed).toContainText("didn't finish");
+      expect(failedUninstallBindingReads).toBe(0);
+      const mutationCountBeforeRetry = seenMutations.length;
+      await failed.getByRole("button", { name: "Choose connection for uninstall" }).click();
+      const original = failed.getByRole("combobox", { name: /Original Cloudflare connection/ });
+      const secondary = failed.getByRole("combobox", { name: /Secondary Cloudflare connection/ });
+      await expect(secondary).toHaveValue("");
+      const recovery = failed.getByRole("button", { name: "Review removal" });
+      await expect(recovery).toBeDisabled();
+      await expect(original.getByRole("option", { name: "Original Cloudflare connection" })).toHaveCount(0);
+      await original.selectOption("conn_saved");
+      await recovery.click();
+      await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+      expect(failedUninstallBindingReads).toBe(1);
+      expect(seenMutations.slice(mutationCountBeforeRetry)).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+      expect(replacementPlanBodies.at(-1)).toEqual({
+        destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
+      });
+
       scene = "incomplete";
       await page.reload({ waitUntil: "domcontentloaded" });
-      await showAppOverview(page);
 
       // Parts the server could not read say so instead of showing nothing.
       await expect(header.getByRole("alert")).toHaveText("Couldn't read its screens.");
@@ -1861,6 +1906,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(seenMutations).toEqual([
         `POST /api/v1/capsules/${ID}/destroy-plan`,
         `POST /api/v1/capsules/${ID}/cancel-uninstall`,
+        `POST /api/v1/capsules/${ID}/destroy-plan`,
         `POST /api/v1/capsules/${ID}/destroy-plan`,
         "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
         "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
