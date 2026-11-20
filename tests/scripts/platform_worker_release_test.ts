@@ -30,6 +30,7 @@ import {
   secretNames,
   type PlatformReleaseCommand,
   waitForPlatformContainerReadback,
+  withPlatformForwardContainerPreflight,
 } from "../../scripts/platform-worker-release.ts";
 import { platformExtensionRoutes } from "../../deploy/platform/platform_extensions.ts";
 import { capsulePublicOriginFromPlatformExtensions, platformExtensionProviderCredentialComposition } from "../../deploy/platform/platform_extension_provider_credentials.ts";
@@ -2594,6 +2595,48 @@ test("reviewed Runner image change refuses a different application or reported f
     )).rejects.toThrow(diagnostic);
     expect(reads).toBe(1);
     expect(waits).toBe(0);
+  }
+});
+
+test("forward preflight rechecks temporary Runner startup before the sole upload", async () => {
+  for (const phase of ["starting", "scheduling"] as const) {
+    const events: string[] = [];
+    const predecessor = reviewedRunnerPredecessor;
+    await expect(withPlatformForwardContainerPreflight(
+      predecessor,
+      async () => {
+        events.push("container");
+        return events.length === 1
+          ? { ...predecessor, health: { ...predecessor.health, [phase]: 1 } }
+          : predecessor;
+      },
+      async () => { events.push("upload"); return CODE_DEPLOYED_ID; },
+      async () => { events.push("refresh-worker-and-custody"); },
+    )).resolves.toBe(CODE_DEPLOYED_ID);
+    expect(events).toEqual(["container", "refresh-worker-and-custody", "container", "upload"]);
+  }
+});
+
+test("forward preflight bounds startup retries and stops on further drift", async () => {
+  const predecessor = reviewedRunnerPredecessor;
+  const pending = { ...predecessor, health: { ...predecessor.health, scheduling: 1 } };
+  for (const [current, expectedReads] of [
+    [pending, 4],
+    [{ ...pending, version: predecessor.version + 1 }, 1],
+    [{ ...pending, health: { ...pending.health, failed: 1 } }, 1],
+  ] as const) {
+    let reads = 0;
+    let refreshes = 0;
+    let uploads = 0;
+    await expect(withPlatformForwardContainerPreflight(
+      predecessor,
+      async () => { reads++; return current; },
+      async () => { uploads++; },
+      async () => { refreshes++; },
+    )).rejects.toThrow("platform_worker_release_predecessor_container_drift");
+    expect({ reads, refreshes, uploads }).toEqual({
+      reads: expectedReads, refreshes: expectedReads - 1, uploads: 0,
+    });
   }
 });
 

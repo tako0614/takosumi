@@ -4420,8 +4420,7 @@ async function requiredPlatformForwardUploadMutation(
     assertUnchanged: () => void;
   }>,
   argv: readonly string[],
-  environment: PlatformEnvironment,
-  predecessor: PlatformContainerState,
+  plan: Pick<PlatformReleasePlan, "environment" | "predecessorContainer" | "predecessorVersionId">,
   command: PlatformReleaseCommand = requiredCommand,
 ): Promise<CommandResult> {
   // Finish the recursive local closure check before the final authoritative
@@ -4430,9 +4429,17 @@ async function requiredPlatformForwardUploadMutation(
   custody.assertUnchanged();
   try {
     return await withPlatformForwardContainerPreflight(
-      predecessor,
-      () => readPlatformContainer(custody.configPath, environment, command),
+      plan.predecessorContainer,
+      () => readPlatformContainer(custody.configPath, plan.environment, command),
       () => command(argv),
+      async () => {
+        await Bun.sleep(5_000);
+        const serving = await readServingVersion(custody.configPath, command);
+        if (serving !== plan.predecessorVersionId) {
+          throw new Error("platform_worker_release_predecessor_drift");
+        }
+        custody.assertUnchanged();
+      },
     );
   } finally {
     // Preserve the post-attempt custody proof for both acknowledged and
@@ -4714,8 +4721,7 @@ export async function completeRelease(
           platformReleaseMessage(plan),
           custody.uploadEntrypointPath,
         ),
-        plan.environment,
-        plan.predecessorContainer,
+        plan,
         async (argv) => {
           assertSource();
           return command(argv);
@@ -7187,32 +7193,36 @@ function assertPlatformContainerComplete(
 
 /**
  * Bind the sole forward upload to the exact Container closure captured in the
- * reviewed plan. This one-shot authoritative read belongs after every earlier
- * execute fence and immediately before the upload callback: an unavailable or
- * ambiguous provider read throws before the callback can observe mutation.
+ * reviewed plan. The matching read belongs immediately before upload.
+ * Only startup counters can justify waiting and refreshing the authority.
  */
 export async function withPlatformForwardContainerPreflight<T>(
   predecessor: PlatformContainerState,
   readCurrent: () => Promise<PlatformContainerState>,
   upload: () => Promise<T>,
+  refreshBeforeRetry?: () => Promise<void>,
 ): Promise<T> {
   assertPlatformContainerComplete(predecessor);
-  const current = await readCurrent();
-  if (
-    current.id !== predecessor.id ||
-    current.name !== predecessor.name ||
-    current.state !== predecessor.state ||
-    current.image !== predecessor.image ||
-    current.version !== predecessor.version ||
-    current.hasActiveRollout !== predecessor.hasActiveRollout ||
-    current.health.failed !== predecessor.health.failed ||
-    current.health.starting !== predecessor.health.starting ||
-    current.health.scheduling !== predecessor.health.scheduling ||
-    current.health.errorCount !== predecessor.health.errorCount
-  ) {
-    throw new Error("platform_worker_release_predecessor_container_drift");
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    const current = await readCurrent();
+    const { starting, scheduling, failed, errorCount } = current.health;
+    if (
+      current.id !== predecessor.id ||
+      current.name !== predecessor.name ||
+      current.state !== predecessor.state ||
+      current.image !== predecessor.image ||
+      current.version !== predecessor.version ||
+      current.hasActiveRollout !== predecessor.hasActiveRollout ||
+      failed !== 0 ||
+      errorCount !== 0 ||
+      !nonNegativeInteger(starting) ||
+      !nonNegativeInteger(scheduling)
+    ) break;
+    if (starting === 0 && scheduling === 0) return upload();
+    if (!refreshBeforeRetry || attempt === 3) break;
+    await refreshBeforeRetry();
   }
-  return upload();
+  throw new Error("platform_worker_release_predecessor_container_drift");
 }
 
 export function assertPlatformRestoreCandidate(

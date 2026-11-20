@@ -658,6 +658,16 @@ predecessor and fsyncs an `unknown` checkpoint immediately before the sole
 checkpoint is derived from the physical plan and confirmation, not the chosen
 evidence path, so an alternate output path cannot upload twice.
 
+The final Container check may take up to three additional observations,
+with five seconds of pause before each, when only the starting or scheduling
+instance counts differ from the reviewed predecessor. Each retry confirms
+the exact serving Worker predecessor and the upload custody before reading
+the Container again. Upload still requires the Container to match the reviewed
+state, including zero starting and scheduling instances. Changes to the
+application identity, image, version, state or rollout, reported failures,
+and provider read errors stop without another attempt. The existing
+checkpoint governs recovery if this check stops after it has been written.
+
 Execute parses exactly one `Current Version ID: <uuid>` from Wrangler's output,
 records that accepted UUID in the checkpoint, and requires deployment status to
 contain only that UUID at 100 percent. It reads the exact immutable Version back
