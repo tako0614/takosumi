@@ -84,7 +84,8 @@ import {
 } from "../../lib/run-approval.ts";
 import { canCancelRun } from "../../lib/run-cancel.ts";
 import { initialPlanRetryReport } from "../../lib/initial-plan-retry.ts";
-import { retryPlanForRun } from "../../lib/run-retry.ts";
+import { defaultRetryPlanApi, retryPlanForRun } from "../../lib/run-retry.ts";
+import type { RevisionPlanAttemptStore } from "../../lib/revision-plan-attempt.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -491,6 +492,8 @@ function Inner() {
   };
   let disposed = false;
   let runEpoch = 0;
+  const revisionRetryAttempts: RevisionPlanAttemptStore = new Map();
+  const retryApi = defaultRetryPlanApi(revisionRetryAttempts);
   let applyReadController: AbortController | undefined;
   onCleanup(() => {
     disposed = true;
@@ -1079,27 +1082,6 @@ function Inner() {
     await finishApply(envelope, attempt);
   });
 
-  // Per-run UI state must reset when this SAME component instance navigates
-  // between runs (apply → apply run, retry → fresh plan): a stale `applied`
-  // would fake an applied summary on a never-applied plan and hide the apply
-  // button. Nothing on this page applies automatically.
-  let lastRunId = runId();
-  createEffect(() => {
-    const id = runId();
-    if (id === lastRunId) return;
-    lastRunId = id;
-    runEpoch += 1;
-    applyReadController?.abort();
-    setUnconfirmedApply(undefined);
-    setCheckingApply(false);
-    deploy.clearError();
-    recheckApply.clearError();
-    approve.clearError();
-    cancel.clearError();
-    setApplied(false);
-    setNeedsConfirm(false);
-  });
-
   const { confirm } = useConfirmDialog();
 
   const restartFailedInitialPlan = createAction(async () => {
@@ -1171,25 +1153,42 @@ function Inner() {
     const currentRun = runLatest();
     const instId = currentRun?.capsuleId;
     if (!currentRun || !instId) return;
-    const capsule = await getCapsule(instId);
-    if (capsule.id !== instId || capsule.workspaceId !== currentRun.workspaceId) {
-      throw new ControlApiError(
-        409,
-        "retry_plan_identity_mismatch",
-        t("controlError.sourceRevisionMismatch"),
-      );
+    const attempt = { plan: currentRun, epoch: runEpoch };
+    const isCurrent = () => ownsApply(attempt);
+    if (!isCurrent()) return;
+    try {
+      const capsule = await getCapsule(instId);
+      if (!isCurrent()) return;
+      const newRunId = await retryPlanForRun(currentRun, capsule, retryApi, isCurrent);
+      if (newRunId && isCurrent()) {
+        navigate(
+          appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
+            `/runs/${newRunId}`,
+        );
+      }
+    } catch (cause) {
+      if (isCurrent()) throw cause;
     }
-    // The same selector as the app page: a failed removal is retried as a
-    // removal, a first install keeps its reviewed pair, and an installed
-    // app's change repeats the change its plan records (never the Source's
-    // default ref).
-    const newRunId = await retryPlanForRun(currentRun, capsule);
-    if (newRunId) {
-      navigate(
-        appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
-          `/runs/${newRunId}`,
-      );
-    }
+  });
+
+  // Reset per-run UI state when the same component navigates to another Run.
+  let lastRunId = runId();
+  createEffect(() => {
+    const id = runId();
+    if (id === lastRunId) return;
+    lastRunId = id;
+    runEpoch += 1;
+    revisionRetryAttempts.clear();
+    applyReadController?.abort();
+    setUnconfirmedApply(undefined);
+    setCheckingApply(false);
+    deploy.clearError();
+    recheckApply.clearError();
+    retryPlan.clearError();
+    approve.clearError();
+    cancel.clearError();
+    setApplied(false);
+    setNeedsConfirm(false);
   });
 
   const confirmApprove = async (): Promise<void> => {

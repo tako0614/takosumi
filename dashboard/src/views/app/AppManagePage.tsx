@@ -50,7 +50,6 @@ import {
   type Capsule,
   ControlApiError,
   createCapsuleDestroyRecoveryPlan,
-  createReviewableGitRevisionPlan,
   createStateVersionRollbackPlan,
   advanceGitInstallPlan,
   advanceGitRevisionPlan,
@@ -84,11 +83,8 @@ import { friendlyError } from "../../lib/error-copy.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
 import {
-  getOrCreateRevisionPlanAttempt,
-  observeRevisionPlanAttempt,
   releaseObservedRevisionPlanAttempt,
-  releaseRevisionPlanAttempt,
-  type RevisionPlanAttempt,
+  type RevisionPlanAttemptStore,
 } from "../../lib/revision-plan-attempt.ts";
 import { appUninstallConnectionNotice, appUninstallRecoveryMode, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
 import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
@@ -729,12 +725,9 @@ export default function AppManagePage(props: {
   );
 
   // --- version actions -----------------------------------------------------------
-  // One request/key pair per ref while its outcome is unknown or failed: the
-  // POST may have committed before a later reconcile error reaches the
-  // browser. Once a Plan id comes back the key is released, so the next
-  // Update / Review again / later update to the same ref is a new request
-  // instead of a replay of the plan already returned.
-  const revisionAttempts = new Map<string, RevisionPlanAttempt>();
+  // Use the same request/key handling as a retry from Run details.
+  const revisionAttempts: RevisionPlanAttemptStore = new Map();
+  const revisionApi = defaultRetryPlanApi(revisionAttempts);
   // The installed ref, from the server's view or the Capsule's adopted
   // revision. An installed app never falls back to the Source's default ref:
   // without a known ref there is nothing to update.
@@ -752,19 +745,7 @@ export default function AppManagePage(props: {
         "The installed version is not known yet.",
       );
     }
-    const request = { ref } as const;
-    const requestJson = JSON.stringify(request);
-    const forCapsule = capsuleId();
-    const attempt = getOrCreateRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson);
-    const response = await createReviewableGitRevisionPlan(forCapsule, request, {
-      idempotencyKey: attempt.idempotencyKey,
-      onCreated: (created) => observeRevisionPlanAttempt(
-        revisionAttempts, forCapsule, requestJson, attempt, created.revisionPlan,
-      ),
-    });
-    const planRunId = response.revisionPlan.planRunId;
-    if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson, attempt.idempotencyKey);
-    return planRunId!;
+    return (await revisionApi.planRevision(capsuleId(), ref))!;
   };
   const startUpdate = (ref?: string) =>
     void startReview("version", "update", () => createRevisionRun(ref));
@@ -796,7 +777,7 @@ export default function AppManagePage(props: {
   // current configuration — never the Source's default ref. The app is re-read
   // first.
   const retryApi: RetryPlanApi = {
-    ...defaultRetryPlanApi(),
+    ...revisionApi,
     planRevision: (_capsuleId, ref) => createRevisionRun(ref),
   };
   const retry = (problem: CapsuleAppProblem | undefined) => {
@@ -869,15 +850,17 @@ export default function AppManagePage(props: {
       "update",
       async () => {
         const forCapsule = capsuleId();
-        const response = requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId));
+        const response = await advanceGitRevisionPlan(revisionPlanId);
         const plan = response.revisionPlan;
         if (plan.id === revisionPlanId && plan.capsuleId === forCapsule &&
-          typeof plan.revision?.targetRef === "string") {
+          typeof plan.revision?.targetRef === "string" &&
+          ((response.nextAction === "review_run" && plan.planRunId) ||
+            (response.nextAction === "none" && plan.phase === "failed"))) {
           releaseObservedRevisionPlanAttempt(
             revisionAttempts, forCapsule, JSON.stringify({ ref: plan.revision.targetRef }), plan.id,
           );
         }
-        return plan.planRunId;
+        return requireReviewableRevisionPlan(response).revisionPlan.planRunId;
       },
       { action: "continue_revision", restartable: false },
     );

@@ -1601,6 +1601,8 @@ export async function createReviewableGitRevisionPlan(
     readonly pollCadence?: GitPlanPollCadence;
     /** Observe this request's acknowledged coordinator before reconciliation. */
     readonly onCreated?: (response: GitRevisionPlanResponse) => void;
+    /** Observe the coordinator's final response before a failed result is raised. */
+    readonly onSettled?: (response: GitRevisionPlanResponse) => void;
   } = {},
 ): Promise<GitRevisionPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
@@ -1624,6 +1626,7 @@ export async function createReviewableGitRevisionPlan(
       reconcile: (current) =>
         reconcileGitRevisionPlan(current.revisionPlan.id, { signal }),
     });
+    options.onSettled?.(response);
     return requireReviewableRevisionPlan(response);
   });
 }

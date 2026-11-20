@@ -172,9 +172,8 @@ describe("installed app page", () => {
   });
 
   test("version changes keep one idempotency key per requested ref", () => {
-    expect(page).toContain("getOrCreateRevisionPlanAttempt(");
-    expect(page).toContain("idempotencyKey: attempt.idempotencyKey");
-    expect(page).toContain("createReviewableGitRevisionPlan(");
+    expect(page).toContain("defaultRetryPlanApi(revisionAttempts)");
+    expect(page).toContain("revisionApi.planRevision(capsuleId(), ref)");
     expect(page).toContain("createStateVersionRollbackPlan(stateVersionId)");
     expect(version).toContain('t("app.version.rollback")');
     expect(version).toContain('t("app.version.pinReview")');
@@ -269,11 +268,7 @@ describe("installed app page", () => {
     expect(history).toContain("href={`/runs/${encodeURIComponent(event.runId)}`}");
   });
 
-  test("a returned Plan releases its idempotency key; a failed or unknown outcome keeps it", () => {
-    expect(page).toContain("if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson, attempt.idempotencyKey);");
-    expect(page.indexOf("releaseRevisionPlanAttempt(revisionAttempts")).toBeGreaterThan(
-      page.indexOf("await createReviewableGitRevisionPlan(forCapsule"),
-    );
+  test("a returned settings Plan releases its key and marks the form clean", () => {
     // Settings: the key is released and the form is clean once the Plan exists.
     const create = settings.slice(settings.indexOf("props.onReview(async () => {"), settings.indexOf("return result.configurationPlan.planRunId;"));
     expect(create).toContain("configurationAttempt = undefined");
@@ -300,8 +295,9 @@ describe("installed app page", () => {
     const continueRevision = page.slice(page.indexOf("const continueRevision = (revisionPlanId: string) =>"), page.indexOf("const [screenRetryBusy"));
     // A continued revision that settles without a Plan (for example already
     // current) reports its own diagnostic, not a generic "not started".
-    expect(continueRevision).toContain("requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId))");
-    expect(continueRevision).toContain("return plan.planRunId;");
+    expect(continueRevision).toContain("const response = await advanceGitRevisionPlan(revisionPlanId);");
+    expect(continueRevision).toContain('response.nextAction === "none" && plan.phase === "failed"');
+    expect(continueRevision).toContain("return requireReviewableRevisionPlan(response).revisionPlan.planRunId;");
     expect(continueRevision).toContain('"update",');
     expect(attention).toContain("props.actions.continueRevision(revisionPlanId())");
     // Continuing a stopped one waits too while another change is under way

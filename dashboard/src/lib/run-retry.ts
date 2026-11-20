@@ -27,7 +27,13 @@ import {
   type Run,
 } from "./control-api.ts";
 import { initialPlanRetryReport } from "./initial-plan-retry.ts";
-import { randomUuid } from "./random-uuid.ts";
+import {
+  getOrCreateRevisionPlanAttempt,
+  observeRevisionPlanAttempt,
+  releaseObservedRevisionPlanAttempt,
+  releaseRevisionPlanAttempt,
+  type RevisionPlanAttemptStore,
+} from "./revision-plan-attempt.ts";
 import { t } from "../i18n/index.ts";
 
 /** The change "try again" plans for a failed run. */
@@ -59,16 +65,13 @@ export interface RetryPlanApi {
   readonly planTracked: (capsuleId: string) => Promise<unknown>;
 }
 
-const DEFAULT_API: RetryPlanApi = {
+const STANDARD_REQUESTS = {
   getRun,
   destroyPlanCapsule,
   planCapsule,
-  planRevision: async (capsuleId, ref) =>
-    (await createReviewableGitRevisionPlan(capsuleId, { ref }, { idempotencyKey: randomUuid() }))
-      .revisionPlan.planRunId,
   planRollback: createStateVersionRollbackPlan,
   planTracked: (capsuleId) => planCapsule(capsuleId),
-};
+} satisfies Omit<RetryPlanApi, "planRevision">;
 
 function isRemoval(type: Run["type"]): boolean {
   return type === "destroy_plan" || type === "destroy_apply";
@@ -117,7 +120,7 @@ export function retryChangeForRun(input: {
 export async function previewRetryChange(
   run: Run,
   capsule: Capsule,
-  api: Pick<RetryPlanApi, "getRun"> = DEFAULT_API,
+  api: Pick<RetryPlanApi, "getRun"> = STANDARD_REQUESTS,
 ): Promise<RetryChange> {
   const plan = run.type === "apply" && run.planRunId ? await api.getRun(run.planRunId) : undefined;
   return retryChangeForRun({ run, ...(plan ? { plan } : {}), capsule });
@@ -127,9 +130,11 @@ export async function previewRetryChange(
 export async function retryPlanForRun(
   run: Run,
   capsule: Capsule,
-  api: RetryPlanApi = DEFAULT_API,
+  api: RetryPlanApi,
+  isCurrent?: () => boolean,
 ): Promise<string | undefined> {
   const change = await previewRetryChange(run, capsule, api);
+  if (isCurrent && !isCurrent()) return undefined;
   const capsuleId = capsule.id;
   switch (change.kind) {
     case "removal":
@@ -146,7 +151,31 @@ export async function retryPlanForRun(
   }
 }
 
-/** The default calls, for pages that override only some of them. */
-export function defaultRetryPlanApi(): RetryPlanApi {
-  return DEFAULT_API;
+/** Build one set of retry calls for the lifetime of the current review screen. */
+export function defaultRetryPlanApi(attempts: RevisionPlanAttemptStore = new Map()): RetryPlanApi {
+  return {
+    ...STANDARD_REQUESTS,
+    planRevision: async (capsuleId, ref) => {
+      const request = { ref };
+      const requestJson = JSON.stringify(request);
+      const attempt = getOrCreateRevisionPlanAttempt(attempts, capsuleId, requestJson);
+      const { revisionPlan } = await createReviewableGitRevisionPlan(capsuleId, request, {
+        idempotencyKey: attempt.idempotencyKey,
+        onCreated: ({ revisionPlan: created }) => observeRevisionPlanAttempt(
+          attempts, capsuleId, requestJson, attempt, created,
+        ),
+        onSettled: (response) => {
+          const settled = response.revisionPlan;
+          if (response.nextAction === "none" && settled.phase === "failed" &&
+            settled.capsuleId === capsuleId && settled.revision?.targetRef === ref) {
+            releaseObservedRevisionPlanAttempt(attempts, capsuleId, requestJson, settled.id);
+          }
+        },
+      });
+      if (revisionPlan.planRunId) {
+        releaseRevisionPlanAttempt(attempts, capsuleId, requestJson, attempt.idempotencyKey);
+      }
+      return revisionPlan.planRunId;
+    },
+  };
 }
