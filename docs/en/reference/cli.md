@@ -103,9 +103,15 @@ takosumi apps recover-uninstall cap_example \
 ```
 
 The server checks current ownership, the cloud account, and the applied connection settings before preparing a Destroy Plan.
-Use the `planRunId` and `reviewUrl` in `review_required` or `plan_pending` to inspect what the plan will remove.
-The Plan's `providerConnections` shows the effective Connections, including replacements carried forward from a previous attempt.
-If the result is `unconfirmed`, check the app's Run history for the original Plan before requesting another.
+When the result is `review_required`, inspect what the Plan will remove and its effective `providerConnections`, including replacements carried forward from a previous attempt.
+For `plan_pending`, use the returned `planRunId` to read the same Plan again. If the result is `unconfirmed`, first find the original Plan ID in the app's Run history.
+
+```bash
+takosumi apps recover-uninstall cap_example --destroy-plan destroy_plan_example \
+  --url https://takosumi.example.com --json
+```
+
+Review with `--destroy-plan` reads the specified Plan once and requires the `read` scope.
 
 Execute the exact plan in a separate command after reviewing it.
 

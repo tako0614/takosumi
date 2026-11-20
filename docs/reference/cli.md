@@ -106,9 +106,15 @@ takosumi apps recover-uninstall cap_example \
 ```
 
 サーバーが現在の所有者、クラウドアカウント、適用済みの接続設定を照合し、削除Planを準備します。
-`review_required` または `plan_pending` の `planRunId` と `reviewUrl` で削除内容を確認します。
-Planの `providerConnections` には、今回指定した接続と、前回の削除から引き継いだ接続が表示されます。
-作成結果が `unconfirmed` なら、次のPlanを作る前に元のアプリのRun履歴を確認してください。
+`review_required` になったPlanでは、削除内容と `providerConnections` の有効な接続を確認できます。前回の削除から引き継いだ接続も表示します。
+`plan_pending` なら返された `planRunId` を指定して、同じPlanを読み直せます。作成結果が `unconfirmed` なら、先に元のアプリのRun履歴から元のPlan IDを確認してください。
+
+```bash
+takosumi apps recover-uninstall cap_example --destroy-plan destroy_plan_example \
+  --url https://takosumi.example.com --json
+```
+
+`--destroy-plan` での確認は `read` scopeを使い、指定されたPlanを1回読み取ります。
 
 確認したPlanを実行する場合だけ、別のコマンドで明示します。
 

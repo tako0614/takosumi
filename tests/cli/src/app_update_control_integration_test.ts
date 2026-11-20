@@ -202,6 +202,20 @@ test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall wit
   const errors: string[] = [];
   const io = { stdout: (line: string) => output.push(line), stderr: (line: string) => errors.push(line) };
   try {
+    const reviewArgs = ["apps", "recover-uninstall", h.appId, "--destroy-plan", saved.id,
+      "--token", "synthetic-destroy-read-only", "--url", ORIGIN, "--json"];
+    expect(await main(reviewArgs, io)).toBe(0);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      status: "review_required", planRunId: saved.id, plan: { id: saved.id, status: "waiting_approval" },
+    });
+    expect(await main(reviewArgs.map(value =>
+      value === "synthetic-destroy-read-only" ? "synthetic-destroy-wrong-app" : value), io)).toBe(1);
+    expect(JSON.parse(output[1]!)).toMatchObject({ status: "refused", planRunId: saved.id });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname]))
+      .toEqual([["GET", `/api/v1/runs/${saved.id}`], ["GET", `/api/v1/runs/${saved.id}`]]);
+    expect(h.runnerCalls).toEqual(beforeDestroy);
+    expect((await h.operations.getRun(saved.id))?.status).toBe("waiting_approval");
+
     const args = ["apps", "apply", h.appId, "--destroy-plan", saved.id,
       "--yes", "--token", TOKEN, "--url", ORIGIN, "--json"];
     for (const deniedToken of ["synthetic-destroy-wrong-app", "synthetic-destroy-read-only"]) {
