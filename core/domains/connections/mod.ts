@@ -474,14 +474,17 @@ export class ConnectionsService {
     ); };
     if (!/^sha256:[a-f0-9]{64}$/u.test(input.appliedDigest)) refuse();
     let selection: readonly DestroyProviderConnectionReplacement[];
-    try { selection = parseDestroyProviderConnectionReplacements(input.replacements); }
+    try { selection = parseDestroyProviderConnectionReplacements(input.replacements, { allowOriginalConnection: true }); }
     catch { return refuse(); }
     const replacements = new Map(selection.map(row => [row.connectionId, row.replacementConnectionId]));
     let appliedPlanReplacements: readonly DestroyProviderConnectionReplacement[] = [];
     if (input.appliedPlanRecovery !== undefined) {
-      try { appliedPlanReplacements = parseDestroyProviderConnectionReplacements(input.appliedPlanRecovery.replacements); }
+      try { appliedPlanReplacements = parseDestroyProviderConnectionReplacements(input.appliedPlanRecovery.replacements, { allowOriginalConnection: true }); }
       catch { return refuse(); }
     }
+    const appliedIdsByBinding = new Map(appliedPlanReplacements.map(row => [row.connectionId, row.replacementConnectionId]));
+    if (selection.some(({ connectionId, replacementConnectionId }) =>
+      connectionId === replacementConnectionId && !appliedIdsByBinding.has(connectionId))) refuse();
     const bindings = await this.#validatedProviderBindings(input.capsule);
     const originalBindingIds = new Set([
       ...appliedPlanReplacements.map(({ connectionId }) => connectionId),
@@ -520,7 +523,6 @@ export class ConnectionsService {
     // the current state. A prior recovery may have replaced the binding's
     // stored logical ID without mutating the binding row. Only this comparison
     // aliases those IDs; returned entries and mint retain the new replacement.
-    const appliedIdsByBinding = new Map(appliedPlanReplacements.map(row => [row.connectionId, row.replacementConnectionId]));
     const comparison = selected.map(entry => {
       const bindingId = bindingIdByResolved.get(entry);
       if (bindingId === undefined) return refuse();

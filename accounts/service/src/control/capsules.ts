@@ -207,6 +207,14 @@ export async function handleCapsules(
     // A refused caller must not append Activity to another Workspace by
     // repeatedly guessing a Capsule ID.
     if (!auth.ok) return auth.response;
+    const directUninstallRequester = (ctx.session.credential === "session" && ctx.session.uninstallRequester?.grant === undefined) ||
+      (ctx.session.credential === "personal-access-token" && ctx.session.uninstallRequester?.grant?.kind === "personal-access-token");
+    const actor = ctx.session.subject;
+    const retryOwnershipEpoch = capsule.status === "error" && directUninstallRequester &&
+      ctx.session.uninstallRequester?.subject === actor && auth.authority === "app" &&
+      auth.access.role === "owner" && auth.access.ownerAccountId === actor
+      ? auth.access.ownershipEpoch
+      : undefined;
     if (segments.length === 3 && ((method === "POST" &&
       (segments[2] === "revision-plans" || segments[2] === "install-config-re-adoptions")) ||
       (method === "GET" && segments[2] === "install-config-re-adoption-context"))) {
@@ -248,7 +256,7 @@ export async function handleCapsules(
             operations,
             capsule,
             capsuleId,
-            ctx.session.subject,
+            { actor, ...(retryOwnershipEpoch !== undefined ? { actorOwnershipEpoch: retryOwnershipEpoch } : {}) },
             lifecycleMutation ? requireCapturedManagement() : undefined,
           );
         }
@@ -410,10 +418,7 @@ export async function handleCapsules(
               body.runnerProfileId.trim()
             ? body.runnerProfileId.trim()
             : undefined;
-      if (destroyProviderConnectionReplacements &&
-        (!ctx.session.uninstallRequester ||
-          !((ctx.session.credential === "session" && ctx.session.uninstallRequester.grant === undefined) ||
-            (ctx.session.credential === "personal-access-token" && ctx.session.uninstallRequester.grant?.kind === "personal-access-token")))) {
+      if (destroyProviderConnectionReplacements && (!ctx.session.uninstallRequester || !directUninstallRequester)) {
         return errorJson("forbidden", "Connection recovery requires an account session or personal access token.", 403, request);
       }
       const response = await operations.createCapsuleDestroyPlan(
@@ -421,7 +426,10 @@ export async function handleCapsules(
         {
           ...(destroyProviderConnectionReplacements ? { destroyProviderConnectionReplacements } : {}),
           ...(runnerProfileId ? { runnerProfileId } : {}),
-          actor: ctx.session.subject,
+          actor,
+          ...(retryOwnershipEpoch !== undefined && destroyProviderConnectionReplacements === undefined
+            ? { actorOwnershipEpoch: retryOwnershipEpoch }
+            : {}),
         },
       );
       return jsonStatus(
@@ -683,7 +691,7 @@ async function deleteCapsule(
   operations: ControlPlaneOperations,
   capsule: Capsule,
   capsuleId: string,
-  actor: string,
+  requester: { readonly actor: string; readonly actorOwnershipEpoch?: number },
   expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
 ): Promise<Response> {
   if (capsule.status === "destroyed") {
@@ -713,9 +721,7 @@ async function deleteCapsule(
       expectedWorkspaceManagementAuthority,
     });
   }
-  const response = await operations.createCapsuleDestroyPlan(capsuleId, {
-    actor,
-  });
+  const response = await operations.createCapsuleDestroyPlan(capsuleId, requester);
   return jsonStatus(await publicPlanActionResponse(operations, response), 202);
 }
 
