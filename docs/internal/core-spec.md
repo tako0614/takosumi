@@ -374,8 +374,10 @@ replacement Connections for a new manual `POST /api/v1/capsules/{id}/destroy-pla
 This never changes the app's ProviderBindingSet, InstallConfig, applied module,
 variables, state, or scheduled uninstall request. The current StateVersion must
 identify an applied Plan with exact provider rows and a pinned resolved-binding
-digest. The old Connection must be absent. Current scope, ownership, provider,
-credential policy, readiness and expiry are checked for the selected replacement.
+digest. The old Connection may be absent or still registered, including when an
+API token was rotated. This recovery does not replace operator Connections.
+Current scope, ownership, provider, credential policy, readiness and expiry are
+checked for the selected replacement.
 The trusted credential driver must explicitly prove its verified account scope;
 the reference Cloudflare driver requires its exact-account verification capability
 and matching account metadata. The complete binding digest must match the applied

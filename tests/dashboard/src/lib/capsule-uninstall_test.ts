@@ -4,6 +4,7 @@ import {
   observeUninstallReadback,
   appUninstallBanner,
   appUninstallConnectionNotice,
+  appUninstallRecoveryConnections,
   appUninstallExportNote,
 } from "../../../../dashboard/src/lib/capsule-uninstall.ts";
 import { formatDateTime, t } from "../../../../dashboard/src/i18n/index.ts";
@@ -73,6 +74,26 @@ test("a broken bound connection takes precedence over the countdown only when te
     ...needsConnection,
     uninstall: { mode: "discard", impact: { usedBy: [] } },
   })).toBeUndefined();
+});
+
+test("actionable uninstall recovery rows cover unavailable bound connection statuses only", () => {
+  const rows = appUninstallRecoveryConnections({ problems: [
+    ...(["missing", "revoked", "expired", "error"] as const).map((connectionStatus) => ({
+      code: "connection_unavailable" as const,
+      severity: "error" as const,
+      connectionId: `connection-${connectionStatus}`,
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      connectionStatus,
+    })),
+    { code: "connection_unavailable", severity: "error", connectionStatus: "expired" },
+    { code: "run_failed", severity: "error" },
+  ] });
+  expect(rows.map(({ connectionId, connectionStatus }) => [connectionId, connectionStatus])).toEqual([
+    ["connection-missing", "missing"],
+    ["connection-revoked", "revoked"],
+    ["connection-expired", "expired"],
+    ["connection-error", "error"],
+  ]);
 });
 
 test("the export note reports what was exported, and nothing when unrecorded", () => {

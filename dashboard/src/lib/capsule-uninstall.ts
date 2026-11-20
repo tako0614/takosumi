@@ -15,6 +15,24 @@ export function appUninstallConnectionNotice(
   if (issues.length > 0) return "app.uninstall.connectionUnavailable";
 }
 
+/** Connections an owner can replace in a reviewed uninstall plan. */
+export function appUninstallRecoveryConnections(
+  app: Pick<CapsuleAppView, "problems">,
+): Array<{
+  readonly connectionId: string;
+  readonly provider: string;
+  readonly connectionStatus: NonNullable<CapsuleAppView["problems"][number]["connectionStatus"]>;
+}> {
+  const seen = new Set<string>();
+  return app.problems.flatMap((problem) => {
+    const status = problem.connectionStatus;
+    if (problem.code !== "connection_unavailable" || !problem.connectionId || !problem.provider ||
+      status === undefined || seen.has(problem.connectionId)) return [];
+    seen.add(problem.connectionId);
+    return [{ connectionId: problem.connectionId, provider: problem.provider, connectionStatus: status }];
+  });
+}
+
 /**
  * The one sentence that says where an app's uninstall stands, from the
  * control plane's app view: a teardown that failed or was stopped says so

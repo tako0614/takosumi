@@ -24,7 +24,7 @@ import {
 } from "../../lib/app-page.ts";
 import { installAttemptHref } from "../../lib/app-links.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
-import { appUninstallBanner, appUninstallConnectionNotice, appUninstallExportNote } from "../../lib/capsule-uninstall.ts";
+import { appUninstallBanner, appUninstallConnectionNotice, appUninstallExportNote, appUninstallRecoveryConnections } from "../../lib/capsule-uninstall.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
@@ -344,7 +344,7 @@ export default function AppAttentionSection(props: {
                   <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
                 </Show>
               </div>
-              <Show when={props.canUninstall && uninstallConnectionNotice() === "app.uninstall.connectionRemoved" && app().capsuleId} keyed>
+              <Show when={props.canUninstall && Boolean(uninstallConnectionNotice()) && appUninstallRecoveryConnections(app()).length > 0 && app().capsuleId} keyed>
                 {(_capsuleId) => <AppUninstallConnectionRecovery
                   app={app()}
                   disabled={props.busy || Boolean(app().progress.run || app().progress.review || props.reviewRunId)}

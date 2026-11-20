@@ -52,12 +52,13 @@ function controller() {
     retire: () => { uninstallEpoch++; },
     dispose: () => { disposed = true; },
   };`;
-  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "uninstallConnectionNotice", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", transpile(script))(
+  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "uninstallConnectionNotice", "appUninstallRecoveryConnections", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", transpile(script))(
     () => state.capsuleId, () => ({ sourceId: "source" }), state, () => Boolean(state.starting), () => state.owner ? "owner" : undefined, () => state.owner,
     () => state.starting, (value: unknown) => { state.starting = value; }, (value: unknown) => { if (value) state.errors.push(value); }, () => {},
     (value: { planRunId: string }) => { state.review = value; }, () => {}, () => undefined, isRevisionAlreadyCurrent, () => ({ message: "fixture error" }), (key: string) => key, () => {}, ControlApiError,
     async (options?: { isCurrent?: () => boolean }) => { state.reads++; return await getCapsuleAppWithSignal(state.capsuleId, undefined, options); },
-    () => ({ capsuleId: state.capsuleId, workspaceId: state.workspaceId, progress: {} }), () => state.review, () => "app.uninstall.connectionRemoved",
+    () => ({ capsuleId: state.capsuleId, workspaceId: state.workspaceId, progress: {}, uninstall: { mode: "scheduled" } }), () => state.review, () => "app.uninstall.connectionRemoved",
+    () => [{ connectionId: "old", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionStatus: "revoked" }],
     createCapsuleDestroyRecoveryPlan, extractRunId,
     () => JSON.stringify([state.capsuleId, state.workspaceId, state.accountId, state.principalId]),
   ) as { send: (answer: typeof pairs) => void; retire: () => void; dispose: () => void };

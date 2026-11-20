@@ -475,8 +475,11 @@ export class ConnectionsService {
     const replacements = new Map(selection.map(row => [row.connectionId, row.replacementConnectionId]));
     const bindings = await this.#validatedProviderBindings(input.capsule);
     for (const id of replacements.keys()) {
-      if (!bindings.some(binding => binding.connectionId === id) ||
-        this.#operatorProviderConnections.has(id) || await this.#store.getConnection(id)) refuse();
+      if (
+        !bindings.some((binding) => binding.connectionId === id) ||
+        this.#operatorProviderConnections.has(id) ||
+        (await this.#store.getConnection(id))?.scope === "operator"
+      ) refuse();
     }
     const policy = await this.#policyForCapsule(input.capsule);
     const resolved = await this.#resolveBindings(input.capsule, bindings.map(binding => ({
@@ -492,10 +495,11 @@ export class ConnectionsService {
       if (!originalsByReplacement.has(entry.connection.id)) continue;
       if (entry.connection.expiresAt !== undefined &&
         (!Number.isFinite(Date.parse(entry.connection.expiresAt)) || Date.parse(entry.connection.expiresAt) <= Date.parse(this.#now()))) refuse();
-      if (!input.hasVerifiedAccountScope(entry.connection)) refuse();
+      if (entry.connection.scope === "operator" || !input.hasVerifiedAccountScope(entry.connection)) refuse();
     }
-    // Only this hash preimage uses the old ID. Returned entries and mint always
-    // retain the real replacement ID, and every other binding stays pinned.
+    // Use the applied digest as evidence of the original account even if the
+    // old connection still exists. Only this comparison uses the old ID.
+    // Returned entries and mint retain the replacement ID.
     const comparison = selected.map(entry => {
       const originalId = originalsByReplacement.get(entry.connection.id);
       return originalId === undefined ? entry : { ...entry, connection: { ...entry.connection, id: originalId } };
