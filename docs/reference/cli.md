@@ -93,6 +93,33 @@ takosumi apps apply cap_example --plan plan_example --observe-only \
 `--yes`と`--observe-only`は同時指定できません。
 failed/cancelled/expiredのRunも新Planで盲目的に再実行せず、保存Runとアプリ状態を確認します。
 
+## 別の接続でアンインストールを再開する
+
+別キーを同じクラウドアカウントの確認済みProvider Connectionとして登録した後、元の接続IDと代替の接続IDを指定します。
+アプリの割当は管理画面または `GET /api/v1/capsules/{app-id}/provider-bindings` で確認できます。
+この操作には対象アプリを管理できるAccounts PATの `read` と `write` が必要です。
+
+```bash
+takosumi apps recover-uninstall cap_example \
+  --connections '[{"connectionId":"conn_old","replacementConnectionId":"conn_new"}]' \
+  --url https://takosumi.example.com --json
+```
+
+サーバーが現在の所有者、クラウドアカウント、適用済みの接続設定を照合し、削除Planを準備します。
+`review_required` または `plan_pending` の `planRunId` と `reviewUrl` で削除内容を確認します。
+Planの `providerConnections` には、今回指定した接続と、前回の削除から引き継いだ接続が表示されます。
+作成結果が `unconfirmed` なら、次のPlanを作る前に元のアプリのRun履歴を確認してください。
+
+確認したPlanを実行する場合だけ、別のコマンドで明示します。
+
+```bash
+takosumi apps apply cap_example --destroy-plan destroy_plan_example --yes \
+  --url https://takosumi.example.com --json
+```
+
+`--destroy-plan` は破棄用の保存Planを指定します。応答が不明なら、同じPlan IDで `--yes` を `--observe-only` に替えると、
+紐付いた削除Runを読み取れます。通常の削除予約は `apps uninstall <app-id> --yes` から行います。
+
 ## CLI を用意する
 
 CLI はこのリポジトリの `cli/` にあり、Bun で直接動かします。package manager からの

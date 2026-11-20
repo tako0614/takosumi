@@ -90,6 +90,33 @@ Observation never approves or creates an Apply. Not finding a linked Apply does 
 `--yes` and `--observe-only` cannot be combined.
 Failed, cancelled or expired Runs also need inspection of the saved Run and app state, rather than a blind new Plan.
 
+## Resume an uninstall with a different Connection
+
+Register the new key as a verified Provider Connection for the same cloud account, then pass the original and replacement Connection IDs.
+Find the app's assignments on its management page or through `GET /api/v1/capsules/{app-id}/provider-bindings`.
+Use an Accounts PAT with `read` and `write` access to the app.
+
+```bash
+takosumi apps recover-uninstall cap_example \
+  --connections '[{"connectionId":"conn_old","replacementConnectionId":"conn_new"}]' \
+  --url https://takosumi.example.com --json
+```
+
+The server checks current ownership, the cloud account, and the applied connection settings before preparing a Destroy Plan.
+Use the `planRunId` and `reviewUrl` in `review_required` or `plan_pending` to inspect what the plan will remove.
+The Plan's `providerConnections` shows the effective Connections, including replacements carried forward from a previous attempt.
+If the result is `unconfirmed`, check the app's Run history for the original Plan before requesting another.
+
+Execute the exact plan in a separate command after reviewing it.
+
+```bash
+takosumi apps apply cap_example --destroy-plan destroy_plan_example --yes \
+  --url https://takosumi.example.com --json
+```
+
+`--destroy-plan` selects a saved Destroy Plan. If the result is uncertain, replace `--yes` with `--observe-only` for the same Plan ID to read its linked Destroy Run.
+Use `apps uninstall <app-id> --yes` to schedule a normal uninstall.
+
 ## Setting up the CLI
 
 The CLI lives in this repository's `cli/` and runs directly on Bun. It is not yet

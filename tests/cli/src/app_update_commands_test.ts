@@ -14,6 +14,20 @@ const revision = { id: "revision_one", workspaceId: "ws_owned", capsuleId: "cap_
 const capsule = { id: "cap_owned", workspaceId: "ws_owned", status: "active", currentStateGeneration: 1, currentStateVersionId: "state_old" };
 const apply = { id: "apply_revision", workspaceId: "ws_owned", capsuleId: "cap_owned", type: "apply", planRunId: plan.id, status: "succeeded" };
 const applyArgs = ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes", "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const destroyPlan = { ...plan, id: "plan_destroy_recovery", type: "destroy_plan", status: "waiting_approval",
+  origin: undefined, operation: "destroy", sourceSnapshotId: "snapshot_applied",
+  summary: { add: 0, change: 0, destroy: 1 },
+  planResources: [{ address: "example_resource.app", type: "example_resource", actions: ["delete"] }] };
+const destroyApply = { ...apply, id: "apply_destroy_recovery", type: "destroy_apply",
+  planRunId: destroyPlan.id, status: "succeeded" };
+const destroyPairs = [
+  { connectionId: "conn_old_a", replacementConnectionId: "conn_shared" },
+  { connectionId: "conn_old_b", replacementConnectionId: "conn_shared" },
+];
+const recoverArgs = ["apps", "recover-uninstall", "cap_owned", "--connections", JSON.stringify(destroyPairs),
+  "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const destroyApplyArgs = ["apps", "apply", "cap_owned", "--destroy-plan", destroyPlan.id,
+  "--yes", "--token", "synthetic-account-pat", "--url", origin, "--json"];
 
 async function invoke(args: string[], handle: (req: Request) => Promise<Response> | Response) {
   const before = globalThis.fetch; const calls: Request[] = []; const out: string[] = []; const err: string[] = [];
@@ -36,6 +50,19 @@ function normal(req: Request, overrides: { plan?: object; capsule?: object; hist
   if (path === `/api/v1/runs/${apply.id}`) return Response.json({ run: overrides.apply ?? apply });
   throw Error("unexpected fixture request");
 }
+function normalDestroy(req: Request, overrides: { plan?: object; capsule?: object; history?: object; apply?: object } = {}) {
+  const path = new URL(req.url).pathname;
+  if (path === `/api/v1/runs/${destroyPlan.id}`) return Response.json({ run: overrides.plan ?? destroyPlan });
+  if (path === "/api/v1/capsules/cap_owned") return Response.json({ capsule: overrides.capsule ?? capsule });
+  if (path === "/api/v1/capsules/cap_owned/runs") {
+    expect(new URL(req.url).searchParams.getAll("type")).toEqual(["destroy_apply"]);
+    expect(new URL(req.url).searchParams.has("types")).toBe(false);
+    return Response.json(overrides.history ?? { runs: [] });
+  }
+  if (path === `/api/v1/runs/${destroyPlan.id}/apply`) return Response.json({ run: overrides.apply ?? destroyApply }, { status: 201 });
+  if (path === `/api/v1/runs/${destroyApply.id}`) return Response.json({ run: overrides.apply ?? destroyApply });
+  throw Error("unexpected Destroy fixture request");
+}
 
 test("apps update uses the Accounts revision coordinator and stops at explicit Plan review", async () => {
   const before = globalThis.fetch;
@@ -57,6 +84,124 @@ test("apps update uses the Accounts revision coordinator and stops at explicit P
     expect(await calls[0]!.json()).toEqual({ ref });
     expect(JSON.parse(out[0]!)).toMatchObject({ status: "review_required", appId: "cap_owned", planRunId: plan.id });
   } finally { globalThis.fetch = before; }
+});
+
+test("apps recover-uninstall creates one reviewed Destroy Plan with exact shared-target pairs", async () => {
+  const r = await invoke(recoverArgs, req => {
+    const path = new URL(req.url).pathname;
+    if (path === "/api/v1/capsules/cap_owned/destroy-plan" && req.method === "POST")
+      return Response.json({ run: destroyPlan }, { status: 201 });
+    if (path === `/api/v1/runs/${destroyPlan.id}` && req.method === "GET")
+      return Response.json({ run: destroyPlan });
+    throw Error("unexpected recovery request");
+  });
+  expect(r.code).toBe(0);
+  expect(r.result).toMatchObject({ status: "review_required", appId: "cap_owned",
+    planRunId: destroyPlan.id, reviewUrl: `${origin}/runs/${destroyPlan.id}` });
+  expect(r.calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname))
+    .toEqual(["/api/v1/capsules/cap_owned/destroy-plan"]);
+  expect(r.calls[0]!.headers.get("authorization")).toBe("Bearer synthetic-account-pat");
+  expect(await r.calls[0]!.json()).toEqual({ destroyProviderConnectionReplacements: destroyPairs });
+});
+
+test("recover-uninstall rejects malformed pairs and confirmation flags before HTTP", async () => {
+  for (const pairs of [
+    "not-json", "{}", "[]", "[{}]",
+    JSON.stringify([{ connectionId: "conn_old_a", replacementConnectionId: "conn_old_a" }]),
+    JSON.stringify([destroyPairs[0], destroyPairs[0]]),
+    JSON.stringify([{ ...destroyPairs[0], accountId: "account_claim" }]),
+  ]) {
+    const args = recoverArgs.map(s => s === JSON.stringify(destroyPairs) ? pairs : s);
+    const r = await invoke(args, () => { throw Error("must not send recovery HTTP"); });
+    expect(r.code).toBe(2);
+    expect(r.calls).toHaveLength(0);
+  }
+  for (const args of [recoverArgs.filter((_, index) => index < 3 || index > 4), [...recoverArgs, "--yes"]]) {
+    const r = await invoke(args, () => { throw Error("must not send recovery HTTP"); });
+    expect(r.code).toBe(2);
+    expect(r.calls).toHaveLength(0);
+  }
+});
+
+test("recovery Plan submission with a lost response sends only the original request", async () => {
+  const r = await invoke(recoverArgs, () => { throw Error("lost synthetic Plan response"); });
+  expect(r.code).toBe(1);
+  expect(r.result).toMatchObject({ status: "unconfirmed", appId: "cap_owned" });
+  expect(r.result.recovery).toContain("Run history");
+  expect(r.calls.map(c => [c.method, new URL(c.url).pathname]))
+    .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
+});
+
+test("uninstall review shows the effective Connections, including a carried-forward replacement", async () => {
+  const providerSource = "registry.opentofu.org/cloudflare/cloudflare";
+  const resolutions = [
+    { requirement: { providerSource, alias: "primary" }, status: "resolved_provider_connection", connectionId: "conn_shared",
+      evidence: { kind: "provider_connection", privateKey: "fixture-must-not-print" } },
+    { requirement: { providerSource, alias: "inherited" }, status: "resolved_provider_connection",
+      evidence: { kind: "provider_connection", connectionId: "conn_prior", requiredEnvNames: ["FIXTURE_MUST_NOT_PRINT"] } },
+  ];
+  const args = recoverArgs.map(value => value === JSON.stringify(destroyPairs) ? JSON.stringify([destroyPairs[0]]) : value);
+  const r = await invoke(args, async req => {
+    expect(await req.json()).toEqual({ destroyProviderConnectionReplacements: [destroyPairs[0]] });
+    return Response.json({ run: { ...destroyPlan, providerResolutions: resolutions } }, { status: 201 });
+  });
+  expect(r.code).toBe(0);
+  expect(r.result.plan.providerConnections).toEqual([
+    { provider: providerSource, alias: "primary", status: "resolved_provider_connection", connectionId: "conn_shared" },
+    { provider: providerSource, alias: "inherited", status: "resolved_provider_connection", connectionId: "conn_prior" },
+  ]);
+  expect(JSON.stringify(r.result)).not.toMatch(/must-not-print|MUST_NOT_PRINT/u);
+});
+
+test("apps apply approves and executes only the saved Destroy Plan after review", async () => {
+  let approved = false;
+  const r = await invoke(destroyApplyArgs, req => {
+    const path = new URL(req.url).pathname;
+    if (path === `/api/v1/runs/${destroyPlan.id}/approve`) {
+      approved = true;
+      return Response.json({ run: { ...destroyPlan, status: "succeeded" } });
+    }
+    return normalDestroy(req, { plan: approved ? { ...destroyPlan, status: "succeeded" } : destroyPlan });
+  });
+  expect(r.code).toBe(0);
+  expect(r.result).toMatchObject({ status: "succeeded", appId: "cap_owned",
+    planRunId: destroyPlan.id, runId: destroyApply.id, runStatus: "succeeded" });
+  expect(r.err.some(s => {
+    const value = JSON.parse(s);
+    if (value.status !== "applying_reviewed_plan") return false;
+    expect(s).not.toContain("synthetic-account-pat");
+    return true;
+  })).toBe(true);
+  expect(r.calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname)).toEqual([
+    `/api/v1/runs/${destroyPlan.id}/approve`, `/api/v1/runs/${destroyPlan.id}/apply`,
+  ]);
+  expect(r.calls.filter(c => c.method === "GET" && new URL(c.url).pathname === "/api/v1/capsules/cap_owned/runs")
+    .every(c => new URL(c.url).searchParams.getAll("type").join(",") === "destroy_apply")).toBe(true);
+});
+
+test("Destroy apply observe-only reads a linked failed Run and sends no mutation", async () => {
+  const failed = { ...destroyApply, status: "failed", errorCode: "runner_execution_indeterminate" };
+  const args = destroyApplyArgs.filter(s => s !== "--yes").concat("--observe-only");
+  const r = await invoke(args, req => normalDestroy(req, { history: { runs: [failed] }, apply: failed }));
+  expect(r.code).toBe(1);
+  expect(r.result).toMatchObject({ status: "failed", planRunId: destroyPlan.id,
+    runId: failed.id, runStatus: "failed", code: failed.errorCode });
+  expect(r.calls.every(c => c.method === "GET")).toBe(true);
+});
+
+test("revision and Destroy Plan selectors are reciprocal and stale Destroy state cannot write", async () => {
+  const wrongRevision = await invoke(
+    destroyApplyArgs, req => normalDestroy(req, { plan: { ...plan, id: destroyPlan.id } }));
+  expect(wrongRevision.code).toBe(1);
+  expect(wrongRevision.calls.filter(c => c.method === "POST")).toHaveLength(0);
+  const wrongDestroy = await invoke(
+    applyArgs, req => normal(req, { plan: { ...destroyPlan, id: plan.id } }));
+  expect(wrongDestroy.code).toBe(1);
+  expect(wrongDestroy.calls.filter(c => c.method === "POST")).toHaveLength(0);
+  const stale = await invoke(
+    destroyApplyArgs, req => normalDestroy(req, { capsule: { ...capsule, currentStateGeneration: 2 } }));
+  expect(stale.code).toBe(1);
+  expect(stale.calls.filter(c => c.method === "POST")).toHaveLength(0);
 });
 
 test("apps apply executes only the exact saved revision Plan after emitting value-free review", async () => {
@@ -86,6 +231,7 @@ test("new commands reject absent, ambiguous and unknown mutation flags before HT
     ["apps", "apply", "cap_owned", "--plan", plan.id],
     ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes=true"],
     ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes", "extra"],
+    [...applyArgs, "--destroy-plan", destroyPlan.id],
     [...applyArgs, "--timeout-ms", "0"],
   ]) {
     const result = await invoke(args, () => { throw Error("HTTP must not be reached"); });
