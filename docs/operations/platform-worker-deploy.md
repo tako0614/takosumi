@@ -282,8 +282,13 @@ after live readback proved the configured migration tag, so routine code cannot
 replay a Durable Object migration.
 
 `wrangler versions upload` synchronizes assets and uploads one tagged Version
-without applying triggers or a Container rollout. After immutable Version
-readback, `wrangler versions deploy` routes it at 100% using a transient config
+without applying triggers or a Container rollout. If Cloudflare returns
+Version-not-found (100146) immediately after acknowledging the upload, the lane
+retries the same immutable Version read with at most 120 seconds of retry
+delays. It validates the acknowledged Version and rechecks the active
+predecessor and authority before activating after a retry. If the Version
+remains unavailable, it reports the acknowledged candidate for recovery.
+After immutable Version readback, `wrangler versions deploy` routes it at 100% using a transient config
 with only the exact account and Worker name, so activation cannot patch
 observability, logpush, or tail consumers. After activation is acknowledged,
 deployment status is read again while it reports only the exact predecessor

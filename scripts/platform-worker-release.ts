@@ -2074,6 +2074,7 @@ export type PlatformWorkerCodeRuntime = Readonly<{
   ) => Promise<DashboardAssetSeal>;
   runScopedGate?: () => Promise<void>;
   nativeRead?: PlatformWorkerCodeNativeRead;
+  waitForUploadedVersionRetry?: (milliseconds: number) => Promise<void>;
   waitForServingVersionRetry?: (milliseconds: number) => Promise<void>;
   publicReadback?: (
     environment: PlatformEnvironment,
@@ -2352,19 +2353,25 @@ async function runPlatformWorkerCodePublication(
       deployedVersionId = parseUploadedVersion(`${upload.stdout}\n${upload.stderr}`);
       candidateVersionId = deployedVersionId;
     }
-    const uploadedSource = await readPlatformWorkerCodeVersion(
-      finalConfig.path,
-      deployedVersionId,
-      command,
-    );
+    const candidate = resume
+      ? {
+          source: await readPlatformWorkerCodeVersion(finalConfig.path, deployedVersionId, command),
+          retried: false,
+        }
+      : await readNewlyUploadedVersion(
+          finalConfig.path,
+          deployedVersionId,
+          command,
+          runtime.waitForUploadedVersionRetry ?? Bun.sleep,
+        );
     const uploaded = assertPlatformWorkerCodeVersionMatchesConfig(
-      uploadedSource,
+      candidate.source,
       finalSource,
       platformTargetForEnvironment(environment).hostedService,
       baseline.secrets,
     );
     assertPublishedVersion(
-      uploadedSource,
+      candidate.source,
       platformTargetForEnvironment(environment).hostedService,
       deployedVersionId,
       releaseTag,
@@ -2372,9 +2379,8 @@ async function runPlatformWorkerCodePublication(
     );
     assertPlatformWorkerCodeStableVersion(baseline.version, uploaded);
     candidateVersionId = deployedVersionId;
-    // A pre-existing candidate is read first, then the active predecessor and
-    // all source/config/authority fences are checked again immediately before switching.
-    if (resume) await assertPredecessorUnchanged();
+    // Resume and delayed upload readback can outlive the preceding authority check.
+    if (resume || candidate.retried) await assertPredecessorUnchanged();
 
     activationConfig = createPlatformWorkerCodeActivationConfig(
       workerName,
@@ -2516,6 +2522,35 @@ async function readPlatformWorkerCodeVersion(
       "--json",
     ])
   ).stdout;
+}
+
+async function readNewlyUploadedVersion(
+  configPath: string,
+  versionId: string,
+  command: PlatformReleaseCommand,
+  wait: (milliseconds: number) => Promise<void>,
+): Promise<{ source: string; retried: boolean }> {
+  const delays = [1_000, 2_000, 4_000, 8_000, ...Array<number>(7).fill(15_000)];
+  const viewCommand = [WRANGLER, "versions", "view", versionId].join(" ").slice(0, 256);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const source = await readPlatformWorkerCodeVersion(configPath, versionId, command);
+      return { source, retried: attempt > 0 };
+    } catch (error) {
+      const delay = delays[attempt];
+      if (
+        delay === undefined ||
+        !(error instanceof PlatformCommandError) ||
+        error.command !== viewCommand ||
+        error.exitCode !== 1 ||
+        error.timedOut ||
+        !/\[code: 100146\]/u.test(error.stderr)
+      ) {
+        throw error;
+      }
+      await wait(delay);
+    }
+  }
 }
 
 function assertPlatformWorkerCodeStableVersion(
@@ -8055,7 +8090,7 @@ async function requiredCommand(
   };
 }
 
-class PlatformCommandError extends Error {
+export class PlatformCommandError extends Error {
   constructor(
     readonly command: string,
     readonly exitCode: number,
