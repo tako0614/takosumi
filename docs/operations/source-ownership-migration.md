@@ -42,8 +42,11 @@ FROM sources s ORDER BY snapshot_count DESC, s.id;
 PostgreSQL では `takosumi_sources`、`takosumi_source_snapshots`、`takosumi_runs`
 と対応する JSONB field を用いて同じ内訳を確認する。
 
-D1 の既存 HTTP operator は `scripts/operator-source-ownership.ts`。全 group の dry-run は read-only で、
+D1 の HTTP operator は `scripts/operator-source-ownership.ts`。全 group の棚卸しには
+`--inventory` を使う。Source ID の順に、一つの GET で一つの group だけを準備する。
+各 group の `preparedAt` と `reportDigest` は `reports[]` に入り、対象の確認に使える。
 1 group の準備エラーはその group の `blocked` 理由として返し、他 group の棚卸しを続ける。
+ページ間でDBの状態は固定されない。適用時は、選択した group とレビュー済みの結果を再照合する。
 互換性レポートは識別子（Source・アプリ・SourceSnapshot）だけを付け替え、分析結果の列は保存されたまま運ぶ。
 `providers_json` として受け付ける形は次の3つだけで、どれも新しい形へ変換しない。
 - 現在の形: `{ providerPackages, rootProviderRequirements }`。

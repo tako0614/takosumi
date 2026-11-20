@@ -184,6 +184,15 @@ export async function listD1SourceOwnershipIds(db: D1Database): Promise<readonly
   return (await pagedRows(db, "sources", "1 = 1", [])).map((row) => String(row.id));
 }
 
+/** Return one Source ID and one lookahead without reading any group data. */
+export async function readD1SourceOwnershipInventoryPage(
+  db: D1Database,
+  afterSourceId: string,
+): Promise<readonly string[]> {
+  return (await rows(db, "select id from sources where id > ? order by id limit 2", [afterSourceId]))
+    .map((row) => String(row.id));
+}
+
 export interface SourceOwnershipLineageReader {
   getSource(id: string): Promise<StoredSource | undefined>;
   getStateVersion(id: string): ReturnType<import("../../core/domains/deploy-control/store.ts").OpenTofuControlStore["getStateVersion"]>;
