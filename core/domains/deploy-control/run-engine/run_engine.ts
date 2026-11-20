@@ -6634,6 +6634,9 @@ export class RunEngine {
     return await this.#connectionsService.resolveProviderBindingsForDestroyRecovery({
       capsule, requiredProviders, appliedDigest: recovery.appliedProviderBindingsDigest,
       replacements: recovery.replacements, hasVerifiedAccountScope: this.#hasVerifiedAccountScope,
+      ...(appliedPlan.destroyConnectionRecovery !== undefined
+        ? { appliedPlanRecovery: appliedPlan.destroyConnectionRecovery }
+        : {}),
       includeUnusedBindings,
     });
   }

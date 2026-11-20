@@ -1,4 +1,5 @@
 import type { Capsule } from "takosumi-contract/capsules";
+import { assertRunExecutionEvidence } from "takosumi-contract/runs";
 
 import type { OpenTofuControlStore } from "./store.ts";
 import { exactCommittedPostApplyRecoveryRowsMatch } from "./committed_post_apply_recovery.ts";
@@ -222,10 +223,19 @@ export async function capsuleRunRuntimeSafetyMatches(
   if (priorSafety === undefined || priorSafety.phase === "safe") return true;
   if (
     priorSafety.phase !== "unknown" ||
-    priorSafety.runType !== "apply" ||
     capsule.currentStateVersionId === undefined ||
     plannedCapsuleStateVersionId !== capsule.currentStateVersionId
   ) return false;
+  if (priorSafety.runType === "destroy_apply") {
+    return persistedProviderPartialDestroyRecoveryMatches(
+      store,
+      priorSafety.runId,
+      capsule,
+      runId,
+      plannedCapsuleStateVersionId,
+    );
+  }
+  if (priorSafety.runType !== "apply") return false;
   return (
     (await persistedProviderPartialApplyMatches(
       store,
@@ -247,6 +257,115 @@ export async function capsuleRunRuntimeSafetyMatches(
       plannedCapsuleStateVersionId,
     ))
   );
+}
+
+/**
+ * A manually reviewed Destroy may continue from a retained partial Destroy
+ * state only when the failed provider operation's durable receipt, exact
+ * StateVersion, and both Plans prove the cursor being consumed. This is
+ * intentionally separate from ordinary Apply recovery admission.
+ */
+async function persistedProviderPartialDestroyRecoveryMatches(
+  store: CapsuleRunCredentialLedger,
+  failedDestroyApplyRunId: string,
+  capsule: Capsule,
+  destroyApplyRunId: string,
+  plannedStateVersionId: string,
+): Promise<boolean> {
+  if (
+    capsule.status !== "error" ||
+    capsule.currentStateVersionId !== plannedStateVersionId ||
+    capsule.currentOutputId !== undefined ||
+    capsule.currentStateGeneration === undefined
+  ) return false;
+
+  const [failedDestroy, destroyApply, state] = await Promise.all([
+    store.getApplyRun(failedDestroyApplyRunId),
+    store.getApplyRun(destroyApplyRunId),
+    store.getStateVersion(plannedStateVersionId),
+  ]);
+  let failedEvidence: ReturnType<typeof assertRunExecutionEvidence>;
+  try {
+    failedEvidence = assertRunExecutionEvidence(failedDestroy?.executionEvidence);
+  } catch {
+    return false;
+  }
+  if (
+    !failedDestroy || failedDestroy.id !== failedDestroyApplyRunId ||
+    failedDestroy.status !== "failed" || failedDestroy.operation !== "destroy" ||
+    failedDestroy.workspaceId !== capsule.workspaceId ||
+    failedDestroy.capsuleId !== capsule.id ||
+    failedDestroy.stateVersionId !== plannedStateVersionId ||
+    failedDestroy.outputId !== undefined ||
+    failedEvidence.runId !== failedDestroy.id ||
+    failedEvidence.planRunId !== failedDestroy.planRunId ||
+    failedEvidence.action !== "destroy" ||
+    failedEvidence.outcome !== "provider_failed_state_persisted" ||
+    failedEvidence.receipt.operationId !== failedDestroy.id ||
+    failedEvidence.commit.stateVersionId !== plannedStateVersionId ||
+    !destroyApply || destroyApply.id !== destroyApplyRunId ||
+    destroyApply.status !== "running" || destroyApply.operation !== "destroy" ||
+    destroyApply.workspaceId !== capsule.workspaceId ||
+    destroyApply.capsuleId !== capsule.id ||
+    destroyApply.expected.planRunId !== destroyApply.planRunId ||
+    destroyApply.expected.capsuleId !== capsule.id ||
+    destroyApply.expected.currentStateVersionId !== plannedStateVersionId ||
+    destroyApply.expected.capsuleExecutionAuthorityEpoch === undefined ||
+    !state || state.id !== plannedStateVersionId ||
+    state.workspaceId !== capsule.workspaceId || state.capsuleId !== capsule.id ||
+    state.environment !== capsule.environment ||
+    state.generation !== capsule.currentStateGeneration ||
+    state.createdByRunId !== failedDestroy.id
+  ) return false;
+
+  const persistedDestroyFailureReceipts = failedDestroy.auditEvents.filter(
+    (event) => event.type === "destroy.failed" &&
+      event.data?.providerDispatched === true &&
+      event.data.providerDestroySucceeded === false &&
+      event.data.statePersistence === "persisted" &&
+      event.data.stateVersionId === state.id,
+  );
+  if (persistedDestroyFailureReceipts.length !== 1) return false;
+
+  const [appliedPlan, recoveryPlan] = await Promise.all([
+    store.getPlanRun(failedDestroy.planRunId),
+    store.getPlanRun(destroyApply.planRunId),
+  ]);
+  const recovery = recoveryPlan?.destroyConnectionRecovery;
+  if (
+    !appliedPlan || appliedPlan.id !== failedDestroy.planRunId ||
+    appliedPlan.status !== "succeeded" || appliedPlan.operation !== "destroy" ||
+    appliedPlan.workspaceId !== capsule.workspaceId ||
+    appliedPlan.capsuleId !== capsule.id ||
+    appliedPlan.appliedApplyRunId !== failedDestroy.id ||
+    appliedPlan.capsuleCurrentStateVersionId !==
+      failedDestroy.expected.currentStateVersionId ||
+    appliedPlan.baseStateGeneration === undefined ||
+    state.generation !== appliedPlan.baseStateGeneration + 1 ||
+    !appliedPlan.resolvedProviderBindingsDigest ||
+    appliedPlan.planDigest !== failedEvidence.plan.digest ||
+    appliedPlan.planArtifact?.digest !== failedEvidence.plan.artifactDigest ||
+    appliedPlan.requiredProviderRequirements === undefined ||
+    !recoveryPlan || recoveryPlan.id !== destroyApply.planRunId ||
+    recoveryPlan.status !== "succeeded" || recoveryPlan.operation !== "destroy" ||
+    recoveryPlan.workspaceId !== capsule.workspaceId ||
+    recoveryPlan.capsuleId !== capsule.id ||
+    recoveryPlan.baseStateGeneration !== state.generation ||
+    recoveryPlan.capsuleCurrentStateVersionId !== state.id ||
+    recoveryPlan.approval === undefined ||
+    recoveryPlan.appliedApplyRunId !== undefined ||
+    recoveryPlan.origin?.kind === "scheduled_uninstall" ||
+    recoveryPlan.createdBy === "system:scheduled-uninstall" ||
+    !recovery || recovery.appliedPlanRunId !== appliedPlan.id ||
+    recovery.appliedProviderBindingsDigest !==
+      appliedPlan.resolvedProviderBindingsDigest ||
+    recovery.replacements.length === 0 ||
+    destroyApply.expected.resolvedProviderBindingsDigest !==
+      recoveryPlan.resolvedProviderBindingsDigest ||
+    destroyApply.expected.capsuleExecutionAuthorityEpoch !==
+      recoveryPlan.capsuleExecutionAuthorityEpoch
+  ) return false;
+  return true;
 }
 
 /** A recovered initial create has no provider-success receipt. Only a newly

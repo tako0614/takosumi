@@ -461,6 +461,10 @@ export class ConnectionsService {
     readonly requiredProviders: readonly RequiredProviderBindingIdentity[];
     readonly appliedDigest: string;
     readonly replacements: readonly DestroyProviderConnectionReplacement[];
+    /** Replacement IDs used by the exact PlanRun that produced the current StateVersion. */
+    readonly appliedPlanRecovery?: {
+      readonly replacements: readonly DestroyProviderConnectionReplacement[];
+    };
     readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
     readonly includeUnusedBindings?: boolean;
   }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
@@ -473,36 +477,55 @@ export class ConnectionsService {
     try { selection = parseDestroyProviderConnectionReplacements(input.replacements); }
     catch { return refuse(); }
     const replacements = new Map(selection.map(row => [row.connectionId, row.replacementConnectionId]));
+    let appliedPlanReplacements: readonly DestroyProviderConnectionReplacement[] = [];
+    if (input.appliedPlanRecovery !== undefined) {
+      try { appliedPlanReplacements = parseDestroyProviderConnectionReplacements(input.appliedPlanRecovery.replacements); }
+      catch { return refuse(); }
+    }
     const bindings = await this.#validatedProviderBindings(input.capsule);
-    for (const id of replacements.keys()) {
-      if (
-        !bindings.some((binding) => binding.connectionId === id) ||
+    const originalBindingIds = new Set([
+      ...appliedPlanReplacements.map(({ connectionId }) => connectionId),
+      ...replacements.keys(),
+    ]);
+    for (const id of originalBindingIds) {
+      if (!bindings.some((binding) => binding.connectionId === id) ||
         this.#operatorProviderConnections.has(id) ||
-        (await this.#store.getConnection(id))?.scope === "operator"
-      ) refuse();
+        (await this.#store.getConnection(id))?.scope === "operator") refuse();
     }
     const policy = await this.#policyForCapsule(input.capsule);
     const resolved = await this.#resolveBindings(input.capsule, bindings.map(binding => ({
       ...binding, connectionId: replacements.get(binding.connectionId) ?? binding.connectionId,
     })), policy);
     const selected = this.#selectResolvedProviderBindingsForRun(resolved, input.requiredProviders, false);
-    const originalsByReplacement = new Map<string, string>();
-    for (const [id, replacementId] of replacements) {
-      if (originalsByReplacement.has(replacementId) || !selected.some(entry => entry.connection.id === replacementId)) refuse();
-      originalsByReplacement.set(replacementId, id);
-    }
+    // Resolution preserves the input order, and selection returns the same
+    // objects. Keep each selected row tied to its own stored logical binding;
+    // target connection IDs can also appear on another, unchanged binding.
+    const bindingIdByResolved = new Map(resolved.map((entry, index) => [
+      entry,
+      bindings[index]!.connectionId,
+    ]));
+    const selectedReplacementBindings = new Set<string>();
     for (const entry of selected) {
-      if (!originalsByReplacement.has(entry.connection.id)) continue;
+      const bindingId = bindingIdByResolved.get(entry) ?? refuse();
+      const replacementId = replacements.get(bindingId);
+      if (replacementId === undefined) continue;
+      if (entry.connection.id !== replacementId) refuse();
+      selectedReplacementBindings.add(bindingId);
       if (entry.connection.expiresAt !== undefined &&
         (!Number.isFinite(Date.parse(entry.connection.expiresAt)) || Date.parse(entry.connection.expiresAt) <= Date.parse(this.#now()))) refuse();
       if (entry.connection.scope === "operator" || !input.hasVerifiedAccountScope(entry.connection)) refuse();
     }
-    // Use the applied digest as evidence of the original account even if the
-    // old connection still exists. Only this comparison uses the old ID.
-    // Returned entries and mint retain the replacement ID.
+    if ([...replacements.keys()].some(id => !selectedReplacementBindings.has(id))) refuse();
+    // Compare against the exact connection IDs used by the PlanRun that made
+    // the current state. A prior recovery may have replaced the binding's
+    // stored logical ID without mutating the binding row. Only this comparison
+    // aliases those IDs; returned entries and mint retain the new replacement.
+    const appliedIdsByBinding = new Map(appliedPlanReplacements.map(row => [row.connectionId, row.replacementConnectionId]));
     const comparison = selected.map(entry => {
-      const originalId = originalsByReplacement.get(entry.connection.id);
-      return originalId === undefined ? entry : { ...entry, connection: { ...entry.connection, id: originalId } };
+      const bindingId = bindingIdByResolved.get(entry);
+      if (bindingId === undefined) return refuse();
+      const appliedId = appliedIdsByBinding.get(bindingId) ?? bindingId;
+      return appliedId === entry.connection.id ? entry : { ...entry, connection: { ...entry.connection, id: appliedId } };
     });
     if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse();
     return input.includeUnusedBindings ? resolved : selected;
