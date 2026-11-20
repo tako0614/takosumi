@@ -2,7 +2,7 @@
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { sha256HexOfStringAsync } from "../../core/shared/runtime/hash.ts";
-import { migrateSourceOwnership, prepareSourceOwnershipMigration, sourceOwnershipMigrationPlanDigest, type SourceOwnershipMigrationArchiveCopier,
+import { migrateSourceOwnership, planSourceOwnershipMigration, type SourceOwnershipMigrationArchiveCopier,
   type SourceOwnershipMigrationResult, type SourceOwnershipMigrationStore } from "../../core/domains/sources/ownership-migration.ts";
 import { CloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
 import { readD1SourceOwnershipInventoryPage } from "./d1_source_ownership_migration.ts";
@@ -128,25 +128,17 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
       ((copyCursor as number) > 0 && (typeof values.copyReceipt !== "string" || !/^[0-9a-f]{64}$/.test(values.copyReceipt)))) {
       return Response.json({ error: "invalid_copy_cursor" }, { status: 400 });
     }
-    const before = await migrateSourceOwnership(store, allocator, dryRunCopier, { sourceId, now: values.preparedAt });
+    const { result: observed, mutation } = await planSourceOwnershipMigration(store, allocator, sourceId, values.preparedAt);
+    const before = [observed];
     if (await digestReport(values.preparedAt, before) !== values.reportDigest) {
       return Response.json({ error: "dry_run_changed", results: before }, { status: 409,
         headers: { "cache-control": "no-store" } });
     }
-    const observed = before[0];
-    if (!observed) throw new Error("source_ownership_migration_missing_inventory");
     if (observed.status === "blocked" || observed.status === "unchanged") {
       return Response.json({ kind: "takosumi.source-ownership-migration.apply@v1", results: before },
         { status: observed.status === "blocked" ? 409 : 200, headers: { "cache-control": "no-store" } });
     }
-    const group = await store.readGroup(sourceId);
-    if (!group) throw new Error(`source_ownership_migration_missing_source:${sourceId}`);
-    const mutation = await prepareSourceOwnershipMigration(group, allocator, values.preparedAt);
     if (!mutation) throw new Error("source_ownership_migration_missing_mutation");
-    if (await sourceOwnershipMigrationPlanDigest(mutation) !== observed.planDigest) {
-      return Response.json({ error: "dry_run_changed" }, { status: 409,
-        headers: { "cache-control": "no-store" } });
-    }
     // Metadata-only backfill/retire does not need object copy custody.
     if (mutation.archiveCopies.length > 0) {
       try {
