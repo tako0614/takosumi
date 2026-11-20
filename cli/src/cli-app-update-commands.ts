@@ -18,7 +18,7 @@ const ARGUMENT_REFUSALS = new Set([
   "app_id_required", "unknown_option", "option_value_required", "invalid_boolean_option",
   "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes",
   "exact_ref_and_idempotency_key_required", "saved_plan_and_explicit_confirmation_required",
-  "invalid_connection_replacements", "destroy_plan_id_required",
+  "invalid_connection_replacements", "destroy_plan_id_required", "revision_plan_id_required", "exact_ref_required",
 ]);
 
 /** Preserve inline '=' values, reject unknown flags and extra positionals. */
@@ -26,7 +26,7 @@ function argumentsFor(args: readonly string[], kind: "update" | "apply" | "recov
   const [appId, ...rest] = args;
   if (appId === "--help" || appId === "-h" || rest.includes("--help") || rest.includes("-h")) return { help: true } as const;
   if (!bounded(appId, 256) || appId.startsWith("--")) throw new Refusal("app_id_required");
-  const operationOptions = { update: ["ref", "idempotencyKey"], apply: ["plan", "destroyPlan"],
+  const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], apply: ["plan", "destroyPlan"],
     "recover-uninstall": ["connections", "destroyPlan"] }[kind];
   const strings = new Set(["url", "deployControlUrl", "token", "timeoutMs", ...operationOptions]);
   const booleans = new Set(["json", ...(kind === "apply" ? ["yes", "allowDestroy", "observeOnly"] : [])]);
@@ -189,14 +189,26 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
     ({ appId, options } = parsed);
     ref = typeof options.ref === "string" ? options.ref : undefined;
     key = typeof options.idempotencyKey === "string" ? options.idempotencyKey : undefined;
-    if (!bounded(ref, 1024) || !bounded(key, 256)) throw new Refusal("exact_ref_and_idempotency_key_required");
+    const savedRevisionId = typeof options.revisionPlan === "string" ? options.revisionPlan : undefined;
+    if (savedRevisionId !== undefined) {
+      if (key !== undefined) throw new Refusal("conflicting_modes");
+      if (!TOKEN.test(savedRevisionId)) throw new Refusal("revision_plan_id_required");
+      if (!bounded(ref, 1024)) throw new Refusal("exact_ref_required");
+    } else if (!bounded(ref, 1024) || !bounded(key, 256)) {
+      throw new Refusal("exact_ref_and_idempotency_key_required");
+    }
     options = selectTarget(options);
     const requestedRef = ref; const retainedKey = key; const selectedApp = appId;
     const plan = await within(parsed.wait, async signal => {
       const request = client(options, signal);
-      createAttempted = true;
-      let current = await request(`/api/v1/capsules/${encodeURIComponent(selectedApp)}/revision-plans`, "POST", { ref: requestedRef }, retainedKey);
-      coordinatorReturned = true;
+      let current: unknown;
+      if (savedRevisionId !== undefined) {
+        current = await request(`/api/v1/revision-plans/${encodeURIComponent(savedRevisionId)}`);
+      } else {
+        createAttempted = true;
+        current = await request(`/api/v1/capsules/${encodeURIComponent(selectedApp)}/revision-plans`, "POST", { ref: requestedRef }, retainedKey);
+        coordinatorReturned = true;
+      }
       let delay = 250; let lastProgress: string | undefined; let coordinatorIdentity: string | undefined;
       for (let step = 0; step <= 120; step++) {
         signal.throwIfAborted();
@@ -204,13 +216,14 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
         if (!isRecord(current) || !isRecord(rp) || !bounded(rp.id, 256) || rp.capsuleId !== selectedApp || rp.operation !== "revision" ||
           !bounded(rp.workspaceId, 256) || !isRecord(rp.revision) || rp.revision.targetRef !== requestedRef || !isRecord(rp.revision.base) ||
           !Number.isSafeInteger(rp.revision.base.capsuleStateGeneration) || Number(rp.revision.base.capsuleStateGeneration) < 1 ||
-          (revisionPlanId !== undefined && revisionPlanId !== rp.id)) {
+          (savedRevisionId !== undefined && savedRevisionId !== rp.id)) {
           throw new Refusal("revision_identity_mismatch");
         }
         const identity = canonicalJson([rp.id, rp.workspaceId, rp.capsuleId, rp.revision]);
         if (coordinatorIdentity !== undefined && coordinatorIdentity !== identity) throw new Refusal("revision_identity_mismatch");
         coordinatorIdentity = identity;
         revisionPlanId = rp.id;
+        coordinatorReturned = true;
         if (current.nextAction === "review_run" && bounded(rp.planRunId, 256)) {
           const plan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(rp.planRunId)}`), selectedApp, rp.planRunId), requestedRef);
           if (plan.workspaceId !== rp.workspaceId || plan.baseStateGeneration !== rp.revision.base.capsuleStateGeneration ||
@@ -228,11 +241,20 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
       }
       throw new Refusal("reconcile_limit");
     });
+    if (plan.status !== "succeeded" && plan.status !== "waiting_approval") {
+      write(io, options, { status: "plan_not_reviewable", appId, revisionPlanId, planRunId: plan.id,
+        planStatus: plan.status, reviewUrl: runUrl(options, plan.id) });
+      return 1;
+    }
     write(io, options, { status: "review_required", appId, revisionPlanId, planRunId: plan.id, reviewUrl: runUrl(options, plan.id), plan: review(plan) });
     return 0;
   } catch (error) {
-    write(io, options, { status: !createAttempted || !coordinatorReturned && error instanceof DeployControlApiError && error.status >= 400 && error.status < 500 ? "refused" : "unconfirmed", appId, revisionPlanId, ref, code: errorCode(error),
-      recovery: "Retry only the same app/ref/idempotency key and Accounts identity; no approval or Apply was requested." });
+    const refused = !coordinatorReturned &&
+      (!createAttempted || error instanceof DeployControlApiError && error.status >= 400 && error.status < 500);
+    write(io, options, { status: refused ? "refused" : "unconfirmed", appId, revisionPlanId, ref, code: errorCode(error),
+      recovery: revisionPlanId || options.revisionPlan !== undefined
+        ? "Retry the same app/ref and coordinator ID with --revision-plan."
+        : "Retry only the same app/ref/idempotency key and Accounts identity; no approval or Apply was requested." });
     return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
 }
@@ -433,7 +455,8 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
 
 export function updateHelp(): string {
   return ["takosumi apps update <app-id> --ref <exact-ref> --idempotency-key <retained-key>",
-    isJapaneseCli() ? "既存revision coordinatorでPlanを準備します。承認・Applyは行いません。同じ本人/app/ref/keyで再開します。" : "Prepare a revision Plan only. Retry the same identity/app/ref/key; no approval or Apply.",
+    "takosumi apps update <app-id> --ref <exact-ref> --revision-plan <coordinator-id>",
+    isJapaneseCli() ? "Git更新を準備します。既存の更新はアプリ・ref・更新IDを指定して続けられます。承認・Applyは別操作です。" : "Prepare a Git update. Resume an existing update by specifying its app, ref, and coordinator ID. Approval and Apply are separate.",
     "--url <origin> --token <Accounts PAT with read,write> --json --timeout-ms <1..120000>", "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
 }
 export function applyHelp(): string {

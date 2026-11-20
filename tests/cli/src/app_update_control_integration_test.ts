@@ -357,6 +357,117 @@ test("apps update saves a reviewable revision Plan; apps apply separately reache
   }
 });
 
+test("apps update resumes only the exact saved revision coordinator after a lost reconcile ACK", async () => {
+  const h = await fixture();
+  const originalFetch = globalThis.fetch;
+  const created = await h.dispatch(new Request(`${ORIGIN}/api/v1/capsules/${h.appId}/revision-plans`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+      "idempotency-key": "cli-revision-resume-retained-create",
+    },
+    body: JSON.stringify({ ref: "release/v2" }),
+  }));
+  expect(created.status).toBe(201);
+  const saved = (await created.json()).revisionPlan as {
+    id: string; capsuleId: string; operation: string; revision: { targetRef: string };
+  };
+  expect(saved).toMatchObject({
+    capsuleId: h.appId, operation: "revision", revision: { targetRef: "release/v2" },
+  });
+
+  h.accounts.savePersonalAccessToken("synthetic-cli-revision-read-only", {
+    ...h.pat, tokenId: "pat_cli_revision_read_only", scopes: ["read"],
+  });
+  const requests: Request[] = [];
+  let loseFirstReconcileAck = true;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request.clone());
+    const response = await h.dispatch(request);
+    const path = new URL(request.url).pathname;
+    if (loseFirstReconcileAck && request.method === "POST" &&
+      path === `/api/v1/revision-plans/${saved.id}/reconcile` && response.ok) {
+      loseFirstReconcileAck = false;
+      throw new Error("synthetic lost reconcile ACK after persisted Core progress");
+    }
+    return response;
+  }) as typeof fetch;
+  const output: string[] = [];
+  const errors: string[] = [];
+  const io = { stdout: (line: string) => output.push(line), stderr: (line: string) => errors.push(line) };
+  const update = (appId: string, token = TOKEN, ref = "release/v2") => [
+    "apps", "update", appId, "--ref", ref, "--revision-plan", saved.id,
+    "--token", token, "--url", ORIGIN, "--json",
+  ];
+  try {
+    const beforeRefusals = { ...h.runnerCalls };
+    expect(await main(update("cap_another_app"), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "refused", code: "revision_identity_mismatch" });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", `/api/v1/revision-plans/${saved.id}`],
+    ]);
+    expect(h.runnerCalls).toEqual(beforeRefusals);
+
+    output.length = 0;
+    requests.length = 0;
+    expect(await main(update(h.appId, TOKEN, "release/v3"), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "refused", code: "revision_identity_mismatch" });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", `/api/v1/revision-plans/${saved.id}`],
+    ]);
+    expect(h.runnerCalls).toEqual(beforeRefusals);
+
+    output.length = 0;
+    requests.length = 0;
+    expect(await main(update(h.appId, "synthetic-cli-revision-read-only"), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "unconfirmed", code: "insufficient_scope" });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", `/api/v1/revision-plans/${saved.id}`],
+      ["POST", `/api/v1/revision-plans/${saved.id}/reconcile`],
+    ]);
+    expect(h.runnerCalls).toEqual(beforeRefusals);
+
+    output.length = 0;
+    requests.length = 0;
+    const beforeResume = { ...h.runnerCalls };
+    expect(await main(update(h.appId), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      status: "unconfirmed", appId: h.appId, revisionPlanId: saved.id, ref: "release/v2",
+    });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", `/api/v1/revision-plans/${saved.id}`],
+      ["POST", `/api/v1/revision-plans/${saved.id}/reconcile`],
+    ]);
+
+    output.length = 0;
+    requests.length = 0;
+    expect(await main(update(h.appId), io)).toBe(0);
+    const review = JSON.parse(output[0]!);
+    expect(review).toMatchObject({
+      status: "review_required", appId: h.appId, revisionPlanId: saved.id,
+      planRunId: expect.stringMatching(/^plan_/u), plan: { ref: "release/v2" },
+    });
+    expect(requests[0]?.method).toBe("GET");
+    expect(new URL(requests[0]!.url).pathname).toBe(`/api/v1/revision-plans/${saved.id}`);
+    const posts = requests.filter(request => request.method === "POST");
+    expect(posts.length).toBeGreaterThan(0);
+    expect(posts.every(request => new URL(request.url).pathname ===
+      `/api/v1/revision-plans/${saved.id}/reconcile`)).toBe(true);
+    expect(posts.every(request => request.headers.get("authorization") === `Bearer ${TOKEN}`)).toBe(true);
+    expect(requests.some(request => new URL(request.url).pathname ===
+      `/api/v1/capsules/${h.appId}/revision-plans`)).toBe(false);
+    expect(requests.some(request => /\/approve$|\/apply$/u.test(new URL(request.url).pathname))).toBe(false);
+    expect(h.runnerCalls.plan - beforeResume.plan).toBe(1);
+    expect(h.runnerCalls.apply - beforeResume.apply).toBe(0);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ status: "active", currentStateGeneration: 1 });
+    expect(errors).toEqual([]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("actual coordinator replays the retained create key and lost Apply ACK observes one Core execution", async () => {
   const h = await fixture(); const originalFetch = globalThis.fetch;
   const requests: Request[] = []; let loseCreate = true; let loseApply = true; let createdId: string | undefined; let revokeAfterHistory = false; let revoked = false; let currentReadStatus: number | undefined;
