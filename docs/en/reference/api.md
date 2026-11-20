@@ -706,8 +706,10 @@ the install attempt that created the app; `continue_install` advances it with
 management authority was persisted can never advance and are not named. While
 the attempt waits for its creator's input, `progress.installPlanAwaitingInput`
 is `viewer` (the caller started it) or `other`, and reconciling does not
-advance it. A revision coordinator that stopped before creating its Plan Run is
-named in `progress.revisionPlanId` and continues with
+advance it. Before a revision coordinator creates its Plan Run,
+`progress.revisionPlanId` is returned to the caller who started it. Once
+preparation stalls, all app viewers receive the ID. A caller with app update
+permission can continue the same coordinator with
 `POST /api/v1/revision-plans/{revisionPlanId}/reconcile`. A revision
 coordinator counts only while the state generation and InstallConfig it
 started from are still the Capsule's current ones; after another change was

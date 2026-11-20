@@ -2267,9 +2267,8 @@ export async function advanceGitInstallPlan(
 }
 
 /**
- * Continues a revision coordinator for an installed app that stopped moving
- * (its client went away), through its own reconciliation, until it asks for
- * a review. Resolves to its last response; the caller reads
+ * Continues an existing revision coordinator through its own reconciliation
+ * until it asks for a review. Resolves to its last response; the caller reads
  * `revisionPlan.planRunId`.
  */
 export async function advanceGitRevisionPlan(

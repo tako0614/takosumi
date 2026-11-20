@@ -67,7 +67,7 @@ export interface CapsuleAppFacts {
    * An install or revision coordinator bound to this Capsule is still
    * preparing its Plan (no Plan Run yet; an install attempt only for a
    * never-applied Capsule and only until it stalls), so it owns the next
-   * plan: the app reads as in progress and offers no action that would plan.
+   * plan: the app reads as in progress while the coordinator is active.
    */
   readonly revisionPreparing: boolean;
   readonly connectionIssues: readonly CapsuleAppConnectionIssue[];

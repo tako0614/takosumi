@@ -604,10 +604,10 @@ function linkHealth(
  *   window; after that `continue_install` advances it through its own
  *   reconciliation (`installPlanId`). (An attempt bound to a Capsule never
  *   expires.)
- * - A revision row holds the app until it stops moving; after that the app
- *   reads as it is and the page offers to continue it (`revisionPlanId`).
- *   A row pinned to an older state generation or InstallConfig never
- *   reaches here.
+ * - A revision row holds the app until it stops moving. Its starter can
+ *   continue it immediately; once stalled, the app reads as it is and any
+ *   authorized app manager can continue it. A row pinned to an older
+ *   state generation or InstallConfig never reaches here.
  */
 export function coordinatorPreparation(
   coordinator: PreparingGitPlanCoordinator | undefined,
@@ -621,9 +621,13 @@ export function coordinatorPreparation(
 } {
   if (!coordinator) return { preparing: false };
   if (coordinator.operation === "revision") {
-    return gitRevisionPreparationStalled(coordinator, now)
-      ? { preparing: false, revisionPlanId: coordinator.id }
-      : { preparing: true };
+    const preparing = !gitRevisionPreparationStalled(coordinator, now);
+    return {
+      preparing,
+      ...(!preparing || coordinator.actorSubject === viewer
+        ? { revisionPlanId: coordinator.id }
+        : {}),
+    };
   }
   const idleMs = now - Date.parse(coordinator.updatedAt);
   if (coordinator.phase === "awaiting_input") {

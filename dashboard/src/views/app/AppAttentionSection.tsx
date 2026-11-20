@@ -172,9 +172,15 @@ export default function AppAttentionSection(props: {
   const preparing = () =>
     app().progress.revisionPreparing && !app().progress.run && !app().progress.review &&
     !awaitingInput() && props.reviewRunId === undefined;
+  // The server only returns a plan ID here to the request starter. Other viewers still
+  // see the preparing status but cannot resume someone else's request.
+  const preparingRevisionPlanId = () =>
+    preparing() && app().state === "updating" ? app().progress.revisionPlanId : undefined;
   // A version change whose preparation stopped (its client went away).
   const stalledRevision = () =>
-    props.reviewRunId === undefined ? app().progress.revisionPlanId : undefined;
+    !app().progress.revisionPreparing && props.reviewRunId === undefined
+      ? app().progress.revisionPlanId
+      : undefined;
   // Another change under way or waiting for review goes first: continuing the
   // stopped one beside it would race it to a second Plan.
   const revisionWaits = () => appVersionChangeBusy(app());
@@ -468,6 +474,22 @@ export default function AppAttentionSection(props: {
 
           <Show when={preparing()}>
             <p class="ap-notice" role="status" data-progress="preparing">{t("app.progress.preparing")}</p>
+          </Show>
+
+          <Show when={preparingRevisionPlanId()}>
+            {(revisionPlanId) => (
+              <div class="ap-row-actions">
+                <Button
+                  variant="secondary"
+                  type="button"
+                  busy={props.startingAction === "continue_revision"}
+                  disabled={props.busy}
+                  onClick={() => props.actions.continueRevision(revisionPlanId())}
+                >
+                  {t("app.progress.continueRevision")}
+                </Button>
+              </div>
+            )}
           </Show>
 
           <Show when={awaitingInput()}>

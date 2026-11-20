@@ -1539,11 +1539,28 @@ async function putRevisionRow(
   expect(created.status).toBe("created");
 }
 
-test("a version change being prepared holds the app; one that stopped moving is offered to continue", async () => {
-  const fresh = await fixture();
+test("the starter can resume a preparing version change while other viewers still see it as busy", async () => {
+  const member = { workspaceId: WORKSPACE, accountId: STRANGER, status: "active", roles: ["viewer"] } as const;
+  const fresh = await fixture({
+    overrides: {
+      members: {
+        getMember: async () => member,
+        listMembers: async () => [member],
+      } as unknown as ControlPlaneOperations["members"],
+    },
+  });
   await putRevisionRow(fresh, new Date().toISOString());
-  expect(await fresh.app()).toMatchObject({ state: "updating", primaryAction: "none", progress: { revisionPreparing: true } });
-  expect((await fresh.app()).progress.revisionPlanId).toBeUndefined();
+  expect(await fresh.app()).toMatchObject({
+    state: "updating",
+    primaryAction: "none",
+    progress: { revisionPreparing: true, revisionPlanId: "rp_app_route" },
+  });
+  const asViewer = await fresh.app(fresh.stranger);
+  expect(asViewer).toMatchObject({ state: "updating", primaryAction: "none", progress: { revisionPreparing: true } });
+  expect(asViewer.progress.revisionPlanId).toBeUndefined();
+});
+
+test("a version change that stopped moving is offered to continue as before", async () => {
   // The client's deadline passed during the Source sync: the row stays
   // without a Plan Run. The app reads as installed and names the row.
   const stalled = await fixture();
