@@ -616,7 +616,12 @@ destroy-plan が bridge になります。猶予なしで破棄したい client 
 所有者が計画を取り消した、または破棄が provider に届く前に拒否・失敗した場合は
 `uninstall.blockedReason` を残して止まり、所有者が取り消すか即時削除を選びます。
 provider に届いた破棄が失敗した場合は、通常の破棄失敗と同じく `error` になります。
-`destroy-plan` は猶予なしの破棄計画を作ります。
+`destroy-plan` は猶予なしの破棄計画を作ります。アプリ所有者は
+`{"destroyProviderConnectionReplacements":[{"connectionId":"old-id","replacementConnectionId":"new-id"}]}`
+で、クラウドアカウントと適用済みの接続設定が一致する確認済み接続を選び直せます。
+破棄が一部進んで state が保存されていれば、
+指定を省いた割当では、その state を作った破棄 Plan で使用した代替接続を維持します。
+新しい Plan の承認と Apply が必要です。
 
 `GET /api/v1/capsules/{capsuleId}/app` は、インストール済みのアプリを1つの見え方として
 返します。状態 (`state`) と主操作 (`primaryAction`) は control plane が Capsule、

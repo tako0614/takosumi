@@ -382,12 +382,14 @@ The trusted credential driver must explicitly prove its verified account scope;
 the reference Cloudflare driver requires its exact-account verification capability
 and matching account metadata. The complete binding digest must match the applied
 Plan after substituting the old ID **only in the comparison preimage**. When the
-current StateVersion was produced by a prior recovery Plan, the comparison first
-uses that exact PlanRun's recorded effective replacement ID for each stored
-logical binding, then compares the newly selected replacement against the pinned
-digest. Other bindings, aliases, settings, recipe and verification remain exact;
-minting always uses the real new ID. Each original Connection can have one
-replacement. Several original Connections may use the same replacement when
+current StateVersion was produced by a prior recovery Plan, a new manual recovery
+starts with the replacements recorded by that exact Plan. The new explicit
+selection overrides only the named logical bindings. The new Plan records the
+complete effective selection, which is revalidated at Apply. The comparison
+uses the prior Plan's recorded effective IDs against the pinned digest.
+Other bindings, aliases, settings, recipe and verification remain exact;
+minting uses the effective IDs of the new Plan. Each original Connection can have
+one replacement. Several original Connections may use the same replacement when
 the account and configuration match for every affected binding. Missing or
 legacy evidence, changed metadata, self-replacements and ambiguous selections
 are refused. This option is not available to

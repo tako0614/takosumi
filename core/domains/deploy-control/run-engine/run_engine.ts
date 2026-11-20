@@ -71,6 +71,7 @@ import {
   normalizeCompatibilityReportModulePath,
 } from "takosumi-contract/capsules";
 import {
+  parseDestroyProviderConnectionReplacements,
   type ProviderBindings,
   usesDeclaredEnvCredentialRecipe,
 } from "takosumi-contract/connections";
@@ -2979,12 +2980,44 @@ export class RunEngine {
         { reason: "destroy_source_snapshot_missing" },
       );
     }
-    const destroyConnectionRecovery = internal.destroyProviderConnectionReplacements === undefined
-      ? undefined
-      : appliedPlan?.resolvedProviderBindingsDigest && appliedPlan.requiredProviderRequirements !== undefined
-        ? { appliedPlanRunId: appliedPlan.id, appliedProviderBindingsDigest: appliedPlan.resolvedProviderBindingsDigest,
-            replacements: structuredClone(internal.destroyProviderConnectionReplacements) }
-        : (() => { throw new OpenTofuControllerError("failed_precondition", "Applied provider account evidence is unavailable.", { reason: "destroy_connection_recovery_unproven" }); })();
+    let destroyConnectionRecovery: PlanRun["destroyConnectionRecovery"];
+    if (internal.destroyProviderConnectionReplacements !== undefined) {
+      const refuse = () =>
+        new OpenTofuControllerError(
+          "failed_precondition",
+          "Applied provider account evidence is unavailable.",
+          { reason: "destroy_connection_recovery_unproven" },
+        );
+      if (
+        !appliedPlan?.resolvedProviderBindingsDigest ||
+        appliedPlan.requiredProviderRequirements === undefined
+      ) {
+        throw refuse();
+      }
+      try {
+        const selected = parseDestroyProviderConnectionReplacements(
+          internal.destroyProviderConnectionReplacements,
+        );
+        const prior = appliedPlan.destroyConnectionRecovery
+          ? parseDestroyProviderConnectionReplacements(
+              appliedPlan.destroyConnectionRecovery.replacements,
+            )
+          : [];
+        // Persist the effective selection once so subsequent Apply and
+        // recovery resolve exactly the connections reviewed in this Plan.
+        const effective = new Map(prior.map((row) => [row.connectionId, row]));
+        for (const row of selected) effective.set(row.connectionId, row);
+        destroyConnectionRecovery = {
+          appliedPlanRunId: appliedPlan.id,
+          appliedProviderBindingsDigest: appliedPlan.resolvedProviderBindingsDigest,
+          replacements: parseDestroyProviderConnectionReplacements(
+            [...effective.values()],
+          ),
+        };
+      } catch {
+        throw refuse();
+      }
+    }
     const destroyProviderRequirements = appliedPlan
       ? (() => {
           const inventory = normalizeDestroyProviderInventory(
