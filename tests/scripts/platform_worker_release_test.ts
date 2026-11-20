@@ -489,6 +489,7 @@ async function exerciseCodeLane(options: {
   readonly uploadFails?: boolean;
   readonly uploadReadbackFails?: boolean;
   readonly activationFails?: boolean;
+  readonly postActivationVersions?: readonly string[];
   readonly resume?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-version" | "wrong-predecessor" | "already-serving" | "unhealthy" | "source-drift";
   readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
   readonly loginSmokeFails?: boolean;
@@ -544,6 +545,9 @@ async function exerciseCodeLane(options: {
   let gateCount = 0;
   let sourceCheckCount = 0;
   const operationOrder: string[] = [];
+  const readbackWaits: number[] = [];
+  let postActivationReadCount = 0;
+  let publicReadbackCount = 0;
   let loginSmokeCount = 0;
   let topologySnapshot = 0;
   let uploadArgs: readonly string[] = [];
@@ -581,11 +585,16 @@ async function exerciseCodeLane(options: {
     }
     if (argv[1] === "deployments" && argv[2] === "status") {
       operationOrder.push("serving");
+      let versionId = activated ? CODE_DEPLOYED_ID : CODE_PREDECESSOR_ID;
+      if (activationCount > 0) {
+        versionId = options.postActivationVersions?.[postActivationReadCount] ?? versionId;
+        postActivationReadCount++;
+      }
       return {
         exitCode: 0,
         stdout: JSON.stringify({
           versions: [{
-            version_id: activated ? CODE_DEPLOYED_ID : CODE_PREDECESSOR_ID,
+            version_id: versionId,
             percentage: 100,
           }],
         }),
@@ -672,7 +681,13 @@ async function exerciseCodeLane(options: {
           }
           return cleanNativeRead(path);
         },
-        publicReadback: async () => undefined,
+        waitForServingVersionRetry: async (milliseconds: number) => {
+          readbackWaits.push(milliseconds);
+        },
+        publicReadback: async (_environment, versionId) => {
+          expect(versionId).toBe(CODE_DEPLOYED_ID);
+          publicReadbackCount++;
+        },
         loginStartReadback: async (versionId) => {
           expect(versionId).toBe(CODE_DEPLOYED_ID);
           loginSmokeCount++;
@@ -697,6 +712,9 @@ async function exerciseCodeLane(options: {
     loginSmokeCount,
     sourceCheckCount,
     operationOrder,
+    readbackWaits,
+    postActivationReadCount,
+    publicReadbackCount,
     topologySnapshot,
     uploadArgs,
     activationArgs,
@@ -1064,6 +1082,78 @@ test("routine code resumes an existing exact Version without uploading", async (
   });
   expect(result.operationOrder.slice(0, 4)).toEqual(["serving", "candidate", "serving", "activate"]);
   expect(result.activationArgs).toEqual(expect.arrayContaining([`${CODE_DEPLOYED_ID}@100%`]));
+});
+
+test("routine code waits for the candidate while only the predecessor is visible", async () => {
+  for (const resume of [undefined, "valid"] as const) {
+    const result = await exerciseCodeLane({
+      resume,
+      loginAdmission: "normal",
+      postActivationVersions: [CODE_PREDECESSOR_ID, CODE_PREDECESSOR_ID, CODE_DEPLOYED_ID],
+    });
+    expect(result).toMatchObject({
+      error: undefined,
+      uploadCount: resume ? 0 : 1,
+      activationCount: 1,
+      buildCount: 1,
+      gateCount: 1,
+      topologySnapshot: 3,
+      readbackWaits: [1_000, 2_000],
+      postActivationReadCount: 3,
+      publicReadbackCount: 1,
+      loginSmokeCount: 1,
+    });
+    expect(result.results[0]).toMatchObject({
+      status: "ready",
+      deployedVersionId: CODE_DEPLOYED_ID,
+    });
+  }
+});
+
+test("routine code stops on a concurrent Version instead of waiting for the candidate", async () => {
+  const result = await exerciseCodeLane({
+    postActivationVersions: [CODE_PREDECESSOR_ID, STATUS_VERSION_ID, CODE_DEPLOYED_ID],
+  });
+  expect(((result.error as Error).cause as Error).message).toBe(
+    "platform_worker_release_concurrent_version",
+  );
+  expect(result).toMatchObject({
+    uploadCount: 1,
+    activationCount: 1,
+    postActivationReadCount: 2,
+    readbackWaits: [1_000],
+    topologySnapshot: 2,
+    publicReadbackCount: 0,
+  });
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "activate",
+    candidateVersionId: CODE_DEPLOYED_ID,
+  });
+});
+
+test("routine code reports incomplete when the exact predecessor stays visible", async () => {
+  const result = await exerciseCodeLane({
+    postActivationVersions: Array<string>(17).fill(CODE_PREDECESSOR_ID),
+  });
+  expect(((result.error as Error).cause as Error).message).toBe(
+    "platform_worker_release_predecessor_unchanged",
+  );
+  expect(result).toMatchObject({
+    uploadCount: 1,
+    activationCount: 1,
+    postActivationReadCount: 16,
+    topologySnapshot: 2,
+    publicReadbackCount: 0,
+  });
+  expect(result.readbackWaits.reduce((elapsed, delay) => elapsed + delay, 0)).toBe(180_000);
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "activate",
+    candidateVersionId: CODE_DEPLOYED_ID,
+    predecessorVersionId: CODE_PREDECESSOR_ID,
+  });
+  expect(result.results[0]).not.toHaveProperty("observedServingVersionId");
 });
 
 test("routine resume refuses a mismatched identity or unhealthy predecessor without any mutation", async () => {
