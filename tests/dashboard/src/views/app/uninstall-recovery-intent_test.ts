@@ -88,7 +88,7 @@ test.each(["bindings", "paged", "legacy"] as const)("retiring the chooser suppre
 function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
   const state = { capsuleId: "app", workspaceId: "workspace", accountId: "account", principalId: "person", owner: true,
     starting: undefined as unknown, review: undefined as { planRunId: string } | undefined, errors: [] as unknown[], reads: 0 };
-  const script = `let disposed = false; let uninstallEpoch = 0;\n${start}\n${replacement}\nreturn {
+  const script = `let disposed = false; let uninstallEpoch = 0; let reviewScopeEpoch = 0;\n${start}\n${replacement}\nreturn {
     send: reviewUninstallWithConnection,
     retire: () => { uninstallEpoch++; },
     dispose: () => { disposed = true; },

@@ -879,7 +879,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    test("a lost Update response reads the same app once and recovers only its existing review", async ({ page }) => {
+    for (const retireUpdate of [false, true]) test(retireUpdate
+      ? "leaving a version check lets the user continue its accepted request from the app"
+      : "a lost Update response reads the same app once and recovers only its existing review", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const now = "2026-10-01T00:00:00.000Z";
@@ -896,6 +898,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       let holdReadback = false;
       let releaseReadback: (() => Promise<void>) | undefined;
       let committed = false;
+      let releaseCreation: (() => Promise<void>) | undefined;
+      const revisionId = "grp_retired_version_check";
+      const revision = { id: revisionId, capsuleId: CAPSULE_ID, revision: { targetRef: "main" } };
       let submitted = false;
       let appReadsAfterSubmit = 0;
       const mutations: string[] = [];
@@ -924,7 +929,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             },
             progress: committed
               ? { revisionPreparing: false, review: { runId: planId, runType: "plan" } }
-              : { revisionPreparing: false },
+              : { revisionPreparing: false, ...(retireUpdate && submitted ? { revisionPlanId: revisionId } : {}) },
           }) } });
         }
         if (path === `/api/v1/capsules/${CAPSULE_ID}/revision-plans` && request.method() === "POST") {
@@ -932,12 +937,28 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           expect(request.headers()["idempotency-key"]).toBeTruthy();
           // Model server acceptance independently of the response observed by
           // the actual browser fetch. No second operation is manufactured.
-          committed = acceptUpdate;
+          committed = acceptUpdate && !retireUpdate;
           submitted = true;
+          if (retireUpdate) {
+            return await new Promise<void>((resolve) => {
+              releaseCreation = async () => {
+                await route.fulfill({ status: 201, json: {
+                  revisionPlan: { ...revision, phase: "planning" }, nextAction: "reconcile",
+                } });
+                resolve();
+              };
+            });
+          }
           if (definiteRejection) {
             return route.fulfill({ status: 409, json: { error: { code: "fixture_update_refused", message: "The update was refused." } } });
           }
           return route.abort("failed");
+        }
+        if (path === `/api/v1/revision-plans/${revisionId}/reconcile` && request.method() === "POST") {
+          committed = true;
+          return route.fulfill({ json: {
+            revisionPlan: { ...revision, phase: "reviewable", planRunId: planId }, nextAction: "review_run",
+          } });
         }
         if (path === `/api/v1/runs/${planId}`) return route.fulfill({ json: { run: plan } });
         if (path === `/api/v1/runs/${planId}/cost`) return route.fulfill({ json: { cost: { runId: planId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
@@ -945,6 +966,38 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === `/api/v1/runs/${planId}/stream`) return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
         return route.fallback();
       });
+
+      if (retireUpdate) {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+        await openAppPane(page, "version");
+        await page.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true }).click();
+        await expect.poll(() => Boolean(releaseCreation)).toBe(true);
+        await page.locator(".sidebar").getByRole("link", { name: "Home", exact: true }).click();
+        await expect(page).toHaveURL(/\/$/u);
+        await expect(page.getByTestId("app-page")).toHaveCount(0);
+
+        const accepted = page.waitForResponse((response) => response.status() === 201 &&
+          response.url().endsWith(`/capsules/${CAPSULE_ID}/revision-plans`));
+        await releaseCreation!();
+        await (await accepted).finished();
+        await page.goBack();
+        await showAppOverview(page);
+
+        const stopped = page.locator('[data-problem="revision-stalled"]');
+        await expect(stopped).toBeVisible();
+        expect(mutations).toEqual([`POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`]);
+        await stopped.getByRole("button", { name: "Continue", exact: true }).click();
+        const review = page.getByTestId("app-review");
+        await expect(review).toContainText("existing_update");
+        await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeVisible();
+        expect(mutations).toEqual([
+          `POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`,
+          `POST /api/v1/revision-plans/${revisionId}/reconcile`,
+        ]);
+        expect(errors).toEqual([]);
+        return;
+      }
 
       for (const scene of ["accepted", "not-accepted", "definite-rejection", "readback-pending"] as const) {
         const accepted = scene === "accepted";

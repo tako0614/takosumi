@@ -173,7 +173,7 @@ describe("installed app page", () => {
 
   test("version changes keep one idempotency key per requested ref", () => {
     expect(page).toContain("defaultRetryPlanApi(revisionAttempts)");
-    expect(page).toContain("revisionApi.planRevision(capsuleId(), ref)");
+    expect(page).toContain("revisionApi.planRevision(capsuleId(), ref, isCurrent)");
     expect(page).toContain("createStateVersionRollbackPlan(stateVersionId)");
     expect(version).toContain('t("app.version.rollback")');
     expect(version).toContain('t("app.version.pinReview")');
@@ -282,7 +282,7 @@ describe("installed app page", () => {
   test("continuing an install advances the attempt that owns the app instead of planning beside it", () => {
     const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const [screenRetryBusy"));
     expect(continueInstall).toContain("const attempt = app()?.progress.installPlanId;");
-    expect(continueInstall).toContain("await advanceGitInstallPlan(attempt)");
+    expect(continueInstall).toContain("await advanceGitInstallPlan(attempt, { isCurrent })");
     // An install that waits for the person continues on its own install page,
     // which only whoever started it can answer.
     expect(continueInstall).toContain("navigate(installAttemptHref(attempt));");
@@ -295,7 +295,7 @@ describe("installed app page", () => {
     const continueRevision = page.slice(page.indexOf("const continueRevision = (revisionPlanId: string) =>"), page.indexOf("const [screenRetryBusy"));
     // A continued revision that settles without a Plan (for example already
     // current) reports its own diagnostic, not a generic "not started".
-    expect(continueRevision).toContain("const response = await advanceGitRevisionPlan(revisionPlanId);");
+    expect(continueRevision).toContain("const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent });");
     expect(continueRevision).toContain('response.nextAction === "none" && plan.phase === "failed"');
     expect(continueRevision).toContain("return requireReviewableRevisionPlan(response).revisionPlan.planRunId;");
     expect(continueRevision).toContain('"update",');
@@ -326,10 +326,10 @@ describe("installed app page", () => {
   });
 
   test("try again repeats the failed change the way the run page does, or the installed version as configured", () => {
-    expect(page).toContain("const fresh = await getCapsule(run.capsuleId ?? capsuleId());");
-    expect(page).toContain("return await retryPlanForRun(run, fresh, retryApi);");
+    expect(page).toContain("const fresh = await getCapsule(run.capsuleId, { isCurrent });");
+    expect(page).toContain("return await retryPlanForRun(run, fresh, retryApi, isCurrent);");
     // A version change keeps this page's per-ref idempotency key.
-    expect(page).toContain("planRevision: (_capsuleId, ref) => createRevisionRun(ref),");
+    expect(page).toContain("planRevision: (_capsuleId, ref, isCurrent) => createRevisionRun(ref, isCurrent),");
     // A problem that names no run re-plans the installed version (never the
     // Source's default ref); only an unapplied app plans its saved settings.
     expect(page).toContain("if (!applied()) return extractRunId(await planCapsule(capsuleId()));");
@@ -345,9 +345,11 @@ describe("installed app page", () => {
     expect(route).toContain("<Show when={params.id ?? \"\"} keyed>");
     // Defense in depth inside the page.
     expect(page).toContain("const forCapsule = capsuleId();");
-    expect(page).toContain("const isCurrent = () => capsuleId() === forCapsule && (!options.isCurrent || options.isCurrent());");
+    expect(page).toContain("const isCurrent = () => !disposed && reviewScopeEpoch === forEpoch && capsuleId() === forCapsule &&");
     expect(page).toContain("if (!isCurrent()) return;");
-    const reset = page.slice(page.indexOf("on(\n      capsuleId,"), page.indexOf("{ defer: true }", page.indexOf("on(\n      capsuleId,")));
+    const guard = page.indexOf("() => [capsuleId(), props.accountId, props.principalId] as const,");
+    expect(guard).toBeGreaterThan(-1);
+    const reset = page.slice(guard, page.indexOf("{ defer: true }", guard));
     for (const signal of [
       "setReview(undefined)",
       "setStarting(undefined)",

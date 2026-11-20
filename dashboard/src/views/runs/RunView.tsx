@@ -504,7 +504,7 @@ function Inner() {
   );
   const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
     runId,
-    getRun,
+    (id) => getRun(id),
   );
   // Read the run through this, never `run()` / `run.latest`: both THROW once
   // a load has failed, which took the whole app (nav included) down to the
@@ -584,7 +584,7 @@ function Inner() {
   );
   // The owning app, for the plain-language summary sentence + back link.
   const capsuleId = () => runLatest()?.capsuleId ?? null;
-  const [capsule] = createResource(capsuleId, getCapsule);
+  const [capsule] = createResource(capsuleId, (id) => getCapsule(id));
   const capsuleLatest = () => latestOrUndefined(capsule);
   const appName = () => capsuleLatest()?.name;
   const canRestartFailedInitialPlan = createMemo(() => {
@@ -1157,7 +1157,7 @@ function Inner() {
     const isCurrent = () => ownsApply(attempt);
     if (!isCurrent()) return;
     try {
-      const capsule = await getCapsule(instId);
+      const capsule = await getCapsule(instId, { isCurrent });
       if (!isCurrent()) return;
       const newRunId = await retryPlanForRun(currentRun, capsule, retryApi, isCurrent);
       if (newRunId && isCurrent()) {
