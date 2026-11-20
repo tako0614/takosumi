@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  PlatformCommandError,
   assertConfigTargetsSource,
   assertPlatformRunnerImageProof,
   assertPlatformWorkerCodeVersionMatchesConfig,
@@ -489,6 +490,8 @@ async function exerciseCodeLane(options: {
   readonly containerFailsAfterActivation?: boolean;
   readonly uploadFails?: boolean;
   readonly uploadReadbackFails?: boolean;
+  readonly candidateReadFailures?: number;
+  readonly candidateReadErrorCode?: number;
   readonly activationFails?: boolean;
   readonly postActivationVersions?: readonly string[];
   readonly resume?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-version" | "wrong-predecessor" | "already-serving" | "unhealthy" | "source-drift";
@@ -547,6 +550,8 @@ async function exerciseCodeLane(options: {
   let sourceCheckCount = 0;
   const operationOrder: string[] = [];
   const readbackWaits: number[] = [];
+  const candidateReadWaits: number[] = [];
+  const candidateReads: string[] = [];
   let postActivationReadCount = 0;
   let publicReadbackCount = 0;
   let loginSmokeCount = 0;
@@ -605,6 +610,16 @@ async function exerciseCodeLane(options: {
     if (argv[1] === "versions" && argv[2] === "view") {
       if (argv[3] === CODE_DEPLOYED_ID) {
         operationOrder.push("candidate");
+        candidateReads.push(argv[3]);
+        if (candidateReads.length <= (options.candidateReadFailures ?? 0)) {
+          throw new PlatformCommandError(
+            argv.slice(0, 4).join(" "),
+            1,
+            false,
+            "",
+            `\x1b[31mCloudflare API error [code: ${options.candidateReadErrorCode ?? 100146}]\x1b[0m`,
+          );
+        }
         if (options.uploadReadbackFails) throw new Error("uploaded Version not visible yet");
       }
       return {
@@ -685,6 +700,9 @@ async function exerciseCodeLane(options: {
         waitForServingVersionRetry: async (milliseconds: number) => {
           readbackWaits.push(milliseconds);
         },
+        waitForUploadedVersionRetry: async (milliseconds: number) => {
+          candidateReadWaits.push(milliseconds);
+        },
         publicReadback: async (_environment, versionId) => {
           expect(versionId).toBe(CODE_DEPLOYED_ID);
           publicReadbackCount++;
@@ -713,6 +731,8 @@ async function exerciseCodeLane(options: {
     loginSmokeCount,
     sourceCheckCount,
     operationOrder,
+    candidateReads,
+    candidateReadWaits,
     readbackWaits,
     postActivationReadCount,
     publicReadbackCount,
@@ -1067,6 +1087,62 @@ test("routine code publishes once and refuses production", async () => {
   await expect(
     runPlatformWorkerCodeRelease(["apply", "--config", "/private/config"], "production"),
   ).rejects.toThrow("platform_worker_code_action_invalid");
+});
+
+test("routine code waits for the acknowledged Version and activates it once", async () => {
+  const result = await exerciseCodeLane({ candidateReadFailures: 2 });
+  expect(result).toMatchObject({
+    error: undefined,
+    uploadCount: 1,
+    activationCount: 1,
+    buildCount: 1,
+    gateCount: 1,
+    candidateReadWaits: [1_000, 2_000],
+  });
+  expect(result.operationOrder.slice(0, 7)).toEqual([
+    "serving", "serving", "candidate", "candidate", "candidate", "serving", "activate",
+  ]);
+  expect(result.candidateReads).toEqual(Array<string>(4).fill(CODE_DEPLOYED_ID));
+});
+
+test("routine code keeps the upload receipt when candidate reads do not converge", async () => {
+  const result = await exerciseCodeLane({ candidateReadFailures: 30 });
+  expect(result).toMatchObject({ uploadCount: 1, activationCount: 0 });
+  expect(result.candidateReadWaits.reduce((sum, delay) => sum + delay, 0)).toBe(120_000);
+  expect(result.candidateReads).toEqual(Array<string>(12).fill(CODE_DEPLOYED_ID));
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "upload",
+    candidateVersionId: CODE_DEPLOYED_ID,
+  });
+});
+
+test("routine code skips candidate waits on other errors and explicit resume, and refuses drift", async () => {
+  for (const options of [
+    { candidateReadFailures: 1, candidateReadErrorCode: 10000 },
+    { candidateReadFailures: 1, resume: "valid" },
+  ] as const) {
+    const result = await exerciseCodeLane(options);
+    expect(result).toMatchObject({
+      activationCount: 0,
+      candidateReads: [CODE_DEPLOYED_ID],
+      candidateReadWaits: [],
+    });
+  }
+  const drifted = await exerciseCodeLane({
+    candidateReadFailures: 1,
+    topologyDriftAt: 3,
+  });
+  expect(drifted).toMatchObject({
+    uploadCount: 1,
+    activationCount: 0,
+    candidateReadWaits: [1_000],
+  });
+  expect(drifted.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "upload",
+    candidateVersionId: CODE_DEPLOYED_ID,
+  });
 });
 
 test("routine code resumes an existing exact Version without uploading", async () => {
