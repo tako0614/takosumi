@@ -1,7 +1,9 @@
 import { expect, mock, spyOn, test } from "bun:test";
 import type { DispatchStateScope } from "@takosumi/internal/deploy-control-api";
+import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
+import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
 import {
   InMemoryCapsuleCoordination,
   type CapsuleCoordination,
@@ -20,6 +22,7 @@ import {
   planRunExecutionInputsDigestMaterial,
   type PlanRunInputs,
 } from "../../../core/domains/deploy-control/store.ts";
+import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../providers/registry.ts";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import {
   dispatchRunOwnerWithApplyReceipts,
@@ -27,16 +30,20 @@ import {
 } from "../../../worker/src/committed_apply_recovery.ts";
 import { CloudflareContainerOpenTofuRunner } from "../../../worker/src/container_runner.ts";
 import {
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  FIXTURE_CLOUDFLARE_PROVIDER,
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   FIXTURE_STATE_DIGEST,
   fixtureExecutionEvidence,
   seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
 } from "../../helpers/deploy-control/model_fixture.ts";
 
 const PLAN_DIGEST = `sha256:${"a".repeat(64)}` as const;
 const DESTROY_STATE_DIGEST = `sha256:${"d".repeat(64)}` as const;
 const LEGACY_PROVIDER = "registry.opentofu.org/hashicorp/random";
 const LOCK_DIGEST = `sha256:${"e".repeat(64)}` as const;
+const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
 const UPDATED_WORKER_AUTHORITY = {
   ...FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   controllerArtifact: { digest: `sha256:${"1".repeat(64)}`, immutable: true },
@@ -48,19 +55,56 @@ async function fixture(options: {
   readonly persistedFailure?: boolean;
   readonly responseStatus?: number;
   readonly legacy?: boolean;
+  readonly replacement?: boolean;
   readonly afterWorkerUpdate?: boolean;
   readonly admittedExecutionAuthority?: typeof FIXTURE_EXECUTION_EVIDENCE_AUTHORITY;
   readonly capsuleCoordination?: CapsuleCoordination;
   readonly changeReceipt?: (receipt: Record<string, unknown>) => void;
 } = {}) {
   const store = new InMemoryOpenTofuControlStore();
-  const { capsule } = await seedCapsuleModel(store, { requiredProviders: [] });
+  const { capsule } = await seedCapsuleModel(store, {
+    requiredProviders: options.replacement ? [FIXTURE_CLOUDFLARE_PROVIDER] : [],
+  });
   const profile = createDefaultRunnerProfiles(1)[0]!;
   const artifactReferenceAllocator = new ObjectKeyArtifactReferenceAllocator();
   const currentTime = Date.now();
   let now = currentTime - RUN_HEARTBEAT_STALE_MS - 3_000;
+  const providerFetch = mock(async (input: string) => Response.json({
+    success: true,
+    result: input.endsWith("/workers/subdomain") ? { subdomain: "synthetic-team" }
+      : input.endsWith(`/accounts/${ACCOUNT_ID}`) ? { id: ACCOUNT_ID } : { status: "active" },
+  }));
+  const vault = options.replacement ? new StaticSecretConnectionVault({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "synthetic-cloudflare-destroy-fixture-passphrase" }),
+    now: () => new Date(now),
+    credentialRecipeResolver: (id) => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(recipe => recipe.id === id),
+    credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    fetch: providerFetch,
+  }) : undefined;
+  let replacement: { connectionId: string; replacementConnectionId: string } | undefined;
+  if (vault) {
+    const register = async (label: string) => {
+      const connection = await vault.register({
+        workspaceId: capsule.workspaceId,
+        provider: FIXTURE_CLOUDFLARE_PROVIDER,
+        credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
+        values: { CLOUDFLARE_API_TOKEN: `fixture-key-${label}`, CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID },
+      }, undefined, null);
+      expect((await vault.test(connection.id, undefined, null)).status).toBe("verified");
+      return connection.id;
+    };
+    const connectionId = await register("original");
+    replacement = { connectionId, replacementConnectionId: await register("replacement") };
+    const bindingSet = (await store.getProviderBindingSetByCapsule(capsule.id, capsule.environment))!;
+    await transitionProviderBindingSetForFixture(store, {
+      ...bindingSet,
+      bindings: bindingSet.bindings.map(binding => ({ ...binding, connectionId })),
+    });
+  }
   const composition = {
     store,
+    ...(vault ? { vault } : {}),
     runnerProfiles: [profile],
     defaultRunnerProfileId: profile.id,
     artifactReferenceAllocator,
@@ -90,6 +134,7 @@ async function fixture(options: {
         rawOutputRef: job.rawOutputRef,
         outputs: { launch_url: { sensitive: false, value: "https://fixture.example" } },
         executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        ...(options.replacement ? { providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE] } : {}),
       }),
     },
   });
@@ -120,7 +165,10 @@ async function fixture(options: {
     await store.putCapsule({ ...active, sourceId: undefined as never });
   }
 
-  const { planRun: waiting } = await planning.createCapsuleDestroyPlan(capsule.id);
+  if (vault && replacement) expect(await vault.revoke(replacement.connectionId, undefined, null)).toBe(true);
+  const { planRun: waiting } = await planning.createCapsuleDestroyPlan(capsule.id, {}, replacement
+    ? { destroyProviderConnectionReplacements: [replacement] }
+    : {});
   expect(waiting).toMatchObject({ status: "waiting_approval" });
   expect(waiting.source.kind).toBe(options.legacy ? "operator_module" : "git");
   await planning.approveRun(waiting.id);
@@ -150,6 +198,7 @@ async function fixture(options: {
         ...fixtureExecutionEvidence(job, "destroy", options.persistedFailure ? { outcome: "provider_failed_state_persisted" } : {}),
         committedAt: receiptCommittedAt,
       },
+      ...(options.replacement ? { providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE] } : {}),
       ...(options.persistedFailure ? {
         errorCode: "provider_execution_failed",
         providerExecutionFailure: { kind: "provider_execution_failed", statePersistence: "persisted" },
@@ -200,7 +249,8 @@ async function fixture(options: {
   const dispatch = () => dispatchRunOwnerWithApplyReceipts(
     operations, { action: "apply", runId: run.id, workspaceId: run.workspaceId }, { deadlineAt: Date.now() + 5_000 },
   );
-  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId };
+  providerFetch.mockClear();
+  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, providerFetch };
 }
 
 for (const persistedFailure of [false, true]) {
@@ -270,6 +320,56 @@ for (const persistedFailure of [false, true]) {
     }
   });
 }
+
+test.each([false, true])("an approved same-account replacement Destroy settles once across a Worker update (persisted failure: %s)", async (persistedFailure) => {
+  const f = await fixture({
+    replacement: true,
+    persistedFailure,
+    afterWorkerUpdate: true,
+    admittedExecutionAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  });
+  expect(f.planRun.destroyConnectionRecovery?.replacements).toEqual([f.replacement!]);
+  const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+  const destroy = spyOn(f.runner, "destroy");
+  try {
+    await f.dispatch();
+    const settled = await f.store.getApplyRun(f.run.id);
+    expect(settled).toMatchObject({
+      status: persistedFailure ? "failed" : "succeeded", stateVersionId: f.stateVersionId,
+    });
+    expect(settled?.outputId).toBeUndefined();
+    expect(await f.store.getCapsule(f.capsule.id)).toMatchObject({
+      status: persistedFailure ? "error" : "destroyed",
+      currentStateGeneration: 2, currentStateVersionId: f.stateVersionId,
+    });
+    expect(await f.store.listOutputs(f.capsule.id)).toEqual(f.priorOutputs);
+    await f.dispatch();
+    expect(await f.store.getApplyRun(f.run.id)).toEqual(settled!);
+    expect(f.inspect.mock.calls).toEqual([[f.run.id, "destroy"]]);
+    expect(f.adopt).toHaveBeenCalledTimes(1);
+    expect(f.fetch).not.toHaveBeenCalled();
+    expect(f.providerFetch).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  } finally {
+    mint.mockRestore();
+    destroy.mockRestore();
+  }
+});
+
+test("a completed replacement Destroy holds if its selected account proof changes", async () => {
+  const f = await fixture({ replacement: true });
+  const replacement = (await f.store.getConnection(f.replacement!.replacementConnectionId))!;
+  await f.store.putConnection({
+    ...replacement,
+    scopeHints: {
+      ...replacement.scopeHints,
+      providerSettings: { accountId: "fedcba9876543210fedcba9876543210", workersSubdomain: "synthetic-team" },
+    },
+  });
+  await expectHeld(f, 0);
+  expect(f.providerFetch).not.toHaveBeenCalled();
+});
 
 async function expectHeld(f: Awaited<ReturnType<typeof fixture>>, adoptionReads: number) {
   const before = await f.store.getApplyRun(f.run.id);
@@ -411,24 +511,13 @@ async function expectOrdinaryDestroy(
   }
 }
 
-test("known scheduled, legacy, connection-recovery, lifecycle and private-file paths retain ordinary Destroy handling", async () => {
+test("known scheduled, legacy, lifecycle and private-file paths retain ordinary Destroy handling", async () => {
   const scheduled = await fixture();
   await scheduled.store.putPlanRun({
     ...scheduled.planRun, origin: { kind: "scheduled_uninstall", uninstallId: "uninstall_fixture" },
   });
   await expectOrdinaryDestroy(scheduled, "failed");
   await expectOrdinaryDestroy(await fixture({ legacy: true }), "succeeded");
-
-  const reconnect = await fixture();
-  await reconnect.store.putPlanRun({
-    ...reconnect.planRun,
-    destroyConnectionRecovery: {
-      appliedPlanRunId: "fixture-applied-plan",
-      appliedProviderBindingsDigest: reconnect.planRun.resolvedProviderBindingsDigest!,
-      replacements: [{ connectionId: "fixture-revoked", replacementConnectionId: "fixture-replacement" }],
-    },
-  });
-  await expectOrdinaryDestroy(reconnect, "failed");
 
   const ineligibleInputs: ReadonlyArray<Partial<PlanRunInputs>> = [
     { lifecycleActions: [{

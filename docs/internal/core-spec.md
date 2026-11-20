@@ -1044,9 +1044,11 @@ the original Run, action, receipt version and fence. A Worker code update can
 therefore settle a completed mutation under its original artifacts. Older
 dispatch records without the admitted digests still require the completion to
 match the current configured artifact digests. Destroy reads only the
-committed state and execution evidence. Scheduled uninstall, connection
-replacement, and runs with lifecycle actions or private files continue through
-the ordinary mutation entry point. An R2 target cannot mint its own adoption
+committed state and execution evidence. An approved manual replacement also
+rechecks the selected Connection against the applied provider account and the
+reviewed binding digest before settling. Scheduled uninstall and runs with
+lifecycle actions or private files continue through the ordinary mutation
+entry point. An R2 target cannot mint its own adoption
 authority. A transport failure after
 dispatch returns the typed `runner_mutation_indeterminate` outcome. Redelivery
 may complete only by adopting the exact immutable state/output target already

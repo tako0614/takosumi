@@ -5972,7 +5972,7 @@ export class RunEngine {
     const supportsDestroyReceipt = planRun.operation === "destroy" &&
       planRun.source.kind === "git" && Boolean(planRun.sourceSnapshotId) &&
       planRun.origin?.kind !== "scheduled_uninstall" &&
-      planRun.createdBy !== "system:scheduled-uninstall" && !planRun.destroyConnectionRecovery;
+      planRun.createdBy !== "system:scheduled-uninstall";
     const observesReceipt = !receipt && probe?.runner === runner && applyRun.status === "running" &&
       (receiptAction === "apply" || supportsDestroyReceipt);
     const inspectReceipt = async () => {
