@@ -1103,11 +1103,8 @@ export default function AppManagePage(props: {
   };
   const reviewUninstallWithConnection = (replacements: readonly DestroyProviderConnectionReplacement[]) => {
     const view = app();
-    const recoveryAvailable = view && appUninstallRecoveryConnections(view).length > 0;
-    const scheduledRecoveryAvailable = view?.uninstall.mode === "scheduled" && Boolean(uninstallConnectionNotice());
-    const immediateRecoveryAvailable = view?.uninstall.mode === "none" && !view.uninstall.scheduled;
-    if (!view || !isOwner() || !recoveryAvailable ||
-      (!scheduledRecoveryAvailable && !immediateRecoveryAvailable) ||
+    if (!view || !isOwner() || !uninstallConnectionNotice() ||
+      appUninstallRecoveryConnections(view).length === 0 ||
       review() || view.progress.run || view.progress.review) return;
     const heldScope = uninstallScope();
     const heldEpoch = uninstallEpoch;

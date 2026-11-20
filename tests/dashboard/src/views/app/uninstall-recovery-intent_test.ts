@@ -44,7 +44,7 @@ test("actual replacement transport refuses retired dispatch and suppresses late 
   }
 });
 
-function controller() {
+function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
   const state = { capsuleId: "app", workspaceId: "workspace", accountId: "account", principalId: "person", owner: true,
     starting: undefined as unknown, review: undefined as { planRunId: string } | undefined, errors: [] as unknown[], reads: 0 };
   const script = `let disposed = false; let uninstallEpoch = 0;\n${start}\n${replacement}\nreturn {
@@ -57,7 +57,7 @@ function controller() {
     () => state.starting, (value: unknown) => { state.starting = value; }, (value: unknown) => { if (value) state.errors.push(value); }, () => {},
     (value: { planRunId: string }) => { state.review = value; }, () => {}, () => undefined, isRevisionAlreadyCurrent, () => ({ message: "fixture error" }), (key: string) => key, () => {}, ControlApiError,
     async (options?: { isCurrent?: () => boolean }) => { state.reads++; return await getCapsuleAppWithSignal(state.capsuleId, undefined, options); },
-    () => ({ capsuleId: state.capsuleId, workspaceId: state.workspaceId, progress: {}, uninstall: { mode: "scheduled" } }), () => state.review, () => "app.uninstall.connectionRemoved",
+    () => ({ capsuleId: state.capsuleId, workspaceId: state.workspaceId, progress: {}, uninstall: { mode: uninstallMode, scheduled: { blocked: true } } }), () => state.review, () => "app.uninstall.connectionRemoved",
     () => [{ connectionId: "old", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionStatus: "revoked" }],
     createCapsuleDestroyRecoveryPlan, extractRunId,
     () => JSON.stringify([state.capsuleId, state.workspaceId, state.accountId, state.principalId]),
@@ -100,6 +100,19 @@ test("normal selection opens only its review and an unknown answer keeps the exi
   expect(calls.map(call => call.method)).toEqual(["POST", "POST", "GET"]);
   expect(calls.at(-1)?.path).toBe("/api/v1/capsules/app/app");
   expect(calls.some(call => /\/(approve|apply)$/u.test(call.path))).toBe(false);
+});
+
+test("an existing blocked uninstall can still be reviewed when new reservations are disabled", async () => {
+  const c = controller("none");
+  const methods: (string | undefined)[] = [];
+  globalThis.fetch = Object.assign(async (_input: string | URL | Request, init?: RequestInit) => {
+    methods.push(init?.method);
+    return Response.json({ run: { id: "blocked-uninstall-review" } });
+  }, { preconnect: realFetch.preconnect });
+  c.send(pairs);
+  await flush();
+  expect(methods).toEqual(["POST"]);
+  expect(c.state.review?.planRunId).toBe("blocked-uninstall-review");
 });
 
 test("ABA, disposal, workspace and owner retirement keep the replacement result out of the current action", async () => {
