@@ -144,7 +144,7 @@ describe("RunView", () => {
     // run-retry_test.ts); the run page and the app page both call it.
     expect(source).toContain("defaultRetryPlanApi(revisionRetryAttempts)");
     expect(source).toContain("retryPlanForRun(currentRun, capsule, retryApi, isCurrent)");
-    expect(source).toContain("const capsule = await getCapsule(instId);");
+    expect(source).toContain("const capsule = await getCapsule(instId, { isCurrent });");
   });
 
   test("a failed first-install Plan abandons its stale snapshot before rebuilding from latest source", () => {

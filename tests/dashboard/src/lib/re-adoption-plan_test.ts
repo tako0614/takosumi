@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { advanceGitRevisionPlan } from "../../../../dashboard/src/lib/control-api.ts";
 import { createReAdoptionPlanSubmission } from "../../../../dashboard/src/lib/re-adoption-plan.ts";
 
 const realFetch = globalThis.fetch;
@@ -68,6 +69,36 @@ test("a changed person or selection after adoption cannot dispatch its Plan", as
   expect(operation.adoptionAcknowledged()).toBe(true);
   await expect(operation.submit()).rejects.toMatchObject({ code: "re_adoption_context_changed" });
   expect(calls).toBe(1);
+});
+
+test("retiring target inputs retains the accepted adoption and stops its revision loop", async () => {
+  let current = true;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    requests.push(path);
+    if (path.endsWith("/install-config-re-adoptions")) return json(receipt());
+    if (path.endsWith("/revision-plans")) {
+      current = false;
+      return json({ ...planned(), nextAction: "reconcile" });
+    }
+    return json(planned());
+  }) as typeof fetch;
+
+  const operation = createReAdoptionPlanSubmission(selection(), () => current);
+  const failure = await operation.submit().catch((cause: unknown) => cause);
+  expect(requests).toEqual([
+    "/api/v1/capsules/capsule_a/install-config-re-adoptions",
+    "/api/v1/capsules/capsule_a/revision-plans",
+  ]);
+  expect(failure).toMatchObject({ name: "AbortError" });
+  expect(operation.adoptionAcknowledged()).toBe(true);
+  expect(operation.completedPlanId()).toBeUndefined();
+
+  current = true;
+  await expect(advanceGitRevisionPlan("revision_two", { isCurrent: () => current }))
+    .resolves.toMatchObject({ nextAction: "review_run", revisionPlan: { planRunId: "plan_two" } });
+  expect(requests.slice(2)).toEqual(["/api/v1/revision-plans/revision_two/reconcile"]);
 });
 
 test("target snapshot ref app configuration and state must match before Plan review", async () => {

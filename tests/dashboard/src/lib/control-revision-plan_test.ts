@@ -104,6 +104,52 @@ test("revision coordinator sends one ref, reconciles, and stops at review_run", 
   expect(calls.some(({ url }) => url.endsWith("/apply"))).toBe(false);
 });
 
+test("retiring the creator leaves the accepted revision for explicit continuation", async () => {
+  let current = true;
+  const calls: string[] = [];
+  const isCurrent = () => current;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path === "/api/v1/capsules/capsule_1/revision-plans") {
+      current = false;
+      return json(revisionResponse("reconcile"), 201);
+    }
+    return json(revisionResponse("review_run"));
+  }) as typeof fetch;
+
+  await expect(createReviewableGitRevisionPlan(
+    "capsule_1", { ref: "release/v2" }, { isCurrent },
+  )).rejects.toMatchObject({ name: "AbortError" });
+  expect(calls).toEqual(["/api/v1/capsules/capsule_1/revision-plans"]);
+
+  current = true;
+  await expect(advanceGitRevisionPlan("revision_plan_1", { isCurrent }))
+    .resolves.toMatchObject({ nextAction: "review_run", revisionPlan: { planRunId: "plan_run_1" } });
+  expect(calls).toEqual([
+    "/api/v1/capsules/capsule_1/revision-plans",
+    "/api/v1/revision-plans/revision_plan_1/reconcile",
+  ]);
+});
+
+test("retiring the owner during the reconcile delay prevents the next command", async () => {
+  let current = true;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return json(revisionResponse(calls.length <= 2 ? "reconcile" : "review_run"));
+  }) as typeof fetch;
+
+  await expect(advanceGitRevisionPlan("revision_plan_1", {
+    isCurrent: () => current,
+    pollCadence: { wait: async () => { current = false; } },
+  })).rejects.toMatchObject({ name: "AbortError" });
+  expect(calls).toEqual([
+    "/api/v1/revision-plans/revision_plan_1/reconcile",
+    "/api/v1/revision-plans/revision_plan_1/reconcile",
+  ]);
+});
+
 test("a version check that finds the applied version ends with its own answer, also when continued", async () => {
   const alreadyCurrent = {
     revisionPlan: {

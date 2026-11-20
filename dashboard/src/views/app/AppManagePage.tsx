@@ -505,6 +505,8 @@ export default function AppManagePage(props: {
 
   // --- in-page reviews ---------------------------------------------------------
   const [review, setReview] = createSignal<ActiveReview>();
+  const revisionAttempts: RevisionPlanAttemptStore = new Map();
+  let reviewScopeEpoch = 0;
   const [reAdoptionRevisionId, setReAdoptionRevisionId] = createSignal<string>();
   const reAdoptionTargetId = () => reAdoptionRevisionId() ?? reAdoptionRevisionFromApp(app());
   const [starting, setStarting] = createSignal<
@@ -536,8 +538,10 @@ export default function AppManagePage(props: {
   // handed another app, none of them carry over.
   createEffect(
     on(
-      capsuleId,
+      () => [capsuleId(), props.accountId, props.principalId] as const,
       () => {
+        reviewScopeEpoch += 1;
+        revisionAttempts.clear();
         setReview(undefined);
         setReAdoptionRevisionId(undefined);
         setStarting(undefined);
@@ -563,7 +567,7 @@ export default function AppManagePage(props: {
     section: ReviewSection,
     purpose: ReviewPurpose,
     /** The Plan Run to review; `null` when the work continues elsewhere. */
-    create: () => Promise<string | null | undefined>,
+    create: (isCurrent: () => boolean) => Promise<string | null | undefined>,
     options: {
       readonly restartable?: boolean;
       readonly action?: CapsuleAppAction | "continue_revision";
@@ -577,13 +581,17 @@ export default function AppManagePage(props: {
     const forCapsule = capsuleId();
     const forAccount = props.accountId;
     const forPrincipal = props.principalId;
+    const forEpoch = reviewScopeEpoch;
     const heldStarting = { section, ...(options.action ? { action: options.action } : {}) };
     setStarting(heldStarting);
-    const isCurrent = () => capsuleId() === forCapsule && (!options.isCurrent || options.isCurrent());
+    const isCurrent = () => !disposed && reviewScopeEpoch === forEpoch && capsuleId() === forCapsule &&
+      props.accountId === forAccount && props.principalId === forPrincipal &&
+      appRole() !== undefined && (purpose !== "uninstall" || isOwner()) &&
+      (!options.isCurrent || options.isCurrent());
     setSectionError(undefined);
     setNotice(undefined);
     try {
-      const planRunId = await create();
+      const planRunId = await create(isCurrent);
       if (!isCurrent()) return;
       // The work continues elsewhere (an install that waits on its own page).
       if (planRunId === null) return;
@@ -592,7 +600,7 @@ export default function AppManagePage(props: {
         section,
         purpose,
         planRunId,
-        ...(options.restartable === false ? {} : { restart: create }),
+        ...(options.restartable === false ? {} : { restart: () => create(isCurrent) }),
       });
       if (purpose === "update") setReAdoptionRevisionId(undefined);
       queueMicrotask(() =>
@@ -610,14 +618,14 @@ export default function AppManagePage(props: {
         } else {
           setSectionError({ section, message: friendlyError(cause, t).message });
         }
-        if (!disposed && (purpose === "update" || purpose === "uninstall") && props.accountId === forAccount && props.principalId === forPrincipal &&
+        if ((purpose === "update" || purpose === "uninstall") &&
           (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
             : cause instanceof TypeError)) {
           // Acceptance may precede a lost response. Only this app's current
           // server view can name existing work; never repeat the mutation.
           try {
-            void Promise.resolve(refetchApp(options.isCurrent ? { isCurrent: options.isCurrent } : undefined)).catch(() => {});
+            void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
           } catch {
             // Keep the original update error when its readback also fails.
           }
@@ -626,7 +634,7 @@ export default function AppManagePage(props: {
     } finally {
       // A retired replacement intent may release its own busy state, but
       // must never clear an action that replaced it on the same app.
-      if (capsuleId() === forCapsule && (!options.isCurrent || starting() === heldStarting)) setStarting(undefined);
+      if (starting() === heldStarting) setStarting(undefined);
     }
   };
 
@@ -715,7 +723,7 @@ export default function AppManagePage(props: {
                     const forCapsule = capsuleId();
                     const current = active();
                     const restarted = await current.restart!();
-                    if (restarted && capsuleId() === forCapsule) {
+                    if (restarted && capsuleId() === forCapsule && review() === current) {
                       // A restarted review follows its new Plan from the start.
                       setReview({
                         section: current.section,
@@ -736,7 +744,6 @@ export default function AppManagePage(props: {
 
   // --- version actions -----------------------------------------------------------
   // Use the same request/key handling as a retry from Run details.
-  const revisionAttempts: RevisionPlanAttemptStore = new Map();
   const revisionApi = defaultRetryPlanApi(revisionAttempts);
   // The installed ref, from the server's view or the Capsule's adopted
   // revision. An installed app never falls back to the Source's default ref:
@@ -746,7 +753,7 @@ export default function AppManagePage(props: {
     const ref = currentRef();
     return managed() && typeof ref === "string" && ref.trim().length > 0;
   };
-  const createRevisionRun = async (requested?: string): Promise<string> => {
+  const createRevisionRun = async (requested?: string, isCurrent?: () => boolean): Promise<string> => {
     const ref = (requested ?? currentRef())?.trim();
     if (!managed() || !ref) {
       throw new ControlApiError(
@@ -755,10 +762,10 @@ export default function AppManagePage(props: {
         "The installed version is not known yet.",
       );
     }
-    return (await revisionApi.planRevision(capsuleId(), ref))!;
+    return (await revisionApi.planRevision(capsuleId(), ref, isCurrent))!;
   };
   const startUpdate = (ref?: string) =>
-    void startReview("version", "update", () => createRevisionRun(ref));
+    void startReview("version", "update", (isCurrent) => createRevisionRun(ref, isCurrent));
   const startRollback = (stateVersionId: string) =>
     void startReview("version", "apply", async () =>
       extractRunId(await createStateVersionRollbackPlan(stateVersionId)),
@@ -788,23 +795,25 @@ export default function AppManagePage(props: {
   // first.
   const retryApi: RetryPlanApi = {
     ...revisionApi,
-    planRevision: (_capsuleId, ref) => createRevisionRun(ref),
+    planRevision: (_capsuleId, ref, isCurrent) => createRevisionRun(ref, isCurrent),
   };
   const retry = (problem: CapsuleAppProblem | undefined) => {
     const runId = problem?.runId;
     const removal = problem?.runType === "destroy_plan" || problem?.runType === "destroy_apply";
     const purpose: ReviewPurpose = removal ? "uninstall" : applied() ? "apply" : "install";
-    void startReview("attention", purpose, async () => {
+    void startReview("attention", purpose, async (isCurrent) => {
       if (!runId) {
         if (!applied()) return extractRunId(await planCapsule(capsuleId()));
-        const installed = (await getCapsule(capsuleId())).currentStateVersionId;
+        const installed = (await getCapsule(capsuleId(), { isCurrent })).currentStateVersionId;
+        if (!isCurrent()) return;
         if (!installed) throw new Error(t("app.review.notStarted"));
         return extractRunId(await createStateVersionRollbackPlan(installed));
       }
-      const run = await getRun(runId);
-      if (isAppRemovalRun(run.type) && !isOwner()) return undefined;
-      const fresh = await getCapsule(run.capsuleId ?? capsuleId());
-      return await retryPlanForRun(run, fresh, retryApi);
+      const run = await getRun(runId, { isCurrent });
+      if (!isCurrent() || run.capsuleId !== capsuleId() || (isAppRemovalRun(run.type) && !isOwner())) return;
+      const fresh = await getCapsule(run.capsuleId, { isCurrent });
+      if (!isCurrent()) return;
+      return await retryPlanForRun(run, fresh, retryApi, isCurrent);
     }, { action: "retry" });
   };
   // Continuing an install advances the install attempt that owns this app
@@ -836,10 +845,11 @@ export default function AppManagePage(props: {
     void startReview(
       "attention",
       "install",
-      async () => {
+      async (isCurrent) => {
         const attempt = app()?.progress.installPlanId;
         if (!attempt) return extractRunId(await planCapsule(capsuleId()));
-        const advanced = await advanceGitInstallPlan(attempt);
+        const advanced = await advanceGitInstallPlan(attempt, { isCurrent });
+        if (!isCurrent()) return;
         if (advanced.installPlan.planRunId) return advanced.installPlan.planRunId;
         // The install waits for a person (connections, settings, a module,
         // or starting over), and only whoever started it answers: its own
@@ -858,9 +868,10 @@ export default function AppManagePage(props: {
     void startReview(
       "attention",
       "update",
-      async () => {
+      async (isCurrent) => {
         const forCapsule = capsuleId();
-        const response = await advanceGitRevisionPlan(revisionPlanId);
+        const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent });
+        if (!isCurrent()) return;
         const plan = response.revisionPlan;
         if (plan.id === revisionPlanId && plan.capsuleId === forCapsule &&
           typeof plan.revision?.targetRef === "string" &&

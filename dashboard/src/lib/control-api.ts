@@ -1179,9 +1179,10 @@ export async function listCapsules(
   );
 }
 
-export async function getCapsule(id: string): Promise<Capsule> {
+export async function getCapsule(id: string, options: Pick<RequestOpts, "isCurrent"> = {}): Promise<Capsule> {
   const body = await controlFetch<{ capsule: Capsule }>(
     `${BASE}/capsules/${encodeURIComponent(id)}`,
+    { isCurrent: options.isCurrent },
   );
   if (!isCapsuleResponse(body.capsule)) {
     throw new ControlApiError(
@@ -1358,12 +1359,13 @@ export async function listOpenGitInstallAttempts(
 /** Advances exactly one durable install coordinator phase. */
 export async function reconcileGitInstallPlan(
   installPlanId: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
   throwIfAborted(options.signal);
+  throwIfReadRetired(options);
   return await controlFetch<GitInstallPlanResponse>(
     `${BASE}/install-plans/${encodeURIComponent(installPlanId)}/reconcile`,
-    { method: "POST", signal: options.signal },
+    { method: "POST", signal: options.signal, isCurrent: options.isCurrent },
   );
 }
 
@@ -1384,16 +1386,17 @@ export async function createGitRevisionPlan(
   capsuleId: string,
   request: CreateGitRevisionPlanRequest,
   idempotencyKey: string = randomUuid(),
-  options: { readonly signal?: AbortSignal } = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitRevisionPlanResponse> {
   throwIfAborted(options.signal);
+  throwIfReadRetired(options);
   return await controlFetch<GitRevisionPlanResponse>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/revision-plans`,
     {
       method: "POST",
       headers: { "idempotency-key": idempotencyKey },
       body: request,
-      signal: options.signal,
+      signal: options.signal, isCurrent: options.isCurrent,
     },
   );
 }
@@ -1401,12 +1404,13 @@ export async function createGitRevisionPlan(
 /** Advances exactly one durable Capsule-local revision coordinator phase. */
 export async function reconcileGitRevisionPlan(
   revisionPlanId: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitRevisionPlanResponse> {
   throwIfAborted(options.signal);
+  throwIfReadRetired(options);
   return await controlFetch<GitRevisionPlanResponse>(
     `${BASE}/revision-plans/${encodeURIComponent(revisionPlanId)}/reconcile`,
-    { method: "POST", signal: options.signal },
+    { method: "POST", signal: options.signal, isCurrent: options.isCurrent },
   );
 }
 
@@ -1595,6 +1599,7 @@ export async function createReviewableGitRevisionPlan(
   options: {
     readonly maxReconciles?: number;
     readonly idempotencyKey?: string;
+    readonly isCurrent?: () => boolean;
     /** Bounds the entire coordinator wait; defaults to two minutes. */
     readonly timeoutMs?: number;
     /** Reconcile cadence; see {@link GitPlanPollCadence}. */
@@ -1607,13 +1612,15 @@ export async function createReviewableGitRevisionPlan(
 ): Promise<GitRevisionPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("revision", options.timeoutMs, async (signal) => {
+    const requestScope = { signal, isCurrent: options.isCurrent };
     const first = await createGitRevisionPlan(
       capsuleId,
       request,
       options.idempotencyKey,
-      { signal },
+      requestScope,
     );
     throwIfAborted(signal);
+    throwIfReadRetired(requestScope);
     options.onCreated?.(first);
     const response = await driveGitPlanReconcile<GitRevisionPlanResponse>({
       kind: "revision",
@@ -1624,8 +1631,9 @@ export async function createReviewableGitRevisionPlan(
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
       reconcile: (current) =>
-        reconcileGitRevisionPlan(current.revisionPlan.id, { signal }),
+        reconcileGitRevisionPlan(current.revisionPlan.id, requestScope),
     });
+    throwIfReadRetired(requestScope);
     options.onSettled?.(response);
     return requireReviewableRevisionPlan(response);
   });
@@ -2235,13 +2243,15 @@ export function decideInterfaceLink(providerCapsuleId: string, linkId: string, d
  */
 export async function advanceGitInstallPlan(
   installPlanId: string,
-  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence } = {},
+  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence; readonly isCurrent?: () => boolean } = {},
 ): Promise<GitInstallPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("install", options.timeoutMs, async (signal) => {
-    const first = await reconcileGitInstallPlan(installPlanId, { signal });
+    const requestScope = { signal, isCurrent: options.isCurrent };
+    const first = await reconcileGitInstallPlan(installPlanId, requestScope);
     throwIfAborted(signal);
-    return await driveGitPlanReconcile<GitInstallPlanResponse>({
+    throwIfReadRetired(requestScope);
+    const response = await driveGitPlanReconcile<GitInstallPlanResponse>({
       kind: "install",
       maxReconciles: 120,
       signal,
@@ -2249,8 +2259,10 @@ export async function advanceGitInstallPlan(
       initial: first,
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
-      reconcile: () => reconcileGitInstallPlan(installPlanId, { signal }),
+      reconcile: () => reconcileGitInstallPlan(installPlanId, requestScope),
     });
+    throwIfReadRetired(requestScope);
+    return response;
   });
 }
 
@@ -2262,13 +2274,15 @@ export async function advanceGitInstallPlan(
  */
 export async function advanceGitRevisionPlan(
   revisionPlanId: string,
-  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence } = {},
+  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence; readonly isCurrent?: () => boolean } = {},
 ): Promise<GitRevisionPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("revision", options.timeoutMs, async (signal) => {
-    const first = await reconcileGitRevisionPlan(revisionPlanId, { signal });
+    const requestScope = { signal, isCurrent: options.isCurrent };
+    const first = await reconcileGitRevisionPlan(revisionPlanId, requestScope);
     throwIfAborted(signal);
-    return await driveGitPlanReconcile<GitRevisionPlanResponse>({
+    throwIfReadRetired(requestScope);
+    const response = await driveGitPlanReconcile<GitRevisionPlanResponse>({
       kind: "revision",
       maxReconciles: 120,
       signal,
@@ -2276,8 +2290,10 @@ export async function advanceGitRevisionPlan(
       initial: first,
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
-      reconcile: () => reconcileGitRevisionPlan(revisionPlanId, { signal }),
+      reconcile: () => reconcileGitRevisionPlan(revisionPlanId, requestScope),
     });
+    throwIfReadRetired(requestScope);
+    return response;
   });
 }
 
@@ -2839,7 +2855,7 @@ export async function getRunWithOptions(
 
 const RUN_READ_TIMEOUT_MS = 30_000;
 
-export async function getRun(id: string): Promise<Run> {
+export async function getRun(id: string, options: Pick<RequestOpts, "isCurrent"> = {}): Promise<Run> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
@@ -2860,7 +2876,7 @@ export async function getRun(id: string): Promise<Run> {
     // Promise.race observes the request's later rejection even if fetch or
     // response.json() ignores abort and settles after the deadline.
     return await Promise.race([
-      getRunWithOptions(id, { signal: controller.signal }),
+      getRunWithOptions(id, { ...options, signal: controller.signal }),
       deadline,
     ]);
   } finally {

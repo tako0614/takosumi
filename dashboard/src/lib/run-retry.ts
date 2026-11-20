@@ -52,14 +52,14 @@ export type RetryChange =
   | { readonly kind: "installed"; readonly stateVersionId: string; readonly recorded: boolean };
 
 export interface RetryPlanApi {
-  readonly getRun: (id: string) => Promise<Run>;
+  readonly getRun: typeof getRun;
   readonly destroyPlanCapsule: (capsuleId: string) => Promise<unknown>;
   readonly planCapsule: (
     capsuleId: string,
     options: { readonly compatibilityReportId: string },
   ) => Promise<unknown>;
   /** Plans a version change to `ref`; resolves to the new Plan's id. */
-  readonly planRevision: (capsuleId: string, ref: string) => Promise<string | undefined>;
+  readonly planRevision: (capsuleId: string, ref: string, isCurrent?: () => boolean) => Promise<string | undefined>;
   readonly planRollback: (stateVersionId: string) => Promise<unknown>;
   /** Plans the app's tracked ref as configured. */
   readonly planTracked: (capsuleId: string) => Promise<unknown>;
@@ -121,8 +121,9 @@ export async function previewRetryChange(
   run: Run,
   capsule: Capsule,
   api: Pick<RetryPlanApi, "getRun"> = STANDARD_REQUESTS,
+  isCurrent?: () => boolean,
 ): Promise<RetryChange> {
-  const plan = run.type === "apply" && run.planRunId ? await api.getRun(run.planRunId) : undefined;
+  const plan = run.type === "apply" && run.planRunId ? await api.getRun(run.planRunId, isCurrent ? { isCurrent } : {}) : undefined;
   return retryChangeForRun({ run, ...(plan ? { plan } : {}), capsule });
 }
 
@@ -133,7 +134,7 @@ export async function retryPlanForRun(
   api: RetryPlanApi,
   isCurrent?: () => boolean,
 ): Promise<string | undefined> {
-  const change = await previewRetryChange(run, capsule, api);
+  const change = await previewRetryChange(run, capsule, api, isCurrent);
   if (isCurrent && !isCurrent()) return undefined;
   const capsuleId = capsule.id;
   switch (change.kind) {
@@ -142,7 +143,7 @@ export async function retryPlanForRun(
     case "initial":
       return extractRunId(await api.planCapsule(capsuleId, { compatibilityReportId: change.compatibilityReportId }));
     case "revision":
-      return await api.planRevision(capsuleId, change.ref);
+      return await api.planRevision(capsuleId, change.ref, isCurrent);
     case "update":
       return extractRunId(await api.planTracked(capsuleId));
     case "rollback":
@@ -155,12 +156,13 @@ export async function retryPlanForRun(
 export function defaultRetryPlanApi(attempts: RevisionPlanAttemptStore = new Map()): RetryPlanApi {
   return {
     ...STANDARD_REQUESTS,
-    planRevision: async (capsuleId, ref) => {
+    planRevision: async (capsuleId, ref, isCurrent) => {
       const request = { ref };
       const requestJson = JSON.stringify(request);
       const attempt = getOrCreateRevisionPlanAttempt(attempts, capsuleId, requestJson);
       const { revisionPlan } = await createReviewableGitRevisionPlan(capsuleId, request, {
         idempotencyKey: attempt.idempotencyKey,
+        ...(isCurrent ? { isCurrent } : {}),
         onCreated: ({ revisionPlan: created }) => observeRevisionPlanAttempt(
           attempts, capsuleId, requestJson, attempt, created,
         ),

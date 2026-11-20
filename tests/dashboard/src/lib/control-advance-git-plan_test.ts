@@ -139,6 +139,20 @@ test("continuing a version change backs off while each claim only bumps the gene
   expect(clock.reconciles).toBe(20);
 });
 
+test("retiring the app page stops an accepted install reconciliation without discarding it", async () => {
+  let current = true;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    current = false;
+    return json(installResponse(requests.length, requests.length > 1));
+  }) as typeof fetch;
+
+  await expect(advanceGitInstallPlan("ip_1", { isCurrent: () => current }))
+    .rejects.toMatchObject({ name: "AbortError" });
+  expect(requests).toEqual(["/api/v1/install-plans/ip_1/reconcile"]);
+});
+
 test("the progress signature ignores the generation and sees phase, request, evidence and diagnostic", () => {
   const waiting = installResponse(2, false) as never;
   const sign = gitPlanProgressSignature;
