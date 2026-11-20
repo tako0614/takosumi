@@ -27,7 +27,7 @@ const STATE_DIGEST = `sha256:${"3".repeat(64)}`;
 // Identity, policy and Git/OpenTofu transport below are synthetic. The HTTP
 // handler, Accounts authorization, Core ledger and revision coordinator are real.
 async function fixture() {
-  const runnerCalls = { sync: 0, plan: 0, apply: 0 };
+  const runnerCalls = { sync: 0, plan: 0, apply: 0, destroy: 0 };
   const runner: OpenTofuRunner = {
     sourceSync: async (job) => {
       runnerCalls.sync += 1;
@@ -72,6 +72,14 @@ async function fixture() {
         rawOutputRef: job.rawOutputRef,
         providerInstallation: [],
         executionEvidence: fixtureExecutionEvidence(job, "apply"),
+      };
+    },
+    destroy: async (job) => {
+      runnerCalls.destroy += 1;
+      return {
+        stateDigest: STATE_DIGEST,
+        providerInstallation: [],
+        executionEvidence: fixtureExecutionEvidence(job, "destroy"),
       };
     },
   };
@@ -151,6 +159,93 @@ async function fixture() {
   accounts.savePersonalAccessToken(TOKEN, pat);
   return { accounts, pat, appId, ledger, operations, dispatch, runnerCalls };
 }
+
+test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall with PAT fences", async () => {
+  const h = await fixture();
+  const path = `/api/v1/capsules/${h.appId}/destroy-plan`;
+  for (const [token, changes] of [
+    ["synthetic-destroy-wrong-app", { appIds: ["cap_other"] }],
+    ["synthetic-destroy-read-only", { scopes: ["read"] }],
+  ] as const) {
+    h.accounts.savePersonalAccessToken(token, {
+      ...h.pat, tokenId: `pat_${token}`, ...changes,
+    });
+    const before = { ...h.runnerCalls };
+    const denied = await h.dispatch(new Request(`${ORIGIN}${path}`, {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: "{}",
+    }));
+    expect(denied.status).toBe(403);
+    expect(h.runnerCalls).toEqual(before);
+  }
+  const created = await h.dispatch(new Request(`${ORIGIN}${path}`, {
+    method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    body: "{}",
+  }));
+  expect(created.status).toBe(201);
+  const saved = (await created.json()).run as { id: string; type: string; status: string;
+    capsuleId: string; workspaceId: string };
+  expect(saved).toMatchObject({ type: "destroy_plan", status: "waiting_approval",
+    capsuleId: h.appId });
+  expect(saved.workspaceId).toBeString();
+  expect((await h.operations.getRun(saved.id))?.id).toBe(saved.id);
+  const beforeDestroy = { ...h.runnerCalls };
+
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request.clone());
+    return h.dispatch(request);
+  }) as typeof fetch;
+  const output: string[] = [];
+  const errors: string[] = [];
+  const io = { stdout: (line: string) => output.push(line), stderr: (line: string) => errors.push(line) };
+  try {
+    const args = ["apps", "apply", h.appId, "--destroy-plan", saved.id,
+      "--yes", "--token", TOKEN, "--url", ORIGIN, "--json"];
+    for (const deniedToken of ["synthetic-destroy-wrong-app", "synthetic-destroy-read-only"]) {
+      output.length = 0;
+      errors.length = 0;
+      expect(await main(args.map(value => value === TOKEN ? deniedToken : value), io)).toBe(1);
+      expect(h.runnerCalls.destroy).toBe(beforeDestroy.destroy);
+      expect((await h.operations.getRun(saved.id))?.status).toBe("waiting_approval");
+    }
+    const beforeValidRequests = requests.length;
+    output.length = 0;
+    errors.length = 0;
+    expect(await main(args, io)).toBe(0);
+    expect(errors).toHaveLength(1);
+    expect(JSON.parse(errors[0]!)).toMatchObject({
+      status: "applying_reviewed_plan", appId: h.appId,
+      reviewUrl: `${ORIGIN}/runs/${saved.id}`,
+    });
+    const result = JSON.parse(output[0]!);
+    expect(result).toMatchObject({ status: "succeeded", appId: h.appId,
+      planRunId: saved.id, runId: expect.any(String), runStatus: "succeeded" });
+    expect(h.runnerCalls.destroy - beforeDestroy.destroy).toBe(1);
+    expect(h.runnerCalls.apply - beforeDestroy.apply).toBe(0);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ status: "destroyed" });
+    expect(requests.slice(beforeValidRequests).filter(r => r.method === "POST").map(r => new URL(r.url).pathname)).toEqual([
+      `/api/v1/runs/${saved.id}/approve`, `/api/v1/runs/${saved.id}/apply`,
+    ]);
+    const history = requests.slice(beforeValidRequests)
+      .filter(r => new URL(r.url).pathname === `/api/v1/capsules/${h.appId}/runs`);
+    expect(history.length).toBeGreaterThan(0);
+    expect(history.every(r => new URL(r.url).searchParams.getAll("type").join(",") === "destroy_apply")).toBe(true);
+
+    const beforeObserve = requests.length;
+    output.length = 0;
+    errors.length = 0;
+    expect(await main(["apps", "apply", h.appId, "--destroy-plan", saved.id,
+      "--observe-only", "--token", TOKEN, "--url", ORIGIN, "--json"], io)).toBe(0);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "succeeded", runId: result.runId });
+    expect(requests.slice(beforeObserve).every(r => r.method === "GET")).toBe(true);
+    expect(h.runnerCalls.destroy - beforeDestroy.destroy).toBe(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("apps update saves a reviewable revision Plan; apps apply separately reaches a terminal Run", async () => {
   const h = await fixture();
