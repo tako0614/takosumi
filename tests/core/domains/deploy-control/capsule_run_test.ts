@@ -13640,7 +13640,9 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
 
-test.each([1, 2])("destroy recovery rotates %i bindings again after a failed apply persists partial state", async (bindingCount) => {
+test.each(["1", "2", "2-selective"] as const)("destroy recovery rotates %s bindings again after a failed apply persists partial state", async (variant) => {
+  const selective = variant === "2-selective";
+  const bindingCount = variant === "1" ? 1 : 2;
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -13672,8 +13674,9 @@ test.each([1, 2])("destroy recovery rotates %i bindings again after a failed app
     return (await store.getConnection(row.id))!;
   };
   const original = await register(undefined, "synthetic-original-token");
-  const firstReplacement = await register();
-  const nextReplacement = await register();
+  const sharedReplacementToken = selective ? "synthetic-shared-replacement-token" : undefined;
+  const firstReplacement = await register(undefined, sharedReplacementToken);
+  const nextReplacement = await register(undefined, sharedReplacementToken);
   const foreign = await register("fedcba9876543210fedcba9876543210");
   const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
   const bindings = originalBinding.bindings.map(binding => ({ ...binding, connectionId: original.id }));
@@ -13784,8 +13787,22 @@ test.each([1, 2])("destroy recovery rotates %i bindings again after a failed app
   });
   expect((await store.getPlanRun(firstRecovery.planRun.id))?.resolvedProviderBindingsDigest)
     .toBe(firstRecovery.planRun.resolvedProviderBindingsDigest);
+  if (selective) {
+    expect((await store.getPlanRun(firstRecovery.planRun.id))?.destroyConnectionRecovery?.replacements)
+      .toEqual(replacementsFor(firstReplacement.id));
+  }
 
-  const nextSelection = replacementsFor(nextReplacement.id);
+  const nextSelection = selective
+    ? [replacementsFor(nextReplacement.id)[1]!]
+    : replacementsFor(nextReplacement.id);
+  const effectiveNextSelection = selective
+    ? [replacementsFor(firstReplacement.id)[0]!, nextSelection[0]!]
+    : nextSelection;
+  const expectedNextMint = selective
+    ? bindings.map(({ rootAlias: alias }, index) => ({
+        alias, connectionId: index === 0 ? firstReplacement.id : nextReplacement.id,
+      }))
+    : expectedMint(nextReplacement.id);
   const planCount = runner.planJobs.length;
   const destroyCount = runner.destroyJobs.length;
   const mintCount = mints.length;
@@ -13799,16 +13816,28 @@ test.each([1, 2])("destroy recovery rotates %i bindings again after a failed app
 
   await store.putConnection(nextReplacement);
   if (bindingCount === 2) {
-    const mixedSelection = [
-      nextSelection[0]!,
-      { ...nextSelection[1]!, replacementConnectionId: foreign.id },
-    ];
+    const mixedSelection = selective
+      ? [{ ...nextSelection[0]!, replacementConnectionId: foreign.id }]
+      : [nextSelection[0]!, { ...nextSelection[1]!, replacementConnectionId: foreign.id }];
     await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
       destroyProviderConnectionReplacements: mixedSelection,
     })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "destroy_connection_recovery_unproven" } });
     expect(runner.planJobs).toHaveLength(planCount);
     expect(runner.destroyJobs).toHaveLength(destroyCount);
     expect(mints).toHaveLength(mintCount);
+  }
+  if (selective) {
+    // The omitted original is retired. Keeping its effective replacement is
+    // required even when that original credential is no longer usable.
+    await store.putConnection({ ...original, status: "revoked" });
+    await store.putConnection({ ...firstReplacement, status: "revoked" });
+    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+      destroyProviderConnectionReplacements: nextSelection,
+    })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "provider_connection_not_ready" } });
+    expect(runner.planJobs).toHaveLength(planCount);
+    expect(runner.destroyJobs).toHaveLength(destroyCount);
+    expect(mints).toHaveLength(mintCount);
+    await store.putConnection(firstReplacement);
   }
   const secondRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
     destroyProviderConnectionReplacements: nextSelection,
@@ -13818,9 +13847,9 @@ test.each([1, 2])("destroy recovery rotates %i bindings again after a failed app
   expect(secondRecovery.planRun.baseStateGeneration).toBe(2);
   expect(secondRecovery.planRun.destroyConnectionRecovery).toMatchObject({
     appliedPlanRunId: firstRecovery.planRun.id,
-    replacements: nextSelection,
+    replacements: effectiveNextSelection,
   });
-  expect(mints.at(-1)).toEqual(expectedMint(nextReplacement.id));
+  expect(mints.at(-1)).toEqual(expectedNextMint);
   expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
   await controller.approveRun(secondRecovery.planRun.id);
   const safetyProbeId = "apply_partial_rotation_receipt_probe";
@@ -13870,8 +13899,8 @@ test.each([1, 2])("destroy recovery rotates %i bindings again after a failed app
   expect(completed.applyRun.status).toBe("succeeded");
   expect(completed.capsule.status).toBe("destroyed");
   expect(runner.destroyJobs).toHaveLength(2);
-  expect(mints.at(-1)).toEqual(expectedMint(nextReplacement.id));
-  expect(retiredBindings).toEqual([bindings.map(() => nextReplacement.id)]);
+  expect(mints.at(-1)).toEqual(expectedNextMint);
+  expect(retiredBindings).toEqual([expectedNextMint.map(({ connectionId }) => connectionId)]);
   expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
 });
 
