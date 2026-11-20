@@ -69,12 +69,17 @@ import {
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import { InMemoryObservabilitySink } from "../../../../core/domains/observability/mod.ts";
 import type {
+  ApplyRun,
   ProviderConnection,
   OpenTofuOutputEnvelope,
   PlanRun,
   PlanResourceChange,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import {
+  capsuleRunRuntimeSafetyMatches,
+  type CapsuleRunCredentialLedger,
+} from "../../../../core/domains/deploy-control/run_credential_context.ts";
 import type { Run } from "takosumi-contract/runs";
 import type {
   Capsule,
@@ -13633,6 +13638,193 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   expect(await store.getInstallConfig(capsuleBefore.installConfigId)).toEqual(configBefore);
   expect(await store.getConnection(old.id)).toEqual(originalBeforeRecovery);
   expect(retiredBindings).toEqual([[replacement.id]]);
+});
+
+test("destroy recovery can rotate again after its first failed apply persists partial state", async () => {
+  const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
+  const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
+  const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedRunnableCapsuleModel(store, { environment: "preview", installConfig: oidcMaterializedInstallConfig() });
+  let sequence = 0;
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({ globalPassphrase: "synthetic-destroy-reconnect-fixture-passphrase" }),
+    now: () => new Date("2026-11-18T07:00:00Z"),
+    newId: () => `conn_partial_rotation_${++sequence}`,
+    credentialRecipeResolver: id => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(recipe => recipe.id === id),
+    credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    fetch: async input => {
+      const account = /\/accounts\/([a-f0-9]{32})/.exec(input)?.[1];
+      return Response.json({ success: true, result: input.endsWith("/workers/subdomain") ? { subdomain: "synthetic-team" } : account ? { id: account } : { status: "active" } });
+    },
+  });
+  const register = async (accountId = "0123456789abcdef0123456789abcdef") => {
+    const row = await vault.register({
+      workspaceId: seeded.workspace.id, provider: FIXTURE_CLOUDFLARE_PROVIDER,
+      credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
+      values: { CLOUDFLARE_API_TOKEN: `synthetic-fixture-token-${sequence}`, CLOUDFLARE_ACCOUNT_ID: accountId },
+    }, undefined, null);
+    expect((await vault.test(row.id, undefined, null)).status).toBe("verified");
+    return (await store.getConnection(row.id))!;
+  };
+  const original = await register();
+  const firstReplacement = await register();
+  const nextReplacement = await register();
+  const foreign = await register("fedcba9876543210fedcba9876543210");
+  const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
+  await transitionProviderBindingSetForFixture(store, {
+    ...originalBinding,
+    bindings: originalBinding.bindings.map(binding => ({ ...binding, connectionId: original.id })),
+  });
+  const bindingBefore = await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment);
+  const mintIds: string[][] = [];
+  const mint = vault.mintForCapsuleProviderBindings.bind(vault);
+  vault.mintForCapsuleProviderBindings = async (...args) => {
+    mintIds.push(args[1].map(entry => entry.connectionId));
+    return await mint(...args);
+  };
+  const runner = recordingRunner();
+  let firstDestroy = true;
+  runner.destroy = job => {
+    runner.destroyJobs.push(job);
+    if (firstDestroy) {
+      firstDestroy = false;
+      return Promise.resolve({
+        providerExecutionFailure: {
+          kind: "provider_execution_failed",
+          statePersistence: "persisted",
+          errorCode: "apply_failed",
+        },
+        stateDigest: STATE_DIGEST,
+        providerInstallation: providerInstallationForMutation(job.planRun.requiredProviders),
+        executionEvidence: fixtureExecutionEvidence(job, "destroy", { outcome: "provider_failed_state_persisted" }),
+        diagnostics: [{ severity: "error", code: "apply_failed", message: "provider destroy partially failed" }],
+      });
+    }
+    return Promise.resolve({
+      stateDigest: STATE_DIGEST,
+      providerInstallation: providerInstallationForMutation(job.planRun.requiredProviders),
+      executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+    });
+  };
+  const retiredBindings: string[][] = [];
+  const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
+    ...fixtureAuthorityBoundModuleVariableMaterializer(),
+    async retire(input) { retiredBindings.push(input.resolvedProviderBindings.map(entry => entry.connection.id)); },
+  };
+  const controller = controllerWith(store, runner, { vault, moduleVariableMaterializer });
+  const initialPlan = await controller.createCapsulePlan(seeded.capsule.id);
+  const initialApply = await controller.createApplyRun({
+    planRunId: initialPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(initialPlan.planRun),
+  });
+  expect(initialApply.applyRun.status).toBe("succeeded");
+
+  const { CapsulesService } = await import("../../../../core/domains/capsules/mod.ts");
+  const capsules = new CapsulesService({ store, now: () => new Date("2026-11-18T07:00:00Z") });
+  const scheduled = await capsules.scheduleCapsuleUninstall(seeded.capsule.id, { requester: { subject: seeded.workspace.ownerUserId } });
+  await capsules.advanceCapsuleUninstall(seeded.capsule.id, { uninstallId: scheduled.uninstall!.id, revision: scheduled.uninstall!.revision }, { blockedReason: "destroy_plan_refused" });
+
+  const firstRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+    destroyProviderConnectionReplacements: [{ connectionId: original.id, replacementConnectionId: firstReplacement.id }],
+  });
+  expect(firstRecovery.planRun.resolvedProviderBindingsDigest).toBeDefined();
+  await controller.approveRun(firstRecovery.planRun.id);
+  const partial = await controller.createApplyRun({
+    planRunId: firstRecovery.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(firstRecovery.planRun),
+  });
+  expect(partial.applyRun.status).toBe("failed");
+  expect(partial.applyRun.operation).toBe("destroy");
+  const partialState = await store.getStateVersion(partial.applyRun.stateVersionId!);
+  expect(partialState).toMatchObject({
+    capsuleId: seeded.capsule.id,
+    generation: 2,
+    digest: STATE_DIGEST,
+    createdByRunId: partial.applyRun.id,
+  });
+  expect(partial.capsule).toMatchObject({
+    status: "error",
+    currentStateGeneration: 2,
+    currentStateVersionId: partialState!.id,
+  });
+  expect((await store.getPlanRun(firstRecovery.planRun.id))?.resolvedProviderBindingsDigest)
+    .toBe(firstRecovery.planRun.resolvedProviderBindingsDigest);
+
+  const nextSelection = [{ connectionId: original.id, replacementConnectionId: nextReplacement.id }];
+  const planCount = runner.planJobs.length;
+  const destroyCount = runner.destroyJobs.length;
+  const mintCount = mintIds.length;
+  await store.putConnection({ ...foreign, id: nextReplacement.id });
+  await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+    destroyProviderConnectionReplacements: nextSelection,
+  })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "destroy_connection_recovery_unproven" } });
+  expect(runner.planJobs).toHaveLength(planCount);
+  expect(runner.destroyJobs).toHaveLength(destroyCount);
+  expect(mintIds).toHaveLength(mintCount);
+
+  await store.putConnection(nextReplacement);
+  const secondRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+    destroyProviderConnectionReplacements: nextSelection,
+  });
+  expect(secondRecovery.planRun.status).toBe("waiting_approval");
+  expect(secondRecovery.planRun.operation).toBe("destroy");
+  expect(secondRecovery.planRun.baseStateGeneration).toBe(2);
+  expect(secondRecovery.planRun.destroyConnectionRecovery).toMatchObject({
+    appliedPlanRunId: firstRecovery.planRun.id,
+    replacements: nextSelection,
+  });
+  expect(mintIds.at(-1)).toEqual([nextReplacement.id]);
+  expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
+  await controller.approveRun(secondRecovery.planRun.id);
+  const safetyProbeId = "apply_partial_rotation_receipt_probe";
+  const safetyProbe: ApplyRun = {
+    ...partial.applyRun,
+    id: safetyProbeId,
+    planRunId: secondRecovery.planRun.id,
+    status: "running",
+    expected: applyExpectedGuardFromPlanRun(secondRecovery.planRun),
+    stateVersionId: undefined,
+    executionEvidence: undefined,
+  };
+  let omitPriorExecutionEvidence = false;
+  const safetyLedger = {
+    getCapsuleRuntimeSafety: async (_capsuleId: string, options?: { readonly excludeRunId?: string }) =>
+      options?.excludeRunId === safetyProbeId
+        ? { phase: "unknown" as const, runId: partial.applyRun.id, runType: "destroy_apply" as const }
+        : { phase: "terminating" as const, runId: safetyProbeId, runType: "destroy_apply" as const },
+    getApplyRun: async (id: string) => id === safetyProbeId
+      ? safetyProbe
+      : id === partial.applyRun.id
+        ? {
+            ...partial.applyRun,
+            ...(omitPriorExecutionEvidence ? { executionEvidence: undefined } : {}),
+          }
+        : await store.getApplyRun(id),
+    getPlanRun: store.getPlanRun.bind(store),
+    getStateVersion: store.getStateVersion.bind(store),
+  } as unknown as CapsuleRunCredentialLedger;
+  const safetyInput = {
+    capsule: (await store.getCapsule(seeded.capsule.id))!,
+    runId: safetyProbeId,
+    phase: "destroy",
+    planOperation: "destroy",
+    plannedCapsuleStateVersionId: partialState!.id,
+  } as const;
+  const destroyCountBeforeReceiptProbe = runner.destroyJobs.length;
+  expect(await capsuleRunRuntimeSafetyMatches(safetyLedger, safetyInput)).toBe(true);
+  omitPriorExecutionEvidence = true;
+  expect(await capsuleRunRuntimeSafetyMatches(safetyLedger, safetyInput)).toBe(false);
+  expect(runner.destroyJobs).toHaveLength(destroyCountBeforeReceiptProbe);
+  expect(mintIds).toHaveLength(mintCount + 1);
+  const completed = await controller.createApplyRun({
+    planRunId: secondRecovery.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(secondRecovery.planRun),
+  });
+  expect(completed.applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(2);
+  expect(retiredBindings).toEqual([[nextReplacement.id]]);
 });
 
 test("initial create with an indeterminate dispatched Apply atomically remains unknown in Capsule error", async () => {

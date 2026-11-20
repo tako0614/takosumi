@@ -381,10 +381,13 @@ checked for the selected replacement.
 The trusted credential driver must explicitly prove its verified account scope;
 the reference Cloudflare driver requires its exact-account verification capability
 and matching account metadata. The complete binding digest must match the applied
-Plan after substituting the old ID **only in the comparison preimage**. Other
-bindings, aliases, settings, recipe and verification remain exact; minting always
-uses the real new ID. Missing/legacy evidence, changed account or other metadata,
-same IDs and ambiguous selections are refused. This option is not available to
+Plan after substituting the old ID **only in the comparison preimage**. When the
+current StateVersion was produced by a prior recovery Plan, the comparison first
+uses that exact PlanRun's recorded effective replacement ID for each stored
+logical binding, then compares the newly selected replacement against the pinned
+digest. Other bindings, aliases, settings, recipe and verification remain exact;
+minting always uses the real new ID. Missing/legacy evidence, changed account or
+other metadata, same IDs and ambiguous selections are refused. This option is not available to
 create/update, source-less legacy teardown, or automatic scheduled retries.
 The new destroy Plan still needs explicit approval and Apply, which recheck the
 same evidence and current authority. A blocked reservation can coexist with this
@@ -450,6 +453,12 @@ identities or assert that a provider operation succeeded.
 A reviewed Destroy may settle the original failed create's `unknown` runtime
 safety only through that exact current recovered StateVersion and its failed
 Apply lineage; ordinary Apply/update remains blocked by the unknown outcome.
+For an unknown outcome from a failed Destroy, a new manual Destroy is admitted
+only when the exact provider-dispatched, provider-failed persisted-state audit
+receipt and execution receipt match the failed ApplyRun, current StateVersion,
+and both the applied and newly reviewed recovery Plans. Indeterminate or
+unpersisted failures remain fenced; ordinary Apply/update eligibility is not
+broadened.
 Paired `pre_destroy` cleanup for an unexecuted `post_apply` may be recorded as
 not applicable only when the recovery lineage is exact, no Output exists, and
 no lifecycle-start/dispatch or positive provider-success evidence contradicts
