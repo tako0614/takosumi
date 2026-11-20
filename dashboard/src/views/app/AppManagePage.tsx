@@ -608,6 +608,8 @@ export default function AppManagePage(props: {
       );
     } catch (cause) {
       if (isCurrent()) {
+        const uninstallConnectionRefused = purpose === "uninstall" && cause instanceof ControlApiError &&
+          cause.status === 409 && cause.code === "failed_precondition" && cause.reason === "provider_connection_not_ready";
         if (purpose === "update") {
           const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
           if (target) setReAdoptionRevisionId(target);
@@ -616,14 +618,17 @@ export default function AppManagePage(props: {
         if (isRevisionAlreadyCurrent(cause)) {
           setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
         } else {
-          setSectionError({ section, message: friendlyError(cause, t).message });
+          setSectionError({ section, message: uninstallConnectionRefused
+            ? t("app.uninstall.connectionUnavailable")
+            : friendlyError(cause, t).message });
         }
-        if ((purpose === "update" || purpose === "uninstall") &&
+        const responseUncertain = (purpose === "update" || purpose === "uninstall") &&
           (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
-            : cause instanceof TypeError)) {
-          // Acceptance may precede a lost response. Only this app's current
-          // server view can name existing work; never repeat the mutation.
+            : cause instanceof TypeError);
+        if (uninstallConnectionRefused || responseUncertain) {
+          // The app view can report unavailable connections or work accepted
+          // before a lost response; this fetch never repeats the mutation.
           try {
             void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
           } catch {

@@ -1434,13 +1434,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       traffic.assertNoFailures();
     });
 
-    for (const scenario of ["states", "staleReview", "partialRecovery"] as const) test({
+    for (const scenario of ["states", "staleReview", "partialRecovery", "firstRemovalRefusal"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
       partialRecovery: "a partial uninstall can replace more than the unavailable original connection",
+      firstRemovalRefusal: "a refused first uninstall refreshes the app and offers a replacement connection",
     }[scenario], async ({ page }) => {
       const staleUninstallReview = scenario === "staleReview";
       const partialRecovery = scenario === "partialRecovery";
+      const firstRemovalRefusal = scenario === "firstRemovalRefusal";
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
@@ -1451,10 +1453,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const now = "2026-10-20T00:00:00.000Z";
       type Scene = "uninstall_scheduled" | "uninstall_immediate" | "uninstall_failed" | "uninstall_stale_review" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = partialRecovery ? "uninstall_failed"
-        : staleUninstallReview ? "uninstall_stale_review" : "uninstall_scheduled";
+        : firstRemovalRefusal ? "uninstall_immediate"
+          : staleUninstallReview ? "uninstall_stale_review" : "uninstall_scheduled";
       let connectionRemoved = false;
       const replacementPlanBodies: unknown[] = [];
       let failedUninstallBindingReads = 0;
+      let firstRemovalAttempts = 0;
+      let appReadsAfterFirstRemoval = 0;
       const connectionProblem = {
         code: "connection_unavailable", severity: "error", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionId: "conn_removed", connectionStatus: "revoked",
       } as const;
@@ -1523,6 +1528,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return appView(ID, NAME, {
               screens: [screen],
               ...(connectionRemoved ? { problems: [connectionProblem] } : {}),
+              ...(firstRemovalRefusal && connectionRemoved ? { state: "needs_attention", primaryAction: "fix_connection" } : {}),
               uninstall: { mode: "none", impact: { usedBy: [] } },
             });
           case "uninstall_failed":
@@ -1630,7 +1636,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         const base = `/api/v1/capsules/${ID}`;
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
-          { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: partialRecovery ? "revoked" : "verified" },
+          { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: partialRecovery || (firstRemovalRefusal && connectionRemoved) ? "revoked" : "verified" },
           { id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified" },
           { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
           { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "verified" },
@@ -1644,8 +1650,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           return route.fulfill({ status: 201, json: { run: recoveryPlan } });
         }
         if (path === `${base}/members`) return route.fulfill({ json: { owner: { accountId: "sub_portable_e2e", displayName: "Portable E2E", email: "portable-e2e@example.test" }, members: [] } });
+        if (firstRemovalRefusal && path === base && request.method() === "DELETE" && url.searchParams.get("immediate") === "true") {
+          firstRemovalAttempts += 1;
+          connectionRemoved = firstRemovalAttempts === 2;
+          return route.fulfill({ status: 409, json: { error: {
+            code: "failed_precondition",
+            message: connectionRemoved ? "Provider Connection conn_removed status revoked is not verified" : "An unrelated conflict.",
+            details: { reason: connectionRemoved ? "provider_connection_not_ready" : "unrelated_conflict" },
+          } } });
+        }
         if (path === base) return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
         if (path === `${base}/app`) {
+          if (firstRemovalAttempts > 0) appReadsAfterFirstRemoval += 1;
           return viewUnavailable
             ? route.fulfill({ status: 404, json: { error: "fixture_route_not_found" } })
             : route.fulfill({ json: { app: view() } });
@@ -1746,6 +1762,39 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const app = page.getByTestId("app-page");
       const header = page.getByTestId("app-header");
       const problems = page.getByTestId("app-problems");
+
+      if (firstRemovalRefusal) {
+        await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+        await openAppPane(page, "danger");
+        const danger = page.getByTestId("app-uninstall");
+        const uninstall = danger.getByRole("button", { name: "Uninstall now", exact: true });
+        const choose = danger.getByRole("button", { name: "Choose connection for uninstall" });
+        await uninstall.click();
+        await expect(problems.getByRole("alert")).toContainText("An unrelated conflict.");
+        await expect(choose).toHaveCount(0);
+        expect(appReadsAfterFirstRemoval).toBe(0);
+
+        await uninstall.click();
+        await expect(choose).toBeVisible();
+        expect(appReadsAfterFirstRemoval).toBe(1);
+        expect(seenMutations).toEqual(Array(2).fill(`DELETE /api/v1/capsules/${ID}`));
+        await expect(problems.getByRole("alert")).not.toContainText("conn_removed");
+        await choose.click();
+        await danger.getByRole("combobox", { name: "Cloudflare" }).selectOption("conn_saved");
+        await danger.getByRole("button", { name: "Review removal" }).click();
+        await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+        expect(replacementPlanBodies).toEqual([{
+          destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
+        }]);
+        expect(seenMutations).toEqual([
+          `DELETE /api/v1/capsules/${ID}`, `DELETE /api/v1/capsules/${ID}`, `POST /api/v1/capsules/${ID}/destroy-plan`,
+        ]);
+        expect(errors).toEqual([]);
+        expect(traffic.failures.map(({ kind, url, status }) => ({ kind, path: new URL(url).pathname, status }))).toEqual(
+          Array.from({ length: 2 }, () => ({ kind: "response", path: `/api/v1/capsules/${ID}`, status: 409 })),
+        );
+        return;
+      }
 
       if (partialRecovery) {
         // App issues describe the applied bindings. A different key may
