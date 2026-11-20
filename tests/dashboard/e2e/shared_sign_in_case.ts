@@ -18,6 +18,7 @@ export function registerSharedSignInCases(mode: DashboardE2EMode): void {
     test("logout offers an explicit RP document navigation without restarting sign-in", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       let authenticated = true;
+      let logoutRequests = 0;
       let providers = 0;
       const navigations: string[] = [];
       await page.route("**/auth/oidc/session", (route) => route.fulfill({
@@ -28,10 +29,11 @@ export function registerSharedSignInCases(mode: DashboardE2EMode): void {
         : route.fulfill({ status: 401, json: { error: "unauthenticated" } }));
       await page.route("**/api/v1/account/session/me", (route) => {
         if (route.request().method() === "DELETE") {
+          if (++logoutRequests === 1) return route.fulfill({ status: 503, json: { error: "session_revocation_unavailable" } });
           authenticated = false;
           return route.fulfill({ status: 204 });
         }
-        return authenticated ? route.fallback() : route.fulfill({ json: { session: null } });
+        return route.fulfill({ json: authenticated ? { subject: "tsub_fixture_user" } : { session: null } });
       });
       await page.route("**/api/v1/auth/providers", (route) => {
         providers += 1;
@@ -47,10 +49,17 @@ export function registerSharedSignInCases(mode: DashboardE2EMode): void {
       await expect(page.getByTestId("home-apps")).toBeVisible();
       await page.locator("button.topbar-user").click();
       await page.getByRole("button", { name: "Sign out", exact: true }).click();
+      await expect(page.locator(".user-menu-pop").getByRole("alert")).toBeVisible();
+      await expect(page.getByTestId("home-apps")).toBeVisible();
+      expect(authenticated).toBe(true);
+      expect(logoutRequests).toBe(1);
+      expect(navigations).toEqual([]);
+      await page.getByRole("button", { name: "Sign out", exact: true }).click();
       await expect(page).toHaveURL(/\/sign-in$/u);
       const login = page.locator(".sign-in-buttons a");
       await expect(login).toBeVisible();
       expect(authenticated).toBe(false);
+      expect(logoutRequests).toBe(2);
       expect(navigations).toEqual([]);
       expect(providers).toBe(0);
       await expect(page.locator(".sign-in-notice")).toHaveCount(0);

@@ -7,9 +7,9 @@ import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { HelpCircle, LogOut, UserCircle2 } from "lucide-solid";
 import {
-  clearSession,
   onSessionChange,
   readSession,
+  signOutSession,
   type SessionRecord,
 } from "../../lib/session.ts";
 import { locale, setLocale, t } from "../../../../i18n/index.ts";
@@ -34,6 +34,8 @@ const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
 export default function UserMenu() {
   const [open, setOpen] = createSignal(false);
   const [session, setSession] = createSignal<SessionRecord | null>(null);
+  const [signingOut, setSigningOut] = createSignal(false);
+  const [signOutUnavailable, setSignOutUnavailable] = createSignal(false);
   const nav = useNavigate();
   let containerRef: HTMLDivElement | undefined;
   let triggerRef: HTMLButtonElement | undefined;
@@ -81,12 +83,24 @@ export default function UserMenu() {
     return s.displayName ?? s.email ?? t("nav.account");
   };
 
-  const signOut = () => {
-    clearSession();
-    // `manual=1` on top of the sessionStorage breaker armed by clearSession():
-    // a browser that refuses sessionStorage must still land on the provider
-    // buttons instead of being auto-redirected back into the IdP session it
-    // just asked to leave.
+  const signOut = async () => {
+    if (signingOut()) return;
+    setSigningOut(true);
+    setSignOutUnavailable(false);
+    let completed = false;
+    try {
+      completed = await signOutSession();
+    } catch {
+      completed = false;
+    } finally {
+      setSigningOut(false);
+    }
+    if (!completed) {
+      setSignOutUnavailable(true);
+      return;
+    }
+    setSignOutUnavailable(false);
+    setOpen(false);
     nav("/sign-in", { replace: true });
   };
 
@@ -176,7 +190,13 @@ export default function UserMenu() {
             ))}
           </div>
           <div class="user-menu-divider" />
-          <button class="user-menu-item" type="button" onClick={signOut}>
+          <Show when={signingOut()}>
+            <p role="status">{t("account.signOut.pending")}</p>
+          </Show>
+          <Show when={signOutUnavailable()}>
+            <p role="alert">{t("account.signOut.unavailable")}</p>
+          </Show>
+          <button class="user-menu-item" type="button" disabled={signingOut()} onClick={signOut}>
             <LogOut size={16} /> {t("shell.signOut")}
           </button>
         </div>

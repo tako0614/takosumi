@@ -1308,6 +1308,8 @@ export const en: Record<keyof typeof ja, string> = {
   "account.signOut.title": "Sign out",
   "account.signOut.cta": "Sign out of this browser",
   "account.signOut.confirm": "Sign out now?",
+  "account.signOut.pending": "Signing out…",
+  "account.signOut.unavailable": "Sign-out could not be confirmed. Check your connection and try again.",
   "account.apiKeys.subtitle":
     "Keys that let the Takosumi CLI and your automation act as you. Pass a key to the CLI with --token.",
   "account.apiKeys.apiHelp":

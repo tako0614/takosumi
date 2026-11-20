@@ -2,7 +2,7 @@
 import { createResource, createSignal, For, Show, type JSX } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { ExternalLink } from "lucide-solid";
-import { clearSession, type SessionRecord } from "../lib/session.ts";
+import { signOutSession, type SessionRecord } from "../lib/session.ts";
 import SignInMethodsCard from "../components/SignInMethodsCard.tsx";
 import { intlLocale, locale, setLocale, t } from "../../../i18n/index.ts";
 import type { MessageKey } from "../../../i18n/index.ts";
@@ -48,6 +48,7 @@ export default function ProfileSection(props: {
   let cancelSignOut!: HTMLButtonElement;
   const [signingOut, setSigningOut] = createSignal(false);
   const [confirmingSignOut, setConfirmingSignOut] = createSignal(false);
+  const [signOutUnavailable, setSignOutUnavailable] = createSignal(false);
   const installHandlerAvailable = installHandlerSupported();
   const [handlerRegistered, setHandlerRegistered] = createSignal(
     installHandlerRegistered(),
@@ -67,11 +68,22 @@ export default function ProfileSection(props: {
     }
   };
 
-  const signOut = () => {
+  const signOut = async () => {
+    if (signingOut()) return;
     setSigningOut(true);
-    clearSession();
-    // Sign-out must never hand the user straight back to a single-provider
-    // auto-start (see UserMenu.signOut).
+    setSignOutUnavailable(false);
+    let completed = false;
+    try {
+      completed = await signOutSession();
+    } catch {
+      completed = false;
+    } finally {
+      setSigningOut(false);
+    }
+    if (!completed) {
+      setSignOutUnavailable(true);
+      return;
+    }
     nav("/sign-in");
   };
 
@@ -197,6 +209,7 @@ export default function ProfileSection(props: {
               class="tg-settings-row tg-settings-link"
               type="button"
               onClick={() => {
+                setSignOutUnavailable(false);
                 setConfirmingSignOut(true);
                 requestAnimationFrame(() => cancelSignOut?.focus());
               }}
@@ -225,6 +238,9 @@ export default function ProfileSection(props: {
                 </Button>
               </div>
             </div>
+            <Show when={signOutUnavailable()}>
+              <p role="alert">{t("account.signOut.unavailable")}</p>
+            </Show>
           </Show>
         </div>
       </section>
