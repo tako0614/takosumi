@@ -10,16 +10,16 @@ import { appUninstallRecoveryConnections } from "../../lib/capsule-uninstall.ts"
 
 export default function AppUninstallConnectionRecovery(props: {
   readonly app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "problems" | "latestRun">;
-  readonly mode: "unavailable" | "failed";
+  readonly mode: "unavailable" | "failed" | "refused";
   readonly disabled: boolean;
   readonly onReview: (replacements: readonly DestroyProviderConnectionReplacement[]) => void;
 }) {
   const [open, setOpen] = createSignal(false);
   const capsuleId = createMemo(() => props.app.capsuleId);
   const workspaceId = createMemo(() => props.app.workspaceId);
-  const failedRunId = createMemo(() => props.mode === "failed" ? props.app.latestRun?.id : undefined);
+  const bindingRunId = createMemo(() => props.mode === "unavailable" ? undefined : props.app.latestRun?.id);
   const request = createMemo(() => open() ? {
-    capsuleId: capsuleId(), workspaceId: workspaceId(), failedRunId: failedRunId(),
+    capsuleId: capsuleId(), workspaceId: workspaceId(), bindingRunId: bindingRunId(),
   } : false);
   const reads = new AbortController();
   onCleanup(() => reads.abort());
@@ -27,7 +27,7 @@ export default function AppUninstallConnectionRecovery(props: {
     const isCurrent = () => !reads.signal.aborted && request() === target;
     const [connections, bindingSet] = await Promise.all([
       listProviderConnectionsWithSignal(target.workspaceId, reads.signal, { isCurrent }),
-      target.failedRunId
+      target.bindingRunId
         ? getCapsuleProviderBindingSet(target.capsuleId, { signal: reads.signal, isCurrent })
         : undefined,
     ]);
@@ -37,7 +37,7 @@ export default function AppUninstallConnectionRecovery(props: {
     const verified = connections.filter((connection) =>
       connection.scope !== "operator" && connection.status === "verified" &&
       (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.now()));
-    return { verified, bindings: bindingSet?.bindings ?? [] };
+    return { verified, connections, bindings: bindingSet?.bindings ?? [] };
   });
   const available = () => inventory.state === "ready" ? inventory() : undefined;
   const options = (provider: string, originalConnectionId: string) =>
@@ -51,15 +51,18 @@ export default function AppUninstallConnectionRecovery(props: {
     }
     const current = available();
     if (!current) return [];
-    const originals = new Map(current.verified.map((connection) => [connection.id, connection]));
+    const originals = new Map((props.mode === "refused" ? current.connections : current.verified)
+      .map((connection) => [connection.id, connection]));
     const rows = new Map<string, { connectionId: string; provider: string; label: string }>();
     for (const { connectionId, provider } of current.bindings) {
       const original = originals.get(connectionId);
-      if (!original || !sameProviderSource(provider, original.providerSource) || options(provider, connectionId).length === 0) continue;
+      if ((!original && props.mode !== "refused") ||
+        (original && (original.scope === "operator" || !sameProviderSource(provider, original.providerSource))) ||
+        options(provider, connectionId).length === 0) continue;
       rows.set(connectionId, {
         connectionId,
         provider,
-        label: `${providerName(provider)} · ${providerConnectionDisplayName(original)}`,
+        label: `${providerName(provider)} · ${original ? providerConnectionDisplayName(original) : connectionId}`,
       });
     }
     return [...rows.values()];
@@ -71,7 +74,7 @@ export default function AppUninstallConnectionRecovery(props: {
       return replacementConnectionId && options(provider, connectionId).some((connection) => connection.id === replacementConnectionId)
         ? [{ connectionId, replacementConnectionId }] : [];
     });
-    return selected.length > 0 && (props.mode === "failed" || selected.length === rows().length)
+    return selected.length > 0 && (props.mode !== "unavailable" || selected.length === rows().length)
       ? selected : undefined;
   });
 
@@ -97,7 +100,7 @@ export default function AppUninstallConnectionRecovery(props: {
               <FormField label={label}>
                 <Select value={selection().get(connectionId) ?? ""} disabled={props.disabled} onChange={(event) =>
                   setSelection(new Map(selection()).set(connectionId, event.currentTarget.value))}>
-                  <option value="">{t(props.mode === "failed" && rows().length > 1
+                  <option value="">{t(props.mode !== "unavailable" && rows().length > 1
                     ? "app.uninstall.keepConnection"
                     : "app.uninstall.replacementPlaceholder")}</option>
                   <For each={options(provider, connectionId)}>{(connection) => (
