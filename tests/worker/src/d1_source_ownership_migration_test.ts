@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Miniflare } from "miniflare";
 import { deterministicInitialCapsuleId, deterministicInstallSourceId } from "../../../core/domains/install-plans/source-reservation.ts";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
@@ -6,7 +7,7 @@ import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { Run } from "takosumi-contract/runs";
 import type { StoredGitInstallPlan } from "../../../core/domains/install-plans/store.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
-import type { D1PreparedStatement, D1Result } from "../../../worker/src/bindings.ts";
+import type { D1Database, D1PreparedStatement, D1Result } from "../../../worker/src/bindings.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../worker/src/d1_opentofu_store.ts";
 import { handleSourceOwnershipMigrationOperatorRequest, SOURCE_OWNERSHIP_MIGRATION_PATH } from
   "../../../worker/src/source_ownership_migration_operator.ts";
@@ -15,11 +16,68 @@ import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import { inventorySourceOwnershipGroup, migrateSourceOwnership, prepareSourceOwnershipMigration } from
   "../../../core/domains/sources/ownership-migration.ts";
+import { runOperatorSourceOwnership } from "../../../scripts/operator-source-ownership.ts";
 
 const t0 = "2026-10-01T00:00:00.000Z";
 const workspaceId = "ws_migration_d1";
 const sourceId = "src_migration_d1";
 const url = "https://example.test/repo.git";
+
+test("operator inventory prepares one Source per request against isolated native D1", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [{ type: "ESModule", path: "source-ownership-inventory.mjs",
+      contents: "export default {fetch(){return new Response('ok')}}" }],
+    d1Databases: { CONTROL: "source-ownership-inventory" },
+  });
+  try {
+    const db = await runtime.getD1Database("CONTROL") as unknown as D1Database;
+    const store = new CloudflareD1OpenTofuControlStore(db);
+    await store.putWorkspace({ id: workspaceId, handle: "migration-d1", displayName: "Migration D1",
+      type: "personal", ownerUserId: "owner_migration_d1", createdAt: t0, updatedAt: t0 });
+    for (const id of ["src_c", "src_b", "src_A"]) {
+      await store.putSource({ id, workspaceId, name: id, url, defaultRef: "main",
+        defaultPath: ".", status: "active", autoSync: false, hookSecretHash: "a".repeat(64),
+        createdAt: t0, updatedAt: t0 });
+    }
+    const rowQuery = "select id, status, record_json from sources order by id";
+    const before = (await db.prepare(rowQuery).all()).results;
+    const now = () => new Date("2026-10-28T00:00:00.000Z");
+    const token = "test-operator-inventory-token";
+    const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: token, TAKOSUMI_CONTROL_DB: db } as CloudflareWorkerEnv;
+    const target = `https://operator.test${SOURCE_OWNERSHIP_MIGRATION_PATH}`;
+    const visits: Array<string | null> = [];
+    const fetchFixture = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(String(input), init);
+      expect(request.method).toBe("GET");
+      visits.push(new URL(request.url).searchParams.get("afterSourceId"));
+      const response = await handleSourceOwnershipMigrationOperatorRequest(request, env, { now });
+      expect(response?.headers.get("cache-control")).toBe("no-store");
+      return response!;
+    };
+    const result = await runOperatorSourceOwnership({ baseUrl: target, apply: false, inventory: true },
+      token, fetchFixture as typeof fetch);
+    expect(result.status).toBe(200);
+    expect(visits).toEqual([null, "src_A", "src_b"]);
+    const { reports } = result.body as { reports: Array<{ results: [{ inventory: { sourceId: string; action: string } }] }> };
+    expect(reports.map((report) => report.results.map((entry) => entry.inventory.sourceId)))
+      .toEqual([["src_A"], ["src_b"], ["src_c"]]);
+    expect(reports.map((report) => report.results[0].inventory.action)).toEqual(["retire", "retire", "retire"]);
+    const headers = { authorization: `Bearer ${token}` };
+    const targeted = await handleSourceOwnershipMigrationOperatorRequest(
+      new Request(`${target}?sourceId=src_b`, { headers }), env, { now });
+    expect(await targeted!.json()).toEqual(reports[1]);
+    const mixed = await handleSourceOwnershipMigrationOperatorRequest(
+      new Request(`${target}?inventoryPage=1&sourceId=src_b`, { headers }), env, { now });
+    expect(mixed?.status).toBe(400);
+    const exhausted = await handleSourceOwnershipMigrationOperatorRequest(
+      new Request(`${target}?inventoryPage=1&afterSourceId=src_c`, { headers }), env, { now });
+    expect(await exhausted!.json()).toMatchObject({ report: null, nextAfterSourceId: null });
+    expect((await db.prepare(rowQuery).all()).results).toEqual(before);
+  } finally {
+    await runtime.dispose();
+  }
+}, 30_000);
 
 class InterleavedD1 extends SqliteFakeD1 {
   beforeNextBatch?: () => Promise<void>;
