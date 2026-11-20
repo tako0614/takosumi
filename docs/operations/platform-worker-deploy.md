@@ -289,9 +289,17 @@ observability, logpush, or tail consumers. Final readback repeats every
 Version, topology, secret, Container, public-header, and discovery invariant.
 
 Asset synchronization is the first possible mutation. A lost acknowledgement
-from upload or activation is `incomplete`: the lane prints the predecessor and
-unique Version tag, never retries, and requires immutable Version/deployment
-history before recovery. Historical rollback remains owned by
+from upload or activation is `incomplete`. The JSON result includes the
+predecessor, unique Version tag, mutation phase, and sealed entry and dashboard
+digests. `candidateVersionId` is present after parsing the upload
+acknowledgement or verifying the exact resume candidate. A successful
+post-activation authority read also supplies `observedServingVersionId`.
+If the authority comparison fails, `authorityDrift` lists the changed sections
+without disclosure of the compared values.
+
+The lane never retries a mutation. Read immutable Version and deployment
+history before recovery. Use the original upload acknowledgement to identify
+the candidate. Historical rollback remains owned by
 `takosumi-platform-staging`; this lane creates no plan, journal, archive, or
 parallel restore mechanism.
 

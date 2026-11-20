@@ -2090,6 +2090,14 @@ type PlatformWorkerCodeAuthority = Readonly<{
   topology: PlatformWorkerCodeTopology;
 }>;
 
+type PlatformWorkerCodeAuthoritySection = keyof PlatformWorkerCodeAuthority;
+
+class PlatformWorkerCodeAuthorityDriftError extends Error {
+  constructor(readonly sections: readonly PlatformWorkerCodeAuthoritySection[]) {
+    super("platform_worker_code_authority_drift");
+  }
+}
+
 /** Fixed integration-only lane. Full config/image release remains separate. */
 export async function runPlatformWorkerCodeRelease(
   argv: readonly string[],
@@ -2213,6 +2221,9 @@ async function runPlatformWorkerCodePublication(
   let mutation: "none" | "upload" | "activate" = "none";
   let predecessorVersionId = "unknown";
   let releaseTag = "unknown";
+  let artifacts: { entryDigest: string; dashboardDigest: string } | undefined;
+  let candidateVersionId: string | undefined;
+  let observedServingVersionId: string | undefined;
   try {
     const runnerImage = configuredRunnerImage(initialConfig.path);
     const workerName = platformTargetForEnvironment(environment).workerName;
@@ -2287,6 +2298,7 @@ async function runPlatformWorkerCodePublication(
     if (entryDigest !== pins.controllerArtifactDigest) {
       throw new Error("platform_worker_code_bundle_digest_drift");
     }
+    artifacts = { entryDigest, dashboardDigest: dashboard.digest };
 
     const assertPredecessorUnchanged = async () => {
       const immediate = await readAuthority(initialConfig.path, predecessorSource, true);
@@ -2331,6 +2343,7 @@ async function runPlatformWorkerCodePublication(
         root,
       );
       deployedVersionId = parseUploadedVersion(`${upload.stdout}\n${upload.stderr}`);
+      candidateVersionId = deployedVersionId;
     }
     const uploadedSource = await readPlatformWorkerCodeVersion(
       finalConfig.path,
@@ -2351,6 +2364,7 @@ async function runPlatformWorkerCodePublication(
       releaseMessage,
     );
     assertPlatformWorkerCodeStableVersion(baseline.version, uploaded);
+    candidateVersionId = deployedVersionId;
     // A pre-existing candidate is read first, then the active predecessor and
     // all source/config/authority fences are checked again immediately before switching.
     if (resume) await assertPredecessorUnchanged();
@@ -2380,6 +2394,7 @@ async function runPlatformWorkerCodePublication(
       finalSource,
       false,
     );
+    observedServingVersionId = deployed.versionId;
     if (deployed.versionId !== deployedVersionId) {
       throw new Error(
         deployed.versionId === predecessorVersionId
@@ -2423,6 +2438,12 @@ async function runPlatformWorkerCodePublication(
         predecessorVersionId,
         releaseTag,
         mutation,
+        ...artifacts,
+        candidateVersionId,
+        observedServingVersionId,
+        authorityDrift: error instanceof PlatformWorkerCodeAuthorityDriftError
+          ? error.sections
+          : undefined,
         recoveryStatus:
           "read the tagged Version and deployment history before rollback or forward repair; no mutation was retried",
         historicalRollbackOwner: "takosumi-platform-staging",
@@ -2495,7 +2516,7 @@ function assertPlatformWorkerCodeStableVersion(
   current: PlatformWorkerCodeVersionAuthority,
 ): void {
   if (!platformWorkerCodeEqual(baseline, current)) {
-    throw new Error("platform_worker_code_authority_drift");
+    throw new PlatformWorkerCodeAuthorityDriftError(["version"]);
   }
 }
 
@@ -2504,15 +2525,18 @@ function assertPlatformWorkerCodeAuthorityUnchanged(
   current: PlatformWorkerCodeAuthority,
   sameVersion: boolean,
 ): void {
-  if (
-    (sameVersion && baseline.versionId !== current.versionId) ||
-    !platformWorkerCodeEqual(baseline.secrets, current.secrets) ||
-    !platformWorkerCodeEqual(baseline.container, current.container) ||
-    !platformWorkerCodeEqual(baseline.topology, current.topology)
-  ) {
-    throw new Error("platform_worker_code_authority_drift");
+  const sections: PlatformWorkerCodeAuthoritySection[] = [];
+  if (sameVersion && baseline.versionId !== current.versionId) {
+    sections.push("versionId");
   }
-  assertPlatformWorkerCodeStableVersion(baseline.version, current.version);
+  for (const section of ["secrets", "container", "topology", "version"] as const) {
+    if (!platformWorkerCodeEqual(baseline[section], current[section])) {
+      sections.push(section);
+    }
+  }
+  if (sections.length > 0) {
+    throw new PlatformWorkerCodeAuthorityDriftError(sections);
+  }
 }
 
 function assertPlatformWorkerCodeInputUnchanged(

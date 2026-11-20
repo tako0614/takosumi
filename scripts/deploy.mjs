@@ -177,7 +177,7 @@ const CONTRACT = {
         reversal:
           "prints the predecessor Version and names takosumi-platform-staging as the historical rollback owner; this routine lane does not invent a second restore mechanism",
         "failure-handling":
-          "refuses any pre-upload authority drift; upload or activation errors are incomplete, print the recovery tag and predecessor, and never retry; explicitly resuming a verified Version rechecks the exact healthy predecessor and skips the upload",
+          "refuses any pre-upload authority drift; an incomplete result includes the recovery tag, predecessor, sealed artifact digests, acknowledged or verified candidate Version when known, and observed serving Version when read; explicitly resuming a verified Version rechecks the exact healthy predecessor and skips the upload",
       },
     },
     platformContract(PLATFORM_STAGING),
