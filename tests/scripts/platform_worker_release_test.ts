@@ -2507,18 +2507,94 @@ test("platform container readback retries a transient list/detail mismatch", asy
 });
 
 test("platform container readback fails closed after persistent list/detail mismatch", async () => {
+  for (const predecessor of [undefined, reviewedRunnerPredecessor]) {
+    let reads = 0;
+    await expect(
+      waitForPlatformContainerReadback(
+        reviewedRunnerPredecessor.image,
+        async () => {
+          reads += 1;
+          throw new Error("platform_worker_release_container_list_detail_mismatch");
+        },
+        async () => {},
+        predecessor,
+      ),
+    ).rejects.toThrow("platform_worker_release_container_list_detail_mismatch");
+    expect(reads).toBe(36);
+  }
+});
+
+const reviewedRunnerPredecessor = {
+  id: "application",
+  name: "takosumi-staging-opentofurunnerobject",
+  state: "ready",
+  image: `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`,
+  version: 85,
+  hasActiveRollout: false,
+  health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+} as const;
+const reviewedRunnerTarget = {
+  ...reviewedRunnerPredecessor,
+  image: `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`,
+  version: 86,
+} as const;
+
+test("reviewed Runner image change can complete after the original read limit", async () => {
   let reads = 0;
-  await expect(
-    waitForPlatformContainerReadback(
-      `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`,
-      async () => {
-        reads += 1;
-        throw new Error("platform_worker_release_container_list_detail_mismatch");
-      },
-      async () => {},
-    ),
-  ).rejects.toThrow("platform_worker_release_container_list_detail_mismatch");
-  expect(reads).toBe(36);
+  const waits: number[] = [];
+  const result = await waitForPlatformContainerReadback(
+    reviewedRunnerTarget.image,
+    async () => {
+      reads += 1;
+      if (reads <= 36) {
+        return { ...reviewedRunnerPredecessor, hasActiveRollout: true };
+      }
+      if (reads === 37) {
+        return { ...reviewedRunnerTarget, hasActiveRollout: true };
+      }
+      return reviewedRunnerTarget;
+    },
+    async (milliseconds) => { waits.push(milliseconds); },
+    reviewedRunnerPredecessor,
+  );
+  expect(result).toEqual(reviewedRunnerTarget);
+  expect(reads).toBe(38);
+  expect(waits.slice(0, 35)).toEqual(Array<number>(35).fill(5_000));
+  expect(waits.slice(35)).toEqual([15_000, 15_000]);
+});
+
+test("reviewed Runner image change cannot wait indefinitely on a stale predecessor", async () => {
+  let reads = 0;
+  const waits: number[] = [];
+  await expect(waitForPlatformContainerReadback(
+    reviewedRunnerTarget.image,
+    async () => { reads += 1; return reviewedRunnerPredecessor; },
+    async (milliseconds) => { waits.push(milliseconds); },
+    reviewedRunnerPredecessor,
+  )).rejects.toThrow("platform_worker_release_container_not_ready");
+  expect(reads).toBe(89);
+  expect(waits.reduce((sum, delay) => sum + delay, 0)).toBe(960_000);
+});
+
+test("reviewed Runner image change refuses a different application or reported failure", async () => {
+  for (const [state, diagnostic] of [
+    [{ ...reviewedRunnerTarget, id: "recreated" }, "platform_worker_release_container_rollout_mismatch"],
+    [{ ...reviewedRunnerTarget, image: reviewedRunnerTarget.image.replace(/c{64}$/u, "d".repeat(64)) },
+      "platform_worker_release_container_rollout_mismatch"],
+    [{ ...reviewedRunnerTarget, health: { ...reviewedRunnerTarget.health, failed: 1 } },
+      "platform_worker_release_container_rollout_failed"],
+  ] as const) {
+    let reads = 0;
+    let waits = 0;
+    await expect(waitForPlatformContainerReadback(
+      reviewedRunnerTarget.image,
+      async () => { reads += 1; return state; },
+      async () => { waits += 1; },
+      reviewedRunnerPredecessor,
+    )).rejects.toThrow(diagnostic);
+    expect(reads).toBe(1);
+    expect(waits).toBe(0);
+  }
 });
 
 type LinkedRolloutFixtureOptions = {

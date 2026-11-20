@@ -4772,13 +4772,26 @@ export async function completeRelease(
       platformReleaseMessage(plan),
       command,
     );
-    await publicReadback(plan.environment, deployedVersionId);
+    const runnerImage = configuredRunnerImage(custody.configPath);
+    const runnerImageChanged = runnerImage !== plan.predecessorContainer.image;
+    if (!runnerImageChanged) {
+      await publicReadback(plan.environment, deployedVersionId);
+    }
     const deployedContainer = await waitForPlatformContainer(
       custody.configPath,
       plan.environment,
-      configuredRunnerImage(custody.configPath),
+      runnerImage,
       command,
+      plan.predecessorContainer,
     );
+    if (runnerImageChanged) {
+      // The Runner image may take longer to converge than Worker traffic.
+      // Confirm the selected Version is still serving before recording ready.
+      if (await readServingVersion(custody.configPath, command) !== deployedVersionId) {
+        throw new Error("platform_worker_release_concurrent_version");
+      }
+      await publicReadback(plan.environment, deployedVersionId);
+    }
     custody.assertUnchanged();
     assertSource();
     const evidence = createPlatformReadyEvidence({
@@ -7226,10 +7239,13 @@ async function waitForPlatformContainer(
   environment: PlatformEnvironment,
   expectedImage: string,
   command: PlatformReleaseCommand = requiredCommand,
+  predecessor?: PlatformContainerState,
 ): Promise<PlatformContainerState> {
   return waitForPlatformContainerReadback(
     expectedImage,
     () => readPlatformContainer(configPath, environment, command),
+    Bun.sleep,
+    predecessor,
   );
 }
 
@@ -7237,10 +7253,33 @@ export async function waitForPlatformContainerReadback(
   expectedImage: string,
   read: () => Promise<PlatformContainerState>,
   wait: (milliseconds: number) => Promise<void> = Bun.sleep,
+  predecessor?: Pick<PlatformContainerState, "id" | "name" | "image">,
 ): Promise<PlatformContainerState> {
-  for (let attempt = 1; attempt <= 36; attempt += 1) {
+  const imageChange = predecessor && predecessor.image !== expectedImage
+    ? predecessor
+    : undefined;
+  const normalRetryDelays = Array<number>(35).fill(5_000);
+  // Allow up to the documented 15-minute instance drain plus a minute for
+  // startup and readback when the reviewed plan changes the immutable image.
+  const retryDelays = imageChange
+    ? [...normalRetryDelays, ...Array<number>(52).fill(15_000), 5_000]
+    : normalRetryDelays;
+  const deadline = imageChange ? performance.now() + 16 * 60_000 : Infinity;
+  for (const nextDelay of [...retryDelays, undefined]) {
     try {
       const state = await read();
+      if (imageChange) {
+        if (
+          state.id !== imageChange.id ||
+          state.name !== imageChange.name ||
+          (state.image !== imageChange.image && state.image !== expectedImage)
+        ) {
+          throw new Error("platform_worker_release_container_rollout_mismatch");
+        }
+        if (state.health.failed !== 0 || state.health.errorCount !== 0) {
+          throw new Error("platform_worker_release_container_rollout_failed");
+        }
+      }
       assertPlatformContainerComplete(state, expectedImage);
       return state;
     } catch (error) {
@@ -7248,8 +7287,10 @@ export async function waitForPlatformContainerReadback(
         error instanceof Error &&
         (error.message === "platform_worker_release_container_list_detail_mismatch" ||
           error.message === "platform_worker_release_container_not_ready");
-      if (!retryable || attempt === 36) throw error;
-      await wait(5_000);
+      const remaining = Math.floor(deadline - performance.now());
+      if (!retryable || nextDelay === undefined || remaining <= 0) throw error;
+      await wait(Math.min(nextDelay, remaining));
+      if (performance.now() >= deadline) throw error;
     }
   }
   throw new Error("platform_worker_release_container_not_ready");
