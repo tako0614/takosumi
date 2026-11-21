@@ -74,6 +74,38 @@ async function setup() {
   return { store, model, service };
 }
 
+test("a missing saved provider connection is unavailable but a missing selection is not found", async () => {
+  const { store, model, service } = await setup();
+  const bindings = [{
+    provider: CLOUDFLARE,
+    moduleLocalName: "cloudflare",
+    connectionId: "conn_deleted_cf",
+  }];
+  await transitionProviderBindingSetForFixture(store, {
+    id: "dp_deleted_cf",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings,
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const requiredProviders = [requiredBinding()];
+  await expect(service.resolveProviderBindingsForRun(model.capsule, requiredProviders)).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "provider_connection_not_ready" },
+  });
+  await expect(service.validateProposedProviderBindingsForRun({
+    capsule: model.capsule,
+    bindings,
+    requiredProviders,
+  })).rejects.toMatchObject({
+    code: "not_found",
+    details: { reason: "provider_connection_setup_required" },
+  });
+});
+
 test("secret ProviderConnection binding resolves to its credential row", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(
