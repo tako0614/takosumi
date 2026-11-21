@@ -112,6 +112,65 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
   test.describe("Installed app page", () => {
     test.skip(mode !== "portable", "deterministic app page fixture; not production evidence");
 
+    test("a reopened app links its owner to the accepted uninstall Run", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const errors = pageErrors(page);
+      const now = "2026-11-21T00:00:00.000Z";
+      const plan = lifecycleRun("run_saved_removal_review", "destroy_plan", "succeeded", now);
+      const apply = lifecycleRun("run_accepted_removal", "destroy_apply", "running", now, { planRunId: plan.id });
+      let scene: "no-run" | "review" | "member" | "owner" = "no-run";
+      let runReads = 0;
+      const mutations: string[] = [];
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (request.method() !== "GET") mutations.push(`${request.method()} ${path}`);
+        if (path === "/api/v1/apps") {
+          return route.fulfill({ json: { apps: PORTABLE_APPS.map((app) => app.capsuleId === CAPSULE_ID
+            ? { ...app, role: scene === "member" ? "member" : "owner" }
+            : app) } });
+        }
+        if (path === `/api/v1/capsules/${CAPSULE_ID}/app`) {
+          const progress = scene === "review" ? { review: { runId: plan.id, runType: plan.type } }
+            : scene === "no-run" ? {} : { run: apply };
+          return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
+            state: "uninstalling", primaryAction: scene === "review" ? "review" : "none",
+            progress: { revisionPreparing: false, ...progress },
+          }) } });
+        }
+        if (path === `/api/v1/runs/${apply.id}`) {
+          runReads += 1;
+          return route.fulfill({ json: { run: apply } });
+        }
+        if (path === `/api/v1/runs/${apply.id}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
+        if (path === `/api/v1/runs/${apply.id}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        if (path === `/api/v1/runs/${apply.id}/cost`) return route.fulfill({ json: { cost: {
+          runId: apply.id, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [],
+        } } });
+        return route.fallback();
+      });
+      await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+      const actions = page.getByTestId("app-primary");
+      const progressLink = actions.getByRole("link", { name: "View uninstall progress", exact: true });
+      for (const state of ["no-run", "review", "member", "owner"] as const) {
+        scene = state;
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await expect(appOverviewRow(page, "sharing")).toBeVisible();
+        await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "uninstalling");
+        if (state === "owner") {
+          await expect(progressLink).toHaveAttribute("href", `/runs/${apply.id}`);
+        } else {
+          await expect(progressLink).toHaveCount(0);
+        }
+        expect(runReads).toBe(0);
+      }
+      await progressLink.click();
+      await expect(page).toHaveURL(new RegExp(`/runs/${apply.id}$`, "u"));
+      await expect.poll(() => runReads).toBeGreaterThan(0);
+      expect(mutations).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+
     test("a member can choose only marked owner connection labels in app settings", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const requests: string[] = [];

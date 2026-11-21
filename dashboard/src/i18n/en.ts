@@ -743,6 +743,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.title": "Uninstall",
   "app.uninstall.body": "Schedules {name} to be uninstalled. Its data stays during a grace period and you can cancel at any time. When it ends, the data is exported where possible and the resources it created are removed.",
   "app.uninstall.cta": "Uninstall",
+  "app.uninstall.viewProgress": "View uninstall progress",
   "app.uninstall.confirmTitle": "Uninstall this app?",
   "app.uninstall.confirmMessage": "{name} keeps running and keeps its data until the grace period ends. Then its data is exported where possible and it is removed. You can cancel until then.",
   "app.uninstall.banner": "{name} will be uninstalled on {date}. Until then its data stays and you can cancel.",

@@ -1369,6 +1369,13 @@ export default function AppManagePage(props: {
               uninstallConnectionNotice() === "app.uninstall.connectionRemoved") return undefined;
             return action === "retry" ? retryLabel(view()) : appPrimaryActionLabel(action);
           };
+          const runningUninstallRunId = () => {
+            const current = view();
+            const run = current.progress.run;
+            return isOwner() && !review() && current.state === "uninstalling" &&
+              current.primaryAction === "none" && run?.type === "destroy_apply"
+              ? run.id : undefined;
+          };
           return (
             <AppSectionVisibility.Provider value={sectionVisible}>
             <div
@@ -1432,6 +1439,13 @@ export default function AppManagePage(props: {
                       >
                         {t("app.action.reinstall")}
                       </Button>
+                    </Match>
+                    <Match when={runningUninstallRunId()}>
+                      {(id) => (
+                        <Button variant="secondary" href={`/runs/${encodeURIComponent(id())}`}>
+                          {t("app.uninstall.viewProgress")}
+                        </Button>
+                      )}
                     </Match>
                     <Match when={!primaryOpenInPlace(view()) && appPrimaryAllowed(appRole(), view()) && primaryLabel()}>
                       {(label) => (

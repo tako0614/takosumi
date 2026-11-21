@@ -755,6 +755,7 @@ export const ja = {
   "app.uninstall.title": "アンインストール",
   "app.uninstall.body": "{name} のアンインストールを予約します。猶予期間のあいだはデータが残り、いつでも取り消せます。期限が来ると、できる場合はデータを書き出してから、作られたリソースを取り除きます。",
   "app.uninstall.cta": "アンインストール",
+  "app.uninstall.viewProgress": "アンインストールの進行状況を見る",
   "app.uninstall.confirmTitle": "このアプリをアンインストールしますか？",
   "app.uninstall.confirmMessage": "{name} は猶予期間が終わるまで動き続け、データも残ります。期限が来るとデータの書き出しを試みてから取り除きます。それまでは取り消せます。",
   "app.uninstall.banner": "{name} は {date} にアンインストールされます。それまではデータが残り、取り消せます。",
