@@ -28,6 +28,22 @@ export const APP_PAGE_SECTIONS = {
 
 export type AppPageSection = keyof typeof APP_PAGE_SECTIONS;
 
+const CAPSULE_LINK_ID = /^cap_[A-Za-z0-9_-]{1,128}$/u;
+const UNINSTALL_APP_QUERY = "uninstallApp";
+
+/** A connection setup link may carry only the app's local navigation id. */
+export function uninstallConnectionsHref(capsuleId: string): string {
+  return CAPSULE_LINK_ID.test(capsuleId)
+    ? `/connections?${new URLSearchParams({ [UNINSTALL_APP_QUERY]: capsuleId })}`
+    : "/connections";
+}
+
+export function uninstallReturnHref(search: string): string | undefined {
+  const ids = new URLSearchParams(search).getAll(UNINSTALL_APP_QUERY);
+  const capsuleId = ids.length === 1 ? ids[0] : undefined;
+  return capsuleId && CAPSULE_LINK_ID.test(capsuleId) ? appPageHref(capsuleId) : undefined;
+}
+
 /** The canonical page of one installed app, optionally at one section. */
 export function appPageHref(capsuleId: string, section?: AppPageSection): string {
   const path = `/apps/${encodeURIComponent(capsuleId)}`;
@@ -133,7 +149,7 @@ export function legacyInstallLocatorCapsuleId(search: string): string | undefine
   const keys = [...params.keys()];
   if (keys.length !== 1 || keys[0] !== "capsule") return undefined;
   const id = params.get("capsule") ?? "";
-  return /^cap_[A-Za-z0-9_-]{1,128}$/u.test(id) ? id : undefined;
+  return CAPSULE_LINK_ID.test(id) ? id : undefined;
 }
 
 /**

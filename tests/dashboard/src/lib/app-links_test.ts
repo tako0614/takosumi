@@ -12,6 +12,8 @@ import {
   legacyAppTabSection,
   legacyInstallLocatorCapsuleId,
   reinstallHref,
+  uninstallConnectionsHref,
+  uninstallReturnHref,
 } from "../../../../dashboard/src/lib/app-links.ts";
 import { parseInstallPrefill } from "../../../../dashboard/src/lib/install-link.ts";
 
@@ -19,6 +21,23 @@ describe("install attempt links", () => {
   test("an unfinished install opens its install page by its id alone", () => {
     expect(installAttemptHref("gip_0123456789abcdef")).toBe("/new?installPlan=gip_0123456789abcdef");
     expect(() => installAttemptHref("gip_../x")).toThrow();
+  });
+});
+
+describe("uninstall connection links", () => {
+  test("an app id carries a return destination through connection setup", () => {
+    const href = uninstallConnectionsHref("cap_states_e");
+    expect(href).toBe("/connections?uninstallApp=cap_states_e");
+    expect(uninstallReturnHref(new URL(href, "https://dashboard.example").search)).toBe("/apps/cap_states_e");
+    expect(uninstallConnectionsHref("old app/id")).toBe("/connections");
+  });
+
+  test("other destinations, ambiguous ids and invalid app ids have no uninstall return", () => {
+    for (const search of [
+      "?return=%2Fnew", "?uninstallApp=%2F%2Fexample.invalid", "?uninstallApp=cap_a%2F..",
+      "?uninstallApp=cap_a&uninstallApp=cap_b", "?uninstallApp=cap_",
+      "?uninstallApp=cap_" + "a".repeat(129),
+    ]) expect(uninstallReturnHref(search)).toBeUndefined();
   });
 });
 
