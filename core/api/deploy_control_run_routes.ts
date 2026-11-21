@@ -4,6 +4,7 @@
  * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory.
  */
 
+import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -154,6 +155,13 @@ export function mountDeployControlRunRoutes(
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getRun(id);
         ensureWorkspacePermission(principal, existing.workspaceId);
+        if (existing.type === "restore") {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "Legacy backup Restore Runs are read-only.",
+            { reason: "legacy_restore_approval_unavailable" },
+          );
+        }
         const body = await readOptionalJsonBody<{
           readonly reason?: string;
         }>(c, "runApprove");

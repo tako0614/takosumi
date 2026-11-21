@@ -7,7 +7,7 @@ import {
   requestDeployControlApi,
 } from "./cli-deploy-control-api.ts";
 import { isRecord, stringValue } from "./cli-util.ts";
-import { runAppUpdate, runAppApply } from "./cli-app-update-commands.ts";
+import { runAppUpdate, runAppApply, runAppRecoverUninstall } from "./cli-app-update-commands.ts";
 
 const APPS_PATH = "/api/v1/apps";
 const INSTALL_PLANS_PATH = "/api/v1/install-plans";
@@ -41,6 +41,7 @@ export async function runApps(args: string[], io: CliIo): Promise<number> {
   if (command === "list") return await runAppsList(rest, io);
   if (command === "install") return await runAppInstall(rest, io);
   if (command === "uninstall") return await runAppUninstall(rest, io);
+  if (command === "recover-uninstall") return await runAppRecoverUninstall(rest, io);
   if (command === "update") return await runAppUpdate(rest, io);
   if (command === "apply") return await runAppApply(rest, io);
   io.stderr(`${isJapaneseCli() ? "不明なアプリコマンド" : "Unknown app command"}: ${command}`);
@@ -243,7 +244,8 @@ export function appsHelpText(): string {
     "  list                         自分が管理できるアプリを表示",
     "  install --git <url>          Git からアプリをインストール",
     "  uninstall <app-id>           アプリをアンインストール",
-    "  update <app-id>              Git版更新のPlanを準備（--ref、--idempotency-key）",
+    "  recover-uninstall <app-id>   代替接続を使う削除Planを準備、または保存Planを確認",
+    "  update <app-id>              Git更新のPlanを準備、または保存済みの更新を続行",
     "  apply <app-id>               保存Planを明示実行、又は --observe-only で読取",
     "", "共通オプション: --url、--token（Accounts PAT）、--json",
     "環境変数: TAKOSUMI_ACCOUNT_TOKEN",
@@ -253,7 +255,8 @@ export function appsHelpText(): string {
     "  list                         List apps you can manage",
     "  install --git <url>          Install an app from Git",
     "  uninstall <app-id>           Uninstall an app",
-    "  update <app-id>              Prepare a Git update Plan (--ref, --idempotency-key)",
+    "  recover-uninstall <app-id>   Prepare or review an uninstall recovery Plan",
+    "  update <app-id>              Prepare a Git update Plan or continue an existing update",
     "  apply <app-id>               Execute a saved Plan or read with --observe-only",
     "", "Common options: --url, --token (Accounts PAT), --json",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN",

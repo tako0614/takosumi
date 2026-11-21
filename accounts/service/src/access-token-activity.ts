@@ -1,6 +1,7 @@
 import { isInterfaceAppDataAuthority, type InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import { INTERFACE_INVOCATION_SOURCE_ROLE, isInterfaceOAuthRole, isInterfaceInvocationProvenance, type InterfaceInvocationProvenance } from "../../../contract/internal-interface-invocation-source.ts";
 import type { AccountsStore, TokenRecord } from "./store.ts";
+import { accountAuthenticationGenerationMatches, authenticationGenerationMatchesSnapshot } from "./account-authentication-generation.ts";
 
 export interface InterfaceOAuthActivityEvidence {
   readonly invocationSource?: InterfaceInvocationProvenance;
@@ -50,6 +51,7 @@ export async function validateActiveAccessTokenRecord(input: {
   readonly store: AccountsStore;
   readonly token: string;
   readonly record: TokenRecord | undefined;
+  readonly authenticationGeneration?: number;
   readonly now?: number;
   readonly interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   readonly assertActive?: () => void;
@@ -109,7 +111,16 @@ export async function validateActiveAccessTokenRecord(input: {
     interfaceEvidenceComplete &&
     interfaceEvidenceCurrent &&
     record.role !== "runtime";
-  if (active) return record;
+  if (active) {
+    // Interface credentials use their separate Binding/authority evidence;
+    // ordinary account OAuth access is tied to the issuer session generation.
+    const current = interfaceRuntime || record.oidcProfile === "shared-account" ||
+      (input.authenticationGeneration === undefined
+        ? await accountAuthenticationGenerationMatches(input.store, record.takosumiSubject, record.identityGeneration)
+        : authenticationGenerationMatchesSnapshot(input.authenticationGeneration, record.identityGeneration));
+    input.assertActive?.();
+    return current ? record : undefined;
+  }
   if (record) {
     input.assertActive?.();
     await input.store.deleteToken(input.token);

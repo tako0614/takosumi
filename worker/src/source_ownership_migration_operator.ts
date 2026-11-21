@@ -2,14 +2,16 @@
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { sha256HexOfStringAsync } from "../../core/shared/runtime/hash.ts";
-import { migrateSourceOwnership, prepareSourceOwnershipMigration, sourceOwnershipMigrationPlanDigest, type SourceOwnershipMigrationArchiveCopier,
+import { migrateSourceOwnership, planSourceOwnershipMigration, type SourceOwnershipMigrationArchiveCopier,
   type SourceOwnershipMigrationResult, type SourceOwnershipMigrationStore } from "../../core/domains/sources/ownership-migration.ts";
 import { CloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
+import { readD1SourceOwnershipInventoryPage } from "./d1_source_ownership_migration.ts";
 import { assertControlD1MaintenanceInactive, ControlD1MaintenanceError } from "./d1_schema_maintenance.ts";
 import type { CloudflareWorkerEnv, R2Bucket, R2ObjectBody } from "./bindings.ts";
 import { storedServiceCompositionFromEnv } from "./stored-service-usage.ts";
 
 export const SOURCE_OWNERSHIP_MIGRATION_PATH = "/internal/platform/source-ownership-migration";
+export const SOURCE_OWNERSHIP_MIGRATION_SOURCE_ID = /^[A-Za-z][A-Za-z0-9_-]{2,127}$/u;
 const MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
 const MAX_COPY_BATCH_BYTES = 64 * 1024 * 1024;
 const MAX_COPY_BATCH_ITEMS = 16;
@@ -70,19 +72,40 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
   };
   try {
     if (request.method === "GET") {
-      if ([...url.searchParams.keys()].some((key) => key !== "sourceId")) {
+      const inventoryPage = url.searchParams.get("inventoryPage");
+      const afterSourceId = url.searchParams.get("afterSourceId");
+      const rawSourceId = url.searchParams.get("sourceId");
+      const queryKeys = [...url.searchParams.keys()];
+      if (inventoryPage === null ? queryKeys.some((key) => key !== "sourceId") :
+        inventoryPage !== "1" || rawSourceId !== null ||
+        queryKeys.some((key) => key !== "inventoryPage" && key !== "afterSourceId") ||
+        new Set(queryKeys).size !== queryKeys.length ||
+        (afterSourceId !== null && !SOURCE_OWNERSHIP_MIGRATION_SOURCE_ID.test(afterSourceId))) {
         return Response.json({ error: "invalid_query" }, { status: 400 });
       }
-      const rawSourceId = url.searchParams.get("sourceId");
-      if (rawSourceId !== null && !/^[A-Za-z][A-Za-z0-9_-]{2,127}$/.test(rawSourceId)) {
+      if (rawSourceId !== null && !SOURCE_OWNERSHIP_MIGRATION_SOURCE_ID.test(rawSourceId)) {
         return Response.json({ error: "invalid_source_id" }, { status: 400 });
       }
-      const sourceId = rawSourceId ?? undefined;
+      let sourceId = rawSourceId ?? undefined;
+      let nextAfterSourceId: string | null = null;
+      const pageKind = "takosumi.source-ownership-migration.inventory-page@v1";
+      const headers = { "cache-control": "no-store" };
+      if (inventoryPage !== null) {
+        const [first, next] = await readD1SourceOwnershipInventoryPage(env.TAKOSUMI_CONTROL_DB, afterSourceId ?? "");
+        if (first === undefined) {
+          return Response.json({ kind: pageKind, report: null, nextAfterSourceId }, { headers });
+        }
+        if (!SOURCE_OWNERSHIP_MIGRATION_SOURCE_ID.test(first)) {
+          throw new Error("source_ownership_migration_inventory_source_invalid");
+        }
+        sourceId = first;
+        if (next !== undefined) nextAfterSourceId = first;
+      }
       const preparedAt = (dependencies.now ?? (() => new Date()))().toISOString();
       const results = await migrateSourceOwnership(store, allocator, dryRunCopier, { sourceId, now: preparedAt });
       const reportDigest = await digestReport(preparedAt, results);
-      return Response.json({ kind: "takosumi.source-ownership-migration.dry-run@v1", preparedAt, reportDigest, results },
-        { headers: { "cache-control": "no-store" } });
+      const report = { kind: "takosumi.source-ownership-migration.dry-run@v1", preparedAt, reportDigest, results };
+      return Response.json(inventoryPage === null ? report : { kind: pageKind, report, nextAfterSourceId }, { headers });
     }
     if (url.search) return Response.json({ error: "invalid_query" }, { status: 400 });
     const body = await request.json().catch(() => undefined);
@@ -92,7 +115,7 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
     const values = body as Record<string, unknown>;
     if (Object.keys(values).some((key) => !["preparedAt", "reportDigest", "sourceId", "copyCursor", "copyReceipt"].includes(key)) ||
       typeof values.sourceId !== "string" || !values.sourceId.trim() ||
-      !/^[A-Za-z][A-Za-z0-9_-]{2,127}$/.test(values.sourceId) ||
+      !SOURCE_OWNERSHIP_MIGRATION_SOURCE_ID.test(values.sourceId) ||
       typeof values.preparedAt !== "string" || !Number.isFinite(Date.parse(values.preparedAt)) ||
       new Date(values.preparedAt).toISOString() !== values.preparedAt ||
       typeof values.reportDigest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(values.reportDigest)) {
@@ -105,25 +128,17 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
       ((copyCursor as number) > 0 && (typeof values.copyReceipt !== "string" || !/^[0-9a-f]{64}$/.test(values.copyReceipt)))) {
       return Response.json({ error: "invalid_copy_cursor" }, { status: 400 });
     }
-    const before = await migrateSourceOwnership(store, allocator, dryRunCopier, { sourceId, now: values.preparedAt });
+    const { result: observed, mutation } = await planSourceOwnershipMigration(store, allocator, sourceId, values.preparedAt);
+    const before = [observed];
     if (await digestReport(values.preparedAt, before) !== values.reportDigest) {
       return Response.json({ error: "dry_run_changed", results: before }, { status: 409,
         headers: { "cache-control": "no-store" } });
     }
-    const observed = before[0];
-    if (!observed) throw new Error("source_ownership_migration_missing_inventory");
     if (observed.status === "blocked" || observed.status === "unchanged") {
       return Response.json({ kind: "takosumi.source-ownership-migration.apply@v1", results: before },
         { status: observed.status === "blocked" ? 409 : 200, headers: { "cache-control": "no-store" } });
     }
-    const group = await store.readGroup(sourceId);
-    if (!group) throw new Error(`source_ownership_migration_missing_source:${sourceId}`);
-    const mutation = await prepareSourceOwnershipMigration(group, allocator, values.preparedAt);
     if (!mutation) throw new Error("source_ownership_migration_missing_mutation");
-    if (await sourceOwnershipMigrationPlanDigest(mutation) !== observed.planDigest) {
-      return Response.json({ error: "dry_run_changed" }, { status: 409,
-        headers: { "cache-control": "no-store" } });
-    }
     // Metadata-only backfill/retire does not need object copy custody.
     if (mutation.archiveCopies.length > 0) {
       try {

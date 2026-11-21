@@ -726,9 +726,12 @@ export interface ControlPlaneOperations {
   createCapsuleDestroyPlan(
     capsuleId: string,
     options?: {
+      readonly destroyProviderConnectionReplacements?: readonly import("takosumi-contract/connections").DestroyProviderConnectionReplacement[];
       readonly runnerProfileId?: string;
       /** Server-owned authenticated caller; never accepted from request JSON. */
       readonly actor?: string;
+      /** Canonical owner read for a manual retry from retained Destroy state. */
+      readonly actorOwnershipEpoch?: number;
     },
   ): Promise<PlanRunResponse>;
   createCapsuleDriftCheck(capsuleId: string, options?: { readonly actor?: string }): Promise<PlanRunResponse>;

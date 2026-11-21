@@ -35,3 +35,17 @@ test("app transfer and personal source resolution query contracts reach composed
   expect(document.paths["/api/v1/source-ref-resolutions"]?.get?.parameters).toContainEqual({ name: "url", in: "query", required: true, schema: { type: "string", format: "uri" } });
   expect(document.paths["/api/v1/connections"]?.get?.parameters?.some(parameter => parameter.name === "projection")).toBe(true);
 });
+
+
+test("revision re-adoption context advertises exact authenticated read and required target query", () => {
+  const path = "/api/v1/capsules/{capsuleId}/install-config-re-adoption-context";
+  const document = createTakosumiOpenApiDocument({ publicSessionControlEndpoints: PUBLIC_SESSION_CONTROL_ENDPOINTS });
+  const operation = document.paths[path]?.get;
+  expect(operation).toBeDefined();
+  expect(operation?.security).toEqual([{ accountSession: [] }, { accountsBearer: [] }]);
+  expect(operation?.parameters).toContainEqual({ name: "capsuleId", in: "path", required: true, schema: { type: "string" } });
+  expect(operation?.parameters).toContainEqual({ name: "revisionPlanId", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } });
+  expect(document.paths[path]?.post).toBeUndefined();
+  expect(PUBLIC_SESSION_CONTROL_ENDPOINTS.filter(endpoint => endpoint.path === path).map(endpoint => ({ method: endpoint.method, auth: endpoint.auth }))).toEqual([{ method: "GET", auth: "account-session" }]);
+  expect(createTakosumiOpenApiDocument().paths[path]).toBeUndefined();
+});

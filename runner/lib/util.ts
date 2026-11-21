@@ -243,6 +243,7 @@ export function parseAction(value: unknown): OpenTofuRunAction | undefined {
     value === "apply" ||
     value === "destroy" ||
     value === "compatibility_check" ||
+    value === "compatibility_check_mirror_only" ||
     value === "backup" ||
     value === "release"
   ) {

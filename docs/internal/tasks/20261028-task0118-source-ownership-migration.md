@@ -47,14 +47,18 @@ checks; it does not require a `takosumi-run-id` metadata field on the copy.
 
 ```sh
 TAKOSUMI_DEPLOY_CONTROL_TOKEN=... bun scripts/operator-source-ownership.ts \
-  --base-url https://TARGET
+  --base-url https://TARGET --inventory
 
 TAKOSUMI_DEPLOY_CONTROL_TOKEN=... bun scripts/operator-source-ownership.ts \
   --base-url https://TARGET --source-id src_EXAMPLE
 ```
 
-The JSON result has `kind`, `preparedAt`, `reportDigest`, and one `results[]`
-item per Source. Each item has `inventory` (`action`, owner, live/destroyed app
+The paged inventory returns `takosumi.source-ownership-migration.inventory@v1`
+and a `reports[]` array in Source ID order. Each request prepares one group.
+The scan may observe concurrent changes between pages. Apply verifies the group
+against the exact report selected for review. Each report and the `--source-id` result
+have `kind`, `preparedAt`, `reportDigest`, and a single `results[]` item.
+Each item has `inventory` (`action`, owner, live/destroyed app
 IDs, split app IDs, snapshot count, archive bytes, foreign archive ref count,
 in-flight IDs), `status`, `planDigest`, `copies`, and `bytes`. `planDigest` binds
 the complete observed group and prepared mutation, including lanes, all

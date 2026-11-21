@@ -1,3 +1,4 @@
+import { connectionOAuthAttemptBucket, connectionOAuthAttemptPurpose, connectionOAuthAttemptSweepKey, connectionOAuthAttemptSweepLimit, connectionOAuthAttemptSweepCheckpoint, type ConnectionOAuthAttemptSweepInput, type ConnectionOAuthAttemptSweepResult } from "./connection-oauth-attempt.ts";
 import { readReviewedRecoveryIssuerAvailabilityCheckpoint, consumeReviewedRecoveryIssuerAvailabilityCheckpoint } from "./reviewed-recovery-issuer-availability.ts";
 import type { ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
 import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "./owner-operation-evidence.ts";
@@ -192,6 +193,39 @@ export class D1IdentityRecordRepository implements IdentityRecordRepository {
     if(Number(result[0]?.meta?.changes??0)===1)return true;
     const replay=await this.db.prepare(`SELECT c.key FROM ${table} c WHERE c.bucket='${reviewedApprovalCurrentBucket}' AND c.key=? AND json_extract(c.document,'$.approvalDigest')=? AND json_extract(c.document,'$.revision')=? AND json_extract(c.document,'$.operationId')=? AND EXISTS(SELECT 1 FROM ${table} h WHERE h.bucket='${reviewedApprovalBucket}' AND h.key=? AND json(h.document)=?) AND EXISTS(SELECT 1 FROM ${table} f WHERE f.bucket='${reviewedApprovalRefBucket}' AND f.key=? AND json(f.document)=?) AND ${guard}`).bind(a.operationId,r.approvalDigest,p.revision,a.operationId,r.approvalDigest,canonicalOwnerJson(r),refKey,canonicalOwnerJson(ref),...params).first<{key:string}>();
     return !!replay;
+  }
+
+  async pruneConnectionOAuthAttempts(input: ConnectionOAuthAttemptSweepInput): Promise<ConnectionOAuthAttemptSweepResult> {
+    const limit = connectionOAuthAttemptSweepLimit(input);
+    await this.initialize();
+    const previous = connectionOAuthAttemptSweepCheckpoint(await this.get("maintenance_cursors", connectionOAuthAttemptSweepKey));
+    const page = await this.db.prepare(`SELECT key FROM ${table} WHERE bucket=? AND key>? ORDER BY key LIMIT ?`)
+      .bind(connectionOAuthAttemptBucket, previous.after, limit).all<{ key: string }>();
+    if (!page.success || !Array.isArray(page.results) || page.results.length > limit || page.results.some(r => typeof r.key !== "string")) throw new Error("invalid Connection OAuth attempt sweep page");
+    const keys = page.results.map(r => r.key);
+    const next = JSON.stringify({ generation: previous.generation + 1, after: keys.length < limit ? "" : keys.at(-1)! });
+    const results = await this.db.batch<{ key: string }>([
+      this.db.prepare(`DELETE FROM ${table} WHERE bucket=? AND ${keys.length ? `key IN (${keys.map(() => "?").join(",")})` : "0"}
+        AND CASE WHEN json_valid(document) THEN json_extract(document,'$.purpose')=?
+          AND json_type(document,'$.expiresAt')='integer' AND json_extract(document,'$.expiresAt')>=0
+          AND json_extract(document,'$.expiresAt')<=? ELSE 0 END RETURNING key`)
+        .bind(connectionOAuthAttemptBucket, ...keys, connectionOAuthAttemptPurpose, input.now),
+      this.db.prepare(`INSERT INTO ${table}(bucket,key,document,updated_at)
+        SELECT 'maintenance_cursors',?, ?,? WHERE ?=0 OR EXISTS(SELECT 1 FROM ${table}
+          WHERE bucket='maintenance_cursors' AND key=? AND json_type(document,'$.generation')='integer' AND json_extract(document,'$.generation')=?)
+        ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document,updated_at=excluded.updated_at
+          WHERE json_type(${table}.document,'$.generation')='integer' AND json_extract(${table}.document,'$.generation')=? RETURNING key`)
+        .bind(connectionOAuthAttemptSweepKey, next, input.now, previous.generation, connectionOAuthAttemptSweepKey, previous.generation, previous.generation),
+    ]);
+    if (results.length !== 2) throw new Error("invalid Connection OAuth attempt sweep batch");
+    const counts = results.map((r, i) => {
+      const returned = Array.isArray(r.results) ? r.results.length : undefined;
+      const count = returned ?? r.meta?.changes;
+      if (!r.success || typeof count !== "number" || !Number.isInteger(count) || count < 0 || count > (i === 0 ? keys.length : 1) ||
+        (returned !== undefined && r.meta?.changes !== undefined && r.meta.changes !== returned)) throw new Error("unqualified Connection OAuth attempt sweep effects");
+      return count;
+    });
+    return { scanned: keys.length, deleted: counts[0]! };
   }
   async get<T>(bucket: string, key: string): Promise<T | undefined> {
     await this.initialize();

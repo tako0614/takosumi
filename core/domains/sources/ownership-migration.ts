@@ -393,6 +393,15 @@ export async function prepareSourceOwnershipMigration(
   const inventory = inventorySourceOwnershipGroup(group, now);
   if (inventory.action === "blocked") throw new Error(`source_ownership_migration_blocked:${inventory.sourceId}:${inventory.reason}`);
   if (inventory.action === "none") return undefined;
+  return prepareSourceOwnershipMutation(group, allocator, now, { ...inventory, action: inventory.action });
+}
+
+async function prepareSourceOwnershipMutation(
+  group: SourceOwnershipMigrationGroup,
+  allocator: ArtifactReferenceAllocator,
+  now: string,
+  inventory: SourceOwnershipMigrationInventory & { readonly action: SourceOwnershipMigrationMutation["action"] },
+): Promise<SourceOwnershipMigrationMutation> {
   const retainedSource: StoredSource = inventory.action === "retire"
     ? { ...group.source, status: "disabled", autoSync: false, retiringAt: group.source.retiringAt ?? now, updatedAt: now }
     : { ...group.source, ownerCapsuleId: inventory.ownerCapsuleId,
@@ -459,7 +468,7 @@ export async function prepareSourceOwnershipMigration(
     createdAt: now,
   } satisfies ActivityEvent)));
   return { sourceId: group.source.id, expected: group,
-    action: inventory.action as "backfill" | "retire" | "split" | "normalize", retainedSource,
+    action: inventory.action, retainedSource,
     retainedSnapshots, retainedSyncRuns, retainedCompatibilityRuns, retainedReports, splits,
     archiveCopies: [...retainedCopies, ...splits.flatMap((split) => split.archiveCopies)], activity };
 }
@@ -724,6 +733,31 @@ async function deterministicId(prefix: string, ...parts: readonly string[]): Pro
   return `${prefix}_${(await sha256HexOfStringAsync(material)).slice(0, 32)}`;
 }
 
+/** Keep the review digest and the commit's physical row guards on the same observation. */
+export async function planSourceOwnershipMigration(
+  store: SourceOwnershipMigrationStore,
+  allocator: ArtifactReferenceAllocator,
+  sourceId: string,
+  now: string,
+): Promise<{ readonly result: SourceOwnershipMigrationResult; readonly mutation?: SourceOwnershipMigrationMutation }> {
+  let group: SourceOwnershipMigrationGroup | undefined;
+  try { group = await store.readGroup(sourceId); }
+  catch (error) { return { result: blockedResult(sourceId, sourceOwnershipMigrationReadFailureReason(error)) }; }
+  if (!group) return { result: blockedResult(sourceId, "source_missing") };
+  let inventory: SourceOwnershipMigrationInventory;
+  try { inventory = inventorySourceOwnershipGroup(group, now); }
+  catch { return { result: blockedResult(sourceId, "inventory_failed", group) }; }
+  if (inventory.action === "blocked") return { result: { inventory, status: "blocked", copies: 0, bytes: 0 } };
+  if (inventory.action === "none") return { result: { inventory, status: "unchanged", copies: 0, bytes: 0 } };
+  let mutation: SourceOwnershipMigrationMutation;
+  try { mutation = await prepareSourceOwnershipMutation(group, allocator, now, { ...inventory, action: inventory.action }); }
+  catch (error) { return { result: blockedResult(sourceId, preparationFailureReason(error), group, inventory) }; }
+  const planDigest = await sourceOwnershipMigrationPlanDigest(mutation);
+  const copies = mutation.archiveCopies;
+  const bytes = copies.reduce((total, copy) => total + copy.sizeBytes, 0);
+  return { result: { inventory, status: "dry_run", planDigest, copies: copies.length, bytes }, mutation };
+}
+
 /** Dry-run is the default and never calls the copier or write port. */
 export async function migrateSourceOwnership(
   store: SourceOwnershipMigrationStore,
@@ -735,30 +769,15 @@ export async function migrateSourceOwnership(
   const results: SourceOwnershipMigrationResult[] = [];
   const now = options.now ?? new Date().toISOString();
   for (const id of ids) {
-    let group: SourceOwnershipMigrationGroup | undefined;
-    try { group = await store.readGroup(id); }
-    catch (error) { results.push(blockedResult(id, sourceOwnershipMigrationReadFailureReason(error))); continue; }
-    if (!group) { results.push(blockedResult(id, "source_missing")); continue; }
-    let inventory: SourceOwnershipMigrationInventory;
-    try { inventory = inventorySourceOwnershipGroup(group, now); }
-    catch { results.push(blockedResult(id, "inventory_failed", group)); continue; }
-    if (inventory.action === "blocked") { results.push({ inventory, status: "blocked", copies: 0, bytes: 0 }); continue; }
-    if (inventory.action === "none") { results.push({ inventory, status: "unchanged", copies: 0, bytes: 0 }); continue; }
-    let mutation: SourceOwnershipMigrationMutation | undefined;
-    try { mutation = await prepareSourceOwnershipMigration(group, allocator, now); }
-    catch (error) { results.push(blockedResult(id, preparationFailureReason(error), group, inventory)); continue; }
-    if (!mutation) { results.push(blockedResult(id, "missing_mutation", group, inventory)); continue; }
-    const planDigest = await sourceOwnershipMigrationPlanDigest(mutation);
-    const copies = mutation.archiveCopies;
-    const bytes = copies.reduce((total, copy) => total + copy.sizeBytes, 0);
-    if (!options.apply) { results.push({ inventory, status: "dry_run", planDigest, copies: copies.length, bytes }); continue; }
-    try { for (const copy of copies) await copier.copyVerified(copy); }
+    const { result, mutation } = await planSourceOwnershipMigration(store, allocator, id, now);
+    if (!options.apply || !mutation) { results.push(result); continue; }
+    try { for (const copy of mutation.archiveCopies) await copier.copyVerified(copy); }
     catch (error) { results.push({ ...blockedResult(id,
       error instanceof Error && error.message.startsWith("source_archive_missing")
-        ? "source_archive_missing" : "archive_copy_failed", group, inventory), planDigest,
-      copies: copies.length, bytes }); continue; }
+        ? "source_archive_missing" : "archive_copy_failed", mutation.expected, result.inventory),
+      planDigest: result.planDigest, copies: result.copies, bytes: result.bytes }); continue; }
     const status = await store.commitGroup(mutation);
-    results.push({ inventory, status, planDigest, copies: copies.length, bytes });
+    results.push({ ...result, status });
     if (status === "conflict") break;
   }
   return results;

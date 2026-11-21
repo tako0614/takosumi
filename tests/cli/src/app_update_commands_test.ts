@@ -14,6 +14,22 @@ const revision = { id: "revision_one", workspaceId: "ws_owned", capsuleId: "cap_
 const capsule = { id: "cap_owned", workspaceId: "ws_owned", status: "active", currentStateGeneration: 1, currentStateVersionId: "state_old" };
 const apply = { id: "apply_revision", workspaceId: "ws_owned", capsuleId: "cap_owned", type: "apply", planRunId: plan.id, status: "succeeded" };
 const applyArgs = ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes", "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const destroyPlan = { ...plan, id: "plan_destroy_recovery", type: "destroy_plan", status: "waiting_approval",
+  origin: undefined, operation: "destroy", sourceSnapshotId: "snapshot_applied",
+  summary: { add: 0, change: 0, destroy: 1 },
+  planResources: [{ address: "example_resource.app", type: "example_resource", actions: ["delete"] }] };
+const destroyApply = { ...apply, id: "apply_destroy_recovery", type: "destroy_apply",
+  planRunId: destroyPlan.id, status: "succeeded" };
+const destroyPairs = [
+  { connectionId: "conn_old_a", replacementConnectionId: "conn_shared" },
+  { connectionId: "conn_old_b", replacementConnectionId: "conn_shared" },
+];
+const recoverArgs = ["apps", "recover-uninstall", "cap_owned", "--connections", JSON.stringify(destroyPairs),
+  "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const reviewDestroyArgs = ["apps", "recover-uninstall", "cap_owned", "--destroy-plan", destroyPlan.id,
+  "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const destroyApplyArgs = ["apps", "apply", "cap_owned", "--destroy-plan", destroyPlan.id,
+  "--yes", "--token", "synthetic-account-pat", "--url", origin, "--json"];
 
 async function invoke(args: string[], handle: (req: Request) => Promise<Response> | Response) {
   const before = globalThis.fetch; const calls: Request[] = []; const out: string[] = []; const err: string[] = [];
@@ -33,7 +49,21 @@ function normal(req: Request, overrides: { plan?: object; capsule?: object; hist
     return Response.json(overrides.history ?? { runs: [] });
   }
   if (path === `/api/v1/runs/${plan.id}/apply`) return Response.json({ run: overrides.apply ?? apply }, { status: 201 });
+  if (path === `/api/v1/runs/${apply.id}`) return Response.json({ run: overrides.apply ?? apply });
   throw Error("unexpected fixture request");
+}
+function normalDestroy(req: Request, overrides: { plan?: object; capsule?: object; history?: object; apply?: object } = {}) {
+  const path = new URL(req.url).pathname;
+  if (path === `/api/v1/runs/${destroyPlan.id}`) return Response.json({ run: overrides.plan ?? destroyPlan });
+  if (path === "/api/v1/capsules/cap_owned") return Response.json({ capsule: overrides.capsule ?? capsule });
+  if (path === "/api/v1/capsules/cap_owned/runs") {
+    expect(new URL(req.url).searchParams.getAll("type")).toEqual(["destroy_apply"]);
+    expect(new URL(req.url).searchParams.has("types")).toBe(false);
+    return Response.json(overrides.history ?? { runs: [] });
+  }
+  if (path === `/api/v1/runs/${destroyPlan.id}/apply`) return Response.json({ run: overrides.apply ?? destroyApply }, { status: 201 });
+  if (path === `/api/v1/runs/${destroyApply.id}`) return Response.json({ run: overrides.apply ?? destroyApply });
+  throw Error("unexpected Destroy fixture request");
 }
 
 test("apps update uses the Accounts revision coordinator and stops at explicit Plan review", async () => {
@@ -58,6 +88,226 @@ test("apps update uses the Accounts revision coordinator and stops at explicit P
   } finally { globalThis.fetch = before; }
 });
 
+test("apps recover-uninstall creates one reviewed Destroy Plan with exact shared-target pairs", async () => {
+  const r = await invoke(recoverArgs, req => {
+    const path = new URL(req.url).pathname;
+    if (path === "/api/v1/capsules/cap_owned/destroy-plan" && req.method === "POST")
+      return Response.json({ run: destroyPlan }, { status: 201 });
+    if (path === `/api/v1/runs/${destroyPlan.id}` && req.method === "GET")
+      return Response.json({ run: destroyPlan });
+    throw Error("unexpected recovery request");
+  });
+  expect(r.code).toBe(0);
+  expect(r.result).toMatchObject({ status: "review_required", appId: "cap_owned",
+    planRunId: destroyPlan.id, reviewUrl: `${origin}/runs/${destroyPlan.id}` });
+  expect(r.calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname))
+    .toEqual(["/api/v1/capsules/cap_owned/destroy-plan"]);
+  expect(r.calls[0]!.headers.get("authorization")).toBe("Bearer synthetic-account-pat");
+  expect(await r.calls[0]!.json()).toEqual({ destroyProviderConnectionReplacements: destroyPairs });
+});
+
+test("recover-uninstall rejects malformed pairs and confirmation flags before HTTP", async () => {
+  for (const pairs of [
+    "not-json", "{}", "[]", "[{}]",
+    JSON.stringify([{ connectionId: "conn_old_a", replacementConnectionId: "conn_old_a" }]),
+    JSON.stringify([destroyPairs[0], destroyPairs[0]]),
+    JSON.stringify([{ ...destroyPairs[0], accountId: "account_claim" }]),
+  ]) {
+    const args = recoverArgs.map(s => s === JSON.stringify(destroyPairs) ? pairs : s);
+    const r = await invoke(args, () => { throw Error("must not send recovery HTTP"); });
+    expect(r.code).toBe(2);
+    expect(r.calls).toHaveLength(0);
+  }
+  for (const args of [
+    recoverArgs.filter((_, index) => index < 3 || index > 4),
+    [...recoverArgs, "--yes"],
+    [...recoverArgs, "--destroy-plan", destroyPlan.id],
+    [...reviewDestroyArgs, "--yes"],
+    reviewDestroyArgs.map(value => value === destroyPlan.id ? " " : value),
+  ]) {
+    const r = await invoke(args, () => { throw Error("must not send recovery HTTP"); });
+    expect(r.code).toBe(2);
+    expect(r.calls).toHaveLength(0);
+  }
+});
+
+test("recovery Plan submission with a lost response sends only the original request", async () => {
+  const r = await invoke(recoverArgs, () => { throw Error("lost synthetic Plan response"); });
+  expect(r.code).toBe(1);
+  expect(r.result).toMatchObject({ status: "unconfirmed", appId: "cap_owned" });
+  expect(r.result.recovery).toContain("Run history");
+  expect(r.calls.map(c => [c.method, new URL(c.url).pathname]))
+    .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
+});
+
+test("recover-uninstall distinguishes the three confirmed replacement connection refusals", async () => {
+  for (const connectionRecoveryFailure of [
+    "replacement_unverified", "bindings_mismatch", "applied_evidence_unavailable",
+  ]) {
+    const r = await invoke(recoverArgs, () => Response.json({ error: {
+      code: "failed_precondition",
+      message: "synthetic-private-server-message",
+      details: {
+        reason: "destroy_connection_recovery_unproven",
+        connectionRecoveryFailure,
+        privateEvidence: "synthetic-private-evidence",
+      },
+    } }, { status: 409 }));
+    expect(r.code).toBe(1);
+    expect(r.result).toEqual({
+      status: "refused", appId: "cap_owned", code: "failed_precondition", connectionRecoveryFailure,
+    });
+    expect(r.err).toEqual([]);
+    expect(r.calls.map(c => [c.method, new URL(c.url).pathname]))
+      .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
+  }
+});
+
+test("recover-uninstall does not infer a diagnosis from a legacy, unknown or unrelated refusal", async () => {
+  for (const [status, code, reason, failure] of [
+    [409, "failed_precondition", "destroy_connection_recovery_unproven", undefined],
+    [409, "failed_precondition", "destroy_connection_recovery_unproven", "synthetic-private-detail"],
+    [409, "failed_precondition", "another_refusal", "bindings_mismatch"],
+    [409, "conflict", "destroy_connection_recovery_unproven", "bindings_mismatch"],
+    [503, "failed_precondition", "destroy_connection_recovery_unproven", "bindings_mismatch"],
+  ] as const) {
+    const r = await invoke(recoverArgs, () => Response.json({ error: {
+      code, details: { reason, connectionRecoveryFailure: failure },
+    } }, { status }));
+    expect(r.code).toBe(1);
+    expect(r.result.status).toBe(status === 503 ? "unconfirmed" : "refused");
+    expect(r.result).not.toHaveProperty("connectionRecoveryFailure");
+    if (status === 503) expect(r.result.recovery).toContain("Run history");
+    expect(r.calls.map(c => c.method)).toEqual(["POST"]);
+  }
+
+  const unrelatedRead = await invoke(reviewDestroyArgs, () => Response.json({ error: {
+    code: "failed_precondition",
+    details: {
+      reason: "destroy_connection_recovery_unproven",
+      connectionRecoveryFailure: "bindings_mismatch",
+    },
+  } }, { status: 409 }));
+  expect(unrelatedRead.code).toBe(1);
+  expect(unrelatedRead.result).not.toHaveProperty("connectionRecoveryFailure");
+  expect(unrelatedRead.calls.map(c => c.method)).toEqual(["GET"]);
+});
+
+test("an exact existing recovery Plan can be reviewed by GET after an uncertain submission", async () => {
+  const acceptedPlan = { ...destroyPlan, providerResolutions: [{
+    requirement: { providerSource: "registry.opentofu.org/cloudflare/cloudflare", alias: "default" },
+    status: "resolved_provider_connection", connectionId: "conn_shared",
+  }] };
+  const issued = await invoke(recoverArgs, () => {
+    throw Error("synthetic acknowledgement lost after Plan was accepted");
+  });
+  expect(issued.result.status).toBe("unconfirmed");
+  expect(issued.calls.map(c => c.method)).toEqual(["POST"]);
+
+  const resumed = await invoke(reviewDestroyArgs, () => Response.json({ run: acceptedPlan }));
+  expect(resumed.code).toBe(0);
+  expect(resumed.result).toMatchObject({ status: "review_required", appId: "cap_owned", planRunId: acceptedPlan.id,
+    plan: { providerConnections: [{ alias: "default", connectionId: "conn_shared" }] } });
+  expect(resumed.calls.map(c => [c.method, new URL(c.url).pathname]))
+    .toEqual([["GET", `/api/v1/runs/${acceptedPlan.id}`]]);
+});
+
+test("existing recovery review reports pending and failed Runs without guessing a new Plan", async () => {
+  for (const [status, resultStatus, exitCode] of [["queued", "plan_pending", 0], ["failed", "failed", 1]] as const) {
+    const run = { ...destroyPlan, status, planDigest: undefined, errorCode: status === "failed" ? "provider_refused" : undefined };
+    const result = await invoke(reviewDestroyArgs, () => Response.json({ run }));
+    expect(result.code).toBe(exitCode);
+    expect(result.result).toMatchObject({ status: resultStatus, planRunId: run.id, planStatus: status });
+    expect(result.result.plan).toBeUndefined();
+    expect(result.calls.map(c => c.method)).toEqual(["GET"]);
+  }
+
+  for (const run of [
+    { ...destroyPlan, id: "another_plan" },
+    { ...destroyPlan, capsuleId: "cap_other" },
+    { ...destroyPlan, type: "plan" },
+    { ...destroyPlan, planDigest: undefined },
+  ]) {
+    const result = await invoke(reviewDestroyArgs, () => Response.json({ run }));
+    expect(result.code).toBe(1);
+    expect(result.result).toMatchObject({ status: "refused", planRunId: destroyPlan.id });
+    expect(result.result.plan).toBeUndefined();
+    expect(result.calls.map(c => c.method)).toEqual(["GET"]);
+  }
+});
+
+test("uninstall review shows the effective Connections, including a carried-forward replacement", async () => {
+  const providerSource = "registry.opentofu.org/cloudflare/cloudflare";
+  const resolutions = [
+    { requirement: { providerSource, alias: "primary" }, status: "resolved_provider_connection", connectionId: "conn_shared",
+      evidence: { kind: "provider_connection", privateKey: "fixture-must-not-print" } },
+    { requirement: { providerSource, alias: "inherited" }, status: "resolved_provider_connection",
+      evidence: { kind: "provider_connection", connectionId: "conn_prior", requiredEnvNames: ["FIXTURE_MUST_NOT_PRINT"] } },
+  ];
+  const args = recoverArgs.map(value => value === JSON.stringify(destroyPairs) ? JSON.stringify([destroyPairs[0]]) : value);
+  const r = await invoke(args, async req => {
+    expect(await req.json()).toEqual({ destroyProviderConnectionReplacements: [destroyPairs[0]] });
+    return Response.json({ run: { ...destroyPlan, providerResolutions: resolutions } }, { status: 201 });
+  });
+  expect(r.code).toBe(0);
+  expect(r.result.plan.providerConnections).toEqual([
+    { provider: providerSource, alias: "primary", status: "resolved_provider_connection", connectionId: "conn_shared" },
+    { provider: providerSource, alias: "inherited", status: "resolved_provider_connection", connectionId: "conn_prior" },
+  ]);
+  expect(JSON.stringify(r.result)).not.toMatch(/must-not-print|MUST_NOT_PRINT/u);
+});
+
+test("apps apply approves and executes only the saved Destroy Plan after review", async () => {
+  let approved = false;
+  const r = await invoke(destroyApplyArgs, req => {
+    const path = new URL(req.url).pathname;
+    if (path === `/api/v1/runs/${destroyPlan.id}/approve`) {
+      approved = true;
+      return Response.json({ run: { ...destroyPlan, status: "succeeded" } });
+    }
+    return normalDestroy(req, { plan: approved ? { ...destroyPlan, status: "succeeded" } : destroyPlan });
+  });
+  expect(r.code).toBe(0);
+  expect(r.result).toMatchObject({ status: "succeeded", appId: "cap_owned",
+    planRunId: destroyPlan.id, runId: destroyApply.id, runStatus: "succeeded" });
+  expect(r.err.some(s => {
+    const value = JSON.parse(s);
+    if (value.status !== "applying_reviewed_plan") return false;
+    expect(s).not.toContain("synthetic-account-pat");
+    return true;
+  })).toBe(true);
+  expect(r.calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname)).toEqual([
+    `/api/v1/runs/${destroyPlan.id}/approve`, `/api/v1/runs/${destroyPlan.id}/apply`,
+  ]);
+  expect(r.calls.filter(c => c.method === "GET" && new URL(c.url).pathname === "/api/v1/capsules/cap_owned/runs")
+    .every(c => new URL(c.url).searchParams.getAll("type").join(",") === "destroy_apply")).toBe(true);
+});
+
+test("Destroy apply observe-only reads a linked failed Run and sends no mutation", async () => {
+  const failed = { ...destroyApply, status: "failed", errorCode: "runner_execution_indeterminate" };
+  const args = destroyApplyArgs.filter(s => s !== "--yes").concat("--observe-only");
+  const r = await invoke(args, req => normalDestroy(req, { history: { runs: [failed] }, apply: failed }));
+  expect(r.code).toBe(1);
+  expect(r.result).toMatchObject({ status: "failed", planRunId: destroyPlan.id,
+    runId: failed.id, runStatus: "failed", code: failed.errorCode });
+  expect(r.calls.every(c => c.method === "GET")).toBe(true);
+});
+
+test("revision and Destroy Plan selectors are reciprocal and stale Destroy state cannot write", async () => {
+  const wrongRevision = await invoke(
+    destroyApplyArgs, req => normalDestroy(req, { plan: { ...plan, id: destroyPlan.id } }));
+  expect(wrongRevision.code).toBe(1);
+  expect(wrongRevision.calls.filter(c => c.method === "POST")).toHaveLength(0);
+  const wrongDestroy = await invoke(
+    applyArgs, req => normal(req, { plan: { ...destroyPlan, id: plan.id } }));
+  expect(wrongDestroy.code).toBe(1);
+  expect(wrongDestroy.calls.filter(c => c.method === "POST")).toHaveLength(0);
+  const stale = await invoke(
+    destroyApplyArgs, req => normalDestroy(req, { capsule: { ...capsule, currentStateGeneration: 2 } }));
+  expect(stale.code).toBe(1);
+  expect(stale.calls.filter(c => c.method === "POST")).toHaveLength(0);
+});
+
 test("apps apply executes only the exact saved revision Plan after emitting value-free review", async () => {
   let sawReview = false; const out: string[] = []; const before = globalThis.fetch; const calls: Request[] = [];
   globalThis.fetch = (async (input, init) => {
@@ -71,6 +321,7 @@ test("apps apply executes only the exact saved revision Plan after emitting valu
       expect(s).not.toContain("private://"); expect(s).not.toContain("synthetic-must-not-print"); sawReview = true;
     } })).toBe(0);
     expect(JSON.parse(out[0]!)).toMatchObject({ status: "succeeded", runId: apply.id, runStatus: "succeeded" });
+    expect(calls.filter(c => c.method === "GET" && new URL(c.url).pathname === `/api/v1/runs/${apply.id}`)).toHaveLength(0);
     expect(calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname)).toEqual([`/api/v1/runs/${plan.id}/apply`]);
   } finally { globalThis.fetch = before; }
 });
@@ -84,6 +335,7 @@ test("new commands reject absent, ambiguous and unknown mutation flags before HT
     ["apps", "apply", "cap_owned", "--plan", plan.id],
     ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes=true"],
     ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes", "extra"],
+    [...applyArgs, "--destroy-plan", destroyPlan.id],
     [...applyArgs, "--timeout-ms", "0"],
   ]) {
     const result = await invoke(args, () => { throw Error("HTTP must not be reached"); });
@@ -138,6 +390,47 @@ test("a linked failed Apply on an older page consumes the Plan; current generati
   });
   expect(r.code).toBe(1); expect(r.result).toMatchObject({ status: "failed", runId: failed.id, runStatus: "failed" });
   expect(r.calls.filter(c => c.method !== "GET")).toHaveLength(0);
+});
+
+test("linked Apply resumption requires current individual Run evidence", async () => {
+  for (const mode of ["normal", "observe", "approved-race"] as const) {
+    for (const evidence of ["failed", "denied", "mismatch"] as const) {
+      let approved = false; let historyReads = 0;
+      const otherApply = { ...apply, id: "apply_later_locator" };
+      const args = mode === "observe" ? applyArgs.filter(a => a !== "--yes").concat("--observe-only") : applyArgs;
+      const r = await invoke(args, req => {
+        const path = new URL(req.url).pathname;
+        if (path.endsWith("/approve") && req.method === "POST") {
+          approved = true;
+          return Response.json({ run: plan });
+        }
+        if (path.endsWith("/runs")) {
+          historyReads += 1;
+          return Response.json({ runs: mode === "approved-race" && !approved ? [] : mode === "approved-race" && evidence === "denied" && historyReads > 2 ? [otherApply] : [apply] });
+        }
+        if (path === `/api/v1/runs/${otherApply.id}`) return Response.json({ run: otherApply });
+        if (path === `/api/v1/runs/${apply.id}`) {
+          if (evidence === "denied") return Response.json({ error: { code: "forbidden" } }, { status: 403 });
+          return Response.json({ run: { ...apply, ...(evidence === "failed" ? { status: "failed", errorCode: "runner_execution_indeterminate" } : { planRunId: "other_plan" }) } });
+        }
+        return normal(req, { plan: mode === "approved-race" && !approved ? { ...plan, status: "waiting_approval" } : plan });
+      });
+      expect(r.code).toBe(1);
+      expect(r.result.runId).toBe(apply.id);
+      if (evidence === "failed") {
+        expect(r.result).toMatchObject({ status: "failed", runStatus: "failed", code: "runner_execution_indeterminate" });
+      } else {
+        expect(r.result.status).toBe(mode === "normal" ? "refused" : "indeterminate");
+        expect(r.result.runStatus).toBeUndefined();
+        expect(r.result.code).toBe(evidence === "denied" ? "forbidden" : "apply_identity_mismatch");
+      }
+      const mutations = r.calls.filter(c => c.method !== "GET").map(c => new URL(c.url).pathname);
+      expect(mutations).toEqual(mode === "approved-race" ? [`/api/v1/runs/${plan.id}/approve`] : []);
+      expect(r.calls.filter(c => c.method === "GET" && new URL(c.url).pathname === `/api/v1/runs/${apply.id}`)).toHaveLength(1);
+      expect(historyReads).toBe(mode === "approved-race" ? 2 : 1);
+      expect(r.calls.some(c => new URL(c.url).pathname === `/api/v1/runs/${otherApply.id}`)).toBe(false);
+    }
+  }
 });
 
 test("cycle or malformed Run history never proves absence of Apply", async () => {
@@ -323,6 +616,78 @@ test("exact retained update key survives a lost create response across manual in
   expect(retry.code).toBe(0);
   expect([lost.calls[0], retry.calls[0]].map(c => c!.headers.get("idempotency-key"))).toEqual(["same-key", "same-key"]);
   expect(await lost.calls[0]!.json()).toEqual(await retry.calls[0]!.json());
+});
+
+const resumeUpdateArgs = [
+  "apps", "update", "cap_owned", "--ref", ref, "--revision-plan", revision.id,
+  "--url", origin, "--token", "synthetic-account-pat", "--json",
+];
+const revisionPath = `/api/v1/revision-plans/${revision.id}`;
+const revisionRunPath = `/api/v1/runs/${plan.id}`;
+
+test("apps update resumes the exact existing coordinator without another create", async () => {
+  const result = await invoke(resumeUpdateArgs, request => {
+    switch (new URL(request.url).pathname) {
+      case revisionPath:
+        return Response.json({ revisionPlan: revision, nextAction: "reconcile" });
+      case `${revisionPath}/reconcile`:
+        return Response.json({ revisionPlan: revision, nextAction: "review_run" });
+      case revisionRunPath:
+        return Response.json({ run: plan });
+      default:
+        throw Error("unexpected request");
+    }
+  });
+  expect(result.code).toBe(0);
+  expect(result.result).toMatchObject({ status: "review_required", revisionPlanId: revision.id, planRunId: plan.id });
+  expect(result.calls.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+    ["GET", revisionPath], ["POST", `${revisionPath}/reconcile`], ["GET", revisionRunPath],
+  ]);
+  expect(result.calls.every(request => !request.headers.has("idempotency-key"))).toBe(true);
+});
+
+test("a mismatched saved coordinator is never reconciled", async () => {
+  for (const record of [
+    { ...revision, id: "revision_other" },
+    { ...revision, capsuleId: "cap_other" },
+    { ...revision, revision: { ...revision.revision, targetRef: "release/other" } },
+  ]) {
+    const result = await invoke(resumeUpdateArgs, () =>
+      Response.json({ revisionPlan: record, nextAction: "reconcile" }));
+    expect(result.code).toBe(1);
+    expect(result.result).toMatchObject({ status: "refused", code: "revision_identity_mismatch" });
+    expect(result.calls.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", revisionPath],
+    ]);
+  }
+});
+
+test("saved coordinator mode refuses a create key and invalid IDs before HTTP", async () => {
+  for (const [args, code] of [
+    [[...resumeUpdateArgs, "--idempotency-key", "key"], "conflicting_modes"],
+    [resumeUpdateArgs.map(value => value === revision.id ? ".." : value), "revision_plan_id_required"],
+  ] as const) {
+    const result = await invoke(args, () => { throw Error("must not send HTTP"); });
+    expect(result.code).toBe(2);
+    expect(result.result).toMatchObject({ status: "refused", code });
+    expect(result.calls).toHaveLength(0);
+  }
+});
+
+test("an expired saved revision Run is no longer ready for review", async () => {
+  const replayArgs = [...resumeUpdateArgs];
+  replayArgs.splice(5, 2, "--idempotency-key", "retained-key");
+  for (const [args, firstMethod] of [[replayArgs, "POST"], [resumeUpdateArgs, "GET"]] as const) {
+    const result = await invoke(args, request => new URL(request.url).pathname === revisionRunPath
+      ? Response.json({ run: { ...plan, status: "expired" } })
+      : Response.json({ revisionPlan: revision, nextAction: "review_run" }));
+    expect(result.code).toBe(1);
+    expect(result.result).toMatchObject({
+      status: "plan_not_reviewable", revisionPlanId: revision.id, planRunId: plan.id, planStatus: "expired",
+    });
+    expect(result.result.plan).toBeUndefined();
+    expect(result.calls.map(request => request.method)).toEqual([firstMethod, "GET"]);
+  }
 });
 
 test("deadline covers an unfinished JSON body and no followup request occurs after abort", async () => {

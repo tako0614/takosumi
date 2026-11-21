@@ -1,3 +1,4 @@
+import { repositorySourceName } from "./install-names.ts";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import {
   parseRepositoryModulesSnapshot,
@@ -49,9 +50,8 @@ export interface RepoOwnedStoreHydrationResult {
 /** Presentation base for a bare-Git install with no Store listing selected. */
 export function neutralInstallPresentation(input: {
   readonly gitUrl: string;
-  readonly capsuleName: string;
 }): NonNullable<InstallConfig["store"]> {
-  const suggestedName = input.capsuleName.trim().slice(0, 96) || "service";
+  const suggestedName = repositorySourceName(input.gitUrl);
   const text = { ja: suggestedName, en: suggestedName };
   return {
     source: { url: input.gitUrl, path: "." },
@@ -539,10 +539,7 @@ export async function previewRepoOwnedInstallConfig(
     sourceSnapshot: input.sourceSnapshot,
     storeMetadata: undefined,
     modulePath: selectedPath,
-    presentationFallback: neutralInstallPresentation({
-      gitUrl: input.source.url,
-      capsuleName: input.capsuleName,
-    }),
+    presentationFallback: neutralInstallPresentation({ gitUrl: input.source.url }),
   });
 
   const {
@@ -1023,7 +1020,7 @@ function repositoryManifestModulePath(
   return `${scopePath}/${modulePath}`;
 }
 
-function remapRepositoryManifestModule(
+export function remapRepositoryManifestModule(
   document: RepositoryManifestDocument,
   repositoryModulePath: string,
   selectedModulePath: string,

@@ -4,6 +4,7 @@ import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "./store.ts";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 import { validateOidcLiveGrant } from "./oidc-live-grant.ts";
+import { accountAuthenticationGenerationMatches } from "./account-authentication-generation.ts";
 
 interface SourcePrincipal {
   readonly accountSubject: string;
@@ -41,6 +42,8 @@ export async function resolveInterfaceAppDataPrincipal(input: {
     const record = await input.store.findAccessToken(input.token);
     if (!record || record.expiresAt <= Date.now() || record.role === "runtime" || isInterfaceOAuthRole(record.role) ||
       !record.takosumiSubject || record.subject !== input.subjectId || record.capsuleId !== input.consumerCapsuleId) return undefined;
+    if (record.oidcProfile !== "shared-account" &&
+      !await accountAuthenticationGenerationMatches(input.store, record.takosumiSubject, record.identityGeneration)) return undefined;
     const principal = { accountSubject: record.takosumiSubject, clientId: record.clientId, scope: record.scope };
     return await currentSource({ ...input, principal }) ? principal : undefined;
   } catch { return undefined; }

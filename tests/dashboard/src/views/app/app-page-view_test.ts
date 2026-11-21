@@ -31,9 +31,10 @@ describe("installed app page", () => {
     expect(route).toContain("appPageSectionFromHash(location.hash)");
   });
 
-  test("sections follow the keep-an-app behaviors in order", () => {
+  test("overview keeps the app header above its existing behavior sections", () => {
     const order = [
       'data-testid="app-header"',
+      'data-testid="app-management"',
       "<AppAttentionSection",
       "<AppVersionSection",
       "<AppSettingsSection",
@@ -47,8 +48,7 @@ describe("installed app page", () => {
     // Section fragments the URL may name exist on the page.
     expect(attention).toContain('id="attention"');
     expect(version).toContain('id="version"');
-    expect(settings).toContain('id="settings"');
-    expect(settings).toContain('id="connections"');
+    expect(settings).toContain('id={connectionPane() ? "connections" : "settings"}');
     expect(linked).toContain('id="links"');
     expect(created).toContain('id="created"');
     expect(history).toContain('id="history"');
@@ -77,7 +77,8 @@ describe("installed app page", () => {
   });
 
   test("state, problems, screens and history come from the server's per-app reads", () => {
-    expect(page).toContain("createResource(capsuleId, getCapsuleApp)");
+    expect(page).toContain("getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined,");
+    expect(page).toContain('!(info.refetching instanceof AbortSignal) ? info.refetching : {}');
     expect(page).toContain("listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES })");
     expect(page).toContain("data-app-state={view().state}");
     expect(page).toContain("t(appStateSentence(view()))");
@@ -156,22 +157,23 @@ describe("installed app page", () => {
     // while another action is primary (an app needing attention may still
     // serve its last successful version), except while it is removed.
     expect(page).toMatch(/<OpenAppButton\s+surfaces=\{screens\(\)\}\s+appName=\{displayName\(\)\}\s+variant="secondary"/u);
-    const secondary = page.slice(page.indexOf("const secondaryScreens = "), page.indexOf("const showUpdate = "));
+    const secondary = page.slice(page.indexOf("const secondaryScreens = "), page.indexOf("const updateAvailable = "));
     expect(secondary).toContain('view.primaryAction !== "open" && screens().length > 0');
     expect(secondary).toContain('view.state !== "uninstalling" && view.state !== "uninstalled"');
     expect(page).toContain('<Match when={view().primaryAction === "reinstall"}>');
     expect(page).toContain("href={reinstallHref(reinstallInput(view(), inst()))}");
-    // A connection problem goes to the connections this app uses.
-    expect(page).toContain('if (managed()) scrollToSection("connections");');
+    // App settings can change the binding only outside a scheduled uninstall.
+    const fixConnection = page.slice(page.indexOf("const fixConnection = () =>"), page.indexOf("// --- uninstall"));
+    expect(fixConnection).toContain('if (managed() && !app()?.uninstall.scheduled) openSection("connections");');
+    expect(fixConnection).toContain('else navigate("/connections");');
     // In-progress work the server reports is followed in place, never applied.
     expect(page).toContain("auto: true,");
     expect(page).toContain("dismissedRuns.has(target.runId)");
   });
 
   test("version changes keep one idempotency key per requested ref", () => {
-    expect(page).toContain("getOrCreateRevisionPlanAttempt(");
-    expect(page).toContain("idempotencyKey: attempt.idempotencyKey");
-    expect(page).toContain("createReviewableGitRevisionPlan(");
+    expect(page).toContain("defaultRetryPlanApi(revisionAttempts)");
+    expect(page).toContain("revisionApi.planRevision(capsuleId(), ref, isCurrent)");
     expect(page).toContain("createStateVersionRollbackPlan(stateVersionId)");
     expect(version).toContain('t("app.version.rollback")');
     expect(version).toContain('t("app.version.pinReview")');
@@ -204,7 +206,7 @@ describe("installed app page", () => {
     expect(ui).toContain('role="menuitem"');
     // Each screen opens along its route; the web (always, on a computer) in a new tab.
     expect(ui).toContain("const routeOf = (surface: OpenableScreen) => screenOpenRoute(props.capsuleId, surface);");
-    expect(ui).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
+    expect(readFileSync(resolve(root, "lib/app-launch-link.ts"), "utf8")).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
     expect(ui).toContain("{...openRouteAnchor(otherRoute())}");
   });
 
@@ -231,7 +233,7 @@ describe("installed app page", () => {
 
   test("uninstall is one implementation: grace period stated first and cancellable", () => {
     expect(page).toContain("await deleteCapsule(inst.id);");
-    expect(page).toContain("await cancelCapsuleUninstall(capsuleId());");
+    expect(page).toContain("await cancelCapsuleUninstall(inst.id);");
     expect(page).toContain("deleteCapsule(capsuleId(), { immediate: true })");
     expect(page).not.toContain("dependencyWarning");
     expect(page).not.toContain("dependencyCheck");
@@ -266,11 +268,7 @@ describe("installed app page", () => {
     expect(history).toContain("href={`/runs/${encodeURIComponent(event.runId)}`}");
   });
 
-  test("a returned Plan releases its idempotency key; a failed or unknown outcome keeps it", () => {
-    expect(page).toContain("if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson);");
-    expect(page.indexOf("releaseRevisionPlanAttempt(revisionAttempts")).toBeGreaterThan(
-      page.indexOf("await createReviewableGitRevisionPlan(forCapsule"),
-    );
+  test("a returned settings Plan releases its key and marks the form clean", () => {
     // Settings: the key is released and the form is clean once the Plan exists.
     const create = settings.slice(settings.indexOf("props.onReview(async () => {"), settings.indexOf("return result.configurationPlan.planRunId;"));
     expect(create).toContain("configurationAttempt = undefined");
@@ -278,13 +276,13 @@ describe("installed app page", () => {
     expect(create).toContain("dirty: false, deleted: false, resetToDefault: false");
     // An unapplied settings review re-reads the form from what the app runs.
     expect(page).toContain('if (active.section === "settings") setSettingsSeed((value) => value + 1);');
-    expect(settings).toContain("[() => props.installConfig, () => props.seed]");
+    expect(settings).toContain("[currentRead, () => props.seed]");
   });
 
   test("continuing an install advances the attempt that owns the app instead of planning beside it", () => {
     const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const [screenRetryBusy"));
     expect(continueInstall).toContain("const attempt = app()?.progress.installPlanId;");
-    expect(continueInstall).toContain("await advanceGitInstallPlan(attempt)");
+    expect(continueInstall).toContain("await advanceGitInstallPlan(attempt, { isCurrent })");
     // An install that waits for the person continues on its own install page,
     // which only whoever started it can answer.
     expect(continueInstall).toContain("navigate(installAttemptHref(attempt));");
@@ -297,8 +295,9 @@ describe("installed app page", () => {
     const continueRevision = page.slice(page.indexOf("const continueRevision = (revisionPlanId: string) =>"), page.indexOf("const [screenRetryBusy"));
     // A continued revision that settles without a Plan (for example already
     // current) reports its own diagnostic, not a generic "not started".
-    expect(continueRevision).toContain("requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId))");
-    expect(continueRevision).toContain(".revisionPlan.planRunId");
+    expect(continueRevision).toContain("const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent });");
+    expect(continueRevision).toContain('response.nextAction === "none" && plan.phase === "failed"');
+    expect(continueRevision).toContain("return requireReviewableRevisionPlan(response).revisionPlan.planRunId;");
     expect(continueRevision).toContain('"update",');
     expect(attention).toContain("props.actions.continueRevision(revisionPlanId())");
     // Continuing a stopped one waits too while another change is under way
@@ -327,10 +326,10 @@ describe("installed app page", () => {
   });
 
   test("try again repeats the failed change the way the run page does, or the installed version as configured", () => {
-    expect(page).toContain("const fresh = await getCapsule(run.capsuleId ?? capsuleId());");
-    expect(page).toContain("return await retryPlanForRun(run, fresh, retryApi);");
+    expect(page).toContain("const fresh = await getCapsule(run.capsuleId, { isCurrent });");
+    expect(page).toContain("return await retryPlanForRun(run, fresh, retryApi, isCurrent);");
     // A version change keeps this page's per-ref idempotency key.
-    expect(page).toContain("planRevision: (_capsuleId, ref) => createRevisionRun(ref),");
+    expect(page).toContain("planRevision: (_capsuleId, ref, isCurrent) => createRevisionRun(ref, isCurrent),");
     // A problem that names no run re-plans the installed version (never the
     // Source's default ref); only an unapplied app plans its saved settings.
     expect(page).toContain("if (!applied()) return extractRunId(await planCapsule(capsuleId()));");
@@ -346,8 +345,11 @@ describe("installed app page", () => {
     expect(route).toContain("<Show when={params.id ?? \"\"} keyed>");
     // Defense in depth inside the page.
     expect(page).toContain("const forCapsule = capsuleId();");
-    expect(page).toContain("if (capsuleId() !== forCapsule) return;");
-    const reset = page.slice(page.indexOf("on(\n      capsuleId,"), page.indexOf("{ defer: true }", page.indexOf("on(\n      capsuleId,")));
+    expect(page).toContain("const isCurrent = () => !disposed && reviewScopeEpoch === forEpoch && capsuleId() === forCapsule &&");
+    expect(page).toContain("if (!isCurrent()) return;");
+    const guard = page.indexOf("() => [capsuleId(), props.accountId, props.principalId] as const,");
+    expect(guard).toBeGreaterThan(-1);
+    const reset = page.slice(guard, page.indexOf("{ defer: true }", guard));
     for (const signal of [
       "setReview(undefined)",
       "setStarting(undefined)",

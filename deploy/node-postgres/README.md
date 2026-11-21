@@ -246,10 +246,12 @@ a commercial host extension and are not part of this public distribution.
   historical v2 reader remains uncapped for compatibility and requires a
   trusted operator-owned local filesystem; this bound is not a general file
   store guarantee.
-  This is a composition library, not an enabled CLI or authenticated recovery
-  route. An operator workflow must use the same control store, crypto boundary
-  and artifact root as the selected deployment, authorize the exact recovery
-  scope, and preserve stable retry identity and custody outside Git. See the
+  The explicit local command has separate stage-only and commit-only approval
+  modes; follow the [local recovery runbook](../../docs/operations/local-state-recovery.md).
+  There is no default authenticated recovery route or automatic recovery action.
+  Use the same control store, crypto boundary and artifact root as the selected
+  deployment, authorize each exact stage/commit scope separately, and preserve
+  stable retry identity and custody outside Git. See the
   [Core state contract](../../docs/internal/core-spec.md). A recovered partial
   state does not prove a complete resource inventory or provider success.
 - Apply both schemas before first start: `bun run db:migrate --env=production` (control plane, reads `DATABASE_URL`)
@@ -275,6 +277,16 @@ a commercial host extension and are not part of this public distribution.
   receive full service operations, the Accounts store, server config, or
   secrets. The host keeps its pairwise subject secret, derivation key, and
   public-origin authority outside this factory seam.
+- Manifest-gated Accounts OIDC **module variables** use the separate
+  `createModuleVariableMaterializer` hook on `buildComposedApp`/`buildComposedServer`.
+  Its frozen input contains only `{ control, accounts, issuer }`: the two current
+  Capsule/InstallConfig reads and four Accounts client registration/retirement
+  methods. Compose the existing `createTakosumiAccountsOidcModuleVariableMaterializer`
+  with that input and the host's existing private `pairwiseSubjectSecret` in the
+  closure. Core receives the port before bootstrap completes; the factory is
+  initialized before the app is returned. Omission keeps these repository
+  projections fail-closed. This does not generate user-supplied issuer/client/owner
+  values or replace the binding-delivered `createRuntimeInputOidcClientSource`.
 - Operator-owned credential composition is explicit: pass the complete
   `credentialRecipes` and `credentialRecipeDrivers` together with any fixed
   `operatorProviderConnections`. A host may also supply the generic
@@ -306,3 +318,52 @@ The architectural claim that the Takosumi account plane is substrate-neutral nee
 than a spec promise. This distribution is that second working substrate for the same composed-origin account-plane
 handler. See `takosumi/docs/concepts/self-host.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability
 table.
+
+### Startup adoption of committed local Apply results
+
+The composed Node server makes two nonblocking recovery passes: at startup and
+once more after Core's existing ten-minute heartbeat window. Each pass examines
+at most 25 recoverable rows using the existing durable sweep cursor, excluding
+queued and terminal accounting work, and admits work for at most five seconds;
+this is a bounded window, not a full-ledger sweep. It considers only stale
+Capsule Apply runs whose last heartbeat predates this startup. Fresh running
+work, queued work, accounting tails, Destroy, lifecycle commands, and private
+Run file grants stay with their existing consumers.
+
+Before an HTTP local Apply dispatch, the file artifact store also encrypts
+only the original receipt lookup identity and execution-evidence projection.
+It retains an immutable entry for each legitimate preparation epoch (at most
+64), without the raw job or credential values. When the generation result is
+not yet stored, startup can read the same configured live Runner's completion
+and state using that original identity, verify their digests, and commit the
+normal encrypted state/result artifact before asking Core to adopt it. These
+bounded read-only requests do not follow redirects. An incomplete, evicted,
+corrupt or superseded receipt, another Runner process or binding, or missing
+custody cannot start a new dispatch. This does not persist the Runner's bounded
+in-memory success cache across a Runner restart.
+
+Recovery requires the configured local adapter and an exact authenticated
+encrypted state/result artifact. Both the in-process and HTTP local adapters
+can adopt it, including the standard `opentofu-default` profile. Startup uses
+the same configured profile/executor snapshot as Core, ignoring stored profile
+shadows and leaving unconfigured profiles untouched. The retained
+result enters Core through an opaque, in-process command bound to that exact
+adapter, Apply Run and state target. Before claiming, Core rechecks the pinned
+module inputs, current provider bindings, Workspace authority, generation and
+immutable execution evidence. These checks do not mint or refresh credentials;
+recovery bypasses normal preparation, private-file renewal and Runner dispatch.
+Successful receipts still confirm the exact allocated encrypted raw-output ref
+inside local custody. A typed provider-failed receipt with persisted partial
+state instead uses the existing failed-provider ledger commit: the same Run
+becomes failed, state advances one generation, the Capsule remains in error,
+and no new raw/public Output is created. A Node-encrypted result can survive
+both API and Runner restarts; this does not turn an old Runner process's
+unconfirmed response into evidence. Original Run start and environment evidence
+are retained; the new claim is audited as receipt recovery, not another Apply.
+Unknown or changed admission is held without a new terminal failure; a lost
+commit acknowledgement returns the durable winner when it can be read.
+Missing or mismatched custody and missing or archived Workspaces are skipped.
+Recovery never triggers a new provider dispatch. Other
+concurrent API work retains its normal adapter behavior. The distribution with
+no configured Runner performs no recovery. A slow SQL call may finish after
+the admission budget; it cannot admit another Run after that deadline.

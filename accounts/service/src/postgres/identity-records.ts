@@ -1,3 +1,4 @@
+import { connectionOAuthAttemptBucket, connectionOAuthAttemptPurpose, connectionOAuthAttemptSweepKey, connectionOAuthAttemptSweepLimit, connectionOAuthAttemptSweepCheckpoint, type ConnectionOAuthAttemptSweepInput, type ConnectionOAuthAttemptSweepResult } from "../connection-oauth-attempt.ts";
 import type * as FS from "../identity-state.ts";
 import type { FinancialSourceAtomicMutation } from "../hosted-identity-records.ts";
 import { FinancialSourceDocumentRecords, financialSourceBuckets, financialSourceScopeKey, financialSourceJson, financialSourceEqual, validFinancialSourceAuthority } from "../hosted-identity-records.ts";
@@ -164,6 +165,34 @@ export class PostgresIdentityRecordRepository
     const sql=`WITH operation_claim AS(SELECT key FROM ${table} WHERE ${opGuard} FOR UPDATE), generation_claim AS(SELECT key FROM ${table} WHERE bucket='authentication_generations' AND ${generations} AND EXISTS(SELECT 1 FROM operation_claim) FOR UPDATE), lock_claim AS(SELECT key FROM ${table} WHERE bucket='identity_merge_locks' AND key IN(${source},${target}) AND document->>'operationId'=${opId} AND EXISTS(SELECT 1 FROM generation_claim) FOR UPDATE), changed AS(${changed}), history AS(INSERT INTO ${table}(bucket,key,document,subject,other_subject) SELECT '${reviewedApprovalBucket}',${hash},${bind(canonicalOwnerJson(r))}::jsonb,${target},${source} FROM changed ON CONFLICT DO NOTHING RETURNING key), refs AS(INSERT INTO ${table}(bucket,key,document,subject,other_subject) SELECT '${reviewedApprovalRefBucket}',${refKey},${bind(canonicalOwnerJson(ref))}::jsonb,${target},${source} FROM changed ON CONFLICT DO NOTHING RETURNING key) SELECT key FROM changed UNION ALL ${replay}`;
     const result=await runQuery(this.client,sql,args);
     return result.rows.length===1;
+  }
+
+  async pruneConnectionOAuthAttempts(input: ConnectionOAuthAttemptSweepInput): Promise<ConnectionOAuthAttemptSweepResult> {
+    const limit = connectionOAuthAttemptSweepLimit(input);
+    const previous = connectionOAuthAttemptSweepCheckpoint(await this.get("maintenance_cursors", connectionOAuthAttemptSweepKey));
+    const page = await runQuery<{ key: string }>(this.client, `SELECT key FROM ${table} WHERE bucket=$1 AND key>$2 ORDER BY key LIMIT $3`, [connectionOAuthAttemptBucket, previous.after, limit]);
+    if (page.rows.length > limit || page.rows.some(r => typeof r.key !== "string")) throw new Error("invalid Connection OAuth attempt sweep page");
+    const keys = page.rows.map(r => r.key);
+    const next = JSON.stringify({ generation: previous.generation + 1, after: keys.length < limit ? "" : keys.at(-1)! });
+    const result = await runQuery<{ deleted: number; checkpoint_advanced: number }>(this.client, `
+      WITH removed AS (
+        DELETE FROM ${table} WHERE bucket='${connectionOAuthAttemptBucket}' AND key=ANY($1::text[])
+          AND document->>'purpose'='${connectionOAuthAttemptPurpose}'
+          AND CASE WHEN jsonb_typeof(document->'expiresAt')='number' THEN
+            (document->>'expiresAt')::numeric>=0 AND (document->>'expiresAt')::numeric<=$2::bigint
+            AND mod((document->>'expiresAt')::numeric,1)=0 ELSE false END RETURNING key
+      ), advanced AS (
+        INSERT INTO ${table}(bucket,key,document)
+          SELECT 'maintenance_cursors','${connectionOAuthAttemptSweepKey}',$3::jsonb
+          WHERE $4='0' OR EXISTS(SELECT 1 FROM ${table} WHERE bucket='maintenance_cursors'
+            AND key='${connectionOAuthAttemptSweepKey}' AND document->>'generation'=$4)
+          ON CONFLICT(bucket,key) DO UPDATE SET document=excluded.document
+            WHERE ${table}.document->>'generation'=$4 RETURNING key
+      ) SELECT (SELECT count(*)::integer FROM removed) AS deleted,
+        (SELECT count(*)::integer FROM advanced) AS checkpoint_advanced`, [keys, input.now, next, String(previous.generation)]);
+    const row = result.rows[0];
+    if (result.rows.length !== 1 || !row || !Number.isInteger(row.deleted) || row.deleted < 0 || row.deleted > keys.length || (row.checkpoint_advanced !== 0 && row.checkpoint_advanced !== 1)) throw new Error("unqualified Connection OAuth attempt sweep effects");
+    return { scanned: keys.length, deleted: row.deleted };
   }
   async get<T>(bucket: string, key: string): Promise<T | undefined> {
     const r = await runQuery<{ document: T }>(

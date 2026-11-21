@@ -5,6 +5,11 @@ import {
   isRevisionAlreadyCurrent,
   requireReviewableRevisionPlan,
 } from "../../../../dashboard/src/lib/control-api.ts";
+import {
+  getOrCreateRevisionPlanAttempt,
+  observeRevisionPlanAttempt,
+  releaseObservedRevisionPlanAttempt,
+} from "../../../../dashboard/src/lib/revision-plan-attempt.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -97,6 +102,52 @@ test("revision coordinator sends one ref, reconciles, and stops at review_run", 
   ]);
   expect(calls.some(({ url }) => url.endsWith("/approve"))).toBe(false);
   expect(calls.some(({ url }) => url.endsWith("/apply"))).toBe(false);
+});
+
+test("retiring the creator leaves the accepted revision for explicit continuation", async () => {
+  let current = true;
+  const calls: string[] = [];
+  const isCurrent = () => current;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path === "/api/v1/capsules/capsule_1/revision-plans") {
+      current = false;
+      return json(revisionResponse("reconcile"), 201);
+    }
+    return json(revisionResponse("review_run"));
+  }) as typeof fetch;
+
+  await expect(createReviewableGitRevisionPlan(
+    "capsule_1", { ref: "release/v2" }, { isCurrent },
+  )).rejects.toMatchObject({ name: "AbortError" });
+  expect(calls).toEqual(["/api/v1/capsules/capsule_1/revision-plans"]);
+
+  current = true;
+  await expect(advanceGitRevisionPlan("revision_plan_1", { isCurrent }))
+    .resolves.toMatchObject({ nextAction: "review_run", revisionPlan: { planRunId: "plan_run_1" } });
+  expect(calls).toEqual([
+    "/api/v1/capsules/capsule_1/revision-plans",
+    "/api/v1/revision-plans/revision_plan_1/reconcile",
+  ]);
+});
+
+test("retiring the owner during the reconcile delay prevents the next command", async () => {
+  let current = true;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return json(revisionResponse(calls.length <= 2 ? "reconcile" : "review_run"));
+  }) as typeof fetch;
+
+  await expect(advanceGitRevisionPlan("revision_plan_1", {
+    isCurrent: () => current,
+    pollCadence: { wait: async () => { current = false; } },
+  })).rejects.toMatchObject({ name: "AbortError" });
+  expect(calls).toEqual([
+    "/api/v1/revision-plans/revision_plan_1/reconcile",
+    "/api/v1/revision-plans/revision_plan_1/reconcile",
+  ]);
 });
 
 test("a version check that finds the applied version ends with its own answer, also when continued", async () => {
@@ -306,4 +357,60 @@ test("a changed ref is a distinct request and gets a distinct key", async () => 
   expect(posts[0]?.key).toBeString();
   expect(posts[1]?.key).toBeString();
   expect(posts[0]?.key).not.toBe(posts[1]?.key);
+});
+
+test("only a received create ACK binds the attempt for later coordinator completion", async () => {
+  for (const loseCreateAck of [false, true]) {
+    const attempts = new Map();
+    const request = { ref: "release/recovery" };
+    const requestJson = JSON.stringify(request);
+    const attempt = getOrCreateRevisionPlanAttempt(attempts, "capsule_1", requestJson);
+    const calls: string[] = [];
+    let observed = 0;
+    let ready = false;
+    const response = () => ({
+      revisionPlan: {
+        id: "revision_recovery", capsuleId: "capsule_1", operation: "revision",
+        revision: { targetRef: request.ref },
+        ...(ready ? { planRunId: "run_recovered" } : {}),
+      },
+      nextAction: ready ? "review_run" : "reconcile",
+      links: { self: "/api/v1/revision-plans/revision_recovery" },
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === "/api/v1/capsules/capsule_1/revision-plans") {
+        expect(new Headers(init?.headers).get("idempotency-key")).toBe(attempt.idempotencyKey);
+        if (loseCreateAck) throw new Error("fixture lost create ACK");
+        return json(response(), 201);
+      }
+      if (path === "/api/v1/revision-plans/revision_recovery/reconcile") {
+        if (!ready) {
+          ready = true;
+          if (!loseCreateAck) throw new Error("fixture lost reconcile ACK");
+        }
+        return json(response());
+      }
+      throw new Error(`unexpected fixture request: ${path}`);
+    }) as typeof fetch;
+    await expect(createReviewableGitRevisionPlan("capsule_1", request, {
+      idempotencyKey: attempt.idempotencyKey,
+      onCreated: (created) => {
+        observed += 1;
+        observeRevisionPlanAttempt(attempts, "capsule_1", requestJson, attempt, created.revisionPlan);
+      },
+    })).rejects.toThrow(loseCreateAck ? "fixture lost create ACK" : "fixture lost reconcile ACK");
+    expect(observed).toBe(loseCreateAck ? 0 : 1);
+    // This explicit continuation may find a Plan even when the initial ACK
+    // was lost. Only the observed request/ID association permits release.
+    const recovered = requireReviewableRevisionPlan(await advanceGitRevisionPlan("revision_recovery"));
+    expect(recovered.revisionPlan.planRunId).toBe("run_recovered");
+    releaseObservedRevisionPlanAttempt(attempts, "capsule_1", requestJson, recovered.revisionPlan.id);
+    const next = getOrCreateRevisionPlanAttempt(attempts, "capsule_1", requestJson);
+    if (loseCreateAck) expect(next.idempotencyKey).toBe(attempt.idempotencyKey);
+    else expect(next.idempotencyKey).not.toBe(attempt.idempotencyKey);
+    expect(calls.filter(path => path.endsWith("/revision-plans"))).toHaveLength(1);
+    expect(calls.some(path => /\/(apply|approve)$/.test(path))).toBe(false);
+  }
 });

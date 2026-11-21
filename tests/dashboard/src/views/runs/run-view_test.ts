@@ -70,9 +70,26 @@ describe("RunView", () => {
     expect(en["run.summary.alreadyApplied"].length).toBeGreaterThan(0);
   });
 
+  test("a retained Restore Run has a history message and both approval guards apply", () => {
+    expect(source).toContain('<Show when={canApproveRun(r())}>');
+    expect(source).toContain('if (!r || !canApproveRun(r) || approve.busy()) return;');
+    expect(source).toContain('if (!ownsApply(attempt) || !canApproveRun(runLatest())) return;');
+    expect(source).toContain('if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest())');
+    expect(source).toContain('if (r.type === "restore" && r.status === "waiting_approval")');
+    expect(source).toContain('t("run.summary.restoreApprovalRetired")');
+    expect(source).not.toContain('run.approveConfirm.restore');
+    expect(source).toContain('if (r.type !== "destroy_plan")');
+    expect(source).toContain('title: t("run.approveConfirm.destroyTitle")');
+    expect(en["run.summary.restoreApprovalRetired"]).toContain("legacy restore request");
+    expect(ja["run.summary.restoreApprovalRetired"]).toContain("承認受付は終了");
+  });
+
   test("timeout recovery uses the exact Apply Run -> Plan Run relation", () => {
-    expect(source).toContain("candidate.planRunId === planRun.id");
-    expect(source).not.toContain("Date.parse(planRun.createdAt)");
+    const recovery = readFileSync(resolve(import.meta.dir, "../../../../../dashboard/src/lib/apply-run-recovery.ts"), "utf8");
+    expect(source).toContain("recoverApplyRun(attempt.plan,");
+    expect(recovery).toContain("candidate.planRunId === planId");
+    expect(recovery).toContain("current.planRunId === planId");
+    expect(recovery).not.toContain("Date.parse(");
   });
 
   test("summary-less runs are honest: no fake zeros, fail-closed destructive gate", () => {
@@ -125,8 +142,9 @@ describe("RunView", () => {
   test("try again re-plans through the shared retry selector", () => {
     // Behavior lives in lib/run-retry.ts (tests/dashboard/src/views/runs/
     // run-retry_test.ts); the run page and the app page both call it.
-    expect(source).toContain("retryPlanForRun(currentRun, capsule)");
-    expect(source).toContain("const capsule = await getCapsule(instId);");
+    expect(source).toContain("defaultRetryPlanApi(revisionRetryAttempts)");
+    expect(source).toContain("retryPlanForRun(currentRun, capsule, retryApi, isCurrent)");
+    expect(source).toContain("const capsule = await getCapsule(instId, { isCurrent });");
   });
 
   test("a failed first-install Plan abandons its stale snapshot before rebuilding from latest source", () => {

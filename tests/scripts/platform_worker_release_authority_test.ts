@@ -1,4 +1,4 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -18,6 +18,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  PLATFORM_BINDINGS,
+  platformBindingNames,
+} from "../../deploy/accounts-cloudflare/src/bindings-check.ts";
 import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 
 import {
@@ -1875,6 +1879,59 @@ function forwardExecuteCommand(
   };
 }
 
+function transientForwardExecuteCommand(
+  fixture: ReturnType<typeof forwardExecuteFixture>,
+  events: string[],
+  providerMutations: {
+    upload: number;
+    migration: number;
+    secret: number;
+    traffic: number;
+  },
+  retryServingVersionId: string,
+) {
+  const predecessor = fixture.plan.predecessorContainer;
+  const scenario: { kind: "state"; current: PlatformContainerState } = {
+    kind: "state",
+    current: {
+      ...predecessor,
+      health: { ...predecessor.health, starting: 1 },
+    },
+  };
+  const original = forwardExecuteCommand(
+    fixture,
+    scenario,
+    events,
+    providerMutations,
+  );
+  let servingReads = 0;
+  const command: PlatformReleaseCommand = async (argv) => {
+    if (argv[1] === "deployments" && argv[2] === "status") {
+      servingReads++;
+      if (servingReads > 1) {
+        events.push(`worker-retry:${commandConfig(argv)}`);
+        expect(
+          readPlatformMutationFence(fixture.planPath, fixture.plan.confirmation),
+        ).toEqual({ outcome: "unknown", versionId: null });
+        return successfulCommand(
+          JSON.stringify({
+            id: "deployment-id",
+            versions: [
+              { version_id: retryServingVersionId, percentage: 100 },
+            ],
+          }),
+        );
+      }
+    }
+    return original(argv);
+  };
+  return {
+    command,
+    scenario,
+    servingReads: () => servingReads,
+  };
+}
+
 test("real completeRelease refuses late predecessor Container drift with zero provider mutation", async () => {
   const scenarios: readonly Readonly<{
     label: string;
@@ -2191,6 +2248,249 @@ test("real completeRelease performs the final Container read on fresh custody im
   ).toEqual({ outcome: "unknown", versionId: null });
   const evidence = JSON.parse(readFileSync(fixture.evidencePath, "utf8"));
   expect(evidence.diagnostic.message).toBe("synthetic forward upload boundary");
+});
+
+test("real completeRelease retries only transient Runner startup and then uploads once", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-transient-runner-");
+  const events: string[] = [];
+  const mutations = { upload: 0, migration: 0, secret: 0, traffic: 0 };
+  const retry = transientForwardExecuteCommand(
+    fixture,
+    events,
+    mutations,
+    fixture.plan.predecessorVersionId,
+  );
+  const sleep = spyOn(Bun, "sleep").mockImplementation(async (milliseconds) => {
+    events.push(`sleep:${milliseconds}`);
+    retry.scenario.current = fixture.plan.predecessorContainer;
+  });
+  try {
+    await expect(
+      completeRelease(
+        {
+          action: "execute",
+          plan: fixture.planPath,
+          confirmation: fixture.plan.confirmation,
+          reviewer: "operator:test-reviewer",
+          evidence: fixture.evidencePath,
+        },
+        fixture.plan,
+        true,
+        undefined,
+        retry.command,
+        observedPlatformUploadCustody(fixture, events),
+      ),
+    ).rejects.toThrow("platform_worker_release_incomplete");
+  } finally {
+    sleep.mockRestore();
+  }
+  expect(events.filter((event) => event === "sleep:5000")).toHaveLength(1);
+  expect(retry.servingReads()).toBe(2);
+  const retryWorker = events.findIndex((event) =>
+    event.startsWith("worker-retry:"),
+  );
+  expect(events[retryWorker + 1]).toStartWith("custody-scan:unknown:");
+  expect(events[retryWorker + 2]).toStartWith("container-list:");
+  expect(events[retryWorker + 3]).toStartWith("container-info:");
+  expect(events[retryWorker + 4]).toStartWith("forward-upload:");
+  expect(mutations).toEqual({ upload: 1, migration: 1, secret: 1, traffic: 1 });
+  expect(readPlatformMutationFence(fixture.planPath, fixture.plan.confirmation)).toEqual(
+    { outcome: "unknown", versionId: null },
+  );
+  expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+    mutationOutcome: "unknown",
+    diagnostic: { message: "synthetic forward upload boundary" },
+  });
+});
+
+test("real completeRelease stops transient Runner retry when the Worker predecessor changes", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-transient-worker-");
+  const events: string[] = [];
+  const mutations = { upload: 0, migration: 0, secret: 0, traffic: 0 };
+  const retry = transientForwardExecuteCommand(
+    fixture,
+    events,
+    mutations,
+    CONCURRENT,
+  );
+  const sleep = spyOn(Bun, "sleep").mockImplementation(async (milliseconds) => {
+    events.push(`sleep:${milliseconds}`);
+    retry.scenario.current = fixture.plan.predecessorContainer;
+  });
+  try {
+    await expect(
+      completeRelease(
+        {
+          action: "execute",
+          plan: fixture.planPath,
+          confirmation: fixture.plan.confirmation,
+          reviewer: "operator:test-reviewer",
+          evidence: fixture.evidencePath,
+        },
+        fixture.plan,
+        true,
+        undefined,
+        retry.command,
+        observedPlatformUploadCustody(fixture, events),
+      ),
+    ).rejects.toThrow("platform_worker_release_incomplete");
+  } finally {
+    sleep.mockRestore();
+  }
+  expect(events.filter((event) => event === "sleep:5000")).toHaveLength(1);
+  expect(retry.servingReads()).toBe(2);
+  expect(events.filter((event) => event.startsWith("container-list:"))).toHaveLength(1);
+  expect(events.filter((event) => event.startsWith("container-info:"))).toHaveLength(1);
+  expect(mutations).toEqual({ upload: 0, migration: 0, secret: 0, traffic: 0 });
+  expect(readPlatformMutationFence(fixture.planPath, fixture.plan.confirmation)).toEqual(
+    { outcome: "unknown", versionId: null },
+  );
+  expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+    mutationOutcome: "unknown",
+    diagnostic: { message: "platform_worker_release_predecessor_drift" },
+  });
+});
+
+test("real completeRelease refuses a third serving Version after the target Runner image is ready", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-runner-image-race-");
+  const { releaseTag: _tag, confirmation: _confirmation, ...original } =
+    fixture.plan;
+  const identity = {
+    ...original,
+    predecessorContainer: {
+      ...fixture.plan.predecessorContainer,
+      image: RESTORE_RUNNER_IMAGE,
+    },
+  };
+  const tagDigest = testDigest(JSON.stringify(identity)).slice("sha256:".length);
+  const subject = {
+    ...identity,
+    releaseTag: `tks-stg-${tagDigest.slice(0, 48)}`,
+  };
+  const plan: PlatformReleasePlan = {
+    ...subject,
+    confirmation: testDigest(JSON.stringify(subject)),
+  };
+  writeFileSync(fixture.planPath, `${JSON.stringify(plan, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  appendPlatformMutationFence(fixture.planPath, plan.confirmation, {
+    outcome: "unknown",
+    versionId: null,
+  });
+  appendPlatformMutationFence(fixture.planPath, plan.confirmation, {
+    outcome: "accepted",
+    versionId: DEPLOYED,
+  });
+  const events: string[] = [];
+  let statusReads = 0;
+  let publicReads = 0;
+  let providerMutations = 0;
+  const command: PlatformReleaseCommand = async (argv) => {
+    if (argv[1] === "deployments" && argv[2] === "status") {
+      const versionId = statusReads++ === 0 ? DEPLOYED : CONCURRENT;
+      events.push(`serving:${versionId}`);
+      return successfulCommand(
+        JSON.stringify({
+          id: "deployment-id",
+          versions: [{ version_id: versionId, percentage: 100 }],
+        }),
+      );
+    }
+    if (argv[1] === "versions" && argv[2] === "view") {
+      events.push("candidate-version");
+      return successfulCommand(
+        JSON.stringify({
+          id: DEPLOYED,
+          annotations: {
+            "workers/tag": plan.releaseTag,
+            "workers/message": `takosumi-platform-release ${plan.confirmation}`,
+          },
+          resources: {
+            script: { handlers: ["fetch"] },
+            bindings: platformBindingNames("officialRelease").map((name) => ({
+              name,
+              type: PLATFORM_BINDINGS[name]!.kind,
+              ...(name === "HOSTED"
+                ? { service: "takosumi-hosted-staging" }
+                : {}),
+            })),
+          },
+        }),
+      );
+    }
+    if (argv[1] === "containers" && argv[2] === "list") {
+      events.push("target-container-list");
+      return successfulCommand(
+        JSON.stringify([
+          {
+            id: plan.predecessorContainer.id,
+            name: plan.predecessorContainer.name,
+            state: "ready",
+            image: FORWARD_RUNNER_IMAGE,
+            version: 86,
+          },
+        ]),
+      );
+    }
+    if (argv[1] === "containers" && argv[2] === "info") {
+      events.push("target-container-info");
+      return successfulCommand(
+        JSON.stringify({
+          id: plan.predecessorContainer.id,
+          name: plan.predecessorContainer.name,
+          state: "ready",
+          version: 86,
+          configuration: { image: FORWARD_RUNNER_IMAGE },
+          active_rollout_id: null,
+          health: {
+            instances: { failed: 0, starting: 0, scheduling: 0 },
+            errors: [],
+          },
+        }),
+      );
+    }
+    providerMutations++;
+    throw new Error(`unexpected provider mutation: ${argv.slice(1).join(" ")}`);
+  };
+  await expect(
+    completeRelease(
+      {
+        action: "execute",
+        plan: fixture.planPath,
+        confirmation: plan.confirmation,
+        reviewer: "operator:test-reviewer",
+        evidence: fixture.evidencePath,
+      },
+      plan,
+      false,
+      undefined,
+      command,
+      undefined,
+      async () => {
+        publicReads++;
+        events.push("public-readback");
+      },
+    ),
+  ).rejects.toThrow("platform_worker_release_incomplete");
+  expect(events).toEqual([
+    `serving:${DEPLOYED}`,
+    "candidate-version",
+    "target-container-list",
+    "target-container-info",
+    `serving:${CONCURRENT}`,
+  ]);
+  expect(statusReads).toBe(2);
+  expect(publicReads).toBe(0);
+  expect(providerMutations).toBe(0);
+  expect(readPlatformMutationFence(fixture.planPath, plan.confirmation)).toEqual(
+    { outcome: "accepted", versionId: DEPLOYED },
+  );
+  expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+    status: "incomplete",
+    mutationOutcome: "accepted",
+    diagnostic: { message: "platform_worker_release_concurrent_version" },
+  });
 });
 
 test("serving deployment must be the emitted UUID alone at 100 percent", () => {

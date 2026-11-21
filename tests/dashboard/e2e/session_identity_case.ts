@@ -11,12 +11,14 @@ export function registerSessionIdentityCases(mode: DashboardE2EMode) {
       await page.clock.install({ time: new Date("2026-11-04T00:00:00Z") });
       let subject = "a";
       let holdSession = false;
+      let sessionHeld = false;
       let release!: () => void;
       const held = new Promise<void>((resolve) => { release = resolve; });
       await page.route("**/api/v1/dashboard/bootstrap?**", async (route) => {
         const selectedSubject = subject;
         if (holdSession && new URL(route.request().url()).search === "?includeWorkspaces=false") {
           holdSession = false;
+          sessionHeld = true;
           await held;
         }
         return route.fulfill({ json: {
@@ -27,13 +29,15 @@ export function registerSessionIdentityCases(mode: DashboardE2EMode) {
       await page.goto("/", { waitUntil: "domcontentloaded" });
       await expect(page.getByTestId("home-apps")).toBeVisible();
       subject = nextSubject;
-      await page.clock.fastForward(31_000);
+      // Capture and hold revalidation before advancing the clock can run work.
       const nextSession = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return url.pathname === "/api/v1/dashboard/bootstrap" && url.search === "?includeWorkspaces=false";
       });
       holdSession = true;
+      await page.clock.fastForward(31_000);
       await page.getByRole("link", { name: "Account", exact: true }).first().click();
+      await expect.poll(() => sessionHeld).toBe(true);
       const profile = page.locator(".acct-section");
       await expect(profile).toContainText("Person a");
       const previousPage = await page.locator(".acct-page").elementHandle();

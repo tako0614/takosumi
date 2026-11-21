@@ -41,6 +41,7 @@ import { isSecretKey } from "takosumi-contract/redaction";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { CapsuleRequiredInterface, Interface } from "takosumi-contract/interfaces";
 import { accountsOidcModuleVariableProfile } from "../../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
+import { capsuleSlug, workspaceSlugSuffix } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 
 import type {
   GitInstallAttemptFacts,
@@ -49,36 +50,17 @@ import type {
   StoredGitInstallPlan,
 } from "../../../../core/domains/install-plans/store.ts";
 import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { alternateInstallName } from "./install-names.ts";
 import { declaredRepositoryManifestModulePath } from "./repo-owned-install-config.ts";
 
 const MAX_FACT_MODULES = 100;
 const MAX_FACT_RESOURCES = 200;
 const MAX_FACT_VARIABLES = 256;
-const MAX_NAME_SUFFIX = 99;
-const MAX_CAPSULE_NAME = 128;
 
 import { deterministicInitialCapsuleId, deterministicInstallSourceId } from "../../../../core/domains/install-plans/source-reservation.ts";
 export { deterministicInitialCapsuleId, deterministicInstallSourceId };
-
-/** `https://github.com/o/my_App.git` → `my-app`; never empty. */
-export function proposedAppName(url: string): string {
-  const last = url
-    .replace(/[?#].*$/u, "")
-    .replace(/\/+$/u, "")
-    .replace(/\.git$/u, "")
-    .split(/[/:]/u)
-    .filter((part) => part.length > 0)
-    .at(-1) ?? "";
-  const slug = last
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/gu, "-")
-    .replace(/-+/gu, "-")
-    .replace(/^-|-$/gu, "")
-    .slice(0, 63)
-    .replace(/-$/u, "");
-  return slug || "app";
-}
 
 /** Module candidates captured for a `module` pause. */
 export function moduleCandidates(
@@ -107,6 +89,32 @@ export type AttemptInputFactsResult =
   | { readonly ok: true; readonly facts: NonNullable<GitInstallAttemptFacts["inputs"]> }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
+/** A UI opt-in backed by accepted declarations, with no host-owned override. */
+function publicEndpointPresentation(install: InstallConfig, base: InstallConfig): {
+  readonly variable: string;
+  readonly endpoint: NonNullable<GitInstallPlanVariablePresentation["publicEndpoint"]>;
+} | undefined {
+  const internal = install.internal;
+  if (internal?.reason !== "per_install_overrides" || !internal.sourceSnapshotId ||
+    !/^sha256:[a-f0-9]{64}$/u.test(internal.repositoryInstallUxDigest ?? "") ||
+    install.installExperience?.repositoryInstallUx?.status !== "accepted") return undefined;
+  const endpoints = install.installExperience.projections?.filter((entry) => entry.kind === "public_endpoint") ?? [];
+  const names = install.installExperience.projections?.filter((entry) => entry.kind === "service_name") ?? [];
+  if (endpoints.length !== 1 || names.length !== 1) return undefined;
+  const url = endpoints[0]!.variables.url;
+  const serviceName = names[0]!.variable;
+  if (!url || url === serviceName || endpoints[0]!.variables.subdomain ||
+    endpoints[0]!.variables.routePattern || endpoints[0]!.baseDomain ||
+    Object.hasOwn(base.variableMapping, url) || Object.hasOwn(base.variableMapping, serviceName)) return undefined;
+  const field = install.variablePresentation?.find((entry) => entry.name === url);
+  const name = install.variablePresentation?.find((entry) => entry.name === serviceName);
+  const source = name?.defaultValue?.source;
+  if (field?.format !== "cloudflare-workers-url" || field.type !== "string" || field.secret ||
+    field.defaultValue !== undefined || isSecretKey(url) || name?.secret || isSecretKey(serviceName) ||
+    (source !== "capsule_name" && source !== "workspace_scoped_capsule_name")) return undefined;
+  return { variable: url, endpoint: { serviceNameVariable: serviceName, serviceNameSource: source } };
+}
+
 /**
  * Inputs facts for one analyzed module. `installConfig` is the preview the
  * coordinator will commit (repository manifest) or the materialized generic
@@ -132,6 +140,7 @@ export function attemptInputFacts(input: {
   let variables: GitInstallPlanVariablePresentation[];
   if (input.repositoryManifest) {
     variables = [];
+    const endpoint = publicEndpointPresentation(input.installConfig, input.baseConfig);
     for (const entry of input.installConfig.variablePresentation ?? []) {
       const literalDefault = entry.defaultValue?.source === "literal"
         ? entry.defaultValue.value
@@ -166,6 +175,8 @@ export function attemptInputFacts(input: {
         ...(entry.placeholder && !sensitive
           ? { placeholder: entry.placeholder }
           : {}),
+        ...(entry.format && !sensitive ? { format: entry.format } : {}),
+        ...(endpoint?.variable === entry.name ? { publicEndpoint: endpoint.endpoint } : {}),
         ...(literalDefault !== undefined && !sensitive
           ? { defaultValue: literalDefault as JsonValue }
           : {}),
@@ -366,12 +377,36 @@ function isOfferableConnection(
   connection: ProviderConnection,
   workspace: { readonly id: string; readonly ownerUserId: string },
   appOwnerAccountId: string,
+  personalOwner?: string,
 ): boolean {
   return isWorkspaceBindableOperatorConnection(connection) ||
-    (connection.scope === "workspace" &&
-      connection.status === "verified" &&
-      connection.workspaceId === workspace.id &&
-      connection.ownerAccountId === appOwnerAccountId);
+    (connection.status === "verified" &&
+      connection.ownerAccountId === appOwnerAccountId &&
+      ((connection.scope === "workspace" && connection.workspaceId === workspace.id) ||
+        // Before the app exists, provider preflight uses the workspace owner.
+        (connection.scope === "personal" && connection.workspaceId === undefined &&
+          workspace.ownerUserId === appOwnerAccountId &&
+          connection.ownerAccountId === personalOwner)));
+}
+
+async function personalInstallConnections(
+  operations: ControlPlaneOperations,
+  owner: string,
+): Promise<readonly ProviderConnection[]> {
+  const reader = operations.accountResources;
+  if (!reader) return (await operations.connections.listOwnedConnections?.(owner) ?? [])
+    .filter((connection) => connection.scope === "personal");
+  const rows: ProviderConnection[] = [];
+  let cursor: string | undefined;
+  for (let read = 0; read < 20; read++) {
+    const page = await reader.listConnections(owner, { limit: 100, ...(cursor ? { cursor } : {}) });
+    rows.push(...page.items.filter((connection) => connection.scope === "personal"));
+    if (!page.nextCursor) return rows;
+    if (page.nextCursor === cursor) break;
+    cursor = page.nextCursor;
+  }
+  // A partial list cannot be used to decide that a choice is unique.
+  throw new Error("Personal install connection list is incomplete");
 }
 
 function sameRequirement(
@@ -390,13 +425,18 @@ function sameRequirement(
 export async function connectionRequirements(
   operations: ControlPlaneOperations,
   plan: Pick<StoredGitInstallPlan, "workspaceId" | "createdBy" | "options" | "attemptFacts">,
+  personalOwner?: string,
 ): Promise<readonly GitInstallPlanConnectionRequirement[]> {
   const facts = plan.attemptFacts?.inputs;
   if (!facts || facts.requirements.length === 0) return [];
-  const [connections, workspace] = await Promise.all([
+  const [workspaceConnections, personalConnections, workspace] = await Promise.all([
     operations.connections.listProviderConnections(plan.workspaceId),
+    personalOwner === plan.createdBy ? personalInstallConnections(operations, personalOwner) : [],
     operations.workspaces.getWorkspace(plan.workspaceId),
   ]);
+  const connections = [...new Map(
+    [...workspaceConnections, ...personalConnections].map((connection) => [connection.id, connection]),
+  ).values()];
   const policy = mergedProviderPolicy(workspace.policy, facts.providerPolicy);
   const explicit = plan.options.providerBindings ?? [];
   // The committed app is owned by the person who started the install.
@@ -404,7 +444,7 @@ export async function connectionRequirements(
     const candidates: GitInstallPlanConnectionCandidate[] = connections
       .filter((connection) =>
         workspace.id === plan.workspaceId &&
-        isOfferableConnection(connection, workspace, plan.createdBy) &&
+        isOfferableConnection(connection, workspace, plan.createdBy, personalOwner) &&
         sameProviderSource(requirement.provider, connection.providerSource) &&
         connectionAllowed(connection, policy)
       )
@@ -670,14 +710,8 @@ export async function nameProposal(
   );
   const current = plan.capsule.name;
   if (!taken.has(current)) return { current, proposed: current, conflict: false };
-  for (let suffix = 2; suffix <= MAX_NAME_SUFFIX; suffix += 1) {
-    const tail = `-${suffix}`;
-    const candidate = `${current.slice(0, MAX_CAPSULE_NAME - tail.length)}${tail}`;
-    if (!taken.has(candidate)) {
-      return { current, proposed: candidate, conflict: true };
-    }
-  }
-  return { current, proposed: current, conflict: true };
+  const candidate = await alternateInstallName(plan.workspaceId, plan.id);
+  return { current, proposed: taken.has(candidate) ? current : candidate, conflict: true };
 }
 
 export type AttemptVariablesCheck =
@@ -758,6 +792,7 @@ function isCanonicalHttpsOrigin(value: JsonValue | undefined): boolean {
 export async function userActionFor(
   operations: ControlPlaneOperations,
   plan: StoredGitInstallPlan,
+  personalOwner?: string,
 ): Promise<GitInstallPlanUserAction> {
   switch (plan.phase) {
     case "syncing_source":
@@ -798,17 +833,57 @@ export async function userActionFor(
   const resubmitting = plan.creationAttempted === true;
   const resubmit = plan.transientVariableNames ?? [];
   const [connections, interfaces, name] = await Promise.all([
-    connectionRequirements(operations, plan),
+    connectionRequirements(operations, plan, personalOwner),
     interfaceRequirements(operations, plan),
     nameProposal(operations, plan),
   ]);
-  const variables = facts?.variables ??
+  let variables: readonly GitInstallPlanVariablePresentation[] = facts?.variables?.map(({ publicEndpoint: _endpoint, ...variable }) => variable) ??
     resubmit.map((variableName) => ({
       name: variableName,
       type: "unknown" as const,
       required: true,
       sensitive: true,
     }));
+  // Ownership is projected from the exact immutable repository declaration,
+  // never written into the captured facts or inferred from a default's shape.
+  if (facts && variables.length > 0 && plan.sourceId && plan.sourceSnapshotId &&
+    facts.modulePath === (plan.installModulePath ?? plan.options.modulePath ?? ".")) {
+    let snapshot: SourceSnapshot | undefined;
+    try {
+      snapshot = await operations.getSourceSnapshot(plan.sourceSnapshotId);
+    } catch (error) {
+      // Missing optional presentation evidence leaves legacy editability;
+      // advancing the attempt still requires the canonical snapshot.
+      if (!(error instanceof OpenTofuControllerError) || error.code !== "not_found") throw error;
+    }
+    const manifest = snapshot?.repositoryManifest;
+    const modulePath = snapshot && snapshot.id === plan.sourceSnapshotId &&
+        snapshot.sourceId === plan.sourceId &&
+        snapshot.workspaceId === plan.workspaceId && manifest?.status === "present"
+      ? declaredRepositoryManifestModulePath(snapshot, facts.modulePath)
+      : undefined;
+    if (modulePath && manifest?.status === "present") {
+      const module = manifest.document.install.modules[modulePath]!;
+      const userNames = new Set(module.inputs
+        .filter((entry) => entry.source.kind === "user")
+        .map((entry) => entry.name));
+      variables = variables.map((variable) => {
+        const endpoint = facts.variables.find((entry) => entry.name === variable.name)?.publicEndpoint;
+        const declared = module.inputs.find((entry) => entry.name === variable.name);
+        const serviceName = module.inputs.find((entry) => entry.name === endpoint?.serviceNameVariable);
+        const valid = endpoint && declared?.source.kind === "user" &&
+          declared.format === "cloudflare-workers-url" && serviceName?.role === "service_name" &&
+          serviceName.source.kind === endpoint.serviceNameSource &&
+          module.requires?.some((requirement) => requirement.kind === "http.endpoint" &&
+            requirement.deliver.variables?.url === variable.name);
+        const baseName = capsuleSlug(plan.capsule.name);
+        const suffix = valid && endpoint.serviceNameSource === "workspace_scoped_capsule_name"
+          ? workspaceSlugSuffix(plan.workspaceId) : "";
+        return { ...variable, userEditable: userNames.has(variable.name),
+          ...(valid ? { publicEndpoint: { ...endpoint, suggestedName: suffix ? `${baseName}-${suffix}` : baseName } } : {}) };
+      });
+    }
+  }
   return {
     kind: "provide_inputs",
     modulePath: facts?.modulePath ?? plan.installModulePath ??

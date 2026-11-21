@@ -282,16 +282,34 @@ after live readback proved the configured migration tag, so routine code cannot
 replay a Durable Object migration.
 
 `wrangler versions upload` synchronizes assets and uploads one tagged Version
-without applying triggers or a Container rollout. After immutable Version
-readback, `wrangler versions deploy` routes it at 100% using a transient config
+without applying triggers or a Container rollout. If Cloudflare returns
+Version-not-found (100146) immediately after acknowledging the upload, the lane
+retries the same immutable Version read with at most 120 seconds of retry
+delays. It validates the acknowledged Version and rechecks the active
+predecessor and authority before activating after a retry. If the Version
+remains unavailable, it reports the acknowledged candidate for recovery.
+After immutable Version readback, `wrangler versions deploy` routes it at 100% using a transient config
 with only the exact account and Worker name, so activation cannot patch
-observability, logpush, or tail consumers. Final readback repeats every
-Version, topology, secret, Container, public-header, and discovery invariant.
+observability, logpush, or tail consumers. After activation is acknowledged,
+deployment status is read again while it reports only the exact predecessor
+at 100%, with at most 180 seconds of retry delays. An unexpected Version,
+split deployment, read error, or unchanged predecessor at the retry limit
+stops the release. When status shows the candidate at 100%, final readback
+repeats every Version, topology, secret, Container, public-header, and
+discovery invariant.
 
 Asset synchronization is the first possible mutation. A lost acknowledgement
-from upload or activation is `incomplete`: the lane prints the predecessor and
-unique Version tag, never retries, and requires immutable Version/deployment
-history before recovery. Historical rollback remains owned by
+from upload or activation is `incomplete`. The JSON result includes the
+predecessor, unique Version tag, mutation phase, and sealed entry and dashboard
+digests. `candidateVersionId` is present after parsing the upload
+acknowledgement or verifying the exact resume candidate. A successful
+post-activation authority read also supplies `observedServingVersionId`.
+If the authority comparison fails, `authorityDrift` lists the changed sections
+without disclosure of the compared values.
+
+The lane never retries a mutation. Read immutable Version and deployment
+history before recovery. Use the original upload acknowledgement to identify
+the candidate. Historical rollback remains owned by
 `takosumi-platform-staging`; this lane creates no plan, journal, archive, or
 parallel restore mechanism.
 
@@ -645,6 +663,16 @@ predecessor and fsyncs an `unknown` checkpoint immediately before the sole
 checkpoint is derived from the physical plan and confirmation, not the chosen
 evidence path, so an alternate output path cannot upload twice.
 
+The final Container check may take up to three additional observations,
+with five seconds of pause before each, when only the starting or scheduling
+instance counts differ from the reviewed predecessor. Each retry confirms
+the exact serving Worker predecessor and the upload custody before reading
+the Container again. Upload still requires the Container to match the reviewed
+state, including zero starting and scheduling instances. Changes to the
+application identity, image, version, state or rollout, reported failures,
+and provider read errors stop without another attempt. The existing
+checkpoint governs recovery if this check stops after it has been written.
+
 Execute parses exactly one `Current Version ID: <uuid>` from Wrangler's output,
 records that accepted UUID in the checkpoint, and requires deployment status to
 contain only that UUID at 100 percent. It reads the exact immutable Version back
@@ -677,6 +705,16 @@ do not change its completed current-to-target proof. A present healthy count
 must still be well-formed. Native
 fallback reads use only the fixed provider origin and in-memory credentials;
 Wrangler authentication output and its disk logging are never retained.
+
+On execute and recover, a reviewed change to a different immutable Runner
+image allows deployment readback to poll for up to 16 minutes, reflecting
+Cloudflare's instance drain and startup. Readback starts at five-second
+intervals and slows to 15 seconds after the normal window. A read already
+in flight keeps its existing command deadline. Another Container application
+or image, or reported failed instances or errors, stops the check. Once the
+exact target image is healthy, the command rechecks the candidate's 100-percent
+Worker deployment and the public entry before recording ready. Releases that
+keep the same image retain the normal polling budget.
 
 If provider acknowledgement is lost, recovery lists the bounded recent Version
 set and accepts exactly one post-plan Version carrying that unique plan tag.

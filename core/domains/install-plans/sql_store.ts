@@ -139,6 +139,19 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return await this.#getByScope(scope);
   }
 
+  async revisionForPlanRun(capsuleId: string, workspaceId: string, planRunId: string): Promise<StoredGitInstallPlan | undefined> {
+    const result = await this.#client.query<GitInstallPlanRow>(
+      `select * from ${TABLE}
+        where workspace_id = $1
+          and record_json ->> 'capsuleId' = $2
+          and record_json ->> 'operation' = 'revision'
+          and record_json ->> 'planRunId' = $3
+        limit 2`,
+      [workspaceId, capsuleId, planRunId],
+    );
+    return result.rows.length === 1 ? rowPlan(result.rows[0]!) : undefined;
+  }
+
   async preparingCoordinatorForCapsule(
     capsuleId: string,
     workspaceId: string,

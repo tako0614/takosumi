@@ -45,6 +45,22 @@ test("falls back to a concrete init failure code", () => {
   ).toBe("opentofu_plan_failed");
 });
 
+test("keeps a provider process startup error in the Plan diagnostics", () => {
+  const stderr =
+    'Failed to instantiate provider "registry.opentofu.org/example/test" to obtain schema: ' +
+    "fork/exec .terraform/providers/terraform-provider-test: permission denied";
+  const payload = commandFailurePayload(
+    "run_test",
+    "plan",
+    { exitCode: 1, stdout: "", stderr },
+    undefined,
+    "plan",
+  );
+
+  expect(payload.errorCode).toBe("opentofu_plan_failed");
+  expect(payload.stderr).toBe(stderr);
+});
+
 test("keeps source preparation failures out of infrastructure retries", () => {
   expect(
     classifyOpenTofuFailure(

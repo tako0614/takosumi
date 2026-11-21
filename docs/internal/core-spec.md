@@ -117,6 +117,12 @@ rename cryptographic scope. See [app storage roots](../operations/app-storage-ro
 StateVersion storage and locking are part of the canonical Run lifecycle; they
 are not a separate Resource/Form ledger.
 
+New Git install attempts assign an `app-<UUID>` technical name when no name is
+provided. The name is allocated once per attempt and retained on replay.
+Store display names and Git repository labels are presentation only, and do not
+supply a technical name. An explicit technical name still uses the regular
+uniqueness check before creation.
+
 New Git installs allocate a dedicated Source with a deterministic install-plan-derived id,
 an immutable `ownerCapsuleId`, and private `createdByInstallPlanId` provenance in existing JSON.
 Initial Capsule authority claims or verifies the Source in the same store commit; another
@@ -362,6 +368,48 @@ state cursor, execution epoch, Workspace management, and policy as for any
 Apply. A finalizer-created Plan additionally requires its matching live
 uninstall request at preparation, atomic admission, and pre-dispatch; a cancel
 or replacement request permanently invalidates the old system approval.
+A person using an account session or personal access token may explicitly select
+replacement Connections for a new manual `POST /api/v1/capsules/{id}/destroy-plan`:
+`{"destroyProviderConnectionReplacements":[{"connectionId":"old-id","replacementConnectionId":"new-id"}]}`.
+This never changes the app's ProviderBindingSet, InstallConfig, applied module,
+variables, state, or scheduled uninstall request. The current StateVersion must
+identify an applied Plan with exact provider rows and a pinned resolved-binding
+digest. The old Connection may be absent or still registered, including when an
+API token was rotated. This recovery does not replace operator Connections.
+Current scope, ownership, provider, credential policy, readiness and expiry are
+checked for the selected replacement.
+The trusted credential driver must explicitly prove its verified account scope;
+the reference Cloudflare driver requires its exact-account verification capability
+and matching account metadata. The complete binding digest must match the applied
+Plan after substituting the old ID **only in the comparison preimage**. When the
+current StateVersion was produced by a prior recovery Plan, a new manual recovery
+starts with the replacements recorded by that exact Plan. The new explicit
+selection overrides only the named logical bindings. The new Plan records the
+complete effective selection, which is revalidated at Apply. The comparison
+uses the prior Plan's recorded effective IDs against the pinned digest.
+Other bindings, aliases, settings, recipe and verification remain exact;
+minting uses the effective IDs of the new Plan. Each original Connection can have
+one replacement. Several original Connections may use the same replacement when
+the account and configuration match for every affected binding. Missing or
+legacy evidence, changed metadata, self-replacements and ambiguous selections
+are refused. This option is not available to
+create/update, source-less legacy teardown, or automatic scheduled retries.
+After a previous manual recovery saved a partial Destroy, the app owner can start the
+ordinary immediate removal review with the original bindings, including when the
+previously selected replacement is no longer usable.
+Accounts supplies the current app owner and epoch for this review. Core requires the exact
+failed Destroy receipt and current StateVersion, verifies the original connections against
+the applied account and binding digest, and records the effective original IDs in the new Plan.
+The public replacement input still requires distinct IDs. The new review requires its own
+approval and the ordinary Apply verification. These recorded rows can repeat the original ID
+as the selected ID. Keep a compatible Core reader for unfinished Plans or retained partial
+state whose provenance contains one of these rows. An older reader refuses this evidence.
+The new destroy Plan still needs explicit approval and Apply, which recheck the
+same evidence and current authority. A blocked reservation can coexist with this
+manual recovery; it is not rewritten or automatically resumed. Existing no-body
+destroy requests retain their usual behavior. The Web selection form is separate
+from this API contract.
+
 Approval writes `approvedBy` and `approvedAt` together with the `plan.approved`
 audit event in the Plan transition; Activity exposes the same actor and approval
 time. An unverifiable or non-delete Plan, a Plan the owner cancelled, repeated
@@ -420,6 +468,12 @@ identities or assert that a provider operation succeeded.
 A reviewed Destroy may settle the original failed create's `unknown` runtime
 safety only through that exact current recovered StateVersion and its failed
 Apply lineage; ordinary Apply/update remains blocked by the unknown outcome.
+For an unknown outcome from a failed Destroy, a new manual Destroy is admitted
+only when the exact provider-dispatched, provider-failed persisted-state audit
+receipt and execution receipt match the failed ApplyRun, current StateVersion,
+and both the applied and newly reviewed recovery Plans. Indeterminate or
+unpersisted failures remain fenced; ordinary Apply/update eligibility is not
+broadened.
 Paired `pre_destroy` cleanup for an unexecuted `post_apply` may be recorded as
 not applicable only when the recovery lineage is exact, no Output exists, and
 no lifecycle-start/dispatch or positive provider-success evidence contradicts
@@ -430,6 +484,19 @@ Current Capsule lifecycle code does not release historical public-host
 reservation rows or perform unrelated bulk OIDC-client cleanup; physical
 retirement of those historical rows waits for operator inventory.
 
+When an initial create reaches dispatch but returns the typed
+`runner_mutation_indeterminate` failure, the original failed Apply and consumed
+Plan can commit with an unchanged, generation-0 `pending` Capsule becoming
+`error`. This uses the existing Run-lease and Capsule cursor/status ledger
+fences after current authority checks. It creates no StateVersion, Output,
+execution receipt or assertion of provider success or failure; runtime safety
+remains `unknown`. Reopening the consumed Plan returns the same failed Apply.
+Read-only planning can still run, but normal mutation admission remains fenced
+by runtime safety. Pre-provider retryable refusals keep the initial Capsule
+pending, and an update's existing generation and Output remain unchanged.
+None of these status projections supplies recovery approval or a staged state
+artifact.
+
 The state-only recovery Core primitive is operator-only and has no public route
 or default service mount. The explicit [local Bun/Postgres command](../operations/local-state-recovery.md)
 uses a protected, purpose-specific single-case approval matched to the actual
@@ -437,7 +504,41 @@ Unix OS account, selected target label, fixed command timestamp and exact
 already-staged artifact digests. It calls the existing local verifier and ledger
 primitive without staging or runner dispatch. A shared/root UID is account
 privilege, not personal identity; the target label is not a cross-host proof.
-The Worker/R2 authorization entrypoint remains dormant. Its Worker R2 adapter can
+Its separate `--stage-case` mode requires a different private approval purpose
+for one fixed failed Apply, Capsule/Workspace/environment, pinned SourceSnapshot,
+recovery identity, original captured-state digest and operator-confirmed custody
+evidence digest. It reads a protected, bounded raw capture and stages through the
+same encrypted local adapter. An immutable private receipt contains the verified
+handle/digests for a separately issued commit approval; it is not that approval.
+Stage admission reads the current initial failure and rejects known stale scope,
+generation, authority or later work. These reads are not an atomic ledger fence;
+the unchanged commit primitive checks full provenance, history and CAS authority.
+Neither mode supplies missing capture provenance or performs provider execution.
+The default Worker/R2 authorization entrypoint remains dormant. An explicit
+owner alternate module may export the named-only class from
+`composePrivateStateRecoveryWorker` with a same-realm
+`createPrivateR2StateRecoveryOperator` composition. Fetch returns 404. Its
+purpose-specific qualified approval port authenticates a private proof's
+holder/channel and current effect; named RPC access, a public case lookup,
+session/admin/deploy credentials and Accounts identity-merge review do not
+authorize this operation. The independent signing helper and public-key reader
+use a Worker recovery-specific ES256 domain, a private 32-byte holder proof and
+fresh current lookup of its digest. Stage and commit are explicitly signed
+separately; a stage receipt is never promoted automatically. The reader accepts
+only canonical exact signed payload bytes, the fixed issuer/key/target/purpose,
+current non-revoked evidence and current expiry. It has no signing key or cached
+decision. Real key/holder/current-store custody and default binding are not
+provided. The selected target and storage profile are operator configuration;
+target-label equality is a misselection fence, not physical custody proof.
+Invalid approval is rejected before opening keys/storage. Stage and commit use
+separate closed records, fixed command identity and expiry, rechecked around
+I/O. Stage's receipt is not commit approval. The lazy concrete composition
+requires real encryption key fields, an explicit storage profile and an already
+deployed, verified D1 ledger schema; it cannot bootstrap or migrate that schema.
+The external approval and D1 CAS are not one atomic transaction. Refusal after a
+commit may hide an already committed effect; only the same explicitly authorized
+command can reconcile it. See the [private Worker composition](../operations/local-state-recovery.md#private-worker-composition-unmounted).
+Its Worker R2 adapter can
 stage operator-selected, bounded OpenTofu state bytes and verify an opaque
 handle against an immutable encrypted generation-1 object. It does not accept
 an arbitrary URL or object key, overwrite an occupied coordinate, or infer
@@ -945,9 +1046,27 @@ not change identity. Opaque credential material is bound by a one-way digest
 and is never stored. A matching durable `preparing` record may therefore resume
 with a freshly issued equivalent credential, but `dispatched`, `indeterminate`,
 or any semantic mismatch never grants another provider dispatch. Completed
-state/output readback and adoption also require a freshly verified credential
-and an exact semantic match against that pre-existing post-dispatch record; an
-R2 target cannot mint its own adoption authority. A transport failure after
+state/output readback and adoption through the mutation entry point also
+require a freshly verified credential and an exact semantic match against that
+pre-existing post-dispatch record. RunOwner can additionally settle a running
+Apply or eligible Git Destroy through a private, read-only runner
+receipt under the current Run and Capsule lease. It rechecks the retained Plan,
+current management and execution admission, and the exact state generation.
+The Runner DO records the admitted controller, runner and executor artifact
+digests with the dispatch fence before sending the mutation to the Container. Receipt
+observation compares the completion evidence with those recorded digests and
+the original Run, action, receipt version and fence. A Worker code update can
+therefore settle a completed mutation under its original artifacts. Older
+dispatch records without the admitted digests still require the completion to
+match the current configured artifact digests. Destroy reads only the
+committed state and execution evidence. An approved manual replacement also
+rechecks the selected Connection against the applied provider account and the
+reviewed binding digest before settling. A scheduled Destroy must name the
+current uninstall reservation, have its owner's approval, and still pass
+requester authorization. Legacy schedule markers without an origin and runs
+with lifecycle actions or private files continue through the ordinary mutation
+entry point. An R2 target cannot mint its own adoption
+authority. A transport failure after
 dispatch returns the typed `runner_mutation_indeterminate` outcome. Redelivery
 may complete only by adopting the exact immutable state/output target already
 written for that Run; without that authoritative readback, it remains
@@ -1035,6 +1154,40 @@ and trust in same-UID source/provider code are operator assumptions, not a
 hostile or multi-tenant at-most-once guarantee. The exact request digest also
 includes credential bytes: refreshed equivalent credentials can make an
 otherwise recoverable failure indeterminate rather than authorizing adoption.
+
+Node startup can also adopt an already authenticated encrypted Apply result
+without contacting the Runner or issuing credentials. Its host-only opaque
+command binds the exact adapter, Run and state coordinate. Current pinned input,
+provider-binding, management and execution-evidence checks precede the normal
+lease claim and ledger CAS; missing or mismatched proof cannot fall through to
+execution or a new failed Run. Successful results retain local raw-output
+confirmation. A typed provider-failed result requires persisted state and the
+state-only execution commit, then uses the existing partial-state failure CAS:
+same Run failed, next state generation, Capsule error and no new Output.
+Neither a heartbeat timeout nor a missing Runner is a failure receipt.
+
+The Worker RunOwner uses an explicitly composed, host-only receipt observer for
+stale non-destroy Apply Runs without lifecycle or private-file effects. Core
+allocates the state and raw-output coordinates; the selected Runner object's
+completed receipt must authenticate the exact R2 content/length, evidence
+reference/digest, outcome, raw-output range and immutable execution
+version/fence/operation ID. This private read retains StoredService owner
+resolution, does not write the current-state cache or contact a container, and
+settles through the same current admission, no-mint environment checks and
+lease/CAS as Node receipt adoption.
+New completed success receipts also retain the raw Output plaintext digest and
+the ciphertext length actually accepted at its immutable reference. Both the
+private reader and ordinary completed re-entry require that pair to match the
+read bytes. A conditional-write acknowledgement can adopt an older encryption
+format for the same digest, so its actual stored length is retained. Historical
+receipts without the pair keep their existing guards. No fingerprint is inferred
+or backfilled from their current object metadata. An unreadable/malformed authority, changed
+admission, elapsed dispatch deadline or invalid completed artifact holds the
+original Run without a new failure, credential or mutation. A noncompleted
+valid phase (or absent authority) does not grant dispatch: the unchanged normal
+DO preparation fence still owns pre-dispatch admission and legacy R2 replay.
+Fresh/queued, Destroy, lifecycle/private-file and other configured executors
+keep their existing paths. No new public route or sweep is enabled.
 
 The private local HTTP preparation-v2 candidate is opt-in and is not yet the
 default advertised runner protocol. It permits an exact byte-identical

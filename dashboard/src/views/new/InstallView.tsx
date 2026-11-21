@@ -2,8 +2,7 @@
  * `/new`: the Store and an app's page while it is not installed yet
  * (TASK-0115).
  *
- * - `/new` lists the Store; unfinished installs are shown when a legacy
- *   Workspace context can list them.
+ * - `/new` lists the Store.
  * - `/new?tcsBase&tcsListing…`, `/new?git=…` (and `/install`, `/store`, which
  *   forward here) show one app, not installed. Opening it creates nothing.
  * - 「インストール」 starts one install attempt and opens the one install
@@ -11,20 +10,20 @@
  *   coordinator reads the repository and makes the Plan. Its id joins the
  *   URL (`installPlan=gip_…`) so a reload reopens the same attempt, read-only
  *   until the person acts again.
- * - Nothing applies before 「許可してインストール」; the install then finishes
+ * - Nothing applies before 「インストール」; the install then finishes
  *   on the same screen, which offers 「開く」 and the app's own page.
  */
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { Navigate, useLocation, useNavigate } from "@solidjs/router";
 import { ArrowLeft, ChevronDown, ExternalLink } from "lucide-solid";
-import { matchingInstalledApps, type GitInstallPlan, type GitInstallPlanResponse } from "takosumi-contract";
+import { matchingInstalledApps, type GitInstallPlan } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, FormField, Input, Select, Spinner } from "../../components/ui/index.ts";
-import { StoreBrowser } from "../store/StoreBrowser.tsx";
+import { StoreBrowser, type StoreCatalogCache } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
-import { listConnections, listInstalledApps, listOpenGitInstallAttempts } from "../../lib/control-api.ts";
+import { listConnections, listInstalledApps } from "../../lib/control-api.ts";
 import { capsuleNameFromUrl, hasInstallPrefillParams, isSafeHttpsGitUrl, parseInstallPrefill } from "../../lib/install-link.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import {
@@ -35,7 +34,7 @@ import {
 } from "../../lib/app-handoff.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
-import { appPageHref, installAttemptHref } from "../../lib/app-links.ts";
+import { appPageHref } from "../../lib/app-links.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
 import { readyOrUndefined } from "../../lib/resource-read.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
@@ -43,21 +42,16 @@ import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { InstallScreen } from "./InstallSheet.tsx";
 import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import {
-  appNameFromText,
   attemptProblemKey,
   INSTALL_SCREEN_STAGES,
   installAttemptId,
   legacyCapsuleLocator,
-  openAttemptStatusKey,
-  openEntryIsContinuable,
   repositoryLabel,
   versionLabel,
   withInstallAttempt,
   withoutInstallContext,
 } from "./install-attempt.ts";
 import {
-  discardInstallAttempt,
-  installErrorMessage,
   useInstallAttempt,
   type InstallAttempt,
 } from "./use-install-attempt.ts";
@@ -112,6 +106,7 @@ export default function InstallView() {
 
 function InstallRoute(props: { readonly principalId: string }) {
   const location = useLocation();
+  const catalogCache: StoreCatalogCache = {};
   const namesApp = () =>
     Boolean(
       installAttemptId(location.search) ||
@@ -121,7 +116,7 @@ function InstallRoute(props: { readonly principalId: string }) {
   return (
     <Switch fallback={
       <StorePage
-        principalId={props.principalId}
+        catalogCache={catalogCache}
         rejectedInstallLink={hasInstallPrefillParams(withoutInstallContext(location.search))}
       />
     }>
@@ -137,47 +132,30 @@ function InstallRoute(props: { readonly principalId: string }) {
 
 // --- The Store -------------------------------------------------------------------
 
-function StorePage(props: { readonly principalId: string; readonly rejectedInstallLink: boolean }) {
+function StorePage(props: {
+  readonly rejectedInstallLink: boolean;
+  readonly catalogCache: StoreCatalogCache;
+}) {
   const navigate = useNavigate();
   const [gitUrl, setGitUrl] = createSignal("");
   const [gitError, setGitError] = createSignal<string>();
-  const [installedApps, { refetch: refetchInstalledApps }] = createResource(
-    () => ({ workspaceId: currentWorkspaceId() || undefined }),
-    (scope) => listInstalledApps(scope.workspaceId),
-  );
   // Selecting a listing reflects it into the URL, so back and share work.
   const choose = (listing: TcsListing) => {
     pickedListing = listing;
     navigate(`/new?${buildNewQuery(listing)}`);
   };
   return (
-    <main
-      class="iv-page iv-browse-page"
-      data-install-state={
-        installedApps.error || installedApps.loading || !installedApps() || installedApps()?.complete === false
-          ? "unknown"
-          : "not-installed"
-      }
-    >
+    <div class="iv-page iv-browse-page">
       <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
       <Show when={props.rejectedInstallLink}>
         <div class="iv-error" role="alert" data-testid="install-link-refusal">
           <p>{t("installStore.invalidInstallLink")}</p>
         </div>
       </Show>
-      <OpenAttempts principalId={props.principalId} />
-      <Show when={installedApps.error}>
-        <div class="iv-error" role="alert">
-          <p>{t("installStore.installedReadFailed")}</p>
-          <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
-        </div>
-      </Show>
       <section class="iv-catalogue iv-catalogue-browse" aria-label={t("installStore.browseTitle")}>
         <StoreBrowser
           locale={locale()}
-          installedApps={!installedApps.loading && !installedApps.error ? installedApps()?.installedApps : []}
-          installedAppsLoading={installedApps.loading}
-          installedAppsComplete={!installedApps.loading && !installedApps.error ? installedApps()?.complete : false}
+          catalogCache={props.catalogCache}
           onConfigure={choose}
           onSelectListing={choose}
           showSourceControls={true}
@@ -211,87 +189,7 @@ function StorePage(props: { readonly principalId: string; readonly rejectedInsta
           <Show when={gitError()}>{(message) => <p class="iv-muted" role="alert">{message()}</p>}</Show>
         </details>
       </section>
-    </main>
-  );
-}
-
-/** This person's unfinished installs here: each can continue or be thrown away. */
-function OpenAttempts(props: { readonly principalId: string }) {
-  const [attempts, { mutate, refetch }] = createResource(
-    () => ({ workspaceId: currentWorkspaceId() || undefined }),
-    (scope) => listOpenGitInstallAttempts(scope.workspaceId),
-  );
-  const [busy, setBusy] = createSignal<string>();
-  const [rowError, setRowError] = createSignal<{ readonly id: string; readonly message: string }>();
-  const mine = () =>
-    (attempts.state === "ready" ? attempts.latest ?? [] : []).filter(
-      (entry) => entry.installPlan.createdBy === props.principalId,
-    );
-  const discard = async (entry: GitInstallPlanResponse) => {
-    const plan = entry.installPlan;
-    if (busy()) return;
-    setBusy(plan.id);
-    setRowError(undefined);
-    try {
-      // A newer generation than the list's is read again before discarding.
-      await discardInstallAttempt(plan.id, plan.generation);
-      clearCapsuleListCache(plan.workspaceId);
-      mutate((current) => current?.filter((item) => item.installPlan.id !== plan.id));
-    } catch (cause) {
-      setRowError({ id: plan.id, message: installErrorMessage(cause) });
-      // Show the list as it is now.
-      void refetch();
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  return (
-    <Show when={mine().length > 0}>
-      <section class="iv-open-attempts" data-testid="install-open-attempts" aria-labelledby="iv-open-title">
-        <h2 id="iv-open-title">{t("installStore.open.title")}</h2>
-        <p class="iv-muted">{t("installStore.open.hint")}</p>
-        <ul>
-          <For each={mine()}>
-            {(entry) => (
-              <li data-install-plan-id={entry.installPlan.id}>
-                <div class="iv-open-attempt-text">
-                  <strong>{entry.installPlan.capsule.name}</strong>
-                  <span>
-                    {repositoryLabel(entry.installPlan.source.url)}
-                    <Show when={versionLabel(entry.installPlan.source.ref)}>{(version) => <> · {version()}</>}</Show>
-                  </span>
-                  <span class="iv-open-attempt-status">{t(openAttemptStatusKey(entry))}</span>
-                </div>
-                <div class="iv-open-attempt-actions">
-                  <Show when={openEntryIsContinuable(entry)}>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      href={installAttemptHref(entry.installPlan.id)}
-                    >
-                      {t("installStore.continue")}
-                    </Button>
-                  </Show>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    busy={busy() === entry.installPlan.id}
-                    disabled={busy() !== undefined}
-                    onClick={() => void discard(entry)}
-                  >
-                    {t("installStore.discard")}
-                  </Button>
-                </div>
-                <Show when={rowError()?.id === entry.installPlan.id ? rowError()?.message : undefined}>
-                  {(message) => <p class="iv-muted" role="alert">{message()}</p>}
-                </Show>
-              </li>
-            )}
-          </For>
-        </ul>
-      </section>
-    </Show>
+    </div>
   );
 }
 
@@ -332,7 +230,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
       ref: plan.source.ref === "HEAD" ? "" : plan.source.ref,
       sourcePath: plan.source.path,
       path: plan.options.modulePath ?? "",
-      name: plan.capsule.name,
+      name: capsuleNameFromUrl(plan.source.url),
     });
     return path ? (appendAppHandoff(path, handoff()) ?? path).replace(/^\/new/u, "") : "";
   };
@@ -388,7 +286,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   const title = () => {
     const selected = listed();
     const text = selected?.name?.[locale()]?.trim() || selected?.suggestedName;
-    return text || plan()?.capsule.name || prefill()?.name || (gitUrl() ? capsuleNameFromUrl(gitUrl()) : "");
+    return text || prefill()?.name || (gitUrl() ? capsuleNameFromUrl(gitUrl()) : "");
   };
   const description = () => {
     const text = listed()?.description?.[locale()]?.trim();
@@ -415,9 +313,6 @@ function AppInstallPage(props: { readonly principalId: string }) {
         ref: ref(),
         sourcePath: prefill()?.sourcePath ?? ".",
         modulePath: listed()?.source.path ?? prefill()?.path ?? "",
-        name: prefill()?.name
-          ? appNameFromText(prefill()!.name!)
-          : appNameFromText(listed()?.suggestedName ?? ""),
         ...(sourceAuth() ? { authConnectionId: sourceAuth() } : {}),
       },
       { fromStore: fromStore() },
@@ -475,7 +370,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   }, { defer: true }));
 
   return (
-    <main class="iv-page iv-configure-page" data-install-state={stage()}>
+    <div class="iv-page iv-configure-page" data-install-state={stage()}>
       <a class="iv-back-link" href="/new"><ArrowLeft size={18} aria-hidden="true" />{t("installStore.back")}</a>
       <article class="iv-app-surface" aria-labelledby="iv-app-title">
         <header class="iv-app-detail" data-testid="install-app-header">
@@ -516,11 +411,14 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     <div class="iv-existing-apps" data-testid="install-existing-apps">
                       <p class="iv-muted">{installedLabel()}</p>
                       <div class="iv-action-row">
-                        <For each={existingApps()}>{(app) => (
-                          <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${app.name}`}>
-                            {t("installStore.open")}<Show when={existingApps().length > 1}> · {app.name}</Show>
-                          </Button>
-                        )}</For>
+                        <For each={existingApps()}>{(app) => {
+                          const label = () => app.displayName?.[locale()] || title();
+                          return (
+                            <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${label()}`}>
+                              {t("installStore.open")}<Show when={existingApps().length > 1}> · {label()}</Show>
+                            </Button>
+                          );
+                        }}</For>
                       </div>
                     </div>
                   </Show>
@@ -528,26 +426,6 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
                     <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
                   </Show>
-                  <details class="iv-choice iv-version-choice" data-testid="install-source-fields">
-                    <summary>
-                      <span>{t("installStore.versionLabel")}</span>
-                      <strong>{ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong>
-                      <ChevronDown size={16} aria-hidden="true" />
-                    </summary>
-                    <div class="iv-choice-content">
-                      <FormField
-                        label={t("installStore.sourceRef")}
-                        hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
-                      >
-                        <Input
-                          value={ref()}
-                          placeholder={fromStore() ? t("installStore.sourceRefStable") : undefined}
-                          spellcheck={false}
-                          onInput={(event) => setRef(event.currentTarget.value)}
-                        />
-                      </FormField>
-                    </div>
-                  </details>
                   <Show when={sourceConnections().length > 0}>
                     <FormField label={t("installStore.sourceAuth")}>
                       <Select value={sourceAuth()} onChange={(event) => setSourceAuth(event.currentTarget.value)}>
@@ -576,6 +454,34 @@ function AppInstallPage(props: { readonly principalId: string }) {
                       <p class="iv-start-hint">{t("installStore.installAnotherHint")}</p>
                     </Show>
                   </div>
+                  <details class="iv-disclosure iv-choice iv-version-choice iv-start-version" data-testid="install-source-fields">
+                    <summary>
+                      <span>{t("installStore.versionLabel")}</span>
+                      <strong>{ref() === "HEAD" && fromStore() ? t("installStore.developmentPreview") : ref() ? versionLabel(ref()) ?? t("installStore.defaultBranch") : t(fromStore() ? "installStore.latest" : "installStore.defaultBranch")}</strong>
+                      <ChevronDown size={16} aria-hidden="true" />
+                    </summary>
+                    <div class="iv-choice-content">
+                      <Show when={fromStore()}>
+                        <div class="iv-action-row" role="group" aria-label={t("installStore.versionLabel")}>
+                          <Button type="button" size="sm" variant={ref().trim() ? "ghost" : "secondary"} aria-pressed={!ref().trim()}
+                            onClick={() => setRef("")}>{t("installStore.latest")}</Button>
+                          <Button type="button" size="sm" variant={ref() === "HEAD" ? "secondary" : "ghost"} aria-pressed={ref() === "HEAD"}
+                            onClick={() => setRef("HEAD")}>{t("installStore.developmentPreview")}</Button>
+                        </div>
+                      </Show>
+                      <FormField
+                        label={t("installStore.sourceRef")}
+                        hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
+                      >
+                        <Input
+                          value={ref()}
+                          placeholder={fromStore() ? t("installStore.sourceRefStable") : undefined}
+                          spellcheck={false}
+                          onInput={(event) => setRef(event.currentTarget.value)}
+                        />
+                      </FormField>
+                    </div>
+                  </details>
                 </form>
               </section>
             </Match>
@@ -664,7 +570,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
           </details>
         </Show>
       </article>
-    </main>
+    </div>
   );
 }
 
@@ -697,12 +603,11 @@ function AttemptProblem(props: { readonly attempt: InstallAttempt; readonly onRe
     <section class="iv-workbench" data-testid="install-attempt-problem" data-install-stage={view().stage}>
       <div class="iv-section-head" role="alert">
         <h2 data-stage-heading tabindex="-1">{title()}</h2>
-        <p>{text()}</p>
-        <Show when={attemptProblemKey(code()) === "installStore.problem.generic" && diagnostic()?.message}>
+        <p>{props.attempt.error() || text()}</p>
+        <Show when={!props.attempt.error() && attemptProblemKey(code()) === "installStore.problem.generic" && diagnostic()?.message}>
           {(message) => <p class="iv-muted">{message()}</p>}
         </Show>
       </div>
-      <Show when={props.attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
       <div class="iv-action-row">
         <Switch>
           <Match when={view().primary === "retry"}>

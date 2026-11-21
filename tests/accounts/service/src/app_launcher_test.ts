@@ -170,10 +170,149 @@ async function fixture(options: { readonly delegate?: boolean; readonly endlessA
     });
     return response!;
   }
-  return { headers, list, readResponse, surfaces, extraSurfaces, core, ledger };
+  return { headers, list, readResponse, surfaces, extraSurfaces, core, ledger, accounts };
 }
 
 describe("account launcher", () => {
+  test("Home search filters one authorized candidate page before summary work and reuses its config batch", async () => {
+    const h = await fixture();
+    const configs = h.core.capsules;
+    const batch = configs.getInstallConfigsByIds.bind(configs);
+    let batches = 0;
+    configs.getInstallConfigsByIds = async (ids) => { batches++; return batch(ids); };
+    configs.getInstallConfig = async () => { throw new Error("per-app config query"); };
+    const readRuns = h.core.listCapsuleRunsPage;
+    const projected: string[] = [];
+    h.core.listCapsuleRunsPage = async (...args) => { projected.push(args[0]); return readRuns(...args); };
+    const response = await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=%20MINE%20");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.appliedQuery).toBe("mine");
+    expect(body.apps[0]?.applied).toBe(true);
+    expect(body.apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([MINE]);
+    expect(projected).toEqual([MINE]);
+    expect(batches).toBe(1);
+    projected.length = 0;
+    expect((await (await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=absent")).json()).apps).toEqual([]);
+    expect(projected).toEqual([]);
+    expect(batches).toBe(2);
+  });
+
+  test("Home search includes translated display labels and shared owner, never unauthorized app metadata", async () => {
+    const h = await fixture();
+    const configs = h.core.capsules;
+    const batch = configs.getInstallConfigsByIds.bind(configs);
+    configs.getInstallConfigsByIds = async (ids) => (await batch(ids)).map((config) => ({ ...config,
+      store: { order: 1, surface: "app", kind: "data", provider: "fixture", suggestedName: "app",
+        badge: { ja: "データ", en: "Data" }, name: { ja: "資料保管", en: "Archive" },
+        description: { ja: "保管", en: "Store" } },
+    }));
+    h.accounts.saveAccount({ subject: OTHER, displayName: "Shared teammate", createdAt: 0, updatedAt: 0 });
+    for (const q of ["資料", "ARCHIVE"]) {
+      const response = await h.readResponse(h.headers.session(OWNER), `/api/v1/apps?q=${encodeURIComponent(q)}`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([MINE, SHARED, STOPPED]);
+    }
+    const shared = await (await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=teammate")).json();
+    expect(shared.apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([SHARED]);
+    const hidden = await (await h.readResponse(h.headers.pat(OWNER, { appIds: [MINE] }), "/api/v1/apps?q=teammate")).json();
+    expect(hidden.apps).toEqual([]);
+  });
+
+  test("search cursors continue empty pages and bind query, account and credential scope", async () => {
+    const h = await fixture();
+    const credentials = h.headers.session(OWNER);
+    const first = await (await h.readResponse(credentials, "/api/v1/apps?q=shared&limit=1")).json();
+    expect(first.apps).toEqual([]);
+    expect(first.nextCursor).toBeString();
+    const next = `/api/v1/apps?q=shared&limit=1&cursor=${first.nextCursor}`;
+    const second = await (await h.readResponse(credentials, next)).json();
+    expect(second.apps.map((app: { capsuleId: string }) => app.capsuleId)).toEqual([SHARED]);
+    const last = await (await h.readResponse(credentials, `/api/v1/apps?q=shared&limit=1&cursor=${second.nextCursor}`)).json();
+    expect(last.apps).toEqual([]);
+    expect(last.nextCursor).toBeUndefined();
+    expect((await h.readResponse(credentials, next.replace("q=shared", "q=mine"))).status).toBe(400);
+    expect((await h.readResponse(h.headers.session(MEMBER), next)).status).toBe(400);
+    expect((await h.readResponse(h.headers.pat(OWNER, { appIds: [MINE] }), next)).status).toBe(400);
+    const scopedFirst = await (await h.readResponse(h.headers.pat(OWNER, { appIds: [MINE, SHARED] }), "/api/v1/apps?q=shared&limit=1")).json();
+    expect((await h.readResponse(h.headers.pat(OWNER, { appIds: [MINE] }),
+      `/api/v1/apps?q=shared&limit=1&cursor=${scopedFirst.nextCursor}`)).status).toBe(400);
+    expect((await h.readResponse(credentials, "/api/v1/apps?q=%00")).status).toBe(400);
+    expect((await h.readResponse(credentials, `/api/v1/apps?q=${"x".repeat(201)}`)).status).toBe(400);
+  });
+
+  test("failed or missing search labels never become an empty successful search", async () => {
+    const h = await fixture();
+    h.core.capsules.getInstallConfigsByIds = async () => { throw new Error("fixture label outage"); };
+    expect((await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=absent")).status).toBe(503);
+    h.core.capsules.getInstallConfigsByIds = async () => [];
+    expect((await h.readResponse(h.headers.session(OWNER), "/api/v1/apps?q=absent")).status).toBe(503);
+  });
+
+  test("Home carries the same authorized screens without version reads or per-app config queries", async () => {
+    const h = await fixture();
+    const credential = h.headers.session(OWNER);
+    const detailResponse = await h.readResponse(credential, `/api/v1/capsules/${MINE}/app`);
+    expect(detailResponse.status).toBe(200);
+    const detail = (await detailResponse.json()).app;
+    let batches = 0;
+    let sourceReads = 0;
+    let configReads = 0;
+    const configs = h.core.capsules;
+    const batch = configs.getInstallConfigsByIds.bind(configs);
+    const config = configs.getInstallConfig.bind(configs);
+    configs.getInstallConfigsByIds = async (ids) => { batches++; return batch(ids); };
+    configs.getInstallConfig = async (id) => { configReads++; return config(id); };
+    h.core.getSource = async () => { sourceReads++; throw new Error("Home must not read source history"); };
+    const response = await h.readResponse(credential, "/api/v1/apps");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const app = body.apps.find((entry: { capsuleId: string }) => entry.capsuleId === MINE);
+    expect(app).toBeDefined();
+    expect(app.state).toBe(detail.state);
+    expect(app.primaryAction).toBe(detail.primaryAction);
+    expect(app.screens).toEqual(detail.screens);
+    expect(app).not.toHaveProperty("version");
+    expect(app).not.toHaveProperty("links");
+    expect(app).not.toHaveProperty("progress");
+    expect(sourceReads).toBe(0);
+    expect(configReads).toBe(0);
+    expect(batches).toBe(1);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  test("Home shares workspace inventories only inside a request and keeps failed screens explicit", async () => {
+    const h = await fixture();
+    let inventories = 0;
+    const readFailures = h.core.listInterfaceMaterializationFailures;
+    h.core.listInterfaceMaterializationFailures = async (...args) => { inventories++; return readFailures(...args); };
+    h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage = async () => { throw new Error("fixture screen outage"); };
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const response = await h.readResponse(h.headers.session(OWNER), "/api/v1/apps");
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      const app = body.apps.find((entry: { capsuleId: string }) => entry.capsuleId === MINE);
+      expect(app.screens).toEqual([]);
+      expect(app.incomplete).toContain("screens");
+      expect(inventories).toBe(attempt);
+    }
+  });
+
+  test("launcher summaries preserve app-scoped credentials and do not include other apps' screens", async () => {
+    const h = await fixture();
+    for (const credential of [h.headers.session(MEMBER), h.headers.pat(OWNER, { appIds: [MINE] }), h.headers.oauth(OWNER, MINE)]) {
+      const response = await h.readResponse(credential, "/api/v1/apps");
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      for (const summary of body.apps) {
+        const detail = await h.readResponse(credential, `/api/v1/capsules/${summary.capsuleId}/app`);
+        expect(detail.status).toBe(200);
+        expect(summary.screens).toEqual((await detail.json()).app.screens);
+      }
+      if (credential.authorization) expect(body.apps.every((app: { capsuleId: string }) => app.capsuleId === MINE)).toBe(true);
+    }
+  });
+
   test("aggregate completion follows the actual route to all screens without a sticky warning on reload", async () => {
     const h = await fixture({ extraOwnSurfaces: 5 });
     const read = h.core.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage.bind(h.core.interfaces);

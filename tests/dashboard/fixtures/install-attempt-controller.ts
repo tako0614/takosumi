@@ -40,6 +40,7 @@ function scripted(name: string) {
 mock.module(apiPath, () => ({
   ...api,
   createGitInstallAttempt: scripted("createGitInstallAttempt"),
+  listConnections: scripted("listConnections"),
   getGitInstallPlan: scripted("getGitInstallPlan"),
   reconcileGitInstallPlan: scripted("reconcileGitInstallPlan"),
   answerGitInstallAttempt: scripted("answerGitInstallAttempt"),
@@ -160,7 +161,7 @@ async function until(condition: () => boolean, label: string): Promise<void> {
  * A page with a virtual clock: each pause between reconcile commands is
  * recorded and advances the clock at once (yielding to the event loop).
  */
-function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: number; readonly fromStore?: boolean } = {}) {
+function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: number; readonly fromStore?: boolean; readonly principalId?: () => string } = {}) {
   let dispose!: () => void;
   const [attemptId, setAttemptId] = solid.createSignal<string | undefined>(initialAttemptId);
   const left: string[] = [];
@@ -169,7 +170,7 @@ function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: nu
   const attempt = solid.createRoot((disposeRoot: () => void) => {
     dispose = disposeRoot;
     return useInstallAttempt({
-      principalId: "sub_me",
+      get principalId() { return mountOptions.principalId?.() ?? "sub_me"; },
       attemptId,
       onStarted: (id: string) => setAttemptId(id),
       onLeft: (plan: { id: string }) => {
@@ -1212,6 +1213,52 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
+  test("saved-review holds pause answers and replanning without changing permanent-lock discard semantics", async () => {
+    const sheet = () => inputs({ connections: [], missing: [], variables: [{ name: "domain", type: "string", required: false, sensitive: false }] });
+    reset({
+      getGitInstallPlan: async () => respond(sheet(), 3),
+      answerGitInstallAttempt: async () => respond({ kind: "wait", phase: "planning" }, 4),
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 5),
+      discardGitInstallAttempt: async () => respond({ kind: "none" }, 6, "discarded"),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    try {
+      await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+      const first = page.attempt.holdReview();
+      const second = page.attempt.holdReview();
+      page.attempt.resume();
+      await page.attempt.confirm();
+      page.attempt.setDraft("domain", "blocked.example.test");
+      await pause(30);
+      expect(page.attempt.drafts()).toEqual({});
+      expect(answerBodies()).toEqual([]);
+      expect(await page.attempt.discard()).toBe(false);
+      expect(await page.attempt.restart()).toBe(false);
+      first(); first();
+      expect(page.attempt.locked()).toBe(true);
+      expect(page.attempt.view().canDiscard).toBe(false);
+      second();
+      page.attempt.resume();
+      await until(() => page.attempt.view().stage === "review", "the unheld confirmation");
+      expect(answerBodies()).toEqual([{ expectedGeneration: 3, continue: true }]);
+      expect(page.attempt.locked()).toBe(false);
+      page.attempt.setDraft("domain", "changed.example.test");
+      page.attempt.commitDraft("domain");
+      const pending = page.attempt.holdReview();
+      await pause(30);
+      expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toEqual([]);
+      expect(await page.attempt.restart()).toBe(false);
+      expect(await page.attempt.discard()).toBe(false);
+      // Releasing a read hold cannot undo the permanent lock established by Apply.
+      page.attempt.lockAnswers(); pending();
+      expect(page.attempt.locked()).toBe(true);
+      // That old lock alone never prohibited a definitive-rejection Stop.
+      expect(page.attempt.view().canDiscard).toBe(true);
+      expect(await page.attempt.discard()).toBe(true);
+      expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toHaveLength(1);
+    } finally { page.dispose(); }
+  });
+
   test("a change after the Plan prepares the install again once, with the same answers", async () => {
     const SECOND = "gip_00000000000000b2";
     let creates = 0;
@@ -1954,4 +2001,277 @@ describe("install attempt controller", () => {
     expect(answerBodies().filter((body) => body.continue)).toEqual([{ expectedGeneration: 4, continue: true }]);
     page.dispose();
   });
+});
+
+
+test("explicit public connection settings use the current owned selection and reject stale reads", async () => {
+  let current = respond(inputs({ variables: [{ name: "deployment", type: "json", required: true, sensitive: false }],
+    connections: [{ ...requirement, selectedConnectionId: "conn_a" }], missing: [] }), 1);
+  let release!: (rows: unknown) => void;
+  const row = (id: string, account: string) => ({ id, ownerAccountId: "sub_me", scope: "workspace", workspaceId: "ws_alpha",
+    providerSource: requirement.provider, status: "verified", scopeHints: { moduleInputDefaults: { cloudflare_account_id: account } } });
+  const a = row("conn_a", "a".repeat(32));
+  const b = row("conn_b", "b".repeat(32));
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => [a, b, { ...a, id: "unselected", ownerAccountId: "someone_else" }] });
+  let principal = "sub_me";
+  const page = mount(ID, { settleMs: 60_000, principalId: () => principal });
+  try {
+    await until(() => page.attempt.response() !== undefined, "initial sheet");
+    expect(calls.filter((call) => call.name === "listConnections")).toHaveLength(0);
+    await page.attempt.loadConnectionSettings();
+    expect(page.attempt.connectionSettings().map((choice) => choice.connectionId)).toEqual(["conn_a"]);
+    const choiceA = page.attempt.connectionSettings()[0]!;
+    expect(page.attempt.applyConnectionSettings("api_token", choiceA)).toBe(false);
+    const publicJson = { name: "deployment", type: "json", required: true, sensitive: false };
+    current = respond(inputs({ variables: [{ ...publicJson, defaultValue: { account_id: "already-provided" } }],
+      connections: [{ ...requirement, selectedConnectionId: "conn_a" }], missing: [] }), 1);
+    await page.attempt.reload();
+    await page.attempt.loadConnectionSettings();
+    expect(page.attempt.applyConnectionSettings("deployment", page.attempt.connectionSettings()[0]!)).toBe(false);
+    current = respond(inputs({ variables: [publicJson], connections: [{ ...requirement, selectedConnectionId: "conn_a" }], missing: [] }), 1);
+    await page.attempt.reload();
+    await page.attempt.loadConnectionSettings();
+    const freshA = page.attempt.connectionSettings()[0]!;
+    page.attempt.setDraft("deployment", JSON.stringify({ account_id: "manual" }));
+    expect(page.attempt.applyConnectionSettings("deployment", freshA)).toBe(false);
+    expect(page.attempt.drafts().deployment?.value).toContain("manual");
+    page.attempt.setDraft("deployment", "");
+    expect(page.attempt.applyConnectionSettings("deployment", freshA)).toBe(true);
+    expect(JSON.parse(page.attempt.drafts().deployment!.value)).toEqual({ account_id: "a".repeat(32) });
+    current = respond(inputs({ variables: [publicJson], connections: [{ ...requirement, selectedConnectionId: "conn_a",
+      candidates: requirement.candidates.map((candidate) => ({ ...candidate, status: "revoked" })) }], missing: [] }), 1);
+    await page.attempt.reload();
+    expect(page.attempt.connectionSettings()).toEqual([]);
+    expect(page.attempt.applyConnectionSettings("deployment", freshA)).toBe(false);
+    current = respond(inputs({ variables: [{ name: "deployment", type: "json", required: true, sensitive: false }],
+      connections: [{ ...requirement, selectedConnectionId: "conn_b" }], missing: [] }), 2);
+    await page.attempt.reload();
+    expect(page.attempt.connectionSettings()).toEqual([]);
+    expect(page.attempt.applyConnectionSettings("deployment", freshA)).toBe(false);
+    const { continueVariables } = await import(resolve(dashboard, "src/views/new/install-attempt.ts"));
+    expect(continueVariables(current.userAction as Extract<GitInstallPlanUserAction, { kind: "provide_inputs" }>, page.attempt.drafts())).toMatchObject({ ok: false, invalid: ["deployment"] });
+    handlers.listConnections = async () => new Promise((resolveRows) => { release = resolveRows; });
+    const pending = page.attempt.loadConnectionSettings();
+    await until(() => release !== undefined, "deferred settings read");
+    current = { ...current, installPlan: { ...current.installPlan, generation: 3 } };
+    await page.attempt.reload();
+    release([b]);
+    await pending;
+    expect(page.attempt.connectionSettings()).toEqual([]);
+    const principalPending = page.attempt.loadConnectionSettings();
+    await settle();
+    principal = "other-person";
+    release([b]);
+    await principalPending;
+    expect(page.attempt.connectionSettings()).toEqual([]);
+    principal = "sub_me";
+    handlers.listConnections = async () => [b];
+    await page.attempt.loadConnectionSettings();
+    expect(page.attempt.applyConnectionSettings("deployment", page.attempt.connectionSettings()[0]!)).toBe(true);
+    expect(continueVariables(current.userAction as Extract<GitInstallPlanUserAction, { kind: "provide_inputs" }>, page.attempt.drafts())).toEqual({ ok: true, variables: { deployment: { account_id: "b".repeat(32) } } });
+    handlers.answerGitInstallAttempt = async () => respond({ kind: "wait", phase: "planning" }, 4);
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").at(-1)?.args[1]).toMatchObject({
+      continue: true, expectedGeneration: 3, variables: { deployment: { account_id: "b".repeat(32) } },
+    });
+    expect(calls.filter((call) => call.name === "listConnections").every((call) => call.args[0] === "ws_alpha")).toBe(true);
+  } finally { page.dispose(); }
+});
+
+test("server-owned inputs remain read-only while generic derived defaults can be edited", async () => {
+  const managed = {
+    name: "derived_setting", type: "string" as const, required: false, sensitive: false,
+    derivedDefault: "capsule_name" as const, userEditable: false,
+  };
+  const user = {
+    name: "user_setting", type: "string" as const, required: true, sensitive: false,
+    userEditable: true,
+  };
+  reset({
+    getGitInstallPlan: async () => respond(inputs({ connections: [], interfaces: [], variables: [managed, user], missing: ["variables"] }), 1),
+    answerGitInstallAttempt: async () => respond({ kind: "wait", phase: "planning" }, 2),
+    reconcileGitInstallPlan: abortable([]),
+  });
+  const page = mount(ID);
+  try {
+    await until(() => page.attempt.sheet() !== undefined, "the ownership-aware sheet");
+    expect(page.attempt.sheet()?.variables).toEqual([managed, user]);
+    // A stale draft or programmatic setter must not escape the server's new
+    // ownership projection, even though it is still held in page memory.
+    page.attempt.setDraft(managed.name, "stale-derived-override");
+    expect(page.attempt.view()).toMatchObject({ readyToConfirm: false, missingVariables: [user.name] });
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt")).toHaveLength(0);
+    page.attempt.setDraft(user.name, "typed-user-value");
+    expect(page.attempt.view().readyToConfirm).toBe(true);
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").map((call) => call.args[1])).toEqual([
+      { expectedGeneration: 1, continue: true, variables: { [user.name]: "typed-user-value" } },
+    ]);
+  } finally { page.dispose(); }
+
+  // An absent ownership projection preserves generic InstallConfig behavior:
+  // derivedDefault alone never makes an otherwise editable value read-only.
+  const { userEditable: _ownership, ...generic } = managed;
+  reset({
+    getGitInstallPlan: async () => respond(inputs({ connections: [], interfaces: [], variables: [generic], missing: [] }), 1),
+    answerGitInstallAttempt: async () => respond({ kind: "wait", phase: "planning" }, 2),
+    reconcileGitInstallPlan: abortable([]),
+  });
+  const genericPage = mount(ID);
+  try {
+    await until(() => genericPage.attempt.sheet() !== undefined, "the generic sheet");
+    expect(genericPage.attempt.view().readyToConfirm).toBe(true);
+    genericPage.attempt.setDraft(generic.name, "explicit-generic-override");
+    await genericPage.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").map((call) => call.args[1])).toEqual([
+      { expectedGeneration: 1, continue: true, variables: { [generic.name]: "explicit-generic-override" } },
+    ]);
+  } finally { genericPage.dispose(); }
+});
+
+const endpointField = { name: "public_address", type: "string" as const, required: true, sensitive: false,
+  userEditable: true, format: "cloudflare-workers-url",
+  publicEndpoint: { serviceNameVariable: "deployment_name", serviceNameSource: "capsule_name" as const, suggestedName: "office-compiled" } };
+const endpointInputs = (name = "office", connectionId = "conn_a", resubmit = false) => inputs({
+  variables: [{ ...endpointField, publicEndpoint: { ...endpointField.publicEndpoint, suggestedName: `${name}-compiled` } }],
+  connections: [{ ...requirement, selectedConnectionId: connectionId }], missing: [],
+  name: { current: name, proposed: name, conflict: false },
+  ...(resubmit ? { resubmitVariables: [endpointField.name] } : {}),
+});
+const endpointConnection = (id: string, subdomain: string) => ({ id, providerSource: requirement.provider,
+  ownerAccountId: "sub_me", scope: "personal", status: "verified",
+  scopeHints: { moduleInputDefaults: { cloudflare_account_id: "a".repeat(32), cloudflare_workers_subdomain: subdomain },
+    providerSettings: { accountId: "a".repeat(32), workersSubdomain: subdomain } } });
+
+test("standard public URL uses server names, preserves manual URL edits, and explicitly returns to automatic", async () => {
+  let current = respond(endpointInputs(), 1);
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => [endpointConnection("conn_a", "alpha"), endpointConnection("conn_b", "beta")],
+    answerGitInstallAttempt: async (_id, answer) => {
+      const request = answer as { capsuleName?: string };
+      current = request.capsuleName
+        ? respond(endpointInputs(request.capsuleName), 2)
+        : respond({ kind: "wait", phase: "planning" }, 5);
+      return current;
+    }, reconcileGitInstallPlan: abortable([]) });
+  const page = mount(ID);
+  try {
+    await until(() => page.attempt.drafts().public_address?.value === "https://office-compiled.alpha.workers.dev", "initial automatic URL");
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt")).toHaveLength(0);
+    page.attempt.setNameDraft("renamed");
+    await page.attempt.saveName();
+    await until(() => page.attempt.drafts().public_address?.value === "https://renamed-compiled.alpha.workers.dev", "canonical renamed URL");
+    page.attempt.setDraft("public_address", "https://custom.example", { typing: true });
+    page.attempt.commitDraft("public_address");
+    current = respond(endpointInputs("another", "conn_b"), 3);
+    await page.attempt.reload();
+    await until(() => page.attempt.connectionSettings()[0]?.connectionId === "conn_b", "new selected metadata");
+    expect(page.attempt.drafts().public_address).toEqual({ value: "https://custom.example", touched: true });
+    page.attempt.useStandardPublicUrl("public_address");
+    await until(() => page.attempt.drafts().public_address?.value === "https://another-compiled.beta.workers.dev", "restored automatic URL");
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").at(-1)?.args[1]).toMatchObject({
+      expectedGeneration: 3, continue: true, variables: { public_address: "https://another-compiled.beta.workers.dev" },
+    });
+  } finally { page.dispose(); }
+});
+
+test("late metadata and failed refresh cannot confirm an old connection's standard URL", async () => {
+  let current = respond(endpointInputs(), 1);
+  const first = deferred<unknown[]>();
+  const second = deferred<unknown[]>();
+  let reads = 0;
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => ++reads === 1 ? first.promise : second.promise });
+  const page = mount(ID);
+  try {
+    await until(() => reads === 1, "first metadata request");
+    current = respond(endpointInputs("office", "conn_b"), 2);
+    await page.attempt.reload();
+    await until(() => reads === 2, "replacement metadata request");
+    first.resolve([endpointConnection("conn_a", "old")]);
+    await settle();
+    expect(page.attempt.drafts().public_address).toBeUndefined();
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt")).toHaveLength(0);
+    second.resolve([endpointConnection("conn_b", "current")]);
+    await until(() => page.attempt.drafts().public_address?.publicEndpoint?.confirmed === true, "current metadata");
+    expect(page.attempt.drafts().public_address?.value).toBe("https://office-compiled.current.workers.dev");
+    handlers.listConnections = async () => { reads += 1; throw new Error("metadata unavailable"); };
+    current = respond(endpointInputs("office", "conn_b"), 3);
+    await page.attempt.reload();
+    await until(() => reads === 3 && !page.attempt.settingsChoicesLoading(), "failed metadata refresh");
+    expect(page.attempt.drafts().public_address?.publicEndpoint?.confirmed).toBe(false);
+    expect(page.attempt.view().readyToConfirm).toBe(false);
+    await page.attempt.confirm();
+    await settle();
+    expect(reads).toBe(3);
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt")).toHaveLength(0);
+    handlers.listConnections = async () => [endpointConnection("conn_b", "new-current")];
+    await page.attempt.loadConnectionSettings();
+    await until(() => page.attempt.drafts().public_address?.value === "https://office-compiled.new-current.workers.dev", "explicit refreshed URL");
+  } finally { page.dispose(); }
+});
+
+test("a failed rename cannot send the old generated URL with an unsaved app name", async () => {
+  let current = respond(endpointInputs(), 1);
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => [endpointConnection("conn_a", "alpha")],
+    answerGitInstallAttempt: async () => { throw new Error("rename unavailable"); } });
+  const page = mount(ID);
+  try {
+    await until(() => page.attempt.drafts().public_address?.publicEndpoint?.confirmed === true, "initial URL");
+    page.attempt.setNameDraft("renamed");
+    await page.attempt.saveName();
+    expect(page.attempt.nameDraft()).toBe("renamed");
+    expect(page.attempt.view().readyToConfirm).toBe(false);
+    expect(page.attempt.drafts().public_address?.publicEndpoint?.confirmed).toBe(false);
+    await page.attempt.confirm();
+    expect(calls.filter((call) => call.name === "answerGitInstallAttempt").map((call) => call.args[1]))
+      .toEqual([{ expectedGeneration: 1, capsuleName: "renamed" }]);
+    handlers.answerGitInstallAttempt = async () => {
+      current = respond(endpointInputs("renamed"), 2);
+      return current;
+    };
+    await page.attempt.saveName();
+    await until(() => page.attempt.drafts().public_address?.value === "https://renamed-compiled.alpha.workers.dev", "accepted renamed URL");
+    expect(page.attempt.view().readyToConfirm).toBe(true);
+  } finally { page.dispose(); }
+});
+
+test("public URL resubmission retains the exact in-memory value and reopened inputs stay write-only", async () => {
+  let current = respond(endpointInputs(), 1);
+  reset({ getGitInstallPlan: async () => current,
+    listConnections: async () => [endpointConnection("conn_a", "alpha")],
+    answerGitInstallAttempt: async () => {
+      current = respond(endpointInputs("office", "conn_a", true), 2);
+      return current;
+    } });
+  const page = mount(ID);
+  try {
+    await until(() => page.attempt.drafts().public_address?.publicEndpoint?.confirmed === true, "prepared URL");
+    await page.attempt.confirm();
+    expect(page.attempt.view().readyToConfirm).toBe(true);
+    await page.attempt.confirm();
+    const answers = calls.filter((call) => call.name === "answerGitInstallAttempt").map((call) => call.args[1]);
+    expect(answers).toEqual([
+      { expectedGeneration: 1, continue: true, variables: { public_address: "https://office-compiled.alpha.workers.dev" },
+        providerBindings: [{ provider: requirement.provider, moduleLocalName: requirement.moduleLocalName, connectionId: "conn_a" }] },
+      { expectedGeneration: 2, continue: true, variables: { public_address: "https://office-compiled.alpha.workers.dev" } },
+    ]);
+    expect(calls.filter((call) => call.name === "listConnections")).toHaveLength(1);
+  } finally { page.dispose(); }
+  reset({ getGitInstallPlan: async () => current });
+  const reopened = mount(ID);
+  try {
+    await until(() => reopened.attempt.sheet() !== undefined, "reopened resubmit sheet");
+    expect(reopened.attempt.drafts()).toEqual({});
+    const { sheetVariables } = await import(resolve(dashboard, "src/views/new/install-attempt.ts"));
+    expect(sheetVariables(reopened.attempt.sheet()!)[0]?.sensitive).toBe(true);
+    expect(calls.filter((call) => call.name === "listConnections")).toHaveLength(0);
+    reopened.attempt.setDraft("public_address", "https://office-compiled.alpha.workers.dev");
+    expect(reopened.attempt.view().readyToConfirm).toBe(true);
+  } finally { reopened.dispose(); }
 });

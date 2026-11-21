@@ -57,9 +57,19 @@ takosumi apps update cap_example --ref release/v2 --idempotency-key update-examp
   --url https://takosumi.example.com --json
 ```
 
-`--ref`と`--idempotency-key`は必須です。応答を失った場合も同じ本人・接続先・app・ref・keyを保持して再実行します。
-不明な操作を新keyでやり直しません。reconcileは返却された同じcoordinatorだけを進めます。`--ref=release=v2`も値全体を保ちます。
-最初の明確な受付拒否は`refused`、作成後のreconcile競合・読取失敗などは元coordinatorを保持した`unconfirmed`で、いずれもexit 1です。
+`--ref`は必須です。更新を開始するときは`--idempotency-key`を指定します。
+受付応答を失った場合は、同じ本人・接続先・アプリ・ref・キーで再実行します。`--ref=release=v2`も値全体を保ちます。
+
+既存の更新ID `revisionPlanId` が分かる場合は、次のコマンドで続けられます。更新IDは`planRunId`と別です。
+
+```bash
+takosumi apps update cap_example --ref release/v2 --revision-plan grp_example \
+  --url https://takosumi.example.com --json
+```
+
+`--revision-plan`を指定すると、最初に同じ接続先でその更新を読み、アプリとrefの一致を確認します。
+続行が必要な場合は現在の更新権限で同じ処理を進めます。Planがすでに準備済みなら読取りだけで内容を確認できます。
+`--revision-plan`と`--idempotency-key`は排他です。明確な受付拒否は`refused`、受付済み更新の進行や結果を確認できない場合は`unconfirmed`、保存Planが期限切れなどで確認できない状態なら`plan_not_reviewable`で、いずれもexit 1です。
 
 `review_required`は更新完了ではありません。表示されたapp、`planRunId`、ref、source snapshot、Plan digest、変更数、
 resource actions、policyを確認します。`reviewUrl`でも同じ保存Planを開けます。欠けた変更数は`null`で、0とは扱いません。
@@ -92,6 +102,42 @@ takosumi apps apply cap_example --plan plan_example --observe-only \
 `--observe-only`は承認もApplyも作りません。linked Applyが無いことは、元要求に効果が無かった証明ではありません。
 `--yes`と`--observe-only`は同時指定できません。
 failed/cancelled/expiredのRunも新Planで盲目的に再実行せず、保存Runとアプリ状態を確認します。
+
+## 別の接続でアンインストールを再開する
+
+別キーを同じクラウドアカウントの確認済みProvider Connectionとして登録した後、元の接続IDと代替の接続IDを指定します。
+アプリの割当は管理画面または `GET /api/v1/capsules/{app-id}/provider-bindings` で確認できます。
+この操作には対象アプリを管理できるAccounts PATの `read` と `write` が必要です。
+
+```bash
+takosumi apps recover-uninstall cap_example \
+  --connections '[{"connectionId":"conn_old","replacementConnectionId":"conn_new"}]' \
+  --url https://takosumi.example.com --json
+```
+
+サーバーが現在の所有者、クラウドアカウント、適用済みの接続設定を照合し、削除Planを準備します。
+`refused` に `connectionRecoveryFailure` がある場合、`replacement_unverified` なら代替接続を確認し、
+`bindings_mismatch` ならアカウントと適用済みの接続設定を確認してください。
+`applied_evidence_unavailable` は、照合に必要な適用記録をサーバーが確認できなかったことを示します。
+`review_required` になったPlanでは、削除内容と `providerConnections` の有効な接続を確認できます。前回の削除から引き継いだ接続も表示します。
+`plan_pending` なら返された `planRunId` を指定して、同じPlanを読み直せます。作成結果が `unconfirmed` なら、先に元のアプリのRun履歴から元のPlan IDを確認してください。
+
+```bash
+takosumi apps recover-uninstall cap_example --destroy-plan destroy_plan_example \
+  --url https://takosumi.example.com --json
+```
+
+`--destroy-plan` での確認は `read` scopeを使い、指定されたPlanを1回読み取ります。
+
+確認したPlanを実行する場合だけ、別のコマンドで明示します。
+
+```bash
+takosumi apps apply cap_example --destroy-plan destroy_plan_example --yes \
+  --url https://takosumi.example.com --json
+```
+
+`--destroy-plan` は破棄用の保存Planを指定します。応答が不明なら、同じPlan IDで `--yes` を `--observe-only` に替えると、
+紐付いた削除Runを読み取れます。通常の削除予約は `apps uninstall <app-id> --yes` から行います。
 
 ## CLI を用意する
 

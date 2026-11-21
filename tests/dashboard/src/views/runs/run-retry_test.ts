@@ -5,6 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  defaultRetryPlanApi,
   retryChangeForRun,
   retryPlanForRun,
   type RetryPlanApi,
@@ -43,6 +44,78 @@ const plan = (origin: Run["origin"]): Run =>
   run({ id: "run_plan_failed", type: "plan", status: "succeeded", ...(origin ? { origin } : {}) });
 
 describe("retryPlanForRun", () => {
+  test("reuses the exact revision request after its create response is lost", async () => {
+    const realFetch = globalThis.fetch;
+    const prior = run({ type: "plan", origin: { kind: "revision", ref: "release/v3" } });
+    const api = defaultRetryPlanApi();
+    const requests: { key: string | null; body: unknown }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("/api/v1/capsules/cap_a/revision-plans");
+      const key = new Headers(init?.headers).get("idempotency-key");
+      requests.push({ key, body: JSON.parse(String(init?.body)) });
+      if (requests.length === 1) throw new Error("create response was lost");
+      if (requests.length === 2 && key !== requests[0]?.key) {
+        return Response.json({ error: { code: "failed_precondition", message: "revision_in_progress" } }, { status: 409 });
+      }
+      return Response.json({
+        revisionPlan: {
+          id: "grp_recovered", capsuleId: "cap_a", revision: { targetRef: "release/v3" },
+          phase: "reviewable", planRunId: "plan_recovered",
+        },
+        nextAction: "review_run", links: { self: "/api/v1/revision-plans/grp_recovered" },
+      });
+    }) as typeof fetch;
+    try {
+      await expect(retryPlanForRun(prior, capsule(), api)).rejects.toThrow("create response was lost");
+      expect(await retryPlanForRun(prior, capsule(), api)).toBe("plan_recovered");
+      expect(requests[0]?.key).toBeTruthy();
+      expect(requests[1]).toEqual(requests[0]);
+      expect(requests[1]?.body).toEqual({ ref: "release/v3" });
+      await retryPlanForRun(prior, capsule(), api);
+      expect(requests[2]?.key).not.toBe(requests[0]?.key);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("starts a new revision attempt after the acknowledged coordinator fails", async () => {
+    const realFetch = globalThis.fetch;
+    const prior = run({ type: "plan", origin: { kind: "revision", ref: "release/v3" } });
+    const api = defaultRetryPlanApi();
+    const keys: (string | null)[] = [];
+    const created = { id: "grp_failed", capsuleId: "cap_a", revision: { targetRef: "release/v3" }, phase: "planning" };
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/revision-plans/grp_failed/reconcile") {
+        return Response.json({
+          revisionPlan: { ...created, phase: "failed", diagnostic: { code: "revision_plan_failed" } },
+          nextAction: "none", links: { self: "/api/v1/revision-plans/grp_failed" },
+        });
+      }
+      expect(String(input)).toBe("/api/v1/capsules/cap_a/revision-plans");
+      keys.push(new Headers(init?.headers).get("idempotency-key"));
+      if (keys.length === 1) return Response.json({ revisionPlan: created, nextAction: "reconcile", links: {} });
+      return Response.json({
+        revisionPlan: { ...created, id: "grp_new", phase: "reviewable", planRunId: "plan_new" },
+        nextAction: "review_run", links: {},
+      });
+    }) as typeof fetch;
+    try {
+      await expect(retryPlanForRun(prior, capsule(), api)).rejects.toMatchObject({ code: "revision_plan_failed" });
+      expect(await retryPlanForRun(prior, capsule(), api)).toBe("plan_new");
+      expect(keys[0]).toBeTruthy();
+      expect(keys[1]).toBeTruthy();
+      expect(keys[1]).not.toBe(keys[0]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a retry whose Run page has retired stops after reading the original Plan", async () => {
+    const { api, calls } = recorder({ run_plan_failed: plan({ kind: "revision", ref: "v2" }) });
+    expect(await retryPlanForRun(run({ planRunId: "run_plan_failed" }), capsule(), api, () => false)).toBeUndefined();
+    expect(calls).toEqual(["read run_plan_failed"]);
+  });
+
   test("a failed removal is retried as a removal", async () => {
     for (const type of ["destroy_plan", "destroy_apply"] as const) {
       const { api, calls } = recorder();

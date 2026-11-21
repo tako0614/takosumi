@@ -6,6 +6,7 @@ import type {
   TokenRecord,
 } from "../store.ts";
 import { hashSessionId } from "../session-hash-salt.ts";
+import { isPreGenerationPostgresSchema } from "../account-authentication-generation.ts";
 import {
   accountFromRow,
   type AccountRow,
@@ -30,6 +31,7 @@ type BearerCandidateKind =
 interface BearerCandidateRow {
   readonly kind: BearerCandidateKind;
   readonly document: unknown;
+  readonly authentication_generation?: number | string;
 }
 
 /**
@@ -45,7 +47,7 @@ export async function resolveAccountsBearerCandidates(
     hashSessionId(token),
     hashSecret(token),
   ]);
-  const result = await runQuery<BearerCandidateRow>(
+  const resolve = (projectGeneration: boolean) => runQuery<BearerCandidateRow>(
     client,
     `with
       presented_session as (
@@ -68,25 +70,35 @@ export async function resolveAccountsBearerCandidates(
         from accounts_v1.personal_access_tokens
         where token_hash = $2
       )
-    select 'session' as kind, to_jsonb(presented_session) as document
+    select 'session' as kind, to_jsonb(presented_session) as document,
+      ${generationProjection(projectGeneration, "presented_session.subject")} as authentication_generation
     from presented_session
     union all
-    select 'session_account' as kind, to_jsonb(account_row) as document
+    select 'session_account' as kind, to_jsonb(account_row) as document, 0
     from presented_session
     join accounts_v1.accounts as account_row
       on account_row.subject = presented_session.subject
     union all
-    select 'access_token' as kind, to_jsonb(presented_access_token) as document
+    select 'access_token' as kind, to_jsonb(presented_access_token) as document,
+      ${generationProjection(projectGeneration, "presented_access_token.takosumi_subject")}
     from presented_access_token
     union all
-    select 'pat' as kind, to_jsonb(presented_pat) as document
+    select 'pat' as kind, to_jsonb(presented_pat) as document, 0
     from presented_pat`,
     [sessionHash, tokenHash],
   );
+  // Keep the protected pre-045 self-host schema usable. Never cache the
+  // missing relation across requests because it can be introduced by migration.
+  const result = await resolve(true).catch((error) => {
+    if (!isPreGenerationPostgresSchema(error)) throw error;
+    return resolve(false);
+  });
 
   let session: AccountSessionRecord | undefined;
   let sessionAccount: TakosumiAccountRecord | undefined;
+  let sessionAuthenticationGeneration: number | undefined;
   let accessToken: TokenRecord | undefined;
+  let accessAuthenticationGeneration: number | undefined;
   let personalAccessToken: PersonalAccessTokenRecord | undefined;
   for (const row of result.rows) {
     if (row.kind === "session") {
@@ -95,12 +107,14 @@ export async function resolveAccountsBearerCandidates(
         ...accountSessionFromRow(objectJson<AccountSessionRow>(row.document)),
         sessionId: token,
       };
+      sessionAuthenticationGeneration = Number(row.authentication_generation ?? 0);
     } else if (row.kind === "session_account") {
       if (sessionAccount) throw duplicateBearerCandidate(row.kind);
       sessionAccount = accountFromRow(objectJson<AccountRow>(row.document));
     } else if (row.kind === "access_token") {
       if (accessToken) throw duplicateBearerCandidate(row.kind);
       accessToken = tokenFromRow(objectJson<TokenRow>(row.document));
+      accessAuthenticationGeneration = Number(row.authentication_generation ?? 0);
     } else if (row.kind === "pat") {
       if (personalAccessToken) throw duplicateBearerCandidate(row.kind);
       personalAccessToken = personalAccessTokenFromRow(
@@ -115,9 +129,16 @@ export async function resolveAccountsBearerCandidates(
   return {
     ...(session ? { session } : {}),
     ...(sessionAccount ? { sessionAccount } : {}),
+    ...(sessionAuthenticationGeneration !== undefined ? { sessionAuthenticationGeneration } : {}),
     ...(accessToken ? { accessToken } : {}),
+    ...(accessAuthenticationGeneration !== undefined ? { accessAuthenticationGeneration } : {}),
     ...(personalAccessToken ? { personalAccessToken } : {}),
   };
+}
+
+function generationProjection(enabled: boolean, subjectColumn: "presented_session.subject" | "presented_access_token.takosumi_subject"): string {
+  return enabled ? `coalesce((select (document->>'generation')::bigint from accounts_v1.hosted_identity_records
+    where bucket='authentication_generations' and key=${subjectColumn}),0)` : "0";
 }
 
 function duplicateBearerCandidate(kind: BearerCandidateKind): Error {

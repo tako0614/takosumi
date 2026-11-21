@@ -390,6 +390,10 @@ module sources, including pinned ones, and never treats them as network-fetch
 authority for `tofu init`. Scan and compatibility fail closed instead of
 publishing a partial provider set; vendor dependencies in the repository tree.
 
+An operator's mirror-only provider policy also governs credential-free
+compatibility checks. Runners that lack mirror-only compatibility support stop
+the check before installing providers.
+
 Operator-installed setup recipes are discovered through:
 
 ```http
@@ -408,13 +412,17 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 114
+`accounts/service/src/control-route-inventory.ts`; it currently contains 115
 public route descriptors, listed below. Accounts compositions include the same routes in `/openapi.json` and publish their count as `x-takos-public-session-endpoint-count`. Core-only processes omit the unmounted Accounts routes. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
 ### App ownership and personal resources
 
 `GET /api/v1/apps?cursor&limit` lists the caller's owned and shared apps, with a live `role`, owner display name, app state and primary action. Using an app does not grant management access.
+
+Each entry also includes authorized `screens` and optional `incomplete` sections. Home can launch from the collection without fetching every app detail again. State and primary action use the same rules as the detail view; source/version history and linked-app display metadata are read only for details. Install configs are batched per page, and connection and screen-failure inventories are shared only within the request.
+
+Home shows launch and lifecycle state. Update availability is checked on the app detail page, where version history is read, rather than scanning that history while loading the launcher.
 
 | Method | Path | Permission |
 | --- | --- | --- |
@@ -606,6 +614,7 @@ data and settings.
 | GET | `/api/v1/projects/{projectId}` | Read a Project |
 | GET | `/api/v1/workspaces/{workspaceId}/capsules` | List Workspace Capsules |
 | GET | `/api/v1/capsules/{capsuleId}` | Read a Capsule |
+| GET | `/api/v1/capsules/{capsuleId}/install-config-re-adoption-context?revisionPlanId={id}` | Read re-adoption inputs bound to an existing target revision |
 | POST | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | Re-adopt a Capsule to the latest InstallConfig in its repository, conditional on its current binding |
 | PATCH | `/api/v1/capsules/{capsuleId}` | Update a Capsule |
 | DELETE | `/api/v1/capsules/{capsuleId}` | Schedule deletion of an applied Capsule after a grace period; `?immediate=true` creates a destroy Plan only, which still needs review and Apply |
@@ -627,6 +636,27 @@ data and settings.
 | POST | `/api/v1/capsules/{capsuleId}/drift-check` | Create a Capsule drift check Run |
 | GET | `/api/v1/capsules/{capsuleId}/backups` | List backups taken of the app |
 | POST | `/api/v1/capsules/{capsuleId}/backups` | Create a Capsule Backup |
+
+`GET /api/v1/capsules/{capsuleId}/install-config-re-adoption-context?revisionPlanId={id}`
+requires `change_settings` and the existing designated-delegate owner check.
+It accepts one exact, nonempty `revisionPlanId` of at most 256 characters. Its
+read-only `installConfigReAdoptionContext` binds the existing revision's exact
+snapshot/module/ref/commit and current config/state, and returns the existing
+opaque `authorityGuard`, base InstallConfig ID and declared non-secret
+`source.kind=user` inputs. It creates no Run, scan or preview InstallConfig.
+Each `currentValue` is `present` (with a safe `value`), `unset` or `unavailable`.
+Never submit `unavailable` as an empty value or unset, or confirm a context with
+`blockedReason`. The POST's `reviewedUserVariables` is a complete replacement:
+include optional values explicitly to keep them. A changed target or current
+authority returns 409 and requires rereading.
+
+`AppView.latestRun.revisionPlanId` is a value-free locator only when the current
+failed revision Plan has one exact saved coordinator link, not authorization or
+re-adoption authority. It differs from the existing pre-Plan preparation/stall
+`progress.revisionPlanId`. Re-adoption removes the stale hint; the existing Run
+`origin.kind=revision/ref` supports normal revision retry. Before review, match
+the new Plan's snapshot/config/state/ref against the selected context. If the
+same branch moves to another commit, do not review/apply the old answers blindly.
 
 `GET /api/v1/capsules/{capsuleId}/app` returns one view of an installed app.
 The control plane computes `state` and `primaryAction` from the Capsule, this
@@ -680,8 +710,10 @@ the install attempt that created the app; `continue_install` advances it with
 management authority was persisted can never advance and are not named. While
 the attempt waits for its creator's input, `progress.installPlanAwaitingInput`
 is `viewer` (the caller started it) or `other`, and reconciling does not
-advance it. A revision coordinator that stopped before creating its Plan Run is
-named in `progress.revisionPlanId` and continues with
+advance it. Before a revision coordinator creates its Plan Run,
+`progress.revisionPlanId` is returned to the caller who started it. Once
+preparation stalls, all app viewers receive the ID. A caller with app update
+permission can continue the same coordinator with
 `POST /api/v1/revision-plans/{revisionPlanId}/reconcile`. A revision
 coordinator counts only while the state generation and InstallConfig it
 started from are still the Capsule's current ones; after another change was
@@ -1039,6 +1071,11 @@ refused or failed before reaching the provider stops with
 teardown that fails after reaching the provider ends in `error`, like any
 failed destroy.
 `destroy-plan` creates an immediate destroy plan.
+When the server cannot prove that the replacement matches the applied account and settings, it returns
+`409 failed_precondition` with `details.reason: "destroy_connection_recovery_unproven"`.
+When the cause can be determined, `details.connectionRecoveryFailure` contains
+`replacement_unverified`, `bindings_mismatch`, or `applied_evidence_unavailable`.
+`bindings_mismatch` compares the complete applied binding configuration.
 
 Create a Capsule through the Git install-plan coordinator. It pins the exact
 SourceSnapshot and successful compatibility declaration, creates the complete

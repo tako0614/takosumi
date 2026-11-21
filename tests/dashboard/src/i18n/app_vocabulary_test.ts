@@ -5,7 +5,7 @@
  * screen (画面); what it makes in the cloud are resources (リソース); credentials
  * are connections (接続); a workspace is a スペース in Japanese and a workspace
  * in English (Space and Installation are retired English aliases). Changes are
- * reviewed (内容を確認) and applied only by "Allow and install / update /
+ * reviewed (内容を確認) and applied only by "Install / Allow and update /
  * apply". The old nouns and verbs — service, workload, deploy, publish,
  * reflect — must not come back on these surfaces.
  *
@@ -95,7 +95,7 @@ describe("app, install and run vocabulary", () => {
   });
 
   test("the apply verbs are explicit and shared by every review", () => {
-    expect(ja["installStore.allowInstall"]).toBe("許可してインストール");
+    expect(ja["installStore.allowInstall"]).toBe("インストール");
     expect(ja["app.review.allowUpdate"]).toBe("許可して更新");
     expect(ja["app.review.allowApply"]).toBe("許可して適用");
     expect(ja["app.settings.review"]).toBe("内容を確認");

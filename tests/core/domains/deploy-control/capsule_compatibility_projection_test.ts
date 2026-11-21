@@ -12,6 +12,7 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/s
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type { SourceSnapshot } from "takosumi-contract/sources";
 import {
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fakeProviderVault,
@@ -128,12 +129,21 @@ function recordingRunner(): RecordingRunner {
 function controllerFor(
   store: CompatibilityPreflightPauseStore,
   runner: RecordingRunner,
+  readCapsuleSourceFiles: (
+    snapshot: SourceSnapshot,
+    options?: {
+      readonly modulePath?: string;
+      readonly runId?: string;
+      readonly requireProviderMirror?: true;
+    },
+  ) => Promise<readonly { readonly path: string; readonly text: string }[]> =
+    () => Promise.resolve([]),
 ): OpenTofuController {
   const sourcesService = new SourcesService({
     store,
     now: () => new Date("2026-09-14T00:00:00.000Z"),
     newId: (prefix) => `${prefix}_capsule_compatibility_projection`,
-    readCapsuleSourceFiles: () => Promise.resolve([]),
+    readCapsuleSourceFiles,
   });
   return new OpenTofuController({
     store,
@@ -285,6 +295,30 @@ test("createCapsulePlan projects matching preflight evidence and leaves one queu
       (run) => run.capsuleId === seeded.capsule.id,
     ),
   ).toHaveLength(1);
+});
+
+test("readSourceSnapshotFiles carries Workspace mirror policy to the source reader", async () => {
+  const store = new CompatibilityPreflightPauseStore();
+  const runner = recordingRunner();
+  const { seeded } = await createFixture(store);
+  await store.putWorkspace({
+    ...seeded.workspace,
+    policy: { providerInstallation: { requireMirror: true } },
+  });
+  const observedOptions: unknown[] = [];
+  const controller = controllerFor(store, runner, async (_snapshot, options) => {
+    observedOptions.push(options);
+    return [{ path: "main.tf", text: "terraform {}\n" }];
+  });
+
+  const files = await controller.readSourceSnapshotFiles(seeded.snapshot.id, {
+    modulePath: "infra",
+  });
+
+  expect(files).toEqual([{ path: "main.tf", text: "terraform {}\n" }]);
+  expect(observedOptions).toEqual([
+    { modulePath: "infra", requireProviderMirror: true },
+  ]);
 });
 
 for (const selection of ["preflight", "hint"] as const) {

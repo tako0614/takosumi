@@ -15,9 +15,8 @@ import { resolveLegacyAppUrl } from "./lib/app-links.ts";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import "./lib/theme.ts";
 
-// Web fonts referenced by the design tokens (`--tg-font-body` / `--tg-font-mono`).
-import "@fontsource-variable/bricolage-grotesque";
-import "@fontsource-variable/jetbrains-mono";
+// System fonts keep Japanese and Latin UI text consistent and avoid a font
+// download/layout swap before the first interaction. See styles/tokens.css.
 
 // Takosumi dashboard design system:
 //   tokens (app palette) → base (reset/body/a11y) → components
@@ -309,6 +308,14 @@ function mountDashboard(): void {
     ),
     root,
   );
+}
+
+// Fetch the Home modules alongside discovery; the router still waits for the
+// server's capabilities, and the shell still checks the session before mounting
+// private content. Other entry routes do not pay for Home's code.
+if (window.location.pathname === "/") {
+  void ShellLayout.preload().catch(() => {});
+  void AppListView.preload().catch(() => {});
 }
 
 // Server capabilities are composition truth for the first route too. Mounting

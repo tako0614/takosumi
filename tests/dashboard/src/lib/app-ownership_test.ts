@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   acceptAppOwnershipTransfer, cancelAppOwnershipTransfer, ControlApiError,
   createConnection, createGitInstallAttempt, getAppConnectionChoices, getAppMembers, getCapsuleConfigurationContext,
-  inviteAppMember, listAccessibleApps, listConnections, listPersonalUsagePage,
+  inviteAppMember, listAccessibleApps, listAccessibleAppsPage, listConnections, listPersonalUsagePage,
   removeAppMember, resolveStableSourceTag, transferAppOwnership, resetAppOwnershipCache,
   appOwnershipAvailable, legacyInstallWorkspaceId, startConnectionOAuth, isMissingControlRoute,
   listAppOwnershipTransfers, listIncomingOwnershipTransfers,
@@ -35,6 +35,62 @@ test("apps follows pagination without workspace and propagates authorization/ser
   stub(() => Response.json({ error: { code: "route_not_found" } }, { status: 404 }));
   expect(await listAccessibleApps()).toBeUndefined();
 });
+
+test("Home query pages bypass shared caching and validate the server applied-query marker", async () => {
+  stub((path) => {
+    const q = new URL(path, "https://dashboard.test").searchParams.get("q") ?? "";
+    return Response.json({ apps: [{ capsuleId: q || "all", name: q || "all", role: "owner", state: "installed" }], appliedQuery: q });
+  });
+  expect((await listAccessibleAppsPage(undefined, undefined, " MAIL "))?.appliedQuery).toBe("mail");
+  expect((await listAccessibleAppsPage(undefined, undefined, "files"))?.apps[0]?.capsuleId).toBe("files");
+  await listAccessibleAppsPage(undefined, undefined, "mail");
+  await listAccessibleAppsPage("next", undefined, "mail");
+  expect(calls.map((call) => call.path)).toEqual(["/api/v1/apps?q=mail", "/api/v1/apps?q=files", "/api/v1/apps?q=mail", "/api/v1/apps?cursor=next&q=mail"]);
+  stub(() => Response.json({ apps: [], appliedQuery: "another query" }));
+  await expect(listAccessibleAppsPage(undefined, undefined, "mail")).rejects.toMatchObject({ code: "invalid_apps_response" });
+  stub(() => Response.json({ apps: [], nextCursor: "more" }));
+  expect(await listAccessibleAppsPage(undefined, undefined, "mail")).toEqual({ apps: [], nextCursor: "more" });
+});
+
+test("Home search supports only a missing first-page route fallback and preserves abort/failure", async () => {
+  stub(() => Response.json({ error: { code: "not_found", message: "not found" } }, { status: 404 }));
+  expect(await listAccessibleAppsPage(undefined, undefined, "mail")).toBeUndefined();
+  for (const status of [403, 503]) {
+    stub(() => Response.json({ error: { code: "unavailable" } }, { status }));
+    await expect(listAccessibleAppsPage(undefined, undefined, "mail")).rejects.toMatchObject({ status });
+  }
+  const abort = new AbortController(); abort.abort();
+  stub(() => Response.json({ apps: [] }));
+  await expect(listAccessibleAppsPage(undefined, abort.signal, "mail")).rejects.toMatchObject({ name: "AbortError" });
+  expect(calls).toHaveLength(0);
+});
+test("search abort reaches fetch and malformed Home pages are never retained", async () => {
+  resetAppOwnershipCache();
+  let transport: AbortSignal | null | undefined;
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    transport = init?.signal;
+    return new Promise<Response>((_resolve, reject) => {
+      transport?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+  }) as typeof fetch;
+  const controller = new AbortController();
+  const pending = listAccessibleAppsPage(undefined, controller.signal, "mail");
+  expect(transport).toBe(controller.signal);
+  controller.abort();
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  expect(transport?.aborted).toBe(true);
+  for (const row of [null, { capsuleId: "a", role: "owner", name: 1 },
+    { capsuleId: "a", role: "owner", displayName: { en: 1 } },
+    { capsuleId: "a", role: "owner", screens: [null] }]) {
+    let invalid = true;
+    stub(() => Response.json({ apps: invalid ? [row] : [] }));
+    await expect(listAccessibleAppsPage("next")).rejects.toMatchObject({ code: "invalid_apps_response" });
+    invalid = false;
+    expect((await listAccessibleAppsPage("next"))?.apps).toEqual([]);
+    expect(calls).toHaveLength(2);
+  }
+});
+
 test("role is app-specific; only missing app routes consult legacy owner", async () => {
   stub((path) => Response.json(path === "/api/v1/apps" ? { apps: [{ capsuleId: "a", role: "member" }] } : { workspace: { ownerUserId: "me" } }));
   expect(await resolveAppRole({ capsuleId: "a", accountId: "me", workspaceId: "old" })).toBe("member");
@@ -314,7 +370,10 @@ test("a modern install business not_found never selects the legacy install route
 
 test("an absent later app page cannot downgrade the present account API to legacy", async () => {
   stub((path) => path === "/api/v1/apps" ? Response.json({ apps: [], nextCursor: "next" }) : Response.json({ error: { code: "route_not_found" } }, { status: 404 }));
-  await expect(appOwnershipAvailable()).rejects.toMatchObject({ status: 502, code: "invalid_apps_response" });
+  expect(await appOwnershipAvailable()).toBe(true);
+  expect(calls.map((call) => call.path)).toEqual(["/api/v1/apps"]);
+  await expect(listAccessibleAppsPage("next")).rejects.toMatchObject({ status: 502, code: "invalid_apps_response" });
+  await expect(listAccessibleApps()).rejects.toMatchObject({ status: 502, code: "invalid_apps_response" });
   expect(calls.every((call) => !call.path.includes("workspaces"))).toBe(true);
 });
 

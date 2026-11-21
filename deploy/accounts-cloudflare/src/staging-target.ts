@@ -1,3 +1,4 @@
+import { parsePasswordAuthMode } from "../../../accounts/service/src/password-auth-config.ts";
 import { digest as ownerDigest } from "../../../accounts/service/src/owner-operation-evidence.ts";
 
 /** Fixed official rehearsal target. Self-host Accounts keeps its own entry. */
@@ -44,6 +45,9 @@ export const AUTH_STAGING_WORKSPACE_BILLING_AUTHORITY = "takoserver.hosted.stagi
 export const AUTH_STAGING_CONTROL_SECRETS = ["TAKOSUMI_SECRET_STORE_PASSPHRASE", "TAKOSUMI_DEPLOY_CONTROL_TOKEN"] as const;
 
 export function assertAuthStagingVariables(env: Readonly<Record<string, unknown>>): void {
+  const passwordMode = env.TAKOSUMI_ACCOUNTS_PASSWORD_AUTH;
+  if (passwordMode !== undefined && typeof passwordMode !== "string") throw new Error("auth_staging_password_mode_invalid");
+  parsePasswordAuthMode(passwordMode);
   const ownerTarget = env.TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST;
   const ownerClientId = env.TAKOSUMI_ACCOUNTS_OWNER_CLIENT_ID;
   if ((ownerTarget !== undefined || ownerClientId !== undefined) &&

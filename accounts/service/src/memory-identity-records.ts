@@ -1,3 +1,4 @@
+import { connectionOAuthAttemptBucket, connectionOAuthAttemptPurpose, connectionOAuthAttemptSweepKey, connectionOAuthAttemptSweepLimit, connectionOAuthAttemptSweepCheckpoint, type ConnectionOAuthAttemptSweepInput, type ConnectionOAuthAttemptSweepResult } from "./connection-oauth-attempt.ts";
 import { readReviewedRecoveryIssuerAvailabilityCheckpoint, consumeReviewedRecoveryIssuerAvailabilityCheckpoint } from "./reviewed-recovery-issuer-availability.ts";
 import type { ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
 import { canonicalOwnerJson, ownerContextBucket, ownerReceiptBucket, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey } from "./owner-operation-evidence.ts";
@@ -50,6 +51,44 @@ export class MemoryIdentityRecordRepository
   implements IdentityRecordRepository
 {
   readonly records = new Map<string, unknown>();
+  readonly #connectionOAuthAttemptKeys: string[] = [];
+  private attemptKeyPosition(key: string): number {
+    let low = 0, high = this.#connectionOAuthAttemptKeys.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (this.#connectionOAuthAttemptKeys[middle]! < key) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  }
+  private trackAttemptKey(bucket: string, key: string, present: boolean): void {
+    if (bucket !== connectionOAuthAttemptBucket) return;
+    const index = this.attemptKeyPosition(key);
+    const found = this.#connectionOAuthAttemptKeys[index] === key;
+    if (present && !found) this.#connectionOAuthAttemptKeys.splice(index, 0, key);
+    if (!present && found) this.#connectionOAuthAttemptKeys.splice(index, 1);
+  }
+  async pruneConnectionOAuthAttempts(input: ConnectionOAuthAttemptSweepInput): Promise<ConnectionOAuthAttemptSweepResult> {
+    const limit = connectionOAuthAttemptSweepLimit(input);
+    const checkpointKey = this.key("maintenance_cursors", connectionOAuthAttemptSweepKey);
+    const previous = connectionOAuthAttemptSweepCheckpoint(this.records.get(checkpointKey));
+    let start = this.attemptKeyPosition(previous.after);
+    if (this.#connectionOAuthAttemptKeys[start] === previous.after) start++;
+    const keys = this.#connectionOAuthAttemptKeys.slice(start, start + limit);
+    let deleted = 0;
+    for (const key of keys) {
+      const storageKey = this.key(connectionOAuthAttemptBucket, key);
+      const r = this.records.get(storageKey) as { purpose?: unknown; expiresAt?: number } | undefined;
+      if (r?.purpose === connectionOAuthAttemptPurpose && Number.isSafeInteger(r.expiresAt) && r.expiresAt! >= 0 && r.expiresAt! <= input.now) {
+        this.records.delete(storageKey);
+        this.trackAttemptKey(connectionOAuthAttemptBucket, key, false);
+        deleted++;
+      } else if (!r) this.trackAttemptKey(connectionOAuthAttemptBucket, key, false);
+    }
+    this.records.set(checkpointKey, { generation: previous.generation + 1, after: keys.length < limit ? "" : keys.at(-1)! });
+    return { scanned: keys.length, deleted };
+  }
+
   constructor(
     readonly accounts: Map<string, TakosumiAccountRecord>,
     readonly sessions: Map<string, AccountSessionRecord>,
@@ -324,12 +363,14 @@ export class MemoryIdentityRecordRepository
   async put(bucket: string, key: string, record: unknown): Promise<void> {
     this.assertReferences(record, bucket);
     this.records.set(this.key(bucket, key), structuredClone(record));
+    this.trackAttemptKey(bucket, key, true);
   }
   async create(bucket: string, key: string, record: unknown): Promise<boolean> {
     this.assertReferences(record, bucket);
     const k = this.key(bucket, key);
     if (this.records.has(k)) return false;
     this.records.set(k, structuredClone(record));
+    this.trackAttemptKey(bucket, key, true);
     return true;
   }
   async consume<T>(
@@ -345,6 +386,7 @@ export class MemoryIdentityRecordRepository
     if (!r || r.browserBindingHash !== binding || r.expiresAt <= now)
       return undefined;
     this.records.delete(k);
+    this.trackAttemptKey(bucket, key, false);
     return structuredClone(r) as T;
   }
   async query<T>(

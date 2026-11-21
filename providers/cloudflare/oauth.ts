@@ -9,6 +9,30 @@ interface Session {
   readonly refreshToken?: string;
   readonly expiresAt: number;
   readonly lifetimeSeconds?: number;
+  readonly scopes?: readonly string[];
+}
+
+function scopesFromResponse(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length > 8192) {
+    throw new CloudflareCredentialError("Cloudflare returned invalid permission scopes");
+  }
+  const scopes = [...new Set(value.split(/\s+/u).filter(Boolean))];
+  if (scopes.length > 128 || scopes.some((scope) => !/^[\x21\x23-\x5B\x5D-\x7E]{1,256}$/u.test(scope))) {
+    throw new CloudflareCredentialError("Cloudflare returned invalid permission scopes");
+  }
+  return scopes;
+}
+
+function requireScopes(granted: readonly string[] | undefined, required: readonly string[] = []): void {
+  if (required.some((scope) => scope !== "offline_access" && !granted?.includes(scope))) {
+    throw new CloudflareCredentialError("Cloudflare permissions changed or required scopes are missing; reconnect Cloudflare");
+  }
+}
+
+/** A changed host grant must be authorized again, never inferred from account access. */
+export function assertCloudflareOAuthScopes(values: Readonly<Record<string, string>>, required: readonly string[]): void {
+  requireScopes(sessionFromValues(values)?.scopes, required);
 }
 
 /** Private sealed material; only CLOUDFLARE_API_TOKEN is runner-bound. */
@@ -17,6 +41,7 @@ export function cloudflareOAuthValues(input: {
   readonly clientId: string;
   readonly now: number;
   readonly previous?: Session;
+  readonly requestedScopes?: readonly string[];
 }): Readonly<Record<string, string>> {
   const token = input.tokenResponse.access_token;
   const ttl = input.tokenResponse.expires_in;
@@ -25,12 +50,18 @@ export function cloudflareOAuthValues(input: {
     throw new CloudflareCredentialError("Cloudflare did not return a usable access token and expiry");
   }
   const refresh = input.tokenResponse.refresh_token;
+  // RFC 6749 permits omission only when the grant is unchanged from the
+  // initial request or previous refresh. An explicit reduction is not success.
+  const scopes = scopesFromResponse(input.tokenResponse.scope) ?? input.previous?.scopes ?? input.requestedScopes;
+  requireScopes(scopes, input.requestedScopes);
+  requireScopes(scopes, input.previous?.scopes);
   const session: Session = {
     clientId: input.clientId,
     ...(typeof refresh === "string" && refresh ? { refreshToken: refresh } :
       input.previous?.refreshToken ? { refreshToken: input.previous.refreshToken } : {}),
     expiresAt: input.now + ttl * 1000,
     lifetimeSeconds: ttl,
+    ...(scopes === undefined ? {} : { scopes }),
   };
   return { CLOUDFLARE_API_TOKEN: token, [SESSION]: JSON.stringify(session) };
 }
@@ -42,7 +73,9 @@ function sessionFromValues(values: Readonly<Record<string, string>>): Session | 
     if (value && typeof value === "object" && "clientId" in value &&
       typeof value.clientId === "string" && value.clientId && "expiresAt" in value &&
       typeof value.expiresAt === "number" && Number.isFinite(value.expiresAt) &&
-      (!("refreshToken" in value) || typeof value.refreshToken === "string")) return value as Session;
+      (!("refreshToken" in value) || typeof value.refreshToken === "string") &&
+      (!("scopes" in value) || (Array.isArray(value.scopes) && value.scopes.length <= 128 &&
+        value.scopes.every((scope) => typeof scope === "string" && /^[\x21\x23-\x5B\x5D-\x7E]{1,256}$/u.test(scope))))) return value as Session;
   } catch { /* Never expose malformed sealed material in error messages. */ }
   throw new CloudflareCredentialError("Cloudflare connection must be reconnected");
 }
@@ -65,6 +98,7 @@ export interface CloudflareOAuthClient {
   readonly clientId?: string;
   readonly clientSecret?: string;
   readonly tokenUrl?: string;
+  readonly scopes?: readonly string[];
 }
 
 export async function refreshCloudflareOAuthValues(
@@ -72,6 +106,7 @@ export async function refreshCloudflareOAuthValues(
   client: CloudflareOAuthClient = {},
 ): Promise<Readonly<Record<string, string>> | undefined> {
   const session = sessionFromValues(input.values);
+  assertCloudflareOAuthScopes(input.values, client.scopes ?? []);
   if (!session || !cloudflareOAuthRefreshRequired(input.values, input.now(), input.minimumLifetimeSeconds)) return undefined;
   if (client.clientId && client.clientId !== session.clientId) throw new CloudflareCredentialError("Cloudflare client changed; reconnect Cloudflare");
   if (!session.refreshToken) throw new CloudflareCredentialError("Cloudflare authorization expired; reconnect Cloudflare");
@@ -97,6 +132,6 @@ export async function refreshCloudflareOAuthValues(
   if (!result || typeof result !== "object" || Array.isArray(result)) throw new CloudflareCredentialError("Cloudflare returned an invalid token response");
   return { ...input.values, ...cloudflareOAuthValues({
     tokenResponse: result as Record<string, unknown>, clientId: session.clientId,
-    previous: session, now: input.now().getTime(),
+    previous: session, requestedScopes: client.scopes, now: input.now().getTime(),
   }) };
 }

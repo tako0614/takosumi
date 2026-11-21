@@ -75,7 +75,6 @@ import {
   interfacesReady,
   moduleCandidates,
   nameProposal,
-  proposedAppName,
   userActionFor,
 } from "./install-attempt-facts.ts";
 import { evaluateSourceUrl } from "../../../../core/domains/sources/url-policy.ts";
@@ -120,6 +119,7 @@ import {
   type ControlDispatchContext,
 } from "./shared.ts";
 import { mayApproveInterfaceProvider, requireResourceAccess } from "./app-authorization.ts";
+import { newInstallName, repositorySourceName } from "./install-names.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_DIAGNOSTIC_CODE = 64;
@@ -187,7 +187,7 @@ export async function handleWorkspaceInstallPlans(
   // were excluded.
   const variables = parsed?.variables;
   const [requestDigest, legacyRequestDigest, idempotencyKeyHash] = await Promise.all([
-    stableJsonDigest(attempt ?? requestDigestInput(parsed!)),
+    stableJsonDigest(attempt ? ["git-install-attempt/v2", attempt] : requestDigestInput(parsed!)),
     variables ? stableJsonDigest(parsed) : Promise.resolve(undefined),
     stableJsonDigest(key),
   ]);
@@ -206,24 +206,38 @@ export async function handleWorkspaceInstallPlans(
       (existing.delegateCapsuleId ?? undefined) === (delegateCapsuleId ?? undefined);
     let sameRequest = existing.requestDigest === requestDigest ||
       (legacyRequestDigest !== undefined && existing.requestDigest === legacyRequestDigest);
-    if (sameDelegate && !sameRequest) {
-      const source = attempt?.source ?? parsed!.source;
+    if (sameDelegate && !sameRequest && parsed) {
+      const source = parsed.source;
       const storedPath = modulePathValue(existing.source.path);
       if (existing.source.path !== source.path && storedPath !== undefined &&
         (storedPath === "" ? "." : storedPath) === source.path) {
         // Reconstruct the safely equivalent stored spelling for immutable request identity.
-        const previousPlan = parsed
-          ? { ...parsed, source: { ...parsed.source, path: existing.source.path } }
-          : undefined;
-        const previousAttempt = attempt
-          ? { ...attempt, source: { ...attempt.source, path: existing.source.path } }
-          : undefined;
+        const previousPlan = { ...parsed, source: { ...parsed.source, path: existing.source.path } };
         const [pathDigest, previousValuesDigest] = await Promise.all([
-          stableJsonDigest(previousAttempt ?? requestDigestInput(previousPlan!)),
+          stableJsonDigest(requestDigestInput(previousPlan)),
           variables ? stableJsonDigest(previousPlan) : Promise.resolve(undefined),
         ]);
         sameRequest = existing.requestDigest === pathDigest ||
           (previousValuesDigest !== undefined && existing.requestDigest === previousValuesDigest);
+      }
+    }
+    if (sameDelegate && !sameRequest && attempt) {
+      // Older servers digested the repository-derived default as if it had
+      // been explicit. Recognize that digest without rewriting the old plan.
+      const oldCapsule = { ...attempt.capsule, name: attempt.capsule.name ?? repositorySourceName(attempt.source.url) };
+      const storedPath = modulePathValue(existing.source.path);
+      const paths = new Set([attempt.source.path]);
+      if ((storedPath === "" ? "." : storedPath) === attempt.source.path) paths.add(existing.source.path);
+      for (const path of paths) {
+        const input = { ...attempt, source: { ...attempt.source, path } };
+        const [digest, oldDigest] = await Promise.all([
+          stableJsonDigest(["git-install-attempt/v2", input]),
+          stableJsonDigest({ ...input, capsule: oldCapsule }),
+        ]);
+        if (existing.requestDigest === digest || existing.requestDigest === oldDigest) {
+          sameRequest = true;
+          break;
+        }
       }
     }
     if (sameDelegate && sameRequest) {
@@ -255,7 +269,7 @@ export async function handleWorkspaceInstallPlans(
       operation: "install",
       mode: "attempt",
       source: attempt.source,
-      capsule: attempt.capsule,
+      capsule: { ...attempt.capsule, name: attempt.capsule.name ?? newInstallName() },
       options: attempt.options,
       phase: "syncing_source",
       generation: 0,
@@ -1337,6 +1351,18 @@ async function answerInstallAttempt(
   return await installPlanJson(ctx, result.plan);
 }
 
+/** Match the standalone connection list: only the installer's account
+ * credential sees personal connections, never a Workspace PAT or delegate. */
+function personalInstallConnectionOwner(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): string | undefined {
+  const session = ctx.session;
+  return session.subject === plan.createdBy &&
+    session.workspaceId === undefined && session.appIds === undefined &&
+    plan.delegateCapsuleId === undefined ? session.subject : undefined;
+}
+
 /**
  * Confirms an `inputs` pause. Readiness is checked against live connections,
  * app names and the captured variable presentation before anything is
@@ -1402,7 +1428,7 @@ async function continueInstallAttempt(
   }
   if (!resubmitting) {
     const [rows, interfaces] = await Promise.all([
-      connectionRequirements(ctx.operations, next),
+      connectionRequirements(ctx.operations, next, personalInstallConnectionOwner(ctx, next)),
       interfaceRequirements(ctx.operations, next),
     ]);
     const changedObserved = observedInterfaces.some((entry) => {
@@ -3449,15 +3475,15 @@ function parseCreateRequest(
 }
 
 /**
- * Normalized attempt request: every default is filled so the request digest
- * is the same whether a client omits a default or states it.
+ * Normalize static defaults before digesting the request. Allocate the
+ * omitted Capsule name only when inserting a new attempt.
  */
 function parseCreateAttemptRequest(
   body: Record<string, unknown>,
 ):
   | (CreateGitInstallAttemptRequest & {
       readonly source: GitInstallPlanSourceRequest;
-      readonly capsule: StoredGitInstallPlan["capsule"];
+      readonly capsule: { readonly name?: string; readonly environment: string };
       readonly options: StoredGitInstallPlan["options"];
     })
   | undefined {
@@ -3475,7 +3501,7 @@ function parseCreateAttemptRequest(
   const rawUrl = boundedString(body.source.url, 2048);
   if (!rawUrl || !sourceUrlIsSafeToPersist(rawUrl)) return undefined;
   const url = normalizeInstallConfigSourceUrl(rawUrl);
-  const proposed = proposedAppName(url);
+  const proposed = repositorySourceName(url);
   const sourceName = body.source.name === undefined
     ? proposed
     : boundedPlainString(body.source.name, 128);
@@ -3484,14 +3510,15 @@ function parseCreateAttemptRequest(
   const authConnectionId = connectionReference(body.source.authConnectionId);
   const capsule = isRecord(body.capsule) ? body.capsule : {};
   const capsuleName = capsule.name === undefined
-    ? proposed
+    ? undefined
     : boundedPlainString(capsule.name, 128);
   const environment = capsule.environment === undefined
     ? "production"
     : boundedPlainString(capsule.environment, 128);
   if (
-    !sourceName || !ref || parsedPath === undefined || !capsuleName ||
-    !/^[a-z0-9-]+$/u.test(capsuleName) || !environment ||
+    !sourceName || !ref || parsedPath === undefined ||
+    (capsule.name !== undefined && (!capsuleName || !/^[a-z0-9-]+$/u.test(capsuleName))) ||
+    !environment ||
     (body.source.authConnectionId !== undefined && !authConnectionId)
   ) {
     return undefined;
@@ -3507,7 +3534,7 @@ function parseCreateAttemptRequest(
       path: parsedPath === "" ? "." : parsedPath,
       ...(authConnectionId ? { authConnectionId } : {}),
     },
-    capsule: { name: capsuleName, environment },
+    capsule: { ...(capsuleName ? { name: capsuleName } : {}), environment },
     options,
   };
 }
@@ -3752,6 +3779,9 @@ async function materializeSelectedModuleInstallConfig(input: {
       genericOpenTofuSourceSnapshotId: input.snapshot.id,
     },
     modulePath: input.modulePath,
+    ...(input.plan.mode === "attempt" ? {
+      sourceSelector: { url: input.source.url, path: input.source.defaultPath },
+    } : {}),
     variableMapping: {
       ...baseMaterial.variableMapping,
       ...(input.reviewedVariables ?? {}),
@@ -4337,7 +4367,7 @@ async function installPlanResponseFor(
     publicGitInstallPlan(stored),
     invalidated
       ? { kind: "retry", code: invalidated, restart: true }
-      : await userActionFor(ctx.operations, stored),
+      : await userActionFor(ctx.operations, stored, personalInstallConnectionOwner(ctx, stored)),
     invalidated,
     reviewSummary,
   );

@@ -20,6 +20,10 @@ auth_modes:
   oauth:
     pre_run:
       type: cloudflare_oauth
+      inputs:
+        CLOUDFLARE_ACCOUNT_ID:
+          from: value
+          name: account_id
     env:
       CLOUDFLARE_API_TOKEN:
         from: generated

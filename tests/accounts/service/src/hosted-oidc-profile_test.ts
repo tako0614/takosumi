@@ -99,7 +99,7 @@ test("hosted consent is browser-bound, single-use, exact-Origin and excludes sil
   // form-action also applies to the 302 that answers the POST; it must allow exactly the RP's redirect origin.
   expect(page.headers.get("content-security-policy")).toContain(`form-action 'self' ${new URL(url.searchParams.get("redirect_uri")!).origin};`);
   const html = await page.text();
-  expect(html).toContain("サインインを続ける");
+  expect(html).toContain("hosted のアクセス許可");
   expect(html).toContain("メールアドレスを見る");
   expect(html).toContain("許可して続ける");
   const styleNonce = /<style nonce="([^"]+)">/u.exec(html)?.[1];

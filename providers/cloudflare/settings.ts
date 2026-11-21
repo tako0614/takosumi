@@ -1,5 +1,4 @@
-import type { JsonValue } from "takosumi-contract";
-import type { ConnectionScopeHints } from "takosumi-contract/connections";
+import type { JsonValue, ProviderConnection, ConnectionScopeHints } from "takosumi-contract";
 
 export interface CloudflareTokenVendingConfig {
   readonly policies: readonly CloudflareTokenPolicy[];
@@ -149,4 +148,20 @@ function isStringRecord(
     isRecord(value) &&
     Object.values(value).every((item) => typeof item === "string")
   );
+}
+
+/** Public, non-secret settings proposal; never a credential or module mapping. */
+export function cloudflareInstallSettings(
+  connection: ProviderConnection,
+): Readonly<Record<string, JsonValue>> | undefined {
+  const defaults = connection.scopeHints?.moduleInputDefaults;
+  const settings = connection.scopeHints?.providerSettings;
+  const account = defaults?.cloudflare_account_id;
+  if (typeof account !== "string" || !/^[a-f0-9]{32}$/u.test(account)) return undefined;
+  if (settings?.accountId !== undefined && settings.accountId !== account) return undefined;
+  const subdomain = defaults?.cloudflare_workers_subdomain;
+  if (subdomain !== undefined &&
+    (typeof subdomain !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(subdomain))) return undefined;
+  if (settings?.workersSubdomain !== undefined && settings.workersSubdomain !== subdomain) return undefined;
+  return { account_id: account, ...(subdomain === undefined ? {} : { workers_subdomain: subdomain }) };
 }

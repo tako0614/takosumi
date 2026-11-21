@@ -68,6 +68,40 @@ test("stage entry mounts the guarded issuer portal with an in-process provider r
   const html=await result.text();expect(html).toContain("Continue with Google");expect(html).toContain("Continue with GitHub");expect(paths).toEqual(["/api/v1/auth/providers"]);
 });
 
+test("the issuer account screen is opt-in and reads eligibility with the browser cookie", async () => {
+  const requests: Request[] = [];
+  const worker = createAuthStagingWorker({
+    verifySchema: async () => {},
+    accounts: {
+      async fetch(input) {
+        requests.push(input);
+        return Response.json({
+          passwordEnabled: true, username: null, eligible: true, hasPassword: false, canSetPassword: true,
+        });
+      },
+    },
+  });
+  expect((await worker.fetch(request("/account"), env)).status).toBe(404);
+  const enabled = { ...env, TAKOSUMI_ACCOUNTS_PASSWORD_AUTH: "login" };
+  const anonymous = await worker.fetch(request("/account"), enabled);
+  expect(anonymous.status).toBe(303);
+  expect(anonymous.headers.get("location")).toBe("/sign-in?return=%2Faccount");
+  expect(requests).toHaveLength(0);
+  const page = await worker.fetch(new Request(request("/account"), {
+    headers: { cookie: "__Host-takosumi_session=sess_fixture", "accept-language": "ja" },
+  }), enabled);
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-security-policy")).toContain("form-action 'none'");
+  expect(page.headers.get("cache-control")).toBe("no-store");
+  const html = await page.text();
+  expect(html).toContain("パスワードを設定");
+  expect(html).toContain('autocomplete="new-password"');
+  expect(html).toContain('name="username" autocomplete="username"');
+  expect(html).not.toContain("sess_fixture");
+  expect(requests.map((input) => new URL(input.url).pathname)).toEqual(["/api/v1/account/sign-in-methods"]);
+  expect(requests[0]?.headers.get("cookie")).toBe("__Host-takosumi_session=sess_fixture");
+});
+
 test("stage context confirmation is schema-gated and requires its issuer browser cookies", async () => {
   const path = "/identity-merges/imrg_11111111-1111-4111-8111-111111111111/contexts";
   let schemaCalls = 0;

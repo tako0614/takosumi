@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   awaitsDeployApproval,
+  canApproveRun,
   isDeployApprovalCandidate,
   isReviewRun,
 } from "../../../../dashboard/src/lib/run-approval.ts";
@@ -32,6 +33,13 @@ function applyRun(overrides: Partial<Run> = {}): Run {
 }
 
 describe("shared deploy-approval predicate (run list ↔ run view)", () => {
+  test("explicit approval accepts waiting Plans and leaves old Restore Runs as history", () => {
+    expect(canApproveRun(planRun({ status: "waiting_approval" }))).toBe(true);
+    expect(canApproveRun(planRun({ type: "destroy_plan", status: "waiting_approval" }))).toBe(true);
+    expect(canApproveRun(planRun({ type: "restore", status: "waiting_approval" }))).toBe(false);
+    expect(canApproveRun(planRun())).toBe(false);
+  });
+
   test("a succeeded policy-pass plan with no later apply awaits approval", () => {
     const plan = planRun();
     expect(isReviewRun(plan)).toBe(true);

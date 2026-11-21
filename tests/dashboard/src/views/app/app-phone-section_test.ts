@@ -15,21 +15,22 @@ const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 const section = read("views/app/AppPhoneSection.tsx");
 const css = read("views/app/app-phone.css");
 const page = read("views/app/AppManagePage.tsx");
+const launchLink = read("lib/app-launch-link.ts");
 const appUi = read("views/app/app-ui.tsx");
-const home = read("views/apps/AppListView.tsx");
 const install = read("views/new/InstallView.tsx");
 const run = read("views/runs/RunView.tsx");
 const indexHtml = readFileSync(resolve(root, "../index.html"), "utf8");
 
 describe("use on your phone", () => {
-  test("the app page keeps phone guidance after settings, for the screen Open offers or the URL names", () => {
+  test("the app opens phone guidance on demand for the screen Open offers or the URL names", () => {
     const attention = page.indexOf("<AppAttentionSection");
     const phone = page.indexOf("<AppPhoneSection");
     const settings = page.indexOf("<AppSettingsSection");
     expect(attention).toBeGreaterThan(0);
     expect(phone).toBeGreaterThan(attention);
     expect(phone).toBeGreaterThan(settings);
-    expect(page).toContain('view().primaryAction === "open" || secondaryScreens(view()) ? chooserScreen() : undefined');
+    expect(page).toContain('sectionVisited("phone") && (view().primaryAction === "open" || secondaryScreens(view()))');
+    expect(page).toContain('? chooserScreen() : undefined');
     // The chooser is for the screen the URL (`?open=`) or Open named, else the primary one.
     expect(page).toContain("list.find((screen) => screen.interfaceId === wanted) ?? list[0]");
     // It knows the app, the screen and its server-verified native clients.
@@ -130,11 +131,9 @@ describe("use on your phone", () => {
     expect(section).toContain('return client.name ?? t("app.phone.unverifiedNameStandalone", { target: clientTargetLabel(client) });');
   });
 
-  test("Open and the Home tile open the way this device chose, and a computer keeps the new tab", () => {
+  test("Open follows the device choice and a computer keeps the new tab", () => {
     expect(appUi).toContain("screenOpenRoute(props.capsuleId, surface)");
-    expect(appUi).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
-    expect(home).toContain("screenOpenRoute(props.app.inst.id, surface)");
-    expect(home).toContain("{...openRouteAnchor(route())}");
+    expect(launchLink).toContain('return { href: route.href, target: "_blank", rel: "noreferrer noopener" };');
     // 「開き方を変える」 next to Open leads to the chooser of every screen
     // that has a native app here or a remembered choice.
     expect(page).toContain('data-testid="app-open-change"');

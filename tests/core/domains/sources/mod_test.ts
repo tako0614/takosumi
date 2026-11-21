@@ -316,7 +316,11 @@ function makeService(
     }) => Promise<void>;
     readCapsuleSourceFiles?: (
       snapshot: SourceSnapshot,
-      options?: { readonly modulePath?: string },
+      options?: {
+        readonly modulePath?: string;
+        readonly runId?: string;
+        readonly requireProviderMirror?: true;
+      },
     ) => Promise<readonly { readonly path: string; readonly text: string }[]>;
   } = {},
 ) {
@@ -2209,6 +2213,7 @@ output "public_url" {
       allowedResourceTypes: ["custom_resource", "null_resource"],
       allowedDataSourceTypes: ["external"],
       allowedProvisionerTypes: ["local-exec"],
+      providerInstallation: { requireMirror: true },
     },
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
@@ -2237,6 +2242,7 @@ output "public_url" {
     {
       modulePath: "deploy/opentofu",
       runId: "ccr_test00000004",
+      requireProviderMirror: true,
     },
   ]);
   expect(report.level).toBe("ready");
@@ -2907,6 +2913,72 @@ test("readCapsuleSourceFiles keeps module paths relative to the snapshot archive
     { modulePath: "infrastructure" },
     undefined,
   ]);
+});
+
+test("compatibility source-file cache separates mirror policy and reuses strict reads", async () => {
+  const observedOptions: unknown[] = [];
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async (_snapshot, options) => {
+      observedOptions.push(options);
+      return [{ path: "main.tf", text: "terraform {}\n" }];
+    },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "mirror-cache",
+    url: "https://github.com/acme/mirror-cache.git",
+  });
+  const { run } = await service.createSync(source.id);
+  const sourceSnapshot: SourceSnapshot = {
+    id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveRef: run.archiveRef,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(sourceSnapshot);
+
+  await service.readCapsuleSourceFiles(sourceSnapshot, { modulePath: "infra" });
+
+  await store.putWorkspace({
+    id: "workspace_1",
+    handle: "workspace-1",
+    displayName: "Workspace 1",
+    type: "personal",
+    ownerUserId: "user_1",
+    policy: { providerInstallation: { requireMirror: true } },
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const strictWithWorkspacePolicy = await service.createCompatibilityCheck(
+    source.id,
+    { sourceSnapshotId: sourceSnapshot.id, modulePath: "infra" },
+    { kind: "fresh" },
+  );
+  const strictWithoutInstallConfig = await service.createCompatibilityCheck(
+    source.id,
+    { sourceSnapshotId: sourceSnapshot.id, modulePath: "infra" },
+    { kind: "fresh" },
+  );
+
+  expect(strictWithWorkspacePolicy.run?.status).toBe("succeeded");
+  expect(strictWithoutInstallConfig.run?.status).toBe("succeeded");
+  expect(observedOptions).toHaveLength(2);
+  expect(observedOptions[0]).toEqual({ modulePath: "infra" });
+  expect(observedOptions[1]).toMatchObject({
+    modulePath: "infra",
+    requireProviderMirror: true,
+  });
+  expect(observedOptions[1]).toHaveProperty("runId");
 });
 
 test("an app-owned Source accepts its owner's personal Git connection and refuses another person's", async () => {

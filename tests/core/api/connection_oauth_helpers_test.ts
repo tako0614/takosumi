@@ -24,6 +24,43 @@ const PRINCIPAL = {
   runnerProfileIds: "*",
 } as const;
 
+test("OAuth callback rejects changed consent scopes before token exchange, including omitted response scope", async () => {
+  const base = {
+    TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "scope-drift-state-secret",
+    TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "scope-drift-client",
+    TAKOSUMI_CLOUDFLARE_OAUTH_REDIRECT_URI: "https://app.example.test/callback",
+    TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES: "account-settings.read workers-scripts.admin",
+  };
+  let calls = 0;
+  const fetcher = (async () => { calls++; return Response.json({ access_token: "narrow-token-fixture", expires_in: 3600 }); }) as typeof fetch;
+  const original = createReferenceConnectionOAuthHelpers(base, fetcher)!.cloudflare!;
+  const started = await original.start({ helperId: "cloudflare", request: new Request("https://app.example.test/start"),
+    principal: PRINCIPAL, body: { workspaceId: "ws_1", subject: "acct_1" } });
+  const changed = createReferenceConnectionOAuthHelpers({ ...base,
+    TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES: base.TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES + " d1.write workers-kv-storage.write workers-r2.write" }, fetcher)!.cloudflare!;
+  await expect(changed.complete({ helperId: "cloudflare", request: new Request("https://app.example.test/callback"),
+    principal: PRINCIPAL, code: "code", state: started.state, query: {} })).rejects.toThrow("OAuth configuration changed");
+  expect(calls).toBe(0);
+  const reordered = createReferenceConnectionOAuthHelpers({ ...base,
+    TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES: "workers-scripts.admin account-settings.read" }, fetcher)!.cloudflare!;
+  const result = await reordered.complete({ helperId: "cloudflare", request: new Request("https://app.example.test/callback"),
+    principal: PRINCIPAL, code: "code", state: started.state, query: {} });
+  expect(JSON.parse(result.request.values!.CLOUDFLARE_OAUTH_SESSION!).scopes).not.toContain("d1.write");
+  expect(calls).toBe(1);
+});
+
+test("OAuth authorization parameters cannot replace the signed consent scope", async () => {
+  const descriptor = connectionOAuthDescriptorsFromEnv({
+    TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "scope-override-client",
+    TAKOSUMI_CLOUDFLARE_OAUTH_REDIRECT_URI: "https://app.example.test/callback",
+    TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES: "d1.write",
+  })[0]!;
+  const helper = createConnectionOAuthHelpers({ stateSecret: "scope-override-state-secret",
+    descriptors: [{ ...descriptor, authorizationParams: { scope: "account-settings.read" } }] })!.cloudflare!;
+  await expect(helper.start({ helperId: "cloudflare", request: new Request("https://app.example.test/start"), principal: PRINCIPAL,
+    body: { workspaceId: "ws_1", subject: "acct_1" } })).rejects.toThrow("override required fields");
+});
+
 test("personal OAuth state signs scope and account owner and rejects a mismatched owner", async () => {
   const helpers = createConnectionOAuthHelpers({
     stateSecret: "personal-oauth-state-secret",

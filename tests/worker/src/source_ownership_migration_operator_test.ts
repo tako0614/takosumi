@@ -40,8 +40,12 @@ const group: SourceOwnershipMigrationGroup = {
 class FixtureStore implements SourceOwnershipMigrationStore {
   current: SourceOwnershipMigrationGroup = structuredClone(group);
   commits = 0;
+  reads = 0;
   async listSourceIds() { return [this.current.source.id]; }
-  async readGroup(id: string) { return id === this.current.source.id ? this.current : undefined; }
+  async readGroup(id: string) {
+    this.reads++;
+    return id === this.current.source.id ? this.current : undefined;
+  }
   async commitGroup(mutation: SourceOwnershipMigrationMutation): Promise<"committed"> {
     this.commits++;
     this.current = { ...this.current, source: mutation.retainedSource };
@@ -188,6 +192,7 @@ test("operator POST resumes a large archive set with a bound copy receipt", asyn
     headers: { authorization: `Bearer ${token}` },
   }), env, { store, copier });
   const dry = await get!.json() as { preparedAt: string; reportDigest: string };
+  const readsBeforeCopy = store.reads;
   const first = await handleSourceOwnershipMigrationOperatorRequest(new Request(origin, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ sourceId: "src_legacy", preparedAt: dry.preparedAt, reportDigest: dry.reportDigest }),
@@ -197,6 +202,7 @@ test("operator POST resumes a large archive set with a bound copy receipt", asyn
   expect(pending.nextCopyCursor).toBe(16);
   expect(copied).toBe(16);
   expect(store.commits).toBe(0);
+  expect(store.reads - readsBeforeCopy).toBe(1);
   const forged = await handleSourceOwnershipMigrationOperatorRequest(new Request(origin, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ sourceId: "src_legacy", preparedAt: dry.preparedAt,
@@ -204,6 +210,7 @@ test("operator POST resumes a large archive set with a bound copy receipt", asyn
   }), env, { store, copier });
   expect(forged?.status).toBe(409);
   expect(copied).toBe(16);
+  const readsBeforeCommit = store.reads;
   const final = await handleSourceOwnershipMigrationOperatorRequest(new Request(origin, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ sourceId: "src_legacy", preparedAt: dry.preparedAt,
@@ -213,6 +220,7 @@ test("operator POST resumes a large archive set with a bound copy receipt", asyn
   expect(final?.status).toBe(200);
   expect(copied).toBe(17);
   expect(store.commits).toBe(1);
+  expect(store.reads - readsBeforeCommit).toBe(1);
 });
 
 test("failed archive readback prevents the DB group commit", async () => {

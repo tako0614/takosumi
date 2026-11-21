@@ -91,6 +91,7 @@ let cachedError: SessionError | null = null;
 let cachedAt = 0;
 let initialized = false;
 let inflight: Promise<SessionRecord | null> | null = null;
+let signOutInFlight: Promise<boolean> | null = null;
 let sessionEpoch = 0;
 
 function notify(s: SessionRecord | null): void {
@@ -272,16 +273,19 @@ async function fetchSessionMe(
   }
 }
 
-async function fetchAccountSessionMe(): Promise<SessionRecord | null> {
+async function fetchAccountSessionMe(confirmation?: { readonly signal: AbortSignal }): Promise<SessionRecord | null> {
   try {
     const res = await fetch(SESSION_ME_PATH, {
       method: "GET",
       headers: { accept: "application/json" },
       credentials: "include",
+      ...(confirmation ? { signal: confirmation.signal, cache: "no-store", redirect: "error" } : {}),
     });
-    if (res.status === 401 || res.status === 404) return null;
+    // Legacy bootstrap can tolerate a missing mirror route. A sign-out
+    // readback needs an affirmative answer from the session owner.
+    if (!confirmation && (res.status === 401 || res.status === 404)) return null;
     const body = await readResponseBody(res);
-    if (!res.ok) throw sessionErrorFromResponse(res, body);
+    if (!res.ok || (confirmation && res.status !== 200)) throw sessionErrorFromResponse(res, body);
     const session = pickResponseRecord(body as SessionMeResponse);
     if (!session) {
       if (isExplicitUnauthenticatedSession(body)) return null;
@@ -477,15 +481,6 @@ export function writeSession(_s: SessionRecord): void {
 }
 
 /**
- * Clear the local cache and ask the server to revoke the cookie. The
- * server endpoint is responsible for issuing `Set-Cookie: takosumi_session=;
- * Max-Age=0` and removing the session record.
- *
- * Signing out also arms the sign-in auto-start breaker. The upstream IdP
- * session outlives our cookie, so a single-provider deployment would otherwise
- * bounce the just-signed-out user through /sign-in straight back into a new
- * session without a single click.
- *
  * The cached Workspace *list* is dropped (it is the previous session's
  * projection and must not be shown to whoever signs in next in this tab), but
  * the persisted current-Workspace *selection* is kept: it is validated against
@@ -493,7 +488,7 @@ export function writeSession(_s: SessionRecord): void {
  * it dumped returning users into an arbitrary first Workspace — usually the
  * empty auto-created personal one — which reads as "signed in as someone else".
  */
-export function clearSession(): void {
+function clearLocalSession(): void {
   // A completed old probe cannot restore the just-cleared session, and a
   // later login must not share that old request.
   sessionEpoch++;
@@ -506,6 +501,11 @@ export function clearSession(): void {
   initialized = true;
   notify(null);
   notifyState({ kind: "unauthenticated" });
+}
+
+/** Clear an expired session and request best-effort server cleanup. */
+export function clearSession(): void {
+  clearLocalSession();
   if (typeof fetch !== "undefined") {
     // keepalive: the caller navigates to /sign-in right after this, which
     // would otherwise abort the revocation and leave the cookie valid
@@ -518,6 +518,59 @@ export function clearSession(): void {
       });
     revoke().catch(() => revoke().catch(() => undefined));
   }
+}
+
+async function withSessionDeadline<T>(
+  timeoutMs: number,
+  request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await request(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Confirm explicit sign-out before the browser leaves the authenticated view. */
+export function signOutSession(): Promise<boolean> {
+  if (signOutInFlight) return signOutInFlight;
+  const epoch = sessionEpoch;
+  const session = cachedSession;
+  const stillCurrent = () => epoch === sessionEpoch &&
+    cachedSession?.subject === session?.subject &&
+    cachedSession?.primaryAccountId === session?.primaryAccountId;
+  const request = (async () => {
+    let confirmed = false;
+    try {
+      const response = await withSessionDeadline(45_000, signal => fetch(SESSION_ME_PATH, {
+        method: "DELETE",
+        credentials: "include",
+        keepalive: true,
+        redirect: "error",
+        signal,
+      }));
+      confirmed = response.status === 204;
+    } catch {
+      // A transport failure can follow a committed revocation.
+    }
+    if (!stillCurrent()) return false;
+    if (!confirmed) {
+      try {
+        confirmed = (await withSessionDeadline(8_000, signal => fetchAccountSessionMe({ signal }))) === null;
+      } catch {
+        return false;
+      }
+    }
+    if (!confirmed || !stillCurrent()) return false;
+    clearLocalSession();
+    return true;
+  })().finally(() => {
+    signOutInFlight = null;
+  });
+  signOutInFlight = request;
+  return request;
 }
 
 export function onSessionChange(

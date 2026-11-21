@@ -691,8 +691,11 @@ async function handleRunnerRequestBody(
         setRunRedactionValues(runId, requestRedactionValues);
       }
       const result =
-        action === "compatibility_check"
-          ? await runCompatibilityCheck(runId, body.request, request.signal)
+        action === "compatibility_check" || action === "compatibility_check_mirror_only"
+          ? await runCompatibilityCheck(
+              runId, body.request, request.signal,
+              action === "compatibility_check_mirror_only",
+            )
           : action === "backup"
             ? await runBackup(runId, body.request, request.signal)
             : action === "release"
@@ -741,7 +744,8 @@ async function handleRunnerRequestBody(
       return Response.json(
         {
           runId,
-          action,
+          action: action === "compatibility_check_mirror_only"
+            ? "compatibility_check" : action,
           status: "failed",
           exitCode: 1,
           ...(errorCode ? { errorCode } : {}),

@@ -27,7 +27,7 @@ const STATE_DIGEST = `sha256:${"3".repeat(64)}`;
 // Identity, policy and Git/OpenTofu transport below are synthetic. The HTTP
 // handler, Accounts authorization, Core ledger and revision coordinator are real.
 async function fixture() {
-  const runnerCalls = { sync: 0, plan: 0, apply: 0 };
+  const runnerCalls = { sync: 0, plan: 0, apply: 0, destroy: 0 };
   const runner: OpenTofuRunner = {
     sourceSync: async (job) => {
       runnerCalls.sync += 1;
@@ -72,6 +72,14 @@ async function fixture() {
         rawOutputRef: job.rawOutputRef,
         providerInstallation: [],
         executionEvidence: fixtureExecutionEvidence(job, "apply"),
+      };
+    },
+    destroy: async (job) => {
+      runnerCalls.destroy += 1;
+      return {
+        stateDigest: STATE_DIGEST,
+        providerInstallation: [],
+        executionEvidence: fixtureExecutionEvidence(job, "destroy"),
       };
     },
   };
@@ -151,6 +159,107 @@ async function fixture() {
   accounts.savePersonalAccessToken(TOKEN, pat);
   return { accounts, pat, appId, ledger, operations, dispatch, runnerCalls };
 }
+
+test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall with PAT fences", async () => {
+  const h = await fixture();
+  const path = `/api/v1/capsules/${h.appId}/destroy-plan`;
+  for (const [token, changes] of [
+    ["synthetic-destroy-wrong-app", { appIds: ["cap_other"] }],
+    ["synthetic-destroy-read-only", { scopes: ["read"] }],
+  ] as const) {
+    h.accounts.savePersonalAccessToken(token, {
+      ...h.pat, tokenId: `pat_${token}`, ...changes,
+    });
+    const before = { ...h.runnerCalls };
+    const denied = await h.dispatch(new Request(`${ORIGIN}${path}`, {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: "{}",
+    }));
+    expect(denied.status).toBe(403);
+    expect(h.runnerCalls).toEqual(before);
+  }
+  const created = await h.dispatch(new Request(`${ORIGIN}${path}`, {
+    method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    body: "{}",
+  }));
+  expect(created.status).toBe(201);
+  const saved = (await created.json()).run as { id: string; type: string; status: string;
+    capsuleId: string; workspaceId: string };
+  expect(saved).toMatchObject({ type: "destroy_plan", status: "waiting_approval",
+    capsuleId: h.appId });
+  expect(saved.workspaceId).toBeString();
+  expect((await h.operations.getRun(saved.id))?.id).toBe(saved.id);
+  const beforeDestroy = { ...h.runnerCalls };
+
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request.clone());
+    return h.dispatch(request);
+  }) as typeof fetch;
+  const output: string[] = [];
+  const errors: string[] = [];
+  const io = { stdout: (line: string) => output.push(line), stderr: (line: string) => errors.push(line) };
+  try {
+    const reviewArgs = ["apps", "recover-uninstall", h.appId, "--destroy-plan", saved.id,
+      "--token", "synthetic-destroy-read-only", "--url", ORIGIN, "--json"];
+    expect(await main(reviewArgs, io)).toBe(0);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      status: "review_required", planRunId: saved.id, plan: { id: saved.id, status: "waiting_approval" },
+    });
+    expect(await main(reviewArgs.map(value =>
+      value === "synthetic-destroy-read-only" ? "synthetic-destroy-wrong-app" : value), io)).toBe(1);
+    expect(JSON.parse(output[1]!)).toMatchObject({ status: "refused", planRunId: saved.id });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname]))
+      .toEqual([["GET", `/api/v1/runs/${saved.id}`], ["GET", `/api/v1/runs/${saved.id}`]]);
+    expect(h.runnerCalls).toEqual(beforeDestroy);
+    expect((await h.operations.getRun(saved.id))?.status).toBe("waiting_approval");
+
+    const args = ["apps", "apply", h.appId, "--destroy-plan", saved.id,
+      "--yes", "--token", TOKEN, "--url", ORIGIN, "--json"];
+    for (const deniedToken of ["synthetic-destroy-wrong-app", "synthetic-destroy-read-only"]) {
+      output.length = 0;
+      errors.length = 0;
+      expect(await main(args.map(value => value === TOKEN ? deniedToken : value), io)).toBe(1);
+      expect(h.runnerCalls.destroy).toBe(beforeDestroy.destroy);
+      expect((await h.operations.getRun(saved.id))?.status).toBe("waiting_approval");
+    }
+    const beforeValidRequests = requests.length;
+    output.length = 0;
+    errors.length = 0;
+    expect(await main(args, io)).toBe(0);
+    expect(errors).toHaveLength(1);
+    expect(JSON.parse(errors[0]!)).toMatchObject({
+      status: "applying_reviewed_plan", appId: h.appId,
+      reviewUrl: `${ORIGIN}/runs/${saved.id}`,
+    });
+    const result = JSON.parse(output[0]!);
+    expect(result).toMatchObject({ status: "succeeded", appId: h.appId,
+      planRunId: saved.id, runId: expect.any(String), runStatus: "succeeded" });
+    expect(h.runnerCalls.destroy - beforeDestroy.destroy).toBe(1);
+    expect(h.runnerCalls.apply - beforeDestroy.apply).toBe(0);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ status: "destroyed" });
+    expect(requests.slice(beforeValidRequests).filter(r => r.method === "POST").map(r => new URL(r.url).pathname)).toEqual([
+      `/api/v1/runs/${saved.id}/approve`, `/api/v1/runs/${saved.id}/apply`,
+    ]);
+    const history = requests.slice(beforeValidRequests)
+      .filter(r => new URL(r.url).pathname === `/api/v1/capsules/${h.appId}/runs`);
+    expect(history.length).toBeGreaterThan(0);
+    expect(history.every(r => new URL(r.url).searchParams.getAll("type").join(",") === "destroy_apply")).toBe(true);
+
+    const beforeObserve = requests.length;
+    output.length = 0;
+    errors.length = 0;
+    expect(await main(["apps", "apply", h.appId, "--destroy-plan", saved.id,
+      "--observe-only", "--token", TOKEN, "--url", ORIGIN, "--json"], io)).toBe(0);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "succeeded", runId: result.runId });
+    expect(requests.slice(beforeObserve).every(r => r.method === "GET")).toBe(true);
+    expect(h.runnerCalls.destroy - beforeDestroy.destroy).toBe(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("apps update saves a reviewable revision Plan; apps apply separately reaches a terminal Run", async () => {
   const h = await fixture();
@@ -248,9 +357,120 @@ test("apps update saves a reviewable revision Plan; apps apply separately reache
   }
 });
 
+test("apps update resumes only the exact saved revision coordinator after a lost reconcile ACK", async () => {
+  const h = await fixture();
+  const originalFetch = globalThis.fetch;
+  const created = await h.dispatch(new Request(`${ORIGIN}/api/v1/capsules/${h.appId}/revision-plans`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+      "idempotency-key": "cli-revision-resume-retained-create",
+    },
+    body: JSON.stringify({ ref: "release/v2" }),
+  }));
+  expect(created.status).toBe(201);
+  const saved = (await created.json()).revisionPlan as {
+    id: string; capsuleId: string; operation: string; revision: { targetRef: string };
+  };
+  expect(saved).toMatchObject({
+    capsuleId: h.appId, operation: "revision", revision: { targetRef: "release/v2" },
+  });
+
+  h.accounts.savePersonalAccessToken("synthetic-cli-revision-read-only", {
+    ...h.pat, tokenId: "pat_cli_revision_read_only", scopes: ["read"],
+  });
+  const requests: Request[] = [];
+  let loseFirstReconcileAck = true;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request.clone());
+    const response = await h.dispatch(request);
+    const path = new URL(request.url).pathname;
+    if (loseFirstReconcileAck && request.method === "POST" &&
+      path === `/api/v1/revision-plans/${saved.id}/reconcile` && response.ok) {
+      loseFirstReconcileAck = false;
+      throw new Error("synthetic lost reconcile ACK after persisted Core progress");
+    }
+    return response;
+  }) as typeof fetch;
+  const output: string[] = [];
+  const errors: string[] = [];
+  const io = { stdout: (line: string) => output.push(line), stderr: (line: string) => errors.push(line) };
+  const update = (appId: string, token = TOKEN, ref = "release/v2") => [
+    "apps", "update", appId, "--ref", ref, "--revision-plan", saved.id,
+    "--token", token, "--url", ORIGIN, "--json",
+  ];
+  try {
+    const beforeRefusals = { ...h.runnerCalls };
+    expect(await main(update("cap_another_app"), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "refused", code: "revision_identity_mismatch" });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", `/api/v1/revision-plans/${saved.id}`],
+    ]);
+    expect(h.runnerCalls).toEqual(beforeRefusals);
+
+    output.length = 0;
+    requests.length = 0;
+    expect(await main(update(h.appId, TOKEN, "release/v3"), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "refused", code: "revision_identity_mismatch" });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", `/api/v1/revision-plans/${saved.id}`],
+    ]);
+    expect(h.runnerCalls).toEqual(beforeRefusals);
+
+    output.length = 0;
+    requests.length = 0;
+    expect(await main(update(h.appId, "synthetic-cli-revision-read-only"), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "unconfirmed", code: "insufficient_scope" });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", `/api/v1/revision-plans/${saved.id}`],
+      ["POST", `/api/v1/revision-plans/${saved.id}/reconcile`],
+    ]);
+    expect(h.runnerCalls).toEqual(beforeRefusals);
+
+    output.length = 0;
+    requests.length = 0;
+    const beforeResume = { ...h.runnerCalls };
+    expect(await main(update(h.appId), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      status: "unconfirmed", appId: h.appId, revisionPlanId: saved.id, ref: "release/v2",
+    });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+      ["GET", `/api/v1/revision-plans/${saved.id}`],
+      ["POST", `/api/v1/revision-plans/${saved.id}/reconcile`],
+    ]);
+
+    output.length = 0;
+    requests.length = 0;
+    expect(await main(update(h.appId), io)).toBe(0);
+    const review = JSON.parse(output[0]!);
+    expect(review).toMatchObject({
+      status: "review_required", appId: h.appId, revisionPlanId: saved.id,
+      planRunId: expect.stringMatching(/^plan_/u), plan: { ref: "release/v2" },
+    });
+    expect(requests[0]?.method).toBe("GET");
+    expect(new URL(requests[0]!.url).pathname).toBe(`/api/v1/revision-plans/${saved.id}`);
+    const posts = requests.filter(request => request.method === "POST");
+    expect(posts.length).toBeGreaterThan(0);
+    expect(posts.every(request => new URL(request.url).pathname ===
+      `/api/v1/revision-plans/${saved.id}/reconcile`)).toBe(true);
+    expect(posts.every(request => request.headers.get("authorization") === `Bearer ${TOKEN}`)).toBe(true);
+    expect(requests.some(request => new URL(request.url).pathname ===
+      `/api/v1/capsules/${h.appId}/revision-plans`)).toBe(false);
+    expect(requests.some(request => /\/approve$|\/apply$/u.test(new URL(request.url).pathname))).toBe(false);
+    expect(h.runnerCalls.plan - beforeResume.plan).toBe(1);
+    expect(h.runnerCalls.apply - beforeResume.apply).toBe(0);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ status: "active", currentStateGeneration: 1 });
+    expect(errors).toEqual([]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("actual coordinator replays the retained create key and lost Apply ACK observes one Core execution", async () => {
   const h = await fixture(); const originalFetch = globalThis.fetch;
-  const requests: Request[] = []; let loseCreate = true; let loseApply = true; let createdId: string | undefined;
+  const requests: Request[] = []; let loseCreate = true; let loseApply = true; let createdId: string | undefined; let revokeAfterHistory = false; let revoked = false; let currentReadStatus: number | undefined;
   globalThis.fetch = (async (input, init) => {
     const req = new Request(input, init); requests.push(req.clone());
     const response = await h.dispatch(req); const path = new URL(req.url).pathname;
@@ -261,6 +481,11 @@ test("actual coordinator replays the retained create key and lost Apply ACK obse
     if (req.method === "POST" && path.endsWith("/apply") && loseApply && response.ok) {
       loseApply = false; throw Error("synthetic lost Apply response after actual commit");
     }
+    if (req.method === "GET" && path === `/api/v1/capsules/${h.appId}/runs` && revokeAfterHistory && response.ok) {
+      revokeAfterHistory = false; revoked = true;
+      h.accounts.revokePersonalAccessToken({ subject: OWNER, tokenId: h.pat.tokenId, revokedAt: Date.now() });
+    }
+    if (revoked && req.method === "GET" && path.startsWith("/api/v1/runs/")) currentReadStatus = response.status;
     return response;
   }) as typeof fetch;
   const output: string[] = []; const io = { stdout: (s: string) => output.push(s), stderr() {} };
@@ -292,6 +517,24 @@ test("actual coordinator replays the retained create key and lost Apply ACK obse
     expect(JSON.parse(output[0]!).runId).toBe(runId);
     expect(requests.slice(beforeObservation).every(r => r.method === "GET")).toBe(true);
     expect(h.runnerCalls.apply - before.apply).toBe(1);
+
+    // Listing a completed Apply is only its locator. Current individual Run
+    // authority is re-evaluated after the list response has been produced.
+    const beforeRevokedRead = requests.length;
+    const completedCalls = { ...h.runnerCalls };
+    revokeAfterHistory = true;
+    output.length = 0;
+    expect(await main(["apps", "apply", h.appId, "--plan", planId, "--observe-only", "--url", ORIGIN, "--token", TOKEN, "--json"], io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "indeterminate", runId });
+    expect(JSON.parse(output[0]!).runStatus).toBeUndefined();
+    expect(currentReadStatus).toBe(401);
+    expect(requests.slice(beforeRevokedRead).map(r => `${r.method} ${new URL(r.url).pathname}`)).toEqual([
+      `GET /api/v1/runs/${planId}`,
+      `GET /api/v1/capsules/${h.appId}/runs`,
+      `GET /api/v1/runs/${runId}`,
+    ]);
+    expect(h.runnerCalls).toEqual(completedCalls);
+    expect((await h.ledger.getCapsule(h.appId))?.currentStateGeneration).toBe(2);
   } finally { globalThis.fetch = originalFetch; }
 });
 

@@ -7,6 +7,7 @@ import {
   readSessionState,
   refreshSession,
   refreshSessionState,
+  signOutSession,
   SessionError,
 } from "../../../../dashboard/src/views/account/lib/session.ts";
 import {
@@ -727,6 +728,90 @@ describe("dashboard session bootstrap", () => {
       expect(readSessionState()).toEqual({ kind: "unauthenticated" });
       expect(states).toEqual(["unauthenticated"]);
     } finally { off(); }
+  });
+
+  test("explicit sign-out shares one pending request and clears only after confirmation", async () => {
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    let deletes = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== "DELETE") return Response.json({ session: { subject: "account-before-logout" } });
+      deletes++;
+      return await pending;
+    }) as typeof fetch;
+    await refreshSession();
+    const signOut = signOutSession();
+    expect(signOutSession()).toBe(signOut);
+    expect(readSession()).toMatchObject({ subject: "account-before-logout" });
+    expect(deletes).toBe(1);
+    finish(new Response(null, { status: 204 }));
+    expect(await signOut).toBe(true);
+    expect(readSessionState()).toEqual({ kind: "unauthenticated" });
+    expect(deletes).toBe(1);
+  });
+
+  test("a failed sign-out keeps the active session for an explicit retry", async () => {
+    const calls: string[] = [];
+    let deletes = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      calls.push(`${init?.method ?? "GET"} ${path}`);
+      if (init?.method === "DELETE") return new Response(null, { status: ++deletes === 1 ? 503 : 204 });
+      return Response.json({ session: { subject: "account-retry" } });
+    }) as typeof fetch;
+    await refreshSession();
+    expect(await signOutSession()).toBe(false);
+    expect(readSession()).toMatchObject({ subject: "account-retry" });
+    expect(calls.slice(1)).toEqual(["DELETE /api/v1/account/session/me", "GET /api/v1/account/session/me"]);
+    expect(await signOutSession()).toBe(true);
+    expect(deletes).toBe(2);
+    expect(readSessionState()).toEqual({ kind: "unauthenticated" });
+  });
+
+  test("loss of the sign-out response accepts only a verified signed-out readback", async () => {
+    let followup = () => Response.json({ session: null }, { status: 404 });
+    let deletes = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        deletes++;
+        throw Error("synthetic lost DELETE response");
+      }
+      if (String(input) === "/api/v1/account/session/me") {
+        expect(init?.cache).toBe("no-store");
+        return followup();
+      }
+      return Response.json({ session: { subject: "account-readback" } });
+    }) as typeof fetch;
+    await refreshSession();
+    for (const response of [
+      () => Response.json({ session: null }, { status: 404 }),
+      () => Response.json({ session: null }, { status: 401 }),
+      () => new Response("<html>not a session</html>", { headers: { "content-type": "text/html" } }),
+    ]) {
+      followup = response;
+      expect(await signOutSession()).toBe(false);
+      expect(readSession()).toMatchObject({ subject: "account-readback" });
+    }
+    followup = () => Response.json({ session: null });
+    expect(await signOutSession()).toBe(true);
+    expect(deletes).toBe(4);
+    expect(readSessionState()).toEqual({ kind: "unauthenticated" });
+  });
+
+  test("a late sign-out response does not clear a newer account's cached session", async () => {
+    let subject = "account-before";
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "DELETE" ? pending : Response.json({ session: { subject } })
+    ) as typeof fetch;
+    await refreshSession();
+    const signOut = signOutSession();
+    subject = "account-after";
+    await refreshSession();
+    finish(new Response(null, { status: 204 }));
+    expect(await signOut).toBe(false);
+    expect(readSession()).toMatchObject({ subject: "account-after" });
   });
 
   test("an old failed probe cannot clear the next account's authenticated session", async () => {

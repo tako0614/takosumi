@@ -34,12 +34,14 @@ import type {
   UpstreamLoginTransactionRecord,
 } from "./identity-state.ts";
 import { upstreamIdentityKey } from "./identity-state.ts";
+import { connectionOAuthAttemptBucket, validConnectionOAuthAttempt, type ConnectionOAuthAttemptRecord, type ConnectionOAuthAttemptSweepInput, type ConnectionOAuthAttemptSweepResult } from "./connection-oauth-attempt.ts";
 import type { OwnerOperationContextEvidence, OwnerOperationReceiptEvidence } from "./owner-operation-contract.ts";
 import type { ReviewedRecoveryApprovalRecord, ReviewedRecoveryApprovalPointer, ReviewedRecoveryApprovalMutation } from "./reviewed-recovery-state.ts";
 import { ownerContextBucket, ownerReceiptBucket, ownerContextKey, ownerReceiptKey, reviewedApprovalBucket, reviewedApprovalCurrentBucket, reviewedApprovalRefBucket, reviewedApprovalRefKey, canonicalOwnerJson, digest, boundedText, validOwnerTarget, validOwnerContextEvidence, validOwnerReceiptEvidence, OwnerOperationEvidenceConflict, type OwnerOperationContextEvidenceLookup, type OwnerOperationReceiptEvidenceLookup } from "./owner-operation-evidence.ts";
 import { validReviewedRecoveryMutation, validReviewedRecoveryRecord } from "./reviewed-recovery-approvals.ts";
 
 export interface IdentityRecordRepository {
+  pruneConnectionOAuthAttempts(input: ConnectionOAuthAttemptSweepInput): Promise<ConnectionOAuthAttemptSweepResult>;
   registerFinancialSourceRegistration(registration: import("./financial-source-contract.ts").FinancialSourceRegistration): Promise<boolean>;
   findFinancialSourceRegistration(registrationRef: string): Promise<import("./financial-source-contract.ts").FinancialSourceRegistration | undefined>;
   findFinancialSourceParent(scope: import("./identity-state.ts").FinancialSourceParentScope): Promise<import("./identity-state.ts").FinancialSourceParentHead | undefined>;
@@ -103,6 +105,20 @@ export class HostedIdentityRecords implements HostedIdentityStore {
     readonly repository: IdentityRecordRepository,
     readonly accounts: Pick<AccountsStore, "findAccount">,
   ) {}
+  pruneConnectionOAuthAttempts(input: ConnectionOAuthAttemptSweepInput): Promise<ConnectionOAuthAttemptSweepResult> {
+    return this.repository.pruneConnectionOAuthAttempts(input);
+  }
+  async createConnectionOAuthAttempt(record: ConnectionOAuthAttemptRecord): Promise<boolean> {
+    if (!await validConnectionOAuthAttempt(record)) return false;
+    return this.repository.create(connectionOAuthAttemptBucket, record.id, record);
+  }
+  async consumeConnectionOAuthAttempt(id: string, browserBindingHash: string, now: number): Promise<ConnectionOAuthAttemptRecord | undefined> {
+    if (!Number.isSafeInteger(now) || now < 0) return undefined;
+    const record = await this.repository.consume<ConnectionOAuthAttemptRecord>(connectionOAuthAttemptBucket, id, browserBindingHash, now);
+    if (!await validConnectionOAuthAttempt(record) || record!.id !== id ||
+      record!.browserBindingHash !== browserBindingHash || record!.createdAt > now || record!.expiresAt <= now) return undefined;
+    return record;
+  }
   registerFinancialSourceRegistration(value: FinancialSourceRegistration) { return this.repository.registerFinancialSourceRegistration(value); }
   findFinancialSourceRegistration(value: string) { return this.repository.findFinancialSourceRegistration(value); }
   findFinancialSourceParent(value: FS.FinancialSourceParentScope) { return this.repository.findFinancialSourceParent(value); }

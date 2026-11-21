@@ -825,6 +825,8 @@ export interface CapsuleAppScreen {
 
 export interface CapsuleAppRunSummary {
   readonly id: string;
+  /** Exact current failed revision Plan's saved coordinator; never a stalled-progress id. */
+  readonly revisionPlanId?: string;
   readonly type: RunType;
   readonly status: RunStatus;
   readonly createdAt: string;
@@ -892,10 +894,12 @@ export interface CapsuleAppProgress {
    */
   readonly installPlanAwaitingInput?: "viewer" | "other";
   /**
-   * A revision coordinator for this app that has not created its Plan and
-   * stopped moving (its client went away). It no longer holds the app as
-   * updating; `POST /api/v1/revision-plans/:id/reconcile` continues it, and
-   * its Plan Run records the coordinator (`git-revision-plan:<id>`) as actor.
+   * A revision coordinator for this app that has not created its Plan.
+   * While preparing it is named for the caller who started it. Once stalled
+   * it no longer holds the app as updating and is named for all app viewers.
+   * `POST /api/v1/revision-plans/:id/reconcile` continues it with app
+   * update permission. Its Plan Run records the coordinator
+   * (`git-revision-plan:<id>`) as actor.
    * A coordinator pinned to an older state generation or InstallConfig
    * (another change was applied, or settings rebound the app, since) can only
    * fail and is not named.

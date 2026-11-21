@@ -28,6 +28,7 @@ import {
   digestBytes,
   StateArtifactCrypto,
 } from "../../../../worker/src/state_crypto.ts";
+import { selectSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { createRunCredentialToken } from "../../../../core/shared/run_credential_tokens.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -6823,7 +6824,7 @@ async function seedRecoveredRestoreSource(state: FakeR2Bucket, ledger: FakeResto
 }> {
   const plaintext = new TextEncoder().encode(JSON.stringify({
     version: 4, terraform_version: "1.9.8", serial: 2,
-    lineage: "b8d6c5f4-8f27-4d16-8b90-839c7f770001", outputs: {},
+    lineage: "b8d6c5f4-8f27-0d16-0b90-839c7f770001", outputs: {},
     resources: [{ mode: "managed", type: "example_resource", name: "fixture",
       provider: 'provider["registry.example/example"]',
       instances: [{ schema_version: 0, attributes: {} }] }],
@@ -7136,6 +7137,92 @@ test("OpenTofu runner records a value-free completion receipt a lost caller can 
   assert.equal(providerCalls, 1);
 });
 
+for (const action of ["apply", "destroy"] as const) {
+  test(`OpenTofu runner fences the original ${action} artifact identities before dispatch`, async () => {
+    const planRunId = `plan_${action}_admitted_artifacts`;
+    const applyRunId = `apply_${planRunId}`;
+    const authorityKey = "runner-mutation-authority";
+    const artifacts = new FakeR2Bucket();
+    await seedEncryptedPlan(artifacts, planRunId);
+    const target = {
+      stateScope: capsuleStateScope(),
+      ...(action === "apply" ? { rawOutputRef: rawOutputRefFor(planRunId) } : {}),
+    };
+    const dispatch = signedMutationRequest(
+      planRunId,
+      await signedMutationToken(planRunId, { action, jti: "admitted-artifacts" }),
+      { action, ...target },
+    );
+    const { request } = await dispatch.clone().json() as {
+      request: { executionEvidenceAuthority: Record<string, unknown> };
+    };
+    const original = request.executionEvidenceAuthority;
+
+    const syncedPins: unknown[] = [];
+    const storage = new class extends FakeDoStorage {
+      override async sync() {
+        const record = await this.get<Record<string, unknown>>(authorityKey);
+        if (record?.phase === "dispatched") {
+          syncedPins.push(record.admittedExecutionAuthority);
+        }
+        await super.sync();
+      }
+    }();
+    let calls = 0;
+    const container = mutationSuccessContainer(planRunId, () => {
+      assert.deepEqual(syncedPins, [original]);
+      calls += 1;
+    });
+    const options = {
+      stateBucket: new FakeR2Bucket(),
+      storage,
+      env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+    };
+    const first = await runnerWithContainer(artifacts, container, options).fetch(dispatch);
+    assert.equal(first.status, 200);
+    const runner = runnerWithContainer(artifacts, container, options);
+    const inspect = () => runner.inspectMutationAuthority(applyRunId, action);
+    const adopt = () => runner.adoptDeterminedMutation(applyRunId, action, target);
+    const { authority } = await inspect();
+    assert.ok(authority.status === "valid" && authority.phase === "completed");
+    assert.deepEqual(authority.admittedExecutionAuthority, original);
+    assert.equal((await runner.inspectMutationAuthority("another_run", action)).authority.status, "mismatch");
+    const adopted = await adopt();
+    assert.equal(adopted.status, 200);
+    const { executionEvidence } = await adopted.json() as {
+      executionEvidence: { authority: Record<string, unknown> };
+    };
+    for (const [name, pin] of Object.entries(original)) {
+      assert.deepEqual(executionEvidence.authority[name], pin);
+    }
+
+    const completed = (await storage.get<Record<string, unknown>>(authorityKey))!;
+    await storage.put(authorityKey, {
+      ...completed,
+      admittedExecutionAuthority: { ...original, runnerArtifact: { immutable: false } },
+    });
+    assert.equal((await inspect()).authority.status, "malformed");
+    assert.equal((await adopt()).status, 409);
+    await storage.put(authorityKey, {
+      ...completed,
+      admittedExecutionAuthority: {
+        ...original,
+        runnerArtifact: { immutable: true, digest: `sha256:${"9".repeat(64)}` },
+      },
+    });
+    assert.equal((await adopt()).status, 409);
+
+    const legacy = { ...completed };
+    delete legacy.admittedExecutionAuthority;
+    await storage.put(authorityKey, legacy);
+    const legacyInspection = (await inspect()).authority;
+    assert.ok(legacyInspection.status === "valid" && legacyInspection.phase === "completed");
+    assert.equal(legacyInspection.admittedExecutionAuthority, undefined);
+    assert.equal((await adopt()).status, 200);
+    assert.equal(calls, 1);
+  });
+}
+
 test("OpenTofu runner refuses determined adoption for a dispatch that never completed", async () => {
   const planRunId = "plan_completion_absent";
   const applyRunId = `apply_${planRunId}`;
@@ -7176,6 +7263,7 @@ test("OpenTofu runner refuses determined adoption for a dispatch that never comp
   if (inspection.authority.status !== "valid") throw new Error("unreachable");
   assert.equal(inspection.authority.phase, "indeterminate");
   assert.equal(inspection.authority.completion, undefined);
+  assert.equal(inspection.authority.admittedExecutionAuthority, undefined);
   const adopted = await runner.adoptDeterminedMutation(applyRunId, "apply", {
     stateScope,
     rawOutputRef,
@@ -8697,4 +8785,180 @@ test("runner DO rejects retired dependency envelopes before container or artifac
   const modern = await runner.fetch(request("plan", {}));
   assert.equal(modern.status, 200);
   assert.ok(containerCalls > 0);
+});
+
+
+test("completed adoption binds the durable receipt to immutable R2 evidence and is read-only", async () => {
+  const planRunId = "plan_exact_completed_integrity";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new FakeR2Bucket(), state = new FakeR2Bucket(), storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  let providerCalls = 0, puts = 0;
+  const container = mutationSuccessContainer(planRunId, () => { providerCalls++; });
+  const options = { storage, stateBucket: state, env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET } };
+  const scope = capsuleStateScope(), rawOutputRef = rawOutputRefFor(planRunId);
+  const token = await signedMutationToken(planRunId, { jti: "exact-completed-integrity" });
+  assert.equal((await runnerWithContainer(artifacts, container, options).fetch(
+    signedMutationRequest(planRunId, token, { stateScope: scope, rawOutputRef }),
+  )).status, 200);
+  const original = structuredClone(await storage.get<Record<string, unknown>>("runner-mutation-authority"))!;
+  const originalPut = state.put.bind(state);
+  state.put = async (...args: Parameters<typeof state.put>) => { puts++; return await originalPut(...args); };
+  const object = runnerWithContainer(artifacts, container, options);
+  for (const [field, value] of [
+    ["contentDigest", `sha256:${"9".repeat(64)}`], ["ciphertextLength", 1],
+    ["evidenceRef", "other-evidence"], ["evidenceDigest", `sha256:${"8".repeat(64)}`],
+    ["providerExecutionFailed", true], ["version", 2], ["fence", 2],
+  ] as const) {
+    const changed = structuredClone(original);
+    (changed.completion as Record<string, unknown>)[field] = value;
+    // A valid authority with an internally consistent but different fence is
+    // still not the authority that authenticated the immutable evidence.
+    if (field === "version" || field === "fence") changed[field] = value;
+    await storage.put("runner-mutation-authority", changed);
+    assert.equal((await object.adoptDeterminedMutation(applyRunId, "apply", { stateScope: scope, rawOutputRef })).status, 409, field);
+    const replay = await object.fetch(signedMutationRequest(planRunId,
+      await signedMutationToken(planRunId, { jti: `integrity-replay-${field}` }),
+      { stateScope: scope, rawOutputRef },
+    ));
+    assert.equal(replay.status, 409, `ordinary replay ${field}`);
+    assertMutationIndeterminateResponse(await replay.text(), "apply");
+  }
+  await storage.put("runner-mutation-authority", original);
+  assert.equal((await object.adoptDeterminedMutation(applyRunId, "apply", { stateScope: scope, rawOutputRef })).status, 200);
+  assert.equal(puts, 0);
+  assert.equal(providerCalls, 1);
+});
+
+
+async function completedRawOutputProofFixture(legacyConflict = false) {
+  const planRunId = legacyConflict ? "plan_raw_proof_legacy" : "plan_raw_proof_exact";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new HookedR2Bucket();
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const scope = capsuleStateScope();
+  const rawOutputRef = rawOutputRefFor(planRunId);
+  const outputs = { result_label: { value: "fixture-output", type: "string", sensitive: false } };
+  const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
+  let providerCalls = 0;
+  let legacyBytes: Uint8Array | undefined;
+  if (legacyConflict) {
+    artifacts.beforePut = async (key, options) => {
+      if (key !== rawOutputRef || legacyBytes) return;
+      legacyBytes = await selectSecretBoundaryCrypto({ env: { TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE } })
+        .seal(Buffer.from(plaintext).toString("base64"), "global");
+      const customMetadata = { ...options?.customMetadata };
+      delete customMetadata["takosumi-ciphertext-length"];
+      delete customMetadata["takosumi-encryption-format"];
+      await FakeR2Bucket.prototype.put.call(artifacts, key, legacyBytes, {
+        ...options, onlyIf: undefined, customMetadata,
+      });
+    };
+  }
+  const originalContainer = mutationSuccessContainer(planRunId, () => { providerCalls++; });
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request, port) {
+      const response = await originalContainer.containerFetch(request, port);
+      if (request.method === "POST" && new URL(request.url).pathname === `/runs/${planRunId}`) {
+        return Response.json({ ...(await response.json() as Record<string, unknown>), outputs });
+      }
+      return response;
+    },
+  };
+  const options = { storage, stateBucket: state, env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET } };
+  const first = await runnerWithContainer(artifacts, container, options).fetch(
+    signedMutationRequest(planRunId, await signedMutationToken(planRunId, { jti: "raw-proof-first" }), { stateScope: scope, rawOutputRef }),
+  );
+  assert.equal(first.status, 200);
+  const record = structuredClone(await storage.get<Record<string, unknown>>("runner-mutation-authority"))!;
+  const rawObject = await artifacts.head(rawOutputRef);
+  assert.ok(rawObject);
+  const rawBytes = artifacts.body(rawOutputRef)!.slice();
+  const metadata = { ...rawObject.customMetadata };
+  const object = () => runnerWithContainer(artifacts, container, options);
+  let replayCount = 0;
+  return { planRunId, applyRunId, artifacts, state, storage, scope, rawOutputRef, plaintext, record, rawBytes, metadata,
+    legacyBytes: () => legacyBytes,
+    providerCalls: () => providerCalls,
+    adopt: () => object().adoptDeterminedMutation(applyRunId, "apply", { stateScope: scope, rawOutputRef }),
+    replay: async () => object().fetch(signedMutationRequest(planRunId,
+      await signedMutationToken(planRunId, { jti: `raw-proof-replay-${++replayCount}` }), { stateScope: scope, rawOutputRef })),
+  };
+}
+
+test("completed raw output fingerprint mismatch holds both private adoption and completed reentry", async () => {
+  const f = await completedRawOutputProofFixture();
+  const replacement = await restoreTestCrypto().seal(new TextEncoder().encode(JSON.stringify({
+    result_label: { value: "different-fixture-output", type: "string", sensitive: false },
+  })));
+  await f.artifacts.put(f.rawOutputRef, replacement.ciphertext, { customMetadata: {
+    ...f.metadata, "takosumi-content-digest": replacement.contentDigest,
+    "takosumi-ciphertext-length": String(replacement.ciphertextLength),
+  } });
+  let stateWrites = 0;
+  const put = f.state.put.bind(f.state);
+  f.state.put = async (...args: Parameters<typeof f.state.put>) => { stateWrites++; return await put(...args); };
+  assert.deepEqual([(await f.adopt()).status, (await f.replay()).status], [409, 409]);
+  assert.equal(stateWrites, 0);
+  assert.equal(f.providerCalls(), 1);
+  await f.artifacts.put(f.rawOutputRef, f.rawBytes, { customMetadata: f.metadata });
+  const receipt = f.record.completion as Record<string, unknown>;
+  assert.equal(receipt.rawOutputDigest, await digestBytes(f.plaintext));
+  assert.equal(receipt.rawOutputCiphertextLength, f.rawBytes.byteLength);
+  const adopted = await f.adopt();
+  assert.equal(adopted.status, 200);
+  const payload = await adopted.json() as Record<string, unknown>;
+  assert.equal(await digestBytes(new TextEncoder().encode(JSON.stringify(payload.outputs))), await digestBytes(f.plaintext));
+  assert.equal(stateWrites, 0);
+  assert.equal((await f.replay()).status, 200);
+  assert.equal(f.providerCalls(), 1);
+});
+
+test("completed raw output proof is an optional whole pair and keeps legacy receipt guards", async () => {
+  const f = await completedRawOutputProofFixture();
+  const cases: readonly ((row: Record<string, unknown>) => void)[] = [
+    (row) => { delete row.rawOutputDigest; },
+    (row) => { delete row.rawOutputCiphertextLength; },
+    (row) => { row.rawOutputDigest = "invalid"; },
+    (row) => { row.rawOutputCiphertextLength = 0; },
+    (row) => { row.rawOutputCiphertextLength = 1.5; },
+    (row) => { row.rawOutputCiphertextLength = "length"; },
+    (row) => { row.rawOutputDigest = `sha256:${"9".repeat(64)}`; },
+    (row) => { row.rawOutputCiphertextLength = f.rawBytes.byteLength + 1; },
+  ];
+  for (const change of cases) {
+    const changed = structuredClone(f.record);
+    change(changed.completion as Record<string, unknown>);
+    await f.storage.put("runner-mutation-authority", changed);
+    assert.equal((await f.adopt()).status, 409);
+    assert.equal((await f.replay()).status, 409);
+  }
+  const legacy = structuredClone(f.record);
+  delete (legacy.completion as Record<string, unknown>).rawOutputDigest;
+  delete (legacy.completion as Record<string, unknown>).rawOutputCiphertextLength;
+  await f.storage.put("runner-mutation-authority", legacy);
+  assert.equal((await f.adopt()).status, 200);
+  const retained = await f.storage.get<Record<string, unknown>>("runner-mutation-authority");
+  assert.equal(Object.hasOwn(retained!.completion as object, "rawOutputDigest"), false);
+  assert.equal(Object.hasOwn(retained!.completion as object, "rawOutputCiphertextLength"), false);
+  assert.equal(f.providerCalls(), 1);
+});
+
+test("completed raw output proof records the accepted legacy ciphertext length after conditional conflict", async () => {
+  const f = await completedRawOutputProofFixture(true);
+  const legacy = f.legacyBytes();
+  assert.ok(legacy);
+  const prepared = await restoreTestCrypto().seal(f.plaintext);
+  assert.notEqual(legacy.byteLength, prepared.ciphertextLength);
+  const receipt = f.record.completion as Record<string, unknown>;
+  assert.equal(receipt.rawOutputDigest, await digestBytes(f.plaintext));
+  assert.equal(receipt.rawOutputCiphertextLength, legacy.byteLength);
+  assert.equal(f.metadata["takosumi-ciphertext-length"], undefined);
+  const response = await f.adopt();
+  assert.equal(response.status, 200);
+  const payload = await response.json() as Record<string, unknown>;
+  assert.equal(await digestBytes(new TextEncoder().encode(JSON.stringify(payload.outputs))), await digestBytes(f.plaintext));
+  assert.equal(f.providerCalls(), 1);
 });

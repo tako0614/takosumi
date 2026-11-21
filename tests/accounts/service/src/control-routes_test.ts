@@ -450,6 +450,42 @@ test("the session API cannot reach the legacy backup restore operation", async (
   expect(restoreCalls).toBe(0);
 });
 
+test("a retained backup Restore Run is readable but cannot be approved through the session API", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  const token = "sess_retained_restore_run";
+  store.saveAccount({ subject: "tsub_owner", createdAt: now, updatedAt: now });
+  store.saveAccountSession({
+    sessionId: token, subject: "tsub_owner", createdAt: now, expiresAt: now + 60_000,
+  });
+  const restore = {
+    id: "restore_retained", workspaceId: workspace.id, type: "restore" as const,
+    status: "waiting_approval" as const, createdBy: "tsub_owner", createdAt: workspace.createdAt,
+  };
+  let approvals = 0;
+  const operations: ControlPlaneOperations = {
+    ...workspaceAuthorizationOperations(),
+    getRun: async () => restore,
+    approveRun: async () => {
+      approvals++;
+      return { ...restore, status: "queued" };
+    },
+  };
+  const path = "/api/v1/runs/" + restore.id;
+  const read = await authenticatedControlRequest({ store, token, operations, path });
+  expect(read.status).toBe(200);
+  expect(await read.json()).toMatchObject({ run: { id: restore.id, type: "restore", status: "waiting_approval" } });
+  const approval = await authenticatedControlRequest({
+    store, token, operations, path: path + "/approve", method: "POST",
+    headers: { "content-type": "application/json" }, body: "{}",
+  });
+  expect(approval.status).toBe(409);
+  expect(await approval.json()).toMatchObject({ error: {
+    code: "failed_precondition", details: { reason: "legacy_restore_approval_unavailable" },
+  } });
+  expect(approvals).toBe(0);
+});
+
 function roleAuthorizationOperations(role: "member" | "admin"): {
   readonly operations: ControlPlaneOperations;
   readonly mutations: { workspaceUpdates: number; runCancels: number };
@@ -4255,7 +4291,7 @@ test("OAuth popup callback broadcasts only an opaque attempt result with a nonce
 test("browser-bound provider callbacks reject copied authorization URLs before token exchange", async () => {
   let exchanges = 0;
   const operations = {
-    connectionOAuth: { helper: { browserBindingRequired: true, complete: async () => {
+    connectionOAuth: { helper: { browserBindingRequired: true, start: async () => ({ state: "state-fixture", authorizationUrl: "https://provider.example.test/authorize", expiresAt: new Date(Date.now() + 600_000).toISOString() }), complete: async () => {
       exchanges++;
       return { request: { scope: "personal", ownerAccountId: workspace.ownerUserId }, subject: workspace.ownerUserId };
     } } },
@@ -4267,6 +4303,10 @@ test("browser-bound provider callbacks reject copied authorization URLs before t
   const request = new Request(url);
   const store = new InMemoryAccountsStore();
   store.saveAccount({ subject: workspace.ownerUserId as never, createdAt: Date.now(), updatedAt: Date.now() });
+  store.saveAccountSession({ sessionId: "browser-binding-session", subject: workspace.ownerUserId as never, createdAt: Date.now(), expiresAt: Date.now() + 60_000 });
+  const startUrl = new URL("https://app.example.test/api/v1/connections/oauth/helper/start");
+  const started = await handleControlRoute({ request: new Request(startUrl, { method: "POST", headers: { cookie: "takosumi_session=browser-binding-session", "content-type": "application/json", origin: startUrl.origin }, body: "{}" }), url: startUrl, store, operations });
+  expect(started?.status).toBe(200);
   const refused = await handleControlRoute({ request, url, store, operations });
   expect(refused?.headers.get("location")).toContain("connection_error=oauth_failed");
   expect(exchanges).toBe(0);

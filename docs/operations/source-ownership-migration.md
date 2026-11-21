@@ -11,14 +11,19 @@ group ごとの CAS（観測した行と件数を同じ D1 batch で再確認し
 Source ごとに snapshot 行数、distinct archive 数、総 byte 数、live / destroyed アプリ数、
 foreign archive 参照数を計測し、dry-run の group と照合する。
 
-比較 guard は通常、観測した行を JSON の小さい chunk にして bind する。
+比較 guard は、観測した行を最大100行ずつ JSON にまとめ、一つの bind 値で比較する。
+一つの JSON は配列の区切り文字を含めてUTF-8で2 MB以内に収める。
 保存された physical row 自体は 2 MB 以内でも、その JSON 列を再符号化すると一つの
 bind 値の 2 MB 制限を超える場合がある。その行だけは全 physical 列を直接 bind して
 `IS` で比較し、NULL を含む同じ行の一致を確かめる。表ごとの件数 guard と全行の比較は
 同じ DB batch の書込み前に残す。この処理は有効な行の比較方法を変えるだけで、
 移行後に書く JSON の上限、Worker の resource 制限や batch の実行期限を緩めない。
-[D1 の limits](https://developers.cloudflare.com/d1/platform/limits/)を超える group を
-複数の DB commit に分けて原子性を失う回避は行わない。
+group は単一の DB batch で適用する。D1 では batch 呼び出しが一件のクエリとして数えられ、
+各SQL文の上限と batch 全体の実行期限が適用される。 [D1 の limits](https://developers.cloudflare.com/d1/platform/limits/)
+
+snapshot と SourceSyncRun の書込み、移動するアプリの PlanRun 参照更新は、既存の処理順に沿って
+複数行のSQL文にまとめる。各文のバインドは100個以内で、文字列は元の値を直接渡す。
+行の比較、履歴の書込み、所有権の変更は引き続き一つのトランザクションで確定する。
 
 D1 の archive 棚卸し例（実行結果は operator の管理領域へ保存する）:
 
@@ -42,8 +47,11 @@ FROM sources s ORDER BY snapshot_count DESC, s.id;
 PostgreSQL では `takosumi_sources`、`takosumi_source_snapshots`、`takosumi_runs`
 と対応する JSONB field を用いて同じ内訳を確認する。
 
-D1 の既存 HTTP operator は `scripts/operator-source-ownership.ts`。全 group の dry-run は read-only で、
+D1 の HTTP operator は `scripts/operator-source-ownership.ts`。全 group の棚卸しには
+`--inventory` を使う。Source ID の順に、一つの GET で一つの group だけを準備する。
+各 group の `preparedAt` と `reportDigest` は `reports[]` に入り、対象の確認に使える。
 1 group の準備エラーはその group の `blocked` 理由として返し、他 group の棚卸しを続ける。
+ページ間でDBの状態は固定されない。適用時は、選択した group とレビュー済みの結果を再照合する。
 互換性レポートは識別子（Source・アプリ・SourceSnapshot）だけを付け替え、分析結果の列は保存されたまま運ぶ。
 `providers_json` として受け付ける形は次の3つだけで、どれも新しい形へ変換しない。
 - 現在の形: `{ providerPackages, rootProviderRequirements }`。

@@ -1,0 +1,156 @@
+/** Explicit local capture staging; it never authorizes or commits recovery. */
+import { isAbsolute, join } from "node:path";
+import { sha256Digest, stableStringify } from "../../core/adapters/source/digest.ts";
+import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
+import { observeInitialStateRecoveryFailure } from "../../core/domains/deploy-control/state_recovery_stage_admission.ts";
+import { assertVerifiedRecoveryArtifact } from "../../core/domains/deploy-control/operator_state_recovery.ts";
+import {
+  LOCAL_RECOVERY_STATE_MAX_BYTES,
+  LocalOpenTofuStateRecoveryArtifactStore,
+} from "../../deploy/node-postgres/src/local-state-recovery-artifact-store.ts";
+import { LocalStateRecoveryRefusal, type LocalRecoveryApprovalSelection } from "./local-operator-state-recovery.ts";
+import {
+  readOwnerPrivateApprovalBytesFile,
+  readOwnerPrivateApprovalTextFile,
+  writeNewPrivateEvidenceJson,
+} from "./private-evidence-file.ts";
+
+const CASE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
+const DIGEST = /^sha256:[0-9a-f]{64}$/u;
+const MAX_PRIVATE_JSON_BYTES = 16 * 1024;
+
+export interface LocalStateRecoveryStageApproval {
+  readonly format: "takosumi.local-operator-state-stage/v1";
+  readonly purpose: "stage-initial-create-state";
+  readonly caseId: string;
+  readonly approvedOperatorId: string;
+  readonly selectedTargetId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly environment: string;
+  readonly failedApplyRunId: string;
+  readonly recoveryRunId: string;
+  readonly sourceSnapshotId: string;
+  readonly commandTimestamp: string;
+  readonly expiresAt: string;
+  readonly plaintextSha256: `sha256:${string}`;
+  /** Operator-confirmed capture provenance, not inferred from the state file. */
+  readonly custodyEvidenceDigest: `sha256:${string}`;
+}
+
+export interface LocalStateRecoveryStageReceipt extends Omit<LocalStateRecoveryStageApproval,
+  "format" | "purpose" | "expiresAt"> {
+  readonly format: "takosumi.local-operator-state-stage-receipt/v1";
+  readonly purpose: "staged-initial-create-state";
+  readonly artifactHandle: string;
+  readonly encryptedDigest: `sha256:${string}`;
+  readonly evidenceDigest: `sha256:${string}`;
+}
+
+function operatorId(): string {
+  const uid = process.getuid?.();
+  if (uid === undefined || !Number.isSafeInteger(uid) || uid < 0 || process.geteuid?.() !== uid) {
+    throw new LocalStateRecoveryRefusal();
+  }
+  return `local-unix-account:${uid}`;
+}
+
+function timestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString() === value;
+}
+
+async function readApproval(input: LocalRecoveryApprovalSelection) {
+  const identity = operatorId();
+  if (!CASE_ID.test(input.caseId) || !IDENTIFIER.test(input.selectedTargetId) || !isAbsolute(input.approvalDirectory)) {
+    throw new LocalStateRecoveryRefusal();
+  }
+  const bytes = await readOwnerPrivateApprovalTextFile(join(input.approvalDirectory, `${input.caseId}.stage.json`), {
+    sourceRoots: input.sourceRoots, maxBytes: MAX_PRIVATE_JSON_BYTES,
+  });
+  const value: unknown = JSON.parse(bytes);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new LocalStateRecoveryRefusal();
+  const row = value as Record<string, unknown>;
+  const now = Date.now();
+  if (Object.keys(row).sort().join(",") !== ["format", "purpose", "caseId", "approvedOperatorId", "selectedTargetId",
+    "workspaceId", "capsuleId", "environment", "failedApplyRunId", "recoveryRunId", "sourceSnapshotId",
+    "commandTimestamp", "expiresAt", "plaintextSha256", "custodyEvidenceDigest"].sort().join(",") ||
+    row.format !== "takosumi.local-operator-state-stage/v1" || row.purpose !== "stage-initial-create-state" ||
+    row.caseId !== input.caseId || row.approvedOperatorId !== identity || row.selectedTargetId !== input.selectedTargetId ||
+    !["workspaceId", "capsuleId", "environment", "failedApplyRunId", "recoveryRunId", "sourceSnapshotId"]
+      .every(key => typeof row[key] === "string" && IDENTIFIER.test(row[key])) ||
+    !timestamp(row.commandTimestamp) || !timestamp(row.expiresAt) ||
+    !Number.isFinite(now) || Date.parse(row.commandTimestamp) > now || now >= Date.parse(row.expiresAt) ||
+    !["plaintextSha256", "custodyEvidenceDigest"].every(key => typeof row[key] === "string" && DIGEST.test(row[key])) ||
+    operatorId() !== identity) throw new LocalStateRecoveryRefusal();
+  return { profile: Object.freeze(row as unknown as LocalStateRecoveryStageApproval), bytes };
+}
+
+/** Before the standalone command opens SQL or reads keys/captured state. */
+export async function checkLocalStateRecoveryStageApproval(input: LocalRecoveryApprovalSelection): Promise<void> {
+  try { await readApproval(input); } catch { throw new LocalStateRecoveryRefusal(); }
+}
+
+/** Stages only the approved raw capture, then publishes a private result receipt. */
+export async function stageApprovedLocalStateRecovery(input: LocalRecoveryApprovalSelection & {
+  readonly store: OpenTofuControlStore;
+  readonly verifier: LocalOpenTofuStateRecoveryArtifactStore;
+}): Promise<LocalStateRecoveryStageReceipt> {
+  try {
+    const approved = await readApproval(input);
+    const p = approved.profile;
+    const observed = await observeInitialStateRecoveryFailure(input.store, p);
+    const revalidate = async () => {
+      const current = await observeInitialStateRecoveryFailure(input.store, p);
+      if ((await readApproval(input)).bytes !== approved.bytes || current !== observed) {
+        throw new LocalStateRecoveryRefusal();
+      }
+    };
+    const receiptPath = join(input.approvalDirectory, `${input.caseId}.staged.json`);
+    let prior: LocalStateRecoveryStageReceipt | undefined;
+    try {
+      prior = JSON.parse(await readOwnerPrivateApprovalTextFile(receiptPath, {
+        sourceRoots: input.sourceRoots, maxBytes: MAX_PRIVATE_JSON_BYTES,
+      })) as LocalStateRecoveryStageReceipt;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    let plaintext: Uint8Array | undefined;
+    if (prior === undefined) {
+      plaintext = await readOwnerPrivateApprovalBytesFile(join(input.approvalDirectory, `${input.caseId}.tfstate`), {
+        sourceRoots: input.sourceRoots, maxBytes: LOCAL_RECOVERY_STATE_MAX_BYTES,
+      });
+      if (await sha256Digest(plaintext) !== p.plaintextSha256) throw new LocalStateRecoveryRefusal();
+    }
+    await revalidate();
+    const scope = { workspaceId: p.workspaceId, capsuleId: p.capsuleId, failedApplyRunId: p.failedApplyRunId, recoveryRunId: p.recoveryRunId };
+    // Receipt replay is read-only; missing/replaced custody cannot be restaged.
+    const staged = prior === undefined ? await input.verifier.stage({ ...scope, environment: p.environment, generation: 1,
+      plaintextSha256: p.plaintextSha256, custodyEvidenceDigest: p.custodyEvidenceDigest, plaintext: plaintext! }) :
+      { handle: prior.artifactHandle, artifact: await input.verifier.verify({ ...scope, artifactHandle: prior.artifactHandle,
+        plaintextSha256: p.plaintextSha256, custodyEvidenceDigest: p.custodyEvidenceDigest }) };
+    assertVerifiedRecoveryArtifact(staged.artifact);
+    const { format: _format, purpose: _purpose, expiresAt: _expires, ...binding } = p;
+    const receipt: LocalStateRecoveryStageReceipt = { ...binding, format: "takosumi.local-operator-state-stage-receipt/v1",
+      purpose: "staged-initial-create-state", artifactHandle: staged.handle,
+      encryptedDigest: staged.artifact.encryptedDigest, evidenceDigest: staged.artifact.evidenceDigest };
+    if (prior !== undefined && stableStringify(prior) !== stableStringify(receipt)) throw new LocalStateRecoveryRefusal();
+    await revalidate();
+    if (prior === undefined) {
+      try { await writeNewPrivateEvidenceJson(receiptPath, receipt); }
+      catch {
+        // A lost publish ACK/concurrent exact attempt may already have linked it.
+        const readback = JSON.parse(await readOwnerPrivateApprovalTextFile(receiptPath, {
+          sourceRoots: input.sourceRoots, maxBytes: MAX_PRIVATE_JSON_BYTES,
+        }));
+        if (stableStringify(readback) !== stableStringify(receipt)) throw new LocalStateRecoveryRefusal();
+      }
+    }
+    const readback = JSON.parse(await readOwnerPrivateApprovalTextFile(receiptPath, {
+      sourceRoots: input.sourceRoots, maxBytes: MAX_PRIVATE_JSON_BYTES,
+    }));
+    if (stableStringify(readback) !== stableStringify(receipt)) throw new LocalStateRecoveryRefusal();
+    await revalidate();
+    return receipt;
+  } catch { throw new LocalStateRecoveryRefusal(); }
+}

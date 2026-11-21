@@ -165,7 +165,7 @@ export interface CreateGitInstallAttemptRequest {
     readonly authConnectionId?: string;
   };
   readonly capsule?: {
-    /** Defaults to a collision-checked name derived from the Git URL. */
+    /** Defaults to a server-assigned `app-<UUID>` technical name. */
     readonly name?: string;
     /** Defaults to `production`. */
     readonly environment?: string;
@@ -388,14 +388,69 @@ export interface GitInstallPlanVariablePresentation {
   readonly type: "string" | "number" | "boolean" | "json" | "unknown";
   readonly required: boolean;
   readonly sensitive: boolean;
+  /**
+   * Response-only repository input ownership; omitted for generic/legacy inputs.
+   * This is presentation metadata. The compiler still checks supplied values.
+   */
+  readonly userEditable?: boolean;
   readonly advanced?: boolean;
   readonly label?: InstallConfigStoreText;
   readonly description?: InstallConfigStoreText;
   readonly placeholder?: string;
+  /** Optional repository UI hint; unknown formats use the ordinary input. */
+  readonly format?: string;
+  /** Accepted http.endpoint + service_name declaration; never inferred from names. */
+  readonly publicEndpoint?: {
+    readonly serviceNameVariable: string;
+    readonly serviceNameSource: "capsule_name" | "workspace_scoped_capsule_name";
+    /** Response-only name, computed with the repository compiler's derivation. */
+    readonly suggestedName?: string;
+  };
   /** Literal default for a non-sensitive input. */
   readonly defaultValue?: JsonValue;
   /** Takosumi derives the value from the app name unless it is supplied. */
   readonly derivedDefault?: "capsule_name" | "workspace_scoped_capsule_name";
+}
+
+/** Read-only value state for a declared public user input; never infer a missing value. */
+export type CapsuleReAdoptionCurrentUserValue =
+  | { readonly status: "present"; readonly value: JsonValue }
+  | { readonly status: "unset" }
+  | { readonly status: "unavailable" };
+
+/** Closed, non-secret user-input projection from one immutable revision target. */
+export interface CapsuleReAdoptionInputVariable extends GitInstallPlanVariablePresentation {
+  readonly type: "string" | "number" | "boolean" | "json";
+  readonly sensitive: false;
+  readonly userEditable: true;
+  readonly currentValue: CapsuleReAdoptionCurrentUserValue;
+}
+
+/**
+ * Reading this context performs no preparation or mutation. The guard is the
+ * existing current-Capsule re-adoption guard, not authority minted by the target.
+ * Explicit reviewedUserVariables remain a complete replacement set.
+ */
+export interface CapsuleInstallConfigReAdoptionInputContext {
+  readonly capsuleId: string;
+  readonly revisionPlanId: string;
+  readonly sourceId: string;
+  readonly sourceSnapshotId: string;
+  readonly targetRef: string;
+  readonly resolvedCommit: string;
+  readonly modulePath: string;
+  readonly currentInstallConfigId: string;
+  readonly currentStateGeneration: number;
+  readonly currentStateVersionId?: string;
+  readonly authorityGuard: string;
+  /** Actual service-owned generic policy reference, never its private contents. */
+  readonly baseInstallConfigId: string;
+  readonly variables: readonly CapsuleReAdoptionInputVariable[];
+  readonly blockedReason?: "secret_inputs" | "unsupported_inputs" | "host_policy_conflict";
+}
+
+export interface CapsuleInstallConfigReAdoptionInputContextResponse {
+  readonly installConfigReAdoptionContext: CapsuleInstallConfigReAdoptionInputContext;
 }
 
 export interface GitInstallPlanNameProposal {

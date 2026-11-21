@@ -21,7 +21,8 @@ async function scenario(input: {
   version?: string;
   exactCommit?: boolean;
   curlRuntime?: unknown;
-}): Promise<{ error: string | null; dnsCalls: number; observations: GitObservation[] }> {
+  credentialFiles?: boolean;
+}): Promise<{ error: string | null; dnsCalls: number; observations: GitObservation[]; credentialFiles: string[] }> {
   const root = await mkdtemp(join(tmpdir(), "source-git-transport-"));
   try {
     const bin = join(root, "bin");
@@ -43,11 +44,11 @@ async function scenario(input: {
     await chmod(join(bin, "git"), 0o700);
     const program = `
       import {mock} from "bun:test";
-      import {readFile} from "node:fs/promises";
+      import {readFile,readdir} from "node:fs/promises";
       let dnsCalls=0;
       const policyUrl=${JSON.stringify(sourceModule.replace("source_sync.ts", "policy.ts"))};
       const policy=await import(policyUrl),validate=policy.assertResolvedHostNotBlocked;
-      const resolver=async()=>{dnsCalls++;return ${JSON.stringify(input.addresses ?? ["203.0.113.10", "2001:db8::10"])};};
+      const resolver=async()=>{dnsCalls++;return ${JSON.stringify(input.addresses ?? ["93.184.216.34", "2606:4700:4700::1111"])};};
       // Keep the actual public-address validator; replace only its resolver.
       mock.module(policyUrl,()=>({...policy,assertResolvedHostNotBlocked:(host,label,selected)=>validate(host,label,selected??resolver)}));
       const runtimeUrl=${JSON.stringify(sourceModule.replace("source_sync.ts", "git_curl_runtime.ts"))};
@@ -57,10 +58,11 @@ async function scenario(input: {
       try {
         const url=${JSON.stringify(input.url ?? "https://git.example.test:8443/repo.git")};
         if(${JSON.stringify(input.action)}==="stable_semver_tag")await runStableSemverTagResolution("pin_tags",{url});
-        else await runSourceSync("pin_source",{action:"source_sync",archiveRef:"apps/fixture/source.tar.zst",source:{url,ref:${JSON.stringify(input.exactCommit ? commit : "main")},path:"."},credentials:{env:{GIT_HTTPS_TOKEN:"DUMMY_SOURCE_TOKEN"}}});
+        else await runSourceSync("pin_source",{action:"source_sync",archiveRef:"apps/fixture/source.tar.zst",source:{url,ref:${JSON.stringify(input.exactCommit ? commit : "main")},path:"."},credentials:{env:{GIT_HTTPS_TOKEN:"DUMMY_SOURCE_TOKEN"},files:${JSON.stringify(input.credentialFiles ? [{ path: "fixture.key", content: "SYNTHETIC_NOT_A_KEY", mode: 0o600 }] : [])}}});
       } catch(cause){error=cause instanceof Error?cause.message:String(cause);}
       const lines=await readFile(${JSON.stringify(observations)},"utf8").catch(()=>"");
-      console.log(JSON.stringify({error,dnsCalls,observations:lines.trim()?lines.trim().split("\\n").map(line=>JSON.parse(line)):[]}));
+      const credentialFiles=await readdir(${JSON.stringify(join(root,"runs","pin_source","source-credentials"))}).catch(()=>[]);
+      console.log(JSON.stringify({error,dnsCalls,observations:lines.trim()?lines.trim().split("\\n").map(line=>JSON.parse(line)):[],credentialFiles}));
     `;
     const result = Bun.spawnSync([process.execPath, "--no-env-file", "-e", program], {
       env: {
@@ -86,7 +88,7 @@ for (const action of ["source_sync", "stable_semver_tag"] as const) {
     expect(remote.length).toBe(action === "source_sync" ? 3 : 1);
     for (const call of remote) {
       expect(call.config["http.followRedirects"]).toBe("false");
-      expect(call.config["http.curloptResolve"]).toBe("git.example.test:8443:203.0.113.10,[2001:db8::10]");
+      expect(call.config["http.curloptResolve"]).toBe("git.example.test:8443:93.184.216.34,[2606:4700:4700::1111]");
       expect(call.tokenPresent).toBe(action === "source_sync");
     }
     expect(result.error).toBe(action === "source_sync" ? "git fetch failed with 9: " : null);
@@ -110,13 +112,13 @@ for (const action of ["source_sync", "stable_semver_tag"] as const) {
   });
 
   test(`${action}: a blocked DNS answer refuses before Git or credential effects`, async () => {
-    const result = await scenario({ action, addresses: ["203.0.113.10", "10.0.0.1"] });
+    const result = await scenario({ action, addresses: ["93.184.216.34", "10.0.0.1"] });
     expect(result.error).toContain("blocked address");
     expect(result.observations).toEqual([]);
   });
 
   test(`${action}: a non-IP resolver answer cannot become Git configuration`, async () => {
-    const result = await scenario({ action, addresses: ["203.0.113.10", "not-an-ip"] });
+    const result = await scenario({ action, addresses: ["93.184.216.34", "not-an-ip"] });
     expect(result.error).toContain("invalid IP address");
     expect(result.observations).toEqual([]);
   });
@@ -128,7 +130,7 @@ test("exact source commit keeps the address pin through both fetch attempts", as
   const fetches = result.observations.filter(x => x.args[0] === "fetch");
   expect(fetches).toHaveLength(2);
   for (const call of fetches) {
-    expect(call.config["http.curloptResolve"]).toBe("git.example.test:8443:203.0.113.10,[2001:db8::10]");
+    expect(call.config["http.curloptResolve"]).toBe("git.example.test:8443:93.184.216.34,[2606:4700:4700::1111]");
     expect(call.config["http.followRedirects"]).toBe("false");
   }
 });
@@ -145,7 +147,34 @@ test("literal HTTPS hosts refuse redirects without a second DNS lookup", async (
 });
 
 test("IPv4-only DNS pins do not require an unavailable IPv6 feature", async () => {
-  const result = await scenario({ action: "stable_semver_tag", addresses: ["203.0.113.10"], curlRuntime: { versionNumber: 0x073b00, ipv6: false } });
+  const result = await scenario({ action: "stable_semver_tag", addresses: ["93.184.216.34"], curlRuntime: { versionNumber: 0x073b00, ipv6: false } });
   expect(result.error).toBeNull();
-  expect(result.observations.find(x => x.args[0] === "ls-remote")?.config["http.curloptResolve"]).toBe("git.example.test:8443:203.0.113.10");
+  expect(result.observations.find(x => x.args[0] === "ls-remote")?.config["http.curloptResolve"]).toBe("git.example.test:8443:93.184.216.34");
 });
+
+// Synthetic resolver answers; the Git shim never connects to these addresses.
+const canonicalUnsafeResolvedAddresses = [
+  "::127.0.0.1",
+  "::169.254.169.254",
+  "64:ff9b::a9fe:a9fe",
+  "2002:a9fe:a9fe::1",
+  "2002:c0a8:101::1",
+  "192.0.0.9",
+  "192.0.2.1",
+  "198.18.0.1",
+  "198.19.255.254",
+  "198.51.100.1",
+  "203.0.113.1",
+] as const;
+
+for (const action of ["source_sync", "stable_semver_tag"] as const) {
+  for (const [index, address] of canonicalUnsafeResolvedAddresses.entries()) {
+    test(`${action}: canonical unsafe resolved answer ${index + 1} refuses before Git and credentials`, async () => {
+      const result = await scenario({ action, addresses: [address], credentialFiles: true });
+      expect(result.dnsCalls).toBe(1);
+      expect(result.error).toContain("blocked address");
+      expect(result.observations).toEqual([]);
+      expect(result.credentialFiles).toEqual([]);
+    });
+  }
+}

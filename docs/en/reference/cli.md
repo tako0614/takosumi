@@ -57,9 +57,25 @@ takosumi apps update cap_example --ref release/v2 --idempotency-key update-examp
   --url https://takosumi.example.com --json
 ```
 
-Both `--ref` and `--idempotency-key` are required. After a lost response, retain the same identity, target, app, ref and key for a manual retry.
-Do not repeat an unknown operation with a new key. Reconciliation advances only the same returned coordinator. Inline `--ref=release=v2` retains its complete value.
-An initial definite admission rejection is `refused`; post-create reconcile conflicts or read failures retain the coordinator as `unconfirmed`. Both exit 1.
+`--ref` is required. Use `--idempotency-key` to start an update. If the initial
+response is lost, retry with the same identity, target, app, ref, and key.
+Inline `--ref=release=v2` retains its complete value.
+
+If you have the existing update's `revisionPlanId`, continue with that ID.
+The update ID and its eventual `planRunId` are separate.
+
+```bash
+takosumi apps update cap_example --ref release/v2 --revision-plan grp_example \
+  --url https://takosumi.example.com --json
+```
+
+The CLI first reads the existing update and checks the app and ref. It
+advances that coordinator when necessary, using current app update
+permission. A prepared Plan can be reviewed with reads alone.
+`--revision-plan` and `--idempotency-key` are mutually exclusive. A definite
+admission rejection returns `refused`, an uncertain outcome for an accepted
+update returns `unconfirmed`, and a saved Plan that can no longer be reviewed
+returns `plan_not_reviewable`. These outcomes exit 1.
 
 `review_required` is not update completion. Review the app, `planRunId`, ref, source snapshot, Plan digest, change counts, resource actions and policy.
 `reviewUrl` opens that saved Plan. Missing counts are `null`, never zero. Only after deciding to execute it, use the returned Plan ID separately:
@@ -89,6 +105,42 @@ takosumi apps apply cap_example --plan plan_example --observe-only \
 Observation never approves or creates an Apply. Not finding a linked Apply does not prove the original request had no effect.
 `--yes` and `--observe-only` cannot be combined.
 Failed, cancelled or expired Runs also need inspection of the saved Run and app state, rather than a blind new Plan.
+
+## Resume an uninstall with a different Connection
+
+Register the new key as a verified Provider Connection for the same cloud account, then pass the original and replacement Connection IDs.
+Find the app's assignments on its management page or through `GET /api/v1/capsules/{app-id}/provider-bindings`.
+Use an Accounts PAT with `read` and `write` access to the app.
+
+```bash
+takosumi apps recover-uninstall cap_example \
+  --connections '[{"connectionId":"conn_old","replacementConnectionId":"conn_new"}]' \
+  --url https://takosumi.example.com --json
+```
+
+The server checks current ownership, the cloud account, and the applied connection settings before preparing a Destroy Plan.
+When a `refused` result includes `connectionRecoveryFailure`, verify the replacement connection for `replacement_unverified`,
+or check the account and applied connection settings for `bindings_mismatch`.
+`applied_evidence_unavailable` means the server could not confirm the applied record needed for the comparison.
+When the result is `review_required`, inspect what the Plan will remove and its effective `providerConnections`, including replacements carried forward from a previous attempt.
+For `plan_pending`, use the returned `planRunId` to read the same Plan again. If the result is `unconfirmed`, first find the original Plan ID in the app's Run history.
+
+```bash
+takosumi apps recover-uninstall cap_example --destroy-plan destroy_plan_example \
+  --url https://takosumi.example.com --json
+```
+
+Review with `--destroy-plan` reads the specified Plan once and requires the `read` scope.
+
+Execute the exact plan in a separate command after reviewing it.
+
+```bash
+takosumi apps apply cap_example --destroy-plan destroy_plan_example --yes \
+  --url https://takosumi.example.com --json
+```
+
+`--destroy-plan` selects a saved Destroy Plan. If the result is uncertain, replace `--yes` with `--observe-only` for the same Plan ID to read its linked Destroy Run.
+Use `apps uninstall <app-id> --yes` to schedule a normal uninstall.
 
 ## Setting up the CLI
 

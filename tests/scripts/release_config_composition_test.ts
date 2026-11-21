@@ -454,6 +454,7 @@ test("real release flow accepts a proved runner image across Worker commits and 
     sourceRepository: build.source.repository,
     sourceAuthoritySha256: build.source.authoritySha256,
     planConfirmation: platformPlan.confirmation,
+    deployedContainer: { id: platformPlan.predecessorContainer.id, image: NEXT_IMAGE },
   });
 
   const recoveryCommit = "f".repeat(40);
@@ -806,7 +807,7 @@ function sha256(value: string | Uint8Array): string {
 
 function platformContainer(image: string, version: number) {
   return {
-    id: `container-${version}`,
+    id: "runner-container",
     name: "takosumi-staging-opentofurunnerobject",
     state: "ready",
     image,

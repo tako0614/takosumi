@@ -1,15 +1,18 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createResource,
   createSignal,
   onCleanup,
   Show,
+  type JSX,
 } from "solid-js";
 import { AlertCircle, ChevronDown, ExternalLink, ShieldAlert } from "lucide-solid";
 import {
   approveRun,
   ControlApiError,
+  ControlApiIndeterminateError,
   createApplyRun,
   getRun,
   getRunCostInfo,
@@ -36,6 +39,7 @@ import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
 import { runFailureHint } from "../../lib/run-errors.ts";
+import { isAppRemovalRun } from "../../lib/app-access.ts";
 import { runStatusLabel } from "../../lib/labels.ts";
 import {
   stateVersionReadinessAfterApply,
@@ -43,10 +47,11 @@ import {
 } from "../../lib/capsules-ui.ts";
 import { installRunNeedsFallbackRead } from "./install-run-polling.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+import { recoverApplyRun } from "../../lib/apply-run-recovery.ts";
 
 /**
  * Why this Plan is being reviewed. Every purpose shares the same review and
- * apply rules (nothing applies before the explicit "Allow and …" click, no
+ * apply rules (nothing applies before the explicit final action, no
  * consent survives a reload or a URL); only the words change.
  */
 export type ReviewPurpose = "install" | "update" | "apply" | "uninstall";
@@ -135,8 +140,13 @@ interface Props {
    * held and this says why.
    */
   readonly blockedReason?: string;
+  /** Reuse the parent screen's visible progress instead of repeating it. */
+  readonly blockedReasonId?: string;
   /** An Apply was started (or may have been): what it applies can no longer change. */
   readonly onApplyStarted?: () => void;
+  /** Offers a fresh uninstall Plan after refusal or failure of the removal. */
+  readonly uninstallConnectionRecovery?: (runId: string, mode: "refused" | "failed") => JSX.Element;
+  readonly uninstallConnectionScope?: string;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -308,6 +318,13 @@ function isApplyRun(type: Run["type"] | undefined): boolean {
 }
 
 export default function InstallExecution(props: Props) {
+  let disposed = false;
+  let executionEpoch = 0;
+  let recoveryController: AbortController | undefined;
+  onCleanup(() => {
+    disposed = true;
+    recoveryController?.abort();
+  });
   const copy = () => REVIEW_COPY[props.purpose ?? "install"];
   const [runId, setRunId] = createSignal(props.initialRunId ?? props.planRunId);
   const [run, { mutate, refetch }] = createResource(runId, async (id) => {
@@ -318,9 +335,39 @@ export default function InstallExecution(props: Props) {
   // Never `run()` / `run.latest`: both THROW once a load has failed, and the
   // 3s fallback read below means one 5xx mid-install replaced the whole app
   // with the root reload card. A failed refetch keeps the last good run.
-  const runLatest = createLastGoodValue(run, (r) => r.id === runId());
+  const runLatest = createLastGoodValue(run, (r) => r.id === runId() && r.capsuleId === props.capsuleId);
   const [applying, setApplying] = createSignal(false);
+  const [refusedConnectionPlanId, setRefusedConnectionPlanId] = createSignal<string>();
+  const refusedConnectionPlan = () => {
+    const current = runLatest();
+    return current?.type === "destroy_plan" && current.id === refusedConnectionPlanId() && current.id === props.planRunId
+      ? current.id
+      : undefined;
+  };
   const [applyUnconfirmed, setApplyUnconfirmed] = createSignal(false);
+  type ApplyAttempt = {
+    readonly plan: Run;
+    readonly epoch: number;
+    readonly propsPlanId: string;
+    readonly initialId: string;
+    readonly uninstallScope: string | undefined;
+  };
+  const applyAttempt = (plan: Run): ApplyAttempt => ({
+    plan, epoch: executionEpoch, propsPlanId: props.planRunId,
+    initialId: props.initialRunId ?? props.planRunId, uninstallScope: props.uninstallConnectionScope,
+  });
+  const [recoverableApply, setRecoverableApply] = createSignal<ApplyAttempt>();
+  const [checkingApply, setCheckingApply] = createSignal(false);
+  const sameOwner = (attempt: ApplyAttempt) => !disposed && attempt.epoch === executionEpoch &&
+    props.capsuleId === attempt.plan.capsuleId && props.planRunId === attempt.propsPlanId &&
+    (props.initialRunId ?? props.planRunId) === attempt.initialId &&
+    props.uninstallConnectionScope === attempt.uninstallScope;
+  const ownsApply = (attempt: ApplyAttempt) => {
+    const current = runLatest();
+    return sameOwner(attempt) && runId() === attempt.plan.id && current?.id === attempt.plan.id &&
+      current.capsuleId === attempt.plan.capsuleId && current.workspaceId === attempt.plan.workspaceId &&
+      current.type === attempt.plan.type;
+  };
   const [logsOpen, setLogsOpen] = createSignal(false);
   const [logs, { refetch: refetchLogs }] = createResource(
     () => logsOpen() ? runId() : false, async (id) => ({ runId: id, logs: await getRunLogs(id) }),
@@ -480,6 +527,11 @@ export default function InstallExecution(props: Props) {
   const approve = async () => {
     // An out-of-date Plan is never approved either.
     if (props.blockedReason) return;
+    if (approving()) return;
+    const plan = runLatest();
+    if (!plan || plan.status !== "waiting_approval") return;
+    const attempt = applyAttempt(plan);
+    if (!ownsApply(attempt)) return;
     // Approving a removal starts removing live resources: never one click.
     if (isRemoval()) {
       const ok = await confirm({
@@ -491,46 +543,110 @@ export default function InstallExecution(props: Props) {
       });
       if (!ok) return;
     }
+    if (props.blockedReason || !ownsApply(attempt) || runLatest()?.status !== "waiting_approval" || approving()) return;
     setApproving(true);
     setError(null);
     try {
-      mutate(await approveRun(runId(), { reason: "dashboard install review" }));
+      const approved = await approveRun(plan.id, { reason: "dashboard install review" });
+      if (ownsApply(attempt)) mutate(approved);
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      if (ownsApply(attempt)) setError(friendlyError(cause, t).message);
     } finally {
-      setApproving(false);
+      if (sameOwner(attempt)) setApproving(false);
     }
   };
 
+  const identifyApply = (id: string, attempt: ApplyAttempt) => {
+    if (!ownsApply(attempt)) return;
+    // Observing an exact Apply locks the answers/discard path before its
+    // separate Run read starts. Its status is never taken from the listing.
+    batch(() => {
+      setHasSeenApply(true);
+      mutate(undefined);
+      setRunId(id);
+      setApplyUnconfirmed(false);
+      setRecoverableApply(undefined);
+      setError(null);
+    });
+  };
+  const recoverApply = async (attempt: ApplyAttempt) => {
+    if (!ownsApply(attempt) || recoverableApply() !== attempt) return;
+    recoveryController?.abort();
+    const controller = new AbortController();
+    recoveryController = controller;
+    setCheckingApply(true);
+    try {
+      const recovered = await recoverApplyRun(attempt.plan, {
+        signal: controller.signal,
+        isCurrent: () => ownsApply(attempt) && recoverableApply() === attempt,
+      });
+      if (recovered && ownsApply(attempt)) identifyApply(recovered.id, attempt);
+    } finally {
+      if (recoveryController === controller) {
+        recoveryController = undefined;
+        if (sameOwner(attempt)) setCheckingApply(false);
+      }
+    }
+  };
+  const recheckApply = async () => {
+    const attempt = recoverableApply();
+    if (attempt && !applying() && !checkingApply()) await recoverApply(attempt);
+  };
   const install = async () => {
-    if (props.blockedReason || applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
+    if (props.blockedReason || refusedConnectionPlan() || applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
+    const plan = runLatest();
+    if (!plan || plan.id !== runId() || plan.capsuleId !== props.capsuleId || !plan.workspaceId) return;
+    const attempt = applyAttempt(plan);
     setApplying(true);
     setError(null);
     try {
-      const envelope = await createApplyRun(runId(), { timeoutMs: 30_000 });
-      mutate(undefined);
-      setRunId(envelope.run.id);
+      const envelope = await createApplyRun(plan.id, { timeoutMs: 30_000 });
+      identifyApply(envelope.run.id, attempt);
     } catch (cause) {
-      // A timeout after POST is indeterminate. Do not retry from this surface;
-      // the run detail remains the recovery/audit path.
-      if (!(cause instanceof ControlApiError) || cause.status === 0 || cause.status >= 500) {
+      if (!ownsApply(attempt)) return;
+      if (cause instanceof ControlApiIndeterminateError && cause.operation === "apply") {
+        setRecoverableApply(attempt);
+        setApplyUnconfirmed(true);
+        setError(t("run.applyUnconfirmed"));
+        await recoverApply(attempt);
+      } else if (!(cause instanceof ControlApiError) || cause.status === 0 || cause.status >= 500) {
         setApplyUnconfirmed(true);
         setError(t("installStore.applyUnconfirmed"));
-      } else setError(friendlyError(cause, t).message);
+      } else {
+        // These typed refusals also occur before Apply admission while
+        // checking materialized inputs against the selected connection.
+        const canReplaceConnection = props.uninstallConnectionRecovery && plan.type === "destroy_plan" && cause.status === 409 &&
+          cause.code === "failed_precondition" && (cause.reason === "provider_connection_not_ready" ||
+            cause.reason === "destroy_connection_recovery_unproven");
+        setError(canReplaceConnection && cause.reason === "provider_connection_not_ready"
+          ? t("app.uninstall.reviewConnectionUnavailable")
+          : friendlyError(cause, t).message);
+        if (canReplaceConnection) {
+          setConfirmed(false);
+          setRefusedConnectionPlanId(plan.id);
+        }
+      }
     } finally {
-      setApplying(false);
+      if (sameOwner(attempt)) setApplying(false);
     }
   };
 
-  // Apply starts only from the "Allow and install" click on the reviewed Plan.
+  // Apply starts only from the final "Install" click on the reviewed Plan.
   // Nothing applies automatically, and no consent survives a reload or URL.
   // Unknown POSTs are held.
-  let observedInitialRun = props.initialRunId ?? props.planRunId;
+  const executionScope = () => JSON.stringify([
+    props.capsuleId, props.planRunId, props.initialRunId ?? props.planRunId, props.uninstallConnectionScope,
+  ]);
+  let observedInitialRun = executionScope();
   createEffect(() => {
     const id = props.initialRunId ?? props.planRunId;
-    if (id === observedInitialRun) return;
-    observedInitialRun = id;
-    setConfirmed(false); setApplyUnconfirmed(false); setError(null);
+    const scope = executionScope();
+    if (scope === observedInitialRun) return;
+    observedInitialRun = scope;
+    executionEpoch += 1;
+    recoveryController?.abort();
+    setRecoverableApply(undefined); setCheckingApply(false); setApplying(false); setApproving(false);
+    setConfirmed(false); setApplyUnconfirmed(false); setError(null); setRefusedConnectionPlanId(undefined);
     mutate(undefined); setRunId(id);
   });
   const retryFailedApply = async () => {
@@ -699,30 +815,34 @@ export default function InstallExecution(props: Props) {
       <Show when={runLatest()}>
         {(current) => (
           <>
-            <div classList={{ "iv-review-head": true, "iv-visually-hidden": isInstall() && planReady() }}>
+            <div classList={{ "iv-review-head": true, "iv-visually-hidden": isInstall() && (planReady() || isApplyRun(current().type)) }}>
               <div>
                 <h2 id="iv-review-title">
                   {isApplyRun(current().type)
                     ? t(copy().applying)
                     : t(copy().title)}
                 </h2>
-                <p>
-                  {isApplyRun(current().type)
-                    ? t(copy().applyingHint)
-                    : t(copy().hint)}
-                </p>
+                <Show when={!isInstall() || (!planReady() && !isApplyRun(current().type))}>
+                  <p>
+                    {isApplyRun(current().type)
+                      ? t(copy().applyingHint)
+                      : t(copy().hint)}
+                  </p>
+                </Show>
               </div>
-              <Badge
-                tone={installRunStatusTone(
-                  current().type,
-                  current().status,
-                  readinessState(),
-                )}
-              >
-                {isReviewRun(current().type) && current().status === "succeeded"
-                  ? t("installStore.reviewReady")
-                  : runStatusLabel(current().status)}
-              </Badge>
+              <Show when={!isInstall() || (!planReady() && !isApplyRun(current().type))}>
+                <Badge
+                  tone={installRunStatusTone(
+                    current().type,
+                    current().status,
+                    readinessState(),
+                  )}
+                >
+                  {isReviewRun(current().type) && current().status === "succeeded"
+                    ? t("installStore.reviewReady")
+                    : runStatusLabel(current().status)}
+                </Badge>
+              </Show>
             </div>
 
             <Show when={props.showPolicyReasons && isReviewRun(current().type) ? current().policyReasons : undefined}>
@@ -747,7 +867,7 @@ export default function InstallExecution(props: Props) {
               </Show>
 
               <Show when={isReviewRun(current().type) && (summary() || reviewedPlanRunId()) && (!isInstall() || destructive() || (summary()?.change ?? 0) > 0)}>{resourceDetails(current)}</Show>
-              <Show when={current().status === "waiting_approval" ? props.blockedReason : undefined}>
+              <Show when={current().status === "waiting_approval" && !props.blockedReasonId ? props.blockedReason : undefined}>
                 {(reason) => (
                   <p class="iv-apply-reason" id="iv-approve-outdated" role="status">{reason()}</p>
                 )}
@@ -759,7 +879,7 @@ export default function InstallExecution(props: Props) {
                     variant="primary"
                     busy={approving()}
                     aria-disabled={props.blockedReason ? "true" : undefined}
-                    aria-describedby={props.blockedReason ? "iv-approve-outdated" : undefined}
+                    aria-describedby={props.blockedReason ? props.blockedReasonId ?? "iv-approve-outdated" : undefined}
                     onClick={() => void approve()}
                   >
                     {t("installStore.approve")}
@@ -774,7 +894,7 @@ export default function InstallExecution(props: Props) {
                 </div>
               </Show>
 
-              <Show when={planReady()}>
+              <Show when={planReady() && !refusedConnectionPlan()}>
                 <Show when={destructive()}>
                   <div class="iv-review-warning">
                     <ShieldAlert size={20} aria-hidden="true" />
@@ -789,7 +909,7 @@ export default function InstallExecution(props: Props) {
                     </div>
                   </div>
                 </Show>
-                <Show when={props.blockedReason}>
+                <Show when={!props.blockedReasonId ? props.blockedReason : undefined}>
                   {(reason) => (
                     <p class="iv-apply-reason" id="iv-plan-outdated" data-testid="install-plan-outdated" role="status">{reason()}</p>
                   )}
@@ -805,7 +925,7 @@ export default function InstallExecution(props: Props) {
                     // still focusable so the reason is read out; the click
                     // does nothing (install() refuses).
                     aria-disabled={props.blockedReason ? "true" : undefined}
-                    aria-describedby={props.blockedReason ? "iv-plan-outdated" : undefined}
+                    aria-describedby={props.blockedReason ? props.blockedReasonId ?? "iv-plan-outdated" : undefined}
                     onClick={() => void install()}
                   >
                     {t(copy().allow)}
@@ -962,6 +1082,9 @@ export default function InstallExecution(props: Props) {
                   {closeButton()}
                 </div>
               </div>
+              <Show when={current().status === "failed" && isAppRemovalRun(current().type) && current().id} keyed>
+                {(runId) => props.uninstallConnectionRecovery?.(runId, "failed")}
+              </Show>
             </Show>
           </>
         )}
@@ -990,7 +1113,20 @@ export default function InstallExecution(props: Props) {
                 here — but the review can close; the run detail and the app's
                 history show what happened. */}
             <Show when={applyUnconfirmed()}>{closeButton()}</Show>
+            <Show when={applyUnconfirmed() && recoverableApply()}>
+              <Button type="button" variant="secondary" busy={checkingApply()} disabled={applying() || checkingApply()} onClick={() => void recheckApply()}>
+                {t("common.retry")}
+              </Button>
+            </Show>
           </div>
+        )}
+      </Show>
+      <Show when={refusedConnectionPlan()} keyed>
+        {(planRunId) => (
+          <>
+            {props.uninstallConnectionRecovery?.(planRunId, "refused")}
+            {closeButton()}
+          </>
         )}
       </Show>
     </section>

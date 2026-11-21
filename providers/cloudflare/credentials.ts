@@ -38,6 +38,20 @@ const CLOUDFLARE_ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/u;
 const CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN =
   /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 
+/** Account metadata must originate from the successful exact-account verifier. */
+export function hasCloudflareVerifiedAccountScope(connection: ProviderConnection): boolean {
+  const verification = connection.credentialVerification;
+  const accountId = connection.scopeHints?.providerSettings?.accountId;
+  const subdomain = connection.scopeHints?.providerSettings?.workersSubdomain;
+  return connection.providerSource === "registry.opentofu.org/cloudflare/cloudflare" &&
+    verification?.kind === "takosumi.credential-verification@v1" &&
+    verification.capabilities?.includes(CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY) === true &&
+    typeof accountId === "string" && CLOUDFLARE_ACCOUNT_ID_PATTERN.test(accountId) &&
+    typeof subdomain === "string" && CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN.test(subdomain) &&
+    connection.scopeHints?.moduleInputDefaults?.cloudflare_account_id === accountId &&
+    connection.scopeHints?.moduleInputDefaults?.cloudflare_workers_subdomain === subdomain;
+}
+
 /**
  * Injected fetch seam so the driver is unit-testable without real network.
  * Mirrors the vault's `VaultFetch` shape.

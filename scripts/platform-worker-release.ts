@@ -2074,6 +2074,8 @@ export type PlatformWorkerCodeRuntime = Readonly<{
   ) => Promise<DashboardAssetSeal>;
   runScopedGate?: () => Promise<void>;
   nativeRead?: PlatformWorkerCodeNativeRead;
+  waitForUploadedVersionRetry?: (milliseconds: number) => Promise<void>;
+  waitForServingVersionRetry?: (milliseconds: number) => Promise<void>;
   publicReadback?: (
     environment: PlatformEnvironment,
     versionId: string,
@@ -2089,6 +2091,14 @@ type PlatformWorkerCodeAuthority = Readonly<{
   container: PlatformContainerState;
   topology: PlatformWorkerCodeTopology;
 }>;
+
+type PlatformWorkerCodeAuthoritySection = keyof PlatformWorkerCodeAuthority;
+
+class PlatformWorkerCodeAuthorityDriftError extends Error {
+  constructor(readonly sections: readonly PlatformWorkerCodeAuthoritySection[]) {
+    super("platform_worker_code_authority_drift");
+  }
+}
 
 /** Fixed integration-only lane. Full config/image release remains separate. */
 export async function runPlatformWorkerCodeRelease(
@@ -2108,17 +2118,76 @@ export async function runPlatformWorkerLoginAdmissionRelease(
   return runPlatformWorkerCodePublication(argv, environment, runtime, true);
 }
 
+type StagingCodeResume = Readonly<{
+  config: string;
+  version: string;
+  tag: string;
+  predecessor: string;
+}>;
+
+function parseStagingCodeResume(args: readonly string[]): StagingCodeResume {
+  const keys = new Set(["--config", "--version", "--tag", "--predecessor"]);
+  const values = new Map<string, string>();
+  for (let index = 0; index < args.length; index += 2) {
+    const key = args[index];
+    const value = args[index + 1];
+    if (!key || !keys.has(key) || values.has(key) || !value || value.startsWith("--")) {
+      throw new Error("platform_worker_code_resume_arguments_invalid");
+    }
+    values.set(key, value);
+  }
+  const config = values.get("--config");
+  const version = values.get("--version");
+  const tag = values.get("--tag");
+  const predecessor = values.get("--predecessor");
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u;
+  if (!config || !version || !uuid.test(version) ||
+    !predecessor || !uuid.test(predecessor) || version === predecessor ||
+    !tag || !/^tks-stg-code-[0-9a-f]{32}$/u.test(tag)) {
+    throw new Error("platform_worker_code_resume_arguments_invalid");
+  }
+  return { config: absolute(config), version, tag, predecessor };
+}
+
+/**
+ * A later recovery runner may execute from a descendant of the source pin,
+ * but it may not change any input to the Worker or dashboard build.
+ */
+function assertStagingCodeResumeSource(configPath: string): string {
+  const pin = readPlatformReleaseSourcePin(configPath);
+  const checkout = platformActionSourceRuntime.checkoutIdentity();
+  if (!sameGitRemote(pin.repository, checkout.repository) ||
+    !isAncestor(pin.commit, checkout.commit)) {
+    throw new Error("platform_worker_code_resume_source_drift");
+  }
+  const toolPaths = new Set([
+    "scripts/deploy.mjs",
+    "scripts/platform-worker-release.ts",
+    "tests/scripts/platform_worker_release_test.ts",
+  ]);
+  const files = [
+    ...git(["--no-replace-objects", "diff", "--no-renames", "--name-only", "-z", pin.commit, "--"]).split("\0"),
+    ...git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
+  ];
+  if (files.some((path) => path && !toolPaths.has(path))) {
+    throw new Error("platform_worker_code_resume_source_drift");
+  }
+  return `${platformReleaseSourceAuthorityDigest(pin)}:${checkout.commit}`;
+}
+
 async function runPlatformWorkerCodePublication(
   argv: readonly string[],
   environment: PlatformEnvironment,
   runtime: PlatformWorkerCodeRuntime,
   addLoginAdmission: boolean,
 ): Promise<void> {
-  if (environment !== "staging" || argv[0] !== "apply") {
+  if (environment !== "staging" ||
+    (argv[0] !== "apply" && (argv[0] !== "resume" || addLoginAdmission))) {
     throw new Error("platform_worker_code_action_invalid");
   }
-  const parsed = parsePlatformWorkerReleaseArgs(["status", ...argv.slice(1)]);
-  if (parsed.action !== "status") {
+  const resume = argv[0] === "resume" ? parseStagingCodeResume(argv.slice(1)) : undefined;
+  const parsed = resume ?? parsePlatformWorkerReleaseArgs(["status", ...argv.slice(1)]);
+  if ("action" in parsed && parsed.action !== "status") {
     throw new Error("platform_worker_code_arguments_invalid");
   }
   const command = runtime.command ?? requiredCommand;
@@ -2135,10 +2204,12 @@ async function runPlatformWorkerCodePublication(
   const predecessorSource = addLoginAdmission
     ? platformLoginAdmissionPredecessorSource(configSource, platformTargetForEnvironment(environment).origin)
     : configSource;
-  (runtime.assertSelectedSource ??
-    ((path) => assertPinnedSourceRoot(readPlatformReleaseSourcePin(path))))(
-    parsed.config,
-  );
+  const assertSource = () => {
+    if (runtime.assertSelectedSource) return runtime.assertSelectedSource(parsed.config);
+    if (resume) return assertStagingCodeResumeSource(parsed.config);
+    return assertPinnedSourceRoot(readPlatformReleaseSourcePin(parsed.config));
+  };
+  const sourceFence = assertSource();
 
   const initialConfig = createPlatformDryRunConfig(
     platformWorkerCodeWithoutMigrations(configSource),
@@ -2152,6 +2223,9 @@ async function runPlatformWorkerCodePublication(
   let mutation: "none" | "upload" | "activate" = "none";
   let predecessorVersionId = "unknown";
   let releaseTag = "unknown";
+  let artifacts: { entryDigest: string; dashboardDigest: string } | undefined;
+  let candidateVersionId: string | undefined;
+  let observedServingVersionId: string | undefined;
   try {
     const runnerImage = configuredRunnerImage(initialConfig.path);
     const workerName = platformTargetForEnvironment(environment).workerName;
@@ -2163,7 +2237,12 @@ async function runPlatformWorkerCodePublication(
         workerName,
         command,
       ));
-    const readAuthority = (path: string, source: string, priorPins: boolean) =>
+    const readAuthority = (
+      path: string,
+      source: string,
+      priorPins: boolean,
+      servingVersionId?: string,
+    ) =>
       readPlatformWorkerCodeAuthority(
         path,
         source,
@@ -2171,9 +2250,13 @@ async function runPlatformWorkerCodePublication(
         priorPins,
         command,
         nativeRead,
+        servingVersionId,
       );
     const baseline = await readAuthority(initialConfig.path, predecessorSource, true);
     predecessorVersionId = baseline.versionId;
+    if (resume && predecessorVersionId !== resume.predecessor) {
+      throw new Error("platform_worker_code_resume_predecessor_changed");
+    }
     assertPlatformContainerComplete(baseline.container, runnerImage);
 
     const dashboard = await (runtime.buildDashboard ??
@@ -2223,65 +2306,81 @@ async function runPlatformWorkerCodePublication(
     if (entryDigest !== pins.controllerArtifactDigest) {
       throw new Error("platform_worker_code_bundle_digest_drift");
     }
+    artifacts = { entryDigest, dashboardDigest: dashboard.digest };
 
-    const immediate = await readAuthority(
-      initialConfig.path,
-      predecessorSource,
-      true,
-    );
-    assertPlatformWorkerCodeAuthorityUnchanged(baseline, immediate, true);
-    assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
-    initialConfig.assertUnchanged();
-    finalConfig.assertUnchanged();
+    const assertPredecessorUnchanged = async () => {
+      const immediate = await readAuthority(initialConfig.path, predecessorSource, true);
+      assertPlatformWorkerCodeAuthorityUnchanged(baseline, immediate, true);
+      if (resume && assertSource() !== sourceFence) {
+        throw new Error("platform_worker_code_resume_source_drift");
+      }
+      assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
+      initialConfig.assertUnchanged();
+      finalConfig!.assertUnchanged();
+    };
 
-    const nonce = (runtime.nonce ?? (() => randomBytes(16).toString("hex")))();
-    if (!/^[0-9a-f]{32}$/u.test(nonce)) {
-      throw new Error("platform_worker_code_nonce_invalid");
+    const releaseMessage = `takosumi-platform-staging-code ${entryDigest}`;
+    let deployedVersionId: string;
+    if (resume) {
+      releaseTag = resume.tag;
+      deployedVersionId = resume.version;
+    } else {
+      await assertPredecessorUnchanged();
+      const nonce = (runtime.nonce ?? (() => randomBytes(16).toString("hex")))();
+      if (!/^[0-9a-f]{32}$/u.test(nonce)) {
+        throw new Error("platform_worker_code_nonce_invalid");
+      }
+      releaseTag = `tks-stg-code-${nonce}`;
+      mutation = "upload";
+      const upload = await command(
+        [
+          WRANGLER,
+          "versions",
+          "upload",
+          finalEntry,
+          "--no-bundle",
+          "--config",
+          finalConfig.path,
+          "--tag",
+          releaseTag,
+          "--message",
+          releaseMessage,
+          "--strict",
+        ],
+        undefined,
+        root,
+      );
+      deployedVersionId = parseUploadedVersion(`${upload.stdout}\n${upload.stderr}`);
+      candidateVersionId = deployedVersionId;
     }
-    releaseTag = `tks-stg-code-${nonce}`;
-    const releaseMessage =
-      `takosumi-platform-staging-code ${entryDigest}`;
-    mutation = "upload";
-    const upload = await command(
-      [
-        WRANGLER,
-        "versions",
-        "upload",
-        finalEntry,
-        "--no-bundle",
-        "--config",
-        finalConfig.path,
-        "--tag",
-        releaseTag,
-        "--message",
-        releaseMessage,
-        "--strict",
-      ],
-      undefined,
-      root,
-    );
-    const deployedVersionId = parseUploadedVersion(
-      `${upload.stdout}\n${upload.stderr}`,
-    );
-    const uploadedSource = await readPlatformWorkerCodeVersion(
-      finalConfig.path,
-      deployedVersionId,
-      command,
-    );
+    const candidate = resume
+      ? {
+          source: await readPlatformWorkerCodeVersion(finalConfig.path, deployedVersionId, command),
+          retried: false,
+        }
+      : await readNewlyUploadedVersion(
+          finalConfig.path,
+          deployedVersionId,
+          command,
+          runtime.waitForUploadedVersionRetry ?? Bun.sleep,
+        );
     const uploaded = assertPlatformWorkerCodeVersionMatchesConfig(
-      uploadedSource,
+      candidate.source,
       finalSource,
       platformTargetForEnvironment(environment).hostedService,
       baseline.secrets,
     );
     assertPublishedVersion(
-      uploadedSource,
+      candidate.source,
       platformTargetForEnvironment(environment).hostedService,
       deployedVersionId,
       releaseTag,
       releaseMessage,
     );
     assertPlatformWorkerCodeStableVersion(baseline.version, uploaded);
+    candidateVersionId = deployedVersionId;
+    // Resume and delayed upload readback can outlive the preceding authority check.
+    if (resume || candidate.retried) await assertPredecessorUnchanged();
 
     activationConfig = createPlatformWorkerCodeActivationConfig(
       workerName,
@@ -2303,18 +2402,18 @@ async function runPlatformWorkerCodePublication(
       undefined,
       root,
     );
-    const deployed = await readAuthority(
+    const servingVersionId = await waitForExactServingVersion(
       finalConfig.path,
-      finalSource,
-      false,
+      deployedVersionId,
+      predecessorVersionId,
+      command,
+      {
+        delays: [1_000, 2_000, 4_000, 8_000, ...Array<number>(11).fill(15_000)],
+        wait: runtime.waitForServingVersionRetry,
+      },
     );
-    if (deployed.versionId !== deployedVersionId) {
-      throw new Error(
-        deployed.versionId === predecessorVersionId
-          ? "platform_worker_release_predecessor_unchanged"
-          : "platform_worker_release_concurrent_version",
-      );
-    }
+    const deployed = await readAuthority(finalConfig.path, finalSource, false, servingVersionId);
+    observedServingVersionId = deployed.versionId;
     assertPlatformWorkerCodeAuthorityUnchanged(baseline, deployed, false);
     assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
     activationConfig.assertUnchanged();
@@ -2338,6 +2437,7 @@ async function runPlatformWorkerCodePublication(
         releaseTag,
         entryDigest,
         dashboardDigest: dashboard.digest,
+        ...(resume ? { resumedUpload: true } : {}),
         historicalRollbackOwner: "takosumi-platform-staging",
       })}\n`,
     );
@@ -2350,6 +2450,12 @@ async function runPlatformWorkerCodePublication(
         predecessorVersionId,
         releaseTag,
         mutation,
+        ...artifacts,
+        candidateVersionId,
+        observedServingVersionId,
+        authorityDrift: error instanceof PlatformWorkerCodeAuthorityDriftError
+          ? error.sections
+          : undefined,
         recoveryStatus:
           "read the tagged Version and deployment history before rollback or forward repair; no mutation was retried",
         historicalRollbackOwner: "takosumi-platform-staging",
@@ -2372,13 +2478,14 @@ async function readPlatformWorkerCodeAuthority(
   allowPriorPins: boolean,
   command: PlatformReleaseCommand,
   nativeRead: PlatformWorkerCodeNativeRead,
+  servingVersionId?: string,
 ): Promise<PlatformWorkerCodeAuthority> {
   const topology = await readPlatformWorkerCodeTopology(
     source,
     platformTargetForEnvironment(environment).workerName,
     nativeRead,
   );
-  const versionId = await readServingVersion(configPath, command);
+  const versionId = servingVersionId ?? await readServingVersion(configPath, command);
   const [versionSource, secrets, container] = await Promise.all([
     readPlatformWorkerCodeVersion(configPath, versionId, command),
     readSecretNames(configPath, command),
@@ -2417,12 +2524,41 @@ async function readPlatformWorkerCodeVersion(
   ).stdout;
 }
 
+async function readNewlyUploadedVersion(
+  configPath: string,
+  versionId: string,
+  command: PlatformReleaseCommand,
+  wait: (milliseconds: number) => Promise<void>,
+): Promise<{ source: string; retried: boolean }> {
+  const delays = [1_000, 2_000, 4_000, 8_000, ...Array<number>(7).fill(15_000)];
+  const viewCommand = [WRANGLER, "versions", "view", versionId].join(" ").slice(0, 256);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const source = await readPlatformWorkerCodeVersion(configPath, versionId, command);
+      return { source, retried: attempt > 0 };
+    } catch (error) {
+      const delay = delays[attempt];
+      if (
+        delay === undefined ||
+        !(error instanceof PlatformCommandError) ||
+        error.command !== viewCommand ||
+        error.exitCode !== 1 ||
+        error.timedOut ||
+        !/\[code: 100146\]/u.test(error.stderr)
+      ) {
+        throw error;
+      }
+      await wait(delay);
+    }
+  }
+}
+
 function assertPlatformWorkerCodeStableVersion(
   baseline: PlatformWorkerCodeVersionAuthority,
   current: PlatformWorkerCodeVersionAuthority,
 ): void {
   if (!platformWorkerCodeEqual(baseline, current)) {
-    throw new Error("platform_worker_code_authority_drift");
+    throw new PlatformWorkerCodeAuthorityDriftError(["version"]);
   }
 }
 
@@ -2431,15 +2567,18 @@ function assertPlatformWorkerCodeAuthorityUnchanged(
   current: PlatformWorkerCodeAuthority,
   sameVersion: boolean,
 ): void {
-  if (
-    (sameVersion && baseline.versionId !== current.versionId) ||
-    !platformWorkerCodeEqual(baseline.secrets, current.secrets) ||
-    !platformWorkerCodeEqual(baseline.container, current.container) ||
-    !platformWorkerCodeEqual(baseline.topology, current.topology)
-  ) {
-    throw new Error("platform_worker_code_authority_drift");
+  const sections: PlatformWorkerCodeAuthoritySection[] = [];
+  if (sameVersion && baseline.versionId !== current.versionId) {
+    sections.push("versionId");
   }
-  assertPlatformWorkerCodeStableVersion(baseline.version, current.version);
+  for (const section of ["secrets", "container", "topology", "version"] as const) {
+    if (!platformWorkerCodeEqual(baseline[section], current[section])) {
+      sections.push(section);
+    }
+  }
+  if (sections.length > 0) {
+    throw new PlatformWorkerCodeAuthorityDriftError(sections);
+  }
 }
 
 function assertPlatformWorkerCodeInputUnchanged(
@@ -4316,8 +4455,7 @@ async function requiredPlatformForwardUploadMutation(
     assertUnchanged: () => void;
   }>,
   argv: readonly string[],
-  environment: PlatformEnvironment,
-  predecessor: PlatformContainerState,
+  plan: Pick<PlatformReleasePlan, "environment" | "predecessorContainer" | "predecessorVersionId">,
   command: PlatformReleaseCommand = requiredCommand,
 ): Promise<CommandResult> {
   // Finish the recursive local closure check before the final authoritative
@@ -4326,9 +4464,17 @@ async function requiredPlatformForwardUploadMutation(
   custody.assertUnchanged();
   try {
     return await withPlatformForwardContainerPreflight(
-      predecessor,
-      () => readPlatformContainer(custody.configPath, environment, command),
+      plan.predecessorContainer,
+      () => readPlatformContainer(custody.configPath, plan.environment, command),
       () => command(argv),
+      async () => {
+        await Bun.sleep(5_000);
+        const serving = await readServingVersion(custody.configPath, command);
+        if (serving !== plan.predecessorVersionId) {
+          throw new Error("platform_worker_release_predecessor_drift");
+        }
+        custody.assertUnchanged();
+      },
     );
   } finally {
     // Preserve the post-attempt custody proof for both acknowledged and
@@ -4610,8 +4756,7 @@ export async function completeRelease(
           platformReleaseMessage(plan),
           custody.uploadEntrypointPath,
         ),
-        plan.environment,
-        plan.predecessorContainer,
+        plan,
         async (argv) => {
           assertSource();
           return command(argv);
@@ -4668,13 +4813,26 @@ export async function completeRelease(
       platformReleaseMessage(plan),
       command,
     );
-    await publicReadback(plan.environment, deployedVersionId);
+    const runnerImage = configuredRunnerImage(custody.configPath);
+    const runnerImageChanged = runnerImage !== plan.predecessorContainer.image;
+    if (!runnerImageChanged) {
+      await publicReadback(plan.environment, deployedVersionId);
+    }
     const deployedContainer = await waitForPlatformContainer(
       custody.configPath,
       plan.environment,
-      configuredRunnerImage(custody.configPath),
+      runnerImage,
       command,
+      plan.predecessorContainer,
     );
+    if (runnerImageChanged) {
+      // The Runner image may take longer to converge than Worker traffic.
+      // Confirm the selected Version is still serving before recording ready.
+      if (await readServingVersion(custody.configPath, command) !== deployedVersionId) {
+        throw new Error("platform_worker_release_concurrent_version");
+      }
+      await publicReadback(plan.environment, deployedVersionId);
+    }
     custody.assertUnchanged();
     assertSource();
     const evidence = createPlatformReadyEvidence({
@@ -7070,32 +7228,36 @@ function assertPlatformContainerComplete(
 
 /**
  * Bind the sole forward upload to the exact Container closure captured in the
- * reviewed plan. This one-shot authoritative read belongs after every earlier
- * execute fence and immediately before the upload callback: an unavailable or
- * ambiguous provider read throws before the callback can observe mutation.
+ * reviewed plan. The matching read belongs immediately before upload.
+ * Only startup counters can justify waiting and refreshing the authority.
  */
 export async function withPlatformForwardContainerPreflight<T>(
   predecessor: PlatformContainerState,
   readCurrent: () => Promise<PlatformContainerState>,
   upload: () => Promise<T>,
+  refreshBeforeRetry?: () => Promise<void>,
 ): Promise<T> {
   assertPlatformContainerComplete(predecessor);
-  const current = await readCurrent();
-  if (
-    current.id !== predecessor.id ||
-    current.name !== predecessor.name ||
-    current.state !== predecessor.state ||
-    current.image !== predecessor.image ||
-    current.version !== predecessor.version ||
-    current.hasActiveRollout !== predecessor.hasActiveRollout ||
-    current.health.failed !== predecessor.health.failed ||
-    current.health.starting !== predecessor.health.starting ||
-    current.health.scheduling !== predecessor.health.scheduling ||
-    current.health.errorCount !== predecessor.health.errorCount
-  ) {
-    throw new Error("platform_worker_release_predecessor_container_drift");
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    const current = await readCurrent();
+    const { starting, scheduling, failed, errorCount } = current.health;
+    if (
+      current.id !== predecessor.id ||
+      current.name !== predecessor.name ||
+      current.state !== predecessor.state ||
+      current.image !== predecessor.image ||
+      current.version !== predecessor.version ||
+      current.hasActiveRollout !== predecessor.hasActiveRollout ||
+      failed !== 0 ||
+      errorCount !== 0 ||
+      !nonNegativeInteger(starting) ||
+      !nonNegativeInteger(scheduling)
+    ) break;
+    if (starting === 0 && scheduling === 0) return upload();
+    if (!refreshBeforeRetry || attempt === 3) break;
+    await refreshBeforeRetry();
   }
-  return upload();
+  throw new Error("platform_worker_release_predecessor_container_drift");
 }
 
 export function assertPlatformRestoreCandidate(
@@ -7122,10 +7284,13 @@ async function waitForPlatformContainer(
   environment: PlatformEnvironment,
   expectedImage: string,
   command: PlatformReleaseCommand = requiredCommand,
+  predecessor?: PlatformContainerState,
 ): Promise<PlatformContainerState> {
   return waitForPlatformContainerReadback(
     expectedImage,
     () => readPlatformContainer(configPath, environment, command),
+    Bun.sleep,
+    predecessor,
   );
 }
 
@@ -7133,10 +7298,33 @@ export async function waitForPlatformContainerReadback(
   expectedImage: string,
   read: () => Promise<PlatformContainerState>,
   wait: (milliseconds: number) => Promise<void> = Bun.sleep,
+  predecessor?: Pick<PlatformContainerState, "id" | "name" | "image">,
 ): Promise<PlatformContainerState> {
-  for (let attempt = 1; attempt <= 36; attempt += 1) {
+  const imageChange = predecessor && predecessor.image !== expectedImage
+    ? predecessor
+    : undefined;
+  const normalRetryDelays = Array<number>(35).fill(5_000);
+  // Allow up to the documented 15-minute instance drain plus a minute for
+  // startup and readback when the reviewed plan changes the immutable image.
+  const retryDelays = imageChange
+    ? [...normalRetryDelays, ...Array<number>(52).fill(15_000), 5_000]
+    : normalRetryDelays;
+  const deadline = imageChange ? performance.now() + 16 * 60_000 : Infinity;
+  for (const nextDelay of [...retryDelays, undefined]) {
     try {
       const state = await read();
+      if (imageChange) {
+        if (
+          state.id !== imageChange.id ||
+          state.name !== imageChange.name ||
+          (state.image !== imageChange.image && state.image !== expectedImage)
+        ) {
+          throw new Error("platform_worker_release_container_rollout_mismatch");
+        }
+        if (state.health.failed !== 0 || state.health.errorCount !== 0) {
+          throw new Error("platform_worker_release_container_rollout_failed");
+        }
+      }
       assertPlatformContainerComplete(state, expectedImage);
       return state;
     } catch (error) {
@@ -7144,8 +7332,10 @@ export async function waitForPlatformContainerReadback(
         error instanceof Error &&
         (error.message === "platform_worker_release_container_list_detail_mismatch" ||
           error.message === "platform_worker_release_container_not_ready");
-      if (!retryable || attempt === 36) throw error;
-      await wait(5_000);
+      const remaining = Math.floor(deadline - performance.now());
+      if (!retryable || nextDelay === undefined || remaining <= 0) throw error;
+      await wait(Math.min(nextDelay, remaining));
+      if (performance.now() >= deadline) throw error;
     }
   }
   throw new Error("platform_worker_release_container_not_ready");
@@ -7156,22 +7346,20 @@ async function waitForExactServingVersion(
   expectedVersionId: string,
   predecessorVersionId: string,
   command: PlatformReleaseCommand = requiredCommand,
-): Promise<void> {
-  for (let attempt = 1; attempt <= 8; attempt += 1) {
-    const result = await command([
-      WRANGLER,
-      "deployments",
-      "status",
-      "--config",
-      config,
-      "--json",
-    ]);
-    const current = parseServingVersion(result.stdout);
-    if (current === expectedVersionId) return;
+  retry: {
+    delays: readonly number[];
+    wait?: (milliseconds: number) => Promise<void>;
+  } = { delays: [1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000] },
+): Promise<string> {
+  const wait = retry.wait ?? Bun.sleep;
+  for (const delay of [...retry.delays, undefined]) {
+    const current = await readServingVersion(config, command);
+    if (current === expectedVersionId) return current;
     if (current !== predecessorVersionId) {
       throw new Error("platform_worker_release_concurrent_version");
     }
-    if (attempt < 8) await Bun.sleep(attempt * 1_000);
+    if (delay === undefined) break;
+    await wait(delay);
   }
   throw new Error("platform_worker_release_predecessor_unchanged");
 }
@@ -7902,7 +8090,7 @@ async function requiredCommand(
   };
 }
 
-class PlatformCommandError extends Error {
+export class PlatformCommandError extends Error {
   constructor(
     readonly command: string,
     readonly exitCode: number,

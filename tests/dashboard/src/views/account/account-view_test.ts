@@ -27,8 +27,9 @@ describe("AccountView", () => {
     ] as const) {
       expect(source).toContain(`href: "${href}", labelKey: "${key}"`);
     }
-    expect(source).toContain("<Tabs");
-    expect(source).toContain("<ProfileSection session={props.session} />");
+    expect(source).toContain('<A class="tg-settings-back" href="/account">');
+    expect(source).toContain('<nav class="tg-settings-group"');
+    expect(source).toContain("<ProfileSection session={props.session}>");
     expect(source).not.toContain("ConnectionsTab");
     expect(source).not.toContain("/account/connections");
     expect(source).toContain("<BillingTab />");
@@ -49,17 +50,17 @@ describe("AccountView", () => {
     expect(source).not.toContain("workspace.noneCta");
   });
 
-  test("自分 shows the profile plainly and signs out last, not as a red headline", () => {
+  test("Profile shows identity and preferences before its confirmed sign-out action", () => {
     expect(profile).toContain('label: t("account.profile.displayName")');
     expect(profile).toContain('label: t("account.profile.email")');
     // No folded session/debug layer: subject ids and user agents are gone.
     expect(profile).not.toContain("<details");
     expect(profile).not.toContain("account.profile.subject");
     expect(profile).not.toContain("navigator.userAgent");
-    // Sign-out is the last card and a secondary action with a confirmation.
-    const signOutCard = profile.indexOf('t("account.signOut.title")');
-    expect(signOutCard).toBeGreaterThan(profile.indexOf('t("account.preferences.title")'));
-    expect(signOutCard).toBeGreaterThan(profile.indexOf('t("account.installTarget.title")'));
+    // Sign-out stays a secondary action with a confirmation.
+    const signOutSection = profile.indexOf('t("account.signOut.title")');
+    expect(signOutSection).toBeGreaterThan(profile.indexOf('t("account.preferences.title")'));
+    expect(signOutSection).toBeGreaterThan(profile.indexOf('t("account.installTarget.title")'));
     expect(profile).not.toContain('variant="danger"');
     expect(profile).toContain('t("account.signOut.confirm")');
     // Who sees your name and email is stated where you read them.

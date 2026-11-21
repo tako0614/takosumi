@@ -91,12 +91,44 @@ describe("createApplyRun acknowledgement recovery", () => {
       error = caught;
     }
     expect(error).toMatchObject({
-      status: 502,
-      code: "invalid_apply_response",
+      operation: "apply",
+      code: "request_indeterminate",
+      causeSummary: { status: 502, code: "invalid_apply_response" },
     });
     expect((error as ControlApiError).body).toBeUndefined();
     expect(JSON.stringify(error)).not.toContain(rawMarker);
     expect(calls).toBe(1);
+  });
+
+  test("leaves HTTP 5xx to read-only reconciliation without resending Apply", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return json({ error: "gateway_unavailable" }, 503);
+    }) as typeof fetch;
+
+    await expect(createApplyRun("plan_1")).rejects.toMatchObject({
+      operation: "apply",
+      code: "request_indeterminate",
+      causeSummary: { status: 503, code: "gateway_unavailable" },
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("a rejected replay cannot resolve an earlier missing acknowledgement", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("response not received");
+      return json({ error: "failed_precondition" }, 409);
+    }) as typeof fetch;
+
+    await expect(createApplyRun("plan_1")).rejects.toMatchObject({
+      operation: "apply",
+      code: "request_indeterminate",
+      causeSummary: { status: 409, code: "failed_precondition" },
+    });
+    expect(calls).toBe(2);
   });
 
   test("makes two transport failures explicitly indeterminate", async () => {

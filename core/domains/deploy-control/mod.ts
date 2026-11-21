@@ -1,4 +1,5 @@
 import { capsuleWithOwnershipForAdmission } from "./store.ts";
+import type { CommittedApplyReceiptCommand, CommittedApplyReceiptProbeCommand } from "./committed_apply_receipt.ts";
 /**
  * OpenTofu-native deployment-control-plane domain.
  *
@@ -524,6 +525,9 @@ export interface RunExecutionControl {
  */
 export interface RunDispatchControl {
   readonly deadlineAt?: number;
+  /** Trusted in-process adoption of one exact adapter/Run receipt; no public boolean. */
+  readonly committedApplyReceipt?: CommittedApplyReceiptCommand;
+  readonly committedApplyReceiptProbe?: CommittedApplyReceiptProbeCommand;
 }
 
 export interface OpenTofuPlanJob
@@ -997,6 +1001,7 @@ export interface OpenTofuCapsuleSourceFilesJob {
   readonly runId: string;
   readonly sourceSnapshot: SourceSnapshot;
   readonly modulePath?: string;
+  readonly requireProviderMirror?: true;
 }
 
 export interface OpenTofuStableSourceTagResolutionJob {
@@ -1327,6 +1332,7 @@ export interface GenericRootDispatchContext {
  * it empty.
  */
 export interface PlanRunInternalContext {
+  readonly destroyConnectionRecovery?: PlanRun["destroyConnectionRecovery"];
   readonly capsuleContext?: PlanRunCapsuleContext;
   readonly sourceSnapshotId?: string;
   /**
@@ -1406,6 +1412,8 @@ export interface CreateCapsulePlanRequest {
  * carry `runGroupId`, which reads project unchanged.)
  */
 export interface CreateCapsulePlanInternal {
+  /** Explicit selection for new destroy Plans only; never modifies app bindings. */
+  readonly destroyProviderConnectionReplacements?: readonly import("takosumi-contract/connections").DestroyProviderConnectionReplacement[];
   /** Private management authority retained from outer configuration preparation. */
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   /**
@@ -1768,6 +1776,7 @@ export class OpenTofuController {
       runEnv: this.#runEnv,
       verification: this.#verification,
       planResolution: this.#planResolution,
+      hasVerifiedAccountScope: (connection) => this.#vault?.hasVerifiedAccountScope?.(connection) === true,
       ...(dependencies.privateRunFileGrantMinter
         ? { privateRunFileGrantMinter: dependencies.privateRunFileGrantMinter }
         : {}),
@@ -1955,6 +1964,7 @@ export class OpenTofuController {
       | "sourceSnapshotId"
       | "planRunId"
       | "expectedWorkspaceManagementAuthority"
+      | "destroyProviderConnectionReplacements"
     > = {},
   ): Promise<PlanRunResponse> {
     return this.#runEngine.createCapsuleDestroyPlan(
@@ -2454,7 +2464,14 @@ export class OpenTofuController {
       );
     }
     const snapshot = await this.#sources.getSourceSnapshot(id);
-    return await this.#sourcesService.readCapsuleSourceFiles(snapshot, options);
+    const { source } = await this.#sources.getSource(snapshot.sourceId);
+    const workspace = await this.#requireWorkspace(source.workspaceId);
+    return await this.#sourcesService.readCapsuleSourceFiles(snapshot, {
+      ...options,
+      ...(workspace.policy?.providerInstallation?.requireMirror === true
+        ? { requireProviderMirror: true }
+        : {}),
+    });
   }
 
   async resolveStableSourceTag(

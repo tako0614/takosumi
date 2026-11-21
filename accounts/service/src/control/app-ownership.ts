@@ -1,13 +1,14 @@
 /** Per-app account control routes. Durable mutations belong to AppOwnershipOperations. */
-import type { CapsuleAppState, CapsuleAppAction } from "takosumi-contract/capsules";
+import { installDisplayName } from "./install-names.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AppAccess, AppAccessResolver } from "../../../../contract/app-access.ts";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import { errorJson, json, methodNotAllowed, readJsonObject } from "../http-helpers.ts";
 import { appOwnershipMutationsFrozenResponse } from "../app-ownership-mutations-freeze.ts";
 import { bearerAppAllows } from "../account-session.ts";
 import type { ControlDispatchContext } from "./shared.ts";
 import { controlPlaneUnavailable } from "./shared.ts";
-import { readCapsuleAppView } from "./capsule-app.ts";
+import { readCapsuleAppSummaries, readCapsuleAppView } from "./capsule-app.ts";
 import { AppAuthorizationError } from "../../../../core/domains/app-authorization/errors.ts";
 
 export interface AppMemberRecord {
@@ -168,6 +169,26 @@ async function profile(
   };
 }
 
+async function appCursorBinding(ctx: ControlDispatchContext, q: string): Promise<string> {
+  const scope = JSON.stringify([q, ctx.session.subject, ctx.session.credential,
+    ctx.session.workspaceId ?? null, ctx.session.appIds ? [...new Set(ctx.session.appIds)].sort() : null]);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(scope));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function readAppCursor(token: string, binding: string): string | undefined {
+  try {
+    if (!/^[A-Za-z0-9_-]{1,4096}$/u.test(token)) return undefined;
+    const value = JSON.parse(atob(token.replace(/-/g, "+").replace(/_/g, "/")));
+    return value?.v === 1 && value.binding === binding && typeof value.after === "string" &&
+      /^[A-Za-z0-9_-]{1,2048}$/u.test(value.after) ? value.after : undefined;
+  } catch { return undefined; }
+}
+
+function writeAppCursor(after: string, binding: string): string {
+  return btoa(JSON.stringify({ v: 1, binding, after })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 async function listApps(ctx: ControlDispatchContext): Promise<Response> {
   const port = appPort(ctx);
   if (!port || typeof ctx.operations.listCapsuleRunsPage !== "function") return controlPlaneUnavailable();
@@ -176,15 +197,23 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
     return errorJson("invalid_request", "limit must be a positive integer", 400, ctx.request);
   }
   const limit = rawLimit === null ? 50 : Math.min(Number(rawLimit), 100);
-  const cursor = ctx.url.searchParams.get("cursor") ?? undefined;
-  if (cursor !== undefined && (cursor.length === 0 || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/u.test(cursor))) {
-    return errorJson("invalid_request", "cursor is malformed", 400, ctx.request);
+  const rawQuery = ctx.url.searchParams.get("q");
+  if (rawQuery !== null && (rawQuery.length > 200 || /[\x00-\x1f\x7f]/u.test(rawQuery))) {
+    return errorJson("invalid_request", "q must be at most 200 characters without control characters", 400, ctx.request);
+  }
+  const q = rawQuery?.trim().toLowerCase() ?? "";
+  const binding = await appCursorBinding(ctx, q);
+  const rawCursor = ctx.url.searchParams.get("cursor");
+  const cursor = rawCursor === null ? undefined : readAppCursor(rawCursor, binding);
+  if (rawCursor !== null && cursor === undefined) {
+    return errorJson("invalid_request", "cursor does not match this search or access scope", 400, ctx.request);
   }
   const page = await port.listAccessibleApps(ctx.session.subject, {
     limit,
     ...(cursor ? { cursor } : {}),
   });
-  if (page.apps.length > limit) return controlPlaneUnavailable();
+  if (page.apps.length > limit || (page.nextCursor !== undefined &&
+    (!/^[A-Za-z0-9_-]{1,2048}$/u.test(page.nextCursor) || page.nextCursor === cursor))) return controlPlaneUnavailable();
   const authorized = await Promise.all(page.apps.map(async (entry) => {
     if (!bearerAppAllows(ctx.session, entry.capsuleId)) return undefined;
     // A stale page may outlive revocation. Recheck before reading any app facts.
@@ -196,36 +225,51 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
   const capsules = liveAccesses.length > 0
     ? await ctx.operations.capsules.getCapsulesByIds(liveAccesses.map((entry) => entry.capsuleId))
     : [];
-  const capsuleById = new Map(capsules.map((capsule) => [capsule.id, capsule]));
-  const owners = new Map<string, ReturnType<typeof ctx.store.findAccount>>();
-  const apps = await Promise.all(liveAccesses.map(async (live) => {
-    const capsule = capsuleById.get(live.capsuleId);
-    if (!capsule) return undefined;
-    if (ctx.session.workspaceId && capsule.workspaceId !== ctx.session.workspaceId) return undefined;
-    if (capsule.status === "destroyed") return undefined;
-    let ownerRead = owners.get(live.ownerAccountId);
-    if (!ownerRead) {
-      ownerRead = ctx.store.findAccount(live.ownerAccountId as TakosumiSubject);
-      owners.set(live.ownerAccountId, ownerRead);
-    }
-    const [view, owner] = await Promise.all([
-      readCapsuleAppView(ctx, capsule, Date.now()),
-      ownerRead,
-    ]);
-    return {
-      capsuleId: capsule.id,
-      name: capsule.name,
-      ...(view.displayName ? { displayName: view.displayName } : {}),
-      ...(view.iconUrl ? { iconUrl: view.iconUrl } : {}),
-      role: live.role,
-      ownerDisplayName: owner?.displayName?.trim() || live.ownerAccountId,
-      state: view.state as CapsuleAppState,
-      primaryAction: view.primaryAction as CapsuleAppAction,
-    };
-  }));
+  const visible = capsules.filter((capsule) => capsule.status !== "destroyed" &&
+    (!ctx.session.workspaceId || capsule.workspaceId === ctx.session.workspaceId));
+  const visibleIds = new Set(visible.map((capsule) => capsule.id));
+  const visibleAccesses = liveAccesses.filter((access) => visibleIds.has(access.capsuleId));
+  const metadata = await Promise.all([
+    Promise.all([...new Set(visibleAccesses.map((access) => access.ownerAccountId))]
+      .map(async (id) => [id, await ctx.store.findAccount(id as TakosumiSubject)] as const)),
+    (async (): Promise<ReadonlyMap<string, InstallConfig> | undefined> => {
+      if (!q || visible.length === 0) return undefined;
+      const configs = ctx.operations.capsules;
+      if (!configs.getInstallConfigsByIds) throw new Error("search config batch unavailable");
+      return new Map((await configs.getInstallConfigsByIds([...new Set(visible.map((capsule) => capsule.installConfigId))]))
+        .map((config) => [config.id, config]));
+    })(),
+    // Browsing retains the existing parallel profile/summary reads.
+    q ? undefined : readCapsuleAppSummaries(ctx, visible, Date.now()),
+  ]).catch(() => undefined);
+  if (!metadata) return controlPlaneUnavailable();
+  const [profiles, searchConfigs, browseSummaries] = metadata;
+  const owners = new Map(profiles);
+  let selected = visible;
+  if (q && visible.length > 0) {
+    // Search only authorized candidates from this one page. Display labels
+    // come from one config batch, reused by the matching summary projection.
+    if (visible.some((capsule) => !searchConfigs!.has(capsule.installConfigId))) return controlPlaneUnavailable();
+    const accesses = new Map(visibleAccesses.map((access) => [access.capsuleId, access]));
+    selected = visible.filter((capsule) => {
+      const display = installDisplayName(capsule.name, searchConfigs!.get(capsule.installConfigId));
+      const access = accesses.get(capsule.id)!;
+      const owner = access.role === "member"
+        ? owners.get(access.ownerAccountId)?.displayName?.trim() || access.ownerAccountId : "";
+      return [capsule.name, display?.ja, display?.en, owner].some((value) => value?.toLowerCase().includes(q));
+    });
+  }
+  const summaries = browseSummaries ?? await readCapsuleAppSummaries(ctx, selected, Date.now(), searchConfigs);
+  const byId = new Map(summaries.map((view) => [view.capsuleId, view]));
+  const apps = liveAccesses.flatMap((access) => {
+    const view = byId.get(access.capsuleId);
+    return view ? [{ ...view, role: access.role,
+      ownerDisplayName: owners.get(access.ownerAccountId)?.displayName?.trim() || access.ownerAccountId }] : [];
+  });
   return json({
     apps: apps.filter((entry) => entry !== undefined),
-    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    ...(rawQuery !== null ? { appliedQuery: q } : {}),
+    ...(page.nextCursor ? { nextCursor: writeAppCursor(page.nextCursor, binding) } : {}),
   }, 200, { "cache-control": "no-store" });
 }
 

@@ -1,3 +1,5 @@
+import { handlePasswordAuth, isPasswordAuthPath } from "./password-routes.ts";
+import { permitsPasswordTransport, type PasswordAuthMode } from "./password-auth-config.ts";
 import { validateInterfaceAppDataSource } from "./interface-app-data.ts";
 import { validateInterfaceInvocationSource } from "./interface-invocation-source.ts";
 import {
@@ -297,6 +299,8 @@ export interface AccountsHandlerOptions {
   oidcFlow?: OidcAuthorizationCodeFlow;
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
+  passwordAuthMode?: PasswordAuthMode;
+  passwordClientAddress?: (request: Request) => string | undefined;
   /**
    * In-process deploy-control operations facade backing the session-authed
    * `/api/v1/*` account-plane routes the dashboard SPA calls (M10). The
@@ -356,6 +360,8 @@ export interface EphemeralAccountsHandlerOptions {
   store?: AccountsStore;
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
+  passwordAuthMode?: PasswordAuthMode;
+  passwordClientAddress?: (request: Request) => string | undefined;
   controlPlaneOperations?: ControlPlaneOperations;
   resolveControlPlaneOperations?: () => Promise<
     ControlPlaneOperations | undefined
@@ -421,6 +427,7 @@ export interface OidcClientRegistration {
 }
 
 export interface UpstreamOAuthOptions {
+  passwordAccountReturnEnabled?: boolean;
   hostedSessionPolicy?: boolean;
   subjectSecret: string | Uint8Array | CryptoKey;
   providers: readonly UpstreamOAuthClientRegistration[];
@@ -507,6 +514,8 @@ export async function createEphemeralAccountsHandler(
     store: options.store ?? new InMemoryAccountsStore(),
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
+    passwordAuthMode: options.passwordAuthMode,
+    passwordClientAddress: options.passwordClientAddress,
     controlPlaneOperations: options.controlPlaneOperations,
     resolveControlPlaneOperations: options.resolveControlPlaneOperations,
     patWorkspaceMembershipReader: options.patWorkspaceMembershipReader,
@@ -662,7 +671,13 @@ export function createAccountsHandler(
     options.hostedSessionPolicy === true ||
     [...clients.values()].some((client) => client.consent === "always");
   const baseStore = options.store;
-  const upstreamOAuth = options.upstreamOAuth ? {...options.upstreamOAuth, hostedSessionPolicy: options.hostedSessionPolicy ?? options.upstreamOAuth.hostedSessionPolicy} : undefined;
+  const passwordAuthMode = options.passwordAuthMode ?? "disabled";
+  const passwordEnabled = passwordAuthMode === "login" && permitsPasswordTransport(issuer) && Boolean(baseStore.passwordAuth);
+  const upstreamOAuth = options.upstreamOAuth ? {
+    ...options.upstreamOAuth,
+    hostedSessionPolicy: options.hostedSessionPolicy ?? options.upstreamOAuth.hostedSessionPolicy,
+    passwordAccountReturnEnabled: passwordEnabled,
+  } : undefined;
   const passkeys = options.passkeys ? {...options.passkeys, hostedSessionPolicy: options.hostedSessionPolicy ?? options.passkeys.hostedSessionPolicy} : undefined;
   if (passkeys && (typeof options.store.admitPasskeyChallenge !== "function" ||
     typeof options.store.prunePasskeyChallenges !== "function")) {
@@ -1118,8 +1133,23 @@ export function createAccountsHandler(
       // which sign-in methods are configured (so the sign-in screen can disable
       // the rest) and must answer even when nothing is configured.
       return handleAuthProvidersRequest({
-        upstreamOAuth: upstreamOAuth,
-        passkeys: passkeys,
+        upstreamOAuth,
+        passkeys,
+        password: passwordEnabled ? { enabled: true } : undefined,
+      });
+    }
+
+    if (isPasswordAuthPath(url.pathname)) {
+      return handlePasswordAuth({
+        request,
+        path: url.pathname,
+        issuer,
+        store: baseStore,
+        enabled: passwordEnabled,
+        allowlist: loginEmailAllowlist,
+        secureCookie: isProductionIssuer,
+        hostedPolicy: options.hostedSessionPolicy,
+        clientKey: options.passwordClientAddress?.(request),
       });
     }
 

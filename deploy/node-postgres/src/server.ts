@@ -33,6 +33,9 @@ import {
   startOwnNotificationDispatcher,
 } from "./own-notification-dispatcher.ts";
 import { planOwnNotification } from "../../../core/domains/notifications/own_notifications.ts";
+import { createDefaultRunnerProfiles } from "../../../core/domains/deploy-control/runner_profiles.ts";
+import { SqlOpenTofuControlStore } from "../../../core/domains/deploy-control/store_sql.ts";
+import { startLocalApplyStartupRecovery } from "./local-apply-startup-recovery.ts";
 import { startSourceRetirementSweeper } from "./source-retirement-sweeper.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
 import { isSecretKey, redactString } from "takosumi-contract/redaction";
@@ -133,6 +136,9 @@ export interface ComposedServerOverrides {
   readonly allowOperatorScopedProviderConnections?: Parameters<
     typeof buildComposedApp
   >[0]["allowOperatorScopedProviderConnections"];
+  readonly createModuleVariableMaterializer?: Parameters<
+    typeof buildComposedApp
+  >[0]["createModuleVariableMaterializer"];
   readonly createRuntimeInputOidcClientSource?: Parameters<
     typeof buildComposedApp
   >[0]["createRuntimeInputOidcClientSource"];
@@ -150,6 +156,9 @@ export interface ComposedServerOverrides {
 export async function buildComposedServer(
   overrides: ComposedServerOverrides = {},
 ): Promise<void> {
+  const runner = overrides.opentofuRunner;
+  const runnerProfiles = (overrides.runnerProfiles ?? createDefaultRunnerProfiles()).map((profile) => ({ ...profile }));
+  const runnerExecutors = overrides.opentofuRunnerExecutors ? new Map(overrides.opentofuRunnerExecutors) : undefined;
   const env = readEnv();
   const config = parseEnv(env);
   const pool = createPostgresPool(config, env);
@@ -191,15 +200,13 @@ export async function buildComposedServer(
       ),
     preHandle: (req) => preHandleNonServiceRequest(req, pool),
     ...(staticAssets ? { staticAssets } : {}),
-    ...(overrides.opentofuRunner
-      ? { opentofuRunner: overrides.opentofuRunner }
+    ...(runner
+      ? { opentofuRunner: runner }
       : {}),
-    ...(overrides.opentofuRunnerExecutors
-      ? { opentofuRunnerExecutors: overrides.opentofuRunnerExecutors }
+    ...(runnerExecutors
+      ? { opentofuRunnerExecutors: runnerExecutors }
       : {}),
-    ...(overrides.runnerProfiles
-      ? { runnerProfiles: overrides.runnerProfiles }
-      : {}),
+    runnerProfiles,
     ...(overrides.executionEvidenceAuthority
       ? { executionEvidenceAuthority: overrides.executionEvidenceAuthority }
       : {}),
@@ -229,6 +236,11 @@ export async function buildComposedServer(
             overrides.allowOperatorScopedProviderConnections,
         }
       : {}),
+    ...(overrides.createModuleVariableMaterializer
+      ? {
+          createModuleVariableMaterializer: overrides.createModuleVariableMaterializer,
+        }
+      : {}),
     ...(overrides.createRuntimeInputOidcClientSource
       ? {
           createRuntimeInputOidcClientSource:
@@ -250,6 +262,15 @@ export async function buildComposedServer(
       : {}),
   });
 
+  startLocalApplyStartupRecovery({
+    operations,
+    store: overrides.opentofuControlStore ?? new SqlOpenTofuControlStore({ client: overrides.sqlClient ?? wrapServiceSqlClient(pool) }),
+    runner,
+    profiles: runnerProfiles,
+    executors: runnerExecutors,
+    startedAt: Date.now(),
+    log: structuredLog,
+  });
   startCapsuleUninstallFinalizer({ operations, log: structuredLog });
   ownNotifications = startOwnNotificationDispatcher({
     operations,
@@ -301,6 +322,8 @@ async function buildAccountsHandler(
     issuer: config.issuer,
     store,
     ...(config.clients ? { clients: config.clients } : {}),
+    ...(config.passwordAuthMode ? {passwordAuthMode: config.passwordAuthMode} : {}),
+    passwordClientAddress: (request: Request) => privatePeerAddresses.get(request),
     ...(config.loginEmailAllowlist
       ? { loginEmailAllowlist: config.loginEmailAllowlist }
       : {}),
@@ -518,6 +541,9 @@ interface ServerConfig {
   hostname: string;
 }
 
+// Runtime-provided peer address; never accept a public forwarding header here.
+const privatePeerAddresses = new WeakMap<Request, string>();
+
 async function serveOnAnyRuntime(
   handler: (req: Request) => Promise<Response> | Response,
   options: ServerConfig,
@@ -525,12 +551,21 @@ async function serveOnAnyRuntime(
   const bunGlobal = (
     globalThis as {
       Bun?: {
-        serve: (opts: ServerConfig & { fetch: typeof handler }) => unknown;
+        serve: (opts: ServerConfig & {
+          fetch: (req: Request, server: { requestIP(req: Request): { address: string } | null }) => ReturnType<typeof handler>;
+        }) => unknown;
       };
     }
   ).Bun;
   if (bunGlobal?.serve) {
-    bunGlobal.serve({ ...options, fetch: handler });
+    bunGlobal.serve({
+      ...options,
+      fetch(request, server) {
+        const address = server.requestIP(request)?.address;
+        if (address) privatePeerAddresses.set(request, address);
+        return handler(request);
+      },
+    });
     return;
   }
   // Node fallback for tests and external embedders that do not run Bun.
@@ -558,7 +593,9 @@ async function serveOnAnyRuntime(
         duplex?: "half";
       };
       if (body) requestInit.duplex = "half";
-      const response = await handler(new Request(url, requestInit));
+      const request = new Request(url, requestInit);
+      if (req.socket.remoteAddress) privatePeerAddresses.set(request, req.socket.remoteAddress);
+      const response = await handler(request);
       res.statusCode = response.status;
       response.headers.forEach((value, key) => res.setHeader(key, value));
       if (!response.body) {

@@ -9,10 +9,9 @@
  * lives in folded detail sections below — except diagnostics, which unfold
  * automatically when the run failed.
  *
- * Flow logic is unchanged from the legacy run screen: poll while non-terminal,
- * approve `waiting_approval`, apply a finished policy-passed plan
- * (destructive plans need an explicit second confirmation), billing `blocked`
- * gates the deploy button.
+ * Poll while non-terminal, approve a plan awaiting review, and apply a
+ * finished policy-passed plan. Destructive plans need an explicit second
+ * confirmation. Billing `blocked` gates the deploy button.
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
@@ -36,6 +35,7 @@ import {
   approveRun,
   capsuleAbandonmentCompleted,
   ControlApiError,
+  ControlApiIndeterminateError,
   cancelRun,
   createApplyRun,
   extractRunId,
@@ -78,12 +78,14 @@ import {
 } from "../../lib/run-logs.ts";
 import {
   awaitsDeployApproval,
+  canApproveRun,
   isDeployApprovalCandidate,
   isReviewRun,
 } from "../../lib/run-approval.ts";
 import { canCancelRun } from "../../lib/run-cancel.ts";
 import { initialPlanRetryReport } from "../../lib/initial-plan-retry.ts";
-import { retryPlanForRun } from "../../lib/run-retry.ts";
+import { defaultRetryPlanApi, retryPlanForRun } from "../../lib/run-retry.ts";
+import type { RevisionPlanAttemptStore } from "../../lib/revision-plan-attempt.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -133,6 +135,7 @@ import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
 import { appPageHref } from "../../lib/app-links.ts";
 import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
+import { APPLY_RECOVERY_RUN_LIMIT, recoverApplyRun } from "../../lib/apply-run-recovery.ts";
 import {
   createLastGoodValue,
   latestOrUndefined,
@@ -143,14 +146,10 @@ const RELEASE_ACTIVATION_POLL_MS = 3_000;
 /** Newest-slice size of the Workspace Run ledger fetched to decide whether a
  * succeeded review run's deploy approval was already consumed by a later
  * apply (matches the run history's first page). */
-const SIBLING_RUNS_LIMIT = 200;
+const SIBLING_RUNS_LIMIT = APPLY_RECOVERY_RUN_LIMIT;
 
 export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
-}
-
-function isRequestTimeout(error: unknown): boolean {
-  return error instanceof ControlApiError && error.code === "request_timeout";
 }
 
 /** True when the run fetch failed because the run genuinely does not exist —
@@ -161,19 +160,6 @@ function isRunNotFound(error: unknown): boolean {
     error instanceof ControlApiError &&
     (error.status === 404 || error.code === "not_found")
   );
-}
-
-function latestApplyRunForPlan(
-  runs: readonly Run[],
-  planRun: Run,
-): Run | undefined {
-  return runs.find((candidate) => {
-    if (candidate.type !== "apply" && candidate.type !== "destroy_apply") {
-      return false;
-    }
-    if (candidate.capsuleId !== planRun.capsuleId) return false;
-    return candidate.planRunId === planRun.id;
-  });
 }
 
 function diagnosticDisplayText(value: string | undefined): string | undefined {
@@ -495,13 +481,30 @@ function ProviderResolutionTable(props: {
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
-  const runId = () => params.id ?? "";
+  const runId = () => {
+    const segment = params.id ?? "";
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      // Preserve malformed segments for the existing not-found read path.
+      return segment;
+    }
+  };
+  let disposed = false;
+  let runEpoch = 0;
+  const revisionRetryAttempts: RevisionPlanAttemptStore = new Map();
+  const retryApi = defaultRetryPlanApi(revisionRetryAttempts);
+  let applyReadController: AbortController | undefined;
+  onCleanup(() => {
+    disposed = true;
+    applyReadController?.abort();
+  });
   const appHandoff = appHandoffFromSearch(
     typeof location === "undefined" ? "" : location.search,
   );
   const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
     runId,
-    getRun,
+    (id) => getRun(id),
   );
   // Read the run through this, never `run()` / `run.latest`: both THROW once
   // a load has failed, which took the whole app (nav included) down to the
@@ -581,7 +584,7 @@ function Inner() {
   );
   // The owning app, for the plain-language summary sentence + back link.
   const capsuleId = () => runLatest()?.capsuleId ?? null;
-  const [capsule] = createResource(capsuleId, getCapsule);
+  const [capsule] = createResource(capsuleId, (id) => getCapsule(id));
   const capsuleLatest = () => latestOrUndefined(capsule);
   const appName = () => capsuleLatest()?.name;
   const canRestartFailedInitialPlan = createMemo(() => {
@@ -903,13 +906,37 @@ function Inner() {
       (logs.loading && runLatest()?.status === "failed"),
   );
 
-  const approve = createAction(async () => {
-    await approveRun(runId());
-    await Promise.all([refetchRun(), refetchLogs()]);
-  });
-
   const [applied, setApplied] = createSignal(false);
   const [needsConfirm, setNeedsConfirm] = createSignal(false);
+  type ApplyAttempt = { readonly plan: Run; readonly epoch: number };
+  const [unconfirmedApply, setUnconfirmedApply] = createSignal<ApplyAttempt>();
+  const [checkingApply, setCheckingApply] = createSignal(false);
+  const ownsApply = ({ plan, epoch }: ApplyAttempt): boolean => {
+    const current = runLatest();
+    return !disposed && epoch === runEpoch && runId() === plan.id &&
+      current?.id === plan.id && current.capsuleId === plan.capsuleId &&
+      current.workspaceId === plan.workspaceId && current.type === plan.type;
+  };
+
+  const approve = createAction(async (attempt: ApplyAttempt) => {
+    if (!ownsApply(attempt) || !canApproveRun(runLatest())) return;
+    try {
+      await approveRun(attempt.plan.id);
+      if (ownsApply(attempt)) await Promise.all([refetchRun(), refetchLogs()]);
+    } catch (cause) {
+      if (ownsApply(attempt)) throw cause;
+    }
+  });
+  const cancel = createAction(async (attempt: ApplyAttempt) => {
+    const current = runLatest();
+    if (!ownsApply(attempt) || !current || !canCancelRun(current)) return;
+    try {
+      await cancelRun(attempt.plan.id);
+      if (ownsApply(attempt)) await refetchRun();
+    } catch (cause) {
+      if (ownsApply(attempt)) throw cause;
+    }
+  });
 
   // Whether this plan's deploy approval is still OPEN is not a run-local
   // fact: an apply / destroy_apply explicitly linked by planRunId consumes it
@@ -928,7 +955,7 @@ function Inner() {
     ([capsuleId]) => listRecentCapsuleRuns(capsuleId, SIBLING_RUNS_LIMIT),
   );
   const isDeployableRun = (r: Run): boolean => {
-    if (!isDeployApprovalCandidate(r) || applied()) return false;
+    if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply()) return false;
     // A failed or unfinished history read cannot prove approval is still open.
     if (siblingRuns.error || siblingRuns.loading) return false;
     const siblings = siblingRuns.latest;
@@ -987,9 +1014,50 @@ function Inner() {
       changeCounts().delete > 0 ||
       !changeCountsKnown());
 
+  const recoverApply = async (attempt: ApplyAttempt): Promise<Run | undefined> => {
+    if (!ownsApply(attempt) || unconfirmedApply() !== attempt) return;
+    const controller = new AbortController();
+    applyReadController?.abort();
+    applyReadController = controller;
+    setCheckingApply(true);
+    try {
+      return await recoverApplyRun(attempt.plan, {
+        signal: controller.signal,
+        isCurrent: () => ownsApply(attempt) && unconfirmedApply() === attempt,
+      });
+    } finally {
+      if (applyReadController === controller) {
+        applyReadController = undefined;
+        if (ownsApply(attempt)) setCheckingApply(false);
+      }
+    }
+  };
+  const finishApply = async (envelope: unknown, attempt: ApplyAttempt) => {
+    if (!ownsApply(attempt)) return;
+    setUnconfirmedApply(undefined);
+    setNeedsConfirm(false);
+    setApplied(true);
+    clearWorkspaceProjectionCaches(attempt.plan.workspaceId);
+    const applyRunId = extractRunId(envelope);
+    if (applyRunId && applyRunId !== attempt.plan.id) {
+      const href = `/runs/${encodeURIComponent(applyRunId)}`;
+      navigate(appendAppHandoff(href, appHandoff) ?? href);
+      return;
+    }
+    await Promise.all([refetchRun(), refetchLogs()]);
+  };
+  const recheckApply = createAction(async () => {
+    const attempt = unconfirmedApply();
+    if (!attempt) return;
+    const recovered = await recoverApply(attempt);
+    if (recovered) await finishApply({ run: recovered }, attempt);
+  });
   const deploy = createAction(async (confirmedReview?: boolean) => {
     let envelope: unknown;
     const currentRun = runLatest();
+    if (!currentRun || currentRun.id !== runId() || !currentRun.capsuleId ||
+      !currentRun.workspaceId || !isReviewRun(currentRun) || unconfirmedApply()) return;
+    const attempt = { plan: currentRun, epoch: runEpoch };
     if (
       currentRun &&
       requiresDestructiveConfirmation(currentRun) &&
@@ -999,54 +1067,19 @@ function Inner() {
       return;
     }
     try {
-      envelope = await createApplyRun(runId(), {
+      envelope = await createApplyRun(currentRun.id, {
         timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
       });
     } catch (error) {
-      if (currentRun?.capsuleId && isRequestTimeout(error)) {
-        const recovered = latestApplyRunForPlan(
-          await listRecentCapsuleRuns(currentRun.capsuleId, 30),
-          currentRun,
-        );
-        if (recovered) {
-          envelope = { run: recovered };
-        } else {
-          envelope = await createApplyRun(runId(), {
-            timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
-          });
-        }
-      } else {
-        throw error;
-      }
+      if (!ownsApply(attempt)) return;
+      if (!(error instanceof ControlApiIndeterminateError) || error.operation !== "apply") throw error;
+      setUnconfirmedApply(attempt);
+      const recovered = await recoverApply(attempt);
+      if (!ownsApply(attempt)) return;
+      if (!recovered) throw error;
+      envelope = { run: recovered };
     }
-    setNeedsConfirm(false);
-    setApplied(true);
-    clearWorkspaceProjectionCaches(currentRun?.workspaceId);
-    // Jump to the apply Run when the backend surfaced its id — that page then
-    // polls to "デプロイが完了しました" on its own. Fallback: stay here with the
-    // applied notice (the legacy behaviour).
-    const applyRunId = extractRunId(envelope);
-    if (applyRunId && applyRunId !== runId()) {
-      navigate(
-        appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
-          `/runs/${applyRunId}`,
-      );
-      return;
-    }
-    await Promise.all([refetchRun(), refetchLogs()]);
-  });
-
-  // Per-run UI state must reset when this SAME component instance navigates
-  // between runs (apply → apply run, retry → fresh plan): a stale `applied`
-  // would fake an applied summary on a never-applied plan and hide the apply
-  // button. Nothing on this page applies automatically.
-  let lastRunId = runId();
-  createEffect(() => {
-    const id = runId();
-    if (id === lastRunId) return;
-    lastRunId = id;
-    setApplied(false);
-    setNeedsConfirm(false);
+    await finishApply(envelope, attempt);
   });
 
   const { confirm } = useConfirmDialog();
@@ -1120,69 +1153,71 @@ function Inner() {
     const currentRun = runLatest();
     const instId = currentRun?.capsuleId;
     if (!currentRun || !instId) return;
-    const capsule = await getCapsule(instId);
-    if (capsule.id !== instId || capsule.workspaceId !== currentRun.workspaceId) {
-      throw new ControlApiError(
-        409,
-        "retry_plan_identity_mismatch",
-        t("controlError.sourceRevisionMismatch"),
-      );
-    }
-    // The same selector as the app page: a failed removal is retried as a
-    // removal, a first install keeps its reviewed pair, and an installed
-    // app's change repeats the change its plan records (never the Source's
-    // default ref).
-    const newRunId = await retryPlanForRun(currentRun, capsule);
-    if (newRunId) {
-      navigate(
-        appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
-          `/runs/${newRunId}`,
-      );
+    const attempt = { plan: currentRun, epoch: runEpoch };
+    const isCurrent = () => ownsApply(attempt);
+    if (!isCurrent()) return;
+    try {
+      const capsule = await getCapsule(instId, { isCurrent });
+      if (!isCurrent()) return;
+      const newRunId = await retryPlanForRun(currentRun, capsule, retryApi, isCurrent);
+      if (newRunId && isCurrent()) {
+        navigate(
+          appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
+            `/runs/${newRunId}`,
+        );
+      }
+    } catch (cause) {
+      if (isCurrent()) throw cause;
     }
   });
 
-  const cancel = createAction(async () => {
-    await cancelRun(runId());
-    await refetchRun();
+  // Reset per-run UI state when the same component navigates to another Run.
+  let lastRunId = runId();
+  createEffect(() => {
+    const id = runId();
+    if (id === lastRunId) return;
+    lastRunId = id;
+    runEpoch += 1;
+    revisionRetryAttempts.clear();
+    applyReadController?.abort();
+    setUnconfirmedApply(undefined);
+    setCheckingApply(false);
+    deploy.clearError();
+    recheckApply.clearError();
+    retryPlan.clearError();
+    approve.clearError();
+    cancel.clearError();
+    setApplied(false);
+    setNeedsConfirm(false);
   });
-  // Cancelling a queued/running apply must never be one stray click — name
-  // the run (service + operation) in an explicit ConfirmDialog first.
-  /**
-   * Run operations whose approval immediately replaces or removes live state.
-   * A plan/apply of ordinary changes is already gated by the destructive-count
-   * review; these bypass that because there is no plan to read.
-   */
-  const overwritesLiveState = (type: string | undefined): boolean =>
-    type === "restore" || type === "destroy_plan" || type === "destroy_apply";
+
   const confirmApprove = async (): Promise<void> => {
     const r = runLatest();
-    if (!overwritesLiveState(r?.type)) {
-      await approve.run();
+    if (!r || !canApproveRun(r) || approve.busy()) return;
+    const attempt = { plan: r, epoch: runEpoch };
+    if (!ownsApply(attempt)) return;
+    if (r.type !== "destroy_plan") {
+      await approve.run(attempt);
       return;
     }
     const name = appName();
     const ok = await confirm({
-      title:
-        r?.type === "restore"
-          ? t("run.approveConfirm.restoreTitle")
-          : t("run.approveConfirm.destroyTitle"),
-      message:
-        r?.type === "restore"
-          ? name
-            ? t("run.approveConfirm.restoreMessage", { name })
-            : t("run.approveConfirm.restoreMessageGeneric")
-          : name
-            ? t("run.approveConfirm.destroyMessage", { name })
-            : t("run.approveConfirm.destroyMessageGeneric"),
+      title: t("run.approveConfirm.destroyTitle"),
+      message: name
+        ? t("run.approveConfirm.destroyMessage", { name })
+        : t("run.approveConfirm.destroyMessageGeneric"),
       confirmText: t("run.approve"),
       cancelText: t("common.cancel"),
       danger: true,
     });
-    if (!ok) return;
-    await approve.run();
+    if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest()) || approve.busy()) return;
+    await approve.run(attempt);
   };
   const confirmCancel = async (): Promise<void> => {
     const r = runLatest();
+    if (!r || !canCancelRun(r) || cancel.busy()) return;
+    const attempt = { plan: r, epoch: runEpoch };
+    if (!ownsApply(attempt)) return;
     const operation = operationLabel(r?.type);
     const name = appName();
     const ok = await confirm({
@@ -1194,8 +1229,9 @@ function Inner() {
       cancelText: t("run.cancelConfirm.keep"),
       danger: true,
     });
-    if (!ok) return;
-    await cancel.run();
+    const current = runLatest();
+    if (!ok || !ownsApply(attempt) || !current || !canCancelRun(current) || cancel.busy()) return;
+    await cancel.run(attempt);
   };
   // Only the states the run API's cancel route actually accepts: a `running`
   // apply (or plan) is not stoppable, and offering the control there answered
@@ -1217,7 +1253,7 @@ function Inner() {
 
   // --- summary layer ---------------------------------------------------------
 
-  type SummaryKind = "progress" | "action" | "ok" | "danger" | "error";
+  type SummaryKind = "progress" | "action" | "ok" | "danger" | "error" | "history";
   interface Summary {
     readonly kind: SummaryKind;
     readonly text: string;
@@ -1227,6 +1263,9 @@ function Inner() {
   const summary = createMemo((): Summary | null => {
     const r = runLatest();
     if (!r) return null;
+    if (r.type === "restore" && r.status === "waiting_approval") {
+      return { kind: "history", text: t("run.summary.restoreApprovalRetired") };
+    }
     // Terminal, non-failure statuses: render a settled line (no spinner). A
     // cancelled/expired run has stopped polling, so a "progress" fallback would
     // spin forever and contradict the terminal badge in the header.
@@ -1312,6 +1351,9 @@ function Inner() {
       };
     }
     if (isReviewRun(r)) {
+      if (unconfirmedApply()) {
+        return { kind: "progress", text: t("run.applyUnconfirmed") };
+      }
       if (applied()) {
         return { kind: "ok", text: t("run.summary.applied") };
       }
@@ -1688,15 +1730,10 @@ function Inner() {
 
                   {/* primary action */}
                   <div class="wa-form-actions">
-                    <Show when={r().status === "waiting_approval"}>
-                      {/* `restore` and the destroy family overwrite or remove
-                          live state the moment this is pressed, so they get
-                          the danger treatment and an explicit confirmation —
-                          previously a backup restore was a single quiet
-                          primary click. */}
+                    <Show when={canApproveRun(r())}>
                       <Button
                         variant={
-                          overwritesLiveState(r().type) ? "danger" : "primary"
+                          r().type === "destroy_plan" ? "danger" : "primary"
                         }
                         type="button"
                         busy={approve.busy()}
@@ -1883,7 +1920,19 @@ function Inner() {
                       </p>
                     )}
                   </Show>
-                  <Show when={deploy.error()}>
+                  <Show when={unconfirmedApply()}>
+                    <p class="wa-error" role="alert">{t("run.applyUnconfirmed")}</p>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      disabled={deploy.busy() || checkingApply() || recheckApply.busy()}
+                      busy={checkingApply()}
+                      onClick={() => void recheckApply.run()}
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  </Show>
+                  <Show when={!unconfirmedApply() && deploy.error()}>
                     {(m) => (
                       <p class="wa-error" role="alert">
                         {m()}

@@ -16,6 +16,7 @@
  * types remain assignable to the dashboard view models.
  */
 
+import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import { randomUuid } from "./random-uuid.ts";
 import {
   preflightSharedAuthSession,
@@ -51,6 +52,10 @@ import type {
   CapsuleCurrentResourceInventory as ContractCapsuleCurrentResourceInventory,
   CapsuleConfigurationPlanRequest,
   CapsuleConfigurationPlanResponse,
+  CapsuleInstallConfigReAdoptionResponse,
+  CapsuleInstallConfigReAdoptionInputContext,
+  CapsuleInstallConfigReAdoptionInputContextResponse,
+  CreateCapsuleInstallConfigReAdoptionRequest,
   CreateGitInstallAttemptRequest,
   DiscardGitInstallPlanRequest,
   GitInstallPlanResponse,
@@ -199,6 +204,8 @@ function controlErrorDetails(body: unknown): unknown {
 }
 
 interface RequestOpts {
+  readonly cache?: "no-store";
+  readonly isCurrent?: () => boolean;
   readonly method?: string;
   readonly body?: unknown;
   readonly signal?: AbortSignal;
@@ -209,6 +216,12 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new DOMException("Request was aborted.", "AbortError");
   }
+}
+
+function throwIfReadRetired(options: RequestOpts): void {
+  if (!options.isCurrent) return;
+  throwIfAborted(options.signal);
+  if (!options.isCurrent()) throw new DOMException("Read owner was retired.", "AbortError");
 }
 
 export async function controlFetch<T>(
@@ -232,14 +245,19 @@ export async function controlFetch<T>(
   const preflight = preflightSharedAuthSession(opts.signal);
   if (preflight) await preflight;
   throwIfSharedAuthCallerAborted(opts.signal);
+  throwIfReadRetired(opts);
   const res = await fetch(path, {
     method: opts.method ?? "GET",
     headers,
     body,
     credentials: "include",
     signal: opts.signal,
+    ...(opts.cache ? { cache: opts.cache } : {}),
   });
 
+  // Recovery owns a particular UI scope. A late read must not redirect a
+  // replacement screen or clear its ownership cache after that scope retires.
+  throwIfReadRetired(opts);
   if (res.status === 401) {
     resetAppOwnershipCache();
     // The control routes share the account-plane session gate. On expiry, send
@@ -309,8 +327,7 @@ async function fetchAllPages<T>(
   extract: (
     body: { nextCursor?: string } & Record<string, unknown>,
   ) => readonly T[],
-  opts: {
-    readonly signal?: AbortSignal;
+  opts: Pick<RequestOpts, "signal" | "isCurrent"> & {
     readonly readPage?: (path: string) => Promise<{ nextCursor?: string } & Record<string, unknown>>;
   } = {},
 ): Promise<readonly T[]> {
@@ -324,7 +341,7 @@ async function fetchAllPages<T>(
         : `${basePath}${sep}cursor=${encodeURIComponent(cursor)}`;
     const body = opts.readPage ? await opts.readPage(path) : await controlFetch<
       { nextCursor?: string } & Record<string, unknown>
-    >(path, { signal: opts.signal });
+    >(path, opts);
     all.push(...extract(body));
     if (typeof body.nextCursor !== "string" || body.nextCursor === "") break;
     cursor = body.nextCursor;
@@ -1162,9 +1179,10 @@ export async function listCapsules(
   );
 }
 
-export async function getCapsule(id: string): Promise<Capsule> {
+export async function getCapsule(id: string, options: Pick<RequestOpts, "isCurrent"> = {}): Promise<Capsule> {
   const body = await controlFetch<{ capsule: Capsule }>(
     `${BASE}/capsules/${encodeURIComponent(id)}`,
+    { isCurrent: options.isCurrent },
   );
   if (!isCapsuleResponse(body.capsule)) {
     throw new ControlApiError(
@@ -1181,14 +1199,14 @@ export async function getCapsule(id: string): Promise<Capsule> {
  * snapshot. Settings must echo this guard into the single Configuration Plan
  * request; separate GETs could accidentally combine different authorities.
  */
-export async function getCapsuleConfigurationContext(id: string): Promise<{
+export async function getCapsuleConfigurationContext(id: string, options: { readonly signal?: AbortSignal } = {}): Promise<{
   readonly capsule: Capsule;
   readonly authorityGuard: string;
 }> {
   const body = await controlFetch<{
     capsule: Capsule;
     installConfigReAdoption: { readonly authorityGuard: string };
-  }>(`${BASE}/capsules/${encodeURIComponent(id)}`);
+  }>(`${BASE}/capsules/${encodeURIComponent(id)}`, { signal: options.signal });
   if (
     !isCapsuleResponse(body.capsule) ||
     typeof body.installConfigReAdoption?.authorityGuard !== "string" ||
@@ -1220,6 +1238,53 @@ export async function createCapsuleConfigurationPlan(
       body: request,
     },
   );
+}
+
+/** Explicit immutable configuration re-adoption; never plans or applies. */
+export async function createCapsuleInstallConfigReAdoption(
+  capsuleId: string,
+  request: CreateCapsuleInstallConfigReAdoptionRequest,
+  idempotencyKey: string,
+): Promise<CapsuleInstallConfigReAdoptionResponse> {
+  return await controlFetch<CapsuleInstallConfigReAdoptionResponse>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/install-config-re-adoptions`,
+    {
+      method: "POST",
+      headers: { "idempotency-key": idempotencyKey },
+      body: request,
+    },
+  );
+}
+
+/** Read-only, target-bound presentation; never fetches repository text. */
+export async function getCapsuleInstallConfigReAdoptionContext(
+  capsuleId: string,
+  revisionPlanId: string,
+): Promise<CapsuleInstallConfigReAdoptionInputContext> {
+  const body = await controlFetch<CapsuleInstallConfigReAdoptionInputContextResponse>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/install-config-re-adoption-context${query({ revisionPlanId })}`,
+  );
+  const value = body?.installConfigReAdoptionContext;
+  const nonempty = (field: unknown): field is string => typeof field === "string" && field.length > 0;
+  const names = new Set<string>();
+  if (!isRecord(value) || value.capsuleId !== capsuleId || value.revisionPlanId !== revisionPlanId ||
+    ![value.sourceId, value.sourceSnapshotId, value.targetRef, value.resolvedCommit, value.modulePath,
+      value.currentInstallConfigId, value.authorityGuard, value.baseInstallConfigId].every(nonempty) ||
+    !Number.isSafeInteger(value.currentStateGeneration) || value.currentStateGeneration < 0 ||
+    (value.currentStateVersionId !== undefined && !nonempty(value.currentStateVersionId)) ||
+    (value.blockedReason !== undefined && !["secret_inputs", "unsupported_inputs", "host_policy_conflict"].includes(value.blockedReason)) ||
+    !Array.isArray(value.variables) || !value.variables.every(variable => {
+      if (!isRecord(variable) || !nonempty(variable.name) || names.has(variable.name) ||
+        variable.userEditable !== true || variable.sensitive !== false || typeof variable.required !== "boolean" ||
+        typeof variable.type !== "string" || !["string", "number", "boolean", "json"].includes(variable.type) || !isRecord(variable.currentValue)) return false;
+      names.add(variable.name);
+      return variable.currentValue.status === "present"
+        ? Object.prototype.hasOwnProperty.call(variable.currentValue, "value")
+        : variable.currentValue.status === "unset" || variable.currentValue.status === "unavailable";
+    })) {
+    throw new ControlApiError(502, "invalid_re_adoption_context", "The target inputs could not be confirmed.");
+  }
+  return value;
 }
 
 // --- Install attempts (TASK-0115 Phase 3b) -----------------------------------
@@ -1294,12 +1359,13 @@ export async function listOpenGitInstallAttempts(
 /** Advances exactly one durable install coordinator phase. */
 export async function reconcileGitInstallPlan(
   installPlanId: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
   throwIfAborted(options.signal);
+  throwIfReadRetired(options);
   return await controlFetch<GitInstallPlanResponse>(
     `${BASE}/install-plans/${encodeURIComponent(installPlanId)}/reconcile`,
-    { method: "POST", signal: options.signal },
+    { method: "POST", signal: options.signal, isCurrent: options.isCurrent },
   );
 }
 
@@ -1320,16 +1386,17 @@ export async function createGitRevisionPlan(
   capsuleId: string,
   request: CreateGitRevisionPlanRequest,
   idempotencyKey: string = randomUuid(),
-  options: { readonly signal?: AbortSignal } = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitRevisionPlanResponse> {
   throwIfAborted(options.signal);
+  throwIfReadRetired(options);
   return await controlFetch<GitRevisionPlanResponse>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/revision-plans`,
     {
       method: "POST",
       headers: { "idempotency-key": idempotencyKey },
       body: request,
-      signal: options.signal,
+      signal: options.signal, isCurrent: options.isCurrent,
     },
   );
 }
@@ -1337,12 +1404,13 @@ export async function createGitRevisionPlan(
 /** Advances exactly one durable Capsule-local revision coordinator phase. */
 export async function reconcileGitRevisionPlan(
   revisionPlanId: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitRevisionPlanResponse> {
   throwIfAborted(options.signal);
+  throwIfReadRetired(options);
   return await controlFetch<GitRevisionPlanResponse>(
     `${BASE}/revision-plans/${encodeURIComponent(revisionPlanId)}/reconcile`,
-    { method: "POST", signal: options.signal },
+    { method: "POST", signal: options.signal, isCurrent: options.isCurrent },
   );
 }
 
@@ -1531,21 +1599,29 @@ export async function createReviewableGitRevisionPlan(
   options: {
     readonly maxReconciles?: number;
     readonly idempotencyKey?: string;
+    readonly isCurrent?: () => boolean;
     /** Bounds the entire coordinator wait; defaults to two minutes. */
     readonly timeoutMs?: number;
     /** Reconcile cadence; see {@link GitPlanPollCadence}. */
     readonly pollCadence?: GitPlanPollCadence;
+    /** Observe this request's acknowledged coordinator before reconciliation. */
+    readonly onCreated?: (response: GitRevisionPlanResponse) => void;
+    /** Observe the coordinator's final response before a failed result is raised. */
+    readonly onSettled?: (response: GitRevisionPlanResponse) => void;
   } = {},
 ): Promise<GitRevisionPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("revision", options.timeoutMs, async (signal) => {
+    const requestScope = { signal, isCurrent: options.isCurrent };
     const first = await createGitRevisionPlan(
       capsuleId,
       request,
       options.idempotencyKey,
-      { signal },
+      requestScope,
     );
     throwIfAborted(signal);
+    throwIfReadRetired(requestScope);
+    options.onCreated?.(first);
     const response = await driveGitPlanReconcile<GitRevisionPlanResponse>({
       kind: "revision",
       maxReconciles: options.maxReconciles ?? 120,
@@ -1555,8 +1631,10 @@ export async function createReviewableGitRevisionPlan(
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
       reconcile: (current) =>
-        reconcileGitRevisionPlan(current.revisionPlan.id, { signal }),
+        reconcileGitRevisionPlan(current.revisionPlan.id, requestScope),
     });
+    throwIfReadRetired(requestScope);
+    options.onSettled?.(response);
     return requireReviewableRevisionPlan(response);
   });
 }
@@ -1761,11 +1839,24 @@ export async function deleteCapsule(
 
 export async function getCapsuleProviderBindingSet(
   capsuleId: string,
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<ProviderBindingSet | null> {
   const body = await controlFetch<{
     providerBindingSet: ProviderBindingSet | null;
-  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-bindings`);
+  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-bindings`, options);
   return body.providerBindingSet;
+}
+
+export function createCapsuleDestroyRecoveryPlan(
+  capsuleId: string,
+  replacements: readonly DestroyProviderConnectionReplacement[],
+  options: { readonly isCurrent?: () => boolean } = {},
+): Promise<unknown> {
+  return controlFetch(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`, {
+    method: "POST",
+    body: { destroyProviderConnectionReplacements: replacements },
+    ...options,
+  });
 }
 
 // --- Capsule configs -------------------------------------------------------
@@ -2067,10 +2158,15 @@ export async function listInstalledApps(workspaceId?: string): Promise<ListInsta
 const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1";
 
 /** Reads the server-computed view of one installed app. */
-export async function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> {
+export function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> {
+  return getCapsuleAppWithSignal(capsuleId);
+}
+
+export async function getCapsuleAppWithSignal(capsuleId: string, signal?: AbortSignal, options: { readonly isCurrent?: () => boolean } = {}): Promise<CapsuleAppView> {
   const body = await controlFetch<{ app?: CapsuleAppView }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`, { signal, ...options },
   );
+  throwIfReadRetired({ signal, ...options });
   const app = body.app;
   if (
     !isRecord(app) ||
@@ -2147,13 +2243,15 @@ export function decideInterfaceLink(providerCapsuleId: string, linkId: string, d
  */
 export async function advanceGitInstallPlan(
   installPlanId: string,
-  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence } = {},
+  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence; readonly isCurrent?: () => boolean } = {},
 ): Promise<GitInstallPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("install", options.timeoutMs, async (signal) => {
-    const first = await reconcileGitInstallPlan(installPlanId, { signal });
+    const requestScope = { signal, isCurrent: options.isCurrent };
+    const first = await reconcileGitInstallPlan(installPlanId, requestScope);
     throwIfAborted(signal);
-    return await driveGitPlanReconcile<GitInstallPlanResponse>({
+    throwIfReadRetired(requestScope);
+    const response = await driveGitPlanReconcile<GitInstallPlanResponse>({
       kind: "install",
       maxReconciles: 120,
       signal,
@@ -2161,26 +2259,29 @@ export async function advanceGitInstallPlan(
       initial: first,
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
-      reconcile: () => reconcileGitInstallPlan(installPlanId, { signal }),
+      reconcile: () => reconcileGitInstallPlan(installPlanId, requestScope),
     });
+    throwIfReadRetired(requestScope);
+    return response;
   });
 }
 
 /**
- * Continues a revision coordinator for an installed app that stopped moving
- * (its client went away), through its own reconciliation, until it asks for
- * a review. Resolves to its last response; the caller reads
+ * Continues an existing revision coordinator through its own reconciliation
+ * until it asks for a review. Resolves to its last response; the caller reads
  * `revisionPlan.planRunId`.
  */
 export async function advanceGitRevisionPlan(
   revisionPlanId: string,
-  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence } = {},
+  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence; readonly isCurrent?: () => boolean } = {},
 ): Promise<GitRevisionPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("revision", options.timeoutMs, async (signal) => {
-    const first = await reconcileGitRevisionPlan(revisionPlanId, { signal });
+    const requestScope = { signal, isCurrent: options.isCurrent };
+    const first = await reconcileGitRevisionPlan(revisionPlanId, requestScope);
     throwIfAborted(signal);
-    return await driveGitPlanReconcile<GitRevisionPlanResponse>({
+    throwIfReadRetired(requestScope);
+    const response = await driveGitPlanReconcile<GitRevisionPlanResponse>({
       kind: "revision",
       maxReconciles: 120,
       signal,
@@ -2188,8 +2289,10 @@ export async function advanceGitRevisionPlan(
       initial: first,
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
-      reconcile: () => reconcileGitRevisionPlan(revisionPlanId, { signal }),
+      reconcile: () => reconcileGitRevisionPlan(revisionPlanId, requestScope),
     });
+    throwIfReadRetired(requestScope);
+    return response;
   });
 }
 
@@ -2208,6 +2311,8 @@ export async function listCapsuleRuns(
     readonly limit?: number;
     readonly cursor?: string;
     readonly types?: readonly RunType[];
+    readonly signal?: AbortSignal;
+    readonly isCurrent?: () => boolean;
   } = {},
 ): Promise<CapsuleRunPage> {
   const params = new URLSearchParams();
@@ -2219,6 +2324,7 @@ export async function listCapsuleRuns(
   const search = params.toString();
   const body = await controlFetch<{ runs?: unknown; nextCursor?: unknown }>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/runs${search ? `?${search}` : ""}`,
+    { signal: options.signal, ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}) },
   );
   // A page without its list is unreadable, never an empty history.
   if (
@@ -2735,20 +2841,20 @@ export async function destroyPlanCapsule(capsuleId: string): Promise<unknown> {
   );
 }
 
-async function getRunWithOptions(
+export async function getRunWithOptions(
   id: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: { readonly signal?: AbortSignal; readonly cache?: "no-store"; readonly isCurrent?: () => boolean } = {},
 ): Promise<Run> {
   const body = await controlFetch<{ run: Run }>(
     `${BASE}/runs/${encodeURIComponent(id)}`,
-    { signal: options.signal },
+    { signal: options.signal, ...(options.cache ? { cache: options.cache } : {}), ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}) },
   );
   return body.run;
 }
 
 const RUN_READ_TIMEOUT_MS = 30_000;
 
-export async function getRun(id: string): Promise<Run> {
+export async function getRun(id: string, options: Pick<RequestOpts, "isCurrent"> = {}): Promise<Run> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
@@ -2769,7 +2875,7 @@ export async function getRun(id: string): Promise<Run> {
     // Promise.race observes the request's later rejection even if fetch or
     // response.json() ignores abort and settles after the deadline.
     return await Promise.race([
-      getRunWithOptions(id, { signal: controller.signal }),
+      getRunWithOptions(id, { ...options, signal: controller.signal }),
       deadline,
     ]);
   } finally {
@@ -2917,23 +3023,27 @@ export async function createApplyRun(
     }
   };
 
+  const unconfirmed = (cause: unknown) => new ControlApiIndeterminateError(
+    "apply",
+    "Apply request outcome is indeterminate; reconcile the exact PlanRun before trying again.",
+    cause,
+  );
   try {
     return await attempt();
   } catch (firstError) {
-    // Only a missing HTTP response or our explicit timeout is safe to retry.
-    // HTTP 4xx/5xx and malformed success envelopes are already typed and are
-    // not replayed here.
-    if (!isApplyRetryableTransportError(firstError)) throw firstError;
-    try {
-      return await attempt();
-    } catch (secondError) {
-      if (!isApplyRetryableTransportError(secondError)) throw secondError;
-      throw new ControlApiIndeterminateError(
-        "apply",
-        "Apply request outcome is indeterminate after the bounded retry; reconcile the exact PlanRun before trying again.",
-        secondError,
-      );
+    // A server failure or malformed success envelope cannot show whether Apply
+    // started. Leave these responses to read-only reconciliation.
+    if (firstError instanceof ControlApiError && firstError.status >= 500) {
+      throw unconfirmed(firstError);
     }
+    if (!isApplyRetryableTransportError(firstError)) throw firstError;
+  }
+  // Keep the bounded retry for a missing response or timeout on this exact
+  // PlanRun. A refusal of that retry does not establish the first outcome.
+  try {
+    return await attempt();
+  } catch (secondError) {
+    throw unconfirmed(secondError);
   }
 }
 
@@ -3046,13 +3156,14 @@ export async function listConnections(
 export async function listConnectionsWithSignal(
   workspaceId?: string,
   signal?: AbortSignal,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
   if (await appOwnershipAvailable(signal)) {
     try {
       return await fetchAllPages<ProviderConnection>(
         `${BASE}/connections`,
         (body) => (body.connections as readonly ProviderConnection[]) ?? [],
-        { signal },
+        { signal, ...options },
       );
     } catch (error) {
       if (!isMissingControlRoute(error)) throw error;
@@ -3063,7 +3174,7 @@ export async function listConnectionsWithSignal(
   return await fetchAllPages<ProviderConnection>(
     `${BASE}/connections${query({ workspaceId: normalized })}`,
     (body) => (body.connections as readonly ProviderConnection[]) ?? [],
-    { signal },
+    { signal, ...options },
   );
 }
 
@@ -3076,24 +3187,26 @@ export async function listProviderConnections(
 export async function listProviderConnectionsWithSignal(
   workspaceId?: string,
   signal?: AbortSignal,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
-  if (await appOwnershipAvailable(signal)) return await listConnectionsWithSignal(workspaceId, signal);
+  if (await appOwnershipAvailable(signal)) return await listConnectionsWithSignal(workspaceId, signal, options);
   const normalized = await legacyWorkspaceFor404(workspaceId);
   if (!normalized) return [];
-  return await listLegacyProviderConnectionsWithSignal(normalized, signal);
+  return await listLegacyProviderConnectionsWithSignal(normalized, signal, options);
 }
 
 /** Only for a legacy OAuth start that explicitly returned this client context. */
 export async function listLegacyProviderConnectionsWithSignal(
   workspaceId: string,
   signal?: AbortSignal,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
   const normalized = normalizedWorkspaceId(workspaceId);
   if (!normalized) return [];
   const body = await controlFetch<{
     providerConnections?: readonly ProviderConnection[];
   }>(`${BASE}/provider-connections${query({ workspaceId: normalized })}`, {
-    signal,
+    signal, ...options,
   });
   return body.providerConnections ?? [];
 }
@@ -3343,8 +3456,13 @@ export interface AccessibleApp {
   readonly iconUrl?: string;
   readonly role: AppRole;
   readonly ownerDisplayName: string;
+  /** Whether the app has persisted deployment state; absent on older servers. */
+  readonly applied?: boolean;
   readonly state: CapsuleAppView["state"] | "update_available";
   readonly primaryAction: CapsuleAppView["primaryAction"];
+  /** Authorized launcher metadata, absent only on older servers. */
+  readonly screens?: CapsuleAppView["screens"];
+  readonly incomplete?: CapsuleAppView["incomplete"];
 }
 let accessibleAppsCache: Promise<readonly AccessibleApp[] | undefined> | undefined;
 let appOwnershipCache: Promise<boolean> | undefined;
@@ -3359,6 +3477,42 @@ function expireAccessibleAppsData(): void {
   appsDataExpiresAt = 0;
 }
 
+function normalizeAppsRouteError(path: string, error: unknown): unknown {
+  // The old first-page dispatcher has no resource id and predates route_not_found.
+  const appUrl = new URL(path, "https://dashboard.invalid");
+  if (appUrl.pathname === `${BASE}/apps` && !appUrl.searchParams.has("cursor") &&
+    error instanceof ControlApiError && error.status === 404 &&
+    error.code === "not_found" && error.details === undefined && isRecord(error.body) && isRecord(error.body.error)) {
+    return new ControlApiError(404, "route_not_found", error.message, error.body, error.isHttpStatusFallback);
+  }
+  return error;
+}
+
+/** Validate fields consumed by Home, allowing old role-only summary records. */
+function isHomeAppSummary(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.capsuleId !== "string" || !value.capsuleId ||
+    (value.role !== "owner" && value.role !== "member")) return false;
+  for (const field of ["name", "state", "ownerDisplayName", "iconUrl"]) {
+    if (value[field] !== undefined && typeof value[field] !== "string") return false;
+  }
+  if (value.applied !== undefined && typeof value.applied !== "boolean") return false;
+  if (value.displayName !== undefined && typeof value.displayName !== "string" &&
+    (!isRecord(value.displayName) || !Object.values(value.displayName).every((label) => typeof label === "string"))) return false;
+  if (value.incomplete !== undefined && (!Array.isArray(value.incomplete) ||
+    !value.incomplete.every((part) => typeof part === "string"))) return false;
+  return value.screens === undefined || (Array.isArray(value.screens) && value.screens.every((screen) =>
+    isRecord(screen) && typeof screen.url === "string" && typeof screen.interfaceId === "string" &&
+    (screen.title === undefined || typeof screen.title === "string") &&
+    (screen.category === undefined || typeof screen.category === "string") &&
+    (screen.clients === undefined || (isRecord(screen.clients) &&
+      (screen.clients.preferred === "web" || screen.clients.preferred === "native") &&
+      (screen.clients.ios === undefined || isRecord(screen.clients.ios)) &&
+      (screen.clients.android === undefined || isRecord(screen.clients.android)))) &&
+    (screen.icon === undefined || (isRecord(screen.icon) &&
+      (screen.icon.kind === "image" ? typeof screen.icon.url === "string" :
+        screen.icon.kind === "glyph" && typeof screen.icon.glyph === "string")))));
+}
+
 function readCachedAppsPage(path: string): Promise<{ nextCursor?: string } & Record<string, unknown>> {
   expireAccessibleAppsData();
   const cached = appsPageCache.get(path);
@@ -3367,13 +3521,7 @@ function readCachedAppsPage(path: string): Promise<{ nextCursor?: string } & Rec
     if (appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
     return body;
   }).catch((error: unknown) => {
-    // The old collection route has no resource id and cannot return a missing
-    // app. Its dispatcher predates route_not_found; this exception applies
-    // only to the initial GET /apps capability probe, never mutation errors.
-    if (path === `${BASE}/apps` && error instanceof ControlApiError && error.status === 404 &&
-      error.code === "not_found" && error.details === undefined && isRecord(error.body) && isRecord(error.body.error)) {
-      error = new ControlApiError(404, "route_not_found", error.message, error.body, error.isHttpStatusFallback);
-    }
+    error = normalizeAppsRouteError(path, error);
     if (!isMissingControlRoute(error) && appsPageCache.get(path) === request) appsPageCache.delete(path);
     if (isMissingControlRoute(error) && appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
     throw error;
@@ -3389,6 +3537,40 @@ export function resetAppOwnershipCache(): void {
   appsDataExpiresAt = 0;
   appsPageCache.clear();
   legacyInstallWorkspace = undefined;
+}
+
+/** Read one page of account summaries. Only a missing first-page route means legacy. */
+export async function listAccessibleAppsPage(cursor?: string, signal?: AbortSignal, q = ""): Promise<{
+  readonly apps: readonly AccessibleApp[];
+  readonly nextCursor?: string;
+  /** Absent on legacy servers that ignore q. */
+  readonly appliedQuery?: string;
+} | undefined> {
+  throwIfAborted(signal);
+  const search = q.trim().toLowerCase();
+  const path = `${BASE}/apps${query({ cursor, q: search || undefined })}`;
+  let body;
+  try {
+    // Typed queries have unbounded cardinality and belong to this view only.
+    // Do not retain them in the shared cache; cancellation reaches the transport.
+    body = search
+      ? await controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { signal })
+      : await withAppReadSignal(readCachedAppsPage(path), signal);
+  } catch (error) {
+    error = normalizeAppsRouteError(path, error);
+    if (!isMissingControlRoute(error)) throw error;
+    if (cursor === undefined) return undefined;
+    throw new ControlApiError(502, "invalid_apps_response", "Apps pagination became unavailable.");
+  }
+  throwIfAborted(signal);
+  if (!isRecord(body) || !Array.isArray(body.apps) || !body.apps.every(isHomeAppSummary) ||
+    (body.nextCursor !== undefined && (typeof body.nextCursor !== "string" || !body.nextCursor)) ||
+    (body.appliedQuery !== undefined && body.appliedQuery !== search)) {
+    appsPageCache.delete(path);
+    throw new ControlApiError(502, "invalid_apps_response", "Apps returned an invalid response.");
+  }
+  return { apps: body.apps as readonly AccessibleApp[], nextCursor: body.nextCursor || undefined,
+    ...(typeof body.appliedQuery === "string" ? { appliedQuery: body.appliedQuery } : {}) };
 }
 
 /** One account app read is shared by role, provider and OAuth consumers. */
@@ -3436,7 +3618,7 @@ async function withAppReadSignal<T>(request: Promise<T>, signal?: AbortSignal): 
 export async function appOwnershipAvailable(signal?: AbortSignal): Promise<boolean> {
   throwIfAborted(signal);
   if (!appOwnershipCache) {
-    const request = listAccessibleApps().then((apps) => apps !== undefined).catch((error: unknown) => {
+    const request = listAccessibleAppsPage().then((page) => page !== undefined).catch((error: unknown) => {
       if (appOwnershipCache === request) appOwnershipCache = undefined;
       throw error;
     });

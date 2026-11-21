@@ -31,3 +31,36 @@ membership failure branches. Its report is explicitly a syscall fault unit
 check, never real kernel-counter qualification. No production measurement has a
 fixture source or a wall-time/rusage fallback. A rejected sample leaves all
 output arguments untouched and the native source permanently unavailable.
+
+## Local encrypted state and output reconstruction
+
+```sh
+bun run test:encrypted-state-native
+```
+
+This separate node-postgres subgroup needs installed Bun, OpenTofu, tar/zstd and
+locked dependencies. Missing tools fail the command. It needs neither Docker,
+host root nor a provider/account; run it in a network-isolated OS sandbox with
+read-only source/tools, a private HOME/tmp and bounded scratch/resources. It is
+excluded from the portable test command and is outside `test:accounts` discovery.
+The owning entry always starts the outer private-root wrapper, regardless of an
+ambient internal child flag. On failure, its retained 0700 root contains bounded
+`child.stdout.log` / `child.stderr.log` files created exclusively with mode 0600;
+a diagnostic write failure preserves the original child failure.
+
+The test discovers the real source declaration, changes a nonsecret input through
+the normal configuration API, and verifies a native output-only Plan/Apply change.
+It binds state/raw-output references and encrypted bytes, saves a data-bearing
+PGlite snapshot, then uses new Core/SQL/file-store/crypto objects and a fresh
+handler to read the same Run and both generations without another Apply. The
+same random test key is deliberately reinjected into a distinct crypto instance;
+no key is written or logged. A stored synthetic management account-session drives
+initial installation, canonical app ownership, configuration and explicit Apply.
+The current owner/member roles survive SQL reconstruction; removed app members
+and revoked sessions are refused even with known app/Run IDs, without changing
+state files, the effective config or Run IDs. The Memory Accounts store remains
+live while Core is reconstructed; initial accounts/sessions and Git transport
+remain fixtures. App-data OAuth Link/Binding is a separate authority. With no
+public output allowlist declared, this fixture checks nonempty state/raw outputs
+without publishing them. This proves same-process fresh objects, not OS restart,
+crash durability, real PostgreSQL, genuine identity or managed-resource effects.

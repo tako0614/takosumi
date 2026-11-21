@@ -78,6 +78,7 @@ import type {
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
 import type { AccountsStore } from "../store.ts";
+import { connectionOAuthAttemptId, connectionOAuthAttemptPurpose, validConnectionOAuthAttempt, type ConnectionOAuthAttemptRecord } from "../connection-oauth-attempt.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -759,11 +760,15 @@ async function startConnectionOAuth(
   if (session.appIds !== undefined) return errorJson("app_access_denied", "An account credential is required.", 403);
   const helper = operations.connectionOAuth?.[helperId];
   if (!helper) return connectionOAuthUnavailable();
+  if (helper.browserBindingRequired && (!store.createConnectionOAuthAttempt || !store.consumeConnectionOAuthAttempt)) {
+    return errorJson("feature_unavailable", "Connections are temporarily unavailable.", 503);
+  }
   const body = (await readJsonObject(request)) ?? {};
   // Legacy-route telemetry: the request still named a Workspace.
   if (body.workspaceId !== undefined) markWorkspaceBody?.();
   // The OAuth state never carries a Workspace (TASK-0118 P9.1-d), and the
-  // callback authorizes from the signed subject alone: the minted connection
+  // callback authorizes the signed subject and, for browser-bound helpers,
+  // the consumed server attempt: the minted connection
   // is always the initiator's own. A legacy request that still names a
   // Workspace asks for a Workspace-scoped connection (some credential recipes
   // need one); the Workspace it names is not read, checked or recorded, and
@@ -789,11 +794,31 @@ async function startConnectionOAuth(
   });
   const response = json(started);
   if (helper.browserBindingRequired) {
-    const flow = (await stableJsonDigest(started.state)).slice(7);
-    response.headers.append("set-cookie", `${url.protocol === "https:" ? "__Host-" : ""}takosumi_oauth_${flow}=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${url.protocol === "https:" ? "; Secure" : ""}`);
+    const binding = await connectionOAuthBrowserAttempt(url, helperId, started.state);
+    const createdAt = Date.now();
+    const attempt: ConnectionOAuthAttemptRecord = {
+      purpose: connectionOAuthAttemptPurpose, id: binding.id, helperId,
+      stateDigest: binding.stateDigest, browserBindingHash: binding.browserBindingHash,
+      subject: session.subject as TakosumiSubject, scope: workspaceScoped ? "workspace" : "personal",
+      createdAt, expiresAt: Date.parse(started.expiresAt ?? ""),
+    };
+    try {
+      if (!await store.createConnectionOAuthAttempt!(attempt)) {
+        return errorJson("feature_unavailable", "Connections are temporarily unavailable.", 503);
+      }
+    } catch {
+      return errorJson("feature_unavailable", "Connections are temporarily unavailable.", 503);
+    }
+    response.headers.append("set-cookie", `${binding.name}=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${url.protocol === "https:" ? "; Secure" : ""}`);
   }
   response.headers.set("cache-control", "no-store");
   return response;
+}
+
+async function connectionOAuthBrowserAttempt(url: URL, helperId: string, state: string) {
+  const stateDigest = await stableJsonDigest(state);
+  const name = `${url.protocol === "https:" ? "__Host-" : ""}takosumi_oauth_${stateDigest.slice(7)}`;
+  return { stateDigest, name, id: await connectionOAuthAttemptId(helperId, stateDigest), browserBindingHash: await stableJsonDigest(`${name}=1`) };
 }
 
 /**
@@ -802,7 +827,9 @@ async function startConnectionOAuth(
  * no Authorization header, and cookie policy can withhold the session cookie.
  * This handler therefore does NOT call `requireAccountSession`; it authorizes
  * from the authenticated subject that the cookie-gated `start` signed INTO the
- * HMAC OAuth state. It exchanges the code, registers the resulting
+ * HMAC OAuth state. Browser-bound helpers additionally require the matching
+ * cookie and an unexpired, atomically consumed server attempt before exchange.
+ * It exchanges the code, registers the resulting
  * Connection as that subject's own (personal, or Workspace-scoped in the
  * subject's own namespace), and then REDIRECTS the
  * browser back to the dashboard `/connections` screen with a result query
@@ -827,10 +854,30 @@ export async function completeConnectionOAuth(
   if (!code || !state) {
     return redirectToConnections(url, { error: "missing_code" });
   }
+  let attempt: ConnectionOAuthAttemptRecord | undefined;
   if (helper.browserBindingRequired) {
-    const name = `${url.protocol === "https:" ? "__Host-" : ""}takosumi_oauth_${(await stableJsonDigest(state)).slice(7)}`;
+    const binding = await connectionOAuthBrowserAttempt(url, helperId, state);
     const cookie = request?.headers.get("cookie") ?? "";
-    if (!cookie.split(";").some((item) => item.trim() === `${name}=1`)) {
+    if (!cookie.split(";").some((item) => item.trim() === `${binding.name}=1`)) {
+      return redirectToConnections(url, { error: "oauth_failed" });
+    }
+    try {
+      // A failed or interrupted attempt stays consumed. Never restore a row
+      // after exchange/create failure or infer a new attempt from signed state.
+      const now = Date.now();
+      attempt = await store.consumeConnectionOAuthAttempt?.(binding.id, binding.browserBindingHash, now);
+      if (!await validConnectionOAuthAttempt(attempt) || attempt!.id !== binding.id ||
+        attempt!.helperId !== helperId || attempt!.stateDigest !== binding.stateDigest ||
+        attempt!.browserBindingHash !== binding.browserBindingHash || attempt!.createdAt > now || attempt!.expiresAt <= now ||
+        !await store.findAccount(attempt!.subject)) {
+        return redirectToConnections(url, { error: "oauth_failed" });
+      }
+      if (attempt!.scope === "workspace") {
+        const namespace = await personalResourceNamespace(operations, store, { subject: attempt!.subject }, false);
+        if (!namespace) return redirectToConnections(url, { error: "oauth_failed" });
+        await operations.workspaces.captureManagementAuthority(namespace.id);
+      }
+    } catch {
       return redirectToConnections(url, { error: "oauth_failed" });
     }
   }
@@ -853,6 +900,9 @@ export async function completeConnectionOAuth(
   // The subject is the account that initiated `start` (signed into the state).
   // Its absence means an unsigned/legacy state we will not trust for a mint.
   const subject = completed.subject;
+  if (attempt && (subject !== attempt.subject || createRequest.scope !== attempt.scope)) {
+    return redirectToConnections(url, { error: "oauth_failed" });
+  }
   if (!subject) {
     return redirectToConnections(url, { error: "oauth_failed" });
   }

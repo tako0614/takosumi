@@ -21,6 +21,10 @@ interface OAuthProviderConfig extends ConnectionOAuthDescriptor {
 
 interface SignedOAuthState {
   readonly helperId: string;
+  /** Bind the consent request to the helper configuration used to complete it. */
+  readonly configurationDigest?: string;
+  /** Independent browser-bound attempts remain distinct within the same tick. */
+  readonly nonce?: string;
   readonly expiresAt: number;
   readonly body: ConnectionOAuthStartInput["body"];
   /** Private Workspace admission tuple captured before OAuth preparation. */
@@ -111,9 +115,15 @@ async function startOAuth(
     }
   }
   const expiresAt = Date.now() + 10 * 60 * 1000;
+  const reserved = new Set(["response_type", "client_id", "redirect_uri", "state", "scope", "code_challenge", "code_challenge_method"]);
+  if (Object.keys(config.authorizationParams ?? {}).some((key) => reserved.has(key))) {
+    throw new OpenTofuControllerError("invalid_argument", "OAuth authorization parameters override required fields");
+  }
   const state = await signState(
     {
       helperId: config.id,
+      configurationDigest: await oauthConfigurationDigest(config),
+      ...(config.browserBindingRequired ? { nonce: crypto.randomUUID() } : {}),
       expiresAt,
       body: input.body,
       ...(expectedWorkspaceManagementAuthority
@@ -173,6 +183,10 @@ async function completeOAuth(
       "OAuth state expired",
     );
   }
+  if (typeof state.configurationDigest !== "string" ||
+    !constantTimeEqualsString(state.configurationDigest, await oauthConfigurationDigest(config))) {
+    throw new OpenTofuControllerError("failed_precondition", "OAuth configuration changed; reconnect the provider");
+  }
   if (state.body.scope === "personal" && (
     state.body.workspaceId !== undefined ||
     !state.subject ||
@@ -228,6 +242,23 @@ async function completeOAuth(
         }
       : {}),
   };
+}
+
+async function oauthConfigurationDigest(config: OAuthProviderConfig): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify({
+    providerSource: config.providerSource,
+    credentialRecipe: [config.credentialRecipe.id, config.credentialRecipe.authMode, config.credentialRecipe.secretPartition],
+    clientId: config.clientId,
+    authorizationUrl: config.authorizationUrl,
+    tokenUrl: config.tokenUrl,
+    redirectUri: config.redirectUri,
+    scopes: [...new Set(config.scopes)].sort(),
+    authorizationParams: Object.entries(config.authorizationParams ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+    pkce: config.pkce === true,
+    browserBindingRequired: config.browserBindingRequired === true,
+  }));
+  // Host client-secret rotation is deliberately not part of the consent identity.
+  return base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
 }
 
 async function exchangeCode(

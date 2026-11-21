@@ -1,8 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  PlatformCommandError,
   assertConfigTargetsSource,
   assertPlatformRunnerImageProof,
   assertPlatformWorkerCodeVersionMatchesConfig,
@@ -30,6 +31,7 @@ import {
   secretNames,
   type PlatformReleaseCommand,
   waitForPlatformContainerReadback,
+  withPlatformForwardContainerPreflight,
 } from "../../scripts/platform-worker-release.ts";
 import { platformExtensionRoutes } from "../../deploy/platform/platform_extensions.ts";
 import { capsulePublicOriginFromPlatformExtensions, platformExtensionProviderCredentialComposition } from "../../deploy/platform/platform_extension_provider_credentials.ts";
@@ -485,7 +487,14 @@ async function exerciseCodeLane(options: {
   readonly topologyDriftAt?: number;
   readonly routeDrift?: CodeRouteDrift;
   readonly containerDrift?: boolean;
+  readonly containerFailsAfterActivation?: boolean;
   readonly uploadFails?: boolean;
+  readonly uploadReadbackFails?: boolean;
+  readonly candidateReadFailures?: number;
+  readonly candidateReadErrorCode?: number;
+  readonly activationFails?: boolean;
+  readonly postActivationVersions?: readonly string[];
+  readonly resume?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-version" | "wrong-predecessor" | "already-serving" | "unhealthy" | "source-drift";
   readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
   readonly loginSmokeFails?: boolean;
   readonly unrelatedBindingDrift?: boolean;
@@ -510,7 +519,7 @@ async function exerciseCodeLane(options: {
   }));
   const deployed = JSON.parse(codeVersionSource(finalSource, CODE_DEPLOYED_ID, {
     tag,
-    message,
+    message: options.resume === "wrong-digest" ? `takosumi-platform-staging-code sha256:${"0".repeat(64)}` : message,
   }));
   const rateBindings = [
     { name: "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER", type: "ratelimit", namespace_id: "2026111401", simple: { limit: 60, period: 60 } },
@@ -532,12 +541,19 @@ async function exerciseCodeLane(options: {
     }
     listedSecrets.push(name);
   }
-  const container = statusContainerSource();
-  let activated = false;
+  const container = statusContainerSource({ failed: options.resume === "unhealthy" ? 1 : 0 });
+  let activated = options.resume === "already-serving";
   let uploadCount = 0;
   let activationCount = 0;
   let buildCount = 0;
   let gateCount = 0;
+  let sourceCheckCount = 0;
+  const operationOrder: string[] = [];
+  const readbackWaits: number[] = [];
+  const candidateReadWaits: number[] = [];
+  const candidateReads: string[] = [];
+  let postActivationReadCount = 0;
+  let publicReadbackCount = 0;
   let loginSmokeCount = 0;
   let topologySnapshot = 0;
   let uploadArgs: readonly string[] = [];
@@ -562,6 +578,7 @@ async function exerciseCodeLane(options: {
       };
     }
     if (argv[1] === "versions" && argv[2] === "deploy") {
+      operationOrder.push("activate");
       activationCount += 1;
       activationArgs = argv;
       activationConfigSource = readFileSync(
@@ -569,14 +586,21 @@ async function exerciseCodeLane(options: {
         "utf8",
       );
       activated = true;
+      if (options.activationFails) throw new Error("lost activation acknowledgement");
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     if (argv[1] === "deployments" && argv[2] === "status") {
+      operationOrder.push("serving");
+      let versionId = activated ? CODE_DEPLOYED_ID : CODE_PREDECESSOR_ID;
+      if (activationCount > 0) {
+        versionId = options.postActivationVersions?.[postActivationReadCount] ?? versionId;
+        postActivationReadCount++;
+      }
       return {
         exitCode: 0,
         stdout: JSON.stringify({
           versions: [{
-            version_id: activated ? CODE_DEPLOYED_ID : CODE_PREDECESSOR_ID,
+            version_id: versionId,
             percentage: 100,
           }],
         }),
@@ -584,9 +608,23 @@ async function exerciseCodeLane(options: {
       };
     }
     if (argv[1] === "versions" && argv[2] === "view") {
+      if (argv[3] === CODE_DEPLOYED_ID) {
+        operationOrder.push("candidate");
+        candidateReads.push(argv[3]);
+        if (candidateReads.length <= (options.candidateReadFailures ?? 0)) {
+          throw new PlatformCommandError(
+            argv.slice(0, 4).join(" "),
+            1,
+            false,
+            "",
+            `\x1b[31mCloudflare API error [code: ${options.candidateReadErrorCode ?? 100146}]\x1b[0m`,
+          );
+        }
+        if (options.uploadReadbackFails) throw new Error("uploaded Version not visible yet");
+      }
       return {
         exitCode: 0,
-        stdout: JSON.stringify(argv[3] === CODE_DEPLOYED_ID ? deployed : predecessor),
+        stdout: JSON.stringify(argv[3] === CODE_PREDECESSOR_ID ? predecessor : deployed),
         stderr: "",
       };
     }
@@ -601,20 +639,45 @@ async function exerciseCodeLane(options: {
       return { exitCode: 0, stdout: JSON.stringify([container.summary]), stderr: "" };
     }
     if (argv[1] === "containers" && argv[2] === "info") {
-      return { exitCode: 0, stdout: JSON.stringify(container.detail), stderr: "" };
+      const detail = activated && options.containerFailsAfterActivation
+        ? statusContainerSource({ failed: 1 }).detail
+        : container.detail;
+      return { exitCode: 0, stdout: JSON.stringify(detail), stderr: "" };
     }
     throw new Error(`unexpected command: ${argv.slice(1).join(" ")}`);
   };
   const cleanNativeRead = codeNativeRead(source);
+  const resultLines: string[] = [];
+  const write = process.stdout.write;
+  const stdout = spyOn(process.stdout, "write").mockImplementation((...args) => {
+    const [chunk] = args;
+    if (typeof chunk === "string" && chunk.startsWith('{"kind":"takosumi.platform-worker-staging-')) {
+      resultLines.push(chunk);
+      return true;
+    }
+    return Reflect.apply(write, process.stdout, args);
+  });
   let error: unknown;
   try {
     await (options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
-      ["apply", "--config", configPath],
+      options.resume
+        ? [
+          "resume", "--config", configPath,
+          "--version", options.resume === "wrong-version" ? STATUS_VERSION_ID : CODE_DEPLOYED_ID,
+          "--tag", options.resume === "wrong-tag" ? `tks-stg-code-${"2".repeat(32)}` : tag,
+          "--predecessor", options.resume === "wrong-predecessor" ? STATUS_VERSION_ID : CODE_PREDECESSOR_ID,
+        ]
+        : ["apply", "--config", configPath],
       "staging",
       {
         command,
         repositoryRoot: root,
-        assertSelectedSource: () => undefined,
+        assertSelectedSource: () => {
+          sourceCheckCount += 1;
+          if (options.resume === "source-drift" && sourceCheckCount === 2) {
+            throw new Error("synthetic source pin drift");
+          }
+        },
         buildDashboard: async () => {
           buildCount += 1;
           return { digest: `sha256:${"d".repeat(64)}`, entries: [] };
@@ -634,7 +697,16 @@ async function exerciseCodeLane(options: {
           }
           return cleanNativeRead(path);
         },
-        publicReadback: async () => undefined,
+        waitForServingVersionRetry: async (milliseconds: number) => {
+          readbackWaits.push(milliseconds);
+        },
+        waitForUploadedVersionRetry: async (milliseconds: number) => {
+          candidateReadWaits.push(milliseconds);
+        },
+        publicReadback: async (_environment, versionId) => {
+          expect(versionId).toBe(CODE_DEPLOYED_ID);
+          publicReadbackCount++;
+        },
         loginStartReadback: async (versionId) => {
           expect(versionId).toBe(CODE_DEPLOYED_ID);
           loginSmokeCount++;
@@ -646,15 +718,24 @@ async function exerciseCodeLane(options: {
   } catch (caught) {
     error = caught;
   } finally {
+    stdout.mockRestore();
     rmSync(directory, { recursive: true, force: true });
   }
   return {
     error,
+    results: resultLines.map((line) => JSON.parse(line) as Record<string, unknown>),
     uploadCount,
     activationCount,
     buildCount,
     gateCount,
     loginSmokeCount,
+    sourceCheckCount,
+    operationOrder,
+    candidateReads,
+    candidateReadWaits,
+    readbackWaits,
+    postActivationReadCount,
+    publicReadbackCount,
     topologySnapshot,
     uploadArgs,
     activationArgs,
@@ -1008,6 +1089,180 @@ test("routine code publishes once and refuses production", async () => {
   ).rejects.toThrow("platform_worker_code_action_invalid");
 });
 
+test("routine code waits for the acknowledged Version and activates it once", async () => {
+  const result = await exerciseCodeLane({ candidateReadFailures: 2 });
+  expect(result).toMatchObject({
+    error: undefined,
+    uploadCount: 1,
+    activationCount: 1,
+    buildCount: 1,
+    gateCount: 1,
+    candidateReadWaits: [1_000, 2_000],
+  });
+  expect(result.operationOrder.slice(0, 7)).toEqual([
+    "serving", "serving", "candidate", "candidate", "candidate", "serving", "activate",
+  ]);
+  expect(result.candidateReads).toEqual(Array<string>(4).fill(CODE_DEPLOYED_ID));
+});
+
+test("routine code keeps the upload receipt when candidate reads do not converge", async () => {
+  const result = await exerciseCodeLane({ candidateReadFailures: 30 });
+  expect(result).toMatchObject({ uploadCount: 1, activationCount: 0 });
+  expect(result.candidateReadWaits.reduce((sum, delay) => sum + delay, 0)).toBe(120_000);
+  expect(result.candidateReads).toEqual(Array<string>(12).fill(CODE_DEPLOYED_ID));
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "upload",
+    candidateVersionId: CODE_DEPLOYED_ID,
+  });
+});
+
+test("routine code skips candidate waits on other errors and explicit resume, and refuses drift", async () => {
+  for (const options of [
+    { candidateReadFailures: 1, candidateReadErrorCode: 10000 },
+    { candidateReadFailures: 1, resume: "valid" },
+  ] as const) {
+    const result = await exerciseCodeLane(options);
+    expect(result).toMatchObject({
+      activationCount: 0,
+      candidateReads: [CODE_DEPLOYED_ID],
+      candidateReadWaits: [],
+    });
+  }
+  const drifted = await exerciseCodeLane({
+    candidateReadFailures: 1,
+    topologyDriftAt: 3,
+  });
+  expect(drifted).toMatchObject({
+    uploadCount: 1,
+    activationCount: 0,
+    candidateReadWaits: [1_000],
+  });
+  expect(drifted.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "upload",
+    candidateVersionId: CODE_DEPLOYED_ID,
+  });
+});
+
+test("routine code resumes an existing exact Version without uploading", async () => {
+  const result = await exerciseCodeLane({ resume: "valid", uploadFails: true, loginAdmission: "normal" });
+  expect(result).toMatchObject({
+    error: undefined,
+    uploadCount: 0,
+    activationCount: 1,
+    buildCount: 1,
+    gateCount: 1,
+    loginSmokeCount: 1,
+    sourceCheckCount: 2,
+    topologySnapshot: 3,
+  });
+  expect(result.operationOrder.slice(0, 4)).toEqual(["serving", "candidate", "serving", "activate"]);
+  expect(result.activationArgs).toEqual(expect.arrayContaining([`${CODE_DEPLOYED_ID}@100%`]));
+});
+
+test("routine code waits for the candidate while only the predecessor is visible", async () => {
+  for (const resume of [undefined, "valid"] as const) {
+    const result = await exerciseCodeLane({
+      resume,
+      loginAdmission: "normal",
+      postActivationVersions: [CODE_PREDECESSOR_ID, CODE_PREDECESSOR_ID, CODE_DEPLOYED_ID],
+    });
+    expect(result).toMatchObject({
+      error: undefined,
+      uploadCount: resume ? 0 : 1,
+      activationCount: 1,
+      buildCount: 1,
+      gateCount: 1,
+      topologySnapshot: 3,
+      readbackWaits: [1_000, 2_000],
+      postActivationReadCount: 3,
+      publicReadbackCount: 1,
+      loginSmokeCount: 1,
+    });
+    expect(result.results[0]).toMatchObject({
+      status: "ready",
+      deployedVersionId: CODE_DEPLOYED_ID,
+    });
+  }
+});
+
+test("routine code stops on a concurrent Version instead of waiting for the candidate", async () => {
+  const result = await exerciseCodeLane({
+    postActivationVersions: [CODE_PREDECESSOR_ID, STATUS_VERSION_ID, CODE_DEPLOYED_ID],
+  });
+  expect(((result.error as Error).cause as Error).message).toBe(
+    "platform_worker_release_concurrent_version",
+  );
+  expect(result).toMatchObject({
+    uploadCount: 1,
+    activationCount: 1,
+    postActivationReadCount: 2,
+    readbackWaits: [1_000],
+    topologySnapshot: 2,
+    publicReadbackCount: 0,
+  });
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "activate",
+    candidateVersionId: CODE_DEPLOYED_ID,
+  });
+});
+
+test("routine code reports incomplete when the exact predecessor stays visible", async () => {
+  const result = await exerciseCodeLane({
+    postActivationVersions: Array<string>(17).fill(CODE_PREDECESSOR_ID),
+  });
+  expect(((result.error as Error).cause as Error).message).toBe(
+    "platform_worker_release_predecessor_unchanged",
+  );
+  expect(result).toMatchObject({
+    uploadCount: 1,
+    activationCount: 1,
+    postActivationReadCount: 16,
+    topologySnapshot: 2,
+    publicReadbackCount: 0,
+  });
+  expect(result.readbackWaits.reduce((elapsed, delay) => elapsed + delay, 0)).toBe(180_000);
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "activate",
+    candidateVersionId: CODE_DEPLOYED_ID,
+    predecessorVersionId: CODE_PREDECESSOR_ID,
+  });
+  expect(result.results[0]).not.toHaveProperty("observedServingVersionId");
+});
+
+test("routine resume refuses a mismatched identity or unhealthy predecessor without any mutation", async () => {
+  for (const [resume, message] of [
+    ["wrong-tag", "platform_worker_release_version_identity_invalid"],
+    ["wrong-digest", "platform_worker_release_version_identity_invalid"],
+    ["wrong-version", "platform_worker_release_version_identity_invalid"],
+    ["wrong-predecessor", "platform_worker_code_resume_predecessor_changed"],
+    ["already-serving", "platform_worker_code_resume_predecessor_changed"],
+    ["unhealthy", "platform_worker_release_container_not_ready"],
+    ["source-drift", "synthetic source pin drift"],
+  ] as const) {
+    const refused = await exerciseCodeLane({ resume });
+    expect(refused.error).toBeInstanceOf(Error);
+    expect((refused.error as Error).message).toBe(message);
+    expect(refused).toMatchObject({ uploadCount: 0, activationCount: 0 });
+  }
+  const drifted = await exerciseCodeLane({ resume: "valid", topologyDriftAt: 2 });
+  expect(drifted.error).toBeInstanceOf(Error);
+  expect(drifted).toMatchObject({ uploadCount: 0, activationCount: 0 });
+});
+
+test("routine resume is not a production or authority-transition action", async () => {
+  const args = [
+    "resume", "--config", "/private/config.toml", "--version", CODE_DEPLOYED_ID,
+    "--tag", `tks-stg-code-${"1".repeat(32)}`, "--predecessor", CODE_PREDECESSOR_ID,
+  ];
+  await expect(runPlatformWorkerCodeRelease(args, "production")).rejects.toThrow("platform_worker_code_action_invalid");
+  await expect(runPlatformWorkerLoginAdmissionRelease(args, "staging")).rejects.toThrow("platform_worker_code_action_invalid");
+  await expect(runPlatformWorkerCodeRelease(args.slice(0, -2))).rejects.toThrow("platform_worker_code_resume_arguments_invalid");
+});
+
 test("login admission dedicated transition adds only both ports, then normal code preserves them", async () => {
   for (const loginAdmission of ["transition", "normal"] as const) {
     const result = await exerciseCodeLane({ loginAdmission });
@@ -1081,6 +1336,51 @@ test("routine code never retries a lost acknowledgement", async () => {
   expect(lost.error).toBeInstanceOf(Error);
   expect((lost.error as Error).message).toBe("platform_worker_code_release_incomplete");
   expect(lost).toMatchObject({ uploadCount: 1, activationCount: 0 });
+  const [result] = lost.results;
+  expect(lost.results).toHaveLength(1);
+  expect(result).toMatchObject({ status: "incomplete", mutation: "upload" });
+  expect(result).not.toHaveProperty("candidateVersionId");
+  expect(result).not.toHaveProperty("observedServingVersionId");
+});
+
+test("incomplete staging code output retains the Version from the upload acknowledgement", async () => {
+  const result = await exerciseCodeLane({ uploadReadbackFails: true });
+  expect(result).toMatchObject({ uploadCount: 1, activationCount: 0 });
+  expect(result.results).toHaveLength(1);
+  expect(result.results[0]).toMatchObject({
+    kind: "takosumi.platform-worker-staging-code@v1",
+    status: "incomplete",
+    mutation: "upload",
+    predecessorVersionId: CODE_PREDECESSOR_ID,
+    candidateVersionId: CODE_DEPLOYED_ID,
+    entryDigest: platformExecutionEvidenceReleasePins(CODE_BUNDLE, STATUS_CONTAINER_IMAGE).controllerArtifactDigest,
+    dashboardDigest: `sha256:${"d".repeat(64)}`,
+    releaseTag: `tks-stg-code-${"1".repeat(32)}`,
+  });
+  expect(result.results[0]).not.toHaveProperty("observedServingVersionId");
+  expect(result.results[0]).not.toHaveProperty("authorityDrift");
+});
+
+test("incomplete resume reports observed serving Version and drift sections after activation", async () => {
+  const options = { resume: "valid", topologyDriftAt: 3, containerFailsAfterActivation: true } as const;
+  const result = await exerciseCodeLane(options);
+  expect(result).toMatchObject({ uploadCount: 0, activationCount: 1 });
+  expect(result.results).toHaveLength(1);
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "activate",
+    candidateVersionId: CODE_DEPLOYED_ID,
+    observedServingVersionId: CODE_DEPLOYED_ID,
+    authorityDrift: ["container", "topology"],
+  });
+  expect(((result.error as Error).cause as Error).message).toBe("platform_worker_code_authority_drift");
+  const before = await exerciseCodeLane({ ...options, topologyDriftAt: 2 });
+  expect(before).toMatchObject({ results: [], uploadCount: 0, activationCount: 0 });
+  const lost = await exerciseCodeLane({ resume: "valid", activationFails: true });
+  expect(lost).toMatchObject({ uploadCount: 0, activationCount: 1 });
+  expect(lost.results).toHaveLength(1);
+  expect(lost.results[0]).toMatchObject({ status: "incomplete", candidateVersionId: CODE_DEPLOYED_ID });
+  expect(lost.results[0]).not.toHaveProperty("observedServingVersionId");
 });
 
 test("platform release owns isolated staging and production targets", () => {
@@ -2284,18 +2584,136 @@ test("platform container readback retries a transient list/detail mismatch", asy
 });
 
 test("platform container readback fails closed after persistent list/detail mismatch", async () => {
+  for (const predecessor of [undefined, reviewedRunnerPredecessor]) {
+    let reads = 0;
+    await expect(
+      waitForPlatformContainerReadback(
+        reviewedRunnerPredecessor.image,
+        async () => {
+          reads += 1;
+          throw new Error("platform_worker_release_container_list_detail_mismatch");
+        },
+        async () => {},
+        predecessor,
+      ),
+    ).rejects.toThrow("platform_worker_release_container_list_detail_mismatch");
+    expect(reads).toBe(36);
+  }
+});
+
+const reviewedRunnerPredecessor = {
+  id: "application",
+  name: "takosumi-staging-opentofurunnerobject",
+  state: "ready",
+  image: `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`,
+  version: 85,
+  hasActiveRollout: false,
+  health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+} as const;
+const reviewedRunnerTarget = {
+  ...reviewedRunnerPredecessor,
+  image: `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`,
+  version: 86,
+} as const;
+
+test("reviewed Runner image change can complete after the original read limit", async () => {
   let reads = 0;
-  await expect(
-    waitForPlatformContainerReadback(
-      `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`,
+  const waits: number[] = [];
+  const result = await waitForPlatformContainerReadback(
+    reviewedRunnerTarget.image,
+    async () => {
+      reads += 1;
+      if (reads <= 36) {
+        return { ...reviewedRunnerPredecessor, hasActiveRollout: true };
+      }
+      if (reads === 37) {
+        return { ...reviewedRunnerTarget, hasActiveRollout: true };
+      }
+      return reviewedRunnerTarget;
+    },
+    async (milliseconds) => { waits.push(milliseconds); },
+    reviewedRunnerPredecessor,
+  );
+  expect(result).toEqual(reviewedRunnerTarget);
+  expect(reads).toBe(38);
+  expect(waits.slice(0, 35)).toEqual(Array<number>(35).fill(5_000));
+  expect(waits.slice(35)).toEqual([15_000, 15_000]);
+});
+
+test("reviewed Runner image change cannot wait indefinitely on a stale predecessor", async () => {
+  let reads = 0;
+  const waits: number[] = [];
+  await expect(waitForPlatformContainerReadback(
+    reviewedRunnerTarget.image,
+    async () => { reads += 1; return reviewedRunnerPredecessor; },
+    async (milliseconds) => { waits.push(milliseconds); },
+    reviewedRunnerPredecessor,
+  )).rejects.toThrow("platform_worker_release_container_not_ready");
+  expect(reads).toBe(89);
+  expect(waits.reduce((sum, delay) => sum + delay, 0)).toBe(960_000);
+});
+
+test("reviewed Runner image change refuses a different application or reported failure", async () => {
+  for (const [state, diagnostic] of [
+    [{ ...reviewedRunnerTarget, id: "recreated" }, "platform_worker_release_container_rollout_mismatch"],
+    [{ ...reviewedRunnerTarget, image: reviewedRunnerTarget.image.replace(/c{64}$/u, "d".repeat(64)) },
+      "platform_worker_release_container_rollout_mismatch"],
+    [{ ...reviewedRunnerTarget, health: { ...reviewedRunnerTarget.health, failed: 1 } },
+      "platform_worker_release_container_rollout_failed"],
+  ] as const) {
+    let reads = 0;
+    let waits = 0;
+    await expect(waitForPlatformContainerReadback(
+      reviewedRunnerTarget.image,
+      async () => { reads += 1; return state; },
+      async () => { waits += 1; },
+      reviewedRunnerPredecessor,
+    )).rejects.toThrow(diagnostic);
+    expect(reads).toBe(1);
+    expect(waits).toBe(0);
+  }
+});
+
+test("forward preflight rechecks temporary Runner startup before the sole upload", async () => {
+  for (const phase of ["starting", "scheduling"] as const) {
+    const events: string[] = [];
+    const predecessor = reviewedRunnerPredecessor;
+    await expect(withPlatformForwardContainerPreflight(
+      predecessor,
       async () => {
-        reads += 1;
-        throw new Error("platform_worker_release_container_list_detail_mismatch");
+        events.push("container");
+        return events.length === 1
+          ? { ...predecessor, health: { ...predecessor.health, [phase]: 1 } }
+          : predecessor;
       },
-      async () => {},
-    ),
-  ).rejects.toThrow("platform_worker_release_container_list_detail_mismatch");
-  expect(reads).toBe(36);
+      async () => { events.push("upload"); return CODE_DEPLOYED_ID; },
+      async () => { events.push("refresh-worker-and-custody"); },
+    )).resolves.toBe(CODE_DEPLOYED_ID);
+    expect(events).toEqual(["container", "refresh-worker-and-custody", "container", "upload"]);
+  }
+});
+
+test("forward preflight bounds startup retries and stops on further drift", async () => {
+  const predecessor = reviewedRunnerPredecessor;
+  const pending = { ...predecessor, health: { ...predecessor.health, scheduling: 1 } };
+  for (const [current, expectedReads] of [
+    [pending, 4],
+    [{ ...pending, version: predecessor.version + 1 }, 1],
+    [{ ...pending, health: { ...pending.health, failed: 1 } }, 1],
+  ] as const) {
+    let reads = 0;
+    let refreshes = 0;
+    let uploads = 0;
+    await expect(withPlatformForwardContainerPreflight(
+      predecessor,
+      async () => { reads++; return current; },
+      async () => { uploads++; },
+      async () => { refreshes++; },
+    )).rejects.toThrow("platform_worker_release_predecessor_container_drift");
+    expect({ reads, refreshes, uploads }).toEqual({
+      reads: expectedReads, refreshes: expectedReads - 1, uploads: 0,
+    });
+  }
 });
 
 type LinkedRolloutFixtureOptions = {

@@ -343,18 +343,27 @@ token / password / private key などは、ProviderConnection の write-only な
 
 provider cache / mirror があれば `tofu init` はそれを利用し、なければ通常の
 OpenTofu registry 経路を利用します。mirror を必須にする場合は operator policy
-として明示します。
+として明示します。この設定は資格情報を使わない互換性チェックにも適用されます。
+設定を理解できないRunnerは、providerの取得前にチェックを停止します。
 
 Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `/v1` は公開 API
 ではなく、既知の旧 path は 404 で fail closed します。OIDC/OAuth、well-known、
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 114 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
+次の 115 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
 
 ### アプリの所有と個人の接続・使用量
 
-`GET /api/v1/apps?cursor&limit` は、自分が所有または管理するアプリを、現在の `role`・所有者の表示名・状態・主な操作とともに返します。アプリを使うだけの人には管理権限を付与しません。
+`GET /api/v1/apps?cursor&limit&q` は、自分が所有または管理するアプリを、現在の `role`・所有者の表示名・状態・主な操作とともに返します。`applied` はデプロイの状態が保存されたかを示します。アプリを使うだけの人には管理権限を付与しません。
+
+任意の `q` は前後の空白を除き小文字にして、アプリの `name`、日本語・英語の表示名、共有アプリの所有者表示名に部分一致させます。上限は200文字で、制御文字は受け付けません。指定時は適用した語を `appliedQuery` に返します。このfieldがない旧サーバーでは、クライアントが通常の各ページを検索します。
+
+1回に調べる認可済み候補は `limit` 件（既定50、最大100）までです。設定は一括で読み、一致したアプリだけ状態・画面を投影します。空の `apps` や `limit` 未満でも `nextCursor` があれば続きがあるため、検索完了とは扱いません。cursorは検索語とアカウント・資格情報の種類・Workspace/appIdsのscopeに束縛され、条件を変えたら先頭から読み直します。検索用表示名を取得できない場合は503となり、空の成功結果にはしません。ホームも全ページが成功するまで「一致なし」を表示しません。
+
+一覧には認可済みの `screens` と、補助情報を読めなかった場合の `incomplete` も含まれます。ホームはこの一覧だけで起動でき、アプリごとの詳細取得を重ねません。状態と主な操作は詳細画面と共通の判定です。ソース・バージョン履歴・連携先の表示情報はアプリ詳細で取得します。ページ内の設定は一括で読み、接続・画面生成の障害一覧は同じリクエスト内で共有します。
+
+ホームは起動・稼働状態を表示します。更新可否はバージョン履歴を調べるアプリ詳細画面で確認し、一覧に履歴走査を持ち込みません。
 
 | メソッド | パス | 権限と入力 |
 | --- | --- | --- |
@@ -558,6 +567,7 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | GET      | `/api/v1/projects/{projectId}`                             | Project を読む                               |
 | GET      | `/api/v1/workspaces/{workspaceId}/capsules`                | Capsule を一覧する                           |
 | GET      | `/api/v1/capsules/{capsuleId}`                             | Capsule を読む                               |
+| GET      | `/api/v1/capsules/{capsuleId}/install-config-re-adoption-context?revisionPlanId={id}` | 既存の対象 revision に束縛した再採用入力を読む |
 | POST     | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | SourceSnapshot の InstallConfig を再採用する |
 | PATCH    | `/api/v1/capsules/{capsuleId}`                             | Capsule を更新する                           |
 | DELETE   | `/api/v1/capsules/{capsuleId}`                             | 削除を予約する（即時破棄計画は `?immediate=true`） |
@@ -607,7 +617,17 @@ destroy-plan が bridge になります。猶予なしで破棄したい client 
 所有者が計画を取り消した、または破棄が provider に届く前に拒否・失敗した場合は
 `uninstall.blockedReason` を残して止まり、所有者が取り消すか即時削除を選びます。
 provider に届いた破棄が失敗した場合は、通常の破棄失敗と同じく `error` になります。
-`destroy-plan` は猶予なしの破棄計画を作ります。
+`destroy-plan` は猶予なしの破棄計画を作ります。アプリ所有者は
+`{"destroyProviderConnectionReplacements":[{"connectionId":"old-id","replacementConnectionId":"new-id"}]}`
+で、クラウドアカウントと適用済みの接続設定が一致する確認済み接続を選び直せます。
+破棄が一部進んで state が保存されていれば、
+指定を省いた割当では、その state を作った破棄 Plan で使用した代替接続を維持します。
+新しい Plan の承認と Apply が必要です。
+接続が適用済みのアカウントと設定に一致すると確認できない場合は `409 failed_precondition` と
+`details.reason: "destroy_connection_recovery_unproven"` を返します。
+判別できたときだけ `details.connectionRecoveryFailure` に
+`replacement_unverified`、`bindings_mismatch`、`applied_evidence_unavailable`
+のいずれかが入ります。`bindings_mismatch` は接続設定全体の不一致です。
 
 `GET /api/v1/capsules/{capsuleId}/app` は、インストール済みのアプリを1つの見え方として
 返します。状態 (`state`) と主操作 (`primaryAction`) は control plane が Capsule、
@@ -653,9 +673,10 @@ link は雛形の `{origin}` と `{url}` にその画面の URL を入れた後�
 `POST /api/v1/install-plans/{installPlanId}/reconcile` でその試みを進めます。管理の権限を記録する前に
 書かれた試みは進められないため、名前は返しません。試みが作った人の入力を待っている間は
 `progress.installPlanAwaitingInput` が `viewer`（呼び出した本人が始めた）か `other` になり、
-その間は reconcile しても進みません。版の更新処理が計画の Run を作らないまま止まった場合は
-`progress.revisionPlanId` に名前が入り、`POST /api/v1/revision-plans/{revisionPlanId}/reconcile`
-で続けられます。版の更新処理は、始めたときの状態の世代と InstallConfig がいまの Capsule と同じ間だけ
+その間は reconcile しても進みません。版の更新処理が計画の Run を作る前は、開始した本人に
+`progress.revisionPlanId` を返します。準備が止まった場合は、アプリを読める他の利用者にも返します。
+アプリを更新できる利用者は `POST /api/v1/revision-plans/{revisionPlanId}/reconcile` で同じ処理を続けられます。
+版の更新処理は、始めたときの状態の世代と InstallConfig がいまの Capsule と同じ間だけ
 数えます。その後にほかの変更が適用された処理や、設定の変更で InstallConfig が付け替わった処理
 （世代は変わりません）は reconcile しても失敗するだけなので、準備中にも
 `revisionPlanId` にもなりません。Workspace のメンバーなら誰でもこれらを reconcile できますが、作られる計画の Run の
@@ -994,6 +1015,23 @@ StateVersion が参照する Plan Run の SourceSnapshot が Capsule の追跡�
 初回 apply 前はこの field はありません。
 
 ### Capsule InstallConfig の再採用
+
+`GET /api/v1/capsules/{capsuleId}/install-config-re-adoption-context?revisionPlanId={id}`
+は `change_settings` と既存の delegate-owner 条件で認可した read-only endpoint です。
+既存 revision の exact SourceSnapshot/module/ref/commit と現在の config/state に束縛し、
+`installConfigReAdoptionContext` に既存 opaque `authorityGuard`、base InstallConfig ID、
+non-secret な `source.kind=user` の宣言だけを返します。Run、scan、preview config は作りません。
+各 `currentValue` は `present`（安全に提示できる `value` 付き）、`unset`、`unavailable` を
+区別します。`unavailable` を空値や unset として送信せず、`blockedReason` があれば入力を
+確定しません。POST の `reviewedUserVariables` は完全置換であり、維持する optional 値も
+明示的に含めます。対象または現在の authority が変われば 409 で再読を要求します。
+
+`AppView.latestRun.revisionPlanId` は、現在の failed revision Plan と保存済み coordinator が
+一意に対応する場合だけの value-free locator です。認可や再採用の authority ではありません。
+従来の `progress.revisionPlanId`（Plan 作成前の準備停止）とは別です。再採用済みなら旧 hint は
+消え、既存 Run の `origin.kind=revision/ref` から正規 revision 再計画へ戻れます。
+新 Plan の snapshot/config/state/ref を選択済み context と照合してから review し、同じ branch
+が別 commit へ進んだ場合は古い回答のまま review/apply しません。
 
 `GET /api/v1/capsules/{capsuleId}` は、認証済み caller が読める opaque
 `installConfigReAdoption.authorityGuard` を返します。これは private な

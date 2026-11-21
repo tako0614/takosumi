@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
+import { userActionFor } from "../../../../accounts/service/src/control/install-attempt-facts.ts";
 import { handleAuthenticatedControlRoute } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { defaultCapsuleInstallConfig } from "../../../../core/domains/capsules/default_install_config.ts";
@@ -639,7 +640,7 @@ test.each(["plan", "attempt"] as const)(
       ...(mode === "attempt" ? { mode: "attempt" } : {}),
       source: canonical.source, capsule: canonical.capsule, options: canonical.options,
     };
-    expect(canonical.requestDigest).toBe(await stableJsonDigest(input));
+    expect(canonical.requestDigest).toBe(await stableJsonDigest(mode === "attempt" ? ["git-install-attempt/v2", input] : input));
     const key = "historical-relative-spelling";
     const source = { ...canonical.source, path: "./deploy/app" };
     const historical = {
@@ -2213,6 +2214,49 @@ test("workspace-less install keeps the requester's canonical personal owner for 
   ]);
 });
 
+test("an install uses the present owner's verified personal connection, including when paged", async () => {
+  const fixture = attemptFixture({
+    compatibilityRootModuleVariableDeclarations: [],
+    providerConnections: [],
+  });
+  const personal: ProviderConnection = {
+    ...providerConnection(CLOUDFLARE, "conn_personal"),
+    scope: "personal", workspaceId: undefined, displayName: "My Cloudflare",
+  };
+  const foreign = { ...personal, id: "conn_foreign", ownerAccountId: ADMIN_SUBJECT };
+  const pending: ProviderConnection = { ...personal, id: "conn_pending", status: "pending" };
+  fixture.operations.accountResources = {
+    listConnections: async (owner, page) => {
+      expect(owner).toBe(WORKSPACE.ownerUserId);
+      return page.cursor ? { items: [personal] } : { items: [foreign, pending], nextCursor: "page-two" };
+    },
+    listUsage: async () => ({ items: [] }),
+  };
+  const getConnection = fixture.operations.getConnection;
+  fixture.operations.getConnection = async (id) => id === personal.id ? personal : await getConnection(id);
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction.connections[0]).toMatchObject({
+    candidates: [{ id: personal.id, displayName: "My Cloudflare", scope: "personal" }],
+    selectedConnectionId: personal.id,
+    autoSelected: true,
+  });
+  expect(paused.userAction.connections[0].candidates).toHaveLength(1);
+  const restricted = await fixture.requestRaw(
+    `/api/v1/install-plans/${planId}`, "GET", undefined, {},
+    WORKSPACE.ownerUserId, WORKSPACE.id,
+  );
+  expect(restricted.status).toBe(200);
+  expect((await restricted.json()).userAction.connections[0].candidates).toEqual([]);
+
+  const result = await answer(fixture, planId, { expectedGeneration: paused.installPlan.generation, continue: true });
+  expect(result.status).toBe(200);
+  expect((await result.json()).installPlan.phase).toBe("planning");
+  expect(fixture.getProviderBindingSet(fixture.capsules[0]!.id, "production")?.bindings).toEqual([
+    { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: personal.id },
+  ]);
+});
+
 test("install attempts offer only the installer's Workspace connections (TASK-0118 P9.1-c)", async () => {
   const adminsConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_admin"), ownerAccountId: ADMIN_SUBJECT };
   const legacyConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_legacy") } as ProviderConnection & { ownerAccountId?: string };
@@ -2220,6 +2264,12 @@ test("install attempts offer only the installer's Workspace connections (TASK-01
   const fixture = attemptFixture({
     providerConnections: [providerConnection(CLOUDFLARE, "conn_cloudflare01"), adminsConnection, legacyConnection],
   });
+  fixture.operations.accountResources = {
+    listConnections: async (owner) => ({ items: owner === ADMIN_SUBJECT ? [{
+      ...adminsConnection, id: "conn_admin_personal", scope: "personal", workspaceId: undefined,
+    }] : [] }),
+    listUsage: async () => ({ items: [] }),
+  };
   // The Workspace owner installs: only its own connection is offered. The
   // admin's row is not, nor a legacy row without a recorded owner, which
   // binding would refuse.
@@ -2235,15 +2285,50 @@ test("install attempts offer only the installer's Workspace connections (TASK-01
     .toEqual(["conn_cloudflare_admin"]);
 });
 
+test("Git install assigns a new UUID once per new attempt and preserves historical defaults on replay", async () => {
+  const fixture = attemptFixture();
+  const endpoint = "/api/v1/workspaces/ws_install/install-plans";
+  const create = (body: unknown, key: string) => fixture.request(endpoint, "POST", body, { "idempotency-key": key });
+  const source = attemptBody();
+  const firstId = await startAttempt(fixture, source, "first-copy");
+  const secondId = await startAttempt(fixture, source, "second-copy");
+  const first = (await fixture.planStore.get(firstId))!;
+  const second = (await fixture.planStore.get(secondId))!;
+  expect(second.capsule.name).not.toBe(first.capsule.name);
+  expect(second.source.name).toBe(first.source.name);
+  const replay = await create(source, "first-copy");
+  expect(replay.status).toBe(200);
+  expect((await replay.json()).installPlan).toMatchObject({ id: firstId, capsule: first.capsule });
+  expect((await create(attemptBody({ capsuleName: "example" }), "first-copy")).status).toBe(409);
+
+  // An old record hashed the normalized repository-derived name, including
+  // when the caller omitted it. Keep both the original id and original name.
+  const legacyId = "gip_1234567890abcdef";
+  const legacyCapsule = { name: "example", environment: "production" };
+  const legacySource = { ...first.source, path: "./" };
+  expect((await fixture.planStore.create({
+    ...first, id: legacyId, source: legacySource, capsule: legacyCapsule,
+    idempotencyKeyHash: await stableJsonDigest("old-default"),
+    requestDigest: await stableJsonDigest({ mode: "attempt", source: legacySource, capsule: legacyCapsule, options: first.options }),
+  }, first.workspaceManagementAuthority)).status).toBe("created");
+  const legacyReplay = await create(source, "old-default");
+  expect(legacyReplay.status).toBe(200);
+  expect((await legacyReplay.json()).installPlan).toMatchObject({ id: legacyId, capsule: legacyCapsule });
+  await startAttempt(fixture, attemptBody({ capsuleName: "example" }), "explicit-name");
+  expect((await create(source, "explicit-name")).status).toBe(409);
+});
+
 test("install attempt pauses once for the whole sheet, auto-selects the only connection, and continues with transient values", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);
   const started = await readPlan(fixture, planId);
+  const generatedName = started.installPlan.capsule.name;
+  expect(generatedName).toMatch(/^app-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
   expect(started).toMatchObject({
     installPlan: {
       mode: "attempt",
       phase: "syncing_source",
-      capsule: { name: "example", environment: "production" },
+      capsule: { name: generatedName, environment: "production" },
       source: { name: "example", ref: "main", path: "." },
     },
     nextAction: "reconcile",
@@ -2286,7 +2371,7 @@ test("install attempt pauses once for the whole sheet, auto-selects the only con
     variables: [
       { name: "region", type: "string", required: true, sensitive: true },
     ],
-    name: { current: "example", proposed: "example", conflict: false },
+    name: { current: generatedName, proposed: generatedName, conflict: false },
     missing: [],
   });
   // Nothing was created in the cloud ledger yet.
@@ -3254,6 +3339,22 @@ test("discard before any Capsule exists skips Interface revocation", async () =>
   expect(fixture.counts.capsule).toBe(0);
 });
 
+test("a confirming exact provider binding rejects a changed sole automatic candidate", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction.connections[0]).toMatchObject({ selectedConnectionId: "conn_cloudflare01", autoSelected: true });
+  fixture.operations.connections.listProviderConnections = async () => [providerConnection(CLOUDFLARE, "conn_cloudflare02")];
+  const response = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation, continue: true,
+    variables: { region: "https://example.previous-account.workers.dev" },
+    providerBindings: [{ provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_cloudflare01" }],
+  });
+  expect(response.status).toBe(409);
+  expect(fixture.counts.capsule).toBe(0);
+  expect((await fixture.planStore.get(planId))!.options.providerBindings).toBeUndefined();
+});
+
 test("install attempt asks for connections when no single candidate exists and validates answers", async () => {
   const fixture = attemptFixture({
     providerConnections: [
@@ -3261,7 +3362,7 @@ test("install attempt asks for connections when no single candidate exists and v
       providerConnection(CLOUDFLARE, "conn_cloudflare02"),
     ],
   });
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const paused = await reconcileUntilIdle(fixture, planId);
   expect(paused.userAction).toMatchObject({
     kind: "provide_inputs",
@@ -3331,9 +3432,10 @@ test("install attempt asks for connections when no single candidate exists and v
   });
   const conflicted = await readPlan(fixture, planId);
   expect(conflicted.userAction).toMatchObject({
-    name: { current: "example", proposed: "example-2", conflict: true },
+    name: { current: "example", proposed: expect.stringMatching(/^app-[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u), conflict: true },
     missing: ["name"],
   });
+  expect((await readPlan(fixture, planId)).userAction.name).toEqual(conflicted.userAction.name);
   const refused = await answer(fixture, planId, {
     expectedGeneration: chosenPayload.installPlan.generation,
     continue: true,
@@ -3412,6 +3514,112 @@ test("install attempt asks to choose among scanned modules and restarts analysis
   expect(analyzed.userAction).toMatchObject({ kind: "provide_inputs", modulePath: "apps/b" });
 });
 
+test("install attempt JSON projects manifest input editability without changing stored facts", async () => {
+  const base = repositoryManifest(["."]);
+  if (base.status !== "present") throw new Error("expected manifest fixture");
+  const fixture = attemptFixture({
+    repositoryManifest: { ...base, document: { ...base.document, install: {
+      modules: { ".": { inputs: [
+        { name: "managed_name", type: "string", source: { kind: "capsule_name" }, label: { en: "Managed" } },
+        { name: "user_setting", type: "string", source: { kind: "user" }, required: true, label: { en: "User" } },
+      ] } },
+    } } },
+    providerConnections: [], compatibilityResources: [], compatibilityRootProviderRequirements: [],
+    compatibilityRootModuleVariableDeclarations: [
+      { name: "managed_name", type: "string", hasDefault: true },
+      { name: "user_setting", type: "string", hasDefault: false },
+    ],
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction.kind).toBe("provide_inputs");
+  const stored = (await fixture.planStore.get(planId))!;
+  const captured = JSON.stringify(stored.attemptFacts);
+  expect(stored.attemptFacts?.inputs?.variables.every(x => x.userEditable === undefined)).toBe(true);
+  const response = await fixture.request(`/api/v1/install-plans/${planId}`);
+  expect(response.status).toBe(200);
+  const payload = await response.json();
+  expect(payload.userAction.variables).toEqual([
+    expect.objectContaining({ name: "managed_name", userEditable: false, derivedDefault: "capsule_name" }),
+    expect.objectContaining({ name: "user_setting", userEditable: true, required: true }),
+  ]);
+  expect(payload.installPlan.attemptFacts).toBeUndefined();
+  expect(JSON.stringify((await fixture.planStore.get(planId))?.attemptFacts)).toBe(captured);
+  const snapshot = await fixture.operations.getSourceSnapshot(stored.sourceSnapshotId!);
+  const readSnapshot = fixture.operations.getSourceSnapshot;
+  fixture.operations.getSourceSnapshot = async () => {
+    throw new OpenTofuControllerError("not_found", "missing snapshot fixture");
+  };
+  const missingSnapshot = await fixture.request(`/api/v1/install-plans/${planId}`);
+  expect(missingSnapshot.status).toBe(200);
+  expect((await missingSnapshot.json()).userAction.variables.every((x: { userEditable?: boolean }) => x.userEditable === undefined)).toBe(true);
+  fixture.operations.getSourceSnapshot = async () => { throw new Error("fixture snapshot read unavailable"); };
+  await expect(userActionFor(fixture.operations, stored)).rejects.toThrow("fixture snapshot read unavailable");
+  fixture.operations.getSourceSnapshot = readSnapshot;
+  for (const wrongSnapshot of [
+    { ...snapshot, id: "snapshot_other" },
+    { ...snapshot, sourceId: "source_other" },
+    { ...snapshot, workspaceId: "workspace_other" },
+    { ...snapshot, repositoryManifest: { status: "absent" as const } },
+  ]) {
+    const projected = await userActionFor({ ...fixture.operations, getSourceSnapshot: async () => wrongSnapshot }, stored);
+    expect(projected.kind).toBe("provide_inputs");
+    if (projected.kind !== "provide_inputs") throw new Error("expected inputs");
+    expect(projected.variables.every(x => x.userEditable === undefined)).toBe(true);
+    expect(projected.variables[0]?.derivedDefault).toBe("capsule_name");
+  }
+  for (const legacy of [
+    { ...stored, sourceSnapshotId: undefined },
+    { ...stored, installModulePath: "other" },
+  ]) {
+    const projected = await userActionFor(fixture.operations, legacy);
+    expect(projected.kind).toBe("provide_inputs");
+    if (projected.kind !== "provide_inputs") throw new Error("expected inputs");
+    expect(projected.variables.every(x => x.userEditable === undefined)).toBe(true);
+  }
+  expect(JSON.stringify(stored.attemptFacts)).toBe(captured);
+});
+
+test("public URL presentation uses accepted endpoint roles and exact compiler names without persisting proposed values", async () => {
+  const base = repositoryManifest(["."]);
+  if (base.status !== "present") throw new Error("expected manifest fixture");
+  for (const source of ["capsule_name", "workspace_scoped_capsule_name"] as const) {
+    const fixture = attemptFixture({
+      repositoryManifest: { ...base, document: { ...base.document, install: { modules: { ".": {
+        inputs: [
+          { name: "service_identifier", type: "string", source: { kind: source }, role: "service_name", label: { en: "Name" } },
+          { name: "visible_address", type: "string", source: { kind: "user" }, format: "cloudflare-workers-url", required: true, label: { en: "URL" } },
+        ], requires: [{ kind: "http.endpoint", deliver: { variables: { url: "visible_address" } } }],
+      } } } } },
+      providerConnections: [], compatibilityResources: [], compatibilityRootProviderRequirements: [],
+      compatibilityRootModuleVariableDeclarations: [
+        { name: "service_identifier", type: "string", hasDefault: true },
+        { name: "visible_address", type: "string", hasDefault: false },
+      ],
+    });
+    const appName = "a".repeat(60);
+    const id = await startAttempt(fixture, attemptBody({ capsuleName: appName }));
+    const paused = await reconcileUntilIdle(fixture, id);
+    expect(paused.userAction).toMatchObject({ kind: "provide_inputs" });
+    const expected = "a".repeat(48) + (source === "workspace_scoped_capsule_name" ? "-ws-ins" : "");
+    expect(paused.userAction.variables.find((entry: { name: string }) => entry.name === "visible_address")).toMatchObject({
+      format: "cloudflare-workers-url", userEditable: true,
+      publicEndpoint: { serviceNameVariable: "service_identifier", serviceNameSource: source, suggestedName: expected },
+    });
+    const stored = (await fixture.planStore.get(id))!;
+    expect(JSON.stringify(stored.attemptFacts)).not.toContain("suggestedName");
+    const missing = await userActionFor({ ...fixture.operations, getSourceSnapshot: async () => {
+      throw new OpenTofuControllerError("not_found", "missing fixture snapshot");
+    } }, stored);
+    if (missing.kind !== "provide_inputs") throw new Error("expected inputs");
+    expect(missing.variables.every((entry) => entry.publicEndpoint === undefined)).toBe(true);
+    const renamed = await answer(fixture, id, { expectedGeneration: paused.installPlan.generation, capsuleName: "renamed" });
+    expect(renamed.status).toBe(200);
+    expect((await renamed.json()).userAction.variables.find((entry: { name: string }) => entry.name === "visible_address").publicEndpoint.suggestedName)
+      .toBe("renamed" + (source === "workspace_scoped_capsule_name" ? "-ws-ins" : ""));
+  }
+});
+
 test("install attempt with a repository manifest pauses after manifest analysis and creates from the reviewed preview", async () => {
   const fixture = attemptFixture({
     repositoryManifest: repositoryManifest(["."]),
@@ -3488,7 +3696,7 @@ async function reachReviewable(
 
 test("GET and open listing reconstruct a committed attempt review without Plan or Apply", async () => {
   const fixture = attemptFixture();
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const reviewable = await reachReviewable(fixture, planId);
   const before = fixture.mutationCount();
   const generation = reviewable.installPlan.generation;
@@ -3589,7 +3797,7 @@ for (const failure of ["config", "base", "bindings", "connections", "interface"]
   test(`committed review omits only unavailable ${failure} data when a supporting read fails`, async () => {
     const fixture = interfaceAttemptFixture();
     const selected = addInterfaceProvider(fixture, "named");
-    const planId = await startAttempt(fixture);
+    const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
     const reviewable = await reachReviewable(fixture, planId);
     const getConfig = fixture.operations.capsules.getInstallConfig;
     fixture.operations.interfaces!.get = async () => selected;
@@ -3643,7 +3851,7 @@ test("GET reopens a committed public repository setting from the exact reviewed 
       { name: "public_url", type: "string", hasDefault: false },
     ],
   });
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const paused = await reconcileUntilIdle(fixture, planId);
   expect(paused.userAction).toMatchObject({
     kind: "provide_inputs",
@@ -3862,7 +4070,7 @@ test("installing the same Git address creates a distinct Source per app", async 
 
 test("reads never settle an expired or epoch-changed attempt; only the creator's write discards it", async () => {
   const fixture = attemptFixture();
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const adminPlanId = await startAttempt(
     fixture,
     attemptBody({ capsuleName: "admin-app" }),
@@ -3960,7 +4168,7 @@ test("an attempt with a Capsule never expires", async () => {
 
 test("an idle attempt does not block Workspace management; after a drain reads only report it and the creator's answer discards it", async () => {
   const fixture = attemptFixture();
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   // An attempt with coordinator work pending is still a blocker.
   expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(true);
   const paused = await reconcileUntilIdle(fixture, planId);
@@ -4000,7 +4208,7 @@ test("the store admission fence refuses answers after an epoch change even when 
     { continue: true, variables: { region: "eu" } },
   ]) {
     const fixture = attemptFixture({ staleManagementCapture: true });
-    const planId = await startAttempt(fixture);
+    const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
     const paused = await reconcileUntilIdle(fixture, planId);
     expect(paused.installPlan.phase).toBe("awaiting_input");
     await fixture.beginDrain();
@@ -4027,7 +4235,7 @@ test("the store admission fence refuses answers after an epoch change even when 
 
 test("a confirming request whose creation acknowledgement is lost accepts only the same values and adopts the committed Capsule", async () => {
   const fixture = attemptFixture({ loseAckOnce: ["capsule"] });
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const paused = await reconcileUntilIdle(fixture, planId);
   const lost = await answer(fixture, planId, {
     expectedGeneration: paused.installPlan.generation,
@@ -4361,7 +4569,7 @@ test("a started creation without variables is still protected and adopted after 
     loseAckOnce: ["capsule"],
     compatibilityRootModuleVariableDeclarations: [],
   });
-  const planId = await startAttempt(fixture);
+  const planId = await startAttempt(fixture, attemptBody({ capsuleName: "example" }));
   const paused = await reconcileUntilIdle(fixture, planId);
   expect(paused.userAction.variables).toEqual([]);
   const lost = await answer(fixture, planId, {
@@ -5545,6 +5753,7 @@ function installFixture(
     body?: BodyInit,
     headers: Readonly<Record<string, string>> = {},
     subject = WORKSPACE.ownerUserId,
+    workspaceId?: string,
   ): Promise<Response> {
     const url = new URL(`https://app.example.test${path}`);
     const response = await handleAuthenticatedControlRoute({
@@ -5557,6 +5766,7 @@ function installFixture(
       store: accountsStore,
       operations,
       subject,
+      ...(workspaceId === undefined ? {} : { workspaceId }),
     });
     if (!response) throw new Error("control route did not dispatch");
     return response;

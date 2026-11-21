@@ -17,10 +17,12 @@ import { randomUUID } from "node:crypto";
 import type {
   ProviderBinding,
   ProviderBindings,
+  DestroyProviderConnectionReplacement,
   ProviderConnectionMaterialization,
 } from "takosumi-contract/connections";
 import {
   canonicalRunCredentialSettings,
+  parseDestroyProviderConnectionReplacements,
   isWorkspaceBindableOperatorConnection,
 } from "takosumi-contract/connections";
 import {
@@ -357,7 +359,7 @@ export class ConnectionsService {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const bindings = await this.#validatedProviderBindings(capsule);
     const policy = await this.#policyForCapsule(capsule);
-    return await this.#resolveBindings(capsule, bindings, policy);
+    return await this.#resolveBindings(capsule, bindings, policy, "stored");
   }
 
   /**
@@ -453,6 +455,105 @@ export class ConnectionsService {
     );
   }
 
+  /** Resolve an explicit delete-only selection without mutating app bindings. */
+  async resolveProviderBindingsForDestroyRecovery(input: {
+    readonly capsule: Capsule;
+    readonly requiredProviders: readonly RequiredProviderBindingIdentity[];
+    readonly appliedDigest: string;
+    readonly replacements: readonly DestroyProviderConnectionReplacement[];
+    /** Replacement IDs used by the exact PlanRun that produced the current StateVersion. */
+    readonly appliedPlanRecovery?: {
+      readonly replacements: readonly DestroyProviderConnectionReplacement[];
+    };
+    readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+    readonly includeUnusedBindings?: boolean;
+  }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const refuse = (
+      connectionRecoveryFailure?: "replacement_unverified" | "bindings_mismatch",
+    ): never => {
+      const messages = {
+        replacement_unverified: "The selected connection does not have verified cloud account information.",
+        bindings_mismatch: "The current provider bindings do not match the applied account and settings.",
+      };
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        connectionRecoveryFailure
+          ? messages[connectionRecoveryFailure]
+          : "The selected connection does not prove the applied provider account scope.",
+        {
+          reason: "destroy_connection_recovery_unproven",
+          ...(connectionRecoveryFailure ? { connectionRecoveryFailure } : {}),
+        },
+      );
+    };
+    if (!/^sha256:[a-f0-9]{64}$/u.test(input.appliedDigest)) refuse();
+    let selection: readonly DestroyProviderConnectionReplacement[];
+    try { selection = parseDestroyProviderConnectionReplacements(input.replacements, { allowOriginalConnection: true }); }
+    catch { return refuse(); }
+    const replacements = new Map(selection.map(row => [row.connectionId, row.replacementConnectionId]));
+    let appliedPlanReplacements: readonly DestroyProviderConnectionReplacement[] = [];
+    if (input.appliedPlanRecovery !== undefined) {
+      try { appliedPlanReplacements = parseDestroyProviderConnectionReplacements(input.appliedPlanRecovery.replacements, { allowOriginalConnection: true }); }
+      catch { return refuse(); }
+    }
+    const appliedIdsByBinding = new Map(appliedPlanReplacements.map(row => [row.connectionId, row.replacementConnectionId]));
+    if (selection.some(({ connectionId, replacementConnectionId }) =>
+      connectionId === replacementConnectionId && !appliedIdsByBinding.has(connectionId))) refuse();
+    const bindings = await this.#validatedProviderBindings(input.capsule);
+    const originalBindingIds = new Set([
+      ...appliedPlanReplacements.map(({ connectionId }) => connectionId),
+      ...replacements.keys(),
+    ]);
+    for (const id of originalBindingIds) {
+      if (!bindings.some((binding) => binding.connectionId === id) ||
+        this.#operatorProviderConnections.has(id) ||
+        (await this.#store.getConnection(id))?.scope === "operator") refuse();
+    }
+    const policy = await this.#policyForCapsule(input.capsule);
+    const resolved = await Promise.all(bindings.map((binding) => {
+      const connectionId = replacements.get(binding.connectionId) ?? binding.connectionId;
+      const appliedId = appliedIdsByBinding.get(binding.connectionId);
+      const bindingOrigin = connectionId === binding.connectionId || connectionId === appliedId
+        ? "stored"
+        : "selected";
+      return this.#resolveBinding(input.capsule, { ...binding, connectionId }, policy, bindingOrigin);
+    }));
+    assertUniqueProviderBindingIdentities(resolved);
+    const selected = this.#selectResolvedProviderBindingsForRun(resolved, input.requiredProviders, false);
+    // Resolution preserves the input order, and selection returns the same
+    // objects. Keep each selected row tied to its own stored logical binding;
+    // target connection IDs can also appear on another, unchanged binding.
+    const bindingIdByResolved = new Map(resolved.map((entry, index) => [
+      entry,
+      bindings[index]!.connectionId,
+    ]));
+    const selectedReplacementBindings = new Set<string>();
+    for (const entry of selected) {
+      const bindingId = bindingIdByResolved.get(entry) ?? refuse();
+      const replacementId = replacements.get(bindingId);
+      if (replacementId === undefined) continue;
+      if (entry.connection.id !== replacementId) refuse();
+      selectedReplacementBindings.add(bindingId);
+      if (entry.connection.expiresAt !== undefined &&
+        (!Number.isFinite(Date.parse(entry.connection.expiresAt)) || Date.parse(entry.connection.expiresAt) <= Date.parse(this.#now()))) refuse();
+      if (entry.connection.scope === "operator") refuse();
+      if (!input.hasVerifiedAccountScope(entry.connection)) refuse("replacement_unverified");
+    }
+    if ([...replacements.keys()].some(id => !selectedReplacementBindings.has(id))) refuse();
+    // Compare against the exact connection IDs used by the PlanRun that made
+    // the current state. A prior recovery may have replaced the binding's
+    // stored logical ID without mutating the binding row. Only this comparison
+    // aliases those IDs; returned entries and mint retain the new replacement.
+    const comparison = selected.map(entry => {
+      const bindingId = bindingIdByResolved.get(entry);
+      if (bindingId === undefined) return refuse();
+      const appliedId = appliedIdsByBinding.get(bindingId) ?? bindingId;
+      return appliedId === entry.connection.id ? entry : { ...entry, connection: { ...entry.connection, id: appliedId } };
+    });
+    if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse("bindings_mismatch");
+    return input.includeUnusedBindings ? resolved : selected;
+  }
+
   async #resolveProviderBindingsForRun(
     capsule: Capsule,
     requiredProviders: readonly RequiredProviderBindingIdentity[],
@@ -477,9 +578,12 @@ export class ConnectionsService {
     capsule: Pick<Capsule, "workspaceId"> & Partial<Pick<Capsule, "id">>,
     bindings: ProviderBindings,
     policy: PolicyConfig | undefined,
+    bindingOrigin: "stored" | "selected" = "selected",
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const resolved = await Promise.all(
-      bindings.map((binding) => this.#resolveBinding(capsule, binding, policy)),
+      bindings.map((binding) =>
+        this.#resolveBinding(capsule, binding, policy, bindingOrigin),
+      ),
     );
     assertUniqueProviderBindingIdentities(resolved);
     return resolved;
@@ -582,11 +686,21 @@ export class ConnectionsService {
     capsule: Pick<Capsule, "workspaceId"> & Partial<Pick<Capsule, "id">>,
     binding: ProviderBinding,
     policy: PolicyConfig | undefined,
+    bindingOrigin: "stored" | "selected" = "selected",
   ): Promise<ResolvedCapsuleProviderBinding> {
     const connection =
       this.#operatorProviderConnections.get(binding.connectionId) ??
       (await this.#store.getConnection(binding.connectionId));
     if (!connection) {
+      // Revocation removes the Connection row but leaves the installed app's
+      // binding. Treat that saved binding as unavailable, like an expired key.
+      if (bindingOrigin === "stored") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "The saved Provider Connection is unavailable.",
+          { reason: PROVIDER_CONNECTION_NOT_READY_REASON },
+        );
+      }
       throw new OpenTofuControllerError(
         "not_found",
         `Provider Connection ${binding.connectionId} (provider ${binding.provider}) not found`,

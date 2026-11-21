@@ -104,7 +104,14 @@ function assertWorkflow(workflow: Workflow): void {
   const uploadWith = upload.with as Record<string, unknown>;
   const downloadWith = download.with as Record<string, unknown>;
   expect(uploadWith.path).toBe("dashboard/dist/");
-  expect(uploadWith.name).toBe(downloadWith.name);
+  expect(upload.id).toBe("dashboard_build");
+  expect(staticJob.outputs).toEqual({
+    dashboard_artifact_id: "${{ steps.dashboard_build.outputs.artifact-id }}",
+  });
+  expect(downloadWith).toEqual({
+    "artifact-ids": "${{ needs.static.outputs.dashboard_artifact_id }}",
+    path: "dashboard/dist",
+  });
 
   const docsJob = jobs["docs-browser"]!;
   const docsPhases = selectedPhases(

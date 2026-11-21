@@ -1,3 +1,4 @@
+import { handleCapsuleReAdoptionInputContext } from "./install-config-re-adoption-context.ts";
 /**
  * Session-authed Capsule (`/api/v1/capsules`)
  * control routes: read/patch/destroy-plan, plan / destroy-plan / drift-check,
@@ -48,6 +49,7 @@ import type {
 } from "takosumi-contract/install-configs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
+import { parseDestroyProviderConnectionReplacements } from "takosumi-contract/connections";
 import type {
   ProviderBinding,
   ProviderBindings,
@@ -205,8 +207,17 @@ export async function handleCapsules(
     // A refused caller must not append Activity to another Workspace by
     // repeatedly guessing a Capsule ID.
     if (!auth.ok) return auth.response;
-    if (method === "POST" && segments.length === 3 &&
-      (segments[2] === "revision-plans" || segments[2] === "install-config-re-adoptions")) {
+    const directUninstallRequester = (ctx.session.credential === "session" && ctx.session.uninstallRequester?.grant === undefined) ||
+      (ctx.session.credential === "personal-access-token" && ctx.session.uninstallRequester?.grant?.kind === "personal-access-token");
+    const actor = ctx.session.subject;
+    const retryOwnershipEpoch = capsule.status === "error" && directUninstallRequester &&
+      ctx.session.uninstallRequester?.subject === actor && auth.authority === "app" &&
+      auth.access.role === "owner" && auth.access.ownerAccountId === actor
+      ? auth.access.ownershipEpoch
+      : undefined;
+    if (segments.length === 3 && ((method === "POST" &&
+      (segments[2] === "revision-plans" || segments[2] === "install-config-re-adoptions")) ||
+      (method === "GET" && segments[2] === "install-config-re-adoption-context"))) {
       const codeChange = await requireOwnerForDelegateCodeChange({
         operations, store, session: ctx.session, workspaceId: capsule.workspaceId, capsuleIds: [capsule.id],
       });
@@ -245,7 +256,7 @@ export async function handleCapsules(
             operations,
             capsule,
             capsuleId,
-            ctx.session.subject,
+            { actor, ...(retryOwnershipEpoch !== undefined ? { actorOwnershipEpoch: retryOwnershipEpoch } : {}) },
             lifecycleMutation ? requireCapturedManagement() : undefined,
           );
         }
@@ -387,9 +398,19 @@ export async function handleCapsules(
     if (leaf === "install-config-re-adoptions" && segments.length === 3) {
       return await handleCapsuleInstallConfigReAdoption(ctx, capsule, method);
     }
+    if (leaf === "install-config-re-adoption-context" && segments.length === 3) {
+      return await handleCapsuleReAdoptionInputContext(ctx, capsule, method);
+    }
     if (leaf === "destroy-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const body = await readJsonObject(request.clone()).catch(() => null);
+      let body: Awaited<ReturnType<typeof readJsonObject>> | null;
+      try { body = request.body === null ? null : await readJsonObject(request.clone()); }
+      catch { return errorJson("invalid_argument", "Destroy Plan body must be a JSON object.", 400); }
+      let destroyProviderConnectionReplacements: ReturnType<typeof parseDestroyProviderConnectionReplacements> | undefined;
+      if (body && Object.hasOwn(body, "destroyProviderConnectionReplacements")) {
+        try { destroyProviderConnectionReplacements = parseDestroyProviderConnectionReplacements(body.destroyProviderConnectionReplacements); }
+        catch { return errorJson("invalid_argument", "Invalid destroy Provider Connection replacement selection.", 400); }
+      }
       const runnerProfileId =
         typeof body?.runnerId === "string" && body.runnerId.trim()
           ? body.runnerId.trim()
@@ -397,11 +418,18 @@ export async function handleCapsules(
               body.runnerProfileId.trim()
             ? body.runnerProfileId.trim()
             : undefined;
+      if (destroyProviderConnectionReplacements && (!ctx.session.uninstallRequester || !directUninstallRequester)) {
+        return errorJson("forbidden", "Connection recovery requires an account session or personal access token.", 403, request);
+      }
       const response = await operations.createCapsuleDestroyPlan(
         capsuleId,
         {
+          ...(destroyProviderConnectionReplacements ? { destroyProviderConnectionReplacements } : {}),
           ...(runnerProfileId ? { runnerProfileId } : {}),
-          actor: ctx.session.subject,
+          actor,
+          ...(retryOwnershipEpoch !== undefined && destroyProviderConnectionReplacements === undefined
+            ? { actorOwnershipEpoch: retryOwnershipEpoch }
+            : {}),
         },
       );
       return jsonStatus(
@@ -484,6 +512,7 @@ async function capsuleRouteAppAction(
   method: string,
 ): Promise<AppAction> {
   const leaf = segments.length === 2 ? undefined : segments[2];
+  if (leaf === "install-config-re-adoption-context" && segments.length === 3) return "change_settings";
   if (method === "GET" || method === "HEAD") return "view";
   if (leaf === "configuration-plans" && segments.length === 3) {
     // A configuration plan that selects provider connections is the
@@ -662,7 +691,7 @@ async function deleteCapsule(
   operations: ControlPlaneOperations,
   capsule: Capsule,
   capsuleId: string,
-  actor: string,
+  requester: { readonly actor: string; readonly actorOwnershipEpoch?: number },
   expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
 ): Promise<Response> {
   if (capsule.status === "destroyed") {
@@ -692,9 +721,7 @@ async function deleteCapsule(
       expectedWorkspaceManagementAuthority,
     });
   }
-  const response = await operations.createCapsuleDestroyPlan(capsuleId, {
-    actor,
-  });
+  const response = await operations.createCapsuleDestroyPlan(capsuleId, requester);
   return jsonStatus(await publicPlanActionResponse(operations, response), 202);
 }
 

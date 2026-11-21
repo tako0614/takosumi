@@ -50,7 +50,9 @@ import {
 } from "../../accounts/service/src/refresh-chain-retention-d1.ts";
 import {
   CONTROL_DISPATCH_RESOURCE_KEYS,
+  connectionOAuthCallbackHelperId,
   controlInventoryResourceKey,
+  handleControlRoute,
   isRunGetReadRequest,
 } from "../../accounts/service/src/control-routes.ts";
 import {
@@ -947,6 +949,10 @@ const platformWorker = {
       context,
     );
     await schedulePlatformSideEffect(
+      runScheduledAccountsConnectionOAuthAttemptRetention(env),
+      context,
+    );
+    await schedulePlatformSideEffect(
       runScheduledInterfaceMaterializationIntentDrain(env),
       context,
     );
@@ -1192,6 +1198,24 @@ export async function runScheduledAccountsPasskeyChallengeRetention(
     console.warn(JSON.stringify({ event: "passkey_challenge_retention_failed",
       errorName: error instanceof Error ? error.name : "unknown" }));
     return { scanned: 0, deleted: 0, failures: 1 };
+  }
+}
+
+/** Reclaim only expired credential-setup attempts, on the existing cron cadence. */
+export async function runScheduledAccountsConnectionOAuthAttemptRetention(
+  env: Pick<CloudflareWorkerEnv, "TAKOSUMI_ACCOUNTS_DB" | "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE">,
+): Promise<{ scanned: number | null; deleted: number | null; failures: 0 | 1 }> {
+  const schemaMode = resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE);
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, { schemaMode });
+  try {
+    if (schemaMode !== "predeployed") await store.initialize();
+    const result = await store.pruneConnectionOAuthAttempts({ now: Date.now() });
+    return { ...result, failures: 0 };
+  } catch (error) {
+    // Counts are unknown after an acknowledgement failure; never restore rows.
+    console.warn(JSON.stringify({ event: "connection_oauth_attempt_retention_failed",
+      errorName: error instanceof Error ? error.name : "unknown" }));
+    return { scanned: null, deleted: null, failures: 1 };
   }
 }
 
@@ -2086,9 +2110,26 @@ export async function handlePlatformSharedAuthControlRequest(
   ): Promise<Response> => {
     const ingressFailure = sharedAuthRequestFailure(request, env);
     if (ingressFailure) return ingressFailure;
-    if (request.headers.has("authorization")) {
+    if (request.headers.has("authorization") || request.headers.has("x-takosumi-account-session")) {
       return Response.json({ error: "unauthenticated" }, {
         status: 401, headers: { "cache-control": "no-store" },
+      });
+    }
+    if (connectionOAuthCallbackHelperId(url.pathname, request.method)) {
+      if (url.origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) {
+        return Response.json({ error: "not found" }, {
+          status: 404, headers: { "cache-control": "no-store" },
+        });
+      }
+      // Keep the attempt cookie for the provider redirect. The Accounts callback
+      // checks its own proof and uses the same store as the session-authenticated start.
+      return await handleControlRoute({
+        request,
+        url,
+        store: dependencies.store ?? platformAccountsStore(env),
+        resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
+      }) ?? Response.json({ error: "not found" }, {
+        status: 404, headers: { "cache-control": "no-store" },
       });
     }
     const identity = await measureRequestPhaseOperation(

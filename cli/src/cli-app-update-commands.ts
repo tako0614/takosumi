@@ -1,5 +1,7 @@
 /** Ordinary Accounts/PAT clients of the existing revision and Run surfaces. */
 import type { PublicRun } from "takosumi-contract/runs";
+import { parseDestroyProviderConnectionReplacements } from "takosumi-contract/connections";
+import { isProviderResolutionStatus } from "takosumi-contract/provider-resolution";
 import process from "node:process";
 import type { CliIo } from "./cli-io.ts";
 import { isJapaneseCli } from "./cli-help.ts";
@@ -10,14 +12,23 @@ const MAX_WAIT_MS = 120_000;
 const TOKEN = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u;
 const SETTLED = new Set(["succeeded", "failed", "cancelled", "expired"]);
 class Refusal extends Error { constructor(readonly code: string) { super(code); } }
-type Scope = { readonly appId: string; readonly planId: string; readonly workspaceId: string };
+type ApplyRunType = "apply" | "destroy_apply";
+type Scope = { readonly appId: string; readonly planId: string; readonly workspaceId: string; readonly type: ApplyRunType };
+const ARGUMENT_REFUSALS = new Set([
+  "app_id_required", "unknown_option", "option_value_required", "invalid_boolean_option",
+  "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes",
+  "exact_ref_and_idempotency_key_required", "saved_plan_and_explicit_confirmation_required",
+  "invalid_connection_replacements", "destroy_plan_id_required", "revision_plan_id_required", "exact_ref_required",
+]);
 
 /** Preserve inline '=' values, reject unknown flags and extra positionals. */
-function argumentsFor(args: readonly string[], kind: "update" | "apply") {
+function argumentsFor(args: readonly string[], kind: "update" | "apply" | "recover-uninstall") {
   const [appId, ...rest] = args;
   if (appId === "--help" || appId === "-h" || rest.includes("--help") || rest.includes("-h")) return { help: true } as const;
   if (!bounded(appId, 256) || appId.startsWith("--")) throw new Refusal("app_id_required");
-  const strings = new Set(["url", "deployControlUrl", "token", "timeoutMs", ...(kind === "update" ? ["ref", "idempotencyKey"] : ["plan"])]);
+  const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], apply: ["plan", "destroyPlan"],
+    "recover-uninstall": ["connections", "destroyPlan"] }[kind];
+  const strings = new Set(["url", "deployControlUrl", "token", "timeoutMs", ...operationOptions]);
   const booleans = new Set(["json", ...(kind === "apply" ? ["yes", "allowDestroy", "observeOnly"] : [])]);
   const options: CliOptions = {};
   for (let i = 0; i < rest.length; i++) {
@@ -100,6 +111,38 @@ function revisionRun(run: PublicRun, ref?: string): PublicRun {
   return run;
 }
 
+function savedApplyPlan(run: PublicRun, type: ApplyRunType): PublicRun {
+  if (type === "apply") return revisionRun(run);
+  if (run.type !== "destroy_plan" || !bounded(run.planDigest, 256) ||
+    !Number.isSafeInteger(run.baseStateGeneration) || (run.baseStateGeneration ?? 0) < 1 ||
+    !bounded(run.applyExpected?.currentStateVersionId, 256)) throw new Refusal("destroy_plan_mismatch");
+  return run;
+}
+
+function connectionReplacements(value: unknown) {
+  if (typeof value !== "string") throw new Refusal("invalid_connection_replacements");
+  try {
+    return parseDestroyProviderConnectionReplacements(JSON.parse(value));
+  } catch {
+    throw new Refusal("invalid_connection_replacements");
+  }
+}
+
+function destroyProviderReview(plan: PublicRun) {
+  if (plan.type !== "destroy_plan" || plan.providerResolutions === undefined) return undefined;
+  if (!Array.isArray(plan.providerResolutions)) throw new Refusal("invalid_plan_projection");
+  return plan.providerResolutions.map(row => {
+    if (!isRecord(row) || !isRecord(row.requirement) || !bounded(row.requirement.providerSource, 512) ||
+      (row.requirement.alias !== undefined && !bounded(row.requirement.alias, 256)) || !isProviderResolutionStatus(row.status)) {
+      throw new Refusal("invalid_plan_projection");
+    }
+    const connectionId = row.connectionId ?? (isRecord(row.evidence) && row.evidence.kind === "provider_connection"
+      ? row.evidence.connectionId : undefined);
+    if (connectionId !== undefined && !bounded(connectionId, 256)) throw new Refusal("invalid_plan_projection");
+    return { provider: row.requirement.providerSource, alias: row.requirement.alias, connectionId, status: row.status };
+  });
+}
+
 function review(plan: PublicRun) {
   const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
   if (plan.planResources !== undefined && (!Array.isArray(plan.planResources) || plan.planResources.some(r =>
@@ -113,6 +156,7 @@ function review(plan: PublicRun) {
     policyCodes: plan.policyReasons?.map(r => r.code).filter(c => typeof c === "string" && TOKEN.test(c)),
     changes: { add: count(plan.summary?.add), change: count(plan.summary?.change), destroy: count(plan.summary?.destroy) },
     resources: plan.planResources?.map(r => ({ address: r.address, type: r.type, actions: r.actions })),
+    providerConnections: destroyProviderReview(plan),
   };
 }
 
@@ -127,6 +171,19 @@ function errorCode(error: unknown): string {
   if (error instanceof Refusal) return error.code;
   if (error instanceof DeployControlApiError) return TOKEN.test(error.code ?? "") ? error.code! : `http_${error.status}`;
   return "request_not_confirmed";
+}
+
+function destroyConnectionRecoveryFailure(error: unknown) {
+  if (!(error instanceof DeployControlApiError) || error.status !== 409 ||
+    error.code !== "failed_precondition" || !isRecord(error.body) || !isRecord(error.body.error)) return undefined;
+  const { details } = error.body.error;
+  if (!isRecord(details) || details.reason !== "destroy_connection_recovery_unproven") return undefined;
+  switch (details.connectionRecoveryFailure) {
+    case "replacement_unverified":
+    case "bindings_mismatch":
+    case "applied_evidence_unavailable":
+      return details.connectionRecoveryFailure;
+  }
 }
 
 function runUrl(options: CliOptions, id: string) { return `${deployControlApiBase(options)}/runs/${encodeURIComponent(id)}`; }
@@ -145,14 +202,26 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
     ({ appId, options } = parsed);
     ref = typeof options.ref === "string" ? options.ref : undefined;
     key = typeof options.idempotencyKey === "string" ? options.idempotencyKey : undefined;
-    if (!bounded(ref, 1024) || !bounded(key, 256)) throw new Refusal("exact_ref_and_idempotency_key_required");
+    const savedRevisionId = typeof options.revisionPlan === "string" ? options.revisionPlan : undefined;
+    if (savedRevisionId !== undefined) {
+      if (key !== undefined) throw new Refusal("conflicting_modes");
+      if (!TOKEN.test(savedRevisionId)) throw new Refusal("revision_plan_id_required");
+      if (!bounded(ref, 1024)) throw new Refusal("exact_ref_required");
+    } else if (!bounded(ref, 1024) || !bounded(key, 256)) {
+      throw new Refusal("exact_ref_and_idempotency_key_required");
+    }
     options = selectTarget(options);
     const requestedRef = ref; const retainedKey = key; const selectedApp = appId;
     const plan = await within(parsed.wait, async signal => {
       const request = client(options, signal);
-      createAttempted = true;
-      let current = await request(`/api/v1/capsules/${encodeURIComponent(selectedApp)}/revision-plans`, "POST", { ref: requestedRef }, retainedKey);
-      coordinatorReturned = true;
+      let current: unknown;
+      if (savedRevisionId !== undefined) {
+        current = await request(`/api/v1/revision-plans/${encodeURIComponent(savedRevisionId)}`);
+      } else {
+        createAttempted = true;
+        current = await request(`/api/v1/capsules/${encodeURIComponent(selectedApp)}/revision-plans`, "POST", { ref: requestedRef }, retainedKey);
+        coordinatorReturned = true;
+      }
       let delay = 250; let lastProgress: string | undefined; let coordinatorIdentity: string | undefined;
       for (let step = 0; step <= 120; step++) {
         signal.throwIfAborted();
@@ -160,13 +229,14 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
         if (!isRecord(current) || !isRecord(rp) || !bounded(rp.id, 256) || rp.capsuleId !== selectedApp || rp.operation !== "revision" ||
           !bounded(rp.workspaceId, 256) || !isRecord(rp.revision) || rp.revision.targetRef !== requestedRef || !isRecord(rp.revision.base) ||
           !Number.isSafeInteger(rp.revision.base.capsuleStateGeneration) || Number(rp.revision.base.capsuleStateGeneration) < 1 ||
-          (revisionPlanId !== undefined && revisionPlanId !== rp.id)) {
+          (savedRevisionId !== undefined && savedRevisionId !== rp.id)) {
           throw new Refusal("revision_identity_mismatch");
         }
         const identity = canonicalJson([rp.id, rp.workspaceId, rp.capsuleId, rp.revision]);
         if (coordinatorIdentity !== undefined && coordinatorIdentity !== identity) throw new Refusal("revision_identity_mismatch");
         coordinatorIdentity = identity;
         revisionPlanId = rp.id;
+        coordinatorReturned = true;
         if (current.nextAction === "review_run" && bounded(rp.planRunId, 256)) {
           const plan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(rp.planRunId)}`), selectedApp, rp.planRunId), requestedRef);
           if (plan.workspaceId !== rp.workspaceId || plan.baseStateGeneration !== rp.revision.base.capsuleStateGeneration ||
@@ -184,24 +254,87 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
       }
       throw new Refusal("reconcile_limit");
     });
+    if (plan.status !== "succeeded" && plan.status !== "waiting_approval") {
+      write(io, options, { status: "plan_not_reviewable", appId, revisionPlanId, planRunId: plan.id,
+        planStatus: plan.status, reviewUrl: runUrl(options, plan.id) });
+      return 1;
+    }
     write(io, options, { status: "review_required", appId, revisionPlanId, planRunId: plan.id, reviewUrl: runUrl(options, plan.id), plan: review(plan) });
     return 0;
   } catch (error) {
-    write(io, options, { status: !createAttempted || !coordinatorReturned && error instanceof DeployControlApiError && error.status >= 400 && error.status < 500 ? "refused" : "unconfirmed", appId, revisionPlanId, ref, code: errorCode(error),
-      recovery: "Retry only the same app/ref/idempotency key and Accounts identity; no approval or Apply was requested." });
-    return error instanceof Refusal && ["app_id_required", "unknown_option", "option_value_required", "invalid_boolean_option", "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes", "exact_ref_and_idempotency_key_required"].includes(error.code) ? 2 : 1;
+    const refused = !coordinatorReturned &&
+      (!createAttempted || error instanceof DeployControlApiError && error.status >= 400 && error.status < 500);
+    write(io, options, { status: refused ? "refused" : "unconfirmed", appId, revisionPlanId, ref, code: errorCode(error),
+      recovery: revisionPlanId || options.revisionPlan !== undefined
+        ? "Retry the same app/ref and coordinator ID with --revision-plan."
+        : "Retry only the same app/ref/idempotency key and Accounts identity; no approval or Apply was requested." });
+    return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
+  }
+}
+
+/** Create a recovery Plan or read an exact Plan through the existing Accounts routes. */
+export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise<number> {
+  let options: CliOptions = {};
+  let appId: string | undefined;
+  let planRunId: string | undefined;
+  let submitted = false;
+  try {
+    const parsed = argumentsFor(args, "recover-uninstall");
+    if (parsed.help) { io.stdout(recoverUninstallHelp()); return 0; }
+    ({ appId, options } = parsed);
+    const selectedApp = appId;
+    const existingPlanId = options.destroyPlan;
+    if (existingPlanId !== undefined) {
+      if (options.connections !== undefined) throw new Refusal("conflicting_modes");
+      if (!bounded(existingPlanId, 256)) throw new Refusal("destroy_plan_id_required");
+      planRunId = existingPlanId;
+    }
+    const replacements = existingPlanId === undefined ? connectionReplacements(options.connections) : undefined;
+    options = selectTarget(options);
+    const plan = await within(parsed.wait, async signal => {
+      signal.throwIfAborted();
+      const request = client(options, signal);
+      if (existingPlanId !== undefined) {
+        return runFrom(await request(`/api/v1/runs/${encodeURIComponent(existingPlanId)}`), selectedApp, existingPlanId);
+      }
+      submitted = true;
+      return runFrom(await request(
+        `/api/v1/capsules/${encodeURIComponent(selectedApp)}/destroy-plan`, "POST",
+        { destroyProviderConnectionReplacements: replacements },
+      ), selectedApp);
+    });
+    if (plan.type !== "destroy_plan") throw new Refusal("destroy_plan_mismatch");
+    planRunId = plan.id;
+    const link = { appId, planRunId, planStatus: plan.status, reviewUrl: runUrl(options, plan.id) };
+    if (plan.status === "queued" || plan.status === "running") {
+      write(io, options, { status: "plan_pending", ...link });
+      return 0;
+    }
+    if (plan.status !== "waiting_approval" && plan.status !== "succeeded") {
+      write(io, options, { status: "failed", ...link,
+        code: plan.errorCode && TOKEN.test(plan.errorCode) ? plan.errorCode : undefined });
+      return 1;
+    }
+    write(io, options, { status: "review_required", ...link, plan: review(savedApplyPlan(plan, "destroy_apply")) });
+    return 0;
+  } catch (error) {
+    const refused = !submitted || error instanceof DeployControlApiError && error.status >= 400 && error.status < 500;
+    write(io, options, { status: refused ? "refused" : "unconfirmed", appId, planRunId, code: errorCode(error),
+      connectionRecoveryFailure: submitted ? destroyConnectionRecoveryFailure(error) : undefined,
+      recovery: refused ? undefined : "Check the app's Run history for the original Destroy Plan before requesting another." });
+    return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
 }
 
 async function linkedApply(request: Client, scope: Scope): Promise<PublicRun | undefined> {
   let cursor: string | undefined; const seen = new Set<string>(); let found: PublicRun | undefined;
   for (let page = 0; page < 100; page++) {
-    const query = `?limit=100&type=apply${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    const query = `?limit=100&type=${scope.type}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
     const body = await request(`/api/v1/capsules/${encodeURIComponent(scope.appId)}/runs${query}`);
     if (!isRecord(body) || !Array.isArray(body.runs)) throw new Refusal("run_history_incomplete");
     for (const row of body.runs) {
       const run = runFrom({ run: row }, scope.appId);
-      if (run.type !== "apply" || run.workspaceId !== scope.workspaceId) throw new Refusal("run_history_identity_mismatch");
+      if (run.type !== scope.type || run.workspaceId !== scope.workspaceId) throw new Refusal("run_history_identity_mismatch");
       if (run.planRunId === scope.planId) {
         if (found && found.id !== run.id) throw new Refusal("multiple_linked_apply_runs");
         found = run;
@@ -215,15 +348,19 @@ async function linkedApply(request: Client, scope: Scope): Promise<PublicRun | u
 }
 
 function applyIdentity(run: PublicRun, scope: Scope): PublicRun {
-  if (run.type !== "apply" || run.planRunId !== scope.planId || run.workspaceId !== scope.workspaceId) throw new Refusal("apply_identity_mismatch");
+  if (run.type !== scope.type || run.planRunId !== scope.planId || run.workspaceId !== scope.workspaceId) throw new Refusal("apply_identity_mismatch");
   return run;
+}
+
+async function readApply(request: Client, id: string, scope: Scope): Promise<PublicRun> {
+  return applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(id)}`), scope.appId, id), scope);
 }
 
 async function watch(request: Client, run: PublicRun, scope: Scope, signal: AbortSignal): Promise<PublicRun> {
   let current = applyIdentity(run, scope);
   while (!SETTLED.has(current.status)) {
     await pause(1_000, signal);
-    current = applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(run.id)}`), scope.appId, run.id), scope);
+    current = await readApply(request, run.id, scope);
   }
   return current;
 }
@@ -237,29 +374,39 @@ function writeTerminalApply(io: CliIo, options: CliOptions, appId: string | unde
 }
 
 function applyPlanIdentity(plan: PublicRun): string {
-  return canonicalJson([plan.id, plan.capsuleId, plan.workspaceId, plan.origin, plan.planDigest, plan.applyExpected, plan.sourceSnapshotId, plan.baseStateGeneration]);
+  return canonicalJson([plan.id, plan.type, plan.capsuleId, plan.workspaceId, plan.origin, plan.planDigest,
+    plan.applyExpected, plan.sourceSnapshotId, plan.baseStateGeneration, destroyProviderReview(plan)]);
 }
 
 export async function runAppApply(args: string[], io: CliIo): Promise<number> {
   let options: CliOptions = {}; let appId: string | undefined; let planId: string | undefined;
   let scope: Scope | undefined; let lastRun: PublicRun | undefined; let lastPlan: PublicRun | undefined; let mutationAttempted = false;
-  let expectedPlanIdentity: string | undefined;
+  let expectedPlanIdentity: string | undefined; let locatedApplyId: string | undefined;
+  let applyType: ApplyRunType = "apply";
   try {
     const parsed = argumentsFor(args, "apply");
     if (parsed.help) { io.stdout(applyHelp()); return 0; }
-    ({ appId, options } = parsed); planId = typeof options.plan === "string" ? options.plan : undefined;
-    if (!bounded(planId, 256) || (options.yes !== true && options.observeOnly !== true)) throw new Refusal("saved_plan_and_explicit_confirmation_required");
+    ({ appId, options } = parsed);
+    applyType = options.destroyPlan === undefined ? "apply" : "destroy_apply";
+    const selectedPlanOption = options.destroyPlan ?? options.plan;
+    if ((options.plan !== undefined && options.destroyPlan !== undefined) || !bounded(selectedPlanOption, 256) ||
+      (options.yes !== true && options.observeOnly !== true)) throw new Refusal("saved_plan_and_explicit_confirmation_required");
+    planId = selectedPlanOption;
     options = selectTarget(options);
     const selectedApp = appId; const selectedPlan = planId;
     lastRun = await within(parsed.wait, async signal => {
       const request = client(options, signal);
-      let plan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}`), selectedApp, selectedPlan));
+      let plan = savedApplyPlan(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}`), selectedApp, selectedPlan), applyType);
       lastPlan = plan;
       const initialIdentity = applyPlanIdentity(plan);
       expectedPlanIdentity = initialIdentity;
-      scope = { appId: selectedApp, planId: selectedPlan, workspaceId: plan.workspaceId };
+      scope = { appId: selectedApp, planId: selectedPlan, workspaceId: plan.workspaceId, type: applyType };
       const existing = await linkedApply(request, scope);
-      if (existing) { lastRun = existing; return await watch(request, existing, scope, signal); }
+      if (existing) {
+        locatedApplyId = existing.id;
+        lastRun = await readApply(request, existing.id, scope);
+        return await watch(request, lastRun, scope, signal);
+      }
       if (options.observeOnly === true) throw new Refusal("linked_apply_not_observed");
       const body = await request(`/api/v1/capsules/${encodeURIComponent(selectedApp)}`);
       const cap = isRecord(body) ? body.capsule : undefined;
@@ -268,7 +415,8 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
         plan.applyExpected?.currentStateVersionId !== cap.currentStateVersionId) throw new Refusal("plan_state_changed");
       if (!["succeeded", "waiting_approval"].includes(plan.status) || plan.policyStatus !== "pass") throw new Refusal("plan_not_applyable");
       const projection = review(plan);
-      if ((Object.values(projection.changes).some(value => value === null) || (projection.changes.destroy ?? 0) > 0) && options.allowDestroy !== true) {
+      if (applyType === "apply" && (Object.values(projection.changes).some(value => value === null) ||
+        (projection.changes.destroy ?? 0) > 0) && options.allowDestroy !== true) {
         throw new Refusal("destructive_confirmation_required");
       }
       signal.throwIfAborted();
@@ -276,12 +424,16 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       if (plan.status === "waiting_approval") {
         mutationAttempted = true;
         await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}/approve`, "POST", {});
-        const approvedPlan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}`), selectedApp, selectedPlan));
+        const approvedPlan = savedApplyPlan(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}`), selectedApp, selectedPlan), applyType);
         if (approvedPlan.status !== "succeeded" || approvedPlan.policyStatus !== "pass" || initialIdentity !== applyPlanIdentity(approvedPlan)) throw new Refusal("approved_plan_changed");
         plan = approvedPlan;
         lastPlan = plan;
         const raced = await linkedApply(request, scope);
-        if (raced) { lastRun = raced; return await watch(request, raced, scope, signal); }
+        if (raced) {
+          locatedApplyId = raced.id;
+          lastRun = await readApply(request, raced.id, scope);
+          return await watch(request, lastRun, scope, signal);
+        }
       }
       signal.throwIfAborted(); mutationAttempted = true;
       lastRun = applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}/apply`, "POST", {}), selectedApp), scope);
@@ -293,35 +445,50 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
     // separately bounded reads can observe its exact linked Apply only.
     // Keep recovery evidence local: a late response from the aborted command
     // must not change its result while a fresh readback is being refused.
-    let observedRun = lastRun; let observedPlan = lastPlan; let readbackConfirmed = false;
-    if (scope && mutationAttempted) {
+    let observedRun = lastRun; const observedApplyId = locatedApplyId; let observedPlan = lastPlan; let readbackConfirmed = false;
+    if (scope && mutationAttempted && observedApplyId === undefined) {
       try { observedRun = await within(5_000, async signal => {
         const request = client(options, signal);
-        const freshPlan = revisionRun(runFrom(await request(`/api/v1/runs/${encodeURIComponent(scope!.planId)}`), scope!.appId, scope!.planId));
+        const freshPlan = savedApplyPlan(runFrom(await request(`/api/v1/runs/${encodeURIComponent(scope!.planId)}`), scope!.appId, scope!.planId), scope!.type);
         if (freshPlan.workspaceId !== scope!.workspaceId || applyPlanIdentity(freshPlan) !== expectedPlanIdentity) throw new Refusal("observed_plan_changed");
         observedPlan = freshPlan;
         const observed = await linkedApply(request, scope!);
         if (!observed) return undefined;
-        return applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(observed.id)}`), scope!.appId, observed.id), scope!);
+        return await readApply(request, observed.id, scope!);
       }); readbackConfirmed = true; } catch { /* unavailable readback is not proof of no effect */ }
     }
     if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
     write(io, options, { status: observedRun && !SETTLED.has(observedRun.status) ? "pending" : mutationAttempted || options.observeOnly === true ? "indeterminate" : "refused",
-      appId, planRunId: planId, lastObservedPlanStatus: observedPlan?.status, runId: observedRun?.id, runStatus: observedRun?.status, code: errorCode(error),
-      recovery: "Use apps apply with the same app/plan and --observe-only for readback; no new Plan, key, approval or Apply is created by observation." });
-    return error instanceof Refusal && ["app_id_required", "unknown_option", "option_value_required", "invalid_boolean_option", "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes", "saved_plan_and_explicit_confirmation_required"].includes(error.code) ? 2 : 1;
+      appId, planRunId: planId, lastObservedPlanStatus: observedPlan?.status, runId: observedRun?.id ?? observedApplyId, runStatus: observedRun?.status, code: errorCode(error),
+      recovery: applyType === "destroy_apply"
+        ? "Use apps apply with the same app, --destroy-plan and --observe-only for readback."
+        : "Use apps apply with the same app/plan and --observe-only for readback; no new Plan, key, approval or Apply is created by observation." });
+    return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
 }
 
 export function updateHelp(): string {
   return ["takosumi apps update <app-id> --ref <exact-ref> --idempotency-key <retained-key>",
-    isJapaneseCli() ? "既存revision coordinatorでPlanを準備します。承認・Applyは行いません。同じ本人/app/ref/keyで再開します。" : "Prepare a revision Plan only. Retry the same identity/app/ref/key; no approval or Apply.",
+    "takosumi apps update <app-id> --ref <exact-ref> --revision-plan <coordinator-id>",
+    isJapaneseCli() ? "Git更新を準備します。既存の更新はアプリ・ref・更新IDを指定して続けられます。承認・Applyは別操作です。" : "Prepare a Git update. Resume an existing update by specifying its app, ref, and coordinator ID. Approval and Apply are separate.",
     "--url <origin> --token <Accounts PAT with read,write> --json --timeout-ms <1..120000>", "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
 }
 export function applyHelp(): string {
   return ["takosumi apps apply <app-id> --plan <saved-revision-plan-run-id> --yes [--allow-destroy]",
     "takosumi apps apply <app-id> --plan <saved-revision-plan-run-id> --observe-only",
-    isJapaneseCli() ? "保存Planを明示実行し、有限時間だけRunを観測します。削除・変更数不明には --allow-destroy が必要です。観測のみでは書き込みません。" : "Execute the saved Plan explicitly and observe its Run for a bounded time. Deletes/unknown counts need --allow-destroy. Observation writes nothing.",
+    "takosumi apps apply <app-id> --destroy-plan <saved-destroy-plan-run-id> --yes",
+    "takosumi apps apply <app-id> --destroy-plan <saved-destroy-plan-run-id> --observe-only",
+    isJapaneseCli() ? "保存Planを明示実行し、有限時間だけRunを観測します。版更新で削除・変更数不明の場合は --allow-destroy が必要です。" : "Execute the saved Plan explicitly and observe its Run for a bounded time. Revision deletions or unknown counts need --allow-destroy.",
     "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>",
     "Scopes: read for observation; read,write to execute. Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
+}
+
+export function recoverUninstallHelp(): string {
+  return ["takosumi apps recover-uninstall <app-id> --connections '<JSON array of replacement pairs>'",
+    '[{"connectionId":"old-id","replacementConnectionId":"new-id"}]',
+    "takosumi apps recover-uninstall <app-id> --destroy-plan <saved-destroy-plan-run-id>",
+    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read the same saved Plan. Execution is a separate command.",
+    "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>",
+    "Scopes: read,write to prepare; read to review.",
+    "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
 }

@@ -1,5 +1,7 @@
-import { readFile } from "node:fs/promises";
-import { posix } from "node:path";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, test } from "bun:test";
 import { parse as parseYaml } from "yaml";
 
@@ -61,7 +63,10 @@ function covered(path: string, copied: readonly string[]): boolean {
   return copied.some((entry) => path === entry || path.startsWith(`${entry}/`));
 }
 
-async function repoLocalRuntimeInputs(entrypoint: string): Promise<string[]> {
+async function repoLocalRuntimeInputs(
+  entrypoint: string,
+  dependencyDirectory = new URL("node_modules/", ROOT),
+): Promise<string[]> {
   const result = await Bun.build({
     entrypoints: [new URL(entrypoint, ROOT).pathname],
     target: "bun",
@@ -74,10 +79,50 @@ async function repoLocalRuntimeInputs(entrypoint: string): Promise<string[]> {
   const metafile = (result as unknown as {
     metafile: { inputs: Record<string, unknown> };
   }).metafile;
-  return Object.keys(metafile.inputs).filter(
-    (input) => !input.startsWith("node_modules/") && !input.startsWith("/"),
+  // Bun may report a shared dependency under its physical path outside ROOT.
+  // Match the actual dependency roots, never a filename containing node_modules.
+  const dependencyRoots = [fileURLToPath(dependencyDirectory), await realpath(dependencyDirectory)];
+  return Object.keys(metafile.inputs).filter((input) =>
+    !isAbsolute(input) && !dependencyRoots.some((root) => {
+      const fromRoot = relative(root, resolve(input));
+      return fromRoot === "" ||
+        (fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot));
+    })
   );
 }
+
+test("runtime import graph distinguishes shared dependencies from repo paths containing node_modules", async () => {
+  for (const shared of [true, false]) {
+    const repository = await mkdtemp(join(fileURLToPath(ROOT), ".runtime-inputs-fixture-"));
+    const external = await mkdtemp(join(tmpdir(), "takosumi-runtime-input-deps-"));
+    try {
+      const dependencies = shared ? join(external, "node_modules") : join(repository, "node_modules");
+      const dependency = join(dependencies, "fixture-graph-dep");
+      await mkdir(dependency, { recursive: true });
+      await writeFile(join(dependency, "package.json"), JSON.stringify({
+        name: "fixture-graph-dep", version: "1.0.0", main: "index.ts",
+      }));
+      await writeFile(join(dependency, "index.ts"), "export const dependency = 1;\n");
+      if (shared) await symlink(dependencies, join(repository, "node_modules"), "dir");
+      const entry = join(repository, "entry.ts");
+      const source = join(repository, "source-node_modules-marker.ts");
+      await writeFile(source, "export const source = 2;\n");
+      await writeFile(entry, [
+        'import { dependency } from "fixture-graph-dep";',
+        'import { source } from "./source-node_modules-marker.ts";',
+        "export const result = dependency + source;",
+      ].join("\n"));
+      const local = (path: string) => relative(fileURLToPath(ROOT), path).split(sep).join("/");
+      const inputs = await repoLocalRuntimeInputs(
+        local(entry), pathToFileURL(`${join(repository, "node_modules")}${sep}`),
+      );
+      expect(inputs.sort()).toEqual([local(entry), local(source)].sort());
+    } finally {
+      await rm(repository, { recursive: true, force: true });
+      await rm(external, { recursive: true, force: true });
+    }
+  }
+});
 
 test("node-postgres deps stage ships every root workspace and runtime import", async () => {
   const [dockerfile, rootPackage] = await Promise.all([
@@ -141,7 +186,7 @@ test("node-postgres runtime copies its import graph and migration SQL without th
     "deploy/node-postgres/src/server.ts",
     "cli/src/main.ts",
     "core/scripts/db-migrate.ts",
-  ].map(repoLocalRuntimeInputs))).flat();
+  ].map((entrypoint) => repoLocalRuntimeInputs(entrypoint)))).flat();
   expect([...new Set(inputs)].filter((input) => !covered(input, copied))).toEqual([]);
   expect(covered("deploy/cloudflare/worker.ts", copied)).toBe(false);
 });
@@ -190,10 +235,17 @@ test("node-postgres compose applies both schemas and passes only declared servic
         environment?: Record<string, string>;
         command?: unknown;
         depends_on?: Record<string, { condition: string }>;
+        healthcheck?: { test: string[] };
       }
     >;
   };
   const migrations = compose.services.migrations!;
+  expect(migrations.depends_on?.postgres?.condition).toBe("service_healthy");
+  // The image starts a socket-only postmaster before the long-lived server.
+  expect(compose.services.postgres?.healthcheck?.test).toEqual([
+    "CMD-SHELL",
+    "pg_isready -h 127.0.0.1 -U takosumi -d takosumi_accounts",
+  ]);
   const migrationCommand = JSON.stringify(migrations.command);
   expect(migrationCommand).toContain("/app/core/scripts/db-migrate.ts --env=production");
   expect(migrationCommand).toContain("/app/cli/src/main.ts accounts migrate");

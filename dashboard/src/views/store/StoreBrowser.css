@@ -24,7 +24,8 @@
 }
 .tcs-search {
   flex: 1;
-  min-width: 180px;
+  min-width: min(100%, 10rem);
+  position: relative;
 }
 .tcs-search input,
 .tcs-add input {
@@ -36,6 +37,14 @@
   padding: var(--tg-s-2, 8px) var(--tg-s-3, 12px);
   font: inherit;
 }
+.tcs-search > svg { position: absolute; inset-inline-start: 12px; top: 50%; transform: translateY(-50%); color: var(--c-muted); pointer-events: none; }
+.tcs-search input { min-height: 44px; padding-inline-start: 38px; }
+.tcs-controls .tcs-display-options { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; background: transparent; }
+.tcs-display-options[aria-expanded="true"] { background: var(--c-panel2); }
+.tcs-options-panel { margin-bottom: 1rem; padding: 12px; background: var(--c-panel); border: 1px solid var(--c-border); border-radius: var(--tg-r-md, 10px); }
+.tcs-options-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.tcs-options-row select { min-height: 44px; }
+.tcs-options-row:empty { display: none; }
 .tcs-sort {
   background: var(--c-panel);
   border: 1px solid var(--c-border);
@@ -97,11 +106,10 @@
 }
 
 .tcs-servers {
-  background: var(--c-panel);
-  border: 1px solid var(--c-border);
-  border-radius: var(--tg-r-md, 10px);
-  padding: var(--tg-s-3, 12px) var(--tg-s-3, 12px);
-  margin-bottom: 12px;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
 }
 .tcs-servers ul {
   list-style: none;
@@ -137,6 +145,7 @@
   gap: var(--tg-s-2, 8px);
 }
 .tcs-add input {
+  min-width: 0;
   flex: 1;
 }
 
@@ -512,4 +521,49 @@
   color: var(--c-muted);
   font-size: var(--tg-fs-xs, 0.78rem);
   line-height: 1.6;
+}
+
+/* Hosts with a dedicated app page can use the whole tile to open it. */
+.tcs-page-list .tcs-card {
+  position: relative;
+  justify-content: center;
+  min-height: 106px;
+  background: transparent;
+  border-color: transparent;
+  transition: background-color 0.14s ease;
+}
+
+.tcs-page-list .tcs-card:not(.tcs-card-skeleton):hover {
+  background: var(--c-panel2);
+  transform: none;
+  box-shadow: none;
+}
+
+.tcs-page-list .tcs-card-top {
+  align-items: center;
+}
+
+.tcs-page-list .tcs-card-main {
+  gap: var(--tg-s-1, 4px);
+}
+
+.tcs-page-list .tcs-card-title {
+  margin: 0;
+}
+
+.tcs-page-list .tcs-card-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--tg-r-lg, 14px);
+}
+
+.tcs-page-list .tcs-card-open:focus-visible::after {
+  outline: 2px solid var(--c-accent);
+  outline-offset: -2px;
+}
+
+.tcs-page-list .tcs-card-skeleton {
+  background: var(--c-panel2);
+  animation: none;
 }

@@ -35,8 +35,9 @@ import type {
 } from "./mod.ts";
 import { readEnvVar } from "./read-env.ts";
 import type { SharedHostedSessionContext } from "./shared-account-workspace.ts";
-import { authLanguage, authPage, escapeAuthHtml } from "./auth-page.ts";
+import { authLanguage, authPage, authSignInTitle, escapeAuthHtml, stagingSignInProduct } from "./auth-page.ts";
 import { requireAccountSession } from "./account-session.ts";
+import { accountAuthenticationGenerationMatches } from "./account-authentication-generation.ts";
 import { HOSTED_CODE_TTL_MS, HOSTED_TOKEN_TTL_SECONDS, HOSTED_REFRESH_IDLE_MS, HOSTED_REFRESH_ABSOLUTE_MS, HOSTED_OIDC_SCOPES, hostedGrantIsActive, hostedIssuerSessionId, hostedOpaqueId } from "./hosted-oidc-profile.ts";
 import { findActiveAccessToken } from "./access-token-activity.ts";
 import type { InterfaceOAuthActivityValidator } from "./access-token-activity.ts";
@@ -234,6 +235,7 @@ type OidcTokenDenialStage =
   | "authorization_code_missing"
   | "authorization_code_reused"
   | "authorization_code_unknown_or_expired"
+  | "authentication_generation_changed"
   | "client_id_mismatch"
   | "client_registration_missing"
   | "client_authentication_failed"
@@ -684,6 +686,7 @@ async function handleAuthorizeUncached(input: {
   // Consent is never remembered for these clients, so a silent request cannot succeed.
   if (nativeConsentPrompts.includes("none")) return nativeAuthorizeError(redirectUri, input.url.searchParams.get("state"), "consent_required", input.issuer ?? input.url.origin);
   const sessionRecord = await input.store.findAccountSession(session.sessionId);
+  if (!sessionRecord || sessionRecord.subject !== session.subject) return authorizeSignInRedirect(input.url);
   let reauthenticationStartedAt: number | undefined;
   if (client.profile === "shared-account") {
     if (sessionRecord?.policy !== "hosted" || !Number.isSafeInteger(sessionRecord.authTime)) return authorizeSignInRedirect(input.url);
@@ -841,6 +844,8 @@ async function handleAuthorizeUncached(input: {
   }
   await input.store.saveAuthorizationCode(code, {
     ...hostedMetadata,
+    ...(client.profile !== "shared-account" && subject.record.takosumiSubject && (sessionRecord.identityGeneration ?? 0) > 0
+      ? { identityGeneration: sessionRecord.identityGeneration } : {}),
     clientId,
     redirectUri,
     scope,
@@ -985,6 +990,9 @@ async function handleTokenUncached(input: {
           "authorization_code_unknown_or_expired",
           "invalid_grant",
         );
+      }
+      if (record.oidcProfile !== "shared-account" && !await accountAuthenticationGenerationMatches(input.store, record.takosumiSubject, record.identityGeneration)) {
+        return oidcTokenDenial("authentication_generation_changed", "invalid_grant");
       }
 
       if (credentials.clientId !== record.clientId) {
@@ -1172,7 +1180,8 @@ async function handleRefreshToken(input: {
     }
     const requestedScope = input.params.get("scope");
     if (requestedScope !== null && requestedScope !== record.scope) return json({error:"invalid_scope"},400);
-  } else if (hostedRefresh || client.profile === "shared-account") return json({error:"invalid_grant"},400);
+  } else if (hostedRefresh || client.profile === "shared-account" ||
+    !await accountAuthenticationGenerationMatches(input.store, record.takosumiSubject, record.identityGeneration)) return json({error:"invalid_grant"},400);
   const operations = await operationsForLiveGrant({
     operations: input.operations,
     resolveOperations: input.resolveOperations,
@@ -1391,6 +1400,10 @@ async function issueTokenResponse(input: {
       if (input.refreshToken) await input.store.revokeRefreshChain(input.refreshToken);
       return json({error:"invalid_grant"},400);
     }
+  } else if (!await accountAuthenticationGenerationMatches(input.store, input.takosumiSubject, input.identityGeneration)) {
+    await input.store.deleteToken(accessToken);
+    if (input.refreshToken) await input.store.revokeRefreshChain(input.refreshToken);
+    return json({ error: "invalid_grant" }, 400);
   }
   const body: Record<string, unknown> = {
     access_token: accessToken,
@@ -1762,6 +1775,7 @@ async function handleIntrospectUncached(input: {
       return json({ active: false });
     }
     if (!(await hostedGrantIsActive({store:input.store,record:refreshRecord,client:auth.client,issuer:input.issuer})) || refreshRecord.expiresAt <= Date.now() || (refreshRecord.oidcProfile === "shared-account" && (await input.store.getRefreshChainChild(token) !== undefined || await input.store.isRefreshRootRevoked(token)))) return json({active:false});
+    if (refreshRecord.oidcProfile !== "shared-account" && !await accountAuthenticationGenerationMatches(input.store, refreshRecord.takosumiSubject, refreshRecord.identityGeneration)) return json({ active: false });
     const operations = await operationsForLiveGrant({
       operations: input.operations,
       resolveOperations: input.resolveOperations,
@@ -1980,19 +1994,17 @@ function hostedConsentPage(
   const nonce = base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(16)));
   const redirect = new URL(redirectUri);
   const stage = url.origin === "https://auth-staging.takos.jp";
-  const stageClientName = stage && client.clientId === "takosumi-hosted-staging-v1"
-    ? "Takosumi" : stage && client.clientId === "takoserver-console-staging-v1" ? "Takoserver" : undefined;
-  const name = escapeAuthHtml(stageClientName ?? client.displayName ?? client.clientId);
+  const stageClientName = stage ? stagingSignInProduct(client.clientId) : undefined;
+  const name = stageClientName ?? client.displayName ?? client.clientId;
   const scopes = NATIVE_CONSENT_COPY[language].scopes;
   const permissions = scope.split(/\s+/u).filter(Boolean).map((item) =>
     `<li>${escapeAuthHtml(Object.hasOwn(scopes, item) ? scopes[item]! : item)}</li>`).join("");
-  const title = ja ? "サインインを続ける" : "Continue sign-in";
-  const body = `<p class="auth-summary">${ja ? `${name} に次のアクセスを許可しますか？` : `Allow ${name} to access the following?`}</p>` +
-    `<ul class="auth-permissions">${permissions}</ul>` +
-    `<p class="auth-hint">${ja ? "戻り先" : "Returns to"}：${escapeAuthHtml(redirect.host)}</p>` +
+  const title = stageClientName ? authSignInTitle(language, stageClientName) : NATIVE_CONSENT_COPY[language].title(name);
+  const body = `<ul class="auth-permissions" aria-label="${ja ? "共有される情報" : "Information to share"}">${permissions}</ul>` +
+    `<dl class="auth-context"><dt>${ja ? "戻り先" : "Returns to"}</dt><dd>${escapeAuthHtml(redirect.host)}</dd></dl>` +
     `<form method="post" action="${escapeAuthHtml(url.pathname + url.search)}"><input type="hidden" name="consent_transaction" value="${escapeAuthHtml(transaction)}">` +
     `<div class="actions"><button class="auth-button auth-button--primary" type="submit" name="approve" value="yes">${ja ? "許可して続ける" : "Allow and continue"}</button></div></form>`;
-  return new Response(authPage({ language, nonce, title, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
+  return new Response(authPage({ language, nonce, issuer: url.origin, title, body, ...(stage ? { badge: ja ? "ステージング" : "Staging" } : {}) }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "content-language": language,
@@ -2008,7 +2020,7 @@ function hostedConsentPage(
 function hostedRecordMetadata(record: {
   identityGeneration?: number; issuer?: string; oidcProfile?: "shared-account"; authTime?: number; sid?: string; issuerSessionId?: string; nonce?: string; familyStartedAt?: number; familyExpiresAt?: number;
 }): Partial<TokenRecord> {
-  return record.oidcProfile === "shared-account" ? {identityGeneration:record.identityGeneration,issuer:record.issuer,oidcProfile:record.oidcProfile,authTime:record.authTime,sid:record.sid,issuerSessionId:record.issuerSessionId,nonce:record.nonce,familyStartedAt:record.familyStartedAt,familyExpiresAt:record.familyExpiresAt} : {};
+  return record.oidcProfile === "shared-account" ? {identityGeneration:record.identityGeneration,issuer:record.issuer,oidcProfile:record.oidcProfile,authTime:record.authTime,sid:record.sid,issuerSessionId:record.issuerSessionId,nonce:record.nonce,familyStartedAt:record.familyStartedAt,familyExpiresAt:record.familyExpiresAt} : (record.identityGeneration ?? 0) > 0 ? { identityGeneration: record.identityGeneration } : {};
 }
 async function hostedEmailVerified(store: AccountsStore, account: TakosumiAccountRecord|undefined): Promise<boolean> {
   if (!account?.email || account.emailVerified !== true) return false;
@@ -2203,40 +2215,34 @@ function isNativeConsentTransaction(code: string): boolean {
 const NATIVE_CONSENT_COPY = {
   ja: {
     lang: "ja",
-    title: (client: string) => `${client} にアクセスを許可しますか？`,
-    lead: (client: string, instance: string) => `${instance} のアカウントで、${client} が次のことをできるようになります。`,
+    title: (client: string) => `${client} のアクセス許可`,
     account: "アカウント",
-    can: "できること",
     scopes: {
-      openid: "あなたのアカウントを識別する",
+      openid: "アカウントを識別する",
       profile: "名前とプロフィール画像を見る",
       email: "メールアドレスを見る",
-      offline_access: "サインインしたままにする（この端末で更新を続ける）",
+      offline_access: "ログイン状態を維持する",
       "capsules:read": "アプリ、Run、状態を見る",
-      "capsules:write": "このアカウントでTakosumiを操作する（アプリの変更、Runの承認・取り消し、接続・ソース・スペースの変更を含む）",
+      "capsules:write": "このアカウントでTakosumiを操作する（アプリの変更、Runの承認と取り消し、接続・ソース・スペースの変更など）",
     } as Record<string, string>,
-    runs: "許可すると、このアプリからRunの承認と取り消しを含め、ダッシュボードでできる操作のほとんどができます。",
-    warning: (client: string) => `このページを ${client} から開いていない場合は、「許可しない」を選んでください。`,
+    warning: "心当たりがない場合は、許可しないでください。",
     returnsTo: "戻り先",
     approve: "許可する",
     deny: "許可しない",
   },
   en: {
     lang: "en",
-    title: (client: string) => `Allow ${client} to access your account?`,
-    lead: (client: string, instance: string) => `With your account on ${instance}, ${client} will be able to:`,
+    title: (client: string) => `Access for ${client}`,
     account: "Account",
-    can: "It can",
     scopes: {
       openid: "Identify your account",
       profile: "See your name and profile picture",
       email: "See your email address",
       offline_access: "Stay signed in on this device",
       "capsules:read": "See your apps, Runs and their state",
-      "capsules:write": "Act on Takosumi as this account (change apps, approve or cancel Runs, and change connections, sources and workspaces)",
+      "capsules:write": "Act on Takosumi as this account (change apps, approve and cancel Runs, and change connections, sources and workspaces)",
     } as Record<string, string>,
-    runs: "If you allow it, this app can approve and cancel Runs and do most of what you can do in the dashboard.",
-    warning: (client: string) => `If you did not open this page from ${client}, choose Don't allow.`,
+    warning: "If you did not request this, choose Don't allow.",
     returnsTo: "Returns to",
     approve: "Allow",
     deny: "Don't allow",
@@ -2257,7 +2263,6 @@ function nativeConsentPage(input: {
   const language = authLanguage(input.request);
   const copy = NATIVE_CONSENT_COPY[language];
   const client = input.client.displayName ?? input.client.clientId;
-  const instance = new URL(input.issuer).host;
   const scopes = [...new Set(input.scope.split(/\s+/u).filter(Boolean))];
   const nonce = base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(16)));
   const redirect = new URL(input.redirectUri);
@@ -2267,14 +2272,12 @@ function nativeConsentPage(input: {
     ? redirect.origin
     : /^[a-z][a-z0-9+.-]*:$/u.test(redirect.protocol) ? redirect.protocol : "'none'";
   const body =
-    `<p>${escape(copy.lead(client, instance))}</p>` +
-    `<ul class="auth-permissions">${scopes.map((scope) => `<li>${escape(Object.hasOwn(copy.scopes, scope) ? copy.scopes[scope]! : scope)} <small>(${escape(scope)})</small></li>`).join("")}</ul>` +
-    (scopes.includes("capsules:write") ? `<p class="note">${escape(copy.runs)}</p>` : "") +
-    `<dl>${input.accountLabel ? `<dt>${escape(copy.account)}</dt><dd>${escape(input.accountLabel)}</dd>` : ""}<dt>${escape(copy.returnsTo)}</dt><dd>${escape(input.redirectUri)}</dd></dl>` +
-    `<p class="warn">${escape(copy.warning(client))}</p>` +
+    `<ul class="auth-permissions">${scopes.map((scope) => `<li>${escape(Object.hasOwn(copy.scopes, scope) ? copy.scopes[scope]! : scope)}</li>`).join("")}</ul>` +
+    `<dl class="auth-context">${input.accountLabel ? `<dt>${escape(copy.account)}</dt><dd>${escape(input.accountLabel)}</dd>` : ""}<dt>${escape(copy.returnsTo)}</dt><dd>${escape(input.redirectUri)}</dd></dl>` +
+    `<p class="warn">${escape(copy.warning)}</p>` +
     `<form method="post" action="${escape(input.url.pathname + input.url.search)}"><input type="hidden" name="consent_transaction" value="${escape(input.transaction)}">` +
     `<div class="actions"><button class="auth-button" type="submit" name="decision" value="deny">${escape(copy.deny)}</button><button class="auth-button auth-button--primary" type="submit" name="decision" value="approve">${escape(copy.approve)}</button></div></form>`;
-  return new Response(authPage({ language, nonce, title: copy.title(client), body }), {
+  return new Response(authPage({ language, nonce, issuer: input.issuer, title: copy.title(client), body }), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",

@@ -463,6 +463,12 @@ export interface GitInstallPlanStore {
   get(id: string): Promise<StoredGitInstallPlan | undefined>;
   /** Observation only: an exact replay must not require new admission. */
   getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined>;
+  /** Read-only exact saved Plan link. Missing or ambiguous records have no hint. */
+  revisionForPlanRun?(
+    capsuleId: string,
+    workspaceId: string,
+    planRunId: string,
+  ): Promise<StoredGitInstallPlan | undefined>;
   /**
    * The newest coordinator row still preparing a Plan for this Capsule: a
    * non-terminal row (not `failed`, `reviewable` or `discarded`) that has not
@@ -600,6 +606,18 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
   async getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined> {
     const id = this.#scopeIndex.get(scopeKey(scope));
     return id === undefined ? undefined : await this.get(id);
+  }
+
+  revisionForPlanRun(capsuleId: string, workspaceId: string, planRunId: string): Promise<StoredGitInstallPlan | undefined> {
+    const found: StoredGitInstallPlan[] = [];
+    for (const { plan } of this.#entries.values()) {
+      if (plan.workspaceId === workspaceId && plan.capsuleId === capsuleId &&
+        plan.operation === "revision" && plan.planRunId === planRunId) {
+        found.push(plan);
+        if (found.length === 2) break;
+      }
+    }
+    return Promise.resolve(found.length === 1 ? clone(found[0]!) : undefined);
   }
 
   preparingCoordinatorForCapsule(

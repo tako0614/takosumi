@@ -44,6 +44,7 @@ import {
   type CapsulePlanCreationFence,
   type OpenTofuRunner,
   type OpenTofuRunnerExecutorRegistry,
+  type RunDispatchControl,
   type RunExecutionAuthority,
   type ReleaseActivator,
   type RecordMeteredUsageInput,
@@ -836,8 +837,10 @@ export interface TakosumiOperations {
   createCapsuleDestroyPlan(
     capsuleId: string,
     options?: {
+      readonly destroyProviderConnectionReplacements?: readonly import("takosumi-contract/connections").DestroyProviderConnectionReplacement[];
       readonly runnerProfileId?: string;
       readonly actor?: string;
+      readonly actorOwnershipEpoch?: number;
     },
   ): Promise<PlanRunResponse>;
   /**
@@ -995,7 +998,7 @@ export interface TakosumiOperations {
       workspaceId: string;
     },
     /** Host invocation bounds, e.g. a Durable Object alarm's wall deadline. */
-    control?: { readonly deadlineAt?: number },
+    control?: RunDispatchControl,
   ): Promise<void>;
   // --- Sources (Core Specification §6) ---
   createSource(
@@ -1316,6 +1319,9 @@ export async function createTakosumiService(
               sourceSnapshot: snapshot,
               ...(fileOptions?.modulePath
                 ? { modulePath: fileOptions.modulePath }
+                : {}),
+              ...(fileOptions?.requireProviderMirror
+                ? { requireProviderMirror: true }
                 : {}),
             }),
         }
@@ -2083,10 +2089,16 @@ export async function createTakosumiService(
     createCapsuleDestroyPlan: (capsuleId, options) =>
       opentofuController.createCapsuleDestroyPlan(
         capsuleId,
-        options?.actor ? { actor: options.actor } : {},
-        options?.runnerProfileId
-          ? { runnerProfileId: options.runnerProfileId }
-          : {},
+        {
+          ...(options?.actor ? { actor: options.actor } : {}),
+          ...(options?.actorOwnershipEpoch !== undefined
+            ? { actorOwnershipEpoch: options.actorOwnershipEpoch }
+            : {}),
+        },
+        {
+          ...(options?.runnerProfileId ? { runnerProfileId: options.runnerProfileId } : {}),
+          ...(options?.destroyProviderConnectionReplacements !== undefined ? { destroyProviderConnectionReplacements: options.destroyProviderConnectionReplacements } : {}),
+        },
       ),
     createCapsuleDriftCheck: (capsuleId, options) =>
       opentofuController.createCapsuleDriftCheck(capsuleId, {

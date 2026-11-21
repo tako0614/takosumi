@@ -127,6 +127,7 @@ function truncate(message: string): string {
 const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
   // 409 failed_precondition while the operator pauses member/transfer writes.
   app_ownership_mutations_frozen: "controlError.appOwnershipMutationsFrozen",
+  destroy_connection_recovery_unproven: "app.uninstall.replacementUnproven",
   state_generation_mismatch: "controlError.stateGenerationMismatch",
   dependency_retired: "controlError.dependencyRetired",
   source_ref_changed: "controlError.sourceChanged",
@@ -180,6 +181,20 @@ function mappedControlApiMessage(
   if (!(err instanceof ControlApiError)) return undefined;
   const codeKey = err.code ? CODE_MESSAGES[err.code] : undefined;
   if (codeKey) return t(codeKey);
+  if (err.status === 409 && err.code === "failed_precondition" &&
+    err.reason === "destroy_connection_recovery_unproven") {
+    const details = err.details;
+    if (details && typeof details === "object" && "connectionRecoveryFailure" in details) {
+      switch (details.connectionRecoveryFailure) {
+        case "replacement_unverified":
+          return t("app.uninstall.replacementVerifyFirst");
+        case "bindings_mismatch":
+          return t("app.uninstall.replacementSettingsMismatch");
+        case "applied_evidence_unavailable":
+          return t("app.uninstall.replacementAppliedEvidenceUnavailable");
+      }
+    }
+  }
   // A plan diagnostic arrives as the error CODE (no `reason`), and it uses
   // the same snake_case vocabulary — look it up there too.
   const key =

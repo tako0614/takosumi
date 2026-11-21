@@ -8,6 +8,7 @@
  */
 import { createMemo, For, type JSX, Match, Show, Switch } from "solid-js";
 import { ExternalLink } from "lucide-solid";
+import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import { Button } from "../../components/ui/index.ts";
 import type {
   CapsuleAppAction,
@@ -23,11 +24,12 @@ import {
 } from "../../lib/app-page.ts";
 import { installAttemptHref } from "../../lib/app-links.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
-import { appUninstallBanner, appUninstallExportNote } from "../../lib/capsule-uninstall.ts";
+import { appUninstallBanner, appUninstallConnectionNotice, appUninstallExportNote, appUninstallFailure, appUninstallRecoveryMode } from "../../lib/capsule-uninstall.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
+import AppUninstallConnectionRecovery from "./AppUninstallConnectionRecovery.tsx";
 
 export interface AttentionActions {
   readonly retry: (problem: CapsuleAppProblem) => void;
@@ -37,6 +39,7 @@ export interface AttentionActions {
   readonly continueInstall: () => void;
   readonly cancelUninstall: () => void;
   readonly uninstallNow: () => void;
+  readonly reviewUninstallWithConnection: (replacements: readonly DestroyProviderConnectionReplacement[]) => void;
   readonly openReview: (runId: string, runType: RunType) => void;
   /** Continues a revision coordinator that stopped moving. */
   readonly continueRevision: (revisionPlanId: string) => void;
@@ -100,6 +103,7 @@ function failedRunTitle(problem: CapsuleAppProblem): MessageKey {
 
 export default function AppAttentionSection(props: {
   readonly app: CapsuleAppView;
+  readonly uninstallScope: string;
   readonly displayName: string;
   /** A review or change is being started, so other changes wait. */
   readonly busy: boolean;
@@ -107,7 +111,6 @@ export default function AppAttentionSection(props: {
   readonly startingAction?: CapsuleAppAction | "continue_revision";
   readonly canUninstall?: boolean;
   readonly uninstallBusy: boolean;
-  readonly uninstallError?: string;
   readonly screenRetryBusy: boolean;
   readonly screenRetryMessage?: string;
   readonly error?: string;
@@ -125,7 +128,20 @@ export default function AppAttentionSection(props: {
     return action !== undefined && app().primaryAction === action &&
       primary !== undefined && problemKey(primary) === problemKey(problem);
   };
-  const cards = () => app().problems.filter((problem) => !UNINSTALL_CODES.has(problem.code));
+  const scheduled = () => app().uninstall.scheduled;
+  const uninstallFailed = createMemo(() => appUninstallFailure(app()));
+  const recoveryMode = createMemo(() => appUninstallRecoveryMode(app()));
+  const recoveryKey = createMemo(() => {
+    const mode = recoveryMode();
+    return props.canUninstall && props.reviewRunId === undefined && mode
+      ? JSON.stringify([props.uninstallScope, mode, mode === "failed" ? app().latestRun?.id : undefined])
+      : undefined;
+  });
+  const uninstallBlocked = () => app().problems.find((problem) => problem.code === "uninstall_blocked");
+  const showUninstallCard = () => Boolean(scheduled() || uninstallFailed() || uninstallBlocked());
+  const uninstallConnectionNotice = () => showUninstallCard() ? appUninstallConnectionNotice(app()) : undefined;
+  const cards = () => app().problems.filter((problem) => !UNINSTALL_CODES.has(problem.code) && problem !== uninstallFailed() &&
+    !(problem.code === "connection_unavailable" && uninstallConnectionNotice()));
   /** The app asking for a link, by the usedBy row the problem names. */
   const requesterName = (problem: CapsuleAppProblem) => {
     const row = app().links?.usedBy.find((link) =>
@@ -136,10 +152,6 @@ export default function AppAttentionSection(props: {
   };
   const cardKeys = createMemo(() => cards().map(problemKey), undefined, { equals: sameKeys });
   const cardByKey = () => new Map(cards().map((problem) => [problemKey(problem), problem]));
-  const scheduled = () => app().uninstall.scheduled;
-  const uninstallFailed = () => app().problems.find((problem) => problem.code === "uninstall_failed");
-  const uninstallBlocked = () => app().problems.find((problem) => problem.code === "uninstall_blocked");
-  const showUninstallCard = () => Boolean(scheduled() || uninstallFailed() || uninstallBlocked());
   const pendingReview = () => {
     const review = app().progress.review;
     // A review the server is waiting on that is not already open here.
@@ -160,9 +172,15 @@ export default function AppAttentionSection(props: {
   const preparing = () =>
     app().progress.revisionPreparing && !app().progress.run && !app().progress.review &&
     !awaitingInput() && props.reviewRunId === undefined;
+  // The server only returns a plan ID here to the request starter. Other viewers still
+  // see the preparing status but cannot resume someone else's request.
+  const preparingRevisionPlanId = () =>
+    preparing() && app().state === "updating" ? app().progress.revisionPlanId : undefined;
   // A version change whose preparation stopped (its client went away).
   const stalledRevision = () =>
-    props.reviewRunId === undefined ? app().progress.revisionPlanId : undefined;
+    !app().progress.revisionPreparing && props.reviewRunId === undefined
+      ? app().progress.revisionPlanId
+      : undefined;
   // Another change under way or waiting for review goes first: continuing the
   // stopped one beside it would race it to a second Plan.
   const revisionWaits = () => appVersionChangeBusy(app());
@@ -285,6 +303,7 @@ export default function AppAttentionSection(props: {
           <Show when={showUninstallCard()}>
             <article class="ap-problem ap-problem-warn" data-problem="uninstall">
               <strong>{banner()}</strong>
+              <Show when={uninstallConnectionNotice()}>{(notice) => <p>{t(notice())}</p>}</Show>
               <Show when={uninstallFailed()}>
                 {(problem) => <p>{runFailureHint(problem().errorCode)}</p>}
               </Show>
@@ -305,7 +324,7 @@ export default function AppAttentionSection(props: {
                 <Show
                   when={uninstallFailed()}
                   fallback={
-                    <Show when={offerUninstallNow()}>
+                    <Show when={offerUninstallNow() && !uninstallConnectionNotice()}>
                       <Button
                         variant="secondary"
                         type="button"
@@ -320,7 +339,7 @@ export default function AppAttentionSection(props: {
                 >
                   {(problem) => (
                     <>
-                      <Show when={props.canUninstall !== false && !isPrimary(problem(), "retry")}>
+                      <Show when={props.canUninstall !== false && !isPrimary(problem(), "retry") && !uninstallConnectionNotice()}>
                         <Button
                           variant="secondary"
                           type="button"
@@ -335,9 +354,17 @@ export default function AppAttentionSection(props: {
                     </>
                   )}
                 </Show>
+                <Show when={uninstallConnectionNotice() === "app.uninstall.connectionUnavailable" && props.canUninstall !== false && app().primaryAction !== "fix_connection"}>
+                  <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
+                </Show>
               </div>
-              <Show when={props.uninstallError}>
-                {(message) => <p class="wa-error" role="alert">{message()}</p>}
+              <Show when={recoveryKey()} keyed>
+                {(_scope) => <AppUninstallConnectionRecovery
+                  app={app()}
+                  mode={recoveryMode()!}
+                  disabled={props.busy}
+                  onReview={props.actions.reviewUninstallWithConnection}
+                />}
               </Show>
             </article>
           </Show>
@@ -447,6 +474,22 @@ export default function AppAttentionSection(props: {
 
           <Show when={preparing()}>
             <p class="ap-notice" role="status" data-progress="preparing">{t("app.progress.preparing")}</p>
+          </Show>
+
+          <Show when={preparingRevisionPlanId()}>
+            {(revisionPlanId) => (
+              <div class="ap-row-actions">
+                <Button
+                  variant="secondary"
+                  type="button"
+                  busy={props.startingAction === "continue_revision"}
+                  disabled={props.busy}
+                  onClick={() => props.actions.continueRevision(revisionPlanId())}
+                >
+                  {t("app.progress.continueRevision")}
+                </Button>
+              </div>
+            )}
           </Show>
 
           <Show when={awaitingInput()}>

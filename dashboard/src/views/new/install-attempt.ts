@@ -33,6 +33,9 @@ import type {
   JsonValue,
 } from "takosumi-contract";
 import type { MessageKey } from "../../i18n/index.ts";
+import type { ProviderConnection } from "takosumi-contract";
+import { sameProviderSource } from "takosumi-contract/provider-env-rules";
+import { providerInstallSettings } from "../../../../providers/install-settings.ts";
 
 // --- URL ---------------------------------------------------------------------
 
@@ -94,20 +97,6 @@ export function appNameValue(value: string | undefined): string | undefined {
   return trimmed.length > 0 && trimmed.length <= 63 && APP_NAME.test(trimmed)
     ? trimmed
     : undefined;
-}
-
-/** `Repository Office` → `repository-office`, for a Store listing's name. */
-export function appNameFromText(value: string): string | undefined {
-  return appNameValue(
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/gu, "-")
-      .replace(/-+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 48)
-      .replace(/-+$/u, ""),
-  );
 }
 
 /** Inputs for starting an install or recreating an existing attempt. */
@@ -215,6 +204,10 @@ export interface VariableDraft {
   readonly value: string;
   /** False until the person edits the field; untouched defaults are not sent. */
   readonly touched: boolean;
+  /** Exact chosen provider instance; a connection switch invalidates this proposal. */
+  readonly connectionSetting?: ConnectionSettingOrigin;
+  /** Standard URL provenance; stale metadata must never be submitted. */
+  readonly publicEndpoint?: PublicEndpointOrigin;
 }
 
 export type VariableDrafts = Readonly<Record<string, VariableDraft>>;
@@ -341,7 +334,24 @@ export function continueVariables(
   const missing: string[] = [];
   const invalid: string[] = [];
   for (const variable of sheetVariables(action)) {
+    // Only an explicit server ownership projection forbids an override.
+    // Generic derived defaults remain editable when this metadata is absent.
+    if (variable.userEditable === false) continue;
     const draft = drafts[variable.name];
+    // Resubmission renders all fields write-only, but retains the original
+    // declaration for validating an exact value already held in memory.
+    const declaration = awaitingResubmission(action)
+      ? action.variables.find((field) => field.name === variable.name) ?? variable : variable;
+    if (draft?.publicEndpoint && !currentPublicEndpoint(action, declaration, draft)) {
+      invalid.push(variable.name);
+      continue;
+    }
+    if (draft?.connectionSetting && (variable.type !== "json" || variable.sensitive ||
+      variable.defaultValue !== undefined || variable.derivedDefault !== undefined ||
+      !currentConnectionSetting(action.connections, draft.connectionSetting))) {
+      invalid.push(variable.name);
+      continue;
+    }
     const text = variable.sensitive
       ? (draft?.value ?? "")
       : draft?.touched
@@ -977,34 +987,6 @@ export function deriveInstallView(
   }
 }
 
-/**
- * Whether the install screen can continue this list entry: only an attempt
- * can. An install plan started without that screen is listed only to be
- * stopped.
- */
-export function openEntryIsContinuable(response: GitInstallPlanResponse): boolean {
-  return response.installPlan.mode === "attempt";
-}
-
-/** Short status of an unfinished attempt in the "途中のインストール" list. */
-export function openAttemptStatusKey(response: GitInstallPlanResponse): MessageKey {
-  if (!openEntryIsContinuable(response)) return "installStore.open.statusNotContinuable";
-  switch (deriveInstallView(response).stage) {
-    case "paused":
-    case "retry":
-      return "installStore.open.statusReading";
-    case "choose_module":
-    case "provide_inputs":
-      return "installStore.open.statusInputs";
-    case "review":
-      return "installStore.open.statusReview";
-    case "invalidated":
-      return "installStore.open.statusExpired";
-    default:
-      return "installStore.open.statusFailed";
-  }
-}
-
 // --- Words ------------------------------------------------------------------------
 
 /** What happened, for a failed or invalidated attempt's code. */
@@ -1058,4 +1040,105 @@ export function versionLabel(ref: string | undefined): string | undefined {
   const value = ref?.trim();
   if (!value || value === "HEAD") return undefined;
   return /^[0-9a-f]{40}$/iu.test(value) ? value.slice(0, 7) : value;
+}
+
+/** Explicitly chosen provider instance, not an authority or a default mapping. */
+export type ConnectionSettingOrigin = {
+  readonly requirementKey: string;
+  readonly connectionId: string;
+};
+export interface ConnectionSettingChoice extends ConnectionSettingOrigin {
+  readonly displayName: string;
+  readonly provider: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
+  readonly rootAlias?: string;
+  readonly value: Readonly<Record<string, JsonValue>>;
+}
+
+export interface PublicEndpointOrigin extends ConnectionSettingOrigin {
+  readonly appName: string;
+  readonly serviceName: string;
+  readonly workersSubdomain: string;
+  readonly confirmed: boolean;
+}
+
+const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+
+/** An app must explicitly declare both the format and the endpoint role. */
+export function isCloudflarePublicUrl(variable: GitInstallPlanVariablePresentation): boolean {
+  return variable.format === "cloudflare-workers-url" && variable.publicEndpoint !== undefined &&
+    variable.type === "string" && !variable.sensitive && variable.userEditable === true &&
+    variable.defaultValue === undefined && variable.derivedDefault === undefined;
+}
+
+function publicUrl(origin: PublicEndpointOrigin): string {
+  return `https://${origin.serviceName}.${origin.workersSubdomain}.workers.dev`;
+}
+
+function unambiguousCloudflare(action: ProvideInputs): boolean {
+  // The endpoint role does not bind a provider alias. Do not guess between
+  // multiple Cloudflare requirements, even if only one returned metadata.
+  return action.connections.filter((row) => sameProviderSource(row.provider, CLOUDFLARE_PROVIDER)).length === 1;
+}
+
+/** Compose only one unambiguous selected provider's sanitized, confirmed metadata. */
+export function cloudflarePublicUrlDraft(
+  action: ProvideInputs,
+  variable: GitInstallPlanVariablePresentation,
+  choices: readonly ConnectionSettingChoice[],
+): VariableDraft | undefined {
+  const serviceName = variable.publicEndpoint?.suggestedName;
+  if (!isCloudflarePublicUrl(variable) || !unambiguousCloudflare(action) || !serviceName || !DNS_LABEL.test(serviceName)) return undefined;
+  const eligible = choices.filter((choice) => sameProviderSource(choice.provider, CLOUDFLARE_PROVIDER) &&
+    currentConnectionSetting(action.connections, choice));
+  if (eligible.length !== 1) return undefined;
+  const choice = eligible[0]!;
+  const workersSubdomain = choice.value.workers_subdomain;
+  if (typeof workersSubdomain !== "string" || !DNS_LABEL.test(workersSubdomain)) return undefined;
+  const origin: PublicEndpointOrigin = { requirementKey: choice.requirementKey, connectionId: choice.connectionId,
+    appName: action.name.current, serviceName, workersSubdomain, confirmed: true };
+  return { value: publicUrl(origin), touched: true, publicEndpoint: origin };
+}
+
+function currentPublicEndpoint(action: ProvideInputs, variable: GitInstallPlanVariablePresentation, draft: VariableDraft): boolean {
+  const origin = draft.publicEndpoint;
+  return Boolean(origin?.confirmed && isCloudflarePublicUrl(variable) && unambiguousCloudflare(action) &&
+    origin.appName === action.name.current && origin.serviceName === variable.publicEndpoint?.suggestedName &&
+    DNS_LABEL.test(origin.serviceName) && DNS_LABEL.test(origin.workersSubdomain) &&
+    currentConnectionSetting(action.connections, origin) &&
+    action.connections.some((row) => connectionKey(row) === origin.requirementKey && sameProviderSource(row.provider, CLOUDFLARE_PROVIDER)) &&
+    draft.value === publicUrl(origin));
+}
+
+export function currentConnectionSetting(
+  rows: readonly GitInstallPlanConnectionRequirement[],
+  origin: ConnectionSettingOrigin,
+): boolean {
+  return rows.some((row) => connectionKey(row) === origin.requirementKey &&
+    selectedCandidate(row)?.id === origin.connectionId && selectedCandidate(row)?.status === "verified");
+}
+
+/** Only a current eligible selection owned by this actor can offer public settings. */
+export function connectionSettingChoices(
+  rows: readonly GitInstallPlanConnectionRequirement[],
+  connections: readonly ProviderConnection[],
+  principalId: string,
+  workspaceId: string,
+): readonly ConnectionSettingChoice[] {
+  return rows.flatMap((row) => {
+    const selected = selectedCandidate(row);
+    if (!selected || selected.status !== "verified") return [];
+    const connection = connections.find((value) => value.id === selected.id);
+    if (!connection || connection.ownerAccountId !== principalId ||
+      !sameProviderSource(row.provider, connection.providerSource) ||
+      !(connection.scope === "personal" && connection.workspaceId === undefined ||
+        connection.scope === "workspace" && connection.workspaceId === workspaceId)) return [];
+    const value = providerInstallSettings(connection);
+    return value ? [{ requirementKey: connectionKey(row), connectionId: connection.id,
+      displayName: selected.displayName, provider: row.provider, moduleLocalName: row.moduleLocalName,
+      ...(row.childAlias ? { childAlias: row.childAlias } : {}),
+      ...(row.rootAlias ? { rootAlias: row.rootAlias } : {}), value }] : [];
+  });
 }

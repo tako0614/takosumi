@@ -1,4 +1,5 @@
 /** Workspace-authorized, value-free app identities for Store discovery. */
+import { installDisplayName } from "./install-names.ts";
 import { hasCredentialQueryParams, installedAppSourceIsMatchable, installedAppSourceUrl, type InstalledAppSummary, type ListInstalledAppsResponse } from "takosumi-contract";
 import { normalizeInstallConfigSourcePath } from "takosumi-contract/install-configs";
 import type { InstallConfig } from "takosumi-contract";
@@ -102,10 +103,11 @@ export async function handleWorkspaceInstalledApps(
         return [];
       }
       const iconUrl = safeIconUrl(config.store?.iconUrl);
+      const displayName = installDisplayName(capsule.name, config, displaySourceUrl);
       return [{
         capsuleId: capsule.id,
         name: capsule.name,
-        ...(config.store ? { displayName: config.store.name } : {}),
+        ...(displayName ? { displayName } : {}),
         ...(iconUrl ? { iconUrl } : {}),
         state: storeState(capsule),
         installedFrom: {

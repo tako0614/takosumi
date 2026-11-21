@@ -7,6 +7,7 @@
 import { isAbsolute, normalize } from "node:path";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { isPrivateIP } from "../../contract/reference/ip-classification.ts";
 import {
   assertHostNotBlocked,
   BlockedHostError,
@@ -367,33 +368,11 @@ export function assertHostLiteralNotBlocked(host: string, label: string): void {
 }
 
 export function isBlockedIpv4Literal(value: string): boolean {
-  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) return false;
-  const parts = value.split(".").map((part) => Number.parseInt(part, 10));
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)
-  ) {
-    return true;
-  }
-  const [a, b, c, d] = parts;
-  if (a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31)) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 0 || a >= 224) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return a === 255 && b === 255 && c === 255 && d === 255;
+  return /^(\d{1,3}\.){3}\d{1,3}$/u.test(value) && isPrivateIP(value);
 }
 
 export function isBlockedIpv6Literal(value: string): boolean {
-  if (!value.includes(":")) return false;
-  if (value === "::" || value === "::1") return true;
-  if (value.startsWith("fc") || value.startsWith("fd")) return true;
-  if (/^fe[89ab]/.test(value)) return true;
-  if (value.startsWith("ff")) return true;
-  if (value.startsWith("::ffff:")) {
-    return isBlockedIpv4Literal(value.slice("::ffff:".length));
-  }
-  return false;
+  return value.includes(":") && isPrivateIP(value);
 }
 
 export function assertGeneratedRootFileName(name: string): void {

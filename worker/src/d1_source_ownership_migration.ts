@@ -35,6 +35,7 @@ interface ObservedTable {
 }
 const observations = new WeakMap<SourceOwnershipMigrationGroup, readonly ObservedTable[]>();
 const encoder = new TextEncoder();
+const D1_READ_PAGE_SIZE = 100;
 const D1_ROW_MAX_BYTES = 2_000_000;
 const D1_GUARD_BIND_MAX_BYTES = 2_000_000;
 const scopes = (sourceId: string): readonly Omit<ObservedTable, "rows">[] => [
@@ -108,7 +109,7 @@ async function pagedRows(
   let after = "";
   for (;;) {
     const page = await rows(db,
-      `select * from ${table} where (${where}) and id > ? order by id limit 100`,
+      `select * from ${table} where (${where}) and id > ? order by id limit ${D1_READ_PAGE_SIZE}`,
       [...args, after]);
     if (page.length === 0) return collected;
     for (const row of page) {
@@ -122,7 +123,7 @@ async function pagedRows(
     if (typeof last !== "string" || last <= after) throw new Error(`D1 Source ownership ${table} page did not advance`);
     collected.push(...page);
     after = last;
-    if (page.length < 100) return collected;
+    if (page.length < D1_READ_PAGE_SIZE) return collected;
   }
 }
 
@@ -182,6 +183,15 @@ async function d1UnscopedReportReferences(
 
 export async function listD1SourceOwnershipIds(db: D1Database): Promise<readonly string[]> {
   return (await pagedRows(db, "sources", "1 = 1", [])).map((row) => String(row.id));
+}
+
+/** Return one Source ID and one lookahead without reading any group data. */
+export async function readD1SourceOwnershipInventoryPage(
+  db: D1Database,
+  afterSourceId: string,
+): Promise<readonly string[]> {
+  return (await rows(db, "select id from sources where id > ? order by id limit 2", [afterSourceId]))
+    .map((row) => String(row.id));
 }
 
 export interface SourceOwnershipLineageReader {
@@ -351,33 +361,44 @@ function fence(db: D1Database, observed: ObservedTable): D1PreparedStatement[] {
     (select count(*) from ${observed.table} where ${observed.where}) = ?
     then 1 else json_extract('source_ownership_conflict', '$') end as guard`)
     .bind(...observed.args, observed.rows.length)];
-  for (let i = 0; i < observed.rows.length;) {
-    const chunk: PhysicalRow[] = [];
-    while (i < observed.rows.length && chunk.length < 10) {
-      const candidate = observed.rows[i]!;
-      const next = [...chunk, candidate];
-      const nextBytes = encoder.encode(JSON.stringify(next)).byteLength;
-      if (nextBytes > D1_GUARD_BIND_MAX_BYTES) {
-        if (chunk.length === 0) {
-          statements.push(physicalRowFence(db, observed.table, candidate));
-          i++;
-        }
-        break;
-      }
-      chunk.push(candidate);
-      i++;
-    }
-    if (chunk.length === 0) continue;
-    const columns = Object.keys(chunk[0]!);
-    if (!columns.every((name) => /^[a-z_]+$/u.test(name))) throw new Error("D1 Source ownership unexpected column");
-    const mismatch = columns.map((name) =>
-      `t.${name} is not json_extract(e.value, '$.${name}')`).join(" or ");
+  if (observed.rows.length === 0) return statements;
+  const columns = Object.keys(observed.rows[0]!);
+  if (!columns.every((name) => /^[a-z_]+$/u.test(name))) throw new Error("D1 Source ownership unexpected column");
+  const mismatch = columns.map((name) =>
+    `t.${name} is not json_extract(e.value, '$.${name}')`).join(" or ");
+  const chunk: string[] = [];
+  let chunkBytes = 2; // JSON array brackets
+  const flush = () => {
+    if (chunk.length === 0) return;
     statements.push(db.prepare(`select case when not exists (
       select 1 from json_each(?) e left join ${observed.table} t on t.id = json_extract(e.value, '$.id')
       where t.id is null or ${mismatch}
     ) then 1 else json_extract('source_ownership_conflict', '$') end as guard`)
-      .bind(checkedJson(chunk, `${observed.table} guard chunk`)));
+      .bind(`[${chunk.join(",")}]`));
+    chunk.length = 0;
+    chunkBytes = 2;
+  };
+  for (const row of observed.rows) {
+    if (Object.keys(row).length !== columns.length ||
+      columns.some((name) => !Object.hasOwn(row, name))) {
+      throw new Error("D1 Source ownership inconsistent physical columns");
+    }
+    const encoded = JSON.stringify(row);
+    const rowBytes = encoder.encode(encoded).byteLength;
+    if (rowBytes + 2 > D1_GUARD_BIND_MAX_BYTES) {
+      flush();
+      statements.push(physicalRowFence(db, observed.table, row));
+      continue;
+    }
+    const separatorBytes = chunk.length > 0 ? 1 : 0;
+    if (chunk.length >= D1_READ_PAGE_SIZE ||
+      chunkBytes + separatorBytes + rowBytes > D1_GUARD_BIND_MAX_BYTES) {
+      flush();
+    }
+    chunkBytes += (chunk.length > 0 ? 1 : 0) + rowBytes;
+    chunk.push(encoded);
   }
+  flush();
   return statements;
 }
 
@@ -392,6 +413,65 @@ function insertRow(db: D1Database, table: Table, row: PhysicalRow): D1PreparedSt
   }
   return db.prepare(`insert into ${table} (${columns.join(", ")}) values (${columns.map(() => "?").join(", ")})`)
     .bind(...columns.map((name) => row[name]));
+}
+
+function appendHistoryWrites(
+  db: D1Database,
+  statements: D1PreparedStatement[],
+  table: Table,
+  operation: "insert" | "update",
+  rows: readonly PhysicalRow[],
+): void {
+  const first = rows[0];
+  if (!first) return;
+  const columns = Object.keys(first);
+  if (!Object.hasOwn(first, "id") || columns.length < 2 || columns.length > 100 ||
+    !columns.every((name) => /^[a-z_]+$/u.test(name))) {
+    throw new Error("D1 Source ownership unexpected history columns");
+  }
+  const columnList = columns.join(", ");
+  const assignments = columns.filter((column) => column !== "id")
+    .map((column) => `${column} = history.${column}`).join(", ");
+  const placeholders = `(${columns.map(() => "?").join(", ")})`;
+  const seen = new Set<string>();
+  let bindings: PhysicalRow[string][] = [];
+  let bytes = 0;
+  function flush(): void {
+    if (bindings.length === 0) return;
+    const values = Array<string>(bindings.length / columns.length).fill(placeholders).join(", ");
+    const sql = operation === "insert"
+      ? `insert into ${table} (${columnList}) values ${values}`
+      : `with history(${columnList}) as (values ${values})
+        update ${table} set ${assignments} from history where ${table}.id = history.id`;
+    statements.push(db.prepare(sql).bind(...bindings));
+    bindings = [];
+    bytes = 0;
+  }
+  for (const row of rows) {
+    if (typeof row.id !== "string" || Object.keys(row).length !== columns.length ||
+      !columns.every((name) => Object.hasOwn(row, name))) {
+      throw new Error(`D1 Source ownership unexpected ${table} history row`);
+    }
+    // SQLite UPDATE FROM needs at most one matching input row per target.
+    if (seen.has(row.id)) throw new Error(`D1 Source ownership duplicate ${table} history row: ${row.id}`);
+    seen.add(row.id);
+    const values = columns.map((name) => row[name]);
+    let rowBytes = 0;
+    for (const [index, value] of values.entries()) {
+      if (typeof value !== "string") continue;
+      const size = encoder.encode(value).byteLength;
+      if (size > D1_ROW_MAX_BYTES) {
+        throw new Error(`D1 Source ownership ${table}:${row.id} ${columns[index]} exceeds 2 MB bound value limit`);
+      }
+      rowBytes += size;
+    }
+    // Limit the text packed together. A single wide row still gets its own
+    // statement with the same per-value limit as the original single-row write.
+    if (bindings.length + columns.length > 100 || bytes + rowBytes > D1_ROW_MAX_BYTES) flush();
+    bindings.push(...values);
+    bytes += rowBytes;
+  }
+  flush();
 }
 
 function oldRow(physicalByTable: ReadonlyMap<Table, ReadonlyMap<string, PhysicalRow>>, table: Table, id: string): PhysicalRow {
@@ -422,15 +502,13 @@ export async function commitD1SourceOwnershipGroup(
   statements.push(db.prepare(`update sources set status = ?, record_json = ?, updated_at = ? where id = ?`)
     .bind(mutation.retainedSource.status, checkedJson(mutation.retainedSource, "retained Source"),
       mutation.retainedSource.updatedAt, mutation.sourceId));
-  for (const snapshot of mutation.retainedSnapshots) {
-    statements.push(db.prepare(`update source_snapshots set record_json = ? where id = ?`)
-      .bind(checkedJson(snapshot, `retained Snapshot:${snapshot.id}`), snapshot.id));
-  }
-  for (const run of mutation.retainedSyncRuns) {
+  appendHistoryWrites(db, statements, "source_snapshots", "update", mutation.retainedSnapshots.map((snapshot) => ({
+    id: snapshot.id, record_json: checkedJson(snapshot, `retained Snapshot:${snapshot.id}`),
+  })));
+  appendHistoryWrites(db, statements, "runs", "update", mutation.retainedSyncRuns.map((run) => {
     const before = parseRun<SourceSyncRun>(oldRow(physicalByTable, "runs", run.id));
-    statements.push(db.prepare(`update runs set run_json = ? where id = ?`)
-      .bind(checkedJson({ ...before, archiveRef: run.archiveRef }, `retained SyncRun:${run.id}`), run.id));
-  }
+    return { id: run.id, run_json: checkedJson({ ...before, archiveRef: run.archiveRef }, `retained SyncRun:${run.id}`) };
+  }));
   for (const run of mutation.retainedCompatibilityRuns) {
     const base = oldRow(physicalByTable, "runs", run.id);
     const before = parseRun<Run>(base);
@@ -484,22 +562,22 @@ export async function commitD1SourceOwnershipGroup(
     statements.push(db.prepare(`update capsules set source_id = ?, install_config_id = ?, record_json = ?, updated_at = ? where id = ?`)
       .bind(split.source.id, split.capsule.installConfigId,
         checkedJson(split.capsule, `Capsule:${split.capsule.id}`), split.capsule.updatedAt, split.capsule.id));
-    for (const snapshot of split.snapshots) {
+    appendHistoryWrites(db, statements, "source_snapshots", "insert", split.snapshots.map((snapshot) => {
       const original = originalSnapshotsBySplitId.get(snapshot.id);
       const base = original ? oldRow(physicalByTable, "source_snapshots", original.id) : undefined;
       if (!base) throw new Error(`D1 Source ownership missing snapshot template: ${snapshot.id}`);
-      statements.push(insertRow(db, "source_snapshots", { ...base,
+      return { ...base,
         id: snapshot.id, source_id: split.source.id,
         record_json: checkedJson(snapshot, `split Snapshot:${snapshot.id}`),
-        fetched_at: snapshot.fetchedAt }));
-    }
-    for (const run of split.syncRuns) {
+        fetched_at: snapshot.fetchedAt };
+    }));
+    appendHistoryWrites(db, statements, "runs", "insert", split.syncRuns.map((run) => {
       const original = originalSyncRunsBySplitId.get(run.id);
       if (!original) throw new Error(`D1 Source ownership missing Run template: ${run.id}`);
       const base = oldRow(physicalByTable, "runs", original.id);
-      statements.push(insertRow(db, "runs", { ...base, id: run.id, source_id: split.source.id,
-        run_json: checkedJson(run, `split SyncRun:${run.id}`) }));
-    }
+      return { ...base, id: run.id, source_id: split.source.id,
+        run_json: checkedJson(run, `split SyncRun:${run.id}`) };
+    }));
     for (const run of split.compatibilityRuns) {
       const original = originalCompatibilityRunsBySplitId.get(run.id);
       if (!original) throw new Error(`D1 Source ownership missing CompatibilityRun template: ${run.id}`);
@@ -511,12 +589,11 @@ export async function commitD1SourceOwnershipGroup(
           sourceSnapshotId: run.sourceSnapshotId, compatibilityReportId: run.compatibilityReportId },
           `split CompatibilityRun:${run.id}`) }));
     }
-    for (const plan of split.planRuns) {
+    appendHistoryWrites(db, statements, "runs", "update", split.planRuns.map((plan) => {
       const before = parseRun<PlanRun>(oldRow(physicalByTable, "runs", plan.id));
-      statements.push(db.prepare(`update runs set run_json = ? where id = ?`)
-        .bind(checkedJson({ ...before, sourceSnapshotId: plan.sourceSnapshotId,
-          compatibilityReportId: plan.compatibilityReportId }, `PlanRun:${plan.id}`), plan.id));
-    }
+      return { id: plan.id, run_json: checkedJson({ ...before, sourceSnapshotId: plan.sourceSnapshotId,
+        compatibilityReportId: plan.compatibilityReportId }, `PlanRun:${plan.id}`) };
+    }));
     const originalGitPlans = mutation.expected.gitPlans.filter((plan) => plan.capsuleId === split.capsuleId);
     // Find each copy's original by its deterministic copy id, not by position,
     // so the selection stays exactly the core plan's.

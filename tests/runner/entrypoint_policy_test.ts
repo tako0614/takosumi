@@ -252,10 +252,10 @@ test("resolved-host policy accepts public addresses through an injected runner r
       "source host",
       async (host) => {
         seen.push(host);
-        return ["203.0.113.10", "2001:db8::10"];
+        return ["93.184.216.34", "2606:4700:4700::1111"];
       },
     ),
-  ).resolves.toEqual(["203.0.113.10", "2001:db8::10"]);
+  ).resolves.toEqual(["93.184.216.34", "2606:4700:4700::1111"]);
   expect(seen).toEqual(["git.example.test"]);
 });
 
@@ -264,7 +264,7 @@ test("resolved-host policy rejects any private answer and unresolved names", asy
     assertResolvedHostNotBlocked(
       "mixed.example.test",
       "source host",
-      async () => ["203.0.113.10", "10.0.0.5"],
+      async () => ["93.184.216.34", "10.0.0.5"],
     ),
   ).rejects.toThrow("resolves to a blocked address (10.0.0.5)");
 
@@ -278,10 +278,10 @@ test("resolved-host policy rejects any private answer and unresolved names", asy
 });
 
 test("resolved-host policy returns an immutable validated snapshot", async () => {
-  const answer = ["203.0.113.10", "203.0.113.10", "2001:db8::10"];
+  const answer = ["93.184.216.34", "93.184.216.34", "2606:4700:4700::1111"];
   const validated = await assertResolvedHostNotBlocked("git.example.test", "source host", async () => answer);
   answer[0] = "10.0.0.1";
-  expect(validated).toEqual(["203.0.113.10", "2001:db8::10"]);
+  expect(validated).toEqual(["93.184.216.34", "2606:4700:4700::1111"]);
   expect(Object.isFrozen(validated)).toBe(true);
 });
 
@@ -293,7 +293,7 @@ test("resolved-host policy rejects internal names before invoking a resolver", a
       "source host",
       async () => {
         called = true;
-        return ["203.0.113.10"];
+        return ["93.184.216.34"];
       },
     ),
   ).rejects.toThrow("is an internal-only name");

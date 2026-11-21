@@ -67,7 +67,7 @@ export interface CapsuleAppFacts {
    * An install or revision coordinator bound to this Capsule is still
    * preparing its Plan (no Plan Run yet; an install attempt only for a
    * never-applied Capsule and only until it stalls), so it owns the next
-   * plan: the app reads as in progress and offers no action that would plan.
+   * plan: the app reads as in progress while the coordinator is active.
    */
   readonly revisionPreparing: boolean;
   readonly connectionIssues: readonly CapsuleAppConnectionIssue[];
@@ -277,10 +277,11 @@ function scheduledUninstallStatus(facts: CapsuleAppFacts): CapsuleAppStatus {
   if (review && isRemovalType(review.type) && !finalizerPlan) {
     return status("uninstalling", "review");
   }
+  const connections = connectionProblems(facts.connectionIssues);
   // The finalizer records why it stopped in either phase; until someone acts
   // the resources keep running and billing.
   if (record?.blockedReason !== undefined) {
-    const problems: CapsuleAppProblem[] = [{
+    const problems: CapsuleAppProblem[] = [...connections, {
       code: "uninstall_blocked",
       severity: "error",
       reason: record.blockedReason,
@@ -290,7 +291,7 @@ function scheduledUninstallStatus(facts: CapsuleAppFacts): CapsuleAppStatus {
     }];
     return status(
       "needs_attention",
-      actionFor(problems, facts.uninstallCancellable),
+      facts.uninstallCancellable ? "cancel_uninstall" : connections.length ? "fix_connection" : "uninstall_now",
       problems,
     );
   }
@@ -300,7 +301,7 @@ function scheduledUninstallStatus(facts: CapsuleAppFacts): CapsuleAppStatus {
   return status(
     "uninstall_scheduled",
     facts.uninstallCancellable ? "cancel_uninstall" : "none",
-    [{ code: "uninstall_scheduled", severity: "warning" }],
+    [...connections, { code: "uninstall_scheduled", severity: "warning" }],
   );
 }
 

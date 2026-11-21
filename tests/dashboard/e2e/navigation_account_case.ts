@@ -185,6 +185,81 @@ export function registerNavigationAccountCases(mode: string): void {
   test.describe("Navigation, connections and account", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
 
+    for (const [language, theme] of [["ja", "dark"], ["en", "light"]] as const) {
+      test(`Home, Store, App, Connections and Account fit at five widths (${language}, ${theme})`, async ({ page }, info) => {
+        test.setTimeout(75_000);
+        const errors = collectPageErrors(page);
+        const fixture = await accountFixture(page);
+        await page.addInitScript(({ language, theme }) => {
+          localStorage.setItem("tg_lang", language);
+          localStorage.setItem("tg_theme", theme);
+          localStorage.setItem("tcs.stores", JSON.stringify(["https://store.example.test"]));
+        }, { language, theme });
+        await page.route("https://store.example.test/tcs/v2/listings**", (route) => route.fulfill({ json: { items: [{
+          id: "fixtures/office",
+          source: { git: "https://github.com/example/office.git" },
+          name: { ja: "共同作業オフィス", en: "Team Office" },
+          description: { ja: "チームの作業をまとめるアプリ。", en: "An app for your team's shared work." },
+          createdAt: "2026-08-04T00:00:00.000Z",
+          updatedAt: "2026-08-04T00:00:00.000Z",
+        }] } }));
+        const surfaces = [
+          { name: "home", route: "/", target: '[data-app-opens="true"] .av-tile' },
+          // The listing button's pseudo-element makes the entire card clickable.
+          { name: "store", route: "/new", target: '[data-tcs-listing-id="fixtures/office"]', card: true },
+          { name: "app", route: "/apps/cap_repository_office", target: '[data-testid="app-primary"] .ap-open > a' },
+          { name: "connections", route: "/connections", target: ".conn-details > summary" },
+          { name: "account", route: "/account", target: ".acct-page nav a" },
+        ] as const;
+        for (const { name, route, target, ...options } of surfaces) {
+          await page.goto(route, { waitUntil: "domcontentloaded" });
+          await expect(page.locator("html")).toHaveAttribute("lang", language);
+          await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+          const primary = page.locator(target).first();
+          await expect(primary).toBeVisible();
+          await expect(page.getByRole("main")).toHaveCount(1);
+          if (name === "store") {
+            const options = page.getByRole("button", { name: language === "ja" ? "表示設定" : "Display options" });
+            const order = page.getByRole("combobox", { name: language === "ja" ? "並び順" : "Sort", exact: true });
+            await expect(order).toBeHidden();
+            await options.click();
+            await order.selectOption("created");
+            await options.click();
+            await expect(order).toBeHidden();
+            await options.click();
+            await expect(order).toHaveValue("created");
+            await options.click();
+          }
+          for (const width of [320, 375, 414, 768, 1440]) {
+            const label = `${name}-${language}-${theme}-${width}`;
+            await page.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
+            if (name === "home") {
+              // The virtual grid recomputes its columns on the next animation frame.
+              const grid = page.locator(".av-home-grid");
+              await expect.poll(() => grid.evaluate((node) =>
+                getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/u).length
+              ), `${label} Home columns`).toBeGreaterThanOrEqual(3);
+            }
+            await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth), label).toBeLessThanOrEqual(1);
+            const size = await primary.boundingBox();
+            expect(size?.width, `${label} target width`).toBeGreaterThanOrEqual(44);
+            expect(size?.height, `${label} target height`).toBeGreaterThanOrEqual(44);
+            if ("card" in options) {
+              await primary.scrollIntoViewIfNeeded();
+              expect(await primary.evaluate((card) => {
+                const { left, bottom } = card.getBoundingClientRect();
+                return Boolean(document.elementFromPoint(left + 12, bottom - 12)?.closest(".tcs-card-open"));
+              }), `${label} card hit area`).toBe(true);
+              await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+            }
+            await page.screenshot({ path: info.outputPath(`${label}.png`), animations: "disabled", fullPage: true });
+          }
+        }
+        expect(fixture.mutations).toEqual([]);
+        expect(errors).toEqual([]);
+      });
+    }
+
     test("primary navigation has no workspace switcher and Home lists owned and shared apps", async ({ page }) => {
       const errors = collectPageErrors(page);
       const apiReads: string[] = [];
@@ -255,9 +330,9 @@ export function registerNavigationAccountCases(mode: string): void {
       });
       await page.goto("/", { waitUntil: "domcontentloaded" });
       await expect(page.getByTestId("home-app")).toHaveCount(9);
+      await expect(page.getByTestId("home-apps")).toContainText("一部のアプリの起動情報を読み込めませんでした");
       expect(maximum).toBeLessThanOrEqual(4);
       expect(maximum).toBeGreaterThan(1);
-      await expect(page.getByTestId("home-apps")).toContainText("一部のアプリの画面を読み込めませんでした");
     });
 
     test("接続 shows the apps using each connection and removal names them", async ({ page }) => {
@@ -268,13 +343,19 @@ export function registerNavigationAccountCases(mode: string): void {
       await page.goto("/connections", { waitUntil: "domcontentloaded" });
       await expect(page).toHaveURL(/\/connections$/u);
       await expect(page.getByRole("heading", { name: "接続", exact: true, level: 1 })).toBeVisible();
-      const direct = page.locator(".conn-card").filter({ hasText: DIRECT.displayName });
-      const operator = page.locator(".conn-card").filter({ hasText: OPERATOR.displayName });
+      const direct = page.locator(".conn-details").filter({ hasText: DIRECT.displayName });
+      const operator = page.locator(".conn-details").filter({ hasText: OPERATOR.displayName });
+      await expect(direct.locator("summary")).toBeVisible();
+      await expect(direct.getByRole("button", { name: "削除" })).toHaveCount(0);
+      await direct.locator("summary").press("Enter");
+      await operator.locator("summary").click();
+      await expect(direct.locator(".conn-apps")).toBeVisible();
       await expect(direct.locator(".conn-apps")).toContainText("使っているアプリ");
       await expect(direct.getByRole("link", { name: PORTABLE_EXPECTATIONS.appName })).toHaveAttribute(
         "href",
         "/apps/cap_repository_office",
       );
+      await expect(operator.locator(".conn-apps")).toBeVisible();
       await expect(operator.locator(".conn-apps")).toContainText("まだどのアプリも使っていません");
       // Operator-provided connections cannot be removed from here.
       await expect(operator.getByRole("button", { name: "削除" })).toHaveCount(0);
@@ -297,14 +378,14 @@ export function registerNavigationAccountCases(mode: string): void {
 
       await page.goto("/account", { waitUntil: "domcontentloaded" });
       await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
-      const tabs = page.locator(".acct-tabs");
-      await expect(tabs.getByRole("link")).toHaveText([
-        "自分",
+      const sections = page.getByRole("navigation", { name: "アカウントの項目" });
+      const accountBack = page.getByRole("main").getByRole("link", { name: "アカウント", exact: true });
+      await expect(sections.getByRole("link")).toHaveText([
         "料金と利用量",
         "CLI・APIから使う",
         "通知を受け取る端末",
       ]);
-      await expect(tabs).not.toContainText(/メンバー|スペース|workspace/iu);
+      await expect(sections).not.toContainText(/メンバー|スペース|workspace/iu);
       await expect(page.getByRole("button", { name: "このブラウザからサインアウト" })).toBeVisible();
       await shots(page, "account-profile");
 
@@ -319,15 +400,26 @@ export function registerNavigationAccountCases(mode: string): void {
       await shots(page, "account-connections");
 
       await page.locator(".sidebar").getByRole("link", { name: "アカウント", exact: true }).click();
-      await tabs.getByRole("link", { name: "料金と利用量" }).click();
+      const usageLink = sections.getByRole("link", { name: "料金と利用量" });
+      const usageHeading = page.getByRole("heading", { name: "料金と利用量", level: 1 });
+      await usageLink.press("Enter");
       await expect(page).toHaveURL(/\/account\/usage$/u);
+      await expect(usageHeading).toBeFocused();
+      await expect(sections).toHaveCount(0);
+      await page.goBack();
+      await expect(usageLink).toBeFocused();
+      await page.goForward();
+      await expect(usageHeading).toBeFocused();
       await expect(page.getByRole("heading", { name: "利用量", level: 2 })).toBeVisible();
       await expect(page.locator(".acct-row-amount").filter({ hasText: "金額不明" })).toHaveCount(1);
       expect(fixture.reads.some((path) => path === "/api/v1/usage" || path.startsWith("/api/v1/usage?"))).toBe(true);
       expect(fixture.reads.some((path) => path.startsWith("/api/v1/workspaces/"))).toBe(false);
       await shots(page, "account-usage");
+      await accountBack.press("Enter");
+      await expect(page).toHaveURL(/\/account$/u);
+      await expect(usageLink).toBeFocused();
 
-      await tabs.getByRole("link", { name: "CLI・APIから使う" }).click();
+      await sections.getByRole("link", { name: "CLI・APIから使う" }).click();
       await expect(page).toHaveURL(/\/account\/cli$/u);
       await expect(page.getByText("開発用 CLI")).toBeVisible();
       await expect(page.getByRole("textbox", { name: /キーの名前/u })).toHaveCount(0);
@@ -335,8 +427,10 @@ export function registerNavigationAccountCases(mode: string): void {
       await expect(page.getByRole("textbox", { name: /キーの名前/u })).toBeVisible();
       await page.getByRole("button", { name: "キャンセル" }).click();
       await shots(page, "account-cli");
+      await accountBack.click();
+      await expect(page).toHaveURL(/\/account$/u);
 
-      await tabs.getByRole("link", { name: "通知を受け取る端末" }).click();
+      await sections.getByRole("link", { name: "通知を受け取る端末" }).click();
       await expect(page).toHaveURL(/\/account\/devices$/u);
       await expect(page.getByText("Pixel 9", { exact: true })).toBeVisible();
       await expect(page.getByText("届いていません", { exact: true })).toBeVisible();

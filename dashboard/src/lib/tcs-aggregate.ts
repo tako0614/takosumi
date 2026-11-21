@@ -181,48 +181,40 @@ export function filterTcsItems<T extends TcsListing>(
   });
 }
 
-/** Fetch the next page from every not-yet-exhausted server and merge. */
-export async function loadMoreTcs(
+interface PageResult {
+  readonly server: TcsServer;
+  readonly ok: boolean;
+  readonly items: readonly TcsListing[];
+  readonly nextCursor: string | null;
+  readonly error?: string;
+}
+
+async function readPage(state: TcsAggregateState, server: TcsServer, timeoutMs: number): Promise<PageResult> {
+  const cursor = state.cursors[server.base];
+  const query: TcsPageQuery = {
+    sort: state.sort,
+    limit: state.limitPerServer,
+    ...(typeof cursor === "string" ? { cursor } : {}),
+  };
+  const { signal, cancel } = withTimeout(timeoutMs);
+  try {
+    const page = await fetchTcsListingsPage(server.base, { ...query, signal });
+    return { server, ok: true, items: page.items, nextCursor: page.nextCursor ?? null };
+  } catch (err) {
+    return {
+      server, ok: false, items: [], nextCursor: null,
+      error: String((err as Error)?.message ?? err),
+    };
+  } finally {
+    cancel();
+  }
+}
+
+function applyPages(
   state: TcsAggregateState,
-  timeoutMs = 8000,
-): Promise<TcsAggregateState> {
-  const targets = state.servers.filter((s) => state.cursors[s.base] !== null);
-  if (targets.length === 0) return { ...state, done: true, loading: false };
-
-  const settled = await Promise.all(
-    targets.map(async (server) => {
-      const cursor = state.cursors[server.base];
-      const query: TcsPageQuery = {
-        sort: state.sort,
-        limit: state.limitPerServer,
-        ...(typeof cursor === "string" ? { cursor } : {}),
-      };
-      const { signal, cancel } = withTimeout(timeoutMs);
-      try {
-        const page = await fetchTcsListingsPage(server.base, {
-          ...query,
-          signal,
-        });
-        return {
-          server,
-          ok: true,
-          items: page.items,
-          nextCursor: page.nextCursor ?? null,
-        };
-      } catch (err) {
-        return {
-          server,
-          ok: false,
-          items: [] as readonly TcsListing[],
-          nextCursor: null,
-          error: String((err as Error)?.message ?? err),
-        };
-      } finally {
-        cancel();
-      }
-    }),
-  );
-
+  settled: readonly PageResult[],
+  loading: boolean,
+): TcsAggregateState {
   const cursors = { ...state.cursors };
   for (const r of settled) cursors[r.server.base] = r.nextCursor;
 
@@ -255,6 +247,30 @@ export async function loadMoreTcs(
     items: sortTcsItems(merged, state.sort, state.locale),
     status: [...statusByBase.values()],
     done,
-    loading: false,
+    loading,
   };
+}
+
+/** Merge completed pages while leaving other servers free to finish. */
+export async function loadMoreTcs(
+  state: TcsAggregateState,
+  timeoutMs = 8000,
+  onProgress?: (partial: TcsAggregateState) => void,
+): Promise<TcsAggregateState> {
+  const targets = state.servers.filter((s) => state.cursors[s.base] !== null);
+  if (targets.length === 0) return { ...state, done: true, loading: false };
+
+  // Keep the original server order for equal-priority duplicate listings,
+  // even if they arrived in a different order.
+  const pages: PageResult[] = [];
+  let remaining = targets.length;
+  await Promise.all(targets.map(async (server, index) => {
+    const page = await readPage(state, server, timeoutMs);
+    pages[index] = page;
+    remaining--;
+    if (page.items.length > 0 && remaining > 0 && onProgress) {
+      onProgress(applyPages(state, pages.filter(Boolean), true));
+    }
+  }));
+  return applyPages(state, pages, false);
 }

@@ -1,6 +1,6 @@
 import { createEffect, createResource, createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Button, Checkbox, FormField, Input, Select, Toast } from "../../components/ui/index.ts";
+import { Button, Checkbox, FormField, Input, Select, Spinner, Toast } from "../../components/ui/index.ts";
 import {
   acceptAppOwnershipTransfer, cancelAppOwnershipTransfer,
   getAppMembers, inviteAppMember, removeAppMember, transferAppOwnership,
@@ -37,7 +37,9 @@ export default function AppSharingSection(props: {
   const [notice, setNotice] = createSignal<string>();
   const members = () => sharing.error ? undefined : sharing();
   const pendingTransfers = () => transfers.error ? [] : transfers() ?? [];
-  createEffect(() => props.onAvailability?.(Boolean(sharing.error || members())));
+  createEffect(() => {
+    if (!sharing.loading) props.onAvailability?.(Boolean(sharing.error || members()));
+  });
   const names = () => props.connectionNames?.join("、") || t("app.sharing.noConnections");
   createEffect(() => { void names(); setConsent(false); });
   const action = async (run: () => Promise<void | false>) => {
@@ -49,10 +51,15 @@ export default function AppSharingSection(props: {
   };
   const confirmChange = (title: string, message: string) => confirm({ title, message, confirmText: title, cancelText: t("common.cancel"), danger: true });
   return (
-    <Show when={sharing.error || members()}>
-      <AppSection id="sharing" title={t("app.sharing.title")} subtitle={t("app.sharing.subtitle")} testId="app-sharing">
+    <AppSection id="sharing" title={t("app.sharing.title")} testId="app-sharing">
+        <Show when={sharing.loading && !members()}>
+          <span role="status"><Spinner size={18} /> {t("common.loading")}</span>
+        </Show>
         <Show when={sharing.error}>
           <Toast tone="error">{friendlyError(sharing.error, t).message}<Button variant="secondary" onClick={() => void refetch()}>{t("common.retry")}</Button></Toast>
+        </Show>
+        <Show when={!sharing.loading && !sharing.error && !members()}>
+          <p class="ap-muted">{t("app.manage.sectionUnavailable")}</p>
         </Show>
         <Show when={members()}>{(group) => <>
           <p>{t("app.sharing.owner")}: {group().owner.displayName}</p>
@@ -118,7 +125,6 @@ export default function AppSharingSection(props: {
         </>}</Show>
         <Show when={error()}>{(message) => <p class="wa-error" role="alert">{message()}</p>}</Show>
         <Show when={notice()}>{(message) => <p role="status">{message()}</p>}</Show>
-      </AppSection>
-    </Show>
+    </AppSection>
   );
 }

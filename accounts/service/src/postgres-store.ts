@@ -1,3 +1,6 @@
+import { PostgresPasswordAuthStore } from "./postgres/passwords.ts";
+import type { PasswordAuthStore } from "./password-store.ts";
+import type { ConnectionOAuthAttemptRecord, ConnectionOAuthAttemptSweepInput, ConnectionOAuthAttemptSweepResult } from "./connection-oauth-attempt.ts";
 import { hashSessionId } from "./session-hash-salt.ts";
 import type {
   PasskeyChallengeAdmissionInput,
@@ -47,11 +50,13 @@ import type { NotificationDeliveryStore } from "./notification-deliveries-store.
 export type { PostgresQueryClient, PostgresQueryResult };
 
 export class PostgresAccountsStore implements AccountsStore {
+  readonly passwordAuth: PasswordAuthStore;
   readonly #client: PostgresQueryClient;
   readonly #hosted: HostedIdentityRecords;
 
   constructor(client: PostgresQueryClient) {
     this.#client = client;
+    this.passwordAuth = new PostgresPasswordAuthStore(client);
     this.#hosted = new HostedIdentityRecords(new PostgresIdentityRecordRepository(client), this);
   }
 
@@ -109,6 +114,9 @@ export class PostgresAccountsStore implements AccountsStore {
   findCanonicalAccount(subject: TakosumiSubject): Promise<TakosumiAccountRecord | undefined> { return this.#hosted.findCanonicalAccount(subject); }
   isAccountAuthenticationFenced(subject: TakosumiSubject): Promise<boolean> { return this.#hosted.isAccountAuthenticationFenced(subject); }
   findUpstreamIdentityStatus(identity: Pick<UpstreamIdentityRecord, "providerId" | "upstreamIssuer" | "upstreamSubject">): Promise<UpstreamIdentityStatusRecord | undefined> { return this.#hosted.findUpstreamIdentityStatus(identity); }
+  pruneConnectionOAuthAttempts(input: ConnectionOAuthAttemptSweepInput): Promise<ConnectionOAuthAttemptSweepResult> { return this.#hosted.pruneConnectionOAuthAttempts(input); }
+  createConnectionOAuthAttempt(record: ConnectionOAuthAttemptRecord): Promise<boolean> { return this.#hosted.createConnectionOAuthAttempt(record); }
+  consumeConnectionOAuthAttempt(id: string, browserBindingHash: string, now: number): Promise<ConnectionOAuthAttemptRecord | undefined> { return this.#hosted.consumeConnectionOAuthAttempt(id, browserBindingHash, now); }
   saveUpstreamLoginTransaction(record: UpstreamLoginTransactionRecord): Promise<void> { return this.#hosted.saveUpstreamLoginTransaction(record); }
   consumeUpstreamLoginTransaction(id: string, browserBindingHash: string, now: number): Promise<UpstreamLoginTransactionRecord | undefined> { return this.#hosted.consumeUpstreamLoginTransaction(id, browserBindingHash, now); }
   saveHostedOidcGrant(record: HostedOidcGrantRecord): Promise<void> { return this.#hosted.saveHostedOidcGrant(record); }

@@ -1,3 +1,5 @@
+import { MemoryPasswordAuthStore, memoryPasswordSubjectActive, memoryPasswordRevocationAllowed, type PasswordAuthStore } from "./password-store.ts";
+import type { ConnectionOAuthAttemptRecord, ConnectionOAuthAttemptSweepInput, ConnectionOAuthAttemptSweepResult } from "./connection-oauth-attempt.ts";
 import { prepareInterfaceInvocationAccessRecord } from "../../../contract/internal-interface-invocation-source.ts";
 import type { InterfaceAppDataAuthority } from "takosumi-contract/interfaces";
 import type { InterfaceInvocationProvenance } from "../../../contract/internal-interface-invocation-source.ts";
@@ -268,7 +270,10 @@ export interface AccountSessionRecord {
 export interface AccountsBearerCredentialCandidates {
   readonly session?: AccountSessionRecord;
   readonly sessionAccount?: TakosumiAccountRecord;
+  /** Current generation for this exact candidate, from the same database snapshot. */
+  readonly sessionAuthenticationGeneration?: number;
   readonly accessToken?: TokenRecord;
+  readonly accessAuthenticationGeneration?: number;
   readonly personalAccessToken?: PersonalAccessTokenRecord;
 }
 
@@ -341,6 +346,7 @@ export interface AccountsStore
     HostedIdentityStore,
     Partial<NotificationPusherStore>,
     Partial<NotificationDeliveryStore> {
+  readonly passwordAuth?: PasswordAuthStore;
   /**
    * Optional bounded lookup for all credential kinds sharing one opaque token.
    * Implementations must use exact indexed keys and must not select a winner.
@@ -705,11 +711,37 @@ export class InMemoryAccountsStore implements AccountsStore {
   ]> | undefined;
   #passkeyWindowStart = -1;
 
-  readonly #hosted = new HostedIdentityRecords(new MemoryIdentityRecordRepository(this.#accounts, this.#accountSessions, this.#upstreamIdentities, (subjects, now) => {
+  readonly #identityRecords = new MemoryIdentityRecordRepository(this.#accounts, this.#accountSessions, this.#upstreamIdentities, (subjects, now) => {
     for (const [key, value] of this.#accountSessions) if (subjects.includes(value.subject)) this.#accountSessions.delete(key);
     for (const [key, value] of this.#authorizationCodes) if (subjects.includes(value.subject) || value.takosumiSubject && subjects.includes(value.takosumiSubject)) this.#authorizationCodes.delete(key);
     for (const map of [this.#accessTokens, this.#refreshTokens]) for (const [key, value] of map) if (subjects.includes(value.subject) || value.takosumiSubject && subjects.includes(value.takosumiSubject)) map.delete(key);
-  }, (accessToken) => this.#accessTokens.get(accessToken)), this);
+  }, (accessToken) => this.#accessTokens.get(accessToken));
+  readonly #hosted = new HostedIdentityRecords(this.#identityRecords, this);
+  readonly passwordAuth: PasswordAuthStore = new MemoryPasswordAuthStore(this.#accounts, (subject, now) => {
+    const key = `authentication_generations\n${subject}`;
+    const previous = this.#identityRecords.records.get(key) as { generation: number } | undefined;
+    this.#identityRecords.records.set(key, { subject, generation: (previous?.generation ?? 0) + 1 });
+    this.#identityRecords.revoke([subject], now);
+    for (const [key, value] of this.#identityRecords.records) {
+      const grant = value as { subject?: string };
+      if (key.startsWith("hosted_oidc_grants\n") && grant.subject === subject) {
+        this.#identityRecords.records.set(key, { ...grant, revokedAt: now });
+      }
+    }
+  }, (subject, authorization, fallbackAnchor) => {
+    const session = this.#accountSessions.get(authorization.sessionId);
+    const records = this.#identityRecords.records;
+    const generation = (records.get(`authentication_generations\n${subject}`) as { generation: number } | undefined)?.generation ?? 0;
+    const lock = records.get(`identity_merge_locks\n${subject}`) as { operationId: string } | undefined;
+    const operation = lock ? records.get(`identity_merge_operations\n${lock.operationId}`) as { status: string } | undefined : undefined;
+    return session?.subject === subject && session.expiresAt > authorization.now &&
+      (session.absoluteExpiresAt === undefined || session.absoluteExpiresAt > authorization.now) &&
+      (session.policy !== "hosted" || session.absoluteExpiresAt !== undefined && session.absoluteExpiresAt > authorization.now &&
+        !records.has(`hosted_oidc_revoked_sessions\n${session.issuerSessionId ?? fallbackAnchor}`)) &&
+      (session.identityGeneration ?? 0) === authorization.generation && generation === authorization.generation &&
+      !records.has(`canonical_accounts\n${subject}`) && (!lock || operation?.status === "active");
+  }, (subject) => memoryPasswordSubjectActive(this.#identityRecords.records, subject),
+  (subject) => memoryPasswordRevocationAllowed(this.#identityRecords.records, subject));
 
   registerFinancialSourceRegistration(registration: FinancialSourceRegistration): Promise<boolean> { return this.#hosted.registerFinancialSourceRegistration(registration); }
   findFinancialSourceRegistration(registrationRef: string): Promise<FinancialSourceRegistration | undefined> { return this.#hosted.findFinancialSourceRegistration(registrationRef); }
@@ -765,6 +797,9 @@ export class InMemoryAccountsStore implements AccountsStore {
   findCanonicalAccount(subject: TakosumiSubject): Promise<TakosumiAccountRecord | undefined> { return this.#hosted.findCanonicalAccount(subject); }
   isAccountAuthenticationFenced(subject: TakosumiSubject): Promise<boolean> { return this.#hosted.isAccountAuthenticationFenced(subject); }
   findUpstreamIdentityStatus(identity: Pick<UpstreamIdentityRecord, "providerId" | "upstreamIssuer" | "upstreamSubject">): Promise<UpstreamIdentityStatusRecord | undefined> { return this.#hosted.findUpstreamIdentityStatus(identity); }
+  pruneConnectionOAuthAttempts(input: ConnectionOAuthAttemptSweepInput): Promise<ConnectionOAuthAttemptSweepResult> { return this.#hosted.pruneConnectionOAuthAttempts(input); }
+  createConnectionOAuthAttempt(record: ConnectionOAuthAttemptRecord): Promise<boolean> { return this.#hosted.createConnectionOAuthAttempt(record); }
+  consumeConnectionOAuthAttempt(id: string, browserBindingHash: string, now: number): Promise<ConnectionOAuthAttemptRecord | undefined> { return this.#hosted.consumeConnectionOAuthAttempt(id, browserBindingHash, now); }
   saveUpstreamLoginTransaction(record: UpstreamLoginTransactionRecord): Promise<void> { return this.#hosted.saveUpstreamLoginTransaction(record); }
   consumeUpstreamLoginTransaction(id: string, browserBindingHash: string, now: number): Promise<UpstreamLoginTransactionRecord | undefined> { return this.#hosted.consumeUpstreamLoginTransaction(id, browserBindingHash, now); }
   saveHostedOidcGrant(record: HostedOidcGrantRecord): Promise<void> { return this.#hosted.saveHostedOidcGrant(record); }
