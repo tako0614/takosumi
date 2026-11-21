@@ -94,7 +94,12 @@ import {
   platformExtensionProviderCredentialComposition,
 } from "../../deploy/platform/platform_extension_provider_credentials.ts";
 import { applyCredentialRequiredProviderSources } from "../../deploy/platform/host_install_config_composition.ts";
-import { createTakosumiAccountsOidcModuleVariableMaterializer } from "../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
+import {
+  createTakosumiAccountsOidcModuleVariableMaterializer,
+  type AccountsOidcModuleVariableAccountsLedger,
+  type AccountsOidcModuleVariableControlLedger,
+} from "../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
+import { AUTH_STAGING_ISSUER } from "../../deploy/accounts-cloudflare/src/staging-target.ts";
 import { decideInterfaceAppAccess } from "../../core/domains/app-ownership/interface-app-decision.ts";
 import {
   createTakosumiRuntimeInputOidcClientSource,
@@ -241,23 +246,13 @@ export async function createWorkerServiceApp(
   const accountsIssuer = env.TAKOSUMI_ACCOUNTS_ISSUER;
   const pairwiseSubjectSecret =
     env.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET;
-  const moduleVariableMaterializer =
-    accountsStore &&
-      typeof accountsIssuer === "string" &&
-      accountsIssuer.length > 0 &&
-      typeof pairwiseSubjectSecret === "string" &&
-      pairwiseSubjectSecret.length > 0
-      ? createTakosumiAccountsOidcModuleVariableMaterializer({
-          control: {
-            getCapsule: (id) => opentofuControlStore.getCapsule(id),
-            getInstallConfig: (id) =>
-              opentofuControlStore.getInstallConfig(id),
-          },
-          accounts: accountsStore,
-          issuer: accountsIssuer,
-          pairwiseSubjectSecret,
-        })
-      : undefined;
+  const moduleVariableMaterializer = workerRepositoryOidcMaterializer(env, {
+    control: {
+      getCapsule: (id) => opentofuControlStore.getCapsule(id),
+      getInstallConfig: (id) => opentofuControlStore.getInstallConfig(id),
+    },
+    accounts: accountsStore,
+  });
   const interfaceCredentialIssuer = accountsStore
     ? interfaceCredentialIssuerFromAccountsStore(accountsStore)
     : undefined;
@@ -648,6 +643,36 @@ function interfaceCredentialIssuerFromAccountsStore(
       };
     },
   };
+}
+
+export function workerRepositoryOidcMaterializer(
+  env: Partial<Pick<CloudflareWorkerEnv,
+    "TAKOSUMI_ACCOUNTS_ISSUER" | "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET" |
+    "TAKOSUMI_ENVIRONMENT" | "TAKOSUMI_SHARED_AUTH_PROFILE" | "TAKOSUMI_SHARED_AUTH_ORIGIN">>,
+  input: {
+    readonly control: AccountsOidcModuleVariableControlLedger;
+    readonly accounts: AccountsOidcModuleVariableAccountsLedger | undefined;
+  },
+) {
+  const issuer = env.TAKOSUMI_ACCOUNTS_ISSUER;
+  const pairwiseSubjectSecret = env.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET;
+  if (!input.accounts ||
+      typeof issuer !== "string" || issuer.length === 0 ||
+      typeof pairwiseSubjectSecret !== "string" || pairwiseSubjectSecret.length === 0) {
+    return undefined;
+  }
+  const sharedStaging =
+    env.TAKOSUMI_ENVIRONMENT === "staging" &&
+    env.TAKOSUMI_SHARED_AUTH_PROFILE === "shared-account" &&
+    issuer === "https://app-staging.takosumi.com" &&
+    env.TAKOSUMI_SHARED_AUTH_ORIGIN === issuer;
+  return createTakosumiAccountsOidcModuleVariableMaterializer({
+    control: input.control,
+    accounts: input.accounts,
+    issuer: sharedStaging ? AUTH_STAGING_ISSUER : issuer,
+    ...(sharedStaging ? { retainedIssuer: issuer } : {}),
+    pairwiseSubjectSecret,
+  });
 }
 
 export function workerInterfaceOAuth2ResourceAuthorizer(

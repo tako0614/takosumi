@@ -71,6 +71,7 @@ import {
 } from "./oidc-live-grant.ts";
 import {
   accountMatchesLoginAllowlist,
+  credentialLoginNotAllowedResponse,
   type LoginEmailAllowlist,
 } from "./login-email-allowlist.ts";
 
@@ -160,6 +161,7 @@ type ResolvedOidcClient = {
   enabled?: boolean;
   clientId: string;
   capsuleId?: string;
+  namespacePath?: string;
   issuerUrl?: string;
   redirectUris: readonly string[];
   allowedScopes?: readonly string[];
@@ -209,6 +211,7 @@ async function resolveOidcClient(input: {
   return {
     clientId: dynamicClient.clientId,
     capsuleId: dynamicClient.capsuleId,
+    namespacePath: dynamicClient.namespacePath,
     issuerUrl: dynamicClient.issuerUrl,
     redirectUris: dynamicClient.redirectUris,
     allowedScopes: dynamicClient.allowedScopes,
@@ -507,6 +510,21 @@ function undeclaredDelegationScopes(
     .filter((scope) => delegation.has(scope) && !declared.has(scope));
 }
 
+/** Host-only proof from the authentication that verified this browser request. */
+export type CapsuleAuthorizeSessionResolver = (request: Request) => Promise<
+  | {
+      kind: "authenticated";
+      subject: TakosumiSubject;
+      identityGeneration: number;
+      issuer: string;
+      clientId: string;
+      sessionId: string;
+      expiresAt: number;
+    }
+  | { kind: "unauthenticated" }
+  | { kind: "unavailable" }
+>;
+
 export async function handleAuthorize(input: {
   issuer?: string;
   request: Request;
@@ -516,6 +534,8 @@ export async function handleAuthorize(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
+  resolveCapsuleAuthorizeSession?: CapsuleAuthorizeSessionResolver;
+  loginEmailAllowlist?: LoginEmailAllowlist;
   /**
    * Called once an authenticated request names `workspace_id` (TASK-0118
    * Phase 9 telemetry). A sign-in redirect is not a use: the authorization
@@ -546,6 +566,8 @@ async function handleAuthorizeUncached(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
+  resolveCapsuleAuthorizeSession?: CapsuleAuthorizeSessionResolver;
+  loginEmailAllowlist?: LoginEmailAllowlist;
   observeWorkspaceRequest?: () => void;
 }): Promise<Response> {
   // OAuth authorization is a top-level navigation. A subresource request can
@@ -576,11 +598,26 @@ async function handleAuthorizeUncached(input: {
       400,
     );
   }
+  if (input.resolveCapsuleAuthorizeSession && (
+    input.request.method !== "GET" ||
+    input.issuer !== input.url.origin ||
+    [...input.url.searchParams.keys()].some((name) => input.url.searchParams.getAll(name).length !== 1) ||
+    input.url.searchParams.has("workspace_id") ||
+    input.clients.has(clientId)
+  )) return json({ error: "not found" }, 404);
   const client = await resolveOidcClient({
     clientId,
     clients: input.clients,
     store: input.store,
   });
+  if (input.resolveCapsuleAuthorizeSession && (
+    !client?.capsuleId ||
+    client.namespacePath !== "identity.oidc" ||
+    client.issuerUrl !== input.issuer ||
+    client.subjectMode !== "pairwise" ||
+    client.tokenEndpointAuthMethod !== "none" ||
+    client.clientSecretHash !== undefined
+  )) return json({ error: "not found" }, 404);
   if (!client) {
     // Reject any client_id that is neither a configured static client nor a
     // dynamic registration. Falling through would issue an unauthenticated
@@ -669,6 +706,71 @@ async function handleAuthorizeUncached(input: {
     const invalid = nativeConsentRequestProblem(input.url.searchParams, codeChallenge, requestedScope);
     if (invalid) return json({ error: "invalid_request", error_description: invalid }, 400);
   } else if (input.request.method !== "GET") return json({error:"invalid_request"},400);
+  if (input.resolveCapsuleAuthorizeSession) {
+    const proof = await input.resolveCapsuleAuthorizeSession(input.request)
+      .catch(() => ({ kind: "unavailable" as const }));
+    if (proof.kind === "unavailable") return json({ error: "temporarily_unavailable" }, 503);
+    if (proof.kind === "unauthenticated") return authorizeSignInRedirect(input.url);
+    const generation = proof.identityGeneration;
+    const findCanonical = input.store.findCanonicalAccount?.bind(input.store);
+    const getGeneration = input.store.getAccountAuthenticationGeneration?.bind(input.store);
+    const isFenced = input.store.isAccountAuthenticationFenced?.bind(input.store);
+    const findGrant = input.store.findHostedOidcGrant?.bind(input.store);
+    const isClientRevoked = input.store.isHostedOidcClientRevoked?.bind(input.store);
+    const isSessionRevoked = input.store.isHostedOidcSessionRevoked?.bind(input.store);
+    if (!findCanonical || !getGeneration || !isFenced || !findGrant || !isClientRevoked || !isSessionRevoked) {
+      return json({ error: "temporarily_unavailable" }, 503);
+    }
+    const checkProof = async () => {
+      const account = await findCanonical(proof.subject);
+      const grant = await findGrant(proof.sessionId);
+      if (account?.subject !== proof.subject || !grant ||
+        grant.sid !== proof.sessionId || grant.issuer !== proof.issuer ||
+        grant.clientId !== proof.clientId || grant.subject !== proof.subject ||
+        grant.identityGeneration !== generation || grant.revokedAt !== undefined ||
+        await isClientRevoked(grant.clientId) || await isSessionRevoked(grant.issuerSessionId) ||
+        await getGeneration(proof.subject) !== generation ||
+        await isFenced(proof.subject) || Math.min(proof.expiresAt, grant.absoluteExpiresAt) <= Date.now()
+      ) return json({ error: "access_denied" }, 403);
+      if (!accountMatchesLoginAllowlist(account, input.loginEmailAllowlist)) {
+        return credentialLoginNotAllowedResponse(input.request);
+      }
+    };
+    if (!Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(proof.expiresAt)) {
+      return json({ error: "access_denied" }, 403);
+    }
+    const rejectedProof = await checkProof();
+    if (rejectedProof) return rejectedProof;
+    const operations = await operationsForLiveGrant({
+      operations: input.operations,
+      resolveOperations: input.resolveOperations,
+      required: true,
+    });
+    const authorized = await resolveOidcAuthorizationSubject({
+      client,
+      flow: input.flow,
+      sessionSubject: proof.subject,
+      scope,
+      store: input.store,
+      operations,
+    });
+    if (!authorized.ok) {
+      return json({ error: authorized.error, error_description: authorized.errorDescription }, authorized.status);
+    }
+    const noLongerAllowed = await checkProof();
+    if (noLongerAllowed) return noLongerAllowed;
+    return await saveAuthorizeRedirect(input.store, input.url, crypto.randomUUID(), {
+      ...authorized.record,
+      clientId,
+      redirectUri,
+      scope,
+      identityGeneration: generation,
+      nonce: input.url.searchParams.get("nonce") ?? undefined,
+      codeChallenge,
+      codeChallengeMethod,
+      expiresAt: Date.now() + AUTHORIZATION_CODE_TTL_MS,
+    });
+  }
   const nativeConsentPrompts = client.consent === "always"
     ? (input.url.searchParams.get("prompt") ?? "").split(/\s+/u).filter(Boolean)
     : [];
@@ -842,7 +944,7 @@ async function handleAuthorizeUncached(input: {
     await input.store.saveHostedOidcGrant({issuer:input.issuer ?? input.url.origin,identityGeneration:sessionRecord!.identityGeneration ?? 0,sid,issuerSessionId,clientId,subject:session.subject,scope,authTime,createdAt:now,absoluteExpiresAt:now+HOSTED_REFRESH_ABSOLUTE_MS,authorizationCodeHash:await sha256Text(`takosumi-hosted-code:${code}`)});
     hostedMetadata = {issuer:input.issuer ?? input.url.origin,identityGeneration:sessionRecord!.identityGeneration ?? 0,oidcProfile:"shared-account",sid,issuerSessionId,authTime,familyStartedAt:now,familyExpiresAt:now+HOSTED_REFRESH_ABSOLUTE_MS};
   }
-  await input.store.saveAuthorizationCode(code, {
+  return await saveAuthorizeRedirect(input.store, input.url, code, {
     ...hostedMetadata,
     ...(client.profile !== "shared-account" && subject.record.takosumiSubject && (sessionRecord.identityGeneration ?? 0) > 0
       ? { identityGeneration: sessionRecord.identityGeneration } : {}),
@@ -858,15 +960,24 @@ async function handleAuthorizeUncached(input: {
     codeChallenge,
     codeChallengeMethod,
     expiresAt: now + (client.profile === "shared-account" ? HOSTED_CODE_TTL_MS : AUTHORIZATION_CODE_TTL_MS),
-  });
+  }, client.consent === "always" ? input.issuer ?? input.url.origin : undefined);
+}
 
-  const redirect = new URL(redirectUri);
+async function saveAuthorizeRedirect(
+  store: AccountsStore,
+  authorizeUrl: URL,
+  code: string,
+  record: AuthorizationCodeRecord,
+  responseIssuer?: string,
+): Promise<Response> {
+  await store.saveAuthorizationCode(code, record);
+  const redirect = new URL(record.redirectUri);
   redirect.searchParams.set("code", code);
-  const state = input.url.searchParams.get("state");
+  const state = authorizeUrl.searchParams.get("state");
   if (state) redirect.searchParams.set("state", state);
   // RFC 9207: native consent clients learn which issuer answered, so a code
   // from one issuer cannot be redeemed in a flow started with another.
-  if (client.consent === "always") redirect.searchParams.set("iss", input.issuer ?? input.url.origin);
+  if (responseIssuer !== undefined) redirect.searchParams.set("iss", responseIssuer);
   return Response.redirect(redirect, 302);
 }
 
@@ -1670,28 +1781,23 @@ async function handleRevokeUncached(input: {
   return new Response(null, { status: 200 });
 }
 
-export async function handleIntrospect(input: {
+interface IntrospectionInput {
   issuer: string;
   request: Request;
   store: AccountsStore;
   /** Static OIDC clients are always supplied by the Accounts composition root. */
   clients: ReadonlyMap<string, OidcClientRegistration>;
+  hostedAppAuthorizationClientId?: string;
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
-}): Promise<Response> {
+}
+
+export async function handleIntrospect(input: IntrospectionInput): Promise<Response> {
   return withOAuthNoStoreHeaders(await handleIntrospectUncached(input));
 }
 
-async function handleIntrospectUncached(input: {
-  issuer: string;
-  request: Request;
-  store: AccountsStore;
-  clients: ReadonlyMap<string, OidcClientRegistration>;
-  interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
-  operations?: ControlPlaneOperations;
-  resolveOperations?: ResolveControlPlaneOperations;
-}): Promise<Response> {
+async function handleIntrospectUncached(input: IntrospectionInput): Promise<Response> {
   const params = await readFormUrlEncoded(input.request);
   // RFC 7662 §2.1: the introspection endpoint MUST require client
   // authentication for any introspection request. Reject unauthenticated
@@ -1716,6 +1822,43 @@ async function handleIntrospectUncached(input: {
   const token = params.get("token");
   if (!token) return json({ active: false });
   const authenticatedClientId = auth.client.clientId;
+  if (params.has("takosumi_proof")) {
+    if (
+      params.getAll("takosumi_proof").length !== 1 ||
+      params.get("takosumi_proof") !== "app_authorize" ||
+      params.getAll("token").length !== 1 ||
+      params.getAll("token_type_hint").length !== 1 ||
+      params.get("token_type_hint") !== "access_token" ||
+      params.has("resource") ||
+      params.has("client_id") ||
+      credentials.method !== "basic" ||
+      authenticatedClientId !== input.hostedAppAuthorizationClientId ||
+      auth.client.profile !== "shared-account"
+    ) return json({ active: false });
+
+    // A proof is derived from the live RP access token, never from the
+    // account's current generation or a refresh token. Its grant reference
+    // lets the caller's Accounts composition check revocation before issuance.
+    const record = await input.store.findAccessToken(token);
+    const generation = record?.identityGeneration;
+    if (
+      !record || record.clientId !== authenticatedClientId ||
+      record.oidcProfile !== "shared-account" || !record.sid ||
+      typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0 ||
+      record.expiresAt <= Date.now() ||
+      !(await hostedGrantIsActive({ store: input.store, record, client: auth.client, issuer: input.issuer })) ||
+      record.expiresAt <= Date.now()
+    ) return json({ active: false });
+
+    return json({
+      ...introspectionBody(record, "oauth_access"),
+      takosumi_app_authorization: {
+        issuer: input.issuer,
+        session_id: record.sid,
+        identity_generation: generation,
+      },
+    });
+  }
   const requestedResource = params.get("resource");
 
   const accessRecord = await findActiveAccessToken({

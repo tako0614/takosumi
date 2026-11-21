@@ -24,14 +24,14 @@ const registrations = (): OidcClientRegistration[] => ["hosted", "takoserver"].m
   redirectUris: [`https://${clientId}.example.test/auth/callback`],
 }));
 
-async function fixture(store: AccountsStore = new InMemoryAccountsStore()) {
+async function fixture(store: AccountsStore = new InMemoryAccountsStore(), hostedAppAuthorizationClientId?: string) {
   const now = Date.now();
   await store.saveAccount({subject,email:"User@example.test",emailVerified:true,displayName:"Customer",picture:"https://images.example.test/user.png",createdAt:now,updatedAt:now});
   await store.saveAccountEmailProof?.({subject,address:"User@example.test",normalizedAddress:"User@example.test",providerId:"google",upstreamIssuer:"https://accounts.google.com",upstreamSubject:"immutable-upstream",verification:"provider",authoritative:true,observedAt:now,validUntil:now+300_000});
   const session = await rotateAccountSession({store,subject,now,ttlMs:999_999,hostedPolicy:true,freshlyAuthenticatedAt:Math.floor(now/1000)});
   const cookie = `${HOSTED_ACCOUNT_SESSION_COOKIE_NAME}=${session.sessionId}`;
   const clients = registrations();
-  const handler = await createEphemeralAccountsHandler({issuer,store,clients,hostedSessionPolicy:true,allowEphemeralKeyOnHttpsIssuer:true});
+  const handler = await createEphemeralAccountsHandler({issuer,store,clients,hostedSessionPolicy:true,hostedAppAuthorizationClientId,allowEphemeralKeyOnHttpsIssuer:true});
   const challenge = base64UrlEncodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(verifier))));
   function authorizeUrl(clientId = "hosted", scope="openid email profile offline_access") {
     const url = new URL(`${issuer}/oauth/authorize`);
@@ -86,6 +86,53 @@ test("hosted HTTP flow shares canonical Accounts ID, signs ES256, scopes claims 
   expect(await f.introspect(hosted.access_token,"takoserver")).toEqual({active:false});
   const info=await (await f.handler(new Request(`${issuer}/oauth/userinfo`,{headers:{authorization:`Bearer ${server.access_token}`}}))).json();
   expect(info).toEqual({sub:subject,aud:"takoserver",scope:"openid"});
+});
+
+test("app authorization introspection returns only the configured RP's original active access proof", async () => {
+  const store = new InMemoryAccountsStore();
+  let generation = 7;
+  store.getAccountAuthenticationGeneration = () => generation;
+  const f = await fixture(store, "hosted");
+  const hosted = await f.grant();
+  const server = await f.grant("takoserver", "openid");
+  const record = (await store.findAccessToken(hosted.access_token))!;
+  const proofRequest = (token: string, clientId = "hosted", secret = `secret-${clientId}`) => {
+    const form = new URLSearchParams({
+      token, token_type_hint: "access_token", takosumi_proof: "app_authorize",
+    });
+    return { form, send: () => f.handler(new Request(`${issuer}/oauth/introspect`, {
+      method: "POST",
+      headers: { authorization: `Basic ${btoa(`${clientId}:${secret}`)}` },
+      body: form,
+    })) };
+  };
+  expect(record.identityGeneration).toBe(7);
+  expect(await f.introspect(hosted.access_token)).not.toHaveProperty("takosumi_app_authorization");
+  const proof = await proofRequest(hosted.access_token).send();
+  expect(proof.headers.get("cache-control")).toContain("no-store");
+  expect(await proof.json()).toEqual({
+    ...await f.introspect(hosted.access_token),
+    takosumi_app_authorization: { issuer, session_id: record.sid, identity_generation: 7 },
+  });
+  expect((await proofRequest(hosted.access_token, "hosted", "wrong").send()).status).toBe(401);
+  const ambiguous = proofRequest(hosted.access_token);
+  ambiguous.form.append("takosumi_proof", "app_authorize");
+  await store.saveAccessToken("missing-generation", { ...record, identityGeneration: undefined });
+  await store.saveAccessToken("expired-access", { ...record, expiresAt: Date.now() - 1 });
+  for (const attempt of [
+    proofRequest(hosted.access_token, "takoserver"),
+    proofRequest(server.access_token),
+    proofRequest(server.access_token, "takoserver"),
+    proofRequest(hosted.refresh_token!),
+    proofRequest("missing-generation"),
+    proofRequest("expired-access"),
+    ambiguous,
+  ]) expect(await (await attempt.send()).json()).toEqual({ active: false });
+  generation += 1;
+  expect(await (await proofRequest(hosted.access_token).send()).json()).toEqual({ active: false });
+  generation -= 1;
+  await store.revokeHostedOidcGrant(record.sid!, Date.now());
+  expect(await (await proofRequest(hosted.access_token).send()).json()).toEqual({ active: false });
 });
 
 test("hosted consent is browser-bound, single-use, exact-Origin and excludes silent first consent",async()=>{

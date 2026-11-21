@@ -109,6 +109,7 @@ import {
   sharedAuthUnavailableResponse,
   sharedAuthConfigured,
   sharedAuthRequestFailure,
+  sharedStagingAppAuthorizeSessionResolver,
   type SharedAuthEnvironment,
 } from "../../worker/src/shared_auth_rpc.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
@@ -678,6 +679,7 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
   // in-process operations facade adapted to the `ControlPlaneOperations`
   // shape (see `controlPlaneOperationsFor`).
   controlPlaneOperations: (env) => controlPlaneOperationsFor(env),
+  resolveCapsuleAuthorizeSession: sharedStagingAppAuthorizeSessionResolver,
   // PAT self authority is one bounded Control D1 membership SELECT. It must
   // not initialize the full deploy-control service or run schema/bootstrap —
   // but it must still refuse while an operator holds the maintenance fence, so
