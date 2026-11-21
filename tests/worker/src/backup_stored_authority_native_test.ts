@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_store.ts";
@@ -38,7 +38,7 @@ async function mutate(env, action, runId) {
   else if(action==='lease') await env.DB.prepare("update runs set lease_token='synthetic-not-admitted' where id=?").bind(runId).run();
   else if(action==='maintenance') await env.DB.prepare("update _takosumi_control_schema_maintenance set active=1,released_at=null where singleton=1").run();
   else if(action==='missing_index') await env.DB.prepare("drop index backups_created_by_run_id_idx").run();
-  else if(action==='future_head') await env.DB.prepare("insert into schema_migrations values(75,'unknown_future',?,?)").bind('sha256:'+'f'.repeat(64),now).run();
+  else if(action==='future_head') await env.DB.prepare("insert into schema_migrations select max(version)+1,'unknown_future',?,? from schema_migrations").bind('sha256:'+'f'.repeat(64),now).run();
   else if(action==='wrong_expression') {
     await env.DB.prepare("drop index backups_legacy_created_by_run_text_idx").run();
     await env.DB.prepare("create index backups_legacy_created_by_run_text_idx on backups((cast((case when json_valid(record_json) = 1 then json_extract(record_json, '$.createdbyrunid') else null end) as text)))").run();
@@ -150,21 +150,58 @@ export default {async fetch(request, env) {
 }};
 `;
 
-async function fixture(options: { readonly failConfirm?: boolean; readonly capsule?: boolean } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "takosumi-backup-authority-"));
-  const entry = join(directory, "entry.ts");
-  await writeFile(entry, NATIVE);
-  const built = await Bun.build({ entrypoints: [entry], outdir: directory, target: "browser", format: "esm", external: ["cloudflare:workers"] });
-  if (!built.success) throw new Error(built.logs.map(log => log.message).join("\n"));
-  const runtime = new Miniflare({ modules: [{ type: "ESModule", path: "backup-native.mjs", contents: await built.outputs[0]!.text() }], compatibilityDate: "2026-06-01", d1Databases: { DB: "backup-native" }, r2Buckets: ["BACKUPS"], bindings: { FAIL_CONFIRM: options.failConfirm ? "yes" : "no" } });
+function backupRuntime(script: string, directory: string, failConfirm = false): Miniflare {
+  return new Miniflare({
+    modules: [{ type: "ESModule", path: "backup-native.mjs", contents: script }],
+    compatibilityDate: "2026-06-01",
+    d1Databases: { DB: "backup-native" },
+    d1Persist: join(directory, "d1"),
+    r2Buckets: ["BACKUPS"],
+    bindings: { FAIL_CONFIRM: failConfirm ? "yes" : "no" },
+  });
+}
+
+async function buildFixtureBaseline() {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-backup-baseline-"));
   try {
-    const db = await runtime.getD1Database("DB");
-    await ensureD1OpenTofuLedgerSchema(db as unknown as D1Database);
-    const maintenance = await acquireControlD1MaintenanceFence(db as unknown as D1Database, {
-      sourceCommit: "a".repeat(40), manifestDigest: "sha256:" + "b".repeat(64), environment: "backup-native-test", databaseRole: "in_place", releasePolicy: "in_place",
-    }, "2026-10-14T00:00:00.000Z");
-    await releaseControlD1MaintenanceFence(db as unknown as D1Database, maintenance, "2026-10-14T00:01:00.000Z");
-    await db.prepare("create table fixture_usage(object_ref text primary key,owner text,snapshot text,request text)").run();
+    const entry = join(directory, "entry.ts");
+    await writeFile(entry, NATIVE);
+    const built = await Bun.build({ entrypoints: [entry], write: false, target: "browser", format: "esm", external: ["cloudflare:workers"] });
+    if (!built.success) throw new Error(built.logs.map(log => log.message).join("\n"));
+    const script = await built.outputs[0]!.text();
+    const runtime = backupRuntime(script, directory);
+    try {
+      const db = await runtime.getD1Database("DB");
+      const binding = db as unknown as D1Database;
+      await ensureD1OpenTofuLedgerSchema(binding);
+      const maintenance = await acquireControlD1MaintenanceFence(binding, {
+        sourceCommit: "a".repeat(40), manifestDigest: "sha256:" + "b".repeat(64), environment: "backup-native-test", databaseRole: "in_place", releasePolicy: "in_place",
+      }, "2026-10-14T00:00:00.000Z");
+      await releaseControlD1MaintenanceFence(binding, maintenance, "2026-10-14T00:01:00.000Z");
+      await db.prepare("create table fixture_usage(object_ref text primary key,owner text,snapshot text,request text)").run();
+    } finally {
+      await runtime.dispose();
+    }
+    return { directory, script };
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+let baseline: ReturnType<typeof buildFixtureBaseline> | undefined;
+afterAll(() => baseline?.then(seed => rm(seed.directory, { recursive: true, force: true }), () => undefined));
+
+async function fixture(options: { readonly failConfirm?: boolean; readonly capsule?: boolean } = {}) {
+  const seed = await (baseline ??= buildFixtureBaseline());
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-backup-authority-"));
+  let runtime: Miniflare | undefined;
+  try {
+    // Copy only the closed, empty D1 baseline. Each fixture gets a fresh runtime,
+    // its own writable database and an empty R2 bucket.
+    await cp(join(seed.directory, "d1"), join(directory, "d1"), { recursive: true });
+    const worker = runtime = backupRuntime(seed.script, directory, options.failConfirm);
+    const db = await worker.getD1Database("DB");
     const store = new CloudflareD1OpenTofuControlStore(db as unknown as D1Database, { schemaMode: "predeployed" });
     if (options.capsule) {
       const seeded = await seedCapsuleModel(store, { workspaceId: "workspace_backup", installConfig: { backup: { enabled: true, mode: "artifact_export", outputPath: "backup.artifact" } } });
@@ -174,11 +211,11 @@ async function fixture(options: { readonly failConfirm?: boolean; readonly capsu
       await store.putWorkspace({ id: "workspace_backup", handle: "workspace-backup", displayName: "Backup authority fixture", type: "personal", ownerUserId: "original_owner", createdAt: "2026-10-14T00:00:00.000Z", updatedAt: "2026-10-14T00:00:00.000Z" });
     }
     const call = async <T = unknown>(input: unknown) => {
-      const response = await runtime.dispatchFetch("http://fixture.test", { method: "POST", body: JSON.stringify(input) });
+      const response = await worker.dispatchFetch("http://fixture.test", { method: "POST", body: JSON.stringify(input) });
       return { status: response.status, body: await response.json() as T };
     };
-    return { db, store, runtime, call, async close() { await runtime.dispose(); await rm(directory, { recursive: true, force: true }); } };
-  } catch (error) { await runtime.dispose(); await rm(directory, { recursive: true, force: true }); throw error; }
+    return { db, store, runtime: worker, call, async close() { await worker.dispose(); await rm(directory, { recursive: true, force: true }); } };
+  } catch (error) { await runtime?.dispose(); await rm(directory, { recursive: true, force: true }); throw error; }
 }
 
 test("genuine native Core Backup admission writes all four artifacts and settles during accepted drain", async () => {
@@ -281,6 +318,10 @@ test("native Backup warm readiness refuses maintenance, index drift or a future 
       const prior = await (await f.runtime.getR2Bucket("BACKUPS")).list();
       const response = await f.call({ operation: "put", runId: "backup_readiness", [timing]: action });
       expect(response.status, `${action}/${timing}`).toBe(503);
+      if (action === "future_head") {
+        expect(response.body).toEqual({ error: "stored service custody is unavailable" });
+        expect(await f.db.prepare("select count(*) as n from schema_migrations where name='unknown_future'").first("n")).toBe(1);
+      }
       expect((await (await f.runtime.getR2Bucket("BACKUPS")).list()).objects.map(object => object.version)).toEqual(prior.objects.map(object => object.version));
       expect(await f.db.prepare("select count(*) as n from fixture_usage").first("n")).toBe(timing === "before" ? 1 : 2);
       if (timing === "duringPrepare") {
