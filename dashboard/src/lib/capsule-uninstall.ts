@@ -9,7 +9,12 @@ export function appUninstallConnectionNotice(
   const record = app.uninstall.scheduled;
   if (record?.phase === "destroying" && !record.blocked &&
     !app.problems.some((problem) => problem.code === "uninstall_failed")) return;
-  const issues = app.problems.filter((problem) => problem.code === "connection_unavailable");
+  const requiredConnectionIds = app.uninstall.requiredConnectionIds;
+  const issues = app.problems.filter((problem) =>
+    problem.code === "connection_unavailable" &&
+    !(requiredConnectionIds !== undefined && problem.connectionId !== undefined &&
+      !requiredConnectionIds.includes(problem.connectionId))
+  );
   if (issues.some((problem) => problem.connectionStatus === "missing" || problem.connectionStatus === "revoked")) {
     return "app.uninstall.connectionRemoved";
   }

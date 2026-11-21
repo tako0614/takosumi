@@ -932,6 +932,11 @@ export interface CapsuleAppUninstall {
    * manual replacement review. An empty list means no targets were established.
    */
   readonly recoveryConnectionIds?: readonly string[];
+  /**
+   * All stored connection IDs used by an ordinary Destroy with exact applied
+   * provenance. An omitted list leaves the connection scope unknown.
+   */
+  readonly requiredConnectionIds?: readonly string[];
   /** The current scheduled uninstall, when one is pending or running. */
   readonly scheduled?: {
     readonly phase: "scheduled" | "destroying";

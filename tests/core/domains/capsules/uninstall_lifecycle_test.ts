@@ -69,6 +69,7 @@ import {
   fixtureExecutionEvidence,
   seedCapsuleModel,
   seedProviderConnections,
+  transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -99,6 +100,7 @@ interface Harness {
   readonly authorization: { validate: (requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, workspaceId: string, validAtMs?: number) => Promise<boolean> };
   readonly queuedDestroys: import("../../../../core/domains/deploy-control/mod.ts").OpenTofuRunDispatch[];
   readonly credentialMint: { beforeReturn?: () => Promise<void> };
+  readonly mintedConnections: string[][];
   readonly clock: { ms: number };
   readonly destroyJobs: OpenTofuDestroyJob[];
   readonly capsuleId: string;
@@ -117,6 +119,7 @@ async function appliedCapsule(
     readonly uninstallGraceDays?: number;
     readonly ownerless?: boolean;
     readonly appOwnership?: AppOwnershipStore;
+    readonly unusedProviderAlias?: boolean;
   } = {},
 ): Promise<Harness> {
   const clock = { ms: START };
@@ -130,6 +133,39 @@ async function appliedCapsule(
   await seedProviderConnections(store, seeded.capsule, {
     requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
   });
+  if (options.unusedProviderAlias) {
+    const bindings = (await store.getProviderBindingSetByCapsule(
+      seeded.capsule.id, seeded.capsule.environment,
+    ))!;
+    const used = (await store.getConnection(bindings.bindings[0]!.connectionId))!;
+    const unused = { ...used, id: "conn_uninstall_unused_alias" };
+    await store.putConnection(unused);
+    const reportId = "caprep_uninstall_default_provider";
+    await store.putCapsuleCompatibilityReport({
+      id: reportId,
+      sourceId: seeded.source.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      modulePath: ".",
+      level: "ready",
+      findings: [],
+      providerPackages: [{ source: FIXTURE_CLOUDFLARE_PROVIDER, allowed: true }],
+      rootProviderRequirements: [{ source: FIXTURE_CLOUDFLARE_PROVIDER, moduleLocalName: "cloudflare" }],
+      resources: [], dataSources: [], provisioners: [],
+      createdAt: seeded.capsule.createdAt,
+    });
+    await store.putCapsule({
+      ...seeded.capsule,
+      compatibilityStatus: "ready",
+      compatibilityReportId: reportId,
+    });
+    await transitionProviderBindingSetForFixture(store, {
+      ...bindings,
+      bindings: [
+        bindings.bindings[0]!,
+        { ...bindings.bindings[0]!, connectionId: unused.id, childAlias: "unused", rootAlias: "unused" },
+      ],
+    });
+  }
   if (options.preDestroy) await store.putInstallConfig({
     ...seeded.installConfig,
     lifecycleActions: [{ apiVersion: "takosumi.dev/v1alpha1", kind: "command", id: "cleanup_425",
@@ -141,6 +177,7 @@ async function appliedCapsule(
   const authorization = { validate: async (_requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, _workspaceId: string, _validAtMs = clock.ms) => true };
   const queuedDestroys: import("../../../../core/domains/deploy-control/mod.ts").OpenTofuRunDispatch[] = [];
   const credentialMint: { beforeReturn?: () => Promise<void> } = {};
+  const mintedConnections: string[][] = [];
   const vault = fakeProviderVault();
   const harness = {
     destroyPlanChanges: [
@@ -250,6 +287,7 @@ async function appliedCapsule(
     vault: {
       ...vault,
       mintForCapsuleProviderBindings: async (...args: Parameters<typeof vault.mintForCapsuleProviderBindings>) => {
+        mintedConnections.push(args[1].map((entry) => entry.connectionId));
         const result = await vault.mintForCapsuleProviderBindings(...args);
         await credentialMint.beforeReturn?.();
         return result;
@@ -312,6 +350,7 @@ async function appliedCapsule(
     authorization,
     queuedDestroys,
     credentialMint,
+    mintedConnections,
     destroyJobs,
     capsuleId: seeded.capsule.id,
     finalize: (
@@ -467,6 +506,61 @@ for (const [label, open] of appAuthorityStores) {
       await close();
     }
   }, label === "native-d1" ? 30_000 : 5_000);
+}
+
+for (const unusedStatus of ["revoked", "missing"] as const) {
+  test(`scheduled uninstall ignores an ${unusedStatus} unused provider alias`, async () => {
+    const h = await appliedCapsule({ unusedProviderAlias: true });
+    const before = (await h.store.getCapsule(h.capsuleId))!;
+    const state = (await h.store.getStateVersion(before.currentStateVersionId!))!;
+    const appliedRun = (await h.store.getApplyRun(state.createdByRunId))!;
+    const appliedPlan = (await h.store.getPlanRun(appliedRun.planRunId))!;
+    const bindings = (await h.store.getProviderBindingSetByCapsule(
+      h.capsuleId, before.environment,
+    ))!;
+    const usedId = bindings.bindings[0]!.connectionId;
+    const unusedId = bindings.bindings[1]!.connectionId;
+    expect(unusedId).not.toBe(usedId);
+    expect(appliedPlan.requiredProviderRequirements?.map((row) => row.childAlias))
+      .toEqual([undefined]);
+    expect(h.mintedConnections).toEqual([[usedId], [usedId]]);
+    const unused = (await h.store.getConnection(unusedId))!;
+    if (unusedStatus === "revoked") {
+      await h.store.putConnection({ ...unused, status: "revoked" });
+    } else {
+      expect(await h.store.deleteConnection(unusedId)).toBe(true);
+    }
+    const mintCount = h.mintedConnections.length;
+    await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+      actor: "user_test", requester: { subject: "user_test" },
+    });
+    await jumpToDue(h);
+    expect(await h.finalize()).toMatchObject({
+      scanned: 1, exportsRecorded: 1, destroyPlansCreated: 1,
+      destroysStarted: 1, blocked: 0, failures: 0,
+    });
+    const destroyed = (await h.store.getCapsule(h.capsuleId))!;
+    expect(destroyed.status).toBe("destroyed");
+    const plan = (await h.store.getPlanRun(destroyed.uninstall!.destroyPlanRunId!))!;
+    expect(plan.approval?.approvedBy).toBe("user_test");
+    expect(plan.approval?.reason).toBe(`scheduled uninstall ${destroyed.uninstall!.id}`);
+    expect(plan.planResourceChanges).toEqual(h.destroyPlanChanges);
+    expect(plan.destroyConnectionRecovery).toBeUndefined();
+    expect(plan.baseStateGeneration).toBe(before.currentStateGeneration);
+    expect(plan.appliedApplyRunId).toBe(
+      scheduledDestroyRunId("apply", destroyed.uninstall!.id, 1),
+    );
+    expect((await h.store.getApplyRun(plan.appliedApplyRunId!))?.status).toBe("succeeded");
+    expect(plan.requiredProviderRequirements).toEqual(appliedPlan.requiredProviderRequirements);
+    expect(plan.resolvedProviderBindingsDigest).toBe(appliedPlan.resolvedProviderBindingsDigest);
+    expect(h.mintedConnections.slice(mintCount)).toEqual([[usedId], [usedId]]);
+    expect(h.destroyJobs).toHaveLength(1);
+    expect(h.destroyJobs[0]!.planRun.id).toBe(plan.id);
+    expect(await h.store.getProviderBindingSetByCapsule(h.capsuleId, before.environment))
+      .toEqual(bindings);
+    expect(await h.finalize()).toMatchObject({ scanned: 0 });
+    expect(h.destroyJobs).toHaveLength(1);
+  });
 }
 
 for (const [label, open] of durableStores) {

@@ -120,6 +120,33 @@ test("uninstall recovery rows honor the applied binding projection without hidin
   } as CapsuleAppView).map(({ connectionId }) => connectionId)).toEqual(["used", "unused"]);
 });
 
+test("only exact applied-Destroy IDs make unavailable connections block uninstall", () => {
+  const provider = "registry.opentofu.org/cloudflare/cloudflare";
+  const unusedIssue = {
+    code: "connection_unavailable",
+    severity: "error",
+    connectionId: "unused",
+    provider,
+    connectionStatus: "expired",
+  } as const;
+  const usedIssue = { ...unusedIssue, connectionId: "used", connectionStatus: "revoked" } as const;
+  const app: Terms = {
+    uninstall: { ...scheduled.uninstall, requiredConnectionIds: ["used"] },
+    problems: [unusedIssue],
+  };
+
+  // The UI keeps the general issue visible, while the exact projection says
+  // this saved alias is not needed to destroy the applied state.
+  expect(app.problems).toHaveLength(1);
+  expect(appUninstallConnectionNotice(app)).toBeUndefined();
+  expect(appUninstallBanner(app, "App")).not.toBe(t("app.uninstall.bannerConnection", { name: "App" }));
+  expect(appUninstallConnectionNotice({ ...app, problems: [usedIssue] })).toBe("app.uninstall.connectionRemoved");
+  expect(appUninstallConnectionNotice({ ...app, uninstall: { ...app.uninstall, requiredConnectionIds: [] } })).toBeUndefined();
+  expect(appUninstallConnectionNotice({ ...app, problems: [{ ...unusedIssue, connectionId: undefined }] })).toBe("app.uninstall.connectionUnavailable");
+  // An older host without exact applied-Destroy evidence keeps the old guard.
+  expect(appUninstallConnectionNotice({ uninstall: scheduled.uninstall, problems: [unusedIssue] })).toBe("app.uninstall.connectionUnavailable");
+});
+
 test("replacement can be offered after a failed removal even with verified connection status", () => {
   const latestRun = { id: "run_destroy", type: "destroy_apply", status: "failed", createdAt: "2026-10-01T00:00:00.000Z", errorCode: "apply_failed" } as const;
   const failed = {

@@ -405,13 +405,32 @@ test("uninstall recovery targets come from current state, and all connection iss
 
   const view = await h.app();
   expect(view.latestRun?.id).toBe("destroy_later");
+  expect(view.uninstall.requiredConnectionIds).toEqual([appliedId]);
   expect(view.uninstall.recoveryConnectionIds).toEqual([appliedId]);
   expect(view.problems
     .filter((problem) => problem.code === "connection_unavailable")
     .map((problem) => problem.connectionId).sort()).toEqual([appliedId, unusedId]);
 
+  await h.ledger.putConnection({
+    id: appliedId,
+    workspaceId: WORKSPACE,
+    scope: "operator",
+    provider,
+    providerSource: provider,
+    status: "verified",
+    materialization: "secret",
+    envNames: [],
+    createdAt: new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString(),
+  } as never);
+  const operatorBindingView = await h.app();
+  expect(operatorBindingView.uninstall.requiredConnectionIds).toEqual([appliedId]);
+  expect(operatorBindingView.uninstall.recoveryConnectionIds).toEqual([]);
+
   await h.ledger.putPlanRun({ ...applied, requiredProviderRequirements: undefined });
-  expect((await h.app()).uninstall.recoveryConnectionIds).toEqual([]);
+  const legacyView = await h.app();
+  expect(legacyView.uninstall.requiredConnectionIds).toBeUndefined();
+  expect(legacyView.uninstall.recoveryConnectionIds).toEqual([]);
 });
 
 test("app connection issues include the canonical owner's personal connections", async () => {

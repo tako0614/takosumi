@@ -739,10 +739,13 @@ export interface ControlPlaneOperations {
   getCapsuleAdoptedSourceRevision(
     capsuleId: string,
   ): Promise<CapsuleAdoptedSourceRevision | undefined>;
-  /** Value-free replacement targets read against one app/state snapshot. */
-  listCapsuleDestroyRecoveryConnectionIds?(
+  /** Value-free teardown and replacement targets for one app/state snapshot. */
+  listCapsuleAppliedDestroyConnectionIds?(
     capsule: Capsule,
-  ): Promise<readonly string[]>;
+  ): Promise<{
+    readonly requiredConnectionIds: readonly string[];
+    readonly recoveryConnectionIds: readonly string[];
+  } | undefined>;
   /**
    * Reads the internal PlanRun projection by id. The control surface uses it to
    * resolve a plan run's owning Workspace (for the apply Workspace-permission gate) and
