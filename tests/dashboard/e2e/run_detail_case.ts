@@ -5,68 +5,75 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
   test.describe("App-owned Run details", () => {
     test.skip(mode !== "portable", "isolated app Run fixture only");
 
-    test("a lost version retry response returns to the original review from Run details", async ({ page }) => {
-      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
-      const capsuleId = "cap_revision_retry";
-      const capsulePath = `/api/v1/capsules/${capsuleId}`;
-      const versionPath = capsulePath + "/revision-plans";
-      const failed = {
-        id: "plan_failed_version_retry", capsuleId, workspaceId: "ws_alpha",
-        type: "plan", status: "failed", origin: { kind: "revision", ref: "v2.0.0" },
-        baseStateGeneration: 1, createdBy: "portable-e2e", createdAt: "2026-11-18T00:00:00Z",
-      };
-      const review = { ...failed, id: "plan_original_version_retry", status: "succeeded", policyStatus: "pass",
-        planDigest: `sha256:${"a".repeat(64)}`, summary: { add: 0, change: 1, destroy: 0 } };
-      const attempts: { key: string | undefined; request: unknown }[] = [];
-      const writes: string[] = [];
-      await page.route("**/api/v1/**", (route) => {
-        const request = route.request();
-        const path = new URL(request.url()).pathname;
-        if (request.method() !== "GET") writes.push(`${request.method()} ${path}`);
-        if (path === versionPath && request.method() === "POST") {
-          const key = request.headers()["idempotency-key"];
-          attempts.push({ key, request: request.postDataJSON() });
-          if (attempts.length === 1) return route.abort("failed");
-          if (key !== attempts[0]?.key) return route.fulfill({ status: 409, json: {
-            error: { code: "failed_precondition", message: "Another version change is being prepared." },
-          } });
-          return route.fulfill({ json: {
-            revisionPlan: { id: "grp_original_version_retry", capsuleId, revision: { targetRef: "v2.0.0" },
-              phase: "reviewable", generation: 1, planRunId: review.id },
-            nextAction: "review_run", links: { self: "/api/v1/revision-plans/grp_original_version_retry" },
-          } });
-        }
-        if (path === capsulePath) return route.fulfill({ json: { capsule: {
-          id: capsuleId, workspaceId: "ws_alpha", name: "Revision retry fixture",
-          slug: "revision-retry-fixture", installConfigId: "config_revision_retry",
-          status: "active", environment: "production", currentStateGeneration: 1,
-          currentStateVersionId: "state_revision_retry", createdAt: failed.createdAt, updatedAt: failed.createdAt,
-        } } });
-        if (path === capsulePath + "/runs") return route.fulfill({ json: { runs: [] } });
-        const current = [failed, review].find(run => path === `/api/v1/runs/${run.id}` || path.startsWith(`/api/v1/runs/${run.id}/`));
-        if (current && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
-        if (current && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
-        if (current && path.endsWith("/cost")) return route.fulfill({ json: { cost: {
-          runId: current.id, billingMode: "disabled", ratingStatus: "not_applicable",
-          estimatedUsdMicros: 0, blocked: false, reasons: [],
-        } } });
-        if (current) return route.fulfill({ json: { run: current } });
-        return route.fallback();
+    for (const kind of ["version", "rollback"] as const) {
+      test(`a lost ${kind} retry response returns to the original review from Run details`, async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+        const capsuleId = "cap_revision_retry";
+        const capsulePath = `/api/v1/capsules/${capsuleId}`;
+        const stateVersionId = "state_rollback_target";
+        const requestPath = kind === "rollback"
+          ? `/api/v1/state-versions/${stateVersionId}/rollback-plan`
+          : capsulePath + "/revision-plans";
+        const expectedRequest = kind === "version" ? { ref: "v2.0.0" } : null;
+        const failed = {
+          id: "plan_failed_version_retry", capsuleId, workspaceId: "ws_alpha",
+          type: "plan", status: "failed", origin: kind === "rollback" ? { kind: "rollback", stateVersionId } : { kind: "revision", ref: "v2.0.0" },
+          baseStateGeneration: 1, createdBy: "portable-e2e", createdAt: "2026-11-18T00:00:00Z",
+        };
+        const review = { ...failed, id: "plan_original_version_retry", status: "succeeded", policyStatus: "pass",
+          planDigest: `sha256:${"a".repeat(64)}`, summary: { add: 0, change: 1, destroy: 0 } };
+        const attempts: { key: string | undefined; request: unknown }[] = [];
+        const writes: string[] = [];
+        await page.route("**/api/v1/**", (route) => {
+          const request = route.request();
+          const path = new URL(request.url()).pathname;
+          if (request.method() !== "GET") writes.push(`${request.method()} ${path}`);
+          if (path === requestPath && request.method() === "POST") {
+            const key = request.headers()["idempotency-key"];
+            attempts.push({ key, request: request.postDataJSON() });
+            if (attempts.length === 1) return route.abort("failed");
+            if (!key || key !== attempts[0]?.key) return route.fulfill({ status: 409, json: {
+              error: { code: "failed_precondition", message: "Another version change is being prepared." },
+            } });
+            if (kind === "rollback") return route.fulfill({ status: 201, json: { run: review } });
+            return route.fulfill({ json: {
+              revisionPlan: { id: "grp_original_version_retry", capsuleId, revision: { targetRef: "v2.0.0" },
+                phase: "reviewable", generation: 1, planRunId: review.id },
+              nextAction: "review_run", links: { self: "/api/v1/revision-plans/grp_original_version_retry" },
+            } });
+          }
+          if (path === capsulePath) return route.fulfill({ json: { capsule: {
+            id: capsuleId, workspaceId: "ws_alpha", name: "Revision retry fixture",
+            slug: "revision-retry-fixture", installConfigId: "config_revision_retry",
+            status: "active", environment: "production", currentStateGeneration: 1,
+            currentStateVersionId: "state_revision_retry", createdAt: failed.createdAt, updatedAt: failed.createdAt,
+          } } });
+          if (path === capsulePath + "/runs") return route.fulfill({ json: { runs: [] } });
+          const current = [failed, review].find(run => path === `/api/v1/runs/${run.id}` || path.startsWith(`/api/v1/runs/${run.id}/`));
+          if (current && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+          if (current && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (current && path.endsWith("/cost")) return route.fulfill({ json: { cost: {
+            runId: current.id, billingMode: "disabled", ratingStatus: "not_applicable",
+            estimatedUsdMicros: 0, blocked: false, reasons: [],
+          } } });
+          if (current) return route.fulfill({ json: { run: current } });
+          return route.fallback();
+        });
+        await page.goto(`/runs/${failed.id}`);
+        const retry = page.getByRole("button", { name: "Review changes again", exact: true });
+        await retry.click();
+        await expect.poll(() => attempts.length).toBe(1);
+        await expect(retry).toBeEnabled();
+        await retry.click();
+        await expect(page).toHaveURL(new RegExp(`/runs/${review.id}$`));
+        expect(attempts[0]?.key).toBeTruthy();
+        expect(attempts).toEqual([
+          { key: attempts[0]?.key, request: expectedRequest },
+          { key: attempts[0]?.key, request: expectedRequest },
+        ]);
+        expect(writes).toEqual([`POST ${requestPath}`, `POST ${requestPath}`]);
       });
-      await page.goto(`/runs/${failed.id}`);
-      const retry = page.getByRole("button", { name: "Review changes again", exact: true });
-      await retry.click();
-      await expect.poll(() => attempts.length).toBe(1);
-      await expect(retry).toBeEnabled();
-      await retry.click();
-      await expect(page).toHaveURL(new RegExp(`/runs/${review.id}$`));
-      expect(attempts[0]?.key).toBeTruthy();
-      expect(attempts).toEqual([
-        { key: attempts[0]?.key, request: { ref: "v2.0.0" } },
-        { key: attempts[0]?.key, request: { ref: "v2.0.0" } },
-      ]);
-      expect(writes).toEqual([`POST ${versionPath}`, `POST ${versionPath}`]);
-    });
+    }
 
     test("a cancel confirmation stays with its displayed Run", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));

@@ -44,6 +44,32 @@ const plan = (origin: Run["origin"]): Run =>
   run({ id: "run_plan_failed", type: "plan", status: "succeeded", ...(origin ? { origin } : {}) });
 
 describe("retryPlanForRun", () => {
+  test("keeps a rollback attempt until the active view receives a Plan id", async () => {
+    const realFetch = globalThis.fetch;
+    const prior = run({ type: "plan", origin: { kind: "rollback", stateVersionId: "sv_1" } });
+    const api = defaultRetryPlanApi();
+    const keys: (string | null)[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("/api/v1/state-versions/sv_1/rollback-plan");
+      expect(init?.method).toBe("POST");
+      keys.push(new Headers(init?.headers).get("idempotency-key"));
+      return Response.json(keys.length === 1 ? {} : { run: { id: `plan_${keys.length}` } });
+    }) as typeof fetch;
+    try {
+      expect(await api.planRollback("sv_1", () => false)).toBeUndefined();
+      expect(keys).toEqual([]);
+      expect(await retryPlanForRun(prior, capsule(), api)).toBeUndefined();
+      expect(await retryPlanForRun(prior, capsule(), api)).toBe("plan_2");
+      expect(await retryPlanForRun(prior, capsule(), api)).toBe("plan_3");
+      expect(keys[0]).toBeTruthy();
+      expect(keys[1]).toBe(keys[0]);
+      expect(keys[2]).toBeTruthy();
+      expect(keys[2]).not.toBe(keys[0]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("reuses the exact revision request after its create response is lost", async () => {
     const realFetch = globalThis.fetch;
     const prior = run({ type: "plan", origin: { kind: "revision", ref: "release/v3" } });
