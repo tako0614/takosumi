@@ -52,6 +52,7 @@ Run の問題は dashboard または認可された `GET /api/v1/runs/:runId` �
 | `/healthz` が応答しない | `local_compose ps`、accounts logs、公開 port と bind を確認。local test は `localhost:26401` |
 | dashboard は表示されるが sign-in できない | issuer、origin、redirect URI、upstream `clientSecretEnv` の明示 mapping を確認 |
 | provider の認証拒否 | その phase に渡る ProviderConnection、recipe、権限、失効 |
+| Plan ログで provider の起動が `fork/exec ... permission denied` になる | runner の実行ユーザーにバイナリの実行権限があるか、provider の格納先が実行禁止（`noexec`）でマウントされていないかを確認 |
 | state・排他制御の印（fence）・実行記録（receipt）が食い違う | 保存済みの記録、fence、現在の state を照合。apply を繰り返さず、結果を判定できない変更は operator が調査 |
 
 Cloudflare の修復処理（定期的な sweep）は、止まったままの Run を拾い直し、その件数を

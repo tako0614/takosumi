@@ -53,6 +53,7 @@ use logs/events to identify the failing phase.
 | `/healthz` does not respond | Check `local_compose ps`, Accounts logs, published port, and bind address. The local test uses `localhost:26401`. |
 | Dashboard loads but sign-in fails | Check issuer, origin, redirect URI, and explicit mapping for upstream `clientSecretEnv`. |
 | Provider authentication rejected | Phase-specific ProviderConnection, recipe, permissions, expiry |
+| Plan log shows `fork/exec ... permission denied` when starting the provider | Check execute permissions for the runner user and whether the provider directory is on a `noexec` mount. |
 | State/fence/receipt mismatch | Retained evidence and current state; investigate indeterminate mutations before retry |
 
 The Cloudflare repair sweep picks up stalled Runs again and counts them as
