@@ -1,5 +1,6 @@
 import { batch, createEffect, createMemo, createResource, createSignal, onCleanup, untrack } from "solid-js";
 import { sortHomeApps } from "./home-launcher.ts";
+import { visibleInStagingHome } from "./staging-home-residue.ts";
 import { getCapsuleAppWithSignal, listAccessibleAppsPage, resetAppOwnershipCache, type AccessibleApp } from "./control-api.ts";
 import { currentWorkspaceId, selectAvailableWorkspaceId, setCurrentWorkspaceId } from "./workspace-state.ts";
 import { listWorkspacesCached } from "./workspace-list.ts";
@@ -70,7 +71,7 @@ function installedSummaries(entries: readonly AccessibleApp[]): readonly HomeApp
 async function loadHome(workspaceId: string, q: string, signal: AbortSignal): Promise<HomePage> {
   const first = await listAccessibleAppsPage(undefined, signal, q);
   const scope = { workspaceId, requestedQuery: q };
-  if (first) return { ...first, ...scope, apps: installedSummaries(first.apps) };
+  if (first) return { ...first, ...scope, apps: await visibleInStagingHome(installedSummaries(first.apps)) };
   const workspaces = await listWorkspacesCached();
   if (signal.aborted) throw new DOMException("Aborted", "AbortError");
   const id = selectAvailableWorkspaceId(workspaceId, workspaces);
@@ -89,11 +90,11 @@ async function loadHome(workspaceId: string, q: string, signal: AbortSignal): Pr
   }
   return {
     ...scope,
-    apps: capsules.filter((inst) => isVisibleServiceCapsule(inst) &&
+    apps: await visibleInStagingHome(capsules.filter((inst) => isVisibleServiceCapsule(inst) &&
       (Boolean(inst.currentStateVersionId) || inst.currentStateGeneration > 0)).map((inst) => {
       const own = byApp.get(inst.id) ?? [];
       return { id: inst.id, name: inst.name, state: appState(inst), surfaces: own, category: own[0]?.category };
-    }),
+    })),
     surfacesFailed: surfaces.failed,
   };
 }
@@ -233,14 +234,15 @@ export function createHomeLibrary() {
     const isCurrent = () => !signal.aborted && q === term() && workspaceId === currentWorkspaceId();
     setLoadingMore(true);
     setMoreFailed(false);
-    pendingPage = listAccessibleAppsPage(next, signal, q).then((data) => {
+    pendingPage = listAccessibleAppsPage(next, signal, q).then(async (data) => {
       if (!isCurrent()) return false;
       if (!data || data.appliedQuery !== appliedQuery) { setMoreFailed(true); return false; }
       if (data.nextCursor && (data.nextCursor === next || seenCursors.has(data.nextCursor))) {
         setMoreFailed(true);
         return false;
       }
-      const page = installedSummaries(data.apps);
+      const page = await visibleInStagingHome(installedSummaries(data.apps));
+      if (!isCurrent()) return false;
       seenCursors.add(next);
       setSeekNextMatch(page.length === 0 && data.nextCursor !== undefined);
       setExtra((previous) => ({ pages: [...(previous?.pages ?? []), page], nextCursor: data.nextCursor }));
