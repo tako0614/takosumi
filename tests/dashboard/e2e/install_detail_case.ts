@@ -317,6 +317,59 @@ async function expectNothingStored(page: Page, ...values: string[]): Promise<voi
 export function registerInstallDetailCases(mode: string, base: (page: Page, provider: boolean) => Promise<BaseFixture>) {
   test.describe("Inline app detail installation", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
+    test("Store app detail presents its gallery, release notes, and reviews without starting an install", async ({ page }) => {
+      const f = await detailFixture(page, base);
+      const store = "https://store.example.test";
+      const listing = {
+        id: "tako/service",
+        source: { git: "https://github.com/example/store-service.git", path: "deploy/service" },
+        suggestedName: "store-service",
+        name: { ja: "ストアサービス", en: "Store Service" },
+        description: { ja: "サービスの説明", en: "About this service" },
+        badge: { ja: "公式", en: "Official" },
+        publisher: { handle: "example", displayName: "Example" },
+        rating: { average: 4.5, count: 2 },
+        gallery: [{ kind: "image", url: "/media/screen.svg", width: 640, height: 360, alt: { ja: "画面", en: "Service screen" } }],
+        releaseNotes: { ja: "更新内容", en: "Release notes for this version" },
+        createdAt: now,
+        updatedAt: now,
+      };
+      const storeRequests: string[] = [];
+      await page.route(`${store}/**`, async (route) => {
+        const url = new URL(route.request().url());
+        storeRequests.push(`${route.request().method()} ${url.pathname}`);
+        if (url.pathname.endsWith("/reviews")) {
+          return route.fulfill({ json: { items: [{
+            id: "review-1", author: "A reviewer", stars: 5, text: "A useful service.",
+            createdAt: now, updatedAt: now,
+          }] } });
+        }
+        if (url.pathname.endsWith("/media/screen.svg")) {
+          return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="white"/></svg>' });
+        }
+        return route.fulfill({ json: listing });
+      });
+
+      await page.goto(`/new?tcsBase=${encodeURIComponent(store)}&tcsListing=tako%2Fservice`);
+      await expect(page.getByRole("heading", { name: "Store Service" })).toBeVisible();
+      await expect(page.getByTestId("install-app-header").getByText("About this service")).toBeVisible();
+      await expect(page.getByText("About this service", { exact: true })).toHaveCount(1);
+      const screenshot = page.getByRole("button", { name: "Service screen" });
+      await expect(screenshot).toBeVisible();
+      await expect.poll(() => screenshot.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+      await screenshot.click();
+      await expect(page.getByRole("dialog", { name: "Screenshots" })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toBeHidden();
+      await expect(page.getByRole("heading", { name: "What’s new" })).toBeVisible();
+      await expect(page.getByText("Release notes for this version")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Ratings and reviews" })).toBeVisible();
+      await expect(page.getByText("A reviewer")).toBeVisible();
+      await expect(page.getByText("A useful service.")).toBeVisible();
+      expect(storeRequests).toContain("GET /tcs/v2/listings/tako/service/reviews");
+      expect(f.mutations).toEqual([]);
+    });
+
     test("opening the app page creates nothing; Install reads the repository as one attempt", async ({ page }) => {
       let readingHeld = true;
       const f = await detailFixture(page, base, false, false, "not_applicable", { holdSourceReading: () => readingHeld });
