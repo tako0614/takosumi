@@ -1584,6 +1584,18 @@ test.describe("Takosumi dashboard browser surface", () => {
           },
         });
       });
+      await page.route("https://store.example.test/tcs/v2/listings/example/service", (route) =>
+        route.fulfill({ json: {
+          id: "example/service",
+          source: { git: "https://github.com/example/service.git" },
+          suggestedName: "example-service",
+          name: { ja: "Example Service", en: "Example Service" },
+          description: { ja: "サービスの説明", en: "Service description" },
+          badge: { ja: "追加", en: "Add" },
+          createdAt: "2026-08-04T00:00:00.000Z",
+          updatedAt: "2026-08-04T00:00:00.000Z",
+        } })
+      );
       await page.route("https://store.example.test/tcs/v2/listings/example/service/reviews**", async (route) => {
         await route.fulfill({ json: { items: [] } });
       });
