@@ -27,6 +27,7 @@ import {
   type Run,
 } from "./control-api.ts";
 import { initialPlanRetryReport } from "./initial-plan-retry.ts";
+import { randomUuid } from "./random-uuid.ts";
 import {
   getOrCreateRevisionPlanAttempt,
   observeRevisionPlanAttempt,
@@ -60,7 +61,7 @@ export interface RetryPlanApi {
   ) => Promise<unknown>;
   /** Plans a version change to `ref`; resolves to the new Plan's id. */
   readonly planRevision: (capsuleId: string, ref: string, isCurrent?: () => boolean) => Promise<string | undefined>;
-  readonly planRollback: (stateVersionId: string) => Promise<unknown>;
+  readonly planRollback: (stateVersionId: string, isCurrent?: () => boolean) => Promise<unknown>;
   /** Plans the app's tracked ref as configured. */
   readonly planTracked: (capsuleId: string) => Promise<unknown>;
 }
@@ -69,9 +70,8 @@ const STANDARD_REQUESTS = {
   getRun,
   destroyPlanCapsule,
   planCapsule,
-  planRollback: createStateVersionRollbackPlan,
   planTracked: (capsuleId) => planCapsule(capsuleId),
-} satisfies Omit<RetryPlanApi, "planRevision">;
+} satisfies Omit<RetryPlanApi, "planRevision" | "planRollback">;
 
 function isRemoval(type: Run["type"]): boolean {
   return type === "destroy_plan" || type === "destroy_apply";
@@ -148,14 +148,29 @@ export async function retryPlanForRun(
       return extractRunId(await api.planTracked(capsuleId));
     case "rollback":
     case "installed":
-      return extractRunId(await api.planRollback(change.stateVersionId));
+      return extractRunId(await api.planRollback(change.stateVersionId, isCurrent));
   }
 }
 
 /** Build one set of retry calls for the lifetime of the current review screen. */
-export function defaultRetryPlanApi(attempts: RevisionPlanAttemptStore = new Map()): RetryPlanApi {
+export function defaultRetryPlanApi(
+  attempts: RevisionPlanAttemptStore = new Map(),
+  rollbackAttempts: Map<string, string> = new Map(),
+): RetryPlanApi {
   return {
     ...STANDARD_REQUESTS,
+    planRollback: async (stateVersionId, isCurrent) => {
+      if (isCurrent && !isCurrent()) return;
+      const idempotencyKey = rollbackAttempts.get(stateVersionId) ?? randomUuid();
+      rollbackAttempts.set(stateVersionId, idempotencyKey);
+      const result = await createStateVersionRollbackPlan(stateVersionId, { idempotencyKey, isCurrent });
+      if (isCurrent && !isCurrent()) return;
+      // Keep an unacknowledged request available for explicit retry.
+      if (extractRunId(result) && rollbackAttempts.get(stateVersionId) === idempotencyKey) {
+        rollbackAttempts.delete(stateVersionId);
+      }
+      return result;
+    },
     planRevision: async (capsuleId, ref, isCurrent) => {
       const request = { ref };
       const requestJson = JSON.stringify(request);

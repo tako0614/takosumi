@@ -51,7 +51,6 @@ import {
   type Capsule,
   ControlApiError,
   createCapsuleDestroyRecoveryPlan,
-  createStateVersionRollbackPlan,
   advanceGitInstallPlan,
   advanceGitRevisionPlan,
   deleteCapsule,
@@ -83,7 +82,6 @@ import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
-import { randomUuid } from "../../lib/random-uuid.ts";
 import {
   releaseObservedRevisionPlanAttempt,
   type RevisionPlanAttemptStore,
@@ -755,7 +753,7 @@ export default function AppManagePage(props: {
 
   // --- version actions -----------------------------------------------------------
   // Use the same request/key handling as a retry from Run details.
-  const revisionApi = defaultRetryPlanApi(revisionAttempts);
+  const versionPlanApi = defaultRetryPlanApi(revisionAttempts, rollbackAttemptKeys);
   // The installed ref, from the server's view or the Capsule's adopted
   // revision. An installed app never falls back to the Source's default ref:
   // without a known ref there is nothing to update.
@@ -773,23 +771,13 @@ export default function AppManagePage(props: {
         "The installed version is not known yet.",
       );
     }
-    return (await revisionApi.planRevision(capsuleId(), ref, isCurrent))!;
+    return (await versionPlanApi.planRevision(capsuleId(), ref, isCurrent))!;
   };
   const startUpdate = (ref?: string) =>
     void startReview("version", "update", (isCurrent) => createRevisionRun(ref, isCurrent));
   const startRollback = (stateVersionId: string) =>
-    void startReview("version", "apply", async (isCurrent) => {
-      if (!isCurrent()) return;
-      const idempotencyKey = rollbackAttemptKeys.get(stateVersionId) ?? randomUuid();
-      rollbackAttemptKeys.set(stateVersionId, idempotencyKey);
-      const runId = extractRunId(await createStateVersionRollbackPlan(stateVersionId, { idempotencyKey, isCurrent }));
-      // An uncertain response keeps the key for this page's next explicit
-      // attempt. Only the exact POST's acknowledgement releases it.
-      if (runId && isCurrent() && rollbackAttemptKeys.get(stateVersionId) === idempotencyKey) {
-        rollbackAttemptKeys.delete(stateVersionId);
-      }
-      return runId;
-    });
+    void startReview("version", "apply", async (isCurrent) =>
+      extractRunId(await versionPlanApi.planRollback(stateVersionId, isCurrent)));
   const [autoUpdateBusy, setAutoUpdateBusy] = createSignal(false);
   const [autoUpdateError, setAutoUpdateError] = createSignal<string>();
   const toggleAutoUpdate = async (enabled: boolean) => {
@@ -814,7 +802,7 @@ export default function AppManagePage(props: {
   // current configuration — never the Source's default ref. The app is re-read
   // first.
   const retryApi: RetryPlanApi = {
-    ...revisionApi,
+    ...versionPlanApi,
     planRevision: (_capsuleId, ref, isCurrent) => createRevisionRun(ref, isCurrent),
   };
   const retry = (problem: CapsuleAppProblem | undefined) => {
@@ -827,7 +815,7 @@ export default function AppManagePage(props: {
         const installed = (await getCapsule(capsuleId(), { isCurrent })).currentStateVersionId;
         if (!isCurrent()) return;
         if (!installed) throw new Error(t("app.review.notStarted"));
-        return extractRunId(await createStateVersionRollbackPlan(installed));
+        return extractRunId(await versionPlanApi.planRollback(installed, isCurrent));
       }
       const run = await getRun(runId, { isCurrent });
       if (!isCurrent() || run.capsuleId !== capsuleId() || (isAppRemovalRun(run.type) && !isOwner())) return;

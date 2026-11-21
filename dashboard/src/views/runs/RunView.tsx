@@ -493,7 +493,8 @@ function Inner() {
   let disposed = false;
   let runEpoch = 0;
   const revisionRetryAttempts: RevisionPlanAttemptStore = new Map();
-  const retryApi = defaultRetryPlanApi(revisionRetryAttempts);
+  const rollbackAttemptKeys = new Map<string, string>();
+  const retryApi = defaultRetryPlanApi(revisionRetryAttempts, rollbackAttemptKeys);
   let applyReadController: AbortController | undefined;
   onCleanup(() => {
     disposed = true;
@@ -1179,6 +1180,7 @@ function Inner() {
     lastRunId = id;
     runEpoch += 1;
     revisionRetryAttempts.clear();
+    rollbackAttemptKeys.clear();
     applyReadController?.abort();
     setUnconfirmedApply(undefined);
     setCheckingApply(false);

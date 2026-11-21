@@ -172,9 +172,9 @@ describe("installed app page", () => {
   });
 
   test("version changes keep one idempotency key per requested ref", () => {
-    expect(page).toContain("defaultRetryPlanApi(revisionAttempts)");
-    expect(page).toContain("revisionApi.planRevision(capsuleId(), ref, isCurrent)");
-    expect(page).toContain("createStateVersionRollbackPlan(stateVersionId, { idempotencyKey, isCurrent })");
+    expect(page).toContain("defaultRetryPlanApi(revisionAttempts, rollbackAttemptKeys)");
+    expect(page).toContain("versionPlanApi.planRevision(capsuleId(), ref, isCurrent)");
+    expect(page).toContain("versionPlanApi.planRollback(stateVersionId, isCurrent)");
     expect(version).toContain('t("app.version.rollback")');
     expect(version).toContain('t("app.version.pinReview")');
     expect(version).toContain("props.version.autoUpdate === true");
@@ -333,7 +333,7 @@ describe("installed app page", () => {
     // A problem that names no run re-plans the installed version (never the
     // Source's default ref); only an unapplied app plans its saved settings.
     expect(page).toContain("if (!applied()) return extractRunId(await planCapsule(capsuleId()));");
-    expect(page).toContain("return extractRunId(await createStateVersionRollbackPlan(installed));");
+    expect(page).toContain("return extractRunId(await versionPlanApi.planRollback(installed, isCurrent));");
     expect(page).toContain('const purpose: ReviewPurpose = removal ? "uninstall" : applied() ? "apply" : "install";');
     // The installed ref never falls back to the Source's default ref.
     expect(page).toContain("const currentRef = () => appInstalledRef(app(), capsule());");
