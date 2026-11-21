@@ -1071,6 +1071,11 @@ refused or failed before reaching the provider stops with
 teardown that fails after reaching the provider ends in `error`, like any
 failed destroy.
 `destroy-plan` creates an immediate destroy plan.
+When the server cannot prove that the replacement matches the applied account and settings, it returns
+`409 failed_precondition` with `details.reason: "destroy_connection_recovery_unproven"`.
+When the cause can be determined, `details.connectionRecoveryFailure` contains
+`replacement_unverified`, `bindings_mismatch`, or `applied_evidence_unavailable`.
+`bindings_mismatch` compares the complete applied binding configuration.
 
 Create a Capsule through the Git install-plan coordinator. It pins the exact
 SourceSnapshot and successful compatibility declaration, creates the complete

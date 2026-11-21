@@ -13598,6 +13598,30 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   }
   expect((await request({ destroyProviderConnectionReplacements: selection }, "oauth-access-token"))!.status).toBe(403);
   expect(routeDispatches).toBe(0);
+  const dispatchesBeforeRefusal = runner.planJobs.length;
+  const mintsBeforeRefusal = mintIds.length;
+  for (const [row, connectionRecoveryFailure] of [
+    [{ ...foreign, id: replacement.id }, "bindings_mismatch"],
+    [{ ...replacement, credentialVerification: undefined }, "replacement_unverified"],
+    [replacement, "applied_evidence_unavailable"],
+  ] as const) {
+    await store.putConnection(row);
+    if (connectionRecoveryFailure === "applied_evidence_unavailable") {
+      await store.putPlanRun({ ...appliedPlanBefore!, resolvedProviderBindingsDigest: undefined });
+    }
+    const rejection = (await request({ destroyProviderConnectionReplacements: selection }))!;
+    expect(rejection.status).toBe(409);
+    const body = await rejection.json() as { error: { code: string; details: unknown } };
+    expect(body.error.code).toBe("failed_precondition");
+    expect(body.error.details).toEqual({
+      reason: "destroy_connection_recovery_unproven", connectionRecoveryFailure,
+    });
+    expect(runner.planJobs).toHaveLength(dispatchesBeforeRefusal);
+    expect(mintIds).toHaveLength(mintsBeforeRefusal);
+    expect(runner.destroyJobs).toHaveLength(0);
+  }
+  await store.putPlanRun(appliedPlanBefore!);
+  expect(routeDispatches).toBe(3);
   // No-body callers still use the original connection, without falling back.
   if (originalStatus !== "verified") {
     const refused = (await request(undefined))!;
@@ -13605,14 +13629,14 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
     expect(await refused.json()).toMatchObject({
       error: { code: "failed_precondition", details: { reason: "provider_connection_not_ready" } },
     });
-    expect(routeDispatches).toBe(1);
+    expect(routeDispatches).toBe(4);
   }
   const routed = await request({ destroyProviderConnectionReplacements: selection });
   expect(routed!.status).toBe(201);
   const routedBody = await routed!.json() as { run: Run };
   expect(routedBody.run.type).toBe("destroy_plan");
   expect(routedBody.run.capsuleId).toBe(seeded.capsule.id);
-  expect(routeDispatches).toBe(originalStatus === "verified" ? 1 : 2);
+  expect(routeDispatches).toBe(originalStatus === "verified" ? 4 : 5);
   const destroy = await controller.getPlanRun(routedBody.run.id);
   expect(destroy.planRun.createdBy).toBe(seeded.workspace.ownerUserId);
   const repeated = await controller.createCapsuleDestroyPlan(seeded.capsule.id, { actor: seeded.workspace.ownerUserId }, {
