@@ -132,6 +132,7 @@ import {
   InMemoryOpenTofuControlStore,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
+  PlanRunPreparationConflictError,
   type OpenTofuControlStore,
   type CapsulePlanCreationFence,
   type WorkspaceManagementAuthority,
@@ -2157,8 +2158,9 @@ export class OpenTofuController {
 
   async createStateVersionRollbackPlan(
     stateVersionId: string,
-    context: DeployControlActorContext = {},
+    context: DeployControlActorContext & { readonly idempotencyKey?: string } = {},
   ): Promise<PlanRunResponse> {
+    const { idempotencyKey, ...actorContext } = context;
     const { stateVersion } = await this.getStateVersion(stateVersionId);
     const sourceSnapshotId = await this.#sourceSnapshotIdForStateVersion(
       stateVersion,
@@ -2170,12 +2172,44 @@ export class OpenTofuController {
         `state version ${stateVersionId} has no source snapshot provenance`,
       );
     }
-    return await this.#runEngine.createCapsulePlanRun(
-      stateVersion.capsuleId,
-      false,
-      context,
-      { sourceSnapshotId, origin: { kind: "rollback", stateVersionId } },
+    const conflict = () => new OpenTofuControllerError(
+      "failed_precondition",
+      "The previous rollback request no longer matches the current Plan inputs. Check the original Run.",
+      { reason: "rollback_plan_preparation_conflict" },
     );
+    let planRunId: string | undefined;
+    if (idempotencyKey !== undefined) {
+      requireNonEmptyString(actorContext.actor, "actor");
+      const digest = await stableJsonDigest({
+        kind: "takosumi.state-version-rollback@v1",
+        actor: actorContext.actor,
+        workspaceId: stateVersion.workspaceId,
+        capsuleId: stateVersion.capsuleId,
+        stateVersionId: stateVersion.id,
+        idempotencyKey,
+      });
+      planRunId = `plan_${digest.slice("sha256:".length)}`;
+      const existing = await this.#store.getPlanRun(planRunId);
+      if (existing) {
+        if (existing.workspaceId !== stateVersion.workspaceId || existing.capsuleId !== stateVersion.capsuleId ||
+          existing.createdBy !== actorContext.actor || existing.operation !== "update" ||
+          existing.sourceSnapshotId !== sourceSnapshotId || existing.origin?.kind !== "rollback" ||
+          existing.origin.stateVersionId !== stateVersion.id) throw conflict();
+        // Queued replays still use atomic preparation to repair a lost enqueue.
+        // Already-started requests retain their Plan across state changes.
+        if (existing.status !== "queued") return { planRun: publicPlanRun(existing) };
+      }
+    }
+    try {
+      return await this.#runEngine.createCapsulePlanRun(stateVersion.capsuleId, false, actorContext, {
+        sourceSnapshotId,
+        origin: { kind: "rollback", stateVersionId: stateVersion.id },
+        ...(planRunId === undefined ? {} : { planRunId }),
+      });
+    } catch (error) {
+      if (planRunId !== undefined && error instanceof PlanRunPreparationConflictError) throw conflict();
+      throw error;
+    }
   }
 
   async #sourceSnapshotIdForStateVersion(

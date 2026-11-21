@@ -1181,6 +1181,14 @@ canonical mutation. An unconfirmed mutation returns 202 with
 and stops. State rollback remains the
 separate `POST /api/v1/state-versions/{stateVersionId}/rollback-plan` flow.
 
+For this Accounts endpoint, send an `Idempotency-Key` of at most 256 bytes
+to recover from an uncertain response. An authorized caller who repeats the
+key for the same StateVersion receives the original Plan. If the queued
+Plan's inputs have changed, the request is refused. Retain the key for that
+request, and use a fresh key to start a new rollback. Approval and apply are
+separate operations. Callers that omit the key retain the original
+one-request creation behavior.
+
 Creating or reconciling a revision plan does not change what the Capsule
 tracks. Only a successful apply that advances `currentStateVersionId` adopts
 the Plan Run's SourceSnapshot as the Capsule's tracking authority.
