@@ -70,6 +70,78 @@ describe("retryPlanForRun", () => {
     }
   });
 
+  test("restores a failed Run's attempt only for the same account, Run, and state after reload", async () => {
+    const realFetch = globalThis.fetch;
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const storage = new Map<string, string>();
+    let storageAvailable = true;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { sessionStorage: {
+        getItem: (key: string) => {
+          if (!storageAvailable) throw new Error("storage unavailable");
+          return storage.get(key) ?? null;
+        },
+        setItem: (key: string, value: string) => {
+          if (!storageAvailable) throw new Error("storage unavailable");
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => storage.delete(key),
+      } },
+    });
+    const prior = run({ type: "plan", origin: { kind: "rollback", stateVersionId: "sv_1" } });
+    const api = (subject = "sub_a", account = "acc_a", runId = prior.id) =>
+      defaultRetryPlanApi(undefined, undefined, () => [subject, account, runId]);
+    const keys: (string | null)[] = [];
+    const plans = new Map<string | null, string>();
+    let loseAck = true;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const key = new Headers(init?.headers).get("idempotency-key");
+      keys.push(key);
+      const id = plans.get(key) ?? `plan_${plans.size + 1}`;
+      plans.set(key, id);
+      if (loseAck) {
+        loseAck = false;
+        return Response.json({}, { status: 502 });
+      }
+      return Response.json({ run: { id } }, { status: 201 });
+    }) as typeof fetch;
+    try {
+      await expect(retryPlanForRun(prior, capsule(), api())).rejects.toMatchObject({ status: 502 });
+      expect(keys[0]).toBeTruthy();
+      expect(storage.size).toBe(1);
+      expect(await retryPlanForRun(prior, capsule(), api("sub_b"))).toBe("plan_2");
+      expect(await retryPlanForRun(prior, capsule(), api("sub_a", "acc_b"))).toBe("plan_3");
+      expect(await retryPlanForRun(prior, capsule(), api("sub_a", "acc_a", "run_other"))).toBe("plan_4");
+      expect(await retryPlanForRun(prior, capsule({ currentStateVersionId: "sv_3" }), api())).toBe("plan_5");
+      expect(storage.size).toBe(1);
+      expect(await retryPlanForRun(prior, capsule(), api())).toBe("plan_1");
+      expect(keys.at(-1)).toBe(keys[0]);
+      expect(storage.size).toBe(0);
+      expect(await retryPlanForRun(prior, capsule(), api())).toBe("plan_6");
+
+      // If storage recovers, the attempt already sent by this view still owns
+      // the retry, even if a previous view left a different key in storage.
+      loseAck = true;
+      await expect(retryPlanForRun(prior, capsule(), api())).rejects.toMatchObject({ status: 502 });
+      expect(storage.size).toBe(1);
+      storageAvailable = false;
+      const mounted = api();
+      loseAck = true;
+      await expect(retryPlanForRun(prior, capsule(), mounted)).rejects.toMatchObject({ status: 502 });
+      const activeKey = keys.at(-1);
+      expect(activeKey).not.toBe([...storage.values()][0]);
+      storageAvailable = true;
+      expect(await retryPlanForRun(prior, capsule(), mounted)).toBe("plan_8");
+      expect(keys.at(-1)).toBe(activeKey);
+      expect(storage.size).toBe(0);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
+  });
+
   test("reuses the exact revision request after its create response is lost", async () => {
     const realFetch = globalThis.fetch;
     const prior = run({ type: "plan", origin: { kind: "revision", ref: "release/v3" } });
