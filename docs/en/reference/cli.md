@@ -78,7 +78,22 @@ update returns `unconfirmed`, and a saved Plan that can no longer be reviewed
 returns `plan_not_reviewable`. These outcomes exit 1.
 
 `review_required` is not update completion. Review the app, `planRunId`, ref, source snapshot, Plan digest, change counts, resource actions and policy.
-`reviewUrl` opens that saved Plan. Missing counts are `null`, never zero. Only after deciding to execute it, use the returned Plan ID separately:
+`reviewUrl` opens that saved Plan. Missing counts are `null`, never zero.
+
+## Prepare a rollback to a saved StateVersion
+
+`apps rollback` prepares a Plan for a StateVersion ID from `GET /api/v1/capsules/<app-id>/state-versions`. It checks that the StateVersion belongs to the app and uses the Accounts personal access token. `review_required` returns the target `stateVersionId` and the saved `planRunId`.
+
+```bash
+takosumi apps rollback cap_example --state-version state_example --idempotency-key restore-example-01 \
+  --url https://takosumi.example.com --json
+```
+
+If the response is lost, use the same URL, account, app, StateVersion, and idempotency key. While waiting, the CLI reads the same Run.
+
+## Execute a saved Plan
+
+After reviewing the update or rollback and choosing to execute it, pass the returned Plan ID to a separate command.
 
 ```bash
 takosumi apps apply cap_example --plan plan_example --yes \

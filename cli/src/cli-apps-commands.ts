@@ -7,7 +7,7 @@ import {
   requestDeployControlApi,
 } from "./cli-deploy-control-api.ts";
 import { isRecord, stringValue } from "./cli-util.ts";
-import { runAppUpdate, runAppApply, runAppRecoverUninstall } from "./cli-app-update-commands.ts";
+import { runAppUpdate, runAppRollback, runAppApply, runAppRecoverUninstall } from "./cli-app-update-commands.ts";
 
 const APPS_PATH = "/api/v1/apps";
 const INSTALL_PLANS_PATH = "/api/v1/install-plans";
@@ -43,6 +43,7 @@ export async function runApps(args: string[], io: CliIo): Promise<number> {
   if (command === "uninstall") return await runAppUninstall(rest, io);
   if (command === "recover-uninstall") return await runAppRecoverUninstall(rest, io);
   if (command === "update") return await runAppUpdate(rest, io);
+  if (command === "rollback") return await runAppRollback(rest, io);
   if (command === "apply") return await runAppApply(rest, io);
   io.stderr(`${isJapaneseCli() ? "不明なアプリコマンド" : "Unknown app command"}: ${command}`);
   io.stderr(appsHelpText());
@@ -246,6 +247,7 @@ export function appsHelpText(): string {
     "  uninstall <app-id>           アプリをアンインストール",
     "  recover-uninstall <app-id>   代替接続を使う削除Planを準備、または保存Planを確認",
     "  update <app-id>              Git更新のPlanを準備、または保存済みの更新を続行",
+    "  rollback <app-id>            指定した状態バージョンへの復旧Planを準備",
     "  apply <app-id>               保存Planを明示実行、又は --observe-only で読取",
     "", "共通オプション: --url、--token（Accounts PAT）、--json",
     "環境変数: TAKOSUMI_ACCOUNT_TOKEN",
@@ -257,6 +259,7 @@ export function appsHelpText(): string {
     "  uninstall <app-id>           Uninstall an app",
     "  recover-uninstall <app-id>   Prepare or review an uninstall recovery Plan",
     "  update <app-id>              Prepare a Git update Plan or continue an existing update",
+    "  rollback <app-id>            Prepare a rollback Plan for a saved StateVersion",
     "  apply <app-id>               Execute a saved Plan or read with --observe-only",
     "", "Common options: --url, --token (Accounts PAT), --json",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN",
