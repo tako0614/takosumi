@@ -3000,7 +3000,14 @@ export class RunEngine {
         !appliedPlan?.resolvedProviderBindingsDigest ||
         appliedPlan.requiredProviderRequirements === undefined
       ) {
-        throw refuse();
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "Applied provider account evidence is unavailable.",
+          {
+            reason: "destroy_connection_recovery_unproven",
+            connectionRecoveryFailure: "applied_evidence_unavailable",
+          },
+        );
       }
       if (retryWithOriginalConnections) {
         const safety = await this.#store.getCapsuleRuntimeSafety(capsule.id);
@@ -6691,7 +6698,14 @@ export class RunEngine {
     if (!appliedPlan || appliedPlan.id !== recovery.appliedPlanRunId ||
       appliedPlan.resolvedProviderBindingsDigest !== recovery.appliedProviderBindingsDigest ||
       appliedPlan.requiredProviderRequirements === undefined) {
-      throw new OpenTofuControllerError("failed_precondition", "Applied provider account evidence changed or is unavailable.", { reason: "destroy_connection_recovery_unproven" });
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Applied provider account evidence changed or is unavailable.",
+        {
+          reason: "destroy_connection_recovery_unproven",
+          connectionRecoveryFailure: "applied_evidence_unavailable",
+        },
+      );
     }
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store, appOwnership: this.#appOwnership,

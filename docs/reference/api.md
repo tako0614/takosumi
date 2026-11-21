@@ -623,6 +623,11 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 破棄が一部進んで state が保存されていれば、
 指定を省いた割当では、その state を作った破棄 Plan で使用した代替接続を維持します。
 新しい Plan の承認と Apply が必要です。
+接続が適用済みのアカウントと設定に一致すると確認できない場合は `409 failed_precondition` と
+`details.reason: "destroy_connection_recovery_unproven"` を返します。
+判別できたときだけ `details.connectionRecoveryFailure` に
+`replacement_unverified`、`bindings_mismatch`、`applied_evidence_unavailable`
+のいずれかが入ります。`bindings_mismatch` は接続設定全体の不一致です。
 
 `GET /api/v1/capsules/{capsuleId}/app` は、インストール済みのアプリを1つの見え方として
 返します。状態 (`state`) と主操作 (`primaryAction`) は control plane が Capsule、

@@ -468,10 +468,24 @@ export class ConnectionsService {
     readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
     readonly includeUnusedBindings?: boolean;
   }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
-    const refuse = (): never => { throw new OpenTofuControllerError(
-      "failed_precondition", "The selected connection does not prove the applied provider account scope.",
-      { reason: "destroy_connection_recovery_unproven" },
-    ); };
+    const refuse = (
+      connectionRecoveryFailure?: "replacement_unverified" | "bindings_mismatch",
+    ): never => {
+      const messages = {
+        replacement_unverified: "The selected connection does not have verified cloud account information.",
+        bindings_mismatch: "The current provider bindings do not match the applied account and settings.",
+      };
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        connectionRecoveryFailure
+          ? messages[connectionRecoveryFailure]
+          : "The selected connection does not prove the applied provider account scope.",
+        {
+          reason: "destroy_connection_recovery_unproven",
+          ...(connectionRecoveryFailure ? { connectionRecoveryFailure } : {}),
+        },
+      );
+    };
     if (!/^sha256:[a-f0-9]{64}$/u.test(input.appliedDigest)) refuse();
     let selection: readonly DestroyProviderConnectionReplacement[];
     try { selection = parseDestroyProviderConnectionReplacements(input.replacements, { allowOriginalConnection: true }); }
@@ -522,7 +536,8 @@ export class ConnectionsService {
       selectedReplacementBindings.add(bindingId);
       if (entry.connection.expiresAt !== undefined &&
         (!Number.isFinite(Date.parse(entry.connection.expiresAt)) || Date.parse(entry.connection.expiresAt) <= Date.parse(this.#now()))) refuse();
-      if (entry.connection.scope === "operator" || !input.hasVerifiedAccountScope(entry.connection)) refuse();
+      if (entry.connection.scope === "operator") refuse();
+      if (!input.hasVerifiedAccountScope(entry.connection)) refuse("replacement_unverified");
     }
     if ([...replacements.keys()].some(id => !selectedReplacementBindings.has(id))) refuse();
     // Compare against the exact connection IDs used by the PlanRun that made
@@ -535,7 +550,7 @@ export class ConnectionsService {
       const appliedId = appliedIdsByBinding.get(bindingId) ?? bindingId;
       return appliedId === entry.connection.id ? entry : { ...entry, connection: { ...entry.connection, id: appliedId } };
     });
-    if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse();
+    if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse("bindings_mismatch");
     return input.includeUnusedBindings ? resolved : selected;
   }
 

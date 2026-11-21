@@ -4,6 +4,24 @@ import { ja } from "../../../../dashboard/src/i18n/ja.ts";
 import { ControlApiError } from "../../../../dashboard/src/lib/control-api.ts";
 import { friendlyError } from "../../../../dashboard/src/lib/error-copy.ts";
 
+test("uninstall connection recovery explains the proven reason without showing server prose", () => {
+  for (const [connectionRecoveryFailure, key] of [
+    ["replacement_unverified", "app.uninstall.replacementVerifyFirst"],
+    ["bindings_mismatch", "app.uninstall.replacementSettingsMismatch"],
+    ["applied_evidence_unavailable", "app.uninstall.replacementAppliedEvidenceUnavailable"],
+    ["unknown_detail", "app.uninstall.replacementUnproven"],
+    [undefined, "app.uninstall.replacementUnproven"],
+  ] as const) {
+    const error = new ControlApiError(409, "failed_precondition", "Internal validation detail", {
+      error: { details: { reason: "destroy_connection_recovery_unproven", connectionRecoveryFailure } },
+    });
+    const english = friendlyError(error, (name) => en[name]).message;
+    const japanese = friendlyError(error, (name) => ja[name]).message;
+    expect(english).toBe(en[key]);
+    expect(japanese).toBe(ja[key]);
+  }
+});
+
 describe("friendlyError plan deadline copy", () => {
   const timeoutCodes = [
     "install_plan_reconcile_timeout",
