@@ -221,10 +221,11 @@ describe("attempt-driven install page", () => {
     }
   });
 
-  test("the Store page keeps search and the Git form", () => {
+  test("the Store keeps search, the direct Git entry", () => {
     expect(view).toContain('class="iv-hero iv-page-heading"');
     expect(view).toContain('class="iv-catalogue iv-catalogue-browse"');
-    expect(view).toContain('aria-label={t("installStore.sourceUrl")}');
+    expect(view).toContain('href={GIT_INSTALL_ENTRY}');
+    expect(view).toContain('label={t("installStore.sourceUrl")}');
     // Selecting a listing reflects it into the URL so back and share work.
     expect(view).toContain("navigate(`/new?${buildNewQuery(listing)}`);");
   });

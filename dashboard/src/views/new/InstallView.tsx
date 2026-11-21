@@ -16,7 +16,7 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { Navigate, useLocation, useNavigate } from "@solidjs/router";
 import { ArrowLeft, ChevronDown, ExternalLink } from "lucide-solid";
-import { matchingInstalledApps, type GitInstallPlan } from "takosumi-contract";
+import { matchingInstalledApps, normalizeInstallConfigSourceUrl, type GitInstallPlan } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, FormField, Input, Select, Spinner } from "../../components/ui/index.ts";
@@ -25,7 +25,7 @@ import { StoreGallery, StoreOfferDetails, StoreRating } from "../store/StoreList
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { listConnections, listInstalledApps } from "../../lib/control-api.ts";
-import { capsuleNameFromUrl, hasInstallPrefillParams, isSafeHttpsGitUrl, parseInstallPrefill } from "../../lib/install-link.ts";
+import { capsuleNameFromUrl, GIT_INSTALL_ENTRY, hasInstallPrefillParams, parseInstallPrefill } from "../../lib/install-link.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import {
   appendAppHandoff,
@@ -33,7 +33,7 @@ import {
   appHandoffProductLabel,
   createAppHandoffConnectHref,
 } from "../../lib/app-handoff.ts";
-import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
+import { fetchTcsListing, tcsListingIdentity, type TcsListing } from "../../lib/tcs-client.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import { appPageHref } from "../../lib/app-links.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
@@ -80,22 +80,41 @@ function storeHandoff(search: string): { readonly base: string; readonly listing
   return { base, listingId };
 }
 
-/**
- * The listing the person just picked in the Store, kept in memory only so its
- * page shows it without reading it again. A shared or reloaded link reads the
- * listing from its Store instead.
- */
+/** The most recent selection lets its page render while the detail is read. */
 let pickedListing: TcsListing | undefined;
 
-function readListing(handoff: { readonly base: string; readonly listingId: string }) {
+type StoreHandoff = NonNullable<ReturnType<typeof storeHandoff>>;
+
+function matchesStoreRepository(listing: TcsListing, expectedGit?: string): boolean {
+  if (!expectedGit) return true;
+  try {
+    return tcsListingIdentity(listing.source) === tcsListingIdentity({ url: expectedGit });
+  } catch {
+    return false;
+  }
+}
+
+function cachedListing(handoff: StoreHandoff, expectedGit?: string): TcsListing | undefined {
   const picked = pickedListing;
-  const listing = picked && picked.id === handoff.listingId && storeBase(picked.primaryServer) === handoff.base
-    ? Promise.resolve(picked)
-    : fetchTcsListing(handoff.base, handoff.listingId);
-  // This route value selects the public Store read source; it is never an
-  // install input. Restore it after reload because listing sanitization strips
-  // server-routing fields from untrusted Store responses.
-  return listing.then((value) => value ? { ...value, primaryServer: handoff.base } : null);
+  return picked && picked.id === handoff.listingId && storeBase(picked.primaryServer) === handoff.base &&
+      matchesStoreRepository(picked, expectedGit)
+    ? picked
+    : undefined;
+}
+
+async function readListing(handoff: StoreHandoff, expectedGit?: string): Promise<TcsListing | null> {
+  // A product can be repointed after the card or a shared link was made.
+  // Don't replace that link's Git source with the new one.
+  const picked = cachedListing(handoff, expectedGit);
+  try {
+    const listing = await fetchTcsListing(handoff.base, handoff.listingId, AbortSignal.timeout(8000));
+    if (!listing || listing.id !== handoff.listingId ||
+      !matchesStoreRepository(listing, expectedGit ?? picked?.source.url)) return null;
+    return { ...listing, source: picked?.source ?? listing.source, primaryServer: handoff.base };
+  } catch (error) {
+    if (picked) return picked;
+    throw error;
+  }
 }
 
 const SCREEN_READ_ATTEMPTS = 10;
@@ -131,6 +150,9 @@ function InstallRoute(props: { readonly principalId: string }) {
       <Match when={namesApp()}>
         <AppInstallPage principalId={props.principalId} />
       </Match>
+      <Match when={`${location.pathname}${location.search}` === GIT_INSTALL_ENTRY}>
+        <GitInstallPage />
+      </Match>
     </Switch>
   );
 }
@@ -142,8 +164,6 @@ function StorePage(props: {
   readonly catalogCache: StoreCatalogCache;
 }) {
   const navigate = useNavigate();
-  const [gitUrl, setGitUrl] = createSignal("");
-  const [gitError, setGitError] = createSignal<string>();
   // Selecting a listing reflects it into the URL, so back and share work.
   const choose = (listing: TcsListing) => {
     pickedListing = listing;
@@ -151,7 +171,10 @@ function StorePage(props: {
   };
   return (
     <div class="iv-page iv-browse-page">
-      <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
+      <header class="iv-hero iv-page-heading">
+        <h1>{t("installStore.title")}</h1>
+        <a class="iv-git-link" href={GIT_INSTALL_ENTRY}>{t("installStore.fromGit")}</a>
+      </header>
       <Show when={props.rejectedInstallLink}>
         <div class="iv-error" role="alert" data-testid="install-link-refusal">
           <p>{t("installStore.invalidInstallLink")}</p>
@@ -166,34 +189,51 @@ function StorePage(props: {
           showSourceControls={true}
           showSortControl={true}
         />
-        <details class="iv-manual">
-          <summary>{t("installStore.manual")}</summary>
-          <form
-            class="iv-manual-row"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const url = gitUrl().trim();
-              const path = isSafeHttpsGitUrl(url) ? installReturnPathFromPrefill({ git: url }) : undefined;
-              if (!path) {
-                setGitError(t("installStore.invalidSource"));
-                return;
-              }
-              setGitError(undefined);
-              navigate(path);
-            }}
-          >
-            <Input
-              value={gitUrl()}
-              onInput={(event) => setGitUrl(event.currentTarget.value)}
-              placeholder="https://github.com/example/service.git"
-              aria-label={t("installStore.sourceUrl")}
-              spellcheck={false}
-            />
-            <Button type="submit" variant="secondary">{t("installStore.continue")}</Button>
-          </form>
-          <Show when={gitError()}>{(message) => <p class="iv-muted" role="alert">{message()}</p>}</Show>
-        </details>
       </section>
+    </div>
+  );
+}
+
+// The same provider-free example as the standalone quickstart.
+const standaloneExample = installReturnPathFromPrefill({
+  git: "https://github.com/tako0614/takosumi.git",
+  ref: "v2.0.0",
+  path: "examples/opentofu-basic",
+  name: "OpenTofu sample",
+});
+
+function GitInstallPage() {
+  const navigate = useNavigate();
+  const [gitUrl, setGitUrl] = createSignal("");
+  const [invalid, setInvalid] = createSignal(false);
+  return (
+    <div class="iv-page iv-browse-page iv-git-entry">
+      <header class="iv-hero iv-page-heading"><h1>{t("installStore.fromGit")}</h1></header>
+      <form class="iv-form" onSubmit={(event) => {
+        event.preventDefault();
+        const path = installReturnPathFromPrefill({ git: gitUrl() });
+        if (!path) {
+          setInvalid(true);
+          return;
+        }
+        navigate(path);
+      }}>
+        <FormField label={t("installStore.sourceUrl")} error={invalid() ? t("installStore.invalidSource") : undefined}>
+          <Input
+            value={gitUrl()}
+            onInput={(event) => { setGitUrl(event.currentTarget.value); setInvalid(false); }}
+            placeholder="https://github.com/example/service.git"
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </FormField>
+        <Button type="submit">{t("installStore.continue")}</Button>
+      </form>
+      <Show when={standaloneExample}>
+        {(href) => <p class="iv-muted iv-git-example">
+          <a href={href()}>{t("installStore.tryExample")}</a>
+        </p>}
+      </Show>
     </div>
   );
 }
@@ -205,11 +245,17 @@ function AppInstallPage(props: { readonly principalId: string }) {
   const navigate = useNavigate();
   const handoff = createMemo(() => appHandoffFromSearch(location.search));
   const prefill = createMemo(() => parseInstallPrefill(withoutInstallContext(location.search)));
-  const store = createMemo(() => storeHandoff(location.search));
+  const store = createMemo(() => storeHandoff(location.search), undefined, {
+    equals: (a, b) => a?.base === b?.base && a?.listingId === b?.listingId,
+  });
+  const storeGit = createMemo(() => prefill()?.git);
   // The listing is presentation only (name, icon, description, its module).
   const [listing] = createResource(
-    () => store() ?? false,
-    (handoffSource) => readListing(handoffSource),
+    () => {
+      const source = store();
+      return source ? { ...source, expectedGit: storeGit() } : false;
+    },
+    ({ expectedGit, ...source }) => readListing(source, expectedGit),
   );
   const [ref, setRef] = createSignal(prefill()?.ref ?? "");
   const [sourceAuth, setSourceAuth] = createSignal("");
@@ -253,9 +299,37 @@ function AppInstallPage(props: { readonly principalId: string }) {
   const plan = () => attempt.response()?.installPlan;
   const fromStore = () => Boolean(store());
   // `.latest` throws once a read failed; the listing is optional presentation.
-  const listed = () => (listing.error ? undefined : (listing.latest ?? undefined));
-  const listingFailed = (): boolean => Boolean(listing.error);
-  const gitUrl = () => plan()?.source.url ?? listed()?.source.url ?? prefill()?.git ?? "";
+  const resolvedListing = () => {
+    const source = store();
+    if (!source || listing.error) return undefined;
+    const fetched = listing.latest;
+    if (fetched === null) return null;
+    return fetched?.id === source.listingId && fetched.primaryServer === source.base &&
+        matchesStoreRepository(fetched, storeGit())
+      ? fetched
+      : undefined;
+  };
+  const listed = () => {
+    const source = store();
+    const fetched = resolvedListing();
+    // Null means the Store removed or repointed the listing.
+    return fetched === null || !source ? undefined : fetched ?? cachedListing(source, storeGit());
+  };
+  const listingFailed = (): boolean => Boolean(listing.error || (store() && listing.state === "ready" && listing.latest === null));
+  const selectedGitUrl = () => listed()?.source.url ?? prefill()?.git;
+  const sourceMismatch = createMemo(() => {
+    const selected = selectedGitUrl();
+    const current = plan();
+    return Boolean(selected && current &&
+      normalizeInstallConfigSourceUrl(selected) !== normalizeInstallConfigSourceUrl(current.source.url));
+  });
+  createEffect(on(sourceMismatch, (mismatch) => {
+    if (mismatch) {
+      attempt.finish();
+      setCompleted(undefined);
+    }
+  }));
+  const gitUrl = () => (sourceMismatch() ? selectedGitUrl() : plan()?.source.url ?? selectedGitUrl()) ?? "";
   const [installedApps, { refetch: refetchInstalledApps }] = createResource(
     () => ({ workspaceId: currentWorkspaceId() || undefined }),
     (scope) => listInstalledApps(scope.workspaceId),
@@ -302,7 +376,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
     return publisher?.displayName?.trim() || publisher?.handle?.trim();
   };
   const version = () => {
-    const current = plan();
+    const current = sourceMismatch() ? undefined : plan();
     if (!current) return versionLabel(ref()) ?? (ref() === "HEAD" ? "HEAD" : undefined);
     const resolved = attempt.resolvedVersion();
     return resolved && resolved.commit === current.source.ref
@@ -311,6 +385,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   };
 
   const install = () => {
+    if (sourceMismatch()) return;
     if (installedApps.state !== "ready") return;
     void attempt.start(
       {
@@ -365,7 +440,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   // Entering the install screen, a problem or the end moves focus to its
   // heading, so keyboard and screen reader users land where the page
   // changed. Moving within the screen keeps focus where the person types.
-  const place = () => (completed() ? "complete" : onScreen() ? "screen" : stage());
+  const place = () => (sourceMismatch() ? "source-mismatch" : completed() ? "complete" : onScreen() ? "screen" : stage());
   createEffect(on(place, (current, previous) => {
     if (previous === undefined || current === previous) return;
     queueMicrotask(() => {
@@ -376,7 +451,9 @@ function AppInstallPage(props: { readonly principalId: string }) {
 
   return (
     <div class="iv-page iv-configure-page" data-install-state={stage()}>
-      <a class="iv-back-link" href="/new"><ArrowLeft size={18} aria-hidden="true" />{t("installStore.back")}</a>
+      <a class="iv-back-link" href={fromStore() ? "/new" : GIT_INSTALL_ENTRY}>
+        <ArrowLeft size={18} aria-hidden="true" />{t(fromStore() ? "installStore.back" : "installStore.fromGit")}
+      </a>
       <article class="iv-app-surface" aria-labelledby="iv-app-title">
         <header class="iv-app-detail" data-testid="install-app-header">
           <AppFace name={title()} iconUrl={listed()?.iconUrl} class="iv-app-icon" monogramFrameClass="iv-app-monogram" />
@@ -401,8 +478,16 @@ function AppInstallPage(props: { readonly principalId: string }) {
           <div class="iv-error" role="alert">{t("installStore.listingUnavailable")}</div>
         </Show>
 
-        <Show when={completed()} fallback={
+        <Show when={sourceMismatch() ? undefined : completed()} fallback={
           <Switch>
+            <Match when={sourceMismatch()}>
+              <section class="iv-workbench" data-testid="install-source-mismatch" role="alert">
+                <h2 data-stage-heading tabindex="-1">{t("installStore.invalidInstallLink")}</h2>
+                <Button href={`${location.pathname}${withInstallAttempt(location.search, undefined)}`} variant="primary">
+                  {t("installStore.continue")}
+                </Button>
+              </section>
+            </Match>
             <Match when={stage() === "candidate" || stage() === "starting"}>
               <section class="iv-workbench iv-start" data-testid="install-start">
                 <Show when={attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
@@ -420,9 +505,14 @@ function AppInstallPage(props: { readonly principalId: string }) {
                         <For each={existingApps()}>{(app) => {
                           const label = () => app.displayName?.[locale()] || title();
                           return (
-                            <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${label()}`}>
-                              {t("installStore.open")}<Show when={existingApps().length > 1}> · {label()}</Show>
-                            </Button>
+                            <>
+                              <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${label()}`}>
+                                {t("installStore.open")}<Show when={existingApps().length > 1}> · {label()}</Show>
+                              </Button>
+                              <Button variant="secondary" href={appPageHref(app.capsuleId, "version")} aria-label={`${t(app.updateAvailable ? "app.version.update" : "installStore.manageVersion")}: ${label()}`}>
+                                {t(app.updateAvailable ? "app.version.update" : "installStore.manageVersion")}
+                              </Button>
+                            </>
                           );
                         }}</For>
                       </div>

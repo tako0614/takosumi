@@ -52,7 +52,7 @@ test("Store identity uses authorized app details and exact config coordinates wi
   expect(result).toEqual({
     installedApps: [{
       capsuleId: "cap_a", name: "cap_a", displayName: { ja: "オフィス", en: "Office" },
-      iconUrl: "https://example.test/icon.png", state: "installed",
+      iconUrl: "https://example.test/icon.png", state: "installed", updateAvailable: true,
       installedFrom: { url: repository, path: "src/deploy/app" },
     }],
     complete: true,

@@ -1558,6 +1558,32 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
+  test("embedded Store failure leaves direct Git install usable", async ({ page }) => {
+    test.skip(mode !== "portable", "Store outage is mocked only in portable mode");
+    const mutations: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/v1/") && request.method() !== "GET") {
+        mutations.push(`${request.method()} ${new URL(request.url()).pathname}`);
+      }
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem("tg_lang", "en");
+      localStorage.setItem("tcs.stores", JSON.stringify(["https://store.example.test"]));
+    });
+    await page.route("https://store.example.test/**", (route) => route.fulfill({ status: 503 }));
+    await page.goto("/new");
+    await expect(page.getByText("The store could not be reached.")).toBeVisible();
+    await page.getByRole("link", { name: "Install from Git", exact: true }).click();
+    await expect(page).toHaveURL(/\/new\?entry=git$/u);
+    await page.getByRole("textbox", { name: /Git URL/u }).fill("https://github.com/example/direct-service.git");
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("direct-service");
+    await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
+    await expect(page.getByRole("link", { name: "Install from Git", exact: true }))
+      .toHaveAttribute("href", "/new?entry=git");
+    expect(mutations).toEqual([]);
+  });
+
   test("renders the single Store install view on desktop and mobile", async ({
     page,
   }) => {
@@ -1584,6 +1610,18 @@ test.describe("Takosumi dashboard browser surface", () => {
           },
         });
       });
+      await page.route("https://store.example.test/tcs/v2/listings/example/service", (route) =>
+        route.fulfill({ json: {
+          id: "example/service",
+          source: { git: "https://github.com/example/service.git" },
+          suggestedName: "example-service",
+          name: { ja: "Example Service", en: "Example Service" },
+          description: { ja: "サービスの説明", en: "Service description" },
+          badge: { ja: "追加", en: "Add" },
+          createdAt: "2026-08-04T00:00:00.000Z",
+          updatedAt: "2026-08-04T00:00:00.000Z",
+        } })
+      );
       await page.route("https://store.example.test/tcs/v2/listings/example/service/reviews**", async (route) => {
         await route.fulfill({ json: { items: [] } });
       });
@@ -1621,10 +1659,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     }
     await page.setViewportSize({ width: 375, height: 844 });
     await page.screenshot({ path: test.info().outputPath("new-375.png") });
-    const manual = page.locator("details.iv-manual");
-    await expect(manual).not.toHaveAttribute("open");
-    await manual.locator("summary").click();
-    await expect(manual.getByRole("textbox", { name: /Git URL/u })).toBeVisible();
+    await expect(page.locator("details.iv-manual")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Gitからインストール", exact: true }))
+      .toHaveAttribute("href", "/new?entry=git");
     if (mode === "portable") {
       await page.getByRole("button", { name: "Example Service", exact: true }).click();
       await expect(page.getByRole("heading", { level: 1 })).toHaveText("Example Service");

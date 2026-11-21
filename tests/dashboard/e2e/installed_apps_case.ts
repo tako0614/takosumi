@@ -16,7 +16,7 @@ function app(capsuleId: string, name: string): InstalledAppSummary {
   return { capsuleId, name, state: "installed", installedFrom: { url: `${repository}.git/`, path: `./${modulePath}/` } };
 }
 
-type FixtureOptions = { readonly legacy?: boolean };
+type FixtureOptions = { readonly legacy?: boolean; readonly updateCapsuleId?: string };
 
 async function fixture(page: Page, apps: readonly InstalledAppSummary[], complete = true, options: FixtureOptions = {}) {
   await page.addInitScript(() => {
@@ -58,7 +58,7 @@ async function fixture(page: Page, apps: readonly InstalledAppSummary[], complet
       name: row.name,
       role: "owner",
       ownerDisplayName: "Portable E2E",
-      state: row.state,
+      state: row.capsuleId === options.updateCapsuleId ? "update_available" : row.state,
       primaryAction: "open",
     }));
     // Model a bounded list whose one incomplete per-app detail makes the
@@ -99,7 +99,7 @@ async function fixture(page: Page, apps: readonly InstalledAppSummary[], complet
   }
   await page.route("**/api/v1/source-ref-resolutions?**", (route) => route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } }));
   await page.route("**/api/v1/workspaces/*/source-ref-resolutions/stable-semver", (route) => route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } }));
-  return { mutations, reads, errors };
+  return { mutations, reads, errors, attempts };
 }
 
 async function capture(page: Page, name: string) {
@@ -116,8 +116,96 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
   test.describe("Store installed apps", () => {
     test.skip(mode !== "portable", "deterministic installed app identity fixture; not production evidence");
 
+    for (const detail of ["repointed", "removed"] as const) {
+      test(`keeps the shared Git source and installed destination when Store detail is ${detail}`, async ({ page }) => {
+        const h = await fixture(page, [app("cap_repository_office", "office-personal")]);
+        await page.route("https://store.example.test/tcs/v2/listings/example/installed-app", (route) =>
+          detail === "removed"
+            ? route.fulfill({ status: 404, json: { error: "not_found" } })
+            : route.fulfill({ json: {
+              ...listing,
+              name: { ja: "別のアプリ", en: "Different app" },
+              source: { git: "https://github.com/example/another-repository.git" },
+            } })
+        );
+        await page.route("https://store.example.test/tcs/v1/listings/**", (route) =>
+          route.fulfill({ status: 404, json: { error: "not_found" } })
+        );
+        const shared = `/new?${new URLSearchParams({
+          tcsBase: "https://store.example.test", tcsListing: listing.id,
+          git: `${repository}.git`, path: modulePath, name: "another-office",
+        })}`;
+        if (detail === "removed") {
+          await page.goto("/new");
+          await page.getByRole("button", { name: "共有オフィス", exact: true }).click();
+        } else {
+          await page.goto(shared);
+        }
+        await expect(page.getByRole("alert")).toHaveText("このアプリをストアから取得できませんでした。");
+        await expect(page.getByRole("heading", { level: 1 })).toHaveText("another-office");
+        await expect(page.getByTestId("install-provenance")).toContainText("github.com/example/repository-office");
+        const open = page.getByTestId("install-existing-apps").getByRole("link").first();
+        await expect(open).toHaveAttribute("href", "/apps/cap_repository_office");
+        await expect(page.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeEnabled();
+        expect(h.mutations).toEqual([]);
+        await open.click();
+        await expect(page).toHaveURL(/\/apps\/cap_repository_office$/u);
+        await expect.poll(() => h.reads.includes("/api/v1/capsules/cap_repository_office/app")).toBe(true);
+        expect(h.mutations).toEqual([]);
+
+        await page.goto(shared);
+        const version = page.getByTestId("install-source-fields");
+        await version.locator(":scope > summary").click();
+        await version.getByRole("button", { name: "開発版", exact: true }).click();
+        await expect(version.getByRole("textbox")).toHaveValue("HEAD");
+        await page.getByRole("button", { name: "もう1つ入れる", exact: true }).click();
+        await expect.poll(() => h.attempts.latest()?.source.url).toBe(`${repository}.git`);
+        expect(h.attempts.latest()?.source.ref).toBe("HEAD");
+        expect(h.attempts.latest()?.options.modulePath).toBe(modulePath);
+        expect(h.mutations.filter((entry) => entry === "POST /api/v1/install-plans")).toHaveLength(1);
+        expect(h.mutations.some((entry) => /\/(?:apply|approve)$/u.test(entry))).toBe(false);
+        expect(h.errors).toEqual([]);
+      });
+    }
+
+    test("does not resume a saved attempt for a different shared Git source", async ({ page }) => {
+      const h = await fixture(page, []);
+      const shared = `/new?${new URLSearchParams({
+        tcsBase: "https://store.example.test", tcsListing: listing.id,
+        git: `${repository}.git`, path: modulePath, name: "another-office",
+      })}`;
+      await page.goto(shared);
+      await page.getByRole("button", { name: "インストール", exact: true }).click();
+      await expect(page).toHaveURL((url) => url.searchParams.has("installPlan"));
+      const saved = page.url();
+      const attemptId = new URL(saved).searchParams.get("installPlan")!;
+      await page.route(`**/api/v1/install-plans/${attemptId}`, (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const reply = h.attempts.handle({ method: "GET", path: `/api/v1/install-plans/${attemptId}` })!;
+        return route.fulfill({ json: {
+          ...reply.json,
+          installPlan: { ...reply.json.installPlan, source: {
+            ...reply.json.installPlan.source, url: "https://github.com/example/another-repository.git",
+          } },
+        } });
+      });
+      await page.goto(saved);
+      await expect(page.getByTestId("install-source-mismatch")).toBeVisible();
+      const before = [...h.mutations];
+      await expect(page.getByTestId("install-configuration")).toHaveCount(0);
+      await expect(page.getByTestId("install-provenance")).toContainText("github.com/example/repository-office");
+      await page.getByTestId("install-source-mismatch").getByRole("link").click();
+      await expect(page).toHaveURL((url) => !url.searchParams.has("installPlan") && url.searchParams.get("git") === `${repository}.git`);
+      await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeEnabled();
+      expect(h.mutations).toEqual(before);
+      expect(h.mutations.some((entry) => /\/(?:apply|approve)$/u.test(entry))).toBe(false);
+      expect(h.errors).toEqual([]);
+    });
+
     test("shows one installed app in Store and incoming Git links before starting another", async ({ page }) => {
-      const h = await fixture(page, [app("cap_repository_office", "office-personal")]);
+      const h = await fixture(page, [app("cap_repository_office", "office-personal")], true, {
+        updateCapsuleId: "cap_repository_office",
+      });
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
       await expect(card).toBeVisible();
@@ -126,6 +214,8 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
       const installed = page.getByTestId("install-existing-apps");
       await expect(installed.getByText("インストール済み", { exact: true })).toBeVisible();
+      await expect(installed.getByRole("link", { name: "更新: 共有オフィス", exact: true }))
+        .toHaveAttribute("href", "/apps/cap_repository_office#version");
       await expect(page.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeEnabled();
       await expect(page.getByText(hint, { exact: true })).toBeVisible();
       expect(h.mutations).toEqual([]);
@@ -155,6 +245,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
       await expect(page.getByTestId("install-existing-apps").getByText("2件インストール済み", { exact: true })).toBeVisible();
       await expect(page.getByTestId("install-existing-apps").getByRole("link", { name: /^開く:/u })).toHaveCount(2);
+      await expect(page.getByTestId("install-existing-apps").getByRole("link", { name: /^バージョンを管理:/u })).toHaveCount(2);
       await capture(page, "new-installed-two");
       expect(h.mutations).toEqual([]);
       const query = new URLSearchParams({ git: repository, path: "deploy/other", ref: "main", name: "other-module" });
