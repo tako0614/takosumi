@@ -119,6 +119,9 @@ takosumi apps recover-uninstall cap_example \
 ```
 
 The server checks current ownership, the cloud account, and the applied connection settings before preparing a Destroy Plan.
+When a `refused` result includes `connectionRecoveryFailure`, verify the replacement connection for `replacement_unverified`,
+or check the account and applied connection settings for `bindings_mismatch`.
+`applied_evidence_unavailable` means the server could not confirm the applied record needed for the comparison.
 When the result is `review_required`, inspect what the Plan will remove and its effective `providerConnections`, including replacements carried forward from a previous attempt.
 For `plan_pending`, use the returned `planRunId` to read the same Plan again. If the result is `unconfirmed`, first find the original Plan ID in the app's Run history.
 

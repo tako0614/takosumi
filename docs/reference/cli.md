@@ -116,6 +116,9 @@ takosumi apps recover-uninstall cap_example \
 ```
 
 サーバーが現在の所有者、クラウドアカウント、適用済みの接続設定を照合し、削除Planを準備します。
+`refused` に `connectionRecoveryFailure` がある場合、`replacement_unverified` なら代替接続を確認し、
+`bindings_mismatch` ならアカウントと適用済みの接続設定を確認してください。
+`applied_evidence_unavailable` は、照合に必要な適用記録をサーバーが確認できなかったことを示します。
 `review_required` になったPlanでは、削除内容と `providerConnections` の有効な接続を確認できます。前回の削除から引き継いだ接続も表示します。
 `plan_pending` なら返された `planRunId` を指定して、同じPlanを読み直せます。作成結果が `unconfirmed` なら、先に元のアプリのRun履歴から元のPlan IDを確認してください。
 

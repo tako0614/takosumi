@@ -140,6 +140,59 @@ test("recovery Plan submission with a lost response sends only the original requ
     .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
 });
 
+test("recover-uninstall distinguishes the three confirmed replacement connection refusals", async () => {
+  for (const connectionRecoveryFailure of [
+    "replacement_unverified", "bindings_mismatch", "applied_evidence_unavailable",
+  ]) {
+    const r = await invoke(recoverArgs, () => Response.json({ error: {
+      code: "failed_precondition",
+      message: "synthetic-private-server-message",
+      details: {
+        reason: "destroy_connection_recovery_unproven",
+        connectionRecoveryFailure,
+        privateEvidence: "synthetic-private-evidence",
+      },
+    } }, { status: 409 }));
+    expect(r.code).toBe(1);
+    expect(r.result).toEqual({
+      status: "refused", appId: "cap_owned", code: "failed_precondition", connectionRecoveryFailure,
+    });
+    expect(r.err).toEqual([]);
+    expect(r.calls.map(c => [c.method, new URL(c.url).pathname]))
+      .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
+  }
+});
+
+test("recover-uninstall does not infer a diagnosis from a legacy, unknown or unrelated refusal", async () => {
+  for (const [status, code, reason, failure] of [
+    [409, "failed_precondition", "destroy_connection_recovery_unproven", undefined],
+    [409, "failed_precondition", "destroy_connection_recovery_unproven", "synthetic-private-detail"],
+    [409, "failed_precondition", "another_refusal", "bindings_mismatch"],
+    [409, "conflict", "destroy_connection_recovery_unproven", "bindings_mismatch"],
+    [503, "failed_precondition", "destroy_connection_recovery_unproven", "bindings_mismatch"],
+  ] as const) {
+    const r = await invoke(recoverArgs, () => Response.json({ error: {
+      code, details: { reason, connectionRecoveryFailure: failure },
+    } }, { status }));
+    expect(r.code).toBe(1);
+    expect(r.result.status).toBe(status === 503 ? "unconfirmed" : "refused");
+    expect(r.result).not.toHaveProperty("connectionRecoveryFailure");
+    if (status === 503) expect(r.result.recovery).toContain("Run history");
+    expect(r.calls.map(c => c.method)).toEqual(["POST"]);
+  }
+
+  const unrelatedRead = await invoke(reviewDestroyArgs, () => Response.json({ error: {
+    code: "failed_precondition",
+    details: {
+      reason: "destroy_connection_recovery_unproven",
+      connectionRecoveryFailure: "bindings_mismatch",
+    },
+  } }, { status: 409 }));
+  expect(unrelatedRead.code).toBe(1);
+  expect(unrelatedRead.result).not.toHaveProperty("connectionRecoveryFailure");
+  expect(unrelatedRead.calls.map(c => c.method)).toEqual(["GET"]);
+});
+
 test("an exact existing recovery Plan can be reviewed by GET after an uncertain submission", async () => {
   const acceptedPlan = { ...destroyPlan, providerResolutions: [{
     requirement: { providerSource: "registry.opentofu.org/cloudflare/cloudflare", alias: "default" },
