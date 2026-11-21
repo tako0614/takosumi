@@ -294,7 +294,6 @@ function AppInstallPage(props: { readonly principalId: string }) {
     return text || prefill()?.name || (gitUrl() ? capsuleNameFromUrl(gitUrl()) : "");
   };
   const description = () => {
-    if (fromStore()) return undefined;
     const text = listed()?.description?.[locale()]?.trim();
     return text && text !== title() ? text : undefined;
   };

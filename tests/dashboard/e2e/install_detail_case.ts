@@ -352,6 +352,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
 
       await page.goto(`/new?tcsBase=${encodeURIComponent(store)}&tcsListing=tako%2Fservice`);
       await expect(page.getByRole("heading", { name: "Store Service" })).toBeVisible();
+      await expect(page.getByTestId("install-app-header").getByText("About this service")).toBeVisible();
+      await expect(page.getByText("About this service", { exact: true })).toHaveCount(1);
       const screenshot = page.getByRole("button", { name: "Service screen" });
       await expect(screenshot).toBeVisible();
       await expect.poll(() => screenshot.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);

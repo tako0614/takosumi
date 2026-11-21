@@ -1584,6 +1584,9 @@ test.describe("Takosumi dashboard browser surface", () => {
           },
         });
       });
+      await page.route("https://store.example.test/tcs/v2/listings/example/service/reviews**", async (route) => {
+        await route.fulfill({ json: { items: [] } });
+      });
     }
     await page.setViewportSize({ width: 1180, height: 757 });
     await page.goto("/new", { waitUntil: "domcontentloaded" });

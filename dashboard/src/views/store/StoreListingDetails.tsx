@@ -17,7 +17,6 @@ const copy = {
     screenshots: "スクリーンショット",
     video: "プレビュー動画",
     close: "閉じる",
-    about: "アプリについて",
     whatsNew: "更新情報",
     reviews: "評価とレビュー",
     emptyRating: "評価なし",
@@ -32,7 +31,6 @@ const copy = {
     screenshots: "Screenshots",
     video: "Preview video",
     close: "Close",
-    about: "About this app",
     whatsNew: "What’s new",
     reviews: "Ratings and reviews",
     emptyRating: "No ratings",
@@ -224,14 +222,6 @@ export function StoreOfferDetails(props: {
 
   return (
     <div class="tcs-product-details">
-      <Show when={display(props.listing.description, props.locale)}>
-        {(description) => (
-          <section class="tcs-product-section">
-            <h2>{labels().about}</h2>
-            <p>{description()}</p>
-          </section>
-        )}
-      </Show>
       <Show when={display(props.listing.releaseNotes, props.locale)}>
         {(notes) => (
           <section class="tcs-product-section">
