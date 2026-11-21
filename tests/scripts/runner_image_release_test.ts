@@ -28,6 +28,7 @@ import {
 import {
   dashboardAssetTreeSeal,
   injectPlatformSourcePaths,
+  readPlatformContainerRollout,
 } from "../../scripts/platform-worker-release.ts";
 import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 import { authorizeRunnerRegistryPull } from "../../scripts/lib/runner-image-registry-auth.ts";
@@ -821,6 +822,115 @@ function verificationCommand(
       throw new Error(`unexpected command: ${args.join(" ")}`);
     },
   };
+}
+
+function verifyLinkedRollout(
+  fault?: "unlinked" | "wrong-target" | "changed-worker" | "detail-errors",
+) {
+  const rolloutId = "33333333-3333-4333-8333-333333333333";
+  const previous = { ...healthySummary(PREVIOUS), version: 125 };
+  const next = { ...healthySummary(NEXT), version: 126 };
+  const detail = {
+    ...healthyDetail(NEXT),
+    version: 126,
+    ...(fault === "detail-errors" ? { errors: ["container error"] } : {}),
+  };
+  const nativeHealth = detail.health;
+  const oldNative = {
+    id: APPLICATION_ID,
+    name: APPLICATION_NAME,
+    account_id: "b".repeat(32),
+    configuration: { image: PREVIOUS },
+    version: 125,
+    health: nativeHealth,
+    active_rollout_id: rolloutId,
+  };
+  const newNative = {
+    ...oldNative,
+    configuration: { image: NEXT },
+    version: 126,
+    active_rollout_id: null,
+  };
+  const rollout = {
+    id: rolloutId,
+    ...(fault === "unlinked" ? { application_id: "another-application" } : {}),
+    kind: "full_auto",
+    status: "completed",
+    strategy: "rolling",
+    created_at: "2026-09-11T00:00:00.000Z",
+    last_updated_at: "2026-09-11T00:01:00.000Z",
+    current_version: 125,
+    target_version: 126,
+    current_configuration: { image: PREVIOUS },
+    target_configuration: { image: fault === "wrong-target" ? PREVIOUS : NEXT },
+    progress: {
+      total_steps: 1,
+      current_step: 1,
+      updated_instances: 1,
+      total_instances: 1,
+      version_distribution: {
+        target_version_instances: 1,
+        current_version_instances: 0,
+        target_version_percentage: 100,
+      },
+    },
+    health: nativeHealth,
+    steps: [{
+      id: 1,
+      status: "completed",
+      step_size: { percentage: 100 },
+      started_at: "2026-09-11T00:00:00.000Z",
+      completed_at: "2026-09-11T00:01:00.000Z",
+    }],
+  };
+  const reads = { worker: 0, cliList: 0, cliInfo: 0, nativeList: 0, nativeRollout: 0 };
+  const command: NonNullable<RunnerImageReleaseRuntime["command"]> = async (_executable, args) => {
+    if (args[1] === "deployments" && args[2] === "status") {
+      reads.worker += 1;
+      return { exitCode: 0, stdout: JSON.stringify({
+        id: "deployment",
+        versions: [{ version_id: fault === "changed-worker" && reads.worker > 1
+          ? PREDECESSOR_VERSION : DEPLOYED_VERSION, percentage: 100 }],
+      }), stderr: "" };
+    }
+    if (args[1] === "containers" && args[2] === "list") {
+      reads.cliList += 1;
+      return { exitCode: 0, stdout: JSON.stringify([previous]), stderr: "" };
+    }
+    if (args[1] === "containers" && args[2] === "info") {
+      reads.cliInfo += 1;
+      return { exitCode: 0, stdout: JSON.stringify(detail), stderr: "" };
+    }
+    throw new Error(`unexpected verify command: ${args.join(" ")}`);
+  };
+  const readContainerRollout: NonNullable<RunnerImageReleaseRuntime["readContainerRollout"]> =
+    (configPath, environment, summary, rawDetail) => readPlatformContainerRollout(
+      configPath, environment, summary, rawDetail,
+      async (args) => {
+        const action = args[args.indexOf("containers") + 1];
+        if (action === "list") {
+          reads.cliList += 1;
+          return { exitCode: 0, stdout: JSON.stringify([next]), stderr: "" };
+        }
+        if (action === "info") {
+          reads.cliInfo += 1;
+          return { exitCode: 0, stdout: JSON.stringify(detail), stderr: "" };
+        }
+        throw new Error(`unexpected rollout command: ${args.join(" ")}`);
+      },
+      async (path) => {
+        if (path === `/containers/applications?name=${encodeURIComponent(APPLICATION_NAME)}`) {
+          reads.nativeList += 1;
+          return [reads.nativeList === 1 ? oldNative : newNative];
+        }
+        if (path === `/containers/applications/${APPLICATION_ID}/rollouts/${rolloutId}`) {
+          reads.nativeRollout += 1;
+          return rollout;
+        }
+        throw new Error(`unexpected native rollout path: ${path}`);
+      },
+    );
+  return { command, readContainerRollout, reads };
 }
 
 function buildRuntime(
@@ -5676,6 +5786,55 @@ test("verify consumes exact platform evidence and performs no Worker mutation", 
   ]);
   expect(statSync(input.evidence).mode & 0o777).toBe(0o600);
 });
+
+test("verify accepts only a linked completed predecessor-to-target Container rollout", async () => {
+  const input = fixture(NEXT);
+  writeBuildEvidence(input);
+  writePlatformEvidence(input);
+  const probe = verifyLinkedRollout();
+  const record = await runRunnerImageRelease(verifyOptions(input), {
+    repositoryRoot: input.repository,
+    git: gitFor("fix/TASK-0032-runner-image"),
+    command: probe.command,
+    readContainerRollout: probe.readContainerRollout,
+    wait: async () => { throw new Error(`unexpected Container poll ${JSON.stringify(probe.reads)}`); },
+  });
+  expect(record).toMatchObject({
+    status: "verified",
+    image: NEXT,
+    platform: { deployedVersionId: DEPLOYED_VERSION },
+    application: { id: APPLICATION_ID, image: NEXT, version: 126, state: "ready" },
+  });
+  expect(probe.reads).toEqual({
+    worker: 2, cliList: 2, cliInfo: 2, nativeList: 2, nativeRollout: 2,
+  });
+  expect(readFileSync(input.evidence, "utf8")).toContain('"status":"verified"');
+});
+
+for (const [fault, reason] of [
+  ["unlinked", "platform_worker_release_container_rollout_invalid"],
+  ["wrong-target", "platform_worker_release_container_rollout_mismatch"],
+  ["changed-worker", "platform evidence Worker Version is not serving exactly"],
+  ["detail-errors", "platform_worker_release_container_health_invalid"],
+] as const) {
+  test(`verify refuses a ${fault} Container rollout proof`, async () => {
+    const input = fixture(NEXT);
+    writeBuildEvidence(input);
+    writePlatformEvidence(input);
+    const probe = verifyLinkedRollout(fault);
+    await expect(runRunnerImageRelease(verifyOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      command: probe.command,
+      readContainerRollout: probe.readContainerRollout,
+      wait: async () => { throw new Error(`unexpected Container poll ${JSON.stringify(probe.reads)}`); },
+    })).rejects.toThrow(reason);
+    const evidence = readFileSync(input.evidence, "utf8");
+    expect(evidence).toContain('"status":"incomplete"');
+    expect(evidence).not.toContain('"status":"verified"');
+    expect(probe.reads.worker).toBe(fault === "changed-worker" ? 2 : 1);
+  });
+}
 
 test("verify rejects partial, cross-repository or forged platform recovery authority before readback", async () => {
   for (const recovery of [

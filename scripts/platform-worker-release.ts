@@ -6349,11 +6349,38 @@ export async function readPlatformContainer(
       throw error;
     }
   }
+  return readPlatformContainerRollout(
+    configPath,
+    environment,
+    summary,
+    detail,
+    command,
+    _nativeRead,
+  );
+}
 
+/** Prove a qualified list/detail mismatch with the provider's completed rollout. */
+export async function readPlatformContainerRollout(
+  configPath: string,
+  environment: PlatformEnvironment,
+  summary: Readonly<Record<string, unknown>>,
+  detail: unknown,
+  command: PlatformReleaseCommand = requiredCommand,
+  nativeReadOverride?: (path: string) => Promise<unknown>,
+): Promise<PlatformContainerState> {
+  const expectedName = `${platformTargetForEnvironment(environment).workerName}-opentofurunnerobject`;
+  if (
+    summary.name !== expectedName ||
+    !boundedString(summary.id, 256) ||
+    !RUNNER_IMAGE.test(String(summary.image)) ||
+    !platformContainerVersion(summary.version)
+  ) {
+    throw new Error("platform_worker_release_container_list_invalid");
+  }
   const accountId = platformContainerAccountIdFromConfig(configPath);
   const target = platformContainerFallbackDetail(summary, detail, true);
   const nativeRead =
-    _nativeRead ??
+    nativeReadOverride ??
     (await platformContainerNativeReader(configPath, accountId, command));
   const applicationPath = `/containers/applications?name=${encodeURIComponent(expectedName)}`;
   const firstApplication = platformContainerNativeApplication(
@@ -6962,12 +6989,16 @@ function platformContainerVerifiedHealth(
   value: Record<string, unknown>,
 ): PlatformContainerVerifiedHealth {
   const health = platformContainerHealth(value);
+  const topLevelErrors = value.errors;
   const rawHealth = value.health;
   const instances = record(rawHealth) ? rawHealth.instances : undefined;
   const rawHealthy = record(instances) ? instances.healthy : undefined;
   const healthy = rawHealthy === undefined ? null : rawHealthy;
   if (
     (healthy !== null && !nonNegativeInteger(healthy)) ||
+    (topLevelErrors !== undefined &&
+      topLevelErrors !== null &&
+      (!Array.isArray(topLevelErrors) || topLevelErrors.length !== 0)) ||
     health.failed !== 0 ||
     health.starting !== 0 ||
     health.scheduling !== 0 ||
