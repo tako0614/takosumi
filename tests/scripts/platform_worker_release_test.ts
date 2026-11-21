@@ -494,6 +494,7 @@ async function exerciseCodeLane(options: {
   readonly candidateReadErrorCode?: number;
   readonly activationFails?: boolean;
   readonly postActivationVersions?: readonly string[];
+  readonly postActivationCandidateReadFailures?: number;
   readonly resume?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-version" | "wrong-predecessor" | "already-serving" | "unhealthy" | "source-drift";
   readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
   readonly loginSmokeFails?: boolean;
@@ -553,6 +554,7 @@ async function exerciseCodeLane(options: {
   const candidateReadWaits: number[] = [];
   const candidateReads: string[] = [];
   let postActivationReadCount = 0;
+  let postActivationCandidateReadCount = 0;
   let publicReadbackCount = 0;
   let loginSmokeCount = 0;
   let topologySnapshot = 0;
@@ -611,7 +613,10 @@ async function exerciseCodeLane(options: {
       if (argv[3] === CODE_DEPLOYED_ID) {
         operationOrder.push("candidate");
         candidateReads.push(argv[3]);
-        if (candidateReads.length <= (options.candidateReadFailures ?? 0)) {
+        const shouldFail = activationCount > 0
+          ? ++postActivationCandidateReadCount <= (options.postActivationCandidateReadFailures ?? 0)
+          : candidateReads.length <= (options.candidateReadFailures ?? 0);
+        if (shouldFail) {
           throw new PlatformCommandError(
             argv.slice(0, 4).join(" "),
             1,
@@ -700,7 +705,7 @@ async function exerciseCodeLane(options: {
         waitForServingVersionRetry: async (milliseconds: number) => {
           readbackWaits.push(milliseconds);
         },
-        waitForUploadedVersionRetry: async (milliseconds: number) => {
+        waitForVersionViewRetry: async (milliseconds: number) => {
           candidateReadWaits.push(milliseconds);
         },
         publicReadback: async (_environment, versionId) => {
@@ -1207,6 +1212,77 @@ test("routine code stops on a concurrent Version instead of waiting for the cand
     mutation: "activate",
     candidateVersionId: CODE_DEPLOYED_ID,
   });
+});
+
+test("routine code retries only the exact Version read after activation", async () => {
+  const result = await exerciseCodeLane({
+    loginAdmission: "normal",
+    postActivationCandidateReadFailures: 1,
+  });
+  expect(result).toMatchObject({
+    error: undefined,
+    uploadCount: 1,
+    activationCount: 1,
+    buildCount: 1,
+    gateCount: 1,
+    candidateReads: Array<string>(3).fill(CODE_DEPLOYED_ID),
+    candidateReadWaits: [1_000],
+    postActivationReadCount: 2,
+    topologySnapshot: 3,
+    publicReadbackCount: 1,
+    loginSmokeCount: 1,
+  });
+  expect(result.operationOrder.slice(-5)).toEqual([
+    "activate", "serving", "candidate", "candidate", "serving",
+  ]);
+  expect(result.results[0]).toMatchObject({
+    status: "ready",
+    deployedVersionId: CODE_DEPLOYED_ID,
+  });
+});
+
+test("routine code refuses a concurrent Version after a delayed post-activation read", async () => {
+  const result = await exerciseCodeLane({
+    postActivationCandidateReadFailures: 1,
+    postActivationVersions: [CODE_DEPLOYED_ID, STATUS_VERSION_ID],
+  });
+  expect(((result.error as Error).cause as Error).message).toBe(
+    "platform_worker_release_concurrent_version",
+  );
+  expect(result).toMatchObject({
+    uploadCount: 1,
+    activationCount: 1,
+    candidateReadWaits: [1_000],
+    postActivationReadCount: 2,
+    publicReadbackCount: 0,
+  });
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "activate",
+    candidateVersionId: CODE_DEPLOYED_ID,
+    observedServingVersionId: STATUS_VERSION_ID,
+  });
+});
+
+test("routine code leaves an unverifiable activated Version incomplete without replay", async () => {
+  for (const [candidateReadErrorCode, expectedWaitMs] of [[100146, 120_000], [10000, 0]] as const) {
+    const result = await exerciseCodeLane({
+      postActivationCandidateReadFailures: 20,
+      candidateReadErrorCode,
+    });
+    expect(result).toMatchObject({
+      uploadCount: 1,
+      activationCount: 1,
+      postActivationReadCount: 1,
+      publicReadbackCount: 0,
+    });
+    expect(result.candidateReadWaits.reduce((sum, delay) => sum + delay, 0)).toBe(expectedWaitMs);
+    expect(result.results[0]).toMatchObject({
+      status: "incomplete",
+      mutation: "activate",
+      candidateVersionId: CODE_DEPLOYED_ID,
+    });
+  }
 });
 
 test("routine code reports incomplete when the exact predecessor stays visible", async () => {

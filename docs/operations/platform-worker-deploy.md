@@ -295,8 +295,11 @@ deployment status is read again while it reports only the exact predecessor
 at 100%, with at most 180 seconds of retry delays. An unexpected Version,
 split deployment, read error, or unchanged predecessor at the retry limit
 stops the release. When status shows the candidate at 100%, final readback
-repeats every Version, topology, secret, Container, public-header, and
-discovery invariant.
+checks the same immutable Version. If that Version read returns 100146, it
+retries only the read with at most 120 seconds of retry delays. After validating
+the Version, topology, secret names, and Container, it confirms the same
+Version is still serving at 100% if the Version read was retried. Public-header
+and discovery checks still apply.
 
 Asset synchronization is the first possible mutation. A lost acknowledgement
 from upload or activation is `incomplete`. The JSON result includes the
