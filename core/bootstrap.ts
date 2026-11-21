@@ -882,7 +882,7 @@ export interface TakosumiOperations {
   /** Creates a rollback PLAN run from a StateVersion's Run provenance. */
   createStateVersionRollbackPlan(
     stateVersionId: string,
-    options?: { readonly actor?: string },
+    options?: { readonly actor?: string; readonly idempotencyKey?: string },
   ): Promise<PlanRunResponse>;
   /** Unified Run facade (§6.8): read / approve / cancel by run id. */
   getRun(id: string): Promise<Run>;
@@ -2129,7 +2129,7 @@ export async function createTakosumiService(
       opentofuController.getCurrentResourceInventory(capsuleId),
     getOutput: (id) => opentofuController.getOutput(id),
     createStateVersionRollbackPlan: (stateVersionId, options) =>
-      opentofuController.createStateVersionRollbackPlan(stateVersionId, { actor: options?.actor }),
+      opentofuController.createStateVersionRollbackPlan(stateVersionId, options),
     getRun: (id) => opentofuController.getRun(id),
     listRuns: (workspaceId, options) =>
       opentofuController.listRuns(workspaceId, options),

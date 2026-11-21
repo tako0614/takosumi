@@ -174,8 +174,16 @@ export async function handleStateVersions(
         });
         if (!codeChange.ok) return codeChange.response;
       }
+      const idempotencyKey = request.headers.get("idempotency-key");
+      if (idempotencyKey !== null && (!idempotencyKey || idempotencyKey.trim() !== idempotencyKey ||
+        /[\u0000-\u001f\u007f]/u.test(idempotencyKey) || new TextEncoder().encode(idempotencyKey).byteLength > 256)) {
+        return errorJson("invalid_argument", "Idempotency-Key must be 1-256 bytes without control characters.", 400);
+      }
       const response =
-        await operations.createStateVersionRollbackPlan(stateVersionId, { actor: ctx.session.subject });
+        await operations.createStateVersionRollbackPlan(stateVersionId, {
+          actor: ctx.session.subject,
+          ...(idempotencyKey === null ? {} : { idempotencyKey }),
+        });
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
         201,

@@ -973,6 +973,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       let appReadsAfterSubmit = 0;
       const mutations: string[] = [];
       const appReadIds: string[] = [];
+      const rollbackKeys: (string | undefined)[] = [];
       await page.route("**/api/v1/**", async (route) => {
         const request = route.request();
         const path = new URL(request.url()).pathname;
@@ -1011,7 +1012,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           }] } });
         }
         if (path === actionPath && request.method() === "POST") {
-          if (!rollback) {
+          if (rollback) {
+            rollbackKeys.push(request.headers()["idempotency-key"]);
+            if (rollbackKeys.length === 2) return route.fulfill({ status: 201, json: { run: plan } });
+          } else {
             expect(request.postDataJSON()).toEqual({ ref: "main" });
             expect(request.headers()["idempotency-key"]).toBeTruthy();
           }
@@ -1083,7 +1087,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       for (const scene of ["accepted", "not-accepted", "definite-rejection", "readback-pending"] as const) {
         const accepted = scene === "accepted";
-        acceptUpdate = accepted;
+        acceptUpdate = accepted || (rollback && scene === "readback-pending");
         definiteRejection = scene === "definite-rejection";
         holdReadback = scene === "readback-pending";
         releaseReadback = undefined;
@@ -1092,6 +1096,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         appReadsAfterSubmit = 0;
         mutations.length = 0;
         appReadIds.length = 0;
+        rollbackKeys.length = 0;
         await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
         await openAppPane(page, "version");
         const rejected = definiteRejection
@@ -1135,6 +1140,20 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         expect(mutations).toEqual([`POST ${actionPath}`]);
         expect(appReadsAfterSubmit).toBe(definiteRejection ? 0 : 1);
         await (releaseReadback as (() => Promise<void>) | undefined)?.();
+        if (rollback) {
+          expect(rollbackKeys).toHaveLength(1);
+          expect(rollbackKeys[0]).toBeTruthy();
+          if (holdReadback) {
+            // The original Plan is durable but neither the create response
+            // nor the first read reached the browser. Retrying is explicit.
+            await start.click();
+            const review = page.getByTestId("app-review");
+            await expect(review).toContainText(resourceName);
+            await expect(review.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+            expect(rollbackKeys).toEqual([rollbackKeys[0], rollbackKeys[0]]);
+            expect(mutations).toEqual([`POST ${actionPath}`, `POST ${actionPath}`]);
+          }
+        }
       }
       expect(errors).toEqual([]);
     });
