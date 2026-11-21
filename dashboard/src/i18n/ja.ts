@@ -1139,6 +1139,7 @@ export const ja = {
   "conn.saved.message": "{name} を保存しました。",
   "conn.saved.needsTest": "{name} を保存しました。接続を確認してください。",
   "conn.saved.testCta": "接続を確認",
+  "conn.uninstall.returnCta": "アンインストールに戻る",
   "conn.saved.returnCta": "インストールに戻る",
   "conn.add.provider": "つなぐクラウド",
   "conn.add.genericEnvOption": "一覧にないクラウドをつなぐ",

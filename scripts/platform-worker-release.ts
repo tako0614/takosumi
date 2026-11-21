@@ -2074,7 +2074,7 @@ export type PlatformWorkerCodeRuntime = Readonly<{
   ) => Promise<DashboardAssetSeal>;
   runScopedGate?: () => Promise<void>;
   nativeRead?: PlatformWorkerCodeNativeRead;
-  waitForUploadedVersionRetry?: (milliseconds: number) => Promise<void>;
+  waitForVersionViewRetry?: (milliseconds: number) => Promise<void>;
   waitForServingVersionRetry?: (milliseconds: number) => Promise<void>;
   publicReadback?: (
     environment: PlatformEnvironment,
@@ -2191,6 +2191,7 @@ async function runPlatformWorkerCodePublication(
     throw new Error("platform_worker_code_arguments_invalid");
   }
   const command = runtime.command ?? requiredCommand;
+  const waitForVersionViewRetry = runtime.waitForVersionViewRetry ?? Bun.sleep;
   const root = runtime.repositoryRoot ?? ROOT;
   const configBytes = readStablePhysicalBytes(
     parsed.config,
@@ -2241,7 +2242,7 @@ async function runPlatformWorkerCodePublication(
       path: string,
       source: string,
       priorPins: boolean,
-      servingVersionId?: string,
+      servingVersion?: Readonly<{ id: string; source: string }>,
     ) =>
       readPlatformWorkerCodeAuthority(
         path,
@@ -2250,7 +2251,7 @@ async function runPlatformWorkerCodePublication(
         priorPins,
         command,
         nativeRead,
-        servingVersionId,
+        servingVersion,
       );
     const baseline = await readAuthority(initialConfig.path, predecessorSource, true);
     predecessorVersionId = baseline.versionId;
@@ -2358,11 +2359,11 @@ async function runPlatformWorkerCodePublication(
           source: await readPlatformWorkerCodeVersion(finalConfig.path, deployedVersionId, command),
           retried: false,
         }
-      : await readNewlyUploadedVersion(
+      : await readPlatformWorkerCodeVersionWithRetry(
           finalConfig.path,
           deployedVersionId,
           command,
-          runtime.waitForUploadedVersionRetry ?? Bun.sleep,
+          waitForVersionViewRetry,
         );
     const uploaded = assertPlatformWorkerCodeVersionMatchesConfig(
       candidate.source,
@@ -2412,9 +2413,23 @@ async function runPlatformWorkerCodePublication(
         wait: runtime.waitForServingVersionRetry,
       },
     );
-    const deployed = await readAuthority(finalConfig.path, finalSource, false, servingVersionId);
+    const activatedVersion = await readPlatformWorkerCodeVersionWithRetry(
+      finalConfig.path,
+      servingVersionId,
+      command,
+      waitForVersionViewRetry,
+    );
+    const deployed = await readAuthority(finalConfig.path, finalSource, false, {
+      id: servingVersionId, source: activatedVersion.source,
+    });
     observedServingVersionId = deployed.versionId;
     assertPlatformWorkerCodeAuthorityUnchanged(baseline, deployed, false);
+    if (activatedVersion.retried) {
+      observedServingVersionId = await readServingVersion(finalConfig.path, command);
+      if (observedServingVersionId !== servingVersionId) {
+        throw new Error("platform_worker_release_concurrent_version");
+      }
+    }
     assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
     activationConfig.assertUnchanged();
     await (runtime.publicReadback ?? verifyPublicReadback)(
@@ -2478,16 +2493,16 @@ async function readPlatformWorkerCodeAuthority(
   allowPriorPins: boolean,
   command: PlatformReleaseCommand,
   nativeRead: PlatformWorkerCodeNativeRead,
-  servingVersionId?: string,
+  servingVersion?: Readonly<{ id: string; source: string }>,
 ): Promise<PlatformWorkerCodeAuthority> {
   const topology = await readPlatformWorkerCodeTopology(
     source,
     platformTargetForEnvironment(environment).workerName,
     nativeRead,
   );
-  const versionId = servingVersionId ?? await readServingVersion(configPath, command);
+  const versionId = servingVersion?.id ?? await readServingVersion(configPath, command);
   const [versionSource, secrets, container] = await Promise.all([
-    readPlatformWorkerCodeVersion(configPath, versionId, command),
+    servingVersion?.source ?? readPlatformWorkerCodeVersion(configPath, versionId, command),
     readSecretNames(configPath, command),
     readPlatformContainer(configPath, environment, command),
   ]);
@@ -2524,7 +2539,7 @@ async function readPlatformWorkerCodeVersion(
   ).stdout;
 }
 
-async function readNewlyUploadedVersion(
+async function readPlatformWorkerCodeVersionWithRetry(
   configPath: string,
   versionId: string,
   command: PlatformReleaseCommand,
@@ -6349,11 +6364,38 @@ export async function readPlatformContainer(
       throw error;
     }
   }
+  return readPlatformContainerRollout(
+    configPath,
+    environment,
+    summary,
+    detail,
+    command,
+    _nativeRead,
+  );
+}
 
+/** Prove a qualified list/detail mismatch with the provider's completed rollout. */
+export async function readPlatformContainerRollout(
+  configPath: string,
+  environment: PlatformEnvironment,
+  summary: Readonly<Record<string, unknown>>,
+  detail: unknown,
+  command: PlatformReleaseCommand = requiredCommand,
+  nativeReadOverride?: (path: string) => Promise<unknown>,
+): Promise<PlatformContainerState> {
+  const expectedName = `${platformTargetForEnvironment(environment).workerName}-opentofurunnerobject`;
+  if (
+    summary.name !== expectedName ||
+    !boundedString(summary.id, 256) ||
+    !RUNNER_IMAGE.test(String(summary.image)) ||
+    !platformContainerVersion(summary.version)
+  ) {
+    throw new Error("platform_worker_release_container_list_invalid");
+  }
   const accountId = platformContainerAccountIdFromConfig(configPath);
   const target = platformContainerFallbackDetail(summary, detail, true);
   const nativeRead =
-    _nativeRead ??
+    nativeReadOverride ??
     (await platformContainerNativeReader(configPath, accountId, command));
   const applicationPath = `/containers/applications?name=${encodeURIComponent(expectedName)}`;
   const firstApplication = platformContainerNativeApplication(
@@ -6962,12 +7004,16 @@ function platformContainerVerifiedHealth(
   value: Record<string, unknown>,
 ): PlatformContainerVerifiedHealth {
   const health = platformContainerHealth(value);
+  const topLevelErrors = value.errors;
   const rawHealth = value.health;
   const instances = record(rawHealth) ? rawHealth.instances : undefined;
   const rawHealthy = record(instances) ? instances.healthy : undefined;
   const healthy = rawHealthy === undefined ? null : rawHealthy;
   if (
     (healthy !== null && !nonNegativeInteger(healthy)) ||
+    (topLevelErrors !== undefined &&
+      topLevelErrors !== null &&
+      (!Array.isArray(topLevelErrors) || topLevelErrors.length !== 0)) ||
     health.failed !== 0 ||
     health.starting !== 0 ||
     health.scheduling !== 0 ||
