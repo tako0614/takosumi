@@ -173,14 +173,16 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
     });
 
-    for (const individualReadRefused of [false, true]) {
-    test(individualReadRefused
+    for (const recoveryCase of ["transport", "read-refused", "server-error"] as const) {
+    test(recoveryCase === "read-refused"
       ? "an individual Run refusal keeps a lost Apply unconfirmed without another mutation"
+      : recoveryCase === "server-error"
+      ? "an Apply gateway error recovers the exact existing Run with one POST"
       : "lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      for (const outcome of individualReadRefused ? ["read-refused"] as const : ["accepted", "absent", "ambiguous", "foreign", "wrong-kind", "wrong-plan", "incomplete", "pending", "retired", "rejected", "normal"] as const) {
+      for (const outcome of recoveryCase !== "transport" ? [recoveryCase] : ["accepted", "absent", "ambiguous", "foreign", "wrong-kind", "wrong-plan", "incomplete", "pending", "retired", "rejected", "normal"] as const) {
         const capsuleId = `cap_apply_${outcome}`;
         const planId = `plan_apply_${outcome}`;
         const applyId = outcome === "accepted" ? "apply/accepted?result#opaque" : `apply_${outcome}`;
@@ -211,6 +213,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             if (outcome === "rejected") return route.fulfill({ status: 409, json: { error: "conflict" } });
             if (outcome !== "absent" && acceptedEffects === 0) acceptedEffects += 1;
             if (outcome === "normal") return route.fulfill({ status: 201, json: { run: apply } });
+            if (outcome === "server-error") return route.fulfill({ status: 503, json: { error: "gateway_unavailable" } });
             return route.abort("failed");
           }
           if (path === `/api/v1/runs/${replacementId}`) {
@@ -273,6 +276,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const allow = page.getByRole("button", { name: "Allow and apply", exact: true });
         await expect(allow).toBeEnabled();
         await allow.click();
+        const expectedPosts = outcome === "normal" || outcome === "rejected" || outcome === "server-error" ? 1 : 2;
         if (outcome === "normal" || outcome === "rejected") {
           await expect.poll(() => attempts).toBe(1);
           if (outcome === "normal") {
@@ -282,14 +286,16 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           } else await expect(allow).toBeEnabled();
           expect(historyAfterApply).toEqual([]);
         } else {
-          await expect.poll(() => attempts).toBe(2);
+          await expect.poll(() => attempts).toBe(expectedPosts);
           const pages = outcome === "accepted" || outcome === "incomplete" ? 2 : 1;
           await expect.poll(() => historyAfterApply.length).toBe(pages);
-          if (outcome === "accepted") {
+          if (outcome === "accepted" || outcome === "server-error") {
             await expect(page).toHaveURL(new URL(`/runs/${applyPathId}`, page.url()).href);
             await expect.poll(() => applyReads).toBeGreaterThan(0);
             await expect(page.locator(".av-run-summary")).toBeVisible();
-            expect(historyAfterApply).toEqual(["?limit=100&type=apply", "?limit=100&cursor=older&type=apply"]);
+            expect(historyAfterApply).toEqual(outcome === "accepted"
+              ? ["?limit=100&type=apply", "?limit=100&cursor=older&type=apply"]
+              : ["?limit=100&type=apply"]);
           } else if (outcome === "retired") {
             await page.evaluate((id) => {
               history.pushState(null, "", `/runs/${id}`);
@@ -317,7 +323,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           }
         }
         expect(acceptedEffects).toBe(outcome === "absent" || outcome === "rejected" ? 0 : 1);
-        expect(mutations).toEqual(Array.from({ length: outcome === "normal" || outcome === "rejected" ? 1 : 2 }, () => `POST /api/v1/runs/${planId}/apply`));
+        expect(mutations).toEqual(Array.from({ length: expectedPosts }, () => `POST /api/v1/runs/${planId}/apply`));
         await page.unroute("**/api/v1/**");
       }
       expect(errors).toEqual([]);
