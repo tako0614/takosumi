@@ -343,7 +343,8 @@ token / password / private key などは、ProviderConnection の write-only な
 
 provider cache / mirror があれば `tofu init` はそれを利用し、なければ通常の
 OpenTofu registry 経路を利用します。mirror を必須にする場合は operator policy
-として明示します。
+として明示します。この設定は資格情報を使わない互換性チェックにも適用されます。
+設定を理解できないRunnerは、providerの取得前にチェックを停止します。
 
 Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `/v1` は公開 API
 ではなく、既知の旧 path は 404 で fail closed します。OIDC/OAuth、well-known、

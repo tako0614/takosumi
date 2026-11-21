@@ -148,7 +148,7 @@ const WORKER_ELAPSED_TIMING_FIELDS = [
   "doPlanArtifactPersistenceMs",
   "workerAdapterRpcMs",
 ] as const;
-type ContainerRunnerAction = OpenTofuRunAction | "release" | "stable_semver_tag";
+type ContainerRunnerAction = OpenTofuRunAction | "release" | "stable_semver_tag" | "compatibility_check_mirror_only";
 
 export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
@@ -843,8 +843,11 @@ export class CloudflareContainerOpenTofuRunner
   async readCapsuleSourceFiles(
     job: OpenTofuCapsuleSourceFilesJob,
   ): Promise<readonly OpenTofuCapsuleSourceFile[]> {
+    // Older images refuse an unknown action before any init can run.
     const result = await this.#runContainer(
-      "compatibility_check",
+      job.requireProviderMirror
+        ? "compatibility_check_mirror_only"
+        : "compatibility_check",
       job.runId,
       {
         sourceArchive: {

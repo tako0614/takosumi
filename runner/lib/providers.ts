@@ -563,8 +563,7 @@ export async function prepareStrictProviderMirrorInit(
   policy: { readonly requireMirror: boolean } | undefined,
 ): Promise<ProviderMirrorInit | undefined> {
   const canonicalProviders = normalizedProviderList(providers);
-  const strict =
-    policy?.requireMirror === true && canonicalProviders.length > 0;
+  const strict = policy?.requireMirror === true;
   const mirrorRoot =
     Bun.env.OPENTOFU_PROVIDER_MIRROR ?? DEFAULT_PROVIDER_MIRROR_PATH;
   // Strict mode promises the run installs providers ONLY from the operator
@@ -670,10 +669,6 @@ export function strictProviderMirrorCliConfig(
     include = [
 ${providerLines}
     ]
-  }
-
-  direct {
-    exclude = ["*/*"]
   }
 }
 `;

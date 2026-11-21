@@ -1729,7 +1729,7 @@ test("container runner keeps generic release setup failures on the infrastructur
   expect((error as Error).message).not.toContain(secret);
 });
 
-test("container runner reads Capsule compatibility source files", async () => {
+test.each(["default", "mirror"] as const)("container runner reads Capsule compatibility source files (%s)", async (mode) => {
   let captured: Record<string, unknown> | undefined;
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning(
@@ -1748,6 +1748,7 @@ test("container runner reads Capsule compatibility source files", async () => {
   const files = await runner.readCapsuleSourceFiles({
     runId: "compat_snap_1",
     modulePath: "takos/deploy/opentofu",
+    ...(mode === "mirror" ? { requireProviderMirror: true } : {}),
     sourceSnapshot: {
       id: "snap_1",
       sourceId: "src_1",
@@ -1768,6 +1769,9 @@ test("container runner reads Capsule compatibility source files", async () => {
     { path: "main.tf", text: "terraform {}\n" },
     { path: "outputs.tf", text: 'output "x" { value = 1 }\n' },
   ]);
+  expect(captured?.action).toBe(
+    mode === "mirror" ? "compatibility_check_mirror_only" : "compatibility_check",
+  );
   expect(captured?.request).toMatchObject({
     sourceArchive: {
       ref: "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",

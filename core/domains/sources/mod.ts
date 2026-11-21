@@ -118,8 +118,14 @@ export type EnqueueSourceSync = (dispatch: {
 
 export type ReadCapsuleSourceFiles = (
   snapshot: SourceSnapshot,
-  options?: { readonly modulePath?: string; readonly runId?: string },
+  options?: CapsuleSourceFileReadOptions,
 ) => Promise<readonly CapsuleSourceFile[]>;
+
+interface CapsuleSourceFileReadOptions {
+  readonly modulePath?: string;
+  readonly runId?: string;
+  readonly requireProviderMirror?: true;
+}
 
 /**
  * In-process identity supplied only by a durable Git lifecycle coordinator or
@@ -1397,8 +1403,13 @@ export class SourcesService {
     const analysisAttempt =
       await this.#compatibilityAnalysisOrUnsupportedReport(
         snapshot,
-        input.modulePath,
-        runId,
+        {
+          runId,
+          ...(input.modulePath ? { modulePath: input.modulePath } : {}),
+          ...(input.policy?.providerInstallation?.requireMirror === true
+            ? { requireProviderMirror: true }
+            : {}),
+        },
         async (files) =>
           await this.#compatibilityAnalyzer.analyze({
             sourceId: input.sourceId,
@@ -1535,8 +1546,7 @@ export class SourcesService {
 
   async #compatibilityAnalysisOrUnsupportedReport(
     snapshot: SourceSnapshot,
-    modulePath: string | undefined,
-    runId: string,
+    options: CapsuleSourceFileReadOptions,
     analyze: (
       files: readonly CapsuleSourceFile[],
     ) => Promise<CapsuleCompatibilityAnalysis>,
@@ -1545,10 +1555,7 @@ export class SourcesService {
     readonly errorCode?: string;
   }> {
     try {
-      const files = await this.#readCapsuleSourceFilesCached(snapshot, {
-        runId,
-        ...(modulePath ? { modulePath } : {}),
-      });
+      const files = await this.#readCapsuleSourceFilesCached(snapshot, options);
       return {
         analysis: await analyze(
           files.filter(
@@ -1632,7 +1639,12 @@ export class SourcesService {
     readonly policy?: PolicyConfig;
     readonly modulePath?: string;
   }> {
-    if (!installConfigId) return {};
+    if (!installConfigId) {
+      const workspace = await this.#store.getWorkspace(workspaceId);
+      return workspace?.policy?.providerInstallation?.requireMirror === true
+        ? { policy: { providerInstallation: { requireMirror: true } } }
+        : {};
+    }
     const config = await this.#store.getInstallConfig(installConfigId);
     if (!config) {
       throw new OpenTofuControllerError(
@@ -1677,27 +1689,29 @@ export class SourcesService {
    */
   readCapsuleSourceFiles(
     sourceSnapshot: SourceSnapshot,
-    options?: { readonly modulePath?: string; readonly runId?: string },
+    options?: CapsuleSourceFileReadOptions,
   ): Promise<readonly CapsuleSourceFile[]> {
     return this.#readCapsuleSourceFilesCached(sourceSnapshot, options);
   }
 
   #readCapsuleSourceFilesCached(
     sourceSnapshot: SourceSnapshot,
-    options?: { readonly modulePath?: string; readonly runId?: string },
+    options?: CapsuleSourceFileReadOptions,
   ): Promise<readonly CapsuleSourceFile[]> {
     // The selected module path is already relative to the immutable snapshot
     // archive. `sourceSnapshot.path` identifies the captured subtree but is not
     // another coordinate prefix to strip from the execution path.
     const modulePath = normalizeRelativeModulePath(options?.modulePath);
+    const requireProviderMirror = options?.requireProviderMirror === true;
     const normalizedOptions =
-      modulePath || options?.runId
+      modulePath || options?.runId || requireProviderMirror
         ? {
             ...(modulePath ? { modulePath } : {}),
             ...(options?.runId ? { runId: options.runId } : {}),
+            ...(requireProviderMirror ? { requireProviderMirror: true as const } : {}),
           }
         : undefined;
-    const key = `${sourceSnapshot.id}\0${modulePath ?? ""}`;
+    const key = `${sourceSnapshot.id}\0${modulePath ?? ""}\0${requireProviderMirror}`;
     const existing = this.#sourceFilesCache.get(key);
     if (existing) return existing;
     const pending = this.#readCapsuleSourceFiles(
