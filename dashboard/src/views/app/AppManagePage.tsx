@@ -623,7 +623,9 @@ export default function AppManagePage(props: {
             ? t("app.uninstall.connectionUnavailable")
             : friendlyError(cause, t).message });
         }
-        const responseUncertain = (purpose === "update" || purpose === "uninstall") &&
+        // A rollback from version history has the ordinary "apply" review.
+        const isRollback = section === "version" && purpose === "apply";
+        const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback) &&
           (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
             : cause instanceof TypeError);
@@ -1319,8 +1321,11 @@ export default function AppManagePage(props: {
     const selected = activeSection();
     if (id === "app-gone") return true;
     if (id === "attention") {
+      const view = app();
+      const pendingVersionReview = selected === "version" && !review() &&
+        view?.state === "installed" && view.progress.review?.runType === "plan";
       return !selected || selected === id || review()?.section === "attention" ||
-        starting()?.section === "attention" || Boolean(errorFor("attention")) || selected === "danger";
+        starting()?.section === "attention" || Boolean(errorFor("attention")) || selected === "danger" || pendingVersionReview;
     }
     return selected === id;
   };
