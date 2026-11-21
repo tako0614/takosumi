@@ -3823,7 +3823,7 @@ export class RunEngine {
         this.#allowOperatorScopedProviderConnections,
     });
     const resolved = input.destroyConnectionRecovery
-      ? await this.#resolveDestroyConnectionRecovery(input.capsule, providerBindingResolutionRequirements(input.requiredProviderRequirements ?? [], input.profile), input.destroyConnectionRecovery, true)
+      ? await this.#resolveDestroyConnectionRecovery(input.capsule, providerBindingResolutionRequirements(input.requiredProviderRequirements ?? [], input.profile), input.destroyConnectionRecovery)
       : await this.#connectionsService.resolveProviderBindings(input.capsule);
     const declaredEnvConnections = resolved
       .map((entry) => entry.connection)
@@ -6692,7 +6692,6 @@ export class RunEngine {
     capsule: Capsule,
     requiredProviders: readonly CapsuleProviderRequirement[],
     recovery: NonNullable<PlanRun["destroyConnectionRecovery"]>,
-    includeUnusedBindings = false,
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
     if (!appliedPlan || appliedPlan.id !== recovery.appliedPlanRunId ||
@@ -6718,7 +6717,6 @@ export class RunEngine {
       ...(appliedPlan.destroyConnectionRecovery !== undefined
         ? { appliedPlanRecovery: appliedPlan.destroyConnectionRecovery }
         : {}),
-      includeUnusedBindings,
     });
   }
 
