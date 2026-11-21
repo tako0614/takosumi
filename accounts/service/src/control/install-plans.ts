@@ -1351,6 +1351,18 @@ async function answerInstallAttempt(
   return await installPlanJson(ctx, result.plan);
 }
 
+/** Match the standalone connection list: only the installer's account
+ * credential sees personal connections, never a Workspace PAT or delegate. */
+function personalInstallConnectionOwner(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): string | undefined {
+  const session = ctx.session;
+  return session.subject === plan.createdBy &&
+    session.workspaceId === undefined && session.appIds === undefined &&
+    plan.delegateCapsuleId === undefined ? session.subject : undefined;
+}
+
 /**
  * Confirms an `inputs` pause. Readiness is checked against live connections,
  * app names and the captured variable presentation before anything is
@@ -1416,7 +1428,7 @@ async function continueInstallAttempt(
   }
   if (!resubmitting) {
     const [rows, interfaces] = await Promise.all([
-      connectionRequirements(ctx.operations, next),
+      connectionRequirements(ctx.operations, next, personalInstallConnectionOwner(ctx, next)),
       interfaceRequirements(ctx.operations, next),
     ]);
     const changedObserved = observedInterfaces.some((entry) => {
@@ -4355,7 +4367,7 @@ async function installPlanResponseFor(
     publicGitInstallPlan(stored),
     invalidated
       ? { kind: "retry", code: invalidated, restart: true }
-      : await userActionFor(ctx.operations, stored),
+      : await userActionFor(ctx.operations, stored, personalInstallConnectionOwner(ctx, stored)),
     invalidated,
     reviewSummary,
   );
