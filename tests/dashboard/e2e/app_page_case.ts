@@ -939,19 +939,27 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const retireUpdate of [false, true]) test(retireUpdate
-      ? "leaving a version check lets the user continue its accepted request from the app"
-      : "a lost Update response reads the same app once and recovers only its existing review", async ({ page }) => {
+    for (const action of ["update", "retireUpdate", "rollback"] as const) test({
+      update: "a lost Update response reads the same app once and recovers only its existing review",
+      retireUpdate: "leaving a version check lets the user continue its accepted request from the app",
+      rollback: "a lost rollback response reads the same app once and recovers only its existing review",
+    }[action], async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const now = "2026-10-01T00:00:00.000Z";
-      const planId = "run_update_response_lost";
+      const retireUpdate = action === "retireUpdate";
+      const rollback = action === "rollback";
+      const previousState = "sv_lost_response_previous";
+      const actionPath = rollback ? `/api/v1/state-versions/${previousState}/rollback-plan` : `/api/v1/capsules/${CAPSULE_ID}/revision-plans`;
+      const actionName = rollback ? "Go back to this version" : "Check for updates";
+      const resourceName = rollback ? "existing_rollback" : "existing_update";
+      const planId = `run_${action}_response_lost`;
       const plan = {
         ...lifecycleRun(planId, "plan", "succeeded", now),
         capsuleId: CAPSULE_ID, baseStateGeneration: 1,
-        origin: { kind: "revision", ref: "main" },
+        origin: rollback ? { kind: "rollback", stateVersionId: previousState } : { kind: "revision", ref: "main" },
         summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass",
-        planResources: [{ address: "cloudflare_workers_script.existing_update", type: "cloudflare_workers_script", actions: ["update"] }],
+        planResources: [{ address: `cloudflare_workers_script.${resourceName}`, type: "cloudflare_workers_script", actions: ["update"] }],
       };
       let acceptUpdate = true;
       let definiteRejection = false;
@@ -982,7 +990,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             });
           }
           return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
-            primaryAction: committed ? "review" : retireUpdate && submitted ? "none" : "view_resources",
+            primaryAction: committed && !rollback ? "review" : retireUpdate && submitted ? "none" : "view_resources",
             ...(retireUpdate && submitted && !committed ? { state: "updating" } : {}),
             version: {
               current: { sourceSnapshotId: "snap_update_response", ref: "main", path: ".", commit: PORTABLE_SOURCE_COMMIT },
@@ -996,9 +1004,17 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               },
           }) } });
         }
-        if (path === `/api/v1/capsules/${CAPSULE_ID}/revision-plans` && request.method() === "POST") {
-          expect(request.postDataJSON()).toEqual({ ref: "main" });
-          expect(request.headers()["idempotency-key"]).toBeTruthy();
+        if (rollback && path === `/api/v1/capsules/${CAPSULE_ID}/state-versions`) {
+          return route.fulfill({ json: { stateVersions: [{
+            id: previousState, capsuleId: CAPSULE_ID, workspaceId: "ws_alpha", environment: "production",
+            generation: 1, createdByRunId: "run_previous_apply", createdAt: now,
+          }] } });
+        }
+        if (path === actionPath && request.method() === "POST") {
+          if (!rollback) {
+            expect(request.postDataJSON()).toEqual({ ref: "main" });
+            expect(request.headers()["idempotency-key"]).toBeTruthy();
+          }
           // Model server acceptance independently of the response observed by
           // the actual browser fetch. No second operation is manufactured.
           committed = acceptUpdate && !retireUpdate;
@@ -1079,34 +1095,44 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
         await openAppPane(page, "version");
         const rejected = definiteRejection
-          ? page.waitForResponse((response) => response.url().endsWith(`/capsules/${CAPSULE_ID}/revision-plans`) && response.status() === 409)
+          ? page.waitForResponse((response) => response.url().endsWith(actionPath) && response.status() === 409)
           : undefined;
-        await page.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true }).click();
+        const start = page.getByTestId("app-version").getByRole("button", { name: actionName, exact: true });
+        await start.click();
         if (rejected) {
           await rejected;
-          await expect(page.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true })).toBeEnabled();
+          await expect(start).toBeEnabled();
           expect(appReadsAfterSubmit).toBe(0);
         } else {
           await expect.poll(() => appReadsAfterSubmit).toBe(1);
           if (holdReadback) {
             // The recovery read has no new deadline and cannot keep the
             // original action's busy state locked while it remains pending.
-            await expect(page.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true })).toBeEnabled();
+            await expect(start).toBeEnabled();
           }
         }
         expect(appReadIds.every((path) => path === `/api/v1/capsules/${CAPSULE_ID}/app`)).toBe(true);
         if (accepted) {
-          await expect(page.getByTestId("app-header").getByRole("button", { name: "Review", exact: true })).toBeVisible();
-          await page.getByTestId("app-header").getByRole("button", { name: "Review", exact: true }).click();
+          // An installed app keeps its normal primary action. Its pending
+          // rollback review is shown in the app's attention section.
+          const reviewHost = rollback ? page.locator('[data-problem="review-waiting"]') : page.getByTestId("app-header");
+          const openReview = reviewHost.getByRole("button", { name: "Review", exact: true });
+          await expect(openReview).toBeVisible();
+          if (rollback) await expect(start).toBeDisabled();
+          await openReview.click();
           const review = page.getByTestId("app-review");
-          await expect(review).toContainText("existing_update");
+          await expect(review).toContainText(resourceName);
           await expect(review.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+          if (rollback) {
+            await expect(reviewHost).toHaveCount(0);
+            await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#version$`, "u"));
+          }
         } else {
           await expect(page.locator('[data-problem="review-waiting"]')).toHaveCount(0);
           await expect(page.getByTestId("app-review")).toHaveCount(0);
           await expect(page.getByTestId("app-header").getByRole("button", { name: "Review", exact: true })).toHaveCount(0);
         }
-        expect(mutations).toEqual([`POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`]);
+        expect(mutations).toEqual([`POST ${actionPath}`]);
         expect(appReadsAfterSubmit).toBe(definiteRejection ? 0 : 1);
         await (releaseReadback as (() => Promise<void>) | undefined)?.();
       }
