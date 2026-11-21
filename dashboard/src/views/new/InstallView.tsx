@@ -21,6 +21,7 @@ import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, FormField, Input, Select, Spinner } from "../../components/ui/index.ts";
 import { StoreBrowser, type StoreCatalogCache } from "../store/StoreBrowser.tsx";
+import { StoreGallery, StoreOfferDetails, StoreRating } from "../store/StoreListingDetails.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { listConnections, listInstalledApps } from "../../lib/control-api.ts";
@@ -88,9 +89,13 @@ let pickedListing: TcsListing | undefined;
 
 function readListing(handoff: { readonly base: string; readonly listingId: string }) {
   const picked = pickedListing;
-  return picked && picked.id === handoff.listingId && storeBase(picked.primaryServer) === handoff.base
+  const listing = picked && picked.id === handoff.listingId && storeBase(picked.primaryServer) === handoff.base
     ? Promise.resolve(picked)
     : fetchTcsListing(handoff.base, handoff.listingId);
+  // This route value selects the public Store read source; it is never an
+  // install input. Restore it after reload because listing sanitization strips
+  // server-routing fields from untrusted Store responses.
+  return listing.then((value) => value ? { ...value, primaryServer: handoff.base } : null);
 }
 
 const SCREEN_READ_ATTEMPTS = 10;
@@ -289,6 +294,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
     return text || prefill()?.name || (gitUrl() ? capsuleNameFromUrl(gitUrl()) : "");
   };
   const description = () => {
+    if (fromStore()) return undefined;
     const text = listed()?.description?.[locale()]?.trim();
     return text && text !== title() ? text : undefined;
   };
@@ -378,6 +384,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
           <div class="iv-app-intro">
             <h1 id="iv-app-title">{title() || t("common.loading")}</h1>
             <Show when={publisher()}>{(name) => <span class="iv-app-publisher">{name()}</span>}</Show>
+            <Show when={fromStore()}><StoreRating rating={listed()?.rating} locale={locale()} showEmpty /></Show>
             <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
           </div>
         </header>
@@ -559,6 +566,14 @@ function AppInstallPage(props: { readonly principalId: string }) {
               {(url) => <AppPhoneSection url={url()} appName={title()} />}
             </Show>
           </>)}
+        </Show>
+        <Show when={fromStore() && (stage() === "candidate" || stage() === "starting") && listed()}>
+          {(item) => (
+            <div class="iv-store-product">
+              <StoreGallery gallery={item().gallery} appName={title()} locale={locale()} />
+              <StoreOfferDetails listing={item()} locale={locale()} />
+            </div>
+          )}
         </Show>
         <Show when={gitUrl()}>
           <details class="iv-app-about">

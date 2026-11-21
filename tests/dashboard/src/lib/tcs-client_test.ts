@@ -3,8 +3,10 @@ import {
   fetchTcsServerInfo,
   fetchTcsListing,
   fetchTcsListingsPage,
+  fetchTcsReviewsPage,
   mergeTcsListingRepoMetadata,
   parseTcsRepoMetadata,
+  tcsListingPageHref,
   type TcsListing,
 } from "../../../../dashboard/src/lib/tcs-client.ts";
 
@@ -589,5 +591,66 @@ describe("TCS repo metadata", () => {
       const hydrated = mergeTcsListingRepoMetadata(listing(), metadata ?? null);
       expect(hydrated).not.toHaveProperty("iconUrl");
     }
+  });
+
+  test("keeps only same-Store HTTPS gallery images and validated display metadata", async () => {
+    const store = "https://store.example.test";
+    let requestInit: RequestInit | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestInit = init;
+      return new Response(JSON.stringify(wireListing({
+        rating: { average: 4.5, count: 2 },
+        releaseNotes: text("更新情報", "Release notes"),
+        gallery: [
+          { kind: "image", url: "/media/screenshot.png", width: 640, height: 360, alt: text("画面", "Screen") },
+          { kind: "video", url: "/media/video.mp4", width: 640, height: 360 },
+          { kind: "image", url: "https://user:secret@store.example.test/private.png", width: 640, height: 360 },
+          { kind: "image", url: "https://store.example.test/secret.png?token=secret", width: 640, height: 360 },
+          { kind: "image", url: "http://store.example.test/insecure.png", width: 640, height: 360 },
+          { kind: "image", url: "/media/oversized.png", width: 12001, height: 360 },
+        ],
+        primaryServer: "https://attacker.example.test",
+      })), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await fetchTcsListing(store, "tako/example");
+    expect(result?.rating).toEqual({ average: 4.5, count: 2 });
+    expect(result?.releaseNotes).toEqual(text("更新情報", "Release notes"));
+    expect(result?.gallery).toEqual([
+      { kind: "image", url: `${store}/media/screenshot.png`, width: 640, height: 360, alt: text("画面", "Screen") },
+    ]);
+    expect(result).not.toHaveProperty("primaryServer");
+    expect(requestInit?.credentials).toBe("omit");
+    expect(requestInit?.referrerPolicy).toBe("no-referrer");
+  });
+
+  test("reads reviews as unauthenticated text and builds links only for a safe Store listing", async () => {
+    const requested: URL[] = [];
+    let requestInit: RequestInit | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requested.push(new URL(String(input)));
+      requestInit = init;
+      return new Response(JSON.stringify({
+        items: [
+          { id: "review-1", author: "A", stars: 5, text: "<b>Great</b>", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-02T00:00:00Z" },
+          { id: "review-invalid", author: "B", stars: 6, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-02T00:00:00Z" },
+        ],
+        nextCursor: "next page",
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const page = await fetchTcsReviewsPage("https://store.example.test", "tako/example", { cursor: "next page" });
+    expect(page).toEqual({
+      items: [{ id: "review-1", author: "A", stars: 5, text: "<b>Great</b>", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-02T00:00:00Z" }],
+      nextCursor: "next page",
+    });
+    expect(requested[0]?.pathname).toBe("/tcs/v2/listings/tako/example/reviews");
+    expect(requested[0]?.searchParams.get("cursor")).toBe("next page");
+    expect(requestInit?.credentials).toBe("omit");
+    expect(requestInit?.referrerPolicy).toBe("no-referrer");
+    expect(tcsListingPageHref("https://store.example.test", "tako/example", "reviews"))
+      .toBe("https://store.example.test/tako/example#reviews");
+    expect(tcsListingPageHref("https://user:secret@store.example.test", "tako/example")).toBeUndefined();
+    await expect(fetchTcsReviewsPage("https://store.example.test", "bad/id/extra")).rejects.toThrow("scope/slug");
   });
 });

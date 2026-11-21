@@ -30,6 +30,33 @@ export interface TcsListingSource {
   readonly path?: string;
 }
 
+export interface TcsRating {
+  readonly average: number;
+  readonly count: number;
+}
+
+export interface TcsGalleryItem {
+  readonly kind: "image" | "video";
+  readonly url: string;
+  readonly width: number;
+  readonly height: number;
+  readonly alt?: TcsLocalizedText;
+}
+
+export interface TcsReview {
+  readonly id: string;
+  readonly stars: number;
+  readonly text?: string;
+  readonly author: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface TcsReviewsPage {
+  readonly items: readonly TcsReview[];
+  readonly nextCursor?: string;
+}
+
 /** Operator-defined presentation tokens; neither field grants execution authority. */
 export type TcsListingKind = string;
 export type TcsListingSurface = string;
@@ -55,6 +82,10 @@ export interface TcsListing {
     readonly displayName?: string;
   };
   readonly badges?: readonly string[];
+  /** Display-only listing metadata. It never affects install inputs or policy. */
+  readonly rating?: TcsRating;
+  readonly gallery?: readonly TcsGalleryItem[];
+  readonly releaseNotes?: TcsLocalizedText;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -110,6 +141,15 @@ function joinBase(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
 
+function readOptions(signal?: AbortSignal): RequestInit {
+  return {
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+    headers: { accept: "application/json" },
+    signal,
+  };
+}
+
 /**
  * TCS v2 is the canonical read surface. During the wire migration an older
  * node may expose only v1, so a missing v2 route gets one read-only fallback.
@@ -159,13 +199,10 @@ export async function fetchTcsListingsPage(
   const res = await fetchTcsRead(
     base,
     `/tcs/v2/listings${queryString ? `?${queryString}` : ""}`,
-    {
-      headers: { accept: "application/json" },
-      signal: query.signal,
-    },
+    readOptions(query.signal),
   );
   if (!res.ok) throw new Error(`listings ${res.status}`);
-  return sanitizeTcsListingsPage((await res.json()) as TcsListingsPage);
+  return sanitizeTcsListingsPage((await res.json()) as TcsListingsPage, base);
 }
 
 export async function fetchTcsListing(
@@ -182,15 +219,63 @@ export async function fetchTcsListing(
   const res = await fetchTcsRead(
     base,
     `/tcs/v2/listings/${encodeURIComponent(scope)}/${encodeURIComponent(slug)}`,
-    { headers: { accept: "application/json" }, signal },
+    readOptions(signal),
     `/tcs/v1/listings/${encodeURIComponent(id)}`,
   );
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`listing ${res.status}`);
-  return sanitizeTcsListing((await res.json()) as TcsListing);
+  return sanitizeTcsListing((await res.json()) as TcsListing, base);
 }
 
-export function sanitizeTcsListing(listing: TcsListing): TcsListing {
+export async function fetchTcsReviewsPage(
+  base: string,
+  id: string,
+  query: Pick<TcsPageQuery, "cursor" | "signal"> = {},
+): Promise<TcsReviewsPage | null> {
+  const path = tcsListingPath(id);
+  if (!path) throw new Error("listing id must be a non-empty scope/slug pair");
+  const params = query.cursor ? `?${new URLSearchParams({ cursor: query.cursor })}` : "";
+  const res = await fetch(
+    joinBase(base, `/tcs/v2/listings${path}/reviews${params}`),
+    readOptions(query.signal),
+  );
+  if (res.status === 404 || res.status === 501) return null;
+  if (!res.ok) throw new Error(`reviews ${res.status}`);
+  const body: unknown = await res.json();
+  if (!isRecord(body) || !Array.isArray(body.items)) throw new Error("invalid reviews page");
+  return {
+    items: body.items.flatMap((item) => {
+      const review = sanitizeTcsReview(item);
+      return review ? [review] : [];
+    }),
+    ...cursorField(body),
+  };
+}
+
+/** A public listing page link never carries dashboard state or authentication. */
+export function tcsListingPageHref(
+  base: string,
+  id: string,
+  section?: "reviews" | "save",
+): string | undefined {
+  const path = tcsListingPath(id);
+  if (!path) return undefined;
+  const url = safeStoreUrl(base);
+  if (!url) return undefined;
+  url.pathname = `${url.pathname.replace(/\/+$/u, "")}${path}`;
+  if (section) url.hash = section;
+  return url.href;
+}
+
+function tcsListingPath(id: string): string | undefined {
+  const segments = id.split("/");
+  if (segments.length !== 2 || segments.some((part) =>
+    !/^[A-Za-z0-9_@.-]+$/u.test(part) || part === "." || part === ".."
+  )) return undefined;
+  return `/${segments.map(encodeURIComponent).join("/")}`;
+}
+
+export function sanitizeTcsListing(listing: TcsListing, base?: string): TcsListing {
   const unsafe = listing as TcsListing & Record<string, unknown>;
   const {
     inputs: _inputs,
@@ -200,13 +285,22 @@ export function sanitizeTcsListing(listing: TcsListing): TcsListing {
     primaryDefault: _primaryDefault,
     seenOn: _seenOn,
     iconUrl: unsafeIconUrl,
+    gallery: unsafeGallery,
+    rating: unsafeRating,
+    releaseNotes: unsafeReleaseNotes,
     ...rest
   } = unsafe;
   const iconUrl = safePresentationHttpsUrl(unsafeIconUrl);
+  const rating = sanitizeRating(unsafeRating);
+  const gallery = base ? sanitizeGallery(unsafeGallery, base) : [];
+  const releaseNotes = localized(unsafeReleaseNotes);
   return {
     ...rest,
     source: sanitizeTcsListingSource(unsafe.source),
     ...(iconUrl ? { iconUrl } : {}),
+    ...(rating ? { rating } : {}),
+    ...(gallery.length > 0 ? { gallery } : {}),
+    ...(releaseNotes ? { releaseNotes } : {}),
   } as unknown as TcsListing;
 }
 
@@ -223,11 +317,77 @@ export function sanitizeTcsListingSource(value: unknown): TcsListingSource {
   };
 }
 
-function sanitizeTcsListingsPage(page: TcsListingsPage): TcsListingsPage {
+function sanitizeTcsListingsPage(page: unknown, base: string): TcsListingsPage {
+  if (!isRecord(page) || !Array.isArray(page.items)) throw new Error("invalid listings page");
   return {
-    ...page,
-    items: page.items.map(sanitizeTcsListing),
+    items: page.items.map((listing) => sanitizeTcsListing(listing as TcsListing, base)),
+    ...(typeof page.nextCursor === "string" && page.nextCursor.length > 0
+      ? { nextCursor: page.nextCursor }
+      : {}),
   };
+}
+
+function cursorField(body: Record<string, unknown>): { nextCursor?: string } {
+  return typeof body.nextCursor === "string" && body.nextCursor.length > 0
+    ? { nextCursor: body.nextCursor }
+    : {};
+}
+
+function sanitizeRating(value: unknown): TcsRating | undefined {
+  if (!isRecord(value)) return undefined;
+  const { average, count } = value;
+  return typeof average === "number" && Number.isFinite(average) &&
+      typeof count === "number" && Number.isSafeInteger(count) &&
+      ((count === 0 && average === 0) || (count > 0 && average >= 1 && average <= 5))
+    ? { average, count }
+    : undefined;
+}
+
+function safeStoreUrl(raw: string, base?: string): URL | undefined {
+  try {
+    const url = new URL(raw, base);
+    const isLocal = url.protocol === "http:" &&
+      /^(localhost|127\.0\.0\.1|\[::1\])$/u.test(url.hostname);
+    if ((!isLocal && url.protocol !== "https:") || !url.hostname ||
+      url.username || url.password || url.search || url.hash
+    ) return undefined;
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeGallery(value: unknown, base: string): TcsGalleryItem[] {
+  const store = safeStoreUrl(base);
+  if (!Array.isArray(value) || !store) return [];
+  return value.slice(0, 9).flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const { kind, width, height } = entry;
+    const raw = text(entry.url);
+    const url = raw ? safeStoreUrl(raw, `${store.href.replace(/\/+$/u, "")}/`) : undefined;
+    // Dashboard CSP permits HTTPS images but does not grant remote media-src.
+    // Keep the requested image gallery useful without rendering blocked video.
+    if (!url || url.origin !== store.origin || kind !== "image" ||
+      typeof width !== "number" || !Number.isSafeInteger(width) || width <= 0 || width > 12000 ||
+      typeof height !== "number" || !Number.isSafeInteger(height) || height <= 0 || height > 12000
+    ) return [];
+    const alt = localized(entry.alt);
+    return [{ kind, url: url.href, width, height, ...(alt ? { alt } : {}) }];
+  });
+}
+
+function sanitizeTcsReview(value: unknown): TcsReview | undefined {
+  if (!isRecord(value)) return undefined;
+  const { stars } = value;
+  const id = text(value.id);
+  const author = text(value.author);
+  const createdAt = text(value.createdAt);
+  const updatedAt = text(value.updatedAt);
+  const message = text(value.text);
+  if (!id || !author || !createdAt || !updatedAt ||
+    typeof stars !== "number" || !Number.isInteger(stars) || stars < 1 || stars > 5
+  ) return undefined;
+  return { id, author, createdAt, updatedAt, stars, ...(message ? { text: message } : {}) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
