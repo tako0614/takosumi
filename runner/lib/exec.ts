@@ -504,7 +504,6 @@ export function classifyOpenTofuFailure(
   if (
     normalized.includes("incompatible api version with plugin") ||
     normalized.includes("unrecognized remote plugin message") ||
-    normalized.includes("failed to instantiate provider") ||
     normalized.includes("incompatible provider api")
   ) {
     return "provider_protocol_mismatch";
