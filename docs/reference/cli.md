@@ -76,7 +76,15 @@ resource actions、policyを確認します。`reviewUrl`でも同じ保存Plan�
 
 ## 保存済みの状態バージョンから復旧を準備する
 
-`apps rollback`は、`GET /api/v1/capsules/<app-id>/state-versions` が返す状態バージョンIDを指定して復旧Planを作ります。
+`apps history`は、アプリの保存済み状態バージョンを1ページ表示します。`generation`、`createdAt`、`createdByRunId`を確認し、復旧したい行の`id`を選びます。Accountsの個人PATの`read` scopeで実行できます。
+
+```bash
+takosumi apps history cap_example --limit 10 --url https://takosumi.example.com --json
+```
+
+続きがある場合は`nextCursor`が返ります。同じアプリを指定し、`--cursor`にその値を渡すと次のページを読めます。
+
+`apps rollback`は、選んだ状態バージョンIDを指定して復旧Planを作ります。
 指定した状態バージョンが対象アプリに属することを確認し、Accountsの個人PATで実行します。結果の`review_required`には、対象の`stateVersionId`と保存済みの`planRunId`が含まれます。
 
 ```bash

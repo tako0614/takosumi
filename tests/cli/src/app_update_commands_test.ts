@@ -19,6 +19,8 @@ const rollbackPlan = { ...plan, id: "plan_rollback", baseStateGeneration: 2,
   origin: { kind: "rollback", stateVersionId: rollbackTarget.id }, applyExpected: { currentStateVersionId: "state_head" } };
 const rollbackArgs = ["apps", "rollback", "cap_owned", "--state-version", rollbackTarget.id,
   "--idempotency-key=rollback=stable", "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const historyArgs = ["apps", "history", "cap_owned", "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const historyVersion = { ...rollbackTarget, createdAt: "2026-11-21T12:30:00.000Z", createdByRunId: "apply_first" };
 const destroyPlan = { ...plan, id: "plan_destroy_recovery", type: "destroy_plan", status: "waiting_approval",
   origin: undefined, operation: "destroy", sourceSnapshotId: "snapshot_applied",
   summary: { add: 0, change: 0, destroy: 1 },
@@ -44,6 +46,42 @@ async function invoke(args: string[], handle: (req: Request) => Promise<Response
     return { code, calls, result: out.length ? JSON.parse(out.join("\n")) : undefined, err };
   } finally { globalThis.fetch = before; }
 }
+
+test("apps history reads one page and projects only app history fields", async () => {
+  const cursor = "next/opaque+value=";
+  const r = await invoke([...historyArgs, "--limit", "1"], req => {
+    expect(req.method).toBe("GET");
+    expect(new URL(req.url).pathname).toBe("/api/v1/capsules/cap_owned/state-versions");
+    expect(new URL(req.url).searchParams.get("limit")).toBe("1");
+    expect(req.headers.get("authorization")).toBe("Bearer synthetic-account-pat");
+    return Response.json({ stateVersions: [{ ...historyVersion, stateRef: "private-artifact", digest: "private-digest" }], nextCursor: cursor });
+  });
+  expect(r.code).toBe(0);
+  expect(r.calls).toHaveLength(1);
+  expect(r.result).toEqual({ appId: "cap_owned", nextCursor: cursor, stateVersions: [{
+    id: "state_target", generation: 1, environment: "production", createdAt: historyVersion.createdAt, createdByRunId: "apply_first",
+  }] });
+  const next = await invoke([...historyArgs, `--cursor=${r.result.nextCursor}`], req => {
+    expect(new URL(req.url).searchParams.get("cursor")).toBe(cursor);
+    return Response.json({ stateVersions: [] });
+  });
+  expect(next.calls).toHaveLength(1);
+  expect(next.result).toEqual({ appId: "cap_owned", stateVersions: [] });
+});
+
+test("apps history refuses query mistakes and mismatched history without partial output", async () => {
+  for (const args of [["--limit", "0"], ["--limit", "101"], ["--cursor", "with\ncontrol"], ["--yes"]]) {
+    const result = await invoke([...historyArgs, ...args], () => { throw new Error("must not send HTTP"); });
+    expect(result.code).toBe(2);
+    expect(result.calls).toHaveLength(0);
+  }
+  const mismatch = await invoke(historyArgs, () => Response.json({
+    stateVersions: [historyVersion, { ...historyVersion, capsuleId: "cap_other" }],
+  }));
+  expect(mismatch.code).toBe(1);
+  expect(mismatch.result).toEqual({ status: "refused", appId: "cap_owned", code: "state_version_identity_mismatch" });
+});
+
 function normal(req: Request, overrides: { plan?: object; capsule?: object; history?: object; apply?: object } = {}) {
   const path = new URL(req.url).pathname;
   if (path === `/api/v1/runs/${plan.id}`) return Response.json({ run: overrides.plan ?? plan });
