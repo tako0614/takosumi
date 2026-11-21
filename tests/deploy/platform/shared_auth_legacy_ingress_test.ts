@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   handleSharedAuthAccountBoundaryRequest,
   sharedAuthRequestFailure,
+  sharedStagingAppAuthorizeSessionResolver,
   type SharedAuthEnvironment,
 } from "../../../worker/src/shared_auth_rpc.ts";
 import {
@@ -49,6 +50,52 @@ test("shared product rejects the complete legacy human entry surface on every UR
   for (const path of ["/oauth/token", "/oauth/introspect", "/oauth/revoke", "/oauth/jwks", "/oauth/userinfo"]) {
     expect(await handleSharedAuthAccountBoundaryRequest(new Request(origin + path), env)).toBeUndefined();
   }
+});
+
+test("only the official staging authorize request can use the private Hosted app proof", async () => {
+  const stageOrigin = "https://app-staging.takosumi.com";
+  const proof = {
+    kind: "authenticated" as const, subject: "tsub_current" as const,
+    issuer: "https://auth-staging.takos.jp", clientId: "takosumi-hosted-staging-v1",
+    sessionId: "hsid_current", identityGeneration: 3, expiresAt: Date.now() + 30_000,
+  };
+  let calls = 0;
+  let reply = proof;
+  const selected = {
+    ...env, TAKOSUMI_SHARED_AUTH_ORIGIN: stageOrigin, TAKOSUMI_ACCOUNTS_ISSUER: stageOrigin,
+    HOSTED: {
+      ...(env.HOSTED as object),
+      async authenticateAppAuthorization(request: Request) {
+        calls++;
+        expect(request.headers.get("cookie")).toBe("__Host-rp=fixture");
+        expect(request.headers.get("x-takosumi-account-session")).toBeNull();
+        expect(request.headers.get("x-takosumi-platform-subject")).toBeNull();
+        return reply;
+      },
+    },
+  };
+  const route = "/oauth/authorize?client_id=toc_fixture";
+  const request = new Request(stageOrigin + route, { headers: {
+    cookie: "__Host-rp=fixture", "x-takosumi-account-session": "sess_conflicting",
+    "x-takosumi-platform-subject": "tsub_untrusted",
+  } });
+  expect(await handleSharedAuthAccountBoundaryRequest(request, selected)).toBeUndefined();
+  expect(calls).toBe(0);
+  for (const rejected of [
+    new Request(origin + route),
+    new Request(stageOrigin + "/oauth/authorize"),
+    new Request(stageOrigin + route, { method: "POST" }),
+    new Request(stageOrigin + route, { headers: { authorization: "Bearer fixture" } }),
+  ]) expect((await handleSharedAuthAccountBoundaryRequest(rejected, selected))?.status).toBe(404);
+  expect((await handleSharedAuthAccountBoundaryRequest(request, {
+    ...selected, TAKOSUMI_ACCOUNTS_ISSUER: proof.issuer,
+  }))?.status).toBe(404);
+  const resolver = sharedStagingAppAuthorizeSessionResolver(selected)!;
+  expect(await resolver(request)).toEqual(proof);
+  reply = { ...proof, clientId: "another-client" };
+  expect(await resolver(request)).toEqual({ kind: "unavailable" });
+  expect(await resolver(new Request(origin + route))).toEqual({ kind: "unauthenticated" });
+  expect(calls).toBe(2);
 });
 
 test("alternate URL Control requests and invalid shared composition never fall through to legacy Accounts", async () => {

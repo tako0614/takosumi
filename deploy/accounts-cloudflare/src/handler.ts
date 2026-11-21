@@ -1,5 +1,6 @@
 import { parsePasswordAuthMode, permitsPasswordTransport } from "../../../accounts/service/src/password-auth-config.ts";
 import { isPasswordAuthPath } from "../../../accounts/service/src/password-routes.ts";
+import type { CapsuleAuthorizeSessionResolver } from "../../../accounts/service/src/oidc-routes.ts";
 import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   normalizeIssuer,
@@ -255,6 +256,9 @@ export interface CreateCloudflareWorkerOptions<
   readonly controlPlaneOperations?: (
     env: TEnv,
   ) => Promise<ControlPlaneOperations | undefined>;
+  /** Selected by the issuer composition, never by the request or client registry. */
+  readonly hostedAppAuthorizationClientId?: string;
+  readonly resolveCapsuleAuthorizeSession?: (env: TEnv) => CapsuleAuthorizeSessionResolver | undefined;
   /** @internal Explicit source preparation only; absent complete inputs remain off. */
   readonly privateFinancialSourceOrigin?: PrivateAccountsFinancialSourceOrigin<TEnv>;
   /**
@@ -1314,6 +1318,8 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     clients,
     store,
     ...(hostedSessionPolicy ? { hostedSessionPolicy: true } : {}),
+    hostedAppAuthorizationClientId: options.hostedAppAuthorizationClientId,
+    resolveCapsuleAuthorizeSession: options.resolveCapsuleAuthorizeSession?.(env),
     workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
       env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
     ),

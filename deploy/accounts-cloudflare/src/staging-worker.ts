@@ -132,6 +132,7 @@ export function createAuthStagingWorker(dependencies: {
   };
   const accounts = suppliedAccounts ?? createCloudflareWorker<AuthEnv>({
     controlPlaneOperations: controlOperations,
+    hostedAppAuthorizationClientId: AUTH_STAGING_CLIENTS[0].clientId,
     // This exact cached operations instance owns the canonical Core Workspace
     // service. ownerBundle(env).store is a different AccountsStore instance and
     // must never stand in for the HTTP handler's actual D1 store.

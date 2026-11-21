@@ -16,6 +16,9 @@ import {
   type OidcClientRecord,
 } from "../../../../accounts/service/src/store.ts";
 import { oidcClientActivationDigest } from "../../../../accounts/service/src/oidc-activation.ts";
+import { derivePairwiseSubject } from "../../../../accounts/service/src/subject.ts";
+import { createAccountsHandler } from "../../../../accounts/service/src/mod.ts";
+import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 
 const issuer = "https://accounts.example.test";
 const clientId = "toc_live_grant";
@@ -184,6 +187,179 @@ function authorizeRequest(): { request: Request; url: URL } {
     }),
   };
 }
+
+async function rpSessionProof(store: InMemoryAccountsStore, subject: `tsub_${string}`) {
+  const identityGeneration = await store.getAccountAuthenticationGeneration(subject);
+  const proof = {
+    kind: "authenticated" as const, subject, identityGeneration,
+    issuer: "https://rp-issuer.example.test", clientId: "hosted-rp",
+    sessionId: `hsid_${subject}`, expiresAt: Date.now() + 60_000,
+  };
+  await store.saveHostedOidcGrant({
+    sid: proof.sessionId, issuerSessionId: `issuer-session:${subject}`,
+    issuer: proof.issuer, clientId: proof.clientId, subject, identityGeneration,
+    scope: "openid", authTime: 1, createdAt: Date.now(), absoluteExpiresAt: proof.expiresAt,
+  });
+  return proof;
+}
+
+test("a verified RP subject, including a nonmember, is never replaced by a legacy session", async () => {
+  const { store, state, operations } = await liveGrantFixture();
+  state.memberStatus = "suspended";
+  state.appRole = undefined;
+  const other = "tsub_conflicting_legacy";
+  const now = Date.now();
+  store.saveAccount({ subject: other, createdAt: now, updatedAt: now });
+  store.saveAccountSession({ sessionId: "sess_conflicting", subject: other, createdAt: now, expiresAt: now + 60_000 });
+  const { url } = authorizeRequest();
+  const proof = await rpSessionProof(store, accountSubject);
+  const response = await handleAuthorize({
+    issuer,
+    url,
+    request: new Request(url, { headers: { "x-takosumi-account-session": "sess_conflicting" } }),
+    flow, clients: new Map(), store, operations,
+    resolveCapsuleAuthorizeSession: async () => proof,
+  });
+  expect(response.status).toBe(302);
+  const redirect = new URL(response.headers.get("location")!);
+  expect(redirect.origin + redirect.pathname).toBe(redirectUri);
+  const code = await store.consumeAuthorizationCode(redirect.searchParams.get("code")!);
+  expect(code).toMatchObject({
+    capsuleId, clientId, takosumiSubject: accountSubject,
+    identityGeneration: await store.getAccountAuthenticationGeneration(accountSubject),
+    subject: await derivePairwiseSubject({
+      secret: flow.pairwiseSubjectSecret, takosumiSubject: accountSubject,
+      clientId: `live-app:${capsuleId}:${clientId}`,
+    }),
+  });
+  expect(code?.workspaceId).toBeUndefined();
+  expect(code?.role).toBeUndefined();
+});
+
+test("the Accounts handler applies the login allowlist to the verified RP subject only", async () => {
+  const { store, operations } = await liveGrantFixture();
+  const account = (await store.findAccount(accountSubject))!;
+  const legacySubject = "tsub_legacy_allowlist_test";
+  const legacyId = "sess_legacy_allowlist_test";
+  const now = Date.now();
+  await store.saveAccount({ ...account, email: "allowed@example.test", emailVerified: true });
+  await store.saveAccount({
+    subject: legacySubject, email: "excluded@example.test", emailVerified: true,
+    createdAt: now, updatedAt: now,
+  });
+  await store.saveAccountSession({ sessionId: legacyId, subject: legacySubject, createdAt: now, expiresAt: now + 60_000 });
+  const options = {
+    issuer, store, oidcFlow: flow, controlPlaneOperations: operations,
+    loginEmailAllowlist: { emails: ["allowed@example.test"] },
+  };
+  let proof = await rpSessionProof(store, accountSubject);
+  const handler = createAccountsHandler({
+    ...options,
+    resolveCapsuleAuthorizeSession: async () => proof,
+  });
+  const { url } = authorizeRequest();
+  const verifier = "r".repeat(43);
+  url.searchParams.set("code_challenge", await pkceChallenge(verifier));
+  const legacy = { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${legacyId}` };
+  const saved = spyOn(store, "saveAuthorizationCode");
+  for (const headers of [new Headers(), new Headers(legacy), new Headers({
+    "x-takosumi-account-session": legacyId,
+  })]) {
+    const response = await handler(new Request(url, { headers }));
+    expect(response.status).toBe(302);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    const code = new URL(response.headers.get("location")!).searchParams.get("code")!;
+    const token = await handler(new Request(`${issuer}/oauth/token`, {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "authorization_code", client_id: clientId, code,
+        redirect_uri: redirectUri, code_verifier: verifier,
+      }),
+    }));
+    expect(token.status).toBe(200);
+    const body = await token.json() as { access_token: string };
+    expect((await store.findAccessToken(body.access_token))?.takosumiSubject).toBe(accountSubject);
+  }
+  expect(await store.findAccountSession(legacyId)).toBeDefined();
+
+  proof = await rpSessionProof(store, legacySubject);
+  const rejected = await handler(new Request(url, {
+    headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_live_grant` },
+  }));
+  expect(rejected.status).toBe(403);
+  expect(rejected.headers.get("set-cookie")).toBeNull();
+  expect(await store.findAccountSession("sess_live_grant")).toBeDefined();
+  expect(saved).toHaveBeenCalledTimes(3);
+
+  const legacyHandler = createAccountsHandler(options);
+  expect((await legacyHandler(new Request(url, { headers: legacy }))).status).toBe(403);
+  expect(await store.findAccountSession(legacyId)).toBeUndefined();
+});
+
+test("registered Capsule authorization with RP proof refuses stale and cross-authority requests without a code", async () => {
+  const { store, state, operations } = await liveGrantFixture();
+  const save = spyOn(store, "saveAuthorizationCode");
+  const proof = await rpSessionProof(store, accountSubject);
+  const generation = proof.identityGeneration;
+  let resolved = 0;
+  const valid = async () => {
+    resolved += 1;
+    return proof;
+  };
+  const input = { issuer, flow, clients: new Map(), store, operations };
+  const { url } = authorizeRequest();
+  const badRedirect = new URL(url);
+  badRedirect.searchParams.set("redirect_uri", "https://other.example.test/callback");
+  const badPkce = new URL(url);
+  badPkce.searchParams.set("code_challenge_method", "plain");
+  const otherOrigin = new URL(url.pathname + url.search, "https://other.example.test");
+  for (const [requestUrl, status] of [[badRedirect, 400], [badPkce, 400], [otherOrigin, 404]] as const) {
+    const response = await handleAuthorize({
+      ...input, request: new Request(requestUrl), url: requestUrl, resolveCapsuleAuthorizeSession: valid,
+    });
+    expect(response.status).toBe(status);
+  }
+  expect(resolved).toBe(0);
+  const request = authorizeRequest();
+  const missing = await handleAuthorize({
+    ...input, ...request, resolveCapsuleAuthorizeSession: async () => ({ kind: "unauthenticated" }),
+  });
+  expect(new URL(missing.headers.get("location")!).pathname).toBe("/sign-in");
+  for (const change of [
+    { identityGeneration: generation + 1 },
+    { subject: "tsub_unregistered_rp_user" as const },
+    { clientId: "other-rp" },
+    { sessionId: "other-session" },
+    { expiresAt: Date.now() - 1 },
+  ]) {
+    const denied = await handleAuthorize({
+      ...input, ...request, resolveCapsuleAuthorizeSession: async () => ({ ...proof, ...change }),
+    });
+    expect(denied.status).toBeGreaterThanOrEqual(400);
+  }
+  state.capsuleStatus = "destroyed";
+  expect((await handleAuthorize({ ...input, ...request, resolveCapsuleAuthorizeSession: valid })).status).toBe(400);
+  expect(save).not.toHaveBeenCalled();
+});
+
+test("registered Capsule authorization refuses a Hosted grant revoked during app access verification", async () => {
+  const { store, operations } = await liveGrantFixture();
+  const proof = await rpSessionProof(store, accountSubject);
+  const save = spyOn(store, "saveAuthorizationCode");
+  const findGrant = store.findHostedOidcGrant.bind(store);
+  let reads = 0;
+  store.findHostedOidcGrant = async (sid) => {
+    if (++reads === 2) await store.revokeHostedOidcGrant(sid, Date.now());
+    return findGrant(sid);
+  };
+  const response = await handleAuthorize({
+    ...authorizeRequest(), issuer, flow, clients: new Map(), store, operations,
+    resolveCapsuleAuthorizeSession: async () => proof,
+  });
+  expect(response.status).toBe(403);
+  expect(reads).toBe(2);
+  expect(save).not.toHaveBeenCalled();
+});
 
 test("authorize resolves a current Capsule grant and terminal status revokes its client", async () => {
   const { store, state, operations } = await liveGrantFixture();

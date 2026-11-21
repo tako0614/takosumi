@@ -1,3 +1,6 @@
+import type { CapsuleAuthorizeSessionResolver } from "../../accounts/service/src/oidc-routes.ts";
+import { AUTH_STAGING_CLIENTS, AUTH_STAGING_ISSUER } from "../../deploy/accounts-cloudflare/src/staging-target.ts";
+
 /**
  * Optional operator authentication port. The private RP owns opaque sessions,
  * token custody and current issuer checks. No browser-supplied account context
@@ -21,6 +24,7 @@ export type SharedAuthWorkspace =
 export interface SharedAuthRpc {
   fetchSharedAuth(request: Request): Promise<Response | null>;
   authenticateSharedAuth(request: Request): Promise<SharedAuthIdentity>;
+  authenticateAppAuthorization?: CapsuleAuthorizeSessionResolver;
   resolveSharedAuthWorkspace(
     request: Request,
     workspaceId: string,
@@ -36,6 +40,7 @@ export interface SharedAuthEnvironment {
   readonly TAKOSUMI_SHARED_AUTH_PROFILE?: string;
   readonly TAKOSUMI_SHARED_AUTH_ORIGIN?: string;
   readonly TAKOSUMI_ENVIRONMENT?: string;
+  readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly HOSTED?: unknown;
   readonly HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER?: SharedAuthLoginRateLimiter;
   readonly HOSTED_OIDC_LOGIN_IP_RATE_LIMITER?: SharedAuthLoginRateLimiter;
@@ -51,6 +56,8 @@ const SHARED_AUTH_ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
 const NOTIFICATION_PUSHER_ROUTE = /^\/api\/v1\/account\/notification-pushers(?:\/[^/]+)?$/u;
 const BILLING_TRACE_HEADER = "x-takosumi-internal-billing-trace";
 const BILLING_TRACE = /^brpc_[0-9a-f]{32}$/u;
+const STAGING_HOSTED_RP = AUTH_STAGING_CLIENTS[0];
+const STAGING_PLATFORM_ORIGIN = new URL(STAGING_HOSTED_RP.redirectUris[0]).origin;
 
 export function sharedAuthConfigured(env: SharedAuthEnvironment): boolean {
   return env.TAKOSUMI_SHARED_AUTH_PROFILE !== undefined ||
@@ -85,6 +92,47 @@ function composition(env: SharedAuthEnvironment): {
 
 function safeId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,128}$/u.test(value);
+}
+
+function isSharedStagingAppIssuer(env: SharedAuthEnvironment): boolean {
+  return env.TAKOSUMI_ENVIRONMENT === "staging" &&
+    env.TAKOSUMI_SHARED_AUTH_PROFILE === "shared-account" &&
+    env.TAKOSUMI_SHARED_AUTH_ORIGIN === STAGING_PLATFORM_ORIGIN &&
+    env.TAKOSUMI_ACCOUNTS_ISSUER === STAGING_PLATFORM_ORIGIN;
+}
+
+function isSharedStagingAppAuthorizeRequest(request: Request, url: URL): boolean {
+  return request.method === "GET" && url.origin === STAGING_PLATFORM_ORIGIN &&
+    url.pathname === "/oauth/authorize" && !!url.searchParams.get("client_id") &&
+    !request.headers.has("authorization");
+}
+
+export function sharedStagingAppAuthorizeSessionResolver(
+  env: SharedAuthEnvironment,
+): CapsuleAuthorizeSessionResolver | undefined {
+  if (!isSharedStagingAppIssuer(env)) return undefined;
+  return async (request) => {
+    if (!isSharedStagingAppAuthorizeRequest(request, new URL(request.url))) {
+      return { kind: "unauthenticated" };
+    }
+    try {
+      const rpc = composition(env)?.rpc;
+      if (!rpc?.authenticateAppAuthorization) return { kind: "unavailable" };
+      const proof = await boundedRpc(
+        () => rpc.authenticateAppAuthorization!(requestForRpc(request)), 5_000,
+      );
+      if (proof?.kind === "unauthenticated") return { kind: "unauthenticated" };
+      if (proof?.kind !== "authenticated" || !safeId(proof.subject) || !proof.subject.startsWith("tsub_") ||
+          proof.issuer !== AUTH_STAGING_ISSUER || proof.clientId !== STAGING_HOSTED_RP.clientId ||
+          !safeId(proof.sessionId) || !proof.sessionId.startsWith("hsid_") ||
+          !Number.isSafeInteger(proof.identityGeneration) || proof.identityGeneration < 0 ||
+          !Number.isSafeInteger(proof.expiresAt) || proof.expiresAt <= Date.now()
+      ) return { kind: "unavailable" };
+      return proof;
+    } catch {
+      return { kind: "unavailable" };
+    }
+  };
 }
 
 async function boundedRpc<T>(call: () => Promise<T>, timeoutMs: number): Promise<T> {
@@ -187,6 +235,11 @@ export async function handleSharedAuthAccountBoundaryRequest(
       return Response.json({ error: "not found" }, {
         status: 404, headers: { "cache-control": "no-store" },
       });
+    }
+    // The Accounts handler performs the registered-client and PKCE checks
+    // before invoking the same composition's RP proof resolver.
+    if (isSharedStagingAppIssuer(env) && isSharedStagingAppAuthorizeRequest(request, url)) {
+      return undefined;
     }
     if (url.pathname === "/sign-in") {
       if (request.method !== "GET" && request.method !== "HEAD") {

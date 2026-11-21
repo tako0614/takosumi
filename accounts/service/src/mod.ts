@@ -104,6 +104,7 @@ import {
   type NotificationPusherRouteOptions,
 } from "./notification-pusher-routes.ts";
 import {
+  type CapsuleAuthorizeSessionResolver,
   handleAuthorize,
   resolveSharedAccountGrantSession,
   handleIntrospect,
@@ -294,6 +295,10 @@ export interface AccountsHandlerOptions {
   issuer?: string;
   jwks?: JsonWebKeySet;
   clients?: readonly OidcClientRegistration[];
+  /** Host-composed, request-bound proof for registered Capsule authorization. */
+  resolveCapsuleAuthorizeSession?: CapsuleAuthorizeSessionResolver;
+  /** Confidential shared RP allowed to request its own app-authorization proof. */
+  hostedAppAuthorizationClientId?: string;
   /** Durable store chosen explicitly by the production-capable composition root. */
   store: AccountsStore;
   oidcFlow?: OidcAuthorizationCodeFlow;
@@ -357,6 +362,8 @@ export interface EphemeralAccountsHandlerOptions {
   subject?: string;
   keyId?: string;
   clients?: readonly OidcClientRegistration[];
+  resolveCapsuleAuthorizeSession?: CapsuleAuthorizeSessionResolver;
+  hostedAppAuthorizationClientId?: string;
   store?: AccountsStore;
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
@@ -511,6 +518,8 @@ export async function createEphemeralAccountsHandler(
     identityMergeRetry: options.identityMergeRetry,
     credentialUnlinkReconciler: options.credentialUnlinkReconciler,
     clients: options.clients,
+    resolveCapsuleAuthorizeSession: options.resolveCapsuleAuthorizeSession,
+    hostedAppAuthorizationClientId: options.hostedAppAuthorizationClientId,
     store: options.store ?? new InMemoryAccountsStore(),
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
@@ -798,7 +807,9 @@ export function createAccountsHandler(
     const ingressFailure = accountsIngressSecurityFailure(request, url, issuer);
     if (ingressFailure) return ingressFailure;
 
-    if (!isLoginAllowlistBypassPath(url.pathname)) {
+    const capsuleAuthorize = url.pathname === TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH &&
+      options.resolveCapsuleAuthorizeSession !== undefined;
+    if (!capsuleAuthorize && !isLoginAllowlistBypassPath(url.pathname)) {
       const rejectedSession = await diagnostics.measure("allowlist", () =>
         measureServerTiming(timings, "tk_allowlist", () =>
           rejectDisallowedPresentedSession({
@@ -830,6 +841,8 @@ export function createAccountsHandler(
         clients,
         store,
         operations: options.controlPlaneOperations,
+        resolveCapsuleAuthorizeSession: options.resolveCapsuleAuthorizeSession,
+        loginEmailAllowlist,
         ...(resolveControlPlaneOperations
           ? { resolveOperations: resolveControlPlaneOperations }
           : {}),
@@ -898,6 +911,8 @@ export function createAccountsHandler(
         request,
         store,
         clients,
+        hostedAppAuthorizationClientId: options.hostedSessionPolicy
+          ? options.hostedAppAuthorizationClientId : undefined,
         ...(options.controlPlaneOperations
           ? { operations: options.controlPlaneOperations }
           : {}),
