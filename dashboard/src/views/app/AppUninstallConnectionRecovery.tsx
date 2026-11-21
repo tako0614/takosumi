@@ -93,6 +93,9 @@ export default function AppUninstallConnectionRecovery(props: {
           </Match>
           <Match when={inventory.state === "ready" && (rows().length === 0 || rows().some(({ provider, connectionId }) => options(provider, connectionId).length === 0))}>
             <p>{t("app.uninstall.noReplacement")}</p>
+            <Button variant="secondary" href="/connections" disabled={props.disabled}>
+              {t("app.uninstall.viewConnections")}
+            </Button>
           </Match>
           <Match when={inventory.state === "ready"}>
             <p>{t("app.uninstall.replacementHint")}</p>
