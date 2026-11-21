@@ -1492,15 +1492,19 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       traffic.assertNoFailures();
     });
 
-    for (const scenario of ["states", "staleReview", "partialRecovery", "firstRemovalRefusal"] as const) test({
+    for (const scenario of ["states", "staleReview", "partialRecovery", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
       partialRecovery: "a partial uninstall can replace more than the unavailable original connection",
       firstRemovalRefusal: "a refused first uninstall refreshes the app and offers a replacement connection",
+      failedOpenReview: "a failed uninstall offers another connection inside its open review",
+      indeterminateOpenReview: "an indeterminate uninstall offers no new removal from its open review",
     }[scenario], async ({ page }) => {
       const staleUninstallReview = scenario === "staleReview";
       const partialRecovery = scenario === "partialRecovery";
       const firstRemovalRefusal = scenario === "firstRemovalRefusal";
+      const indeterminateOpenReview = scenario === "indeterminateOpenReview";
+      const openReviewFailure = scenario === "failedOpenReview" || indeterminateOpenReview;
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
@@ -1512,7 +1516,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       type Scene = "uninstall_scheduled" | "uninstall_immediate" | "uninstall_failed" | "uninstall_stale_review" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = partialRecovery ? "uninstall_failed"
         : firstRemovalRefusal ? "uninstall_immediate"
-          : staleUninstallReview ? "uninstall_stale_review" : "uninstall_scheduled";
+          : staleUninstallReview || openReviewFailure ? "uninstall_stale_review" : "uninstall_scheduled";
       let connectionRemoved = false;
       const replacementPlanBodies: unknown[] = [];
       let failedUninstallBindingReads = 0;
@@ -1555,7 +1559,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         policyStatus: "pass", summary: { add: 0, change: 1, destroy: 0 }, origin: { kind: "revision", ref: "v2" },
         planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["update"] }],
       };
-      const failedRemoval = lifecycleRun("run_failed_removal", "destroy_apply", "failed", now, { capsuleId: ID, errorCode: "apply_failed" });
+      const failedRemoval = lifecycleRun("run_failed_removal", "destroy_apply", "failed", now, {
+        capsuleId: ID, planRunId: "run_refused_uninstall",
+        errorCode: indeterminateOpenReview ? "runner_mutation_indeterminate" : "apply_failed",
+      });
       const recoveryPlan = {
         ...lifecycleRun("run_states_destroy_recovery", "destroy_plan", "waiting_approval", now, { capsuleId: ID }),
         policyStatus: "pass", requiresApproval: true, summary: { add: 0, change: 0, destroy: 1 },
@@ -1804,6 +1811,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           if (suffix === "/logs") return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
           if (suffix === "/stream") return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
           if (suffix === "/apply" && id === refusedPlan.id && request.method() === "POST") {
+            if (openReviewFailure) {
+              scene = "uninstall_failed";
+              return route.fulfill({ status: 201, json: { run: failedRemoval } });
+            }
             staleReviewApplyAttempts += 1;
             return route.fulfill({ status: 409, json: { error: {
               code: "failed_precondition",
@@ -1875,6 +1886,40 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             { connectionId: "conn_second", replacementConnectionId: "conn_saved" },
           ],
         }]);
+        expect(errors).toEqual([]);
+        traffic.assertNoFailures();
+        return;
+      }
+
+      if (openReviewFailure) {
+        await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+        await header.getByRole("button", { name: "Review", exact: true }).click();
+        const review = page.getByTestId("app-review");
+        await review.getByRole("checkbox").check();
+        await review.getByRole("button", { name: "Allow and uninstall" }).click();
+        await expect(review.locator(".iv-error")).toBeVisible();
+        const choose = review.getByRole("button", { name: "Choose connection for uninstall" });
+        expect(failedUninstallBindingReads).toBe(0);
+        expect(seenMutations).toEqual([`POST /api/v1/runs/${refusedPlan.id}/apply`]);
+        if (indeterminateOpenReview) {
+          await expect(app).toHaveAttribute("data-app-state", "needs_attention");
+          await expect(choose).toHaveCount(0);
+        } else {
+          await expect(choose).toBeVisible();
+          await expect(problems.getByRole("button", { name: "Choose connection for uninstall" })).toHaveCount(1);
+          await choose.click();
+          await review.getByRole("combobox", { name: /Original Cloudflare connection/ }).selectOption("conn_saved");
+          await review.getByRole("button", { name: "Review removal" }).click();
+          await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toBeVisible();
+          expect(failedUninstallBindingReads).toBe(1);
+          expect(replacementPlanBodies).toEqual([{
+            destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
+          }]);
+          expect(seenMutations).toEqual([
+            `POST /api/v1/runs/${refusedPlan.id}/apply`,
+            `POST /api/v1/capsules/${ID}/destroy-plan`,
+          ]);
+        }
         expect(errors).toEqual([]);
         traffic.assertNoFailures();
         return;
