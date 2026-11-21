@@ -30,6 +30,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { Activity, ExternalLink } from "lucide-solid";
 import { redactString } from "takosumi-contract/redaction";
 import Page from "../account/components/auth/Page.tsx";
+import type { SessionRecord } from "../account/lib/session.ts";
 import {
   abandonUnappliedCapsule,
   approveRun,
@@ -149,7 +150,7 @@ const RELEASE_ACTIVATION_POLL_MS = 3_000;
 const SIBLING_RUNS_LIMIT = APPLY_RECOVERY_RUN_LIMIT;
 
 export default function RunView() {
-  return <Page>{() => <Inner />}</Page>;
+  return <Page>{(session) => <Inner session={session} />}</Page>;
 }
 
 /** True when the run fetch failed because the run genuinely does not exist —
@@ -478,7 +479,7 @@ function ProviderResolutionTable(props: {
   );
 }
 
-function Inner() {
+function Inner(props: { readonly session: SessionRecord }) {
   const params = useParams();
   const navigate = useNavigate();
   const runId = () => {
@@ -494,7 +495,11 @@ function Inner() {
   let runEpoch = 0;
   const revisionRetryAttempts: RevisionPlanAttemptStore = new Map();
   const rollbackAttemptKeys = new Map<string, string>();
-  const retryApi = defaultRetryPlanApi(revisionRetryAttempts, rollbackAttemptKeys);
+  const retryApi = defaultRetryPlanApi(revisionRetryAttempts, rollbackAttemptKeys, () => [
+    props.session.subject,
+    props.session.primaryAccountId ?? props.session.subject,
+    runId(),
+  ]);
   let applyReadController: AbortController | undefined;
   onCleanup(() => {
     disposed = true;
@@ -1155,7 +1160,9 @@ function Inner() {
     const instId = currentRun?.capsuleId;
     if (!currentRun || !instId) return;
     const attempt = { plan: currentRun, epoch: runEpoch };
-    const isCurrent = () => ownsApply(attempt);
+    const { subject, primaryAccountId } = props.session;
+    const isCurrent = () => ownsApply(attempt) &&
+      props.session.subject === subject && props.session.primaryAccountId === primaryAccountId;
     if (!isCurrent()) return;
     try {
       const capsule = await getCapsule(instId, { isCurrent });
