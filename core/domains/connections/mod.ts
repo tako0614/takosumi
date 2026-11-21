@@ -56,6 +56,11 @@ export interface ResolvedCapsuleProviderBinding {
   readonly materialization: ProviderConnectionMaterialization;
 }
 
+type ProviderBindingIdentity = Pick<
+  ProviderBinding,
+  "provider" | "moduleLocalName" | "childAlias" | "alias"
+>;
+
 /** Exact child-module provider identity required by one Run. */
 export interface RequiredProviderBindingIdentity {
   readonly source: string;
@@ -399,7 +404,7 @@ export class ConnectionsService {
       bindings,
       policy,
     );
-    this.#selectResolvedProviderBindingsForRun(
+    this.#selectProviderBindingsForRun(
       resolved,
       input.requiredProviders,
       false,
@@ -466,7 +471,6 @@ export class ConnectionsService {
       readonly replacements: readonly DestroyProviderConnectionReplacement[];
     };
     readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
-    readonly includeUnusedBindings?: boolean;
   }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const refuse = (
       connectionRecoveryFailure?: "replacement_unverified" | "bindings_mismatch",
@@ -500,17 +504,28 @@ export class ConnectionsService {
     if (selection.some(({ connectionId, replacementConnectionId }) =>
       connectionId === replacementConnectionId && !appliedIdsByBinding.has(connectionId))) refuse();
     const bindings = await this.#validatedProviderBindings(input.capsule);
+    assertUniqueProviderBindingIdentities(bindings);
+    // Only bindings used by the applied Plan participate in Destroy recovery.
+    // Check the full binding set for ambiguous identities before resolving keys.
+    const selectedBindings = this.#selectProviderBindingsForRun(
+      bindings,
+      input.requiredProviders,
+      false,
+    );
+    const selectedIds = new Set(
+      selectedBindings.map(({ connectionId }) => connectionId),
+    );
     const originalBindingIds = new Set([
       ...appliedPlanReplacements.map(({ connectionId }) => connectionId),
       ...replacements.keys(),
     ]);
     for (const id of originalBindingIds) {
-      if (!bindings.some((binding) => binding.connectionId === id) ||
+      if (!selectedIds.has(id) ||
         this.#operatorProviderConnections.has(id) ||
         (await this.#store.getConnection(id))?.scope === "operator") refuse();
     }
     const policy = await this.#policyForCapsule(input.capsule);
-    const resolved = await Promise.all(bindings.map((binding) => {
+    const selected = await Promise.all(selectedBindings.map((binding) => {
       const connectionId = replacements.get(binding.connectionId) ?? binding.connectionId;
       const appliedId = appliedIdsByBinding.get(binding.connectionId);
       const bindingOrigin = connectionId === binding.connectionId || connectionId === appliedId
@@ -518,40 +533,27 @@ export class ConnectionsService {
         : "selected";
       return this.#resolveBinding(input.capsule, { ...binding, connectionId }, policy, bindingOrigin);
     }));
-    assertUniqueProviderBindingIdentities(resolved);
-    const selected = this.#selectResolvedProviderBindingsForRun(resolved, input.requiredProviders, false);
-    // Resolution preserves the input order, and selection returns the same
-    // objects. Keep each selected row tied to its own stored logical binding;
-    // target connection IDs can also appear on another, unchanged binding.
-    const bindingIdByResolved = new Map(resolved.map((entry, index) => [
-      entry,
-      bindings[index]!.connectionId,
-    ]));
-    const selectedReplacementBindings = new Set<string>();
-    for (const entry of selected) {
-      const bindingId = bindingIdByResolved.get(entry) ?? refuse();
+    for (const [index, entry] of selected.entries()) {
+      const bindingId = selectedBindings[index]!.connectionId;
       const replacementId = replacements.get(bindingId);
       if (replacementId === undefined) continue;
       if (entry.connection.id !== replacementId) refuse();
-      selectedReplacementBindings.add(bindingId);
       if (entry.connection.expiresAt !== undefined &&
         (!Number.isFinite(Date.parse(entry.connection.expiresAt)) || Date.parse(entry.connection.expiresAt) <= Date.parse(this.#now()))) refuse();
       if (entry.connection.scope === "operator") refuse();
       if (!input.hasVerifiedAccountScope(entry.connection)) refuse("replacement_unverified");
     }
-    if ([...replacements.keys()].some(id => !selectedReplacementBindings.has(id))) refuse();
     // Compare against the exact connection IDs used by the PlanRun that made
     // the current state. A prior recovery may have replaced the binding's
     // stored logical ID without mutating the binding row. Only this comparison
     // aliases those IDs; returned entries and mint retain the new replacement.
-    const comparison = selected.map(entry => {
-      const bindingId = bindingIdByResolved.get(entry);
-      if (bindingId === undefined) return refuse();
+    const comparison = selected.map((entry, index) => {
+      const bindingId = selectedBindings[index]!.connectionId;
       const appliedId = appliedIdsByBinding.get(bindingId) ?? bindingId;
       return appliedId === entry.connection.id ? entry : { ...entry, connection: { ...entry.connection, id: appliedId } };
     });
     if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse("bindings_mismatch");
-    return input.includeUnusedBindings ? resolved : selected;
+    return selected;
   }
 
   async #resolveProviderBindingsForRun(
@@ -567,7 +569,7 @@ export class ConnectionsService {
       return [];
     }
     const explicit = await this.resolveProviderBindings(capsule);
-    return this.#selectResolvedProviderBindingsForRun(
+    return this.#selectProviderBindingsForRun(
       explicit,
       required,
       allowLegacySourceOnlyDefault,
@@ -589,11 +591,11 @@ export class ConnectionsService {
     return resolved;
   }
 
-  #selectResolvedProviderBindingsForRun(
-    explicit: readonly ResolvedCapsuleProviderBinding[],
+  #selectProviderBindingsForRun<Binding extends ProviderBindingIdentity>(
+    explicit: readonly Binding[],
     requiredProviders: readonly RequiredProviderBindingIdentity[],
     allowLegacySourceOnlyDefault: boolean,
-  ): readonly ResolvedCapsuleProviderBinding[] {
+  ): readonly Binding[] {
     const required = validateRequiredProviderBindingIdentities(requiredProviders);
     const ambiguous = explicit.find(
       (entry) =>
@@ -820,7 +822,7 @@ export class ConnectionsService {
 
 function sameProviderBindingIdentity(
   required: RequiredProviderBindingIdentity,
-  resolved: ResolvedCapsuleProviderBinding,
+  resolved: ProviderBindingIdentity,
   allowLegacySourceOnlyDefault: boolean,
 ): boolean {
   return (
@@ -978,7 +980,7 @@ function formatRequiredProviderBindingIdentity(
 }
 
 function assertUniqueProviderBindingIdentities(
-  bindings: readonly ResolvedCapsuleProviderBinding[],
+  bindings: readonly ProviderBindingIdentity[],
 ): void {
   const seen = new Set<string>();
   for (const binding of bindings) {

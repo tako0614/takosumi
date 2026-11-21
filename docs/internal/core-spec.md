@@ -387,8 +387,10 @@ starts with the replacements recorded by that exact Plan. The new explicit
 selection overrides only the named logical bindings. The new Plan records the
 complete effective selection, which is revalidated at Apply. The comparison
 uses the prior Plan's recorded effective IDs against the pinned digest.
-Other bindings, aliases, settings, recipe and verification remain exact;
-minting uses the effective IDs of the new Plan. Each original Connection can have
+Other applied bindings, aliases, settings, recipe and verification remain exact.
+Recovery resolves and mints only for the applied provider identities. A
+Connection referenced solely by unused bindings cannot be selected for replacement.
+Minting uses the effective IDs of the new Plan. Each original Connection can have
 one replacement. Several original Connections may use the same replacement when
 the account and configuration match for every affected binding. Missing or
 legacy evidence, changed metadata, self-replacements and ambiguous selections
