@@ -2419,6 +2419,12 @@ async function runRunner(
     )
   ) {
     const reason = stringValue(body, "errorCode");
+    const sourceBuildFailure =
+      (action === "apply" || action === "destroy") &&
+      response.status === 500 &&
+      reason === "source_build_failed" &&
+      body.runId === runId && body.action === action &&
+      body.status === "failed" && body.exitCode === 1;
     throw new OpenTofuRunnerExecutionError(
       `OpenTofu runner rejected ${action} run ${runId}: HTTP ${response.status}`,
       {
@@ -2428,7 +2434,9 @@ async function runRunner(
           /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(reason)
             ? reason
             : "runner_http_error",
-        detail: "runner returned a non-success HTTP status",
+        detail: sourceBuildFailure
+          ? LOCAL_MUTATION_SOURCE_BUILD_DETAIL
+          : "runner returned a non-success HTTP status",
       },
     );
   }
@@ -2442,6 +2450,8 @@ async function runRunner(
  * never adopted from a response body here.
  */
 const RUNNER_MUTATION_NOT_DISPATCHED_REASON = "runner_mutation_not_dispatched";
+const LOCAL_MUTATION_SOURCE_BUILD_DETAIL =
+  "runner reported a source build failure; authoritative mutation completion is unavailable";
 
 /** Fail before workspace preparation if an HTTP runner is not operator-selected
  * for local filesystem custody. Request headers cannot change the mode. */
@@ -2782,17 +2792,20 @@ async function runLocalMutationWithCustody(
     } catch {
       // No authoritative completion is available after a possible dispatch.
     }
-    // Preserve only the finite HTTP classification from our own sanitized
-    // error. A transport's raw message may contain provider or credential data.
-    const status =
+    // Retain only classifications produced by this adapter. The source build
+    // report is diagnostic and says nothing about whether it is safe to retry.
+    const runnerError =
       originalError instanceof OpenTofuRunnerExecutionError
-        ? /HTTP ([0-9]{3})$/.exec(originalError.message)?.[1]
+        ? originalError
         : undefined;
+    const status = runnerError && /HTTP ([0-9]{3})$/.exec(runnerError.message)?.[1];
     throw new OpenTofuRunnerExecutionError(
       `local runner mutation dispatch response is indeterminate${status ? `: HTTP ${status}` : ""}`,
       {
         reason: "runner_mutation_indeterminate",
-        detail: "provider dispatch may have occurred; authoritative completion is unavailable",
+        detail: runnerError?.detail === LOCAL_MUTATION_SOURCE_BUILD_DETAIL
+          ? LOCAL_MUTATION_SOURCE_BUILD_DETAIL
+          : "provider dispatch may have occurred; authoritative completion is unavailable",
       },
     );
   }
