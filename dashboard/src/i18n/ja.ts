@@ -369,6 +369,9 @@ export const ja = {
   "auth.providersLoadFailedMessageWithInstall":
     "通信状態を確認して再試行してください。追加内容はこの画面に保持されています。",
   "auth.retryProviderCheck": "もう一度確認",
+  "auth.sessionCouldNotVerify": "ログイン状態を確認できません",
+  "auth.sessionSignInAgainHint": "ログインし直すと、この画面に戻ります。",
+  "auth.sessionSignInAgain": "ログインし直す",
   "auth.sessionMaintenanceTitle": "ダッシュボードは一時的に利用できません",
   "auth.sessionMaintenanceBody":
     "メンテナンス中です。しばらくしてからもう一度お試しください。",

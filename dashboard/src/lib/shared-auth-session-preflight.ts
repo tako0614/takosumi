@@ -6,6 +6,7 @@
 const HEALTH_PATH = "/auth/oidc/session";
 const ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
 const HEALTH_DEADLINE_MS = 40_000;
+const HOSTED_SESSION_RETRY_MS = [300, 900, 1_800] as const;
 
 type RoutePresence = "present" | "absent";
 type RouteKnowledge = RoutePresence | "failed";
@@ -73,11 +74,24 @@ function readBody(response: Response): Promise<unknown> {
   });
 }
 
-function parseHealth(response: Response, body: unknown): RoutePresence {
-  const json = response.headers.get("content-type")
+function isJson(headers: Headers): boolean {
+  return headers.get("content-type")
     ?.split(";", 1)[0]
     ?.trim()
     .toLowerCase() === "application/json";
+}
+
+export function isHostedSessionUnavailable(
+  error: unknown,
+): error is SharedAuthSessionPreflightError {
+  if (!(error instanceof SharedAuthSessionPreflightError) ||
+    error.status !== 503 || !isJson(error.headers)) return false;
+  const body = error.body as { error?: { code?: unknown } } | null | undefined;
+  return body?.error?.code === "oidc_unavailable";
+}
+
+function parseHealth(response: Response, body: unknown): RoutePresence {
+  const json = isJson(response.headers);
   const record =
     typeof body === "object" && body !== null && !Array.isArray(body)
       ? body as Record<string, unknown>
@@ -121,14 +135,38 @@ async function readHealth(): Promise<RoutePresence> {
     }, HEALTH_DEADLINE_MS);
   });
   const work = (async () => {
-    const response = await fetch(HEALTH_PATH, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      credentials: "include",
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    return parseHealth(response, await readBody(response));
+    let unavailable: SharedAuthSessionPreflightError | undefined;
+    for (const delay of [0, ...HOSTED_SESSION_RETRY_MS]) {
+      if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      throwIfSharedAuthCallerAborted(controller.signal);
+      const response = await fetch(HEALTH_PATH, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const body = await readBody(response);
+      let route: RoutePresence;
+      try {
+        route = parseHealth(response, body);
+      } catch (error) {
+        // A concurrent Hosted grant check can briefly occupy the session.
+        // Only retry its health GET, never the caller's protected operation.
+        // An explicit server retry interval is outside the short contention
+        // retry. Surface it to the caller instead of retrying sooner.
+        if (!isHostedSessionUnavailable(error) || error.headers.has("retry-after")) {
+          throw error;
+        }
+        unavailable = error;
+        continue;
+      }
+      // A later absence cannot open the ordinary OSS fallback after Hosted
+      // has responded as unavailable during the same probe.
+      if (unavailable && route === "absent") throw unavailable;
+      return route;
+    }
+    throw unavailable;
   })();
   try {
     return await Promise.race([work, deadline]);
