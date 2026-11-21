@@ -13446,7 +13446,12 @@ test("v2.6 marked repository Plan refuses a different snapshot API before materi
 });
 
 
-test.each(["deleted", "expired", "verified"] as const)("destroy explicitly replaces a %s connection only for its confirmed applied account", async (originalStatus) => {
+test.each([
+  ["explicitly replaces a deleted connection only for its confirmed applied account", "deleted"],
+  ["explicitly replaces an expired connection only for its confirmed applied account", "expired"],
+  ["explicitly replaces a verified connection only for its confirmed applied account", "verified"],
+  ["uses the verified original when only an unused connection was revoked", "unused-only"],
+] as const)("destroy %s", async (_description, originalStatus) => {
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -13478,7 +13483,7 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   const replacement = await register();
   const foreign = await register("fedcba9876543210fedcba9876543210");
   const laterReplacement = await register();
-  const unused = originalStatus === "deleted" ? await register() : undefined;
+  const unused = originalStatus === "deleted" || originalStatus === "unused-only" ? await register() : undefined;
   const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
   const bindings = originalBinding.bindings.map(binding => ({ ...binding, connectionId: old.id }));
   if (unused) {
@@ -13618,6 +13623,41 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
       session: { subject: seeded.workspace.ownerUserId, credential, uninstallRequester: { subject: seeded.workspace.ownerUserId } },
     }, segments, method).catch(controllerErrorResponse);
   };
+  if (originalStatus === "unused-only") {
+    expect(await vault.revoke(unused!.id, undefined, null)).toBe(true);
+    await store.putPlanRun({ ...appliedPlanBefore!, resolvedProviderBindingsDigest: undefined });
+    const withoutEvidence = (await request(undefined))!;
+    expect(withoutEvidence.status).toBe(409);
+    expect(await withoutEvidence.json()).toMatchObject({
+      error: { details: { reason: "provider_connection_not_ready" } },
+    });
+    await store.putPlanRun(appliedPlanBefore!);
+    const response = (await request(undefined))!;
+    expect(response.status).toBe(202);
+    const { run } = await response.json() as { run: Run };
+    const { planRun } = await controller.getPlanRun(run.id);
+    expect(planRun.status).toBe("waiting_approval");
+    expect(planRun.destroyConnectionRecovery).toBeUndefined();
+    expect(mintIds.at(-1)).toEqual([old.id]);
+    expect(runner.destroyJobs).toHaveLength(0);
+    await controller.approveRun(planRun.id);
+    const apply = () => controller.createApplyRun({
+      planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun),
+    });
+    await store.putConnection({ ...old, status: "revoked" });
+    const beforeMint = mintIds.length;
+    await expect(apply()).rejects.toMatchObject({
+      details: { reason: "provider_connection_not_ready" },
+    });
+    expect(mintIds).toHaveLength(beforeMint);
+    expect(runner.destroyJobs).toHaveLength(0);
+    await store.putConnection(old);
+    expect((await apply()).applyRun.status).toBe("succeeded");
+    expect(mintIds.at(-1)).toEqual([old.id]);
+    expect(runner.destroyJobs).toHaveLength(1);
+    expect(retiredBindings).toEqual([[old.id]]);
+    return;
+  }
   for (const invalid of [null, [], [{}], [{ ...selection[0], arbitraryAccountClaim: "ignored-must-refuse" }], [selection[0], selection[0]], [{ connectionId: old.id, replacementConnectionId: old.id }]]) {
     expect((await request({ destroyProviderConnectionReplacements: invalid }))!.status).toBe(400);
   }

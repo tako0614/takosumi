@@ -2098,10 +2098,8 @@ export class OpenTofuController {
       : undefined;
   }
 
-  async listCapsuleDestroyRecoveryConnectionIds(
-    capsule: Capsule,
-  ): Promise<readonly string[]> {
-    return await this.#runEngine.listCapsuleDestroyRecoveryConnectionIds(capsule);
+  async listCapsuleAppliedDestroyConnectionIds(capsule: Capsule) {
+    return await this.#runEngine.listCapsuleAppliedDestroyConnectionIds(capsule);
   }
 
   async getCurrentOutput(capsuleId: string): Promise<OutputResponse> {
