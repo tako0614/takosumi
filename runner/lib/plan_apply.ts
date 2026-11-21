@@ -1034,10 +1034,11 @@ export async function runCompatibilityCheck(
   runId: string,
   request: unknown,
   signal?: AbortSignal,
+  mirrorOnly = false,
 ): Promise<JsonRecord> {
   const phase = await enterCommandPhaseHome(signal);
   try {
-    return await runCompatibilityCheckInPhase(runId, request, signal, phase.home.env);
+    return await runCompatibilityCheckInPhase(runId, request, signal, phase.home.env, mirrorOnly);
   } finally {
     await phase.cleanup();
   }
@@ -1048,6 +1049,7 @@ async function runCompatibilityCheckInPhase(
   request: unknown,
   signal: AbortSignal | undefined,
   phaseEnv: { readonly HOME: string; readonly XDG_CONFIG_HOME: string },
+  mirrorOnly: boolean,
 ): Promise<JsonRecord> {
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "source root");
@@ -1074,8 +1076,8 @@ async function runCompatibilityCheckInPhase(
   const providerInit = await prepareStrictProviderMirrorInit(
     workspace,
     context,
-    [],
-    undefined,
+    mirrorOnly ? preInitProviderScan.providers : [],
+    mirrorOnly ? { requireMirror: true } : undefined,
   );
   const commandContext = providerInit?.commandContext ?? context;
   const tfDataDir = commandContext.env.TF_DATA_DIR?.trim() || ".terraform";

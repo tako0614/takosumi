@@ -1001,6 +1001,7 @@ export interface OpenTofuCapsuleSourceFilesJob {
   readonly runId: string;
   readonly sourceSnapshot: SourceSnapshot;
   readonly modulePath?: string;
+  readonly requireProviderMirror?: true;
 }
 
 export interface OpenTofuStableSourceTagResolutionJob {
@@ -2463,7 +2464,14 @@ export class OpenTofuController {
       );
     }
     const snapshot = await this.#sources.getSourceSnapshot(id);
-    return await this.#sourcesService.readCapsuleSourceFiles(snapshot, options);
+    const { source } = await this.#sources.getSource(snapshot.sourceId);
+    const workspace = await this.#requireWorkspace(source.workspaceId);
+    return await this.#sourcesService.readCapsuleSourceFiles(snapshot, {
+      ...options,
+      ...(workspace.policy?.providerInstallation?.requireMirror === true
+        ? { requireProviderMirror: true }
+        : {}),
+    });
   }
 
   async resolveStableSourceTag(

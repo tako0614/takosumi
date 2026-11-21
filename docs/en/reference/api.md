@@ -390,6 +390,10 @@ module sources, including pinned ones, and never treats them as network-fetch
 authority for `tofu init`. Scan and compatibility fail closed instead of
 publishing a partial provider set; vendor dependencies in the repository tree.
 
+An operator's mirror-only provider policy also governs credential-free
+compatibility checks. Runners that lack mirror-only compatibility support stop
+the check before installing providers.
+
 Operator-installed setup recipes are discovered through:
 
 ```http

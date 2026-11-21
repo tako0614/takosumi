@@ -6,7 +6,8 @@
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 
 export type OpenTofuRunAction =
-  "plan" | "apply" | "destroy" | "compatibility_check" | "backup" | "release";
+  "plan" | "apply" | "destroy" | "compatibility_check" |
+  "compatibility_check_mirror_only" | "backup" | "release";
 export type OpenTofuOperation = "create" | "update" | "destroy";
 export type JsonRecord = Record<string, unknown>;
 export type RunRequest = {

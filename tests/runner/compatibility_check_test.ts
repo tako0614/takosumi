@@ -232,6 +232,89 @@ esac
   }
 });
 
+test("mirror-only compatibility confines reachable child providers while ordinary compatibility keeps direct fallback", async () => {
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-compat-mirror-bin-"));
+  const mirrorRoot = await mkdtemp(join(tmpdir(), "takosumi-compat-mirror-"));
+  const previousPath = Bun.env.PATH;
+  const previousMirror = Bun.env.OPENTOFU_PROVIDER_MIRROR;
+  const runIds: string[] = [];
+  try {
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(tofuPath, `#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = init
+test -n "\${TF_CLI_CONFIG_FILE:-}"
+cat "$TF_CLI_CONFIG_FILE" > observed-tofu.rc
+printf 'provider "registry.opentofu.org/cloudflare/cloudflare" {}\\n' > .terraform.lock.hcl
+`);
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+    Bun.env.OPENTOFU_PROVIDER_MIRROR = mirrorRoot;
+
+    for (const action of ["compatibility_check_mirror_only", "compatibility_check"] as const) {
+      const runId = `compat_mirror_${crypto.randomUUID().replace(/-/g, "")}`;
+      runIds.push(runId);
+      const sourceRoot = join(RUN_ROOT, runId, "source");
+      const selected = join(sourceRoot, "selected");
+      await mkdir(join(selected, "modules", "child"), { recursive: true });
+      await mkdir(join(sourceRoot, "unselected"), { recursive: true });
+      await writeFile(join(selected, "main.tf"), 'module "child" { source = "./modules/child" }\n');
+      await writeFile(
+        join(selected, "modules", "child", "providers.tofu"),
+        'terraform { required_providers { cloudflare = { source = "cloudflare/cloudflare" } } }\n',
+      );
+      await writeFile(
+        join(sourceRoot, "unselected", "providers.tf"),
+        'terraform { required_providers { unwanted = { source = "attacker/unwanted" } } }\n',
+      );
+      const response = await handleRunnerRequest(new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action,
+          runId,
+          request: {
+            source: { modulePath: "selected" },
+            // An ordinary compatibility request cannot opt into mirror-only
+            // semantics through a payload flag; the exact action selects it.
+            providerInstallationPolicy: { requireMirror: true },
+          },
+        }),
+      }));
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        action: string;
+        status: string;
+        files: readonly { path: string; text: string }[];
+      };
+      expect(body.action).toBe("compatibility_check");
+      expect(body.status).toBe("succeeded");
+      expect(body.files.map(file => file.path)).toContain("modules/child/providers.tofu");
+      expect(body.files.map(file => file.path)).not.toContain("unselected/providers.tf");
+      const config = await readFile(join(selected, "observed-tofu.rc"), "utf8");
+      if (action === "compatibility_check_mirror_only") {
+        expect(config).toContain(`path = "${mirrorRoot}"`);
+        expect(config).toContain('"registry.opentofu.org/cloudflare/cloudflare"');
+        expect(config).not.toContain("attacker/unwanted");
+        expect(config).not.toContain("direct {");
+        expect(config).not.toContain("plugin_cache_dir");
+      } else {
+        expect(config).toContain("direct {}");
+        expect(config).toContain("plugin_cache_dir");
+      }
+    }
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    if (previousMirror === undefined) delete Bun.env.OPENTOFU_PROVIDER_MIRROR;
+    else Bun.env.OPENTOFU_PROVIDER_MIRROR = previousMirror;
+    for (const runId of runIds) await rm(join(RUN_ROOT, runId), { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+    await rm(mirrorRoot, { recursive: true, force: true });
+  }
+});
+
 test("compatibility_check runs tofu init without provider credentials and returns the lockfile", async () => {
   const runId = `compat_init_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, runId);
@@ -993,11 +1076,9 @@ esac
     expect(seenConfig).toContain(
       '"registry.opentofu.org/cloudflare/cloudflare"',
     );
-    expect(seenConfig).toContain("direct");
-    // strict mirror is fail-closed: the direct registry excludes everything so a
-    // provider missing from the mirror include list cannot silently pull from the
-    // public registry, it fails at `tofu init` instead.
-    expect(seenConfig).toContain('exclude = ["*/*"]');
+    // Strict installation declares only the filesystem mirror. A provider
+    // absent from its include list cannot fall back to the public registry.
+    expect(seenConfig).not.toContain("direct {");
   } finally {
     if (previousPath === undefined) {
       delete Bun.env.PATH;
@@ -1131,6 +1212,21 @@ test("provider plugin cache can be shared by runner container env", async () => 
         "utf8",
       ),
     ).not.toContain("plugin_cache_dir");
+
+    const strictProviderFree = await prepareStrictProviderMirrorInit(
+      testWorkspace(join(root, "strict-provider-free-run")),
+      { env: {} },
+      [],
+      { requireMirror: true },
+    );
+    expect(strictProviderFree?.providerCacheDir).toBeUndefined();
+    const providerFreeConfig = await readFile(
+      join(root, "strict-provider-free-run", "takosumi.tofu.rc"),
+      "utf8",
+    );
+    expect(providerFreeConfig).toContain("filesystem_mirror");
+    expect(providerFreeConfig).not.toContain("direct {");
+    expect(providerFreeConfig).not.toContain("plugin_cache_dir");
   } finally {
     if (previousCache === undefined) {
       delete Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;

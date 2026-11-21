@@ -4057,6 +4057,8 @@ export class RunEngine {
       input.snapshot,
       input.modulePath,
       {
+        capsule: input.capsule,
+        profile,
         skipReady: input.skipReadySourceFileDiscovery === true,
         readWithoutReport: input.operation === "destroy",
       },
@@ -4623,7 +4625,12 @@ export class RunEngine {
     report: CapsuleCompatibilityReport | undefined,
     sourceSnapshot: SourceSnapshot,
     modulePath: string | undefined,
-    options: { readonly skipReady?: boolean; readonly readWithoutReport?: boolean } = {},
+    options: {
+      readonly capsule: Capsule;
+      readonly profile: RunnerProfile;
+      readonly skipReady?: boolean;
+      readonly readWithoutReport?: boolean;
+    },
   ): Promise<readonly OpenTofuCapsuleSourceFile[] | undefined> {
     // Destroy has no compatibility admission, but its already-pinned applied
     // module still declares which current provider defaults are legal inputs.
@@ -4632,9 +4639,15 @@ export class RunEngine {
     if (options.skipReady) return undefined;
     if (!this.#sourcesService) return undefined;
     try {
+      const policy = await this.#policyForCapsule(options.capsule, options.profile);
       return await this.#sourcesService.readCapsuleSourceFiles(
         sourceSnapshot,
-        modulePath ? { modulePath } : undefined,
+        {
+          ...(modulePath ? { modulePath } : {}),
+          ...(policy?.providerInstallation?.requireMirror === true
+            ? { requireProviderMirror: true }
+            : {}),
+        },
       );
     } catch {
       return undefined;

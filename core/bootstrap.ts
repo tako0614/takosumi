@@ -1320,6 +1320,9 @@ export async function createTakosumiService(
               ...(fileOptions?.modulePath
                 ? { modulePath: fileOptions.modulePath }
                 : {}),
+              ...(fileOptions?.requireProviderMirror
+                ? { requireProviderMirror: true }
+                : {}),
             }),
         }
       : {}),

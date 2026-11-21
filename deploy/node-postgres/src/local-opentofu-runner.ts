@@ -1763,7 +1763,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     });
     const result = await runRunner(
       this.transport,
-      "compatibility_check",
+      job.requireProviderMirror
+        ? "compatibility_check_mirror_only"
+        : "compatibility_check",
       job.runId,
       {
         source: {
@@ -2353,6 +2355,7 @@ async function runRunner(
     | "apply"
     | "destroy"
     | "compatibility_check"
+    | "compatibility_check_mirror_only"
     | "source_sync"
     | "stable_semver_tag"
     | "release",

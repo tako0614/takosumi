@@ -451,7 +451,7 @@ test("HTTP OpenTofu runner keeps a known-empty resource change list", async () =
   }
 });
 
-test("local OpenTofu runner passes modulePath to compatibility_check", async () => {
+test.each(["default", "mirror", "legacy"] as const)("local OpenTofu runner reads Capsule compatibility source files (%s)", async (mode) => {
   const archiveBytes = new TextEncoder().encode("archive");
   const archiveDigest = await sha256(archiveBytes);
   const requests: unknown[] = [];
@@ -467,6 +467,9 @@ test("local OpenTofu runner passes modulePath to compatibility_check", async () 
       }
       if (request.method === "POST" && url.pathname === "/runs/compat_1") {
         requests.push(await request.json());
+        if (mode === "legacy") {
+          return Response.json({ error: "invalid action" }, { status: 400 });
+        }
         return Response.json({ files: [] });
       }
       return new Response("not found", { status: 404 });
@@ -483,16 +486,22 @@ test("local OpenTofu runner passes modulePath to compatibility_check", async () 
       baseUrl: server.url.href,
     });
 
-    await runner.readCapsuleSourceFiles({
+    const read = runner.readCapsuleSourceFiles({
       runId: "compat_1",
       sourceSnapshot: sourceSnapshot(archiveDigest),
       modulePath: "deploy/opentofu",
+      ...(mode !== "default" ? { requireProviderMirror: true } : {}),
     });
+    if (mode === "legacy") {
+      await expect(read).rejects.toThrow("HTTP 400");
+    } else {
+      expect(await read).toEqual([]);
+    }
 
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
       kind: "takosumi.opentofu-run@v1",
-      action: "compatibility_check",
+      action: mode === "default" ? "compatibility_check" : "compatibility_check_mirror_only",
       runId: "compat_1",
       request: {
         source: {

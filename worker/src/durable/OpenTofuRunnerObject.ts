@@ -9112,6 +9112,8 @@ function isTerminalReleaseCommandFailure(
 
 function runnerFailurePhase(phase: string | undefined): RunnerFailurePhase {
   switch (phase) {
+    case "compatibility_check_mirror_only":
+      return "compatibility_check";
     case "plan":
     case "apply":
     case "destroy":
