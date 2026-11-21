@@ -1144,8 +1144,10 @@ export default function AppManagePage(props: {
               if (!isCurrent() || !reviewedApp(app())) return;
               void startReview("attention", "uninstall", async () => {
                 const fresh = reviewedApp(await refetchApp({ isCurrent }));
-                if (!isCurrent() || !fresh) {
-                  throw new Error(t("installStore.recoveryUnverified"));
+                const allowed = fresh?.uninstall.recoveryConnectionIds;
+                if (!isCurrent() || !fresh ||
+                  (allowed !== undefined && replacements.some(({ connectionId }) => !allowed.includes(connectionId)))) {
+                  throw new Error(t("app.uninstall.replacementAppliedEvidenceUnavailable"));
                 }
                 return extractRunId(await createCapsuleDestroyRecoveryPlan(fresh.capsuleId, replacements, { isCurrent }));
               }, { restartable: false, action: "uninstall_now", replaceReview: heldReview, isCurrent });
@@ -1165,7 +1167,16 @@ export default function AppManagePage(props: {
     void startReview(
       "attention",
       "uninstall",
-      async () => extractRunId(await createCapsuleDestroyRecoveryPlan(view.capsuleId, replacements, { isCurrent })),
+      async () => {
+        const fresh = await refetchApp({ isCurrent });
+        const allowed = fresh?.uninstall.recoveryConnectionIds;
+        if (!isCurrent() || !fresh || fresh.capsuleId !== view.capsuleId || fresh.workspaceId !== view.workspaceId ||
+          !fresh.applied || !appUninstallRecoveryMode(fresh) ||
+          (allowed !== undefined && replacements.some(({ connectionId }) => !allowed.includes(connectionId)))) {
+          throw new Error(t("app.uninstall.replacementAppliedEvidenceUnavailable"));
+        }
+        return extractRunId(await createCapsuleDestroyRecoveryPlan(fresh.capsuleId, replacements, { isCurrent }));
+      },
       { restartable: false, action: "uninstall_now", isCurrent },
     );
   };

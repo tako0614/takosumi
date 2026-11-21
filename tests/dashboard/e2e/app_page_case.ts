@@ -1492,16 +1492,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       traffic.assertNoFailures();
     });
 
-    for (const scenario of ["states", "staleReview", "partialRecovery", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview"] as const) test({
+    for (const scenario of ["states", "staleReview", "partialRecovery", "unusedUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
       partialRecovery: "a partial uninstall can replace more than the unavailable original connection",
+      unusedUnavailable: "uninstall replacement only asks for unavailable connections used by the applied plan",
       firstRemovalRefusal: "a refused first uninstall refreshes the app and offers a replacement connection",
       failedOpenReview: "a failed uninstall offers another connection inside its open review",
       indeterminateOpenReview: "an indeterminate uninstall offers no new removal from its open review",
     }[scenario], async ({ page }) => {
       const staleUninstallReview = scenario === "staleReview";
       const partialRecovery = scenario === "partialRecovery";
+      const unusedUnavailable = scenario === "unusedUnavailable";
       const firstRemovalRefusal = scenario === "firstRemovalRefusal";
       const indeterminateOpenReview = scenario === "indeterminateOpenReview";
       const openReviewFailure = scenario === "failedOpenReview" || indeterminateOpenReview;
@@ -1515,7 +1517,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const now = "2026-10-20T00:00:00.000Z";
       type Scene = "uninstall_scheduled" | "uninstall_immediate" | "uninstall_failed" | "uninstall_stale_review" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = partialRecovery ? "uninstall_failed"
-        : firstRemovalRefusal ? "uninstall_immediate"
+        : firstRemovalRefusal || unusedUnavailable ? "uninstall_immediate"
           : staleUninstallReview || openReviewFailure ? "uninstall_stale_review" : "uninstall_scheduled";
       let connectionRemoved = false;
       const replacementPlanBodies: unknown[] = [];
@@ -1525,6 +1527,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const connectionProblem = {
         code: "connection_unavailable", severity: "error", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionId: "conn_removed", connectionStatus: "revoked",
       } as const;
+      const unusedConnectionProblem = {
+        ...connectionProblem, connectionId: "conn_unused", connectionStatus: "expired" as const,
+      };
       let attemptAwaitsInput = false;
       let viewUnavailable = false;
       const capsule = () => ({
@@ -1592,9 +1597,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           case "uninstall_immediate":
             return appView(ID, NAME, {
               screens: [screen],
-              ...(connectionRemoved ? { problems: [connectionProblem] } : {}),
-              ...(firstRemovalRefusal && connectionRemoved ? { state: "needs_attention", primaryAction: "fix_connection" } : {}),
-              uninstall: { mode: "none", impact: { usedBy: [] } },
+              ...(unusedUnavailable
+                ? { problems: [connectionProblem, unusedConnectionProblem], state: "needs_attention", primaryAction: "fix_connection" }
+                : connectionRemoved ? { problems: [connectionProblem] } : {}),
+              uninstall: {
+                mode: "none", impact: { usedBy: [] },
+                ...(unusedUnavailable ? { recoveryConnectionIds: ["conn_removed"] } : {}),
+              },
             });
           case "uninstall_failed":
             return appView(ID, NAME, {
@@ -1701,10 +1710,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         const base = `/api/v1/capsules/${ID}`;
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
-          { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: partialRecovery || (firstRemovalRefusal && connectionRemoved) ? "revoked" : "verified" },
+          { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: partialRecovery || (firstRemovalRefusal && connectionRemoved) || unusedUnavailable ? "revoked" : "verified" },
           { id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified" },
           { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
           { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "verified" },
+          ...(unusedUnavailable ? [{ id: "conn_unused", displayName: "Unused alias connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" }] : []),
           ...(scene === "uninstall_failed" ? [{
             id: "conn_second", displayName: "Secondary Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified",
           }] : []),
@@ -1831,6 +1841,26 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const app = page.getByTestId("app-page");
       const header = page.getByTestId("app-header");
       const problems = page.getByTestId("app-problems");
+
+      if (unusedUnavailable) {
+        await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+        await openAppPane(page, "danger");
+        await expect(problems.locator('[data-problem="connection_unavailable"]')).toHaveCount(2);
+        const danger = page.getByTestId("app-uninstall");
+        await danger.getByRole("button", { name: "Choose connection for uninstall" }).click();
+        const choices = danger.getByRole("combobox", { name: "Cloudflare" });
+        await expect(choices).toHaveCount(1);
+        await choices.selectOption("conn_saved");
+        await danger.getByRole("button", { name: "Review removal" }).click();
+        await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+        expect(replacementPlanBodies).toEqual([{
+          destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
+        }]);
+        expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+        expect(errors).toEqual([]);
+        traffic.assertNoFailures();
+        return;
+      }
 
       if (firstRemovalRefusal) {
         await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });

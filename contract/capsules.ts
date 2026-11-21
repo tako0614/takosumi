@@ -927,6 +927,11 @@ export interface CapsuleAppUninstall {
   readonly mode: "scheduled" | "discard" | "none";
   /** Whole days a scheduled uninstall waits; present when `mode` is `scheduled`. */
   readonly graceDays?: number;
+  /**
+   * Stored connection IDs for the applied provider identities eligible for
+   * manual replacement review. An empty list means no targets were established.
+   */
+  readonly recoveryConnectionIds?: readonly string[];
   /** The current scheduled uninstall, when one is pending or running. */
   readonly scheduled?: {
     readonly phase: "scheduled" | "destroying";
