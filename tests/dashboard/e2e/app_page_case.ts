@@ -1995,6 +1995,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         expect(seenMutations).toEqual(Array(2).fill(`DELETE /api/v1/capsules/${ID}`));
         await expect(problems.getByRole("alert")).not.toContainText("conn_removed");
         await choose.click();
+        const viewConnections = danger.getByRole("link", { name: "View cloud connections" });
+        await expect(viewConnections).toBeVisible();
+        await expect(viewConnections).toHaveAttribute("href", `/connections?uninstallApp=${ID}`);
         await danger.getByRole("combobox", { name: "Cloudflare" }).selectOption("conn_saved");
         await danger.getByRole("button", { name: "Review removal" }).click();
         await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
