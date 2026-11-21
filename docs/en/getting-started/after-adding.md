@@ -92,3 +92,16 @@ data inside them.
 
 For an app that has never been applied, confirming **Uninstall** removes it right away.
 If you do not know whether it created cloud resources, check the Run result and current state first.
+
+### Resume an uninstall with another key
+
+If the original key is no longer usable, you can use another key for the same cloud account.
+If no connection is available, add and verify one using the new key under **Connections** in the dashboard.
+Then return to the app.
+
+1. Under **Needs attention** or in the removal review, press **Choose connection for uninstall** and select a verified connection.
+2. Press **Review removal**. The connection must match the original cloud account and the settings applied to the app.
+3. Review what will be removed, press **Approve this change**, check the confirmation box, and press **Allow and uninstall**.
+
+The selected connection is used only for this uninstall. If you are unsure what an earlier attempt removed,
+check **History** before trying again.
