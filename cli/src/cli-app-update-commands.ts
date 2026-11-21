@@ -173,6 +173,19 @@ function errorCode(error: unknown): string {
   return "request_not_confirmed";
 }
 
+function destroyConnectionRecoveryFailure(error: unknown) {
+  if (!(error instanceof DeployControlApiError) || error.status !== 409 ||
+    error.code !== "failed_precondition" || !isRecord(error.body) || !isRecord(error.body.error)) return undefined;
+  const { details } = error.body.error;
+  if (!isRecord(details) || details.reason !== "destroy_connection_recovery_unproven") return undefined;
+  switch (details.connectionRecoveryFailure) {
+    case "replacement_unverified":
+    case "bindings_mismatch":
+    case "applied_evidence_unavailable":
+      return details.connectionRecoveryFailure;
+  }
+}
+
 function runUrl(options: CliOptions, id: string) { return `${deployControlApiBase(options)}/runs/${encodeURIComponent(id)}`; }
 
 export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
@@ -307,6 +320,7 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
   } catch (error) {
     const refused = !submitted || error instanceof DeployControlApiError && error.status >= 400 && error.status < 500;
     write(io, options, { status: refused ? "refused" : "unconfirmed", appId, planRunId, code: errorCode(error),
+      connectionRecoveryFailure: submitted ? destroyConnectionRecoveryFailure(error) : undefined,
       recovery: refused ? undefined : "Check the app's Run history for the original Destroy Plan before requesting another." });
     return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
