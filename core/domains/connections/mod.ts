@@ -359,7 +359,7 @@ export class ConnectionsService {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const bindings = await this.#validatedProviderBindings(capsule);
     const policy = await this.#policyForCapsule(capsule);
-    return await this.#resolveBindings(capsule, bindings, policy);
+    return await this.#resolveBindings(capsule, bindings, policy, "stored");
   }
 
   /**
@@ -496,9 +496,15 @@ export class ConnectionsService {
         (await this.#store.getConnection(id))?.scope === "operator") refuse();
     }
     const policy = await this.#policyForCapsule(input.capsule);
-    const resolved = await this.#resolveBindings(input.capsule, bindings.map(binding => ({
-      ...binding, connectionId: replacements.get(binding.connectionId) ?? binding.connectionId,
-    })), policy);
+    const resolved = await Promise.all(bindings.map((binding) => {
+      const connectionId = replacements.get(binding.connectionId) ?? binding.connectionId;
+      const appliedId = appliedIdsByBinding.get(binding.connectionId);
+      const bindingOrigin = connectionId === binding.connectionId || connectionId === appliedId
+        ? "stored"
+        : "selected";
+      return this.#resolveBinding(input.capsule, { ...binding, connectionId }, policy, bindingOrigin);
+    }));
+    assertUniqueProviderBindingIdentities(resolved);
     const selected = this.#selectResolvedProviderBindingsForRun(resolved, input.requiredProviders, false);
     // Resolution preserves the input order, and selection returns the same
     // objects. Keep each selected row tied to its own stored logical binding;
@@ -557,9 +563,12 @@ export class ConnectionsService {
     capsule: Pick<Capsule, "workspaceId"> & Partial<Pick<Capsule, "id">>,
     bindings: ProviderBindings,
     policy: PolicyConfig | undefined,
+    bindingOrigin: "stored" | "selected" = "selected",
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const resolved = await Promise.all(
-      bindings.map((binding) => this.#resolveBinding(capsule, binding, policy)),
+      bindings.map((binding) =>
+        this.#resolveBinding(capsule, binding, policy, bindingOrigin),
+      ),
     );
     assertUniqueProviderBindingIdentities(resolved);
     return resolved;
@@ -662,11 +671,21 @@ export class ConnectionsService {
     capsule: Pick<Capsule, "workspaceId"> & Partial<Pick<Capsule, "id">>,
     binding: ProviderBinding,
     policy: PolicyConfig | undefined,
+    bindingOrigin: "stored" | "selected" = "selected",
   ): Promise<ResolvedCapsuleProviderBinding> {
     const connection =
       this.#operatorProviderConnections.get(binding.connectionId) ??
       (await this.#store.getConnection(binding.connectionId));
     if (!connection) {
+      // Revocation removes the Connection row but leaves the installed app's
+      // binding. Treat that saved binding as unavailable, like an expired key.
+      if (bindingOrigin === "stored") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "The saved Provider Connection is unavailable.",
+          { reason: PROVIDER_CONNECTION_NOT_READY_REASON },
+        );
+      }
       throw new OpenTofuControllerError(
         "not_found",
         `Provider Connection ${binding.connectionId} (provider ${binding.provider}) not found`,

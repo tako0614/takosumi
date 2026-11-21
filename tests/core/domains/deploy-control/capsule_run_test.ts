@@ -13568,7 +13568,11 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   let routeDispatches = 0;
   const operations = {
     capsules: { getCapsule: async () => (await store.getCapsule(seeded.capsule.id))! },
-    workspaces: { getWorkspace: async () => seeded.workspace, getWorkspaceForAccount: async () => seeded.workspace },
+    workspaces: {
+      getWorkspace: async () => seeded.workspace,
+      getWorkspaceForAccount: async () => seeded.workspace,
+      captureManagementAuthority: () => store.getWorkspaceManagement(seeded.workspace.id),
+    },
     members: { listMembers: async () => [] },
     createCapsuleDestroyPlan: async (id: string, options?: Parameters<import("../../../../accounts/service/src/control-operations.ts").ControlPlaneOperations["createCapsuleDestroyPlan"]>[1]) => {
       routeDispatches += 1;
@@ -13579,10 +13583,15 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   // Only these existing route ports are implemented by this provider-free fixture.
   } as unknown as import("../../../../accounts/service/src/control-operations.ts").ControlPlaneOperations;
   const request = async (body: unknown, credential: "session" | "oauth-access-token" = "session") => {
-    const req = new Request(`https://fixture.invalid/api/v1/capsules/${seeded.capsule.id}/destroy-plan`, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
-    return await handleCapsules({ request: req, url: new URL(req.url), operations, store: accountsStore,
+    const segments = ["capsules", seeded.capsule.id];
+    const method = body === undefined ? "DELETE" : "POST";
+    if (method === "POST") segments.push("destroy-plan");
+    const url = new URL("https://fixture.invalid/api/v1/" + segments.join("/"));
+    if (method === "DELETE") url.searchParams.set("immediate", "true");
+    const req = new Request(url, { method, body: JSON.stringify(body), headers: { "content-type": "application/json" } });
+    return await handleCapsules({ request: req, url, operations, store: accountsStore,
       session: { subject: seeded.workspace.ownerUserId, credential, uninstallRequester: { subject: seeded.workspace.ownerUserId } },
-    }, ["capsules", seeded.capsule.id, "destroy-plan"], "POST").catch(controllerErrorResponse);
+    }, segments, method).catch(controllerErrorResponse);
   };
   for (const invalid of [null, [], [{}], [{ ...selection[0], arbitraryAccountClaim: "ignored-must-refuse" }], [selection[0], selection[0]], [{ connectionId: old.id, replacementConnectionId: old.id }]]) {
     expect((await request({ destroyProviderConnectionReplacements: invalid }))!.status).toBe(400);
@@ -13591,7 +13600,11 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   expect(routeDispatches).toBe(0);
   // No-body callers still use the original connection, without falling back.
   if (originalStatus !== "verified") {
-    expect((await request(undefined))!.status).toBe(originalStatus === "deleted" ? 404 : 409);
+    const refused = (await request(undefined))!;
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({
+      error: { code: "failed_precondition", details: { reason: "provider_connection_not_ready" } },
+    });
     expect(routeDispatches).toBe(1);
   }
   const routed = await request({ destroyProviderConnectionReplacements: selection });
@@ -13926,6 +13939,18 @@ test.each(["1", "2", "2-selective", "1-original", "1-original-repeat"] as const)
     // The omitted original is retired. Keeping its effective replacement is
     // required even when that original credential is no longer usable.
     await store.putConnection({ ...original, status: "revoked" });
+    const getConnection = store.getConnection.bind(store);
+    store.getConnection = async (id) => id === firstReplacement.id ? undefined : getConnection(id);
+    try {
+      await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+        destroyProviderConnectionReplacements: nextSelection,
+      })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "provider_connection_not_ready" } });
+    } finally {
+      store.getConnection = getConnection;
+    }
+    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+      destroyProviderConnectionReplacements: [{ ...nextSelection[0]!, replacementConnectionId: "conn_unknown_replacement" }],
+    })).rejects.toMatchObject({ code: "not_found", details: { reason: "provider_connection_setup_required" } });
     await store.putConnection({ ...firstReplacement, status: "revoked" });
     await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
       destroyProviderConnectionReplacements: nextSelection,
