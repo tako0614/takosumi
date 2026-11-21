@@ -795,7 +795,7 @@ export interface ControlPlaneOperations {
    */
   createStateVersionRollbackPlan(
     stateVersionId: string,
-    options?: { readonly actor?: string },
+    options?: { readonly actor?: string; readonly idempotencyKey?: string },
   ): Promise<PlanRunResponse>;
   getRun(id: string): Promise<Run>;
   approveRun(

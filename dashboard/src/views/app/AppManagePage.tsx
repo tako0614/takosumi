@@ -83,6 +83,7 @@ import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
+import { randomUuid } from "../../lib/random-uuid.ts";
 import {
   releaseObservedRevisionPlanAttempt,
   type RevisionPlanAttemptStore,
@@ -507,6 +508,7 @@ export default function AppManagePage(props: {
   // --- in-page reviews ---------------------------------------------------------
   const [review, setReview] = createSignal<ActiveReview>();
   const revisionAttempts: RevisionPlanAttemptStore = new Map();
+  const rollbackAttemptKeys = new Map<string, string>();
   let reviewScopeEpoch = 0;
   const [reAdoptionRevisionId, setReAdoptionRevisionId] = createSignal<string>();
   const reAdoptionTargetId = () => reAdoptionRevisionId() ?? reAdoptionRevisionFromApp(app());
@@ -543,6 +545,7 @@ export default function AppManagePage(props: {
       () => {
         reviewScopeEpoch += 1;
         revisionAttempts.clear();
+        rollbackAttemptKeys.clear();
         setReview(undefined);
         setReAdoptionRevisionId(undefined);
         setStarting(undefined);
@@ -775,9 +778,18 @@ export default function AppManagePage(props: {
   const startUpdate = (ref?: string) =>
     void startReview("version", "update", (isCurrent) => createRevisionRun(ref, isCurrent));
   const startRollback = (stateVersionId: string) =>
-    void startReview("version", "apply", async () =>
-      extractRunId(await createStateVersionRollbackPlan(stateVersionId)),
-    );
+    void startReview("version", "apply", async (isCurrent) => {
+      if (!isCurrent()) return;
+      const idempotencyKey = rollbackAttemptKeys.get(stateVersionId) ?? randomUuid();
+      rollbackAttemptKeys.set(stateVersionId, idempotencyKey);
+      const runId = extractRunId(await createStateVersionRollbackPlan(stateVersionId, { idempotencyKey, isCurrent }));
+      // An uncertain response keeps the key for this page's next explicit
+      // attempt. Only the exact POST's acknowledgement releases it.
+      if (runId && isCurrent() && rollbackAttemptKeys.get(stateVersionId) === idempotencyKey) {
+        rollbackAttemptKeys.delete(stateVersionId);
+      }
+      return runId;
+    });
   const [autoUpdateBusy, setAutoUpdateBusy] = createSignal(false);
   const [autoUpdateError, setAutoUpdateError] = createSignal<string>();
   const toggleAutoUpdate = async (enabled: boolean) => {

@@ -3135,10 +3135,15 @@ export async function getCurrentResourceInventory(
  */
 export async function createStateVersionRollbackPlan(
   stateVersionId: string,
+  options: { readonly idempotencyKey?: string; readonly isCurrent?: () => boolean } = {},
 ): Promise<unknown> {
   return await controlFetch<unknown>(
     `${BASE}/state-versions/${encodeURIComponent(stateVersionId)}/rollback-plan`,
-    { method: "POST" },
+    {
+      method: "POST",
+      isCurrent: options.isCurrent,
+      ...(options.idempotencyKey === undefined ? {} : { headers: { "idempotency-key": options.idempotencyKey } }),
+    },
   );
 }
 

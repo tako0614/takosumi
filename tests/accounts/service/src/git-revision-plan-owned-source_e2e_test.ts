@@ -431,6 +431,52 @@ test("[memory] Review again after an initial persisted Apply failure reviews the
 });
 
 for (const kind of BACKENDS) {
+  test(`[${kind}] repeating a rollback start with the same key reviews one Plan`, async () => {
+    const fixture = await ownedAppFixture(kind, PINNED);
+    const capsule = (await fixture.deployStore.getCapsule(fixture.capsuleId))!;
+    const stateVersionId = capsule.currentStateVersionId!;
+    const path = `/api/v1/state-versions/${stateVersionId}/rollback-plan`;
+    const start = (key = "rollback-response-lost") => fixture.route("POST", path, undefined, key);
+    expect((await start("a".repeat(257))).status).toBe(400);
+
+    const [first, retry] = await Promise.all([start(), start()]);
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(201);
+    const firstRun = (await first.json()).run;
+    expect((await retry.json()).run.id).toBe(firstRun.id);
+    expect(await fixture.deployStore.getPlanRun(firstRun.id)).toMatchObject({
+      capsuleId: fixture.capsuleId,
+      createdBy: OWNER,
+      origin: { kind: "rollback", stateVersionId },
+      capsuleCurrentStateVersionId: stateVersionId,
+    });
+    expect(fixture.planJobs).toHaveLength(2);
+    expect(fixture.applyJobs).toHaveLength(1);
+    expect(await fixture.deployStore.getCapsule(fixture.capsuleId)).toEqual(capsule);
+
+    // Even after an explicit Apply has advanced the state, reusing the key
+    // returns the old Plan. Only a new intentional start uses the new state.
+    await fixture.applyPlanRun(firstRun.id);
+    const current = (await fixture.deployStore.getCapsule(fixture.capsuleId))!;
+    expect(current.currentStateGeneration).toBe(2);
+    const replay = await start();
+    expect(replay.status).toBe(201);
+    expect((await replay.json()).run.id).toBe(firstRun.id);
+    expect(fixture.planJobs).toHaveLength(2);
+    const next = await start("new-rollback-intent");
+    expect(next.status).toBe(201);
+    const nextRun = (await next.json()).run;
+    expect(nextRun.id).not.toBe(firstRun.id);
+    expect(await fixture.deployStore.getPlanRun(nextRun.id)).toMatchObject({
+      origin: { kind: "rollback", stateVersionId },
+      capsuleCurrentStateVersionId: current.currentStateVersionId,
+      baseStateGeneration: 2,
+    });
+    expect(fixture.planJobs).toHaveLength(3);
+    expect(fixture.applyJobs).toHaveLength(2);
+    expect(await fixture.deployStore.getCapsule(fixture.capsuleId)).toEqual(current);
+  });
+
   test(`[${kind}] a version check the previous release left claimed in syncing_source ends in one reconcile`, async () => {
     const fixture = await ownedAppFixture(kind, PINNED);
     const planId = await fixture.createRevision(PINNED, "stuck-check");

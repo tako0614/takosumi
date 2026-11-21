@@ -995,6 +995,12 @@ lost acknowledgement を回収し、未確認の mutation は 202 と `nextActio
 返します。`reviewable` では `nextAction: "review_run"` で停止します。rollback は引き続き
 `POST /api/v1/state-versions/{stateVersionId}/rollback-plan` が所有します。
 
+このAccountsの入口では、応答が不明になった際に備えて256バイト以内の
+`Idempotency-Key` を送れます。同じ利用者が同じStateVersionとキーで再送し、
+その時点でも対象への権限があれば、元のPlanを返します。待機中のPlanの入力が
+変わっていれば要求を拒否します。新しい復旧を始める際は新しいキーを使います。
+Planの作成とは別に承認と適用が必要です。キーを省略した場合は従来の作成動作を使います。
+
 対象が適用中の版と同じ ref・path・commit で、その状態が成功した Apply によるもの
 (Capsule が `error` ではない) なら、更新はありません。provider の失敗で state だけが進んだ
 Apply や、restore・recovery で戻した状態は、同じ ref を指定すると Plan をやり直します。更新が
