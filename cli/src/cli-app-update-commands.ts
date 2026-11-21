@@ -1,4 +1,4 @@
-/** Ordinary Accounts/PAT clients of the existing revision and Run surfaces. */
+/** Ordinary Accounts/PAT clients of the revision, rollback and Run surfaces. */
 import type { PublicRun } from "takosumi-contract/runs";
 import { parseDestroyProviderConnectionReplacements } from "takosumi-contract/connections";
 import { isProviderResolutionStatus } from "takosumi-contract/provider-resolution";
@@ -19,14 +19,15 @@ const ARGUMENT_REFUSALS = new Set([
   "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes",
   "exact_ref_and_idempotency_key_required", "saved_plan_and_explicit_confirmation_required",
   "invalid_connection_replacements", "destroy_plan_id_required", "revision_plan_id_required", "exact_ref_required",
+  "state_version_and_idempotency_key_required",
 ]);
 
 /** Preserve inline '=' values, reject unknown flags and extra positionals. */
-function argumentsFor(args: readonly string[], kind: "update" | "apply" | "recover-uninstall") {
+function argumentsFor(args: readonly string[], kind: "update" | "rollback" | "apply" | "recover-uninstall") {
   const [appId, ...rest] = args;
   if (appId === "--help" || appId === "-h" || rest.includes("--help") || rest.includes("-h")) return { help: true } as const;
   if (!bounded(appId, 256) || appId.startsWith("--")) throw new Refusal("app_id_required");
-  const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], apply: ["plan", "destroyPlan"],
+  const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], rollback: ["stateVersion", "idempotencyKey"], apply: ["plan", "destroyPlan"],
     "recover-uninstall": ["connections", "destroyPlan"] }[kind];
   const strings = new Set(["url", "deployControlUrl", "token", "timeoutMs", ...operationOptions]);
   const booleans = new Set(["json", ...(kind === "apply" ? ["yes", "allowDestroy", "observeOnly"] : [])]);
@@ -103,16 +104,33 @@ function runFrom(value: unknown, appId: string, id?: string): PublicRun {
   return run as unknown as PublicRun;
 }
 
-function revisionRun(run: PublicRun, ref?: string): PublicRun {
-  if (run.type !== "plan" || run.origin?.kind !== "revision" || !bounded(run.origin.ref, 1024) ||
-    (ref !== undefined && run.origin.ref !== ref) || !bounded(run.planDigest, 256) ||
-    !Number.isSafeInteger(run.baseStateGeneration) || (run.baseStateGeneration ?? 0) < 1 || !bounded(run.sourceSnapshotId, 256)) throw new Refusal("revision_plan_mismatch");
+function savedChangePlan(run: PublicRun, mismatch: string): PublicRun {
+  if (!bounded(run.planDigest, 256) || !Number.isSafeInteger(run.baseStateGeneration) ||
+    (run.baseStateGeneration ?? 0) < 1 || !bounded(run.sourceSnapshotId, 256)) throw new Refusal(mismatch);
   if (run.policyStatus !== undefined && !["pass", "warn", "deny"].includes(run.policyStatus)) throw new Refusal("invalid_policy_projection");
   return run;
 }
 
+function revisionRun(run: PublicRun, ref?: string): PublicRun {
+  if (run.type !== "plan" || run.origin?.kind !== "revision" || !bounded(run.origin.ref, 1024) ||
+    (ref !== undefined && run.origin.ref !== ref)) throw new Refusal("revision_plan_mismatch");
+  return savedChangePlan(run, "revision_plan_mismatch");
+}
+
+function rollbackRun(run: PublicRun, target?: string): PublicRun {
+  if (run.type !== "plan" || run.origin?.kind !== "rollback" ||
+    !bounded(run.origin.stateVersionId, 256) || (target !== undefined && run.origin.stateVersionId !== target)) {
+    throw new Refusal("rollback_plan_mismatch");
+  }
+  return run;
+}
+
 function savedApplyPlan(run: PublicRun, type: ApplyRunType): PublicRun {
-  if (type === "apply") return revisionRun(run);
+  if (type === "apply") {
+    return run.origin?.kind === "rollback"
+      ? savedChangePlan(rollbackRun(run), "rollback_plan_mismatch")
+      : revisionRun(run);
+  }
   if (run.type !== "destroy_plan" || !bounded(run.planDigest, 256) ||
     !Number.isSafeInteger(run.baseStateGeneration) || (run.baseStateGeneration ?? 0) < 1 ||
     !bounded(run.applyExpected?.currentStateVersionId, 256)) throw new Refusal("destroy_plan_mismatch");
@@ -151,6 +169,7 @@ function review(plan: PublicRun) {
   if (plan.policyReasons !== undefined && !Array.isArray(plan.policyReasons)) throw new Refusal("invalid_policy_projection");
   return {
     id: plan.id, status: plan.status, ref: plan.origin?.kind === "revision" ? plan.origin.ref : undefined,
+    stateVersionId: plan.origin?.kind === "rollback" ? plan.origin.stateVersionId : undefined,
     sourceSnapshotId: plan.sourceSnapshotId, planDigest: plan.planDigest, baseStateGeneration: plan.baseStateGeneration,
     policyStatus: plan.policyStatus ?? "unknown",
     policyCodes: plan.policyReasons?.map(r => r.code).filter(c => typeof c === "string" && TOKEN.test(c)),
@@ -268,6 +287,64 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
       recovery: revisionPlanId || options.revisionPlan !== undefined
         ? "Retry the same app/ref and coordinator ID with --revision-plan."
         : "Retry only the same app/ref/idempotency key and Accounts identity; no approval or Apply was requested." });
+    return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
+  }
+}
+
+export async function runAppRollback(args: string[], io: CliIo): Promise<number> {
+  let options: CliOptions = {};
+  let appId: string | undefined;
+  let stateVersionId: string | undefined;
+  let planRunId: string | undefined;
+  let submitted = false;
+  try {
+    const parsed = argumentsFor(args, "rollback");
+    if (parsed.help) { io.stdout(rollbackHelp()); return 0; }
+    ({ appId, options } = parsed);
+    const target = options.stateVersion;
+    const key = options.idempotencyKey;
+    if (!bounded(target, 256) || !bounded(key, 256)) throw new Refusal("state_version_and_idempotency_key_required");
+    stateVersionId = target;
+    options = selectTarget(options);
+    const selectedApp = appId;
+    const plan = await within(parsed.wait, async signal => {
+      const request = client(options, signal);
+      const path = `/api/v1/state-versions/${encodeURIComponent(target)}`;
+      const body = await request(path);
+      const version = isRecord(body) ? body.stateVersion : undefined;
+      if (!isRecord(version) || version.id !== target || version.capsuleId !== selectedApp ||
+        !bounded(version.workspaceId, 256) || !bounded(version.environment, 256) ||
+        !Number.isSafeInteger(version.generation) || Number(version.generation) < 1) throw new Refusal("state_version_identity_mismatch");
+      const scopedRun = (value: unknown, id?: string) => {
+        const run = rollbackRun(runFrom(value, selectedApp, id), target);
+        if (run.workspaceId !== version.workspaceId) throw new Refusal("rollback_plan_mismatch");
+        return run;
+      };
+      signal.throwIfAborted();
+      submitted = true;
+      const accepted = scopedRun(await request(`${path}/rollback-plan`, "POST", {}, key));
+      planRunId = accepted.id;
+      for (;;) {
+        const run = scopedRun(await request(`/api/v1/runs/${encodeURIComponent(accepted.id)}`), accepted.id);
+        if (run.status !== "queued" && run.status !== "running") return run;
+        await pause(1_000, signal);
+      }
+    });
+    const reviewUrl = runUrl(options, plan.id);
+    if (plan.status !== "succeeded" && plan.status !== "waiting_approval") {
+      write(io, options, { status: "plan_not_reviewable", appId, stateVersionId, planRunId: plan.id,
+        planStatus: plan.status, reviewUrl });
+      return 1;
+    }
+    write(io, options, { status: "review_required", appId, stateVersionId, planRunId: plan.id, reviewUrl,
+      plan: review(savedChangePlan(plan, "rollback_plan_mismatch")) });
+    return 0;
+  } catch (error) {
+    const refused = !submitted || (!planRunId && error instanceof DeployControlApiError && error.status >= 400 && error.status < 500);
+    write(io, options, { status: refused ? "refused" : "unconfirmed", appId, stateVersionId, planRunId, code: errorCode(error),
+      recovery: submitted && !refused
+        ? "Retry only the same app, StateVersion, idempotency key, target URL, and Accounts identity."
+        : undefined });
     return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
 }
@@ -473,12 +550,17 @@ export function updateHelp(): string {
     isJapaneseCli() ? "Git更新を準備します。既存の更新はアプリ・ref・更新IDを指定して続けられます。承認・Applyは別操作です。" : "Prepare a Git update. Resume an existing update by specifying its app, ref, and coordinator ID. Approval and Apply are separate.",
     "--url <origin> --token <Accounts PAT with read,write> --json --timeout-ms <1..120000>", "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
 }
+export function rollbackHelp(): string {
+  return ["takosumi apps rollback <app-id> --state-version <state-version-id> --idempotency-key <retained-key>",
+    isJapaneseCli() ? "指定した状態バージョンへの復旧Planを準備します。承認とApplyは別操作です。" : "Prepare a rollback Plan for the specified StateVersion. Approval and Apply are separate.",
+    "--url <origin> --token <Accounts PAT with read,write> --json --timeout-ms <1..120000>", "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
+}
 export function applyHelp(): string {
-  return ["takosumi apps apply <app-id> --plan <saved-revision-plan-run-id> --yes [--allow-destroy]",
-    "takosumi apps apply <app-id> --plan <saved-revision-plan-run-id> --observe-only",
+  return ["takosumi apps apply <app-id> --plan <saved-update-or-rollback-plan-run-id> --yes [--allow-destroy]",
+    "takosumi apps apply <app-id> --plan <saved-update-or-rollback-plan-run-id> --observe-only",
     "takosumi apps apply <app-id> --destroy-plan <saved-destroy-plan-run-id> --yes",
     "takosumi apps apply <app-id> --destroy-plan <saved-destroy-plan-run-id> --observe-only",
-    isJapaneseCli() ? "保存Planを明示実行し、有限時間だけRunを観測します。版更新で削除・変更数不明の場合は --allow-destroy が必要です。" : "Execute the saved Plan explicitly and observe its Run for a bounded time. Revision deletions or unknown counts need --allow-destroy.",
+    isJapaneseCli() ? "保存Planを明示実行し、有限時間だけRunを観測します。更新・復旧で削除・変更数不明の場合は --allow-destroy が必要です。" : "Execute the saved Plan explicitly and observe its Run for a bounded time. A revision or rollback with deletions or unknown counts needs --allow-destroy.",
     "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>",
     "Scopes: read for observation; read,write to execute. Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
 }

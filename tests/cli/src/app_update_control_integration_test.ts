@@ -357,6 +357,69 @@ test("apps update saves a reviewable revision Plan; apps apply separately reache
   }
 });
 
+test("apps rollback recovers the exact review after a lost ACK and applies it separately", async () => {
+  const h = await fixture();
+  const target = (await h.ledger.getCapsule(h.appId))?.currentStateVersionId;
+  expect(target).toBeString();
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  const output: string[] = [];
+  const io = { stdout: (line: string) => output.push(line), stderr: () => {} };
+  const rollbackPath = `/api/v1/state-versions/${target}/rollback-plan`;
+  let lostPlan: string | undefined;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request.clone());
+    const response = await h.dispatch(request);
+    if (request.method === "POST" && new URL(request.url).pathname === rollbackPath && lostPlan === undefined) {
+      expect(response.status).toBe(201);
+      lostPlan = (await response.json()).run.id;
+      throw new TypeError("fixture dropped the rollback acknowledgement");
+    }
+    return response;
+  }) as typeof fetch;
+  const common = ["--token", TOKEN, "--url", ORIGIN, "--json"];
+  const run = async (...args: string[]) => {
+    output.length = 0;
+    const code = await main(["apps", ...args, ...common], io);
+    expect(output).toHaveLength(1);
+    return { code, result: JSON.parse(output[0]!) };
+  };
+  try {
+    const revision = await run("update", h.appId, "--ref", "release/v2", "--idempotency-key", "cli-before-rollback");
+    expect(revision.code).toBe(0);
+    expect((await run("apply", h.appId, "--plan", revision.result.planRunId, "--yes")).code).toBe(0);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 2 });
+    const before = { ...h.runnerCalls };
+    requests.length = 0;
+    const args = ["rollback", h.appId, "--state-version", target!, "--idempotency-key", "cli-exact-state-rollback"];
+    const first = await run(...args);
+    expect(first.code).toBe(1);
+    expect(first.result).toMatchObject({ status: "unconfirmed", stateVersionId: target });
+    expect(requests.filter(request => request.method === "POST")).toHaveLength(1);
+    expect(lostPlan).toMatch(/^plan_/u);
+
+    const recovered = await run(...args);
+    expect(recovered).toMatchObject({ code: 0, result: { status: "review_required", appId: h.appId,
+      stateVersionId: target, planRunId: lostPlan, plan: { stateVersionId: target, baseStateGeneration: 2 } } });
+    const posts = requests.filter(request => request.method === "POST");
+    expect(posts.map(request => new URL(request.url).pathname)).toEqual([rollbackPath, rollbackPath]);
+    expect(posts.map(request => request.headers.get("idempotency-key"))).toEqual(["cli-exact-state-rollback", "cli-exact-state-rollback"]);
+    expect(h.runnerCalls.plan - before.plan).toBe(1);
+    expect(h.runnerCalls.sync - before.sync).toBe(0);
+    expect(h.runnerCalls.apply - before.apply).toBe(0);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 2 });
+
+    const restored = await run("apply", h.appId, "--plan", recovered.result.planRunId, "--yes");
+    expect(restored.code).toBe(0);
+    expect(restored.result).toMatchObject({ status: "succeeded", planRunId: lostPlan });
+    expect(h.runnerCalls.apply - before.apply).toBe(1);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 3 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("apps update resumes only the exact saved revision coordinator after a lost reconcile ACK", async () => {
   const h = await fixture();
   const originalFetch = globalThis.fetch;

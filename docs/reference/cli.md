@@ -73,7 +73,22 @@ takosumi apps update cap_example --ref release/v2 --revision-plan grp_example \
 
 `review_required`は更新完了ではありません。表示されたapp、`planRunId`、ref、source snapshot、Plan digest、変更数、
 resource actions、policyを確認します。`reviewUrl`でも同じ保存Planを開けます。欠けた変更数は`null`で、0とは扱いません。
-実行を決めた場合だけ、返却されたPlan IDで別のコマンドを使います。
+
+## 保存済みの状態バージョンから復旧を準備する
+
+`apps rollback`は、`GET /api/v1/capsules/<app-id>/state-versions` が返す状態バージョンIDを指定して復旧Planを作ります。
+指定した状態バージョンが対象アプリに属することを確認し、Accountsの個人PATで実行します。結果の`review_required`には、対象の`stateVersionId`と保存済みの`planRunId`が含まれます。
+
+```bash
+takosumi apps rollback cap_example --state-version state_example --idempotency-key restore-example-01 \
+  --url https://takosumi.example.com --json
+```
+
+受付結果が不明なら、同じ接続先・本人・アプリ・状態バージョン・キーで再実行します。CLI内の待機は同じRunの読取りです。
+
+## 保存Planを実行する
+
+更新または復旧Planの変更内容を確認して実行を決めたら、別のコマンドに返却されたPlan IDを渡します。
 
 ```bash
 takosumi apps apply cap_example --plan plan_example --yes \

@@ -14,6 +14,11 @@ const revision = { id: "revision_one", workspaceId: "ws_owned", capsuleId: "cap_
 const capsule = { id: "cap_owned", workspaceId: "ws_owned", status: "active", currentStateGeneration: 1, currentStateVersionId: "state_old" };
 const apply = { id: "apply_revision", workspaceId: "ws_owned", capsuleId: "cap_owned", type: "apply", planRunId: plan.id, status: "succeeded" };
 const applyArgs = ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes", "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const rollbackTarget = { id: "state_target", workspaceId: "ws_owned", capsuleId: "cap_owned", generation: 1, environment: "production" };
+const rollbackPlan = { ...plan, id: "plan_rollback", baseStateGeneration: 2,
+  origin: { kind: "rollback", stateVersionId: rollbackTarget.id }, applyExpected: { currentStateVersionId: "state_head" } };
+const rollbackArgs = ["apps", "rollback", "cap_owned", "--state-version", rollbackTarget.id,
+  "--idempotency-key=rollback=stable", "--token", "synthetic-account-pat", "--url", origin, "--json"];
 const destroyPlan = { ...plan, id: "plan_destroy_recovery", type: "destroy_plan", status: "waiting_approval",
   origin: undefined, operation: "destroy", sourceSnapshotId: "snapshot_applied",
   summary: { add: 0, change: 0, destroy: 1 },
@@ -332,6 +337,8 @@ test("new commands reject absent, ambiguous and unknown mutation flags before HT
     ["apps", "update", "cap_owned", "--ref", "--idempotency-key", "key"],
     ["apps", "update", "cap_owned", "--ref", ref, "--idempotency-key", "key", "--apply"],
     ["apps", "update", "cap_owned", "--ref", ref, "--ref", "different", "--idempotency-key", "key"],
+    ["apps", "rollback", "cap_owned", "--state-version", rollbackTarget.id],
+    [...rollbackArgs, "--yes"],
     ["apps", "apply", "cap_owned", "--plan", plan.id],
     ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes=true"],
     ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes", "extra"],
@@ -340,6 +347,66 @@ test("new commands reject absent, ambiguous and unknown mutation flags before HT
   ]) {
     const result = await invoke(args, () => { throw Error("HTTP must not be reached"); });
     expect(result.code).toBe(2); expect(result.calls).toHaveLength(0);
+  }
+});
+
+test("rollback reads the StateVersion and exact saved Plan without approval or Apply", async () => {
+  const r = await invoke(rollbackArgs, async req => {
+    const path = new URL(req.url).pathname;
+    if (path === `/api/v1/state-versions/${rollbackTarget.id}`) return Response.json({ stateVersion: rollbackTarget });
+    if (path.endsWith("/rollback-plan")) {
+      expect(req.method).toBe("POST");
+      expect(req.headers.get("idempotency-key")).toBe("rollback=stable");
+      expect(await req.json()).toEqual({});
+      return Response.json({ run: { ...rollbackPlan, status: "queued", planDigest: undefined } }, { status: 201 });
+    }
+    expect(path).toBe(`/api/v1/runs/${rollbackPlan.id}`);
+    return Response.json({ run: { ...rollbackPlan, rawState: "raw-canary" } });
+  });
+  expect(r.code).toBe(0);
+  expect(r.calls.map(c => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
+    "GET /api/v1/state-versions/state_target", "POST /api/v1/state-versions/state_target/rollback-plan", "GET /api/v1/runs/plan_rollback",
+  ]);
+  expect(r.result).toMatchObject({ status: "review_required", appId: "cap_owned", stateVersionId: rollbackTarget.id,
+    planRunId: rollbackPlan.id, plan: { stateVersionId: rollbackTarget.id }, reviewUrl: `${origin}/runs/${rollbackPlan.id}` });
+  expect(JSON.stringify(r.result)).not.toContain("raw-canary");
+});
+
+test("rollback refuses another app's StateVersion and a mismatched saved rollback target", async () => {
+  const wrongApp = await invoke(rollbackArgs, () => Response.json({ stateVersion: { ...rollbackTarget, capsuleId: "cap_other" } }));
+  expect(wrongApp.code).toBe(1);
+  expect(wrongApp.result.code).toBe("state_version_identity_mismatch");
+  expect(wrongApp.calls.map(r => r.method)).toEqual(["GET"]);
+
+  const wrongTarget = await invoke(rollbackArgs, req => {
+    const path = new URL(req.url).pathname;
+    if (path === "/api/v1/state-versions/state_target") return Response.json({ stateVersion: rollbackTarget });
+    if (req.method === "POST") return Response.json({ run: rollbackPlan }, { status: 201 });
+    return Response.json({ run: { ...rollbackPlan, origin: { kind: "rollback", stateVersionId: "state_other" } } });
+  });
+  expect(wrongTarget.code).toBe(1);
+  expect(wrongTarget.result).toMatchObject({ status: "unconfirmed", code: "rollback_plan_mismatch", planRunId: rollbackPlan.id });
+  expect(wrongTarget.calls.filter(req => req.method === "POST").map(req => new URL(req.url).pathname)).toEqual([
+    "/api/v1/state-versions/state_target/rollback-plan",
+  ]);
+});
+
+test("saved rollback Apply keeps the state cursor and destructive guards", async () => {
+  const args = applyArgs.map(arg => arg === plan.id ? rollbackPlan.id : arg);
+  for (const [saved, current, code] of [
+    [rollbackPlan, { ...capsule, currentStateGeneration: 3, currentStateVersionId: "state_drift" }, "plan_state_changed"],
+    [{ ...rollbackPlan, summary: { add: 0, change: 0, destroy: 1 } },
+      { ...capsule, currentStateGeneration: 2, currentStateVersionId: "state_head" }, "destructive_confirmation_required"],
+  ] as const) {
+    const r = await invoke(args, req => {
+      expect(req.method).toBe("GET");
+      const path = new URL(req.url).pathname;
+      if (path === `/api/v1/runs/${rollbackPlan.id}`) return Response.json({ run: saved });
+      if (path.endsWith("/runs")) return Response.json({ runs: [] });
+      return Response.json({ capsule: current });
+    });
+    expect(r.code).toBe(1);
+    expect(r.result.code).toBe(code);
   }
 });
 
