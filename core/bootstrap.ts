@@ -859,9 +859,9 @@ export interface TakosumiOperations {
   getCapsuleAdoptedSourceRevision(
     capsuleId: string,
   ): Promise<CapsuleAdoptedSourceRevision | undefined>;
-  listCapsuleDestroyRecoveryConnectionIds(
+  listCapsuleAppliedDestroyConnectionIds(
     capsule: Capsule,
-  ): Promise<readonly string[]>;
+  ): ReturnType<OpenTofuController["listCapsuleAppliedDestroyConnectionIds"]>;
   listStateVersions(
     capsuleId: string,
     params?: PageParams,
@@ -2116,8 +2116,8 @@ export async function createTakosumiService(
     getCapsule: (id) => opentofuController.getCapsule(id),
     getCapsuleAdoptedSourceRevision: (capsuleId) =>
       opentofuController.getCapsuleAdoptedSourceRevision(capsuleId),
-    listCapsuleDestroyRecoveryConnectionIds: (capsule) =>
-      opentofuController.listCapsuleDestroyRecoveryConnectionIds(capsule),
+    listCapsuleAppliedDestroyConnectionIds: (capsule) =>
+      opentofuController.listCapsuleAppliedDestroyConnectionIds(capsule),
     listStateVersions: (capsuleId, params) =>
       opentofuController.listStateVersions(capsuleId, params),
     listStateVersionsByIds: (ids) =>

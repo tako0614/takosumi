@@ -461,10 +461,13 @@ export class ConnectionsService {
   }
 
   /** Value-free logical connection IDs for the applied provider identities. */
-  async listDestroyRecoveryConnectionIds(
+  async listAppliedDestroyConnectionIds(
     capsule: Capsule,
     requiredProviders: readonly RequiredProviderBindingIdentity[],
-  ): Promise<readonly string[]> {
+  ): Promise<{
+    readonly requiredConnectionIds: readonly string[];
+    readonly recoveryConnectionIds: readonly string[];
+  }> {
     const bindings = await this.#selectStoredProviderBindingsForDestroy(
       capsule,
       requiredProviders,
@@ -473,7 +476,19 @@ export class ConnectionsService {
     const eligible = await Promise.all(ids.map(async (id) =>
       await this.#isOperatorConnection(id) ? undefined : id
     ));
-    return eligible.flatMap((id) => id === undefined ? [] : [id]);
+    return {
+      requiredConnectionIds: ids,
+      recoveryConnectionIds: eligible.flatMap((id) => id === undefined ? [] : [id]),
+    };
+  }
+
+  async resolveAppliedDestroyProviderBindings(
+    capsule: Capsule,
+    requiredProviders: readonly RequiredProviderBindingIdentity[],
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const bindings = await this.#selectStoredProviderBindingsForDestroy(capsule, requiredProviders);
+    const policy = await this.#policyForCapsule(capsule);
+    return await this.#resolveBindings(capsule, bindings, policy, "stored");
   }
 
   /** Resolve an explicit delete-only selection without mutating app bindings. */

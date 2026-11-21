@@ -655,6 +655,8 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 接続を選び直す手動削除の対象は `uninstall.recoveryConnectionIds` で確認できます。現在の
 StateVersion を作った適用済みプランの Provider に対応する保存済み接続 ID だけが入ります。
 空配列は対象を確定できなかった場合も含みます。交換先は破棄プラン作成と Apply 時に検証します。
+`uninstall.requiredConnectionIds` は、適用済みプランから確定できた通常削除の接続 ID です。
+運用者の接続も含みます。省略時は対象を確定していません。
 画面が `document.clients` でスマホの専用アプリを宣言していれば、`screens[].clients` に検査を通った
 ものだけが入ります（`preferred`、`ios` の `verified` / `trustedClientId` / `target` / `name` /
 `appStoreId` / `bundleId` / `open` / `universalLink` / `storeUrl`、`android` の `verified` /
