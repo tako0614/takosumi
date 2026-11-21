@@ -31,7 +31,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { A } from "@solidjs/router";
+import { A, useLocation } from "@solidjs/router";
 import { ArrowLeft, ChevronRight, Plug, Plus, RefreshCw } from "lucide-solid";
 import {
   providerSetupOptionsFromCredentialRecipes,
@@ -74,7 +74,7 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 import ConnectionCreateForm from "../connections/ConnectionCreateForm.tsx";
-import { appPageHref } from "../../../lib/app-links.ts";
+import { appPageHref, uninstallReturnHref } from "../../../lib/app-links.ts";
 import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
 
 const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
@@ -175,9 +175,11 @@ export default function ConnectionsTab(props: {
   >(null);
   const [lastCreatedVerifiedHint, setLastCreatedVerifiedHint] =
     createSignal(false);
-  const installReturn = props.embedded ? undefined : currentInstallReturnContext();
+  const location = useLocation();
+  const uninstallReturn = props.embedded ? undefined : uninstallReturnHref(location.search);
+  const installReturn = props.embedded || uninstallReturn ? undefined : currentInstallReturnContext();
   const [createFormOpen, setCreateFormOpen] = createSignal(
-    Boolean(installReturn) || Boolean(props.embedded),
+    Boolean(installReturn || uninstallReturn || props.embedded),
   );
   let settingsList!: HTMLDivElement;
   const openCreateForm = () => {
@@ -387,6 +389,13 @@ export default function ConnectionsTab(props: {
     );
   const lastCreatedProviderConnection = () =>
     providerConnectionForConnectionId(lastCreatedConnectionId());
+  const verifiedUninstallReturn = () => {
+    if (!uninstallReturn || !lastCreatedConnectionName()) return;
+    // Use the stored connection. The redirect's status hint may be stale.
+    const connection = lastCreatedProviderConnection();
+    if (connection?.status === "verified" && connection.scope !== "operator" &&
+      (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.now())) return uninstallReturn;
+  };
   const lastCreatedReady = () =>
     lastCreatedProviderConnection()?.status === "verified" ||
     lastCreatedVerifiedHint();
@@ -644,6 +653,16 @@ export default function ConnectionsTab(props: {
               name: name(),
             })}
           </Toast>
+        )}
+      </Show>
+
+      <Show when={verifiedUninstallReturn()}>
+        {(href) => (
+          <div class="conn-add-action">
+            <Button variant="secondary" href={href()} icon={<ArrowLeft size={16} />}>
+              {t("conn.uninstall.returnCta")}
+            </Button>
+          </div>
         )}
       </Show>
 

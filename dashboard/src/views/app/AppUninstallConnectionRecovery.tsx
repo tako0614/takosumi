@@ -3,6 +3,7 @@ import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { Button, FormField, Select } from "../../components/ui/index.ts";
 import { t } from "../../i18n/index.ts";
+import { uninstallConnectionsHref } from "../../lib/app-links.ts";
 import { providerName } from "../../lib/app-page.ts";
 import { getCapsuleProviderBindingSet, listProviderConnectionsWithSignal, type CapsuleAppView } from "../../lib/control-api.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
@@ -93,7 +94,7 @@ export default function AppUninstallConnectionRecovery(props: {
           </Match>
           <Match when={inventory.state === "ready" && (rows().length === 0 || rows().some(({ provider, connectionId }) => options(provider, connectionId).length === 0))}>
             <p>{t("app.uninstall.noReplacement")}</p>
-            <Button variant="secondary" href="/connections" disabled={props.disabled}>
+            <Button variant="secondary" href={uninstallConnectionsHref(capsuleId())} disabled={props.disabled}>
               {t("app.uninstall.viewConnections")}
             </Button>
           </Match>

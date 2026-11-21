@@ -107,7 +107,7 @@ import {
   settledValue,
   stateVersionLabels,
 } from "../../lib/app-page.ts";
-import { APP_PAGE_SECTIONS, appPageHref, installAttemptHref, reinstallHref, type AppPageSection } from "../../lib/app-links.ts";
+import { APP_PAGE_SECTIONS, appPageHref, installAttemptHref, reinstallHref, uninstallConnectionsHref, type AppPageSection } from "../../lib/app-links.ts";
 import { listAppHostedResources } from "../../lib/app-hosted-resources.ts";
 import {
   defaultRetryPlanApi,
@@ -1779,7 +1779,7 @@ export default function AppManagePage(props: {
                   </Show>
                   <div class="ap-row-actions">
                     <Show when={uninstallConnectionNotice() === "app.uninstall.connectionUnavailable"}>
-                      <Button variant="secondary" href="/connections">{t("app.uninstall.viewConnections")}</Button>
+                      <Button variant="secondary" href={uninstallConnectionsHref(capsuleId())}>{t("app.uninstall.viewConnections")}</Button>
                     </Show>
                     <Show
                       when={view().uninstall.mode !== "none"}
