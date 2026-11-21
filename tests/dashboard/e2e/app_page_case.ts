@@ -1356,6 +1356,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const origin = resolvePortableOrigin();
       const seenMutations: string[] = [];
       const planBodies: unknown[] = [];
+      const rollbackPlansByKey = new Map<string | undefined, string>();
+      let loseRollbackAck = false;
       const now = "2026-10-01T00:00:00.000Z";
       let removals = 0;
       const removeApp = {
@@ -1454,8 +1456,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === "/api/v1/sources" && request.method() === "GET") return route.fulfill({ json: { sources: [] } });
         // A failed rollback is retried as a rollback to the same version.
         if (path === "/api/v1/state-versions/sv_retry_prev/rollback-plan" && request.method() === "POST") {
-          runs.set("run_retry_rollback", retryPlanRun("run_retry_rollback"));
-          return route.fulfill({ status: 201, json: { run: runs.get("run_retry_rollback") } });
+          const key = request.headers()["idempotency-key"];
+          const id = rollbackPlansByKey.get(key) ?? `run_retry_rollback_${rollbackPlansByKey.size + 1}`;
+          rollbackPlansByKey.set(key, id);
+          runs.set(id, retryPlanRun(id));
+          if (loseRollbackAck) {
+            loseRollbackAck = false;
+            return route.fulfill({ status: 502, json: { error: "test_response_lost" } });
+          }
+          return route.fulfill({ status: 201, json: { run: runs.get(id) } });
         }
         const runMatch = path.match(/^\/api\/v1\/runs\/([^/]+)(\/[a-z]+)?$/u);
         if (runMatch && runs.has(runMatch[1]!)) {
@@ -1536,6 +1545,35 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       ]);
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
+
+      // The server accepts a retry from the failed Run, but the acknowledgement
+      // is lost before the browser reloads. The next explicit retry must open
+      // the accepted Plan without creating or applying another one.
+      const failedRollbackId = "run_failed_rollback_plan";
+      runs.set(failedRollbackId, {
+        ...failedPlan({ kind: "rollback", stateVersionId: "sv_retry_prev" }),
+        id: failedRollbackId,
+        status: "failed",
+        errorCode: "opentofu_plan_failed",
+      });
+      const rollbackPath = "/api/v1/state-versions/sv_retry_prev/rollback-plan";
+      const retry = page.getByRole("button", { name: "Review changes again", exact: true });
+      const mutationFloor = seenMutations.length;
+      await page.goto(`/runs/${failedRollbackId}`, { waitUntil: "domcontentloaded" });
+      loseRollbackAck = true;
+      const lost = page.waitForResponse((response) => new URL(response.url()).pathname === rollbackPath && response.status() === 502);
+      await retry.click();
+      await lost;
+      const acceptedPlan = [...rollbackPlansByKey.values()].at(-1);
+      expect(acceptedPlan).toBe("run_retry_rollback_2");
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(retry).toBeEnabled();
+      expect(seenMutations.slice(mutationFloor)).toEqual([`POST ${rollbackPath}`]);
+      await retry.click();
+      await expect(page).toHaveURL(new RegExp(`/runs/${acceptedPlan}$`, "u"));
+      expect(rollbackPlansByKey.size).toBe(2);
+      expect(seenMutations.slice(mutationFloor)).toEqual([`POST ${rollbackPath}`, `POST ${rollbackPath}`]);
+      expect(errors).toEqual([]);
     });
 
     for (const scenario of ["states", "staleReview", "partialRecovery", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement"] as const) test({

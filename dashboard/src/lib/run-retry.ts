@@ -61,7 +61,11 @@ export interface RetryPlanApi {
   ) => Promise<unknown>;
   /** Plans a version change to `ref`; resolves to the new Plan's id. */
   readonly planRevision: (capsuleId: string, ref: string, isCurrent?: () => boolean) => Promise<string | undefined>;
-  readonly planRollback: (stateVersionId: string, isCurrent?: () => boolean) => Promise<unknown>;
+  readonly planRollback: (
+    stateVersionId: string,
+    isCurrent?: () => boolean,
+    currentStateVersionId?: string,
+  ) => Promise<unknown>;
   /** Plans the app's tracked ref as configured. */
   readonly planTracked: (capsuleId: string) => Promise<unknown>;
 }
@@ -148,7 +152,19 @@ export async function retryPlanForRun(
       return extractRunId(await api.planTracked(capsuleId));
     case "rollback":
     case "installed":
-      return extractRunId(await api.planRollback(change.stateVersionId, isCurrent));
+      return extractRunId(await api.planRollback(change.stateVersionId, isCurrent, capsule.currentStateVersionId));
+  }
+}
+
+type RollbackViewScope = readonly [subject: string, accountId: string, runId: string];
+
+function rollbackAttemptStorage(scope: string | undefined): Storage | undefined {
+  if (!scope) return;
+  try {
+    return window.sessionStorage;
+  } catch {
+    // A browser may disable storage. The in-memory attempt still works.
+    return;
   }
 }
 
@@ -156,20 +172,59 @@ export async function retryPlanForRun(
 export function defaultRetryPlanApi(
   attempts: RevisionPlanAttemptStore = new Map(),
   rollbackAttempts: Map<string, string> = new Map(),
+  rollbackViewScope?: () => RollbackViewScope,
 ): RetryPlanApi {
   return {
     ...STANDARD_REQUESTS,
-    planRollback: async (stateVersionId, isCurrent) => {
+    planRollback: async (stateVersionId, isCurrent, currentStateVersionId) => {
       if (isCurrent && !isCurrent()) return;
-      const idempotencyKey = rollbackAttempts.get(stateVersionId) ?? randomUuid();
-      rollbackAttempts.set(stateVersionId, idempotencyKey);
-      const result = await createStateVersionRollbackPlan(stateVersionId, { idempotencyKey, isCurrent });
-      if (isCurrent && !isCurrent()) return;
-      // Keep an unacknowledged request available for explicit retry.
-      if (extractRunId(result) && rollbackAttempts.get(stateVersionId) === idempotencyKey) {
-        rollbackAttempts.delete(stateVersionId);
+      const viewScope = rollbackViewScope?.();
+      const scope = viewScope && currentStateVersionId
+        ? `takosumi.rollback-attempt:${JSON.stringify([...viewScope, currentStateVersionId, stateVersionId])}`
+        : undefined;
+      const attemptId = scope ?? stateVersionId;
+      const storage = rollbackAttemptStorage(scope);
+      let idempotencyKey = rollbackAttempts.get(attemptId);
+      if (scope && storage) {
+        try {
+          const stored = storage.getItem(scope);
+          if (stored && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(stored)) idempotencyKey = stored;
+        } catch {
+          // Keep the attempt in memory when storage is unavailable.
+        }
       }
-      return result;
+      idempotencyKey ??= randomUuid();
+      rollbackAttempts.set(attemptId, idempotencyKey);
+      if (scope && storage) {
+        try {
+          storage.setItem(scope, idempotencyKey);
+        } catch {
+          // Keep the attempt in memory when storage is full or unavailable.
+        }
+      }
+      const release = () => {
+        if (rollbackAttempts.get(attemptId) === idempotencyKey) rollbackAttempts.delete(attemptId);
+        if (!scope || !storage) return;
+        try {
+          if (storage.getItem(scope) === idempotencyKey) storage.removeItem(scope);
+        } catch {
+          // The browser controls storage availability.
+        }
+      };
+      try {
+        const result = await createStateVersionRollbackPlan(stateVersionId, { idempotencyKey, isCurrent });
+        if (isCurrent && !isCurrent()) return;
+        if (extractRunId(result)) release();
+        return result;
+      } catch (cause) {
+        // A definitive preparation conflict cannot be resolved with the same key.
+        if (cause instanceof ControlApiError && cause.status === 409 &&
+          (cause.body as { error?: { details?: { reason?: string } } } | undefined)?.error?.details?.reason ===
+            "rollback_plan_preparation_conflict") {
+          release();
+        }
+        throw cause;
+      }
     },
     planRevision: async (capsuleId, ref, isCurrent) => {
       const request = { ref };
