@@ -377,12 +377,36 @@ function isOfferableConnection(
   connection: ProviderConnection,
   workspace: { readonly id: string; readonly ownerUserId: string },
   appOwnerAccountId: string,
+  personalOwner?: string,
 ): boolean {
   return isWorkspaceBindableOperatorConnection(connection) ||
-    (connection.scope === "workspace" &&
-      connection.status === "verified" &&
-      connection.workspaceId === workspace.id &&
-      connection.ownerAccountId === appOwnerAccountId);
+    (connection.status === "verified" &&
+      connection.ownerAccountId === appOwnerAccountId &&
+      ((connection.scope === "workspace" && connection.workspaceId === workspace.id) ||
+        // Before the app exists, provider preflight uses the workspace owner.
+        (connection.scope === "personal" && connection.workspaceId === undefined &&
+          workspace.ownerUserId === appOwnerAccountId &&
+          connection.ownerAccountId === personalOwner)));
+}
+
+async function personalInstallConnections(
+  operations: ControlPlaneOperations,
+  owner: string,
+): Promise<readonly ProviderConnection[]> {
+  const reader = operations.accountResources;
+  if (!reader) return (await operations.connections.listOwnedConnections?.(owner) ?? [])
+    .filter((connection) => connection.scope === "personal");
+  const rows: ProviderConnection[] = [];
+  let cursor: string | undefined;
+  for (let read = 0; read < 20; read++) {
+    const page = await reader.listConnections(owner, { limit: 100, ...(cursor ? { cursor } : {}) });
+    rows.push(...page.items.filter((connection) => connection.scope === "personal"));
+    if (!page.nextCursor) return rows;
+    if (page.nextCursor === cursor) break;
+    cursor = page.nextCursor;
+  }
+  // A partial list cannot be used to decide that a choice is unique.
+  throw new Error("Personal install connection list is incomplete");
 }
 
 function sameRequirement(
@@ -401,13 +425,18 @@ function sameRequirement(
 export async function connectionRequirements(
   operations: ControlPlaneOperations,
   plan: Pick<StoredGitInstallPlan, "workspaceId" | "createdBy" | "options" | "attemptFacts">,
+  personalOwner?: string,
 ): Promise<readonly GitInstallPlanConnectionRequirement[]> {
   const facts = plan.attemptFacts?.inputs;
   if (!facts || facts.requirements.length === 0) return [];
-  const [connections, workspace] = await Promise.all([
+  const [workspaceConnections, personalConnections, workspace] = await Promise.all([
     operations.connections.listProviderConnections(plan.workspaceId),
+    personalOwner === plan.createdBy ? personalInstallConnections(operations, personalOwner) : [],
     operations.workspaces.getWorkspace(plan.workspaceId),
   ]);
+  const connections = [...new Map(
+    [...workspaceConnections, ...personalConnections].map((connection) => [connection.id, connection]),
+  ).values()];
   const policy = mergedProviderPolicy(workspace.policy, facts.providerPolicy);
   const explicit = plan.options.providerBindings ?? [];
   // The committed app is owned by the person who started the install.
@@ -415,7 +444,7 @@ export async function connectionRequirements(
     const candidates: GitInstallPlanConnectionCandidate[] = connections
       .filter((connection) =>
         workspace.id === plan.workspaceId &&
-        isOfferableConnection(connection, workspace, plan.createdBy) &&
+        isOfferableConnection(connection, workspace, plan.createdBy, personalOwner) &&
         sameProviderSource(requirement.provider, connection.providerSource) &&
         connectionAllowed(connection, policy)
       )
@@ -763,6 +792,7 @@ function isCanonicalHttpsOrigin(value: JsonValue | undefined): boolean {
 export async function userActionFor(
   operations: ControlPlaneOperations,
   plan: StoredGitInstallPlan,
+  personalOwner?: string,
 ): Promise<GitInstallPlanUserAction> {
   switch (plan.phase) {
     case "syncing_source":
@@ -803,7 +833,7 @@ export async function userActionFor(
   const resubmitting = plan.creationAttempted === true;
   const resubmit = plan.transientVariableNames ?? [];
   const [connections, interfaces, name] = await Promise.all([
-    connectionRequirements(operations, plan),
+    connectionRequirements(operations, plan, personalOwner),
     interfaceRequirements(operations, plan),
     nameProposal(operations, plan),
   ]);

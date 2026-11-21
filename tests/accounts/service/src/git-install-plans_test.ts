@@ -2214,6 +2214,49 @@ test("workspace-less install keeps the requester's canonical personal owner for 
   ]);
 });
 
+test("an install uses the present owner's verified personal connection, including when paged", async () => {
+  const fixture = attemptFixture({
+    compatibilityRootModuleVariableDeclarations: [],
+    providerConnections: [],
+  });
+  const personal: ProviderConnection = {
+    ...providerConnection(CLOUDFLARE, "conn_personal"),
+    scope: "personal", workspaceId: undefined, displayName: "My Cloudflare",
+  };
+  const foreign = { ...personal, id: "conn_foreign", ownerAccountId: ADMIN_SUBJECT };
+  const pending: ProviderConnection = { ...personal, id: "conn_pending", status: "pending" };
+  fixture.operations.accountResources = {
+    listConnections: async (owner, page) => {
+      expect(owner).toBe(WORKSPACE.ownerUserId);
+      return page.cursor ? { items: [personal] } : { items: [foreign, pending], nextCursor: "page-two" };
+    },
+    listUsage: async () => ({ items: [] }),
+  };
+  const getConnection = fixture.operations.getConnection;
+  fixture.operations.getConnection = async (id) => id === personal.id ? personal : await getConnection(id);
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction.connections[0]).toMatchObject({
+    candidates: [{ id: personal.id, displayName: "My Cloudflare", scope: "personal" }],
+    selectedConnectionId: personal.id,
+    autoSelected: true,
+  });
+  expect(paused.userAction.connections[0].candidates).toHaveLength(1);
+  const restricted = await fixture.requestRaw(
+    `/api/v1/install-plans/${planId}`, "GET", undefined, {},
+    WORKSPACE.ownerUserId, WORKSPACE.id,
+  );
+  expect(restricted.status).toBe(200);
+  expect((await restricted.json()).userAction.connections[0].candidates).toEqual([]);
+
+  const result = await answer(fixture, planId, { expectedGeneration: paused.installPlan.generation, continue: true });
+  expect(result.status).toBe(200);
+  expect((await result.json()).installPlan.phase).toBe("planning");
+  expect(fixture.getProviderBindingSet(fixture.capsules[0]!.id, "production")?.bindings).toEqual([
+    { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: personal.id },
+  ]);
+});
+
 test("install attempts offer only the installer's Workspace connections (TASK-0118 P9.1-c)", async () => {
   const adminsConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_admin"), ownerAccountId: ADMIN_SUBJECT };
   const legacyConnection = { ...providerConnection(CLOUDFLARE, "conn_cloudflare_legacy") } as ProviderConnection & { ownerAccountId?: string };
@@ -2221,6 +2264,12 @@ test("install attempts offer only the installer's Workspace connections (TASK-01
   const fixture = attemptFixture({
     providerConnections: [providerConnection(CLOUDFLARE, "conn_cloudflare01"), adminsConnection, legacyConnection],
   });
+  fixture.operations.accountResources = {
+    listConnections: async (owner) => ({ items: owner === ADMIN_SUBJECT ? [{
+      ...adminsConnection, id: "conn_admin_personal", scope: "personal", workspaceId: undefined,
+    }] : [] }),
+    listUsage: async () => ({ items: [] }),
+  };
   // The Workspace owner installs: only its own connection is offered. The
   // admin's row is not, nor a legacy row without a recorded owner, which
   // binding would refuse.
@@ -5704,6 +5753,7 @@ function installFixture(
     body?: BodyInit,
     headers: Readonly<Record<string, string>> = {},
     subject = WORKSPACE.ownerUserId,
+    workspaceId?: string,
   ): Promise<Response> {
     const url = new URL(`https://app.example.test${path}`);
     const response = await handleAuthenticatedControlRoute({
@@ -5716,6 +5766,7 @@ function installFixture(
       store: accountsStore,
       operations,
       subject,
+      ...(workspaceId === undefined ? {} : { workspaceId }),
     });
     if (!response) throw new Error("control route did not dispatch");
     return response;
