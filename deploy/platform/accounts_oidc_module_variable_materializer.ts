@@ -54,10 +54,15 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
   readonly control: AccountsOidcModuleVariableControlLedger;
   readonly accounts: AccountsOidcModuleVariableAccountsLedger;
   readonly issuer: string;
+  /** Only an already-registered Capsule may retain this issuer. */
+  readonly retainedIssuer?: string;
   readonly pairwiseSubjectSecret: string;
   readonly clock?: () => Date;
 }): CapsuleModuleVariableMaterializer {
-  const issuer = exactHttpsOrigin(input.issuer);
+  const newIssuer = exactHttpsOrigin(input.issuer);
+  const retainedIssuer = input.retainedIssuer === undefined
+    ? undefined
+    : exactHttpsOrigin(input.retainedIssuer);
   const pairwiseSubjectSecret = boundedSecret(
     input.pairwiseSubjectSecret,
     "pairwiseSubjectSecret",
@@ -121,6 +126,12 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
     ) {
       invalid("Accounts OIDC module-variable grant is not exact");
     }
+    const registration = retainedIssuer === undefined
+      ? undefined
+      : await input.accounts.findOidcClientForCapsule(currentCapsule.id);
+    const issuer = retainedIssuer !== undefined && registration?.issuerUrl === retainedIssuer
+      ? retainedIssuer
+      : newIssuer;
     const activationDigest = await oidcClientActivationDigest({
       scopeRef: capsuleScopeRef(currentCapsule),
       capsuleId: currentCapsule.id,

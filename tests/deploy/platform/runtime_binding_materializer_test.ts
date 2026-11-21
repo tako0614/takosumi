@@ -26,6 +26,7 @@ import {
   type AccountsOidcModuleVariableControlLedger,
 } from "../../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
 import { createTakosumiRuntimeInputOidcClientSource } from "../../../deploy/platform/runtime_input_oidc_client_source.ts";
+import { workerRepositoryOidcMaterializer } from "../../../worker/src/worker_service.ts";
 
 const NOW = new Date("2026-08-25T12:00:00.000Z");
 const PAIRWISE_SECRET = "pairwise-secret-with-at-least-32-bytes";
@@ -866,7 +867,85 @@ function call(config: InstallConfig, capsule: Capsule = oidcCapsule()) {
   } as const;
 }
 
+const sharedStagingAppEnvironment = {
+  TAKOSUMI_ENVIRONMENT: "staging",
+  TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com",
+  TAKOSUMI_SHARED_AUTH_PROFILE: "shared-account",
+  TAKOSUMI_SHARED_AUTH_ORIGIN: "https://app-staging.takosumi.com",
+  TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET: PAIRWISE_SECRET,
+} as const;
+
 describe("Takosumi repository Accounts OIDC materializer", () => {
+  test("new Cloudflare app clients use the dedicated issuer on shared staging", async () => {
+    const config = repositoryOidcInstallConfig();
+    const accounts = new InMemoryAccountsStore();
+    const materializer = workerRepositoryOidcMaterializer(
+      sharedStagingAppEnvironment,
+      { control: oidcControl(() => config), accounts },
+    )!;
+    const planned = (await materializer.materialize({ phase: "plan", ...call(config) }))!;
+    expect(await accounts.findOidcClientForCapsule("cap_1")).toBeUndefined();
+    const applied = await materializer.materialize({
+      phase: "apply", expectedDigest: planned.digest, plannedVariables: planned.variables, ...call(config),
+    });
+    const registration = await accounts.findOidcClientForCapsule("cap_1");
+    const dedicatedIssuer = "https://auth-staging.takos.jp";
+    expect({
+      plannedIssuer: planned.variables.takosumi_accounts_issuer_url,
+      plannedAccounts: planned.variables.takosumi_accounts_url,
+      appliedIssuer: applied?.variables.takosumi_accounts_issuer_url,
+      registeredIssuer: registration?.issuerUrl,
+    }).toEqual({
+      plannedIssuer: dedicatedIssuer,
+      plannedAccounts: dedicatedIssuer,
+      appliedIssuer: dedicatedIssuer,
+      registeredIssuer: dedicatedIssuer,
+    });
+    expect(registration).toMatchObject({
+      clientId: planned.variables.takosumi_accounts_client_id,
+      redirectUris: [planned.variables.takosumi_accounts_redirect_uri],
+      subjectMode: "pairwise",
+    });
+  });
+
+  test("shared staging preserves the exact registered app issuer and Plan inputs", async () => {
+    const config = repositoryOidcInstallConfig();
+    const accounts = new InMemoryAccountsStore();
+    const control = oidcControl(() => config);
+    const legacy = createTakosumiAccountsOidcModuleVariableMaterializer({
+      control,
+      accounts,
+      issuer: sharedStagingAppEnvironment.TAKOSUMI_ACCOUNTS_ISSUER,
+      pairwiseSubjectSecret: PAIRWISE_SECRET,
+    });
+    const prior = (await legacy.materialize({ phase: "plan", ...call(config) }))!;
+    const plannedCall = { expectedDigest: prior.digest, plannedVariables: prior.variables, ...call(config) };
+    const materializer = workerRepositoryOidcMaterializer(sharedStagingAppEnvironment, { control, accounts })!;
+
+    await expect(materializer.materialize({ phase: "apply", ...plannedCall }))
+      .rejects.toThrow("changed since Plan");
+    expect(await accounts.findOidcClientForCapsule("cap_1")).toBeUndefined();
+
+    await legacy.materialize({ phase: "apply", ...plannedCall });
+    const registration = await accounts.findOidcClientForCapsule("cap_1");
+    expect(registration?.issuerUrl).toBe(sharedStagingAppEnvironment.TAKOSUMI_ACCOUNTS_ISSUER);
+    expect(await materializer.materialize({ phase: "plan", ...call(config) })).toEqual(prior);
+    expect(await materializer.materialize({ phase: "apply", ...plannedCall })).toEqual(prior);
+    expect(await accounts.findOidcClientForCapsule("cap_1")).toEqual(registration);
+  });
+
+  test("the shared staging app issuer does not select an issuer for another origin", async () => {
+    const config = repositoryOidcInstallConfig();
+    const otherOrigin = "https://other-staging.example.test";
+    const materializer = workerRepositoryOidcMaterializer({
+      ...sharedStagingAppEnvironment,
+      TAKOSUMI_ACCOUNTS_ISSUER: otherOrigin,
+      TAKOSUMI_SHARED_AUTH_ORIGIN: otherOrigin,
+    }, { control: oidcControl(() => config), accounts: new InMemoryAccountsStore() })!;
+    const planned = await materializer.materialize({ phase: "plan", ...call(config) });
+    expect(planned?.variables.takosumi_accounts_issuer_url).toBe(otherOrigin);
+  });
+
   test("keeps Plan read-only and registers one Capsule client only on Apply", async () => {
     const config = repositoryOidcInstallConfig();
     let current: OidcClientRecord | undefined;
