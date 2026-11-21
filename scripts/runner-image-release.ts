@@ -29,7 +29,10 @@ import {
   type RunnerImageMeteredNativeReport,
   type RunnerImageProfile,
 } from "./lib/runner-image-profile.ts";
-import { dashboardAssetTreeSeal } from "./platform-worker-release.ts";
+import {
+  dashboardAssetTreeSeal,
+  readPlatformContainerRollout,
+} from "./platform-worker-release.ts";
 import {
   isPublishedRunnerImageBuildRecord,
   isRunnerImageRuntimeInputPlanProof,
@@ -327,6 +330,8 @@ export type RunnerImageReleaseRuntime = Readonly<{
   ) => Promise<CommandResult>;
   /** Isolated test seam; the public CLI always mints fresh pull-only credentials. */
   registryPullAuth?: typeof authorizeRunnerRegistryPull;
+  /** Test seam for the existing read-only platform rollout proof. */
+  readContainerRollout?: typeof readPlatformContainerRollout;
   git?: (root: string, args: readonly string[]) => Promise<string>;
   /** Test/operator override for the fixed external journal locator directory. */
   publicationJournalRoot?: string;
@@ -807,6 +812,7 @@ export async function runRunnerImageRelease(
     command,
     runtime.wait ?? wait,
     [repositoryRoot],
+    runtime.readContainerRollout ?? readPlatformContainerRollout,
   );
 }
 
@@ -2746,6 +2752,7 @@ async function verifyRunnerImage(
   command: NonNullable<RunnerImageReleaseRuntime["command"]>,
   waitForNextRead: NonNullable<RunnerImageReleaseRuntime["wait"]>,
   sourceRoots: readonly string[],
+  readContainerRollout: typeof readPlatformContainerRollout,
 ): Promise<unknown> {
   if (!options.buildEvidence || !options.platformEvidence) {
     throw new Error(
@@ -2866,24 +2873,49 @@ async function verifyRunnerImage(
       ...context,
       config: { ...context.config, path: sealedConfig },
     };
-    const deployment = await checkedCommand(
+    const assertServingVersion = async () => {
+      const deployment = await checkedCommand(
+        command,
+        "bunx",
+        ["wrangler", "deployments", "status", "--json", "--config", sealedConfig],
+        context.repository.root,
+      );
+      if (parseServingVersion(deployment.stdout) !== platform.deployedVersionId) {
+        throw new Error("platform evidence Worker Version is not serving exactly");
+      }
+    };
+    await assertServingVersion();
+    const readApplication = () => readRunnerApplication(
+      readbackContext,
       command,
-      "bunx",
-      [
-        "wrangler",
-        "deployments",
-        "status",
-        "--json",
-        "--config",
-        sealedConfig,
-      ],
-      context.repository.root,
+      async (summary, detail, detailImage) => {
+        if (
+          context.profile === HOSTED_METERED_RUNNER_PROFILE ||
+          summary.image !== build.config.previousImage ||
+          detailImage !== immutableRef ||
+          summary.version === detail.version
+        ) {
+          throw new Error("live runner application list/detail identity differs");
+        }
+        const bridged = await readContainerRollout(
+          sealedConfig,
+          options.environment,
+          summary,
+          detail,
+        );
+        if (
+          bridged.id !== summary.id ||
+          bridged.name !== summary.name ||
+          bridged.version !== detail.version ||
+          !isRunnerApplicationComplete(bridged, immutableRef)
+        ) {
+          throw new Error("live runner application rollout proof differs from the selected image");
+        }
+        await assertServingVersion();
+        return bridged;
+      },
     );
-    const servingVersionId = parseServingVersion(deployment.stdout);
-    if (servingVersionId !== platform.deployedVersionId) {
-      throw new Error("platform evidence Worker Version is not serving exactly");
-    }
-    application = await readRunnerApplication(readbackContext, command);
+    application = await readApplication();
     if (
       application.image !== immutableRef &&
       application.image !== build.config.previousImage
@@ -2891,9 +2923,8 @@ async function verifyRunnerImage(
       throw new Error("live runner application has an unexpected image");
     }
     application = await waitForRunnerApplication(
-      readbackContext,
+      readApplication,
       immutableRef,
-      command,
       waitForNextRead,
       application,
     );
@@ -3103,6 +3134,11 @@ async function repositoryIdentity(
 async function readRunnerApplication(
   context: ReleaseContext,
   command: NonNullable<RunnerImageReleaseRuntime["command"]>,
+  resolveRollout: (
+    summary: Readonly<Record<string, unknown>>,
+    detail: Readonly<Record<string, unknown>>,
+    detailImage: string,
+  ) => Promise<RunnerApplication>,
 ): Promise<RunnerApplication> {
   const result = await checkedCommand(
     command,
@@ -3168,14 +3204,15 @@ async function readRunnerApplication(
   if (
     detail.id !== summary.id ||
     detail.name !== summary.name ||
-    detailImage !== summary.image ||
     (hasDetailState &&
       (!isBoundedString(detail.state, 64) || detail.state !== summary.state)) ||
     !isBoundedString(detailImage, 512) ||
-    !isRunnerApplicationVersion(detail.version) ||
-    detail.version !== summary.version
+    !isRunnerApplicationVersion(detail.version)
   ) {
     throw new Error("live runner application list/detail identity differs");
+  }
+  if (detailImage !== summary.image || detail.version !== summary.version) {
+    return await resolveRollout(summary, detail, detailImage);
   }
   return {
     id: summary.id as string,
@@ -3193,9 +3230,8 @@ async function readRunnerApplication(
 }
 
 async function waitForRunnerApplication(
-  context: ReleaseContext,
+  readApplication: () => Promise<RunnerApplication>,
   expectedImage: string,
-  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
   waitForNextRead: NonNullable<RunnerImageReleaseRuntime["wait"]>,
   initial: RunnerApplication,
 ): Promise<RunnerApplication> {
@@ -3206,7 +3242,7 @@ async function waitForRunnerApplication(
     attempt += 1
   ) {
     await waitForNextRead(5_000);
-    observed = await readRunnerApplication(context, command);
+    observed = await readApplication();
   }
   return observed;
 }

@@ -571,11 +571,15 @@ authority. A Worker release does not have to use the runner image's source
 commit. Platform evidence must also bind the same config and serving Worker
 Version. Verify then requires
 exactly `takosumi-staging-opentofurunnerobject` or
-`takosumi-opentofurunnerobject`, with matching list/detail identity, the exact
-selected digest, no active rollout, `active`/`ready` state, and zero failed,
-starting, scheduling, or error entries. Readback is bounded; an unsettled or
-ambiguous application records incomplete evidence and never causes a Worker
-mutation.
+`takosumi-opentofurunnerobject`, with the exact selected digest, no active
+rollout, `active`/`ready` state, and zero failed, starting, scheduling, or
+error entries. For a standard Runner, a list still showing the recorded
+predecessor can differ from a detail showing the selected digest and a new
+application version. Verify accepts this only when the same repeated,
+completed native rollout proof used by the platform links both views. It
+then rechecks that the exact Worker Version is still serving.
+Readback is bounded. An unsettled or ambiguous application records incomplete
+evidence and never causes a Worker mutation.
 
 ## Rollback
 
