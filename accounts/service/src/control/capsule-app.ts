@@ -254,10 +254,19 @@ export async function readCapsuleAppView(
       : Promise.resolve<Optional<CapsuleAdoptedSourceRevision | undefined>>({ failed: false }),
   ]);
   const incomplete = new Set(overview.view.incomplete);
-  const [version, displays] = await Promise.all([
+  const { applied, latestRun, problems, uninstall } = overview.view;
+  const readRecoveryIds = operations.listCapsuleDestroyRecoveryConnectionIds;
+  const needsRecoveryIds = applied && capsule.status !== "destroyed" && (
+    problems.some((problem) => problem.code === "connection_unavailable") ||
+    latestRun?.type === "destroy_plan" || latestRun?.type === "destroy_apply"
+  );
+  const [version, displays, recovery] = await Promise.all([
     readVersion(operations, capsule, { source: source.value, adopted: adopted.value, onIncomplete: () => incomplete.add("version") }),
     optional(async () => new Map(await Promise.all([...overview.linkedApps.values()].map(async (app) =>
       [app.id, await linkedAppDisplay(ctx, app)] as const)))),
+    readRecoveryIds && needsRecoveryIds
+      ? optional(() => readRecoveryIds.call(operations, capsule))
+      : undefined,
   ]);
   if (source.failed || adopted.failed) incomplete.add("version");
   if (displays.failed) incomplete.add("links");
@@ -269,6 +278,7 @@ export async function readCapsuleAppView(
     ...overview.view,
     links: { uses: overview.view.links.uses.map(enrich), usedBy: overview.view.links.usedBy.map(enrich) },
     version,
+    ...(recovery ? { uninstall: { ...uninstall, recoveryConnectionIds: recovery.value ?? [] } } : {}),
     ...(incomplete.size ? { incomplete: [...incomplete].sort() } : {}),
   };
 }

@@ -652,6 +652,9 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 `uninstall.impact.usedBy` は、削除の影響を受ける利用側を示します。提供元を削除しても利用側の
 アプリは残り、他の提供元へは自動で切り替えません。秘密の値、Output の値、画面の起動 URL
 以外の Interface 入力は含みません。
+接続を選び直す手動削除の対象は `uninstall.recoveryConnectionIds` で確認できます。現在の
+StateVersion を作った適用済みプランの Provider に対応する保存済み接続 ID だけが入ります。
+空配列は対象を確定できなかった場合も含みます。交換先は破棄プラン作成と Apply 時に検証します。
 画面が `document.clients` でスマホの専用アプリを宣言していれば、`screens[].clients` に検査を通った
 ものだけが入ります（`preferred`、`ios` の `verified` / `trustedClientId` / `target` / `name` /
 `appStoreId` / `bundleId` / `open` / `universalLink` / `storeUrl`、`android` の `verified` /

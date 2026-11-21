@@ -6688,6 +6688,46 @@ export class RunEngine {
       : resolved;
   }
 
+  /** Read the logical replacement targets without resolving or minting keys. */
+  async listCapsuleDestroyRecoveryConnectionIds(
+    capsule: Capsule,
+  ): Promise<readonly string[]> {
+    if (!capsule.sourceId || capsule.status === "destroyed") return [];
+    const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
+    if (
+      !appliedPlan?.sourceSnapshotId ||
+      appliedPlan.requiredProviderRequirements === undefined ||
+      !/^sha256:[a-f0-9]{64}$/u.test(appliedPlan.resolvedProviderBindingsDigest ?? "")
+    ) return [];
+    const inventory = normalizeDestroyProviderInventory(
+      appliedPlan.requiredProviders,
+      appliedPlan.requiredProviderRequirements,
+    );
+    const requirements = requiredProviderRequirementsForNewPlan(
+      inventory.requiredProviders,
+      inventory.exactRequirements,
+    );
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store, appOwnership: this.#appOwnership,
+      operatorProviderConnections: this.#operatorProviderConnections,
+      allowOperatorScopedProviderConnections: this.#allowOperatorScopedProviderConnections,
+    });
+    const ids = await this.#connectionsService.listDestroyRecoveryConnectionIds(
+      capsule,
+      requirements,
+    );
+    const current = await this.#store.getCapsule(capsule.id);
+    return current?.status === capsule.status &&
+      current.workspaceId === capsule.workspaceId &&
+      current.environment === capsule.environment &&
+      current.sourceId === capsule.sourceId &&
+      current.installConfigId === capsule.installConfigId &&
+      current.currentStateVersionId === capsule.currentStateVersionId &&
+      current.currentStateGeneration === capsule.currentStateGeneration
+      ? ids
+      : [];
+  }
+
   async #resolveDestroyConnectionRecovery(
     capsule: Capsule,
     requiredProviders: readonly CapsuleProviderRequirement[],

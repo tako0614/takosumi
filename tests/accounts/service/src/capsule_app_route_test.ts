@@ -356,6 +356,64 @@ test("a binding without a usable connection asks the person to fix it", async ()
   });
 });
 
+test("uninstall recovery targets come from current state, and all connection issues remain visible", async () => {
+  const provider = FIXTURE_CLOUDFLARE_PROVIDER;
+  const stateVersionId = "sv_applied_connections";
+  const h = await fixture({ requiredProviders: [provider], currentStateVersionId: stateVersionId });
+  const { environment } = h.seeded.capsule;
+  const saved = (await h.ledger.getProviderBindingSetByCapsule(CAPSULE, environment))!;
+  const appliedId = "conn_saved_default";
+  const unusedId = "conn_saved_unused_alias";
+  await transitionProviderBindingSetForFixture(h.ledger, {
+    ...saved,
+    bindings: [
+      { provider, connectionId: appliedId, moduleLocalName: "cloudflare" },
+      { provider, connectionId: unusedId, moduleLocalName: "cloudflare", childAlias: "unused", rootAlias: "unused" },
+    ],
+  });
+
+  const now = Date.now();
+  const requirement = { source: provider, moduleLocalName: "cloudflare", allowed: true, credentialRequired: true };
+  const applied = planRun("plan_applied_connections", now - 4_000, {
+    sourceSnapshotId: h.seeded.snapshot.id,
+    requiredProviders: [provider],
+    requiredProviderRequirements: [requirement],
+    resolvedProviderBindingsDigest: `sha256:${"a".repeat(64)}`,
+    baseStateGeneration: 0,
+    appliedApplyRunId: "apply_connections",
+  });
+  await h.ledger.putPlanRun(applied);
+  const apply = applyRun("apply_connections", applied.id, now - 3_000);
+  await h.ledger.putApplyRun({ ...apply, stateVersionId, expected: { ...apply.expected, capsuleId: CAPSULE } });
+  await h.ledger.putStateVersion({
+    id: stateVersionId,
+    workspaceId: WORKSPACE,
+    capsuleId: CAPSULE,
+    environment,
+    generation: 1,
+    stateRef: "fixture-state",
+    digest: "sha256:fixture",
+    createdByRunId: apply.id,
+    createdAt: new Date(now - 3_000).toISOString(),
+  });
+  await h.ledger.putPlanRun(planRun("destroy_later", now - 2_000, {
+    operation: "destroy",
+    status: "failed",
+    requiredProviders: [provider],
+    requiredProviderRequirements: [{ ...requirement, childAlias: "unused" }],
+  }));
+
+  const view = await h.app();
+  expect(view.latestRun?.id).toBe("destroy_later");
+  expect(view.uninstall.recoveryConnectionIds).toEqual([appliedId]);
+  expect(view.problems
+    .filter((problem) => problem.code === "connection_unavailable")
+    .map((problem) => problem.connectionId).sort()).toEqual([appliedId, unusedId]);
+
+  await h.ledger.putPlanRun({ ...applied, requiredProviderRequirements: undefined });
+  expect((await h.app()).uninstall.recoveryConnectionIds).toEqual([]);
+});
+
 test("app connection issues include the canonical owner's personal connections", async () => {
   const connectionId = "personal_cf_owner_connection";
   const personal = {
