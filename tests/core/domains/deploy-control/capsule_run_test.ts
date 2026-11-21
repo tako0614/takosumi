@@ -13478,8 +13478,31 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   const replacement = await register();
   const foreign = await register("fedcba9876543210fedcba9876543210");
   const laterReplacement = await register();
+  const unused = originalStatus === "deleted" ? await register() : undefined;
   const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
-  await transitionProviderBindingSetForFixture(store, { ...originalBinding, bindings: originalBinding.bindings.map(binding => ({ ...binding, connectionId: old.id })) });
+  const bindings = originalBinding.bindings.map(binding => ({ ...binding, connectionId: old.id }));
+  if (unused) {
+    // The stored binding set includes an alias left over from configuration.
+    // The applied module only uses the default provider configuration.
+    bindings.push({ ...bindings[0]!, connectionId: unused.id, childAlias: "unused", rootAlias: "unused" });
+    const reportId = "caprep_destroy_unused_connection";
+    await store.putCapsuleCompatibilityReport({
+      id: reportId,
+      sourceId: seeded.source.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      modulePath: ".",
+      level: "ready",
+      findings: [],
+      providerPackages: [{ source: FIXTURE_CLOUDFLARE_PROVIDER, allowed: true }],
+      rootProviderRequirements: [{ source: FIXTURE_CLOUDFLARE_PROVIDER, moduleLocalName: "cloudflare" }],
+      resources: [],
+      dataSources: [],
+      provisioners: [],
+      createdAt: seeded.capsule.createdAt,
+    });
+    await store.putCapsule({ ...seeded.capsule, compatibilityStatus: "ready", compatibilityReportId: reportId });
+  }
+  await transitionProviderBindingSetForFixture(store, { ...originalBinding, bindings });
   const mintIds: string[][] = [];
   const mint = vault.mintForCapsuleProviderBindings.bind(vault);
   vault.mintForCapsuleProviderBindings = async (...args) => {
@@ -13498,6 +13521,8 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
   const controller = controllerWith(store, runner, { vault, moduleVariableMaterializer });
   const created = await controller.createCapsulePlan(seeded.capsule.id);
   expect(created.planRun.status).toBe("succeeded");
+  expect(created.planRun.requiredProviderRequirements?.map(({ childAlias }) => childAlias)).toEqual([undefined]);
+  expect(mintIds.at(-1)).toEqual([old.id]);
   const applied = await controller.createApplyRun({ planRunId: created.planRun.id, expected: applyExpectedGuardFromPlanRun(created.planRun) });
   expect(applied.applyRun.status).toBe("succeeded");
   const { CapsulesService } = await import("../../../../core/domains/capsules/mod.ts");
@@ -13630,6 +13655,12 @@ test.each(["deleted", "expired", "verified"] as const)("destroy explicitly repla
       error: { code: "failed_precondition", details: { reason: "provider_connection_not_ready" } },
     });
     expect(routeDispatches).toBe(4);
+  }
+  if (unused) {
+    expect(await vault.revoke(unused.id, undefined, null)).toBe(true);
+    await noDispatch(() => controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+      destroyProviderConnectionReplacements: [...selection, { connectionId: unused.id, replacementConnectionId: laterReplacement.id }],
+    }));
   }
   const routed = await request({ destroyProviderConnectionReplacements: selection });
   expect(routed!.status).toBe(201);
