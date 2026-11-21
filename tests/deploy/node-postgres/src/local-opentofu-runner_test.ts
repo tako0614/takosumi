@@ -952,6 +952,7 @@ test("HTTP OpenTofu runner never adopts the Durable Object-only not-dispatched r
 
 async function assertAmbiguousMutationResponse(
   completionStatus: "absent" | "unavailable",
+  sourceBuildResponse?: "matching-run" | "different-run",
 ): Promise<void> {
   const runId = `apply_http_ambiguous_${crypto.randomUUID()}`;
   const planRunId = `plan_${runId}`;
@@ -989,6 +990,16 @@ async function assertAmbiguousMutationResponse(
       if (request.method === "PUT") return new Response(null, { status: 204 });
       if (request.method === "POST" && url.pathname === `/runs/${runId}`) {
         applyRequests += 1;
+        if (sourceBuildResponse) {
+          return Response.json({
+            runId: sourceBuildResponse === "matching-run" ? runId : "different_run",
+            action: "apply",
+            status: "failed",
+            exitCode: 1,
+            errorCode: "source_build_failed",
+            stderr: proxyMarker,
+          }, { status: 500 });
+        }
         return new Response(`<html>${proxyMarker}</html>`, {
           status: 500,
           headers: { "content-type": "text/html" },
@@ -1040,8 +1051,12 @@ async function assertAmbiguousMutationResponse(
       "runner_mutation_indeterminate",
     );
     expect((failure as Error).message).not.toContain(proxyMarker);
-    expect((failure as OpenTofuRunnerExecutionError).detail).not.toContain(
-      proxyMarker,
+    const detail = (failure as OpenTofuRunnerExecutionError).detail;
+    expect(detail).not.toContain(proxyMarker);
+    expect(detail).toBe(
+      sourceBuildResponse === "matching-run"
+        ? "runner reported a source build failure; authoritative mutation completion is unavailable"
+        : "provider dispatch may have occurred; authoritative completion is unavailable",
     );
     expect(applyRequests).toBe(1);
   } finally {
@@ -1051,7 +1066,12 @@ async function assertAmbiguousMutationResponse(
 
 test.each(["absent", "unavailable"] as const)(
   "HTTP OpenTofu runner does not replay an ambiguous mutation response with %s completion",
-  assertAmbiguousMutationResponse,
+  (completionStatus) => assertAmbiguousMutationResponse(completionStatus),
+);
+
+test.each(["matching-run", "different-run"] as const)(
+  "HTTP OpenTofu runner retains a source build diagnostic only from the matching response (%s)",
+  (response) => assertAmbiguousMutationResponse("unavailable", response),
 );
 
 test.each([
