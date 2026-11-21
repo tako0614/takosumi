@@ -18,17 +18,19 @@ export function appUninstallConnectionNotice(
 
 /** Connections an owner can replace in a reviewed uninstall plan. */
 export function appUninstallRecoveryConnections(
-  app: Pick<CapsuleAppView, "problems">,
+  app: Pick<CapsuleAppView, "problems" | "uninstall">,
 ): Array<{
   readonly connectionId: string;
   readonly provider: string;
   readonly connectionStatus: NonNullable<CapsuleAppView["problems"][number]["connectionStatus"]>;
 }> {
+  const eligible = app.uninstall.recoveryConnectionIds;
   const seen = new Set<string>();
   return app.problems.flatMap((problem) => {
     const status = problem.connectionStatus;
     if (problem.code !== "connection_unavailable" || !problem.connectionId || !problem.provider ||
-      status === undefined || seen.has(problem.connectionId)) return [];
+      status === undefined || seen.has(problem.connectionId) ||
+      (eligible !== undefined && !eligible.includes(problem.connectionId))) return [];
     seen.add(problem.connectionId);
     return [{ connectionId: problem.connectionId, provider: problem.provider, connectionStatus: status }];
   });

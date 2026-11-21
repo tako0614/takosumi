@@ -78,7 +78,7 @@ test("a broken bound connection takes precedence over the countdown only when te
 });
 
 test("actionable uninstall recovery rows cover unavailable bound connection statuses only", () => {
-  const rows = appUninstallRecoveryConnections({ problems: [
+  const rows = appUninstallRecoveryConnections({ ...scheduled, problems: [
     ...(["missing", "revoked", "expired", "error"] as const).map((connectionStatus) => ({
       code: "connection_unavailable" as const,
       severity: "error" as const,
@@ -95,6 +95,29 @@ test("actionable uninstall recovery rows cover unavailable bound connection stat
     ["connection-expired", "expired"],
     ["connection-error", "error"],
   ]);
+});
+
+test("uninstall recovery rows honor the applied binding projection without hiding general issues", () => {
+  const provider = "registry.opentofu.org/cloudflare/cloudflare";
+  const problems: CapsuleAppView["problems"] = [
+    { code: "connection_unavailable", severity: "error", connectionId: "used", provider, connectionStatus: "revoked" },
+    { code: "connection_unavailable", severity: "error", connectionId: "unused", provider, connectionStatus: "expired" },
+  ];
+  const app = {
+    problems,
+    uninstall: { ...scheduled.uninstall, recoveryConnectionIds: ["used"] },
+  } as CapsuleAppView;
+  expect(app.problems).toHaveLength(2);
+  expect(appUninstallRecoveryConnections(app).map(({ connectionId }) => connectionId)).toEqual(["used"]);
+  expect(appUninstallRecoveryConnections({
+    ...app,
+    uninstall: { ...app.uninstall, recoveryConnectionIds: [] },
+  })).toEqual([]);
+  // Older hosts that omit the optional projection retain their existing chooser behavior.
+  expect(appUninstallRecoveryConnections({
+    problems,
+    uninstall: scheduled.uninstall,
+  } as CapsuleAppView).map(({ connectionId }) => connectionId)).toEqual(["used", "unused"]);
 });
 
 test("replacement can be offered after a failed removal even with verified connection status", () => {

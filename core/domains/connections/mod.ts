@@ -460,6 +460,22 @@ export class ConnectionsService {
     );
   }
 
+  /** Value-free logical connection IDs for the applied provider identities. */
+  async listDestroyRecoveryConnectionIds(
+    capsule: Capsule,
+    requiredProviders: readonly RequiredProviderBindingIdentity[],
+  ): Promise<readonly string[]> {
+    const bindings = await this.#selectStoredProviderBindingsForDestroy(
+      capsule,
+      requiredProviders,
+    );
+    const ids = [...new Set(bindings.map(({ connectionId }) => connectionId))];
+    const eligible = await Promise.all(ids.map(async (id) =>
+      await this.#isOperatorConnection(id) ? undefined : id
+    ));
+    return eligible.flatMap((id) => id === undefined ? [] : [id]);
+  }
+
   /** Resolve an explicit delete-only selection without mutating app bindings. */
   async resolveProviderBindingsForDestroyRecovery(input: {
     readonly capsule: Capsule;
@@ -503,14 +519,9 @@ export class ConnectionsService {
     const appliedIdsByBinding = new Map(appliedPlanReplacements.map(row => [row.connectionId, row.replacementConnectionId]));
     if (selection.some(({ connectionId, replacementConnectionId }) =>
       connectionId === replacementConnectionId && !appliedIdsByBinding.has(connectionId))) refuse();
-    const bindings = await this.#validatedProviderBindings(input.capsule);
-    assertUniqueProviderBindingIdentities(bindings);
-    // Only bindings used by the applied Plan participate in Destroy recovery.
-    // Check the full binding set for ambiguous identities before resolving keys.
-    const selectedBindings = this.#selectProviderBindingsForRun(
-      bindings,
+    const selectedBindings = await this.#selectStoredProviderBindingsForDestroy(
+      input.capsule,
       input.requiredProviders,
-      false,
     );
     const selectedIds = new Set(
       selectedBindings.map(({ connectionId }) => connectionId),
@@ -520,9 +531,7 @@ export class ConnectionsService {
       ...replacements.keys(),
     ]);
     for (const id of originalBindingIds) {
-      if (!selectedIds.has(id) ||
-        this.#operatorProviderConnections.has(id) ||
-        (await this.#store.getConnection(id))?.scope === "operator") refuse();
+      if (!selectedIds.has(id) || await this.#isOperatorConnection(id)) refuse();
     }
     const policy = await this.#policyForCapsule(input.capsule);
     const selected = await Promise.all(selectedBindings.map((binding) => {
@@ -554,6 +563,21 @@ export class ConnectionsService {
     });
     if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse("bindings_mismatch");
     return selected;
+  }
+
+  async #selectStoredProviderBindingsForDestroy(
+    capsule: Capsule,
+    requiredProviders: readonly RequiredProviderBindingIdentity[],
+  ): Promise<ProviderBindings> {
+    // Validate all stored identities before narrowing to the applied plan.
+    const bindings = await this.#validatedProviderBindings(capsule);
+    assertUniqueProviderBindingIdentities(bindings);
+    return this.#selectProviderBindingsForRun(bindings, requiredProviders, false);
+  }
+
+  async #isOperatorConnection(id: string): Promise<boolean> {
+    return this.#operatorProviderConnections.has(id) ||
+      (await this.#store.getConnection(id))?.scope === "operator";
   }
 
   async #resolveProviderBindingsForRun(

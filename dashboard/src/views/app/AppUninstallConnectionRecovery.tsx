@@ -9,7 +9,7 @@ import { providerConnectionDisplayName } from "../../lib/provider-connections.ts
 import { appUninstallRecoveryConnections } from "../../lib/capsule-uninstall.ts";
 
 export default function AppUninstallConnectionRecovery(props: {
-  readonly app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "problems" | "latestRun">;
+  readonly app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "problems" | "latestRun" | "uninstall">;
   readonly mode: "unavailable" | "failed" | "refused";
   readonly disabled: boolean;
   readonly onReview: (replacements: readonly DestroyProviderConnectionReplacement[]) => void;
@@ -54,6 +54,8 @@ export default function AppUninstallConnectionRecovery(props: {
     const originals = new Map(current.connections.map((connection) => [connection.id, connection]));
     const rows = new Map<string, { connectionId: string; provider: string; label: string }>();
     for (const { connectionId, provider } of current.bindings) {
+      if (props.app.uninstall.recoveryConnectionIds !== undefined &&
+        !props.app.uninstall.recoveryConnectionIds.includes(connectionId)) continue;
       const original = originals.get(connectionId);
       if ((original && (original.scope === "operator" || !sameProviderSource(provider, original.providerSource))) ||
         options(provider, connectionId).length === 0) continue;
