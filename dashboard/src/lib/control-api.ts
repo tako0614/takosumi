@@ -3023,23 +3023,27 @@ export async function createApplyRun(
     }
   };
 
+  const unconfirmed = (cause: unknown) => new ControlApiIndeterminateError(
+    "apply",
+    "Apply request outcome is indeterminate; reconcile the exact PlanRun before trying again.",
+    cause,
+  );
   try {
     return await attempt();
   } catch (firstError) {
-    // Only a missing HTTP response or our explicit timeout is safe to retry.
-    // HTTP 4xx/5xx and malformed success envelopes are already typed and are
-    // not replayed here.
-    if (!isApplyRetryableTransportError(firstError)) throw firstError;
-    try {
-      return await attempt();
-    } catch (secondError) {
-      if (!isApplyRetryableTransportError(secondError)) throw secondError;
-      throw new ControlApiIndeterminateError(
-        "apply",
-        "Apply request outcome is indeterminate after the bounded retry; reconcile the exact PlanRun before trying again.",
-        secondError,
-      );
+    // A server failure or malformed success envelope cannot show whether Apply
+    // started. Leave these responses to read-only reconciliation.
+    if (firstError instanceof ControlApiError && firstError.status >= 500) {
+      throw unconfirmed(firstError);
     }
+    if (!isApplyRetryableTransportError(firstError)) throw firstError;
+  }
+  // Keep the bounded retry for a missing response or timeout on this exact
+  // PlanRun. A refusal of that retry does not establish the first outcome.
+  try {
+    return await attempt();
+  } catch (secondError) {
+    throw unconfirmed(secondError);
   }
 }
 

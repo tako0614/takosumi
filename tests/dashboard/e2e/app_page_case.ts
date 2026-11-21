@@ -1199,10 +1199,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(new Set(revisionKeys).size).toBe(3);
       expect(seenMutations.some((entry) => entry.endsWith("/plan"))).toBe(false);
 
-      // A lost apply outcome is held — no retry — but the review can close,
-      // and the rest of the page is usable again.
+      // An unconfirmed Apply stays held while the review can still close.
       await review.getByRole("button", { name: "Allow and update", exact: true }).click();
-      await expect(review.getByRole("alert").filter({ hasText: "could not be confirmed" })).toBeVisible();
+      await expect(review.getByRole("alert").filter({ hasText: "We couldn't confirm the result." })).toBeVisible();
       await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeDisabled();
       await review.getByRole("button", { name: "Close", exact: true }).click();
       await expect(version.getByTestId("app-review")).toHaveCount(0);

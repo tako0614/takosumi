@@ -1108,7 +1108,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const review = await waitForPlan(page);
       await expect(installSheet(page).getByTestId("install-app-name")).toBeEnabled();
       await review.getByRole("button", { name: "Install", exact: true }).click();
-      await expect(review.getByRole("alert")).toContainText("The execution could not be confirmed.");
+      await expect(review.getByRole("alert")).toContainText("We couldn't confirm the result.");
       expect(applyPosts).toBe(1);
       // A reload first holds the outer sheet too, then follows the exact accepted Apply.
       pendingRead = new Promise<void>((resolve) => { releaseRead = resolve; });
@@ -1185,7 +1185,10 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(posts).toBe(0);
       await review.getByRole("button", { name: "Install", exact: true }).click();
       await expect(review.getByRole("button", { name: "Install", exact: true })).toBeDisabled();
-      await expect(review.getByRole("alert")).toContainText("The execution could not be confirmed.");
+      const recovery = review.getByRole("alert");
+      await expect(recovery).toContainText("We couldn't confirm the result.");
+      await recovery.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect(recovery.getByRole("button", { name: "Retry", exact: true })).toBeEnabled();
       // An Apply that may have started can no longer be discarded from here.
       await expect(review.getByRole("button", { name: "Stop installing", exact: true })).toHaveCount(0);
       expect(posts).toBe(1);
