@@ -31,6 +31,7 @@ import {
   Match,
   on,
   onCleanup,
+  onMount,
   Show,
   Switch,
   type JSX,
@@ -711,7 +712,7 @@ export default function AppManagePage(props: {
             onDone={() => finishReview(active())}
             {...(active().purpose === "uninstall" ? {
               uninstallConnectionScope: uninstallScope(),
-              uninstallConnectionRecovery: (planRunId: string) => refusedUninstallRecovery(active(), planRunId),
+              uninstallConnectionRecovery: (runId: string, mode: "refused" | "failed") => uninstallReviewRecovery(active(), runId, mode),
             } : {})}
             // An install review has nothing to cancel on this page: the app
             // stays installable, and Uninstall removes it.
@@ -1110,25 +1111,35 @@ export default function AppManagePage(props: {
       { restartable: false, action: "uninstall_now" },
     );
   };
-  const refusedUninstallRecovery = (heldReview: ActiveReview, planRunId: string) => {
+  const uninstallReviewRecovery = (heldReview: ActiveReview, runId: string, mode: "refused" | "failed") => {
     const scope = uninstallScope();
     const epoch = uninstallEpoch;
-    const isCurrent = () => !disposed && isOwner() && uninstallScope() === scope &&
-      uninstallEpoch === epoch && review() === heldReview && heldReview.planRunId === planRunId;
-    const reviewedApp = (view: CapsuleAppView | null | undefined) =>
-      view?.applied && view.capsuleId === capsuleId() && view.workspaceId === workspaceId() &&
-        !view.progress.run && !view.progress.revisionPreparing &&
-        view.progress.review?.runType === "destroy_plan" && view.progress.review.runId === planRunId &&
-        view.latestRun?.id === planRunId && view.latestRun.type === "destroy_plan" && view.latestRun.status === "succeeded"
+    let active = true;
+    onCleanup(() => { active = false; });
+    const isCurrent = () => active && !disposed && isOwner() && uninstallScope() === scope &&
+      uninstallEpoch === epoch && review() === heldReview && (mode === "failed" || heldReview.planRunId === runId);
+    const reviewedApp = (view: CapsuleAppView | null | undefined) => {
+      if (!view?.applied || view.capsuleId !== capsuleId() || view.workspaceId !== workspaceId() ||
+        view.progress.run || view.progress.revisionPreparing || view.latestRun?.id !== runId) return;
+      if (mode === "failed") return appUninstallRecoveryMode(view) === "failed" ? view : undefined;
+      return view.progress.review?.runType === "destroy_plan" && view.progress.review.runId === runId &&
+        view.latestRun.type === "destroy_plan" && view.latestRun.status === "succeeded"
         ? view
         : undefined;
+    };
+    if (mode === "failed") {
+      // The just-failed Run can arrive before the app view catches up.
+      onMount(() => {
+        if (isCurrent()) void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
+      });
+    }
     return (
       <Show when={isCurrent() && reviewedApp(app())}>
         {(view) => (
           <AppUninstallConnectionRecovery
             app={view()}
-            mode="refused"
-            disabled={starting() !== undefined}
+            mode={mode}
+            disabled={starting() !== undefined || uninstallBusy()}
             onReview={(replacements) => {
               if (!isCurrent() || !reviewedApp(app())) return;
               void startReview("attention", "uninstall", async () => {

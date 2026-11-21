@@ -39,6 +39,7 @@ import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
 import { runFailureHint } from "../../lib/run-errors.ts";
+import { isAppRemovalRun } from "../../lib/app-access.ts";
 import { runStatusLabel } from "../../lib/labels.ts";
 import {
   stateVersionReadinessAfterApply,
@@ -143,8 +144,8 @@ interface Props {
   readonly blockedReasonId?: string;
   /** An Apply was started (or may have been): what it applies can no longer change. */
   readonly onApplyStarted?: () => void;
-  /** Offers a fresh uninstall Plan after a definite connection refusal. */
-  readonly uninstallConnectionRecovery?: (planRunId: string) => JSX.Element;
+  /** Offers a fresh uninstall Plan after refusal or failure of the removal. */
+  readonly uninstallConnectionRecovery?: (runId: string, mode: "refused" | "failed") => JSX.Element;
   readonly uninstallConnectionScope?: string;
 }
 
@@ -1081,6 +1082,9 @@ export default function InstallExecution(props: Props) {
                   {closeButton()}
                 </div>
               </div>
+              <Show when={current().status === "failed" && isAppRemovalRun(current().type) && current().id} keyed>
+                {(runId) => props.uninstallConnectionRecovery?.(runId, "failed")}
+              </Show>
             </Show>
           </>
         )}
@@ -1120,7 +1124,7 @@ export default function InstallExecution(props: Props) {
       <Show when={refusedConnectionPlan()} keyed>
         {(planRunId) => (
           <>
-            {props.uninstallConnectionRecovery?.(planRunId)}
+            {props.uninstallConnectionRecovery?.(planRunId, "refused")}
             {closeButton()}
           </>
         )}

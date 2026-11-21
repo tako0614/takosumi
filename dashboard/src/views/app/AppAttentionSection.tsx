@@ -133,7 +133,7 @@ export default function AppAttentionSection(props: {
   const recoveryMode = createMemo(() => appUninstallRecoveryMode(app()));
   const recoveryKey = createMemo(() => {
     const mode = recoveryMode();
-    return props.canUninstall && mode
+    return props.canUninstall && props.reviewRunId === undefined && mode
       ? JSON.stringify([props.uninstallScope, mode, mode === "failed" ? app().latestRun?.id : undefined])
       : undefined;
   });
@@ -362,7 +362,7 @@ export default function AppAttentionSection(props: {
                 {(_scope) => <AppUninstallConnectionRecovery
                   app={app()}
                   mode={recoveryMode()!}
-                  disabled={props.busy || Boolean(props.reviewRunId)}
+                  disabled={props.busy}
                   onReview={props.actions.reviewUninstallWithConnection}
                 />}
               </Show>
