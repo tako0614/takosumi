@@ -185,7 +185,7 @@ export function defaultRetryPlanApi(
       const attemptId = scope ?? stateVersionId;
       const storage = rollbackAttemptStorage(scope);
       let idempotencyKey = rollbackAttempts.get(attemptId);
-      if (scope && storage) {
+      if (idempotencyKey === undefined && scope && storage) {
         try {
           const stored = storage.getItem(scope);
           if (stored && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(stored)) idempotencyKey = stored;
