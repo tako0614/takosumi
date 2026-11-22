@@ -68,23 +68,24 @@ export const cloudflareDestroyCredentialDelivery: NonNullable<
   CredentialRecipeRuntimeDriver["destroyCredentialDelivery"]
 > = {
   recoverRevokedShape(evidence, replacement) {
+    const materialization = evidence.materialization;
     if (cloudflareDestroyTokenMode(replacement) !== "api_token" ||
-      !REFERENCE_RECIPE || evidence.materialization !== "oauth" ||
+      !REFERENCE_RECIPE || (materialization !== "oauth" && materialization !== "secret") ||
       evidence.provider !== replacement.providerSource ||
       evidence.requiredEnvNames.length !== 1 || evidence.requiredEnvNames[0] !== TOKEN_ENV) return;
     // The full binding digest must independently confirm this registration
     // shape before any selected credential can be minted for Destroy.
     return {
-      materialization: "oauth",
+      materialization,
       envNames: [TOKEN_ENV],
       credentialRecipe: {
         id: REFERENCE_RECIPE.id,
-        authMode: "oauth",
+        authMode: materialization === "oauth" ? "oauth" : "api_token",
         secretPartition: REFERENCE_RECIPE.secretPartition,
         envNames: [TOKEN_ENV],
         fileEnvNames: [],
         requiredEnvGroups: REFERENCE_RECIPE.requiredEnvGroups ?? [],
-        preRunAction: "cloudflare_oauth",
+        ...(materialization === "oauth" ? { preRunAction: "cloudflare_oauth" as const } : {}),
       },
     };
   },
@@ -94,7 +95,7 @@ export const cloudflareDestroyCredentialDelivery: NonNullable<
     const names = appliedEnvNames ?? applied.envNames;
     if (!originalMode || !replacementMode ||
       names.length !== 1 || names[0] !== TOKEN_ENV ||
-      (appliedEnvNames === undefined && (originalMode !== "oauth" || replacementMode !== "api_token")) ||
+      (appliedEnvNames === undefined && replacementMode !== "api_token") ||
       applied.scopeHints?.providerSettings?.accountId !==
         replacement.scopeHints?.providerSettings?.accountId ||
       applied.scopeHints?.providerSettings?.workersSubdomain !==
