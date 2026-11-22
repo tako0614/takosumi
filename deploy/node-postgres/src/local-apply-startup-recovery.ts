@@ -9,7 +9,7 @@ import {
   type OpenTofuRunnerExecutorRegistry,
 } from "../../../core/domains/deploy-control/mod.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
-import { withCommittedLocalApplyRecovery } from "./local-apply-recovery-capability.ts";
+import { readCommittedLocalDestroyProbe, withCommittedLocalApplyRecovery } from "./local-apply-recovery-capability.ts";
 
 type Operations = Pick<Awaited<ReturnType<typeof buildComposedApp>>["operations"], "controller" | "dispatchQueuedRun">;
 type Store = Pick<OpenTofuControlStore, "getApplyRun" | "getPlanRun" | "getPlanRunInputs" | "getCapsule" | "getCapsuleStorageRoot" | "getWorkspace">;
@@ -47,13 +47,14 @@ async function recoverPass(input: Parameters<typeof recoverLocalAppliesAtStartup
     if (Date.now() >= deadlineAt) return;
     // Queue, terminal accounting tails, other actions, and work started/renewed
     // after this boot belong to their existing consumer, never this replay.
-    if (row.type !== "apply" || row.status !== "running" || !row.capsuleId) continue;
+    if ((row.type !== "apply" && row.type !== "destroy_apply") || row.status !== "running" || !row.capsuleId) continue;
+    const destroy = row.type === "destroy_apply";
     try {
       const workspace = await input.store.getWorkspace(row.workspaceId);
       if (!workspace || workspace.id !== row.workspaceId || workspace.archivedAt) continue;
       const run = await input.store.getApplyRun(row.id);
       if (!run || run.id !== row.id || run.status !== "running" || run.workspaceId !== row.workspaceId ||
-        run.capsuleId !== row.capsuleId || run.operation === "destroy" ||
+        run.capsuleId !== row.capsuleId || (run.operation === "destroy") !== destroy ||
         !Number.isFinite(run.heartbeatAt) || run.heartbeatAt! >= cutoff || run.heartbeatAt! > input.startedAt) continue;
       const plan = await input.store.getPlanRun(run.planRunId);
       const ctx = plan?.capsuleContext;
@@ -87,6 +88,16 @@ async function recoverPass(input: Parameters<typeof recoverLocalAppliesAtStartup
         }),
       };
       if (Date.now() >= deadlineAt) return;
+      if (destroy) {
+        const probe = await readCommittedLocalDestroyProbe(runner, { runId: run.id, stateScope });
+        if (probe && Date.now() < deadlineAt) {
+          await input.operations.dispatchQueuedRun(
+            { action: "apply", runId: run.id, workspaceId: run.workspaceId },
+            { deadlineAt, committedApplyReceiptProbe: probe },
+          );
+        }
+        continue;
+      }
       await withCommittedLocalApplyRecovery(runner, { runId: run.id, stateScope }, async (committedApplyReceipt) => {
         if (Date.now() >= deadlineAt) return;
         await input.operations.dispatchQueuedRun({ action: "apply", runId: run.id, workspaceId: run.workspaceId }, { deadlineAt, committedApplyReceipt });

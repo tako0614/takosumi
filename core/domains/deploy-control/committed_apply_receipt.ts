@@ -40,6 +40,8 @@ type ExecutionArtifacts = Pick<RunExecutionAuthority, "controllerArtifact" | "ru
 interface ReceiptProbe {
   readonly runner: OpenTofuRunner;
   readonly runId: string;
+  /** An unqualified observation may never fall through to ordinary execution. */
+  readonly settlementOnly?: true;
   /** Ordinary still relies on the original runner preparation/dispatch fence. */
   readonly inspect: (action: "apply" | "destroy") => Promise<"ordinary" | "completed" | "hold">;
   /** Core allocates the immutable state coordinate and any Apply output. */

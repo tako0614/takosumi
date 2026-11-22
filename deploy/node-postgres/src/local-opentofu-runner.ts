@@ -8,8 +8,8 @@ import {
 } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { createFileLocalApplyDispatchCustodyStore, type LocalApplyDispatchCustodyStore, type LocalMutationEvidenceIdentity } from "./local-apply-dispatch-custody.ts";
-import { registerCommittedLocalApplyRecovery } from "./local-apply-recovery-capability.ts";
-import { committedApplyReceiptCommand, type CommittedApplyReceiptCommand } from "../../../core/domains/deploy-control/committed_apply_receipt.ts";
+import { registerCommittedLocalApplyRecovery, registerCommittedLocalDestroyProbe } from "./local-apply-recovery-capability.ts";
+import { committedApplyReceiptCommand, committedApplyReceiptProbeCommand, type CommittedApplyReceiptCommand } from "../../../core/domains/deploy-control/committed_apply_receipt.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -663,6 +663,28 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       },
     };
     registerCommittedLocalApplyRecovery(this, (input, consume) => this.recoverCommittedApply(input, consume));
+    registerCommittedLocalDestroyProbe(this, (input) => this.committedDestroyProbe(input));
+  }
+
+  private async committedDestroyProbe(input: { readonly runId: string; readonly stateScope: DispatchStateScope }) {
+    const artifact = await this.adoptCommittedStateMutation(input.runId, "destroy", input.stateScope);
+    const result = artifact?.result;
+    if (!artifact || !result || !("stateDigest" in result) ||
+      result.stateDigest !== artifact.stateDigest || !result.executionEvidence ||
+      "outputs" in result || "rawOutputRef" in result) return undefined;
+    return committedApplyReceiptProbeCommand({
+      runner: this,
+      runId: input.runId,
+      settlementOnly: true,
+      inspect: async (action) => action === "destroy" ? "completed" : "hold",
+      read: async ({ stateScope, rawOutputRef }) => {
+        if (rawOutputRef !== undefined) return undefined;
+        assertLocalMutationScope(artifact, stateScope, input.runId, "destroy");
+        // Only the currently configured execution digests can qualify this
+        // receipt. The result is not independent proof of historical admission.
+        return { result: structuredClone(result) };
+      },
+    });
   }
 
   private async recoverCommittedApply(

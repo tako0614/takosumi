@@ -1,7 +1,7 @@
 /** Host-internal receipt capability; keeps Runner implementation out of the service image. */
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
 import type { DispatchStateScope } from "@takosumi/internal/deploy-control-api";
-import type { CommittedApplyReceiptCommand } from "../../../core/domains/deploy-control/committed_apply_receipt.ts";
+import type { CommittedApplyReceiptCommand, CommittedApplyReceiptProbeCommand } from "../../../core/domains/deploy-control/committed_apply_receipt.ts";
 
 type Recovery = (
   input: { readonly runId: string; readonly stateScope: DispatchStateScope },
@@ -21,4 +21,18 @@ export async function withCommittedLocalApplyRecovery(
 ): Promise<boolean> {
   const recover = runner && committedRecoveries.get(runner);
   return recover ? await recover(input, consume) : false;
+}
+
+type DestroyProbe = (input: Parameters<Recovery>[0]) => Promise<CommittedApplyReceiptProbeCommand | undefined>;
+const committedDestroyProbes = new WeakMap<OpenTofuRunner, DestroyProbe>();
+
+export function registerCommittedLocalDestroyProbe(runner: OpenTofuRunner, probe: DestroyProbe): void {
+  committedDestroyProbes.set(runner, probe);
+}
+
+export async function readCommittedLocalDestroyProbe(
+  runner: OpenTofuRunner | undefined,
+  input: Parameters<DestroyProbe>[0],
+): Promise<CommittedApplyReceiptProbeCommand | undefined> {
+  return runner ? await committedDestroyProbes.get(runner)?.(input) : undefined;
 }

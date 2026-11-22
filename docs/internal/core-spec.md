@@ -1184,6 +1184,16 @@ state-only execution commit, then uses the existing partial-state failure CAS:
 same Run failed, next state generation, Capsule error and no new Output.
 Neither a heartbeat timeout nor a missing Runner is a failure receipt.
 
+Node startup can settle a stale running Git-backed Capsule Destroy from the
+same adapter's authenticated encrypted result. It uses the receipt observer
+with settlement-only authority: missing, changed, or ineligible evidence
+cannot reach ordinary dispatch. Core allocates the exact state coordinate
+and checks the current execution artifacts, Plan, approval, authority,
+and leases. Destroy recovers only state and execution evidence, with no new
+Output. This path holds when the configured execution artifacts differ
+from the saved receipt; it does not infer past dispatch authority from that
+receipt. Lifecycle and private-file effects remain outside startup recovery.
+
 The Worker RunOwner uses an explicitly composed, host-only receipt observer for
 stale non-destroy Apply Runs without lifecycle or private-file effects. Core
 allocates the state and raw-output coordinates; the selected Runner object's
