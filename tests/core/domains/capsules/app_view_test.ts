@@ -409,6 +409,92 @@ const ROWS: readonly Row[] = [
     action: "none",
     problems: [],
   },
+  {
+    name: "a manual removal Plan failed after scheduling, with the reservation still cancellable",
+    facts: facts({
+      capsule: uninstalled(SCHEDULED),
+      latestRun: run({ type: "destroy_plan", status: "failed", errorCode: "opentofu_plan_failed" }),
+      uninstallCancellable: true,
+    }),
+    state: "needs_attention",
+    action: "cancel_uninstall",
+    problems: ["uninstall_failed"],
+  },
+  {
+    name: "a manual removal Plan denied by policy stays a policy block",
+    facts: facts({
+      capsule: uninstalled(SCHEDULED),
+      latestRun: run({ type: "destroy_plan", status: "failed", policyStatus: "deny" }),
+      uninstallCancellable: true,
+    }),
+    state: "needs_attention",
+    action: "cancel_uninstall",
+    problems: ["policy_blocked"],
+  },
+  {
+    name: "a removal Plan from before this reservation does not describe its status",
+    facts: facts({
+      capsule: uninstalled(SCHEDULED),
+      latestRun: run({ type: "destroy_plan", status: "failed",
+        createdAt: new Date(Date.parse(SCHEDULED.requestedAt) - 60_000).toISOString() }),
+      uninstallCancellable: true,
+    }),
+    state: "uninstall_scheduled",
+    action: "cancel_uninstall",
+    problems: ["uninstall_scheduled"],
+  },
+  {
+    name: "an unblocked finalizer keeps ownership of its failed teardown Plan",
+    facts: facts({
+      capsule: uninstalled(WITH_PLAN),
+      latestRun: run({ id: "plan_finalizer", type: "destroy_plan", status: "failed" }),
+      uninstallCancellable: true,
+    }),
+    state: "uninstall_scheduled",
+    action: "cancel_uninstall",
+    problems: ["uninstall_scheduled"],
+  },
+  {
+    name: "a prior finalizer failure is not a manual attempt after the next Plan ID is recorded",
+    facts: facts({
+      capsule: uninstalled(advance(WITH_PLAN, { destroyPlanRunId: "plan_next_finalizer" })),
+      latestRun: run({
+        id: "plan_finalizer",
+        type: "destroy_plan",
+        status: "failed",
+        origin: { kind: "scheduled_uninstall", uninstallId: SCHEDULED.id },
+      }),
+      uninstallCancellable: true,
+    }),
+    state: "uninstall_scheduled",
+    action: "cancel_uninstall",
+    problems: ["uninstall_scheduled"],
+  },
+  {
+    name: "a legacy finalizer failure is superseded by a newer finalizer attempt",
+    facts: facts({
+      capsule: uninstalled(advance(WITH_PLAN, {
+        destroyPlanRunId: "plan_next_finalizer",
+        destroyPlanRequestedAt: new Date(NOW).toISOString(),
+      })),
+      latestRun: run({ id: "plan_finalizer", type: "destroy_plan", status: "failed" }),
+      uninstallCancellable: true,
+    }),
+    state: "uninstall_scheduled",
+    action: "cancel_uninstall",
+    problems: ["uninstall_scheduled"],
+  },
+  {
+    name: "a newer manual removal failure remains visible after an earlier finalizer attempt",
+    facts: facts({
+      capsule: uninstalled(WITH_PLAN),
+      latestRun: run({ type: "destroy_plan", status: "failed", createdAt: new Date(NOW).toISOString() }),
+      uninstallCancellable: true,
+    }),
+    state: "needs_attention",
+    action: "cancel_uninstall",
+    problems: ["uninstall_failed"],
+  },
   // two-stage uninstall: the finalizer stopped while still `scheduled`
   ...[
     SCHEDULED_DESTROY_BLOCKED_REASONS.exportIncomplete,
