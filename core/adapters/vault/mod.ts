@@ -26,7 +26,10 @@ import type {
   CreateConnectionRequest,
   DestroyConnectionCredentialDelivery,
 } from "@takosumi/internal/deploy-control-api";
-import type { PreserveDestroyCredentialDelivery } from "takosumi-contract/credential-recipe-host";
+import type {
+  PreserveDestroyCredentialDelivery,
+  RecoverRevokedDestroyCredentialShape,
+} from "takosumi-contract/credential-recipe-host";
 import {
   type MintPhase,
   type MintedFile,
@@ -267,6 +270,7 @@ export interface ConnectionVault {
   /** Pure host-driver account predicate; absence refuses destroy reconnection. */
   hasVerifiedAccountScope?(connection: ProviderConnection): boolean;
   preserveDestroyCredentialDelivery?: PreserveDestroyCredentialDelivery;
+  recoverRevokedDestroyCredentialShape?: RecoverRevokedDestroyCredentialShape;
   register(
     input: RegisterConnectionInput,
     expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
@@ -2516,6 +2520,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       applied,
       replacement,
       appliedEnvNames,
+    );
+  }
+
+  recoverRevokedDestroyCredentialShape(
+    ...[evidence, replacement]: Parameters<RecoverRevokedDestroyCredentialShape>
+  ): ReturnType<RecoverRevokedDestroyCredentialShape> {
+    if (!this.hasVerifiedAccountScope(replacement)) return;
+    return this.#credentialDriver(replacement)?.destroyCredentialDelivery?.recoverRevokedShape?.(
+      evidence,
+      replacement,
     );
   }
 

@@ -90,6 +90,7 @@ import {
 } from "takosumi-contract/install-configs";
 import type { Output } from "takosumi-contract/outputs";
 import type { StateVersion } from "takosumi-contract/state-versions";
+import type { ProviderConnectionResolutionEvidence } from "takosumi-contract/provider-resolution";
 import { assertRunExecutionEvidence, type Run } from "takosumi-contract/runs";
 import type {
   Source,
@@ -125,7 +126,10 @@ import {
   type ResolvedCapsuleProviderBinding,
   validateRequiredProviderBindingIdentities,
 } from "../../connections/mod.ts";
-import type { PreserveDestroyCredentialDelivery } from "takosumi-contract/credential-recipe-host";
+import type {
+  PreserveDestroyCredentialDelivery,
+  RecoverRevokedDestroyCredentialShape,
+} from "takosumi-contract/credential-recipe-host";
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
 import type { SourcesService } from "../../sources/mod.ts";
@@ -1710,6 +1714,7 @@ export interface RunEngineDependencies {
   readonly planResolution: PlanResolutionService;
   readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
   readonly preserveDestroyCredentialDelivery: PreserveDestroyCredentialDelivery;
+  readonly recoverRevokedDestroyCredentialShape: RecoverRevokedDestroyCredentialShape;
   readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   readonly privateRunFileGrantNow?: () => number;
   readonly privateRunFileRefreshIntervalMs?: number;
@@ -1767,6 +1772,7 @@ export class RunEngine {
   readonly #planResolution: PlanResolutionService;
   readonly #hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
   readonly #preserveDestroyCredentialDelivery: PreserveDestroyCredentialDelivery;
+  readonly #recoverRevokedDestroyCredentialShape: RecoverRevokedDestroyCredentialShape;
   readonly #privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   readonly #privateRunFileGrantNow: () => number;
   readonly #privateRunFileRefreshIntervalMs: number;
@@ -1824,6 +1830,7 @@ export class RunEngine {
     this.#planResolution = deps.planResolution;
     this.#hasVerifiedAccountScope = deps.hasVerifiedAccountScope;
     this.#preserveDestroyCredentialDelivery = deps.preserveDestroyCredentialDelivery;
+    this.#recoverRevokedDestroyCredentialShape = deps.recoverRevokedDestroyCredentialShape;
     this.#privateRunFileGrantMinter = deps.privateRunFileGrantMinter;
     this.#privateRunFileGrantNow = deps.privateRunFileGrantNow ?? Date.now;
     const privateRefreshIntervalMs = deps.privateRunFileRefreshIntervalMs ?? 10_000;
@@ -4895,9 +4902,9 @@ export class RunEngine {
     );
   }
 
-  async #currentStatePlanRunForCapsule(
+  async #currentStateVersionForCapsule(
     capsule: Capsule,
-  ): Promise<PlanRun | undefined> {
+  ): Promise<StateVersion | undefined> {
     if (
       !Number.isSafeInteger(capsule.currentStateGeneration) ||
       capsule.currentStateGeneration <= 0 ||
@@ -4909,9 +4916,14 @@ export class RunEngine {
     const current = await this.#store.getStateVersion(
       capsule.currentStateVersionId,
     );
-    if (!current || !stateVersionMatchesCapsuleCurrent(capsule, current)) {
-      return undefined;
-    }
+    return current && stateVersionMatchesCapsuleCurrent(capsule, current)
+      ? current
+      : undefined;
+  }
+
+  async #currentStatePlanRunForCapsule(capsule: Capsule): Promise<PlanRun | undefined> {
+    const current = await this.#currentStateVersionForCapsule(capsule);
+    if (!current) return;
     return await this.#validatedPlanRunForStateVersion(
       capsule,
       current,
@@ -6839,12 +6851,49 @@ export class RunEngine {
       capsule, requiredProviders, appliedDigest: recovery.appliedProviderBindingsDigest,
       replacements: recovery.replacements, hasVerifiedAccountScope: this.#hasVerifiedAccountScope,
       preserveCredentialDelivery: this.#preserveDestroyCredentialDelivery,
+      resolveRevokedCredentialEvidence: (connectionId) =>
+        this.#revokedDestroyCredentialEvidence(capsule, appliedPlan, connectionId),
+      recoverRevokedCredentialShape: this.#recoverRevokedDestroyCredentialShape,
       credentialDelivery: recovery.credentialDelivery,
       captureCredentialDelivery,
       ...(appliedPlan.destroyConnectionRecovery !== undefined
         ? { appliedPlanRecovery: appliedPlan.destroyConnectionRecovery }
         : {}),
     });
+  }
+
+  async #revokedDestroyCredentialEvidence(
+    capsule: Capsule,
+    appliedPlan: PlanRun,
+    connectionId: string,
+  ): Promise<ProviderConnectionResolutionEvidence | undefined> {
+    if (appliedPlan.operation === "destroy" || appliedPlan.destroyConnectionRecovery) return;
+    const [state, ownership] = await Promise.all([
+      this.#currentStateVersionForCapsule(capsule),
+      this.#appOwnership?.getOwnership(capsule.id),
+    ]);
+    if (!state || ownership?.capsuleId !== capsule.id ||
+      appliedPlan.ownershipEpoch !== ownership.ownershipEpoch) return;
+    const apply = await this.#store.getApplyRun(state.createdByRunId);
+    if (apply?.status !== "succeeded" || appliedPlan.appliedApplyRunId !== apply.id ||
+      !applyRunMatchesStateVersion(capsule, state, apply) ||
+      !planRunMatchesAppliedState(capsule, state, apply, appliedPlan) ||
+      apply.expected.resolvedProviderBindingsDigest !== appliedPlan.resolvedProviderBindingsDigest) return;
+    const approvedBy = apply.approval?.approvedBy ?? appliedPlan.createdBy;
+    const mints = (await this.#store.listCredentialMintEventsForRun(apply.id))
+      .filter((event) => event.phase === "apply" && event.connectionId === connectionId);
+    const [mint] = mints;
+    if (mints.length !== 1 || !mint || !approvedBy || mint.actorAccountId !== approvedBy ||
+      mint.runId !== apply.id || mint.capsuleId !== capsule.id || mint.workspaceId !== capsule.workspaceId ||
+      mint.connectionOwnerAccountId !== ownership.ownerAccountId || mint.ownershipEpoch !== ownership.ownershipEpoch) return;
+
+    const rows = (apply.providerResolutions ?? []).filter((row) => row.connectionId === connectionId);
+    const evidence = rows[0]?.evidence;
+    if (evidence?.kind !== "provider_connection" || evidence.connectionId !== connectionId) return;
+    const canonicalEvidence = stableStringify(evidence);
+    if (rows.every((row) => row.status === "resolved_provider_connection" &&
+      row.materialization === evidence.materialization &&
+      stableStringify(row.evidence) === canonicalEvidence)) return evidence;
   }
 
   /**
