@@ -201,6 +201,7 @@ function destroyConnectionRecoveryFailure(error: unknown) {
   if (!isRecord(details) || details.reason !== "destroy_connection_recovery_unproven") return undefined;
   switch (details.connectionRecoveryFailure) {
     case "replacement_unverified":
+    case "replacement_auth_mode_mismatch":
     case "bindings_mismatch":
     case "applied_evidence_unavailable":
       return details.connectionRecoveryFailure;

@@ -7,6 +7,7 @@ import { friendlyError } from "../../../../dashboard/src/lib/error-copy.ts";
 test("uninstall connection recovery explains the proven reason without showing server prose", () => {
   for (const [connectionRecoveryFailure, key] of [
     ["replacement_unverified", "app.uninstall.replacementVerifyFirst"],
+    ["replacement_auth_mode_mismatch", "app.uninstall.replacementAuthModeMismatch"],
     ["bindings_mismatch", "app.uninstall.replacementSettingsMismatch"],
     ["applied_evidence_unavailable", "app.uninstall.replacementAppliedEvidenceUnavailable"],
     ["unknown_detail", "app.uninstall.replacementUnproven"],
