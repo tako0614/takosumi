@@ -147,7 +147,12 @@ test("CLI reports connection-close failure separately from the known Core commit
   const terminal = join(root, "terminal.json");
   try {
     const child = Bun.spawn([process.execPath, "--no-env-file", "tests/fixtures/local-operator-recovery-command.ts"], {
-      cwd: ROOT, env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, FIXTURE_TERMINAL_PATH: terminal },
+      cwd: ROOT, env: {
+        PATH: process.env.PATH,
+        TMPDIR: process.env.TMPDIR,
+        TAKOSUMI_OPERATOR_RECOVERY_TEST_ROOT: process.env.TAKOSUMI_OPERATOR_RECOVERY_TEST_ROOT,
+        FIXTURE_TERMINAL_PATH: terminal,
+      },
       stdout: "pipe", stderr: "pipe",
     });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -163,7 +168,11 @@ test("missing approval refuses before the PG constructor, queries or cleanup are
   const terminal = join(root, "terminal.json");
   try {
     const child = Bun.spawn([process.execPath, "--no-env-file", "tests/fixtures/local-operator-recovery-unapproved.ts"], {
-      cwd: ROOT, env: { PATH: process.env.PATH, FIXTURE_TERMINAL_PATH: terminal }, stdout: "pipe", stderr: "pipe",
+      cwd: ROOT, env: {
+        PATH: process.env.PATH,
+        TAKOSUMI_OPERATOR_RECOVERY_TEST_ROOT: process.env.TAKOSUMI_OPERATOR_RECOVERY_TEST_ROOT,
+        FIXTURE_TERMINAL_PATH: terminal,
+      }, stdout: "pipe", stderr: "pipe",
     });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code).toBe(1);

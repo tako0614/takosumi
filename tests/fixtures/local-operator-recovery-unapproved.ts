@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const root = await mkdtemp(join(homedir(), ".takosumi-unapproved-recovery-test-"));
+const root = await mkdtemp(join(process.env.TAKOSUMI_OPERATOR_RECOVERY_TEST_ROOT ?? homedir(), ".takosumi-unapproved-recovery-test-"));
 const approvals = join(root, "approvals");
 await mkdir(approvals, { mode: 0o700 });
 const observed = { pools: 0, queries: 0, closes: 0 };
