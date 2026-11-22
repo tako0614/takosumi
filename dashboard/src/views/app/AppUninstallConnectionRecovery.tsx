@@ -1,5 +1,5 @@
 import { createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
-import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
+import type { DestroyProviderConnectionReplacement, ProviderConnection } from "takosumi-contract";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { Button, FormField, Select } from "../../components/ui/index.ts";
 import { t } from "../../i18n/index.ts";
@@ -8,6 +8,13 @@ import { providerName } from "../../lib/app-page.ts";
 import { getCapsuleProviderBindingSet, listProviderConnectionsWithSignal, type CapsuleAppView } from "../../lib/control-api.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
 import { appUninstallRecoveryConnections } from "../../lib/capsule-uninstall.ts";
+import { verifiedCloudflareAccountId } from "../../../../providers/cloudflare/settings.ts";
+
+function replacementConnectionLabel(connection: ProviderConnection): string {
+  const name = providerConnectionDisplayName(connection);
+  const accountId = verifiedCloudflareAccountId(connection);
+  return accountId ? t("app.uninstall.replacementCloudflareAccount", { name, accountId }) : name;
+}
 
 export default function AppUninstallConnectionRecovery(props: {
   readonly app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "problems" | "latestRun" | "uninstall">;
@@ -106,7 +113,7 @@ export default function AppUninstallConnectionRecovery(props: {
                     : "app.uninstall.replacementPlaceholder")}</option>
                   <For each={options(provider, connectionId)}>{(connection) => (
                     <option value={connection.id}>
-                      {providerConnectionDisplayName(connection)}
+                      {replacementConnectionLabel(connection)}
                     </option>
                   )}</For>
                 </Select>
