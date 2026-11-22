@@ -463,9 +463,14 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   let wake: (() => void) | undefined;
   /** The sheet answer in flight, so Review can wait for it instead of failing. */
   let answerRun: Promise<unknown> | undefined;
-  /** An unconfirmed start keeps its key so resending it cannot start twice. */
+  /** An unconfirmed start keeps its key and the release already sent to the server. */
   let pendingStart:
-    | { readonly workspaceId?: string; readonly body: string; readonly key: string }
+    | {
+        readonly workspaceId?: string;
+        readonly body: string;
+        readonly key: string;
+        readonly latest?: ResolvedStoreVersion;
+      }
     | undefined;
 
   /** Stop following now: wake the pause and abort the reconcile in flight. */
@@ -804,12 +809,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const postAttempt = async (
     workspaceId: string | undefined,
     request: CreateGitInstallAttemptRequest,
+    latest?: ResolvedStoreVersion,
   ): Promise<GitInstallPlanResponse> => {
     const body = JSON.stringify(request);
     const key = pendingStart && pendingStart.workspaceId === workspaceId && pendingStart.body === body
       ? pendingStart.key
       : randomUuid();
-    pendingStart = { workspaceId, body, key };
+    pendingStart = { workspaceId, body, key, latest };
     try {
       const created = await createGitInstallAttempt(workspaceId, request, key);
       pendingStart = undefined;
@@ -886,12 +892,20 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       legacyWorkspaceContext = workspaceId;
       legacyWorkspaceSelection = selectedWorkspace;
       const ref = candidate.ref.trim();
-      // A Store listing installs the newest released version unless the person chose one.
-      const latest = startOptions.fromStore && !ref
-        ? await resolveStoreVersion(workspaceId, candidate.url)
-        : undefined;
+      let latest: ResolvedStoreVersion | undefined;
+      if (startOptions.fromStore && !ref) {
+        const pending = pendingStart;
+        // Retry an unconfirmed start with its original release if the rest of
+        // the request still matches. A fresh start resolves the current release.
+        if (pending?.latest && pending.workspaceId === workspaceId) {
+          const pinned = attemptCreateRequest({ ...candidate, ref: pending.latest.commit });
+          if (JSON.stringify(pinned) === pending.body) latest = pending.latest;
+        }
+        latest ??= await resolveStoreVersion(workspaceId, candidate.url);
+      }
       if (!stillStartingHere()) return;
-      const created = await postAttempt(workspaceId, attemptCreateRequest({ ...candidate, ref: latest?.commit ?? ref }));
+      const request = attemptCreateRequest({ ...candidate, ref: latest?.commit ?? ref });
+      const created = await postAttempt(workspaceId, request, latest);
       adoptNewAttempt(created, expected, { latest });
     } catch (cause) {
       if (!disposed) setError(installErrorMessage(cause));
