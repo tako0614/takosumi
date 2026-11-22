@@ -146,7 +146,7 @@ When a `refused` result includes `connectionRecoveryFailure`, verify the replace
 or check the account and applied connection settings for `bindings_mismatch`.
 `applied_evidence_unavailable` means the server could not confirm the applied record needed for the comparison.
 When the result is `review_required`, inspect what the Plan will remove and its effective `providerConnections`, including replacements carried forward from a previous attempt.
-For `plan_pending`, use the returned `planRunId` to read the same Plan again. If the result is `unconfirmed`, `--current-review` reads the Destroy Plan the app currently offers for review.
+For `plan_pending`, use the returned `planRunId` to read the same Plan again. If the result is `unconfirmed`, `--current-review` finds the app's current manual Destroy Plan while it is pending or available for review.
 Whether the earlier request was accepted is still unconfirmed. Inspect the connections and planned changes.
 
 ```bash

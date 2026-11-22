@@ -202,6 +202,102 @@ test("current uninstall review follows the app projection and rereads that exact
   expect(r.calls.map(call => new URL(call.url).pathname)).toEqual([appRead, planRead, appRead]);
 });
 
+function pendingDestroyView(status: "queued" | "running") {
+  const latestRun = { ...currentDestroyView.latestRun, status };
+  return { ...currentDestroyView, latestRun, progress: { revisionPreparing: false, run: latestRun } };
+}
+
+test.each(["queued", "running"] as const)(
+  "current uninstall recovery finds the same %s Plan without submitting another",
+  async status => {
+    const appRead = "/api/v1/capsules/cap_owned/app";
+    const planRead = `/api/v1/runs/${destroyPlan.id}`;
+    const r = await invoke(currentReviewArgs, req => new URL(req.url).pathname === appRead
+      ? Response.json({ app: pendingDestroyView(status) })
+      : Response.json({ run: { ...destroyPlan, status } }));
+    expect(r.code).toBe(0);
+    expect(r.result).toMatchObject({
+      status: "plan_pending", planRunId: destroyPlan.id, planStatus: status,
+      reviewUrl: `${origin}/runs/${destroyPlan.id}`,
+    });
+    expect(r.result.plan).toBeUndefined();
+    expect(r.calls.map(call => [call.method, new URL(call.url).pathname]))
+      .toEqual([["GET", appRead], ["GET", planRead], ["GET", appRead]]);
+  },
+);
+
+test("current uninstall recovery returns the review when the same pending Plan finishes", async () => {
+  let firstAppRead = true;
+  const r = await invoke(currentReviewArgs, req => {
+    if (!new URL(req.url).pathname.endsWith("/app")) return Response.json({ run: destroyPlan });
+    const app = firstAppRead ? pendingDestroyView("running") : currentDestroyView;
+    firstAppRead = false;
+    return Response.json({ app });
+  });
+  expect(r.code).toBe(0);
+  expect(r.result).toMatchObject({ status: "review_required", planRunId: destroyPlan.id });
+  expect(r.calls.map(call => call.method)).toEqual(["GET", "GET", "GET"]);
+});
+
+test.each(["scheduled", "destroying"] as const)(
+  "current uninstall recovery distinguishes a pending manual Plan during the %s phase",
+  async phase => {
+    const app = {
+      ...pendingDestroyView("running"), status: "uninstalled",
+      uninstall: { scheduled: { phase } },
+    };
+    for (const finalizerId of [destroyPlan.id, "scheduled_plan"]) {
+      const r = await invoke(currentReviewArgs, req => {
+        switch (new URL(req.url).pathname) {
+          case "/api/v1/capsules/cap_owned/app": return Response.json({ app });
+          case "/api/v1/capsules/cap_owned": return Response.json({ capsule: {
+            id: app.capsuleId, workspaceId: app.workspaceId, status: "uninstalled",
+            uninstall: { phase, destroyPlanRunId: finalizerId },
+          } });
+          case `/api/v1/runs/${destroyPlan.id}`:
+            return Response.json({ run: { ...destroyPlan, status: "running" } });
+          default: throw Error("unexpected review request");
+        }
+      });
+      expect(r.calls.every(call => call.method === "GET")).toBe(true);
+      if (finalizerId === destroyPlan.id) {
+        expect(r.code).toBe(1);
+        expect(r.result).toMatchObject({ status: "refused", code: "current_destroy_review_unavailable" });
+        expect(r.result.planRunId).toBeUndefined();
+        expect(r.calls).toHaveLength(2);
+      } else {
+        expect(r.code).toBe(0);
+        expect(r.result).toMatchObject({ status: "plan_pending", planRunId: destroyPlan.id });
+        expect(r.calls).toHaveLength(4);
+      }
+    }
+  },
+);
+
+test("current uninstall recovery refuses an ambiguous source-less Plan while the reservation can replace its ID", async () => {
+  const app = {
+    ...pendingDestroyView("running"), status: "uninstalled",
+    uninstall: { scheduled: { phase: "scheduled" } },
+  };
+  const r = await invoke(currentReviewArgs, req => {
+    switch (new URL(req.url).pathname) {
+      case "/api/v1/capsules/cap_owned/app": return Response.json({ app });
+      case "/api/v1/capsules/cap_owned": return Response.json({ capsule: {
+        id: app.capsuleId, workspaceId: app.workspaceId, status: "uninstalled",
+        uninstall: { phase: "scheduled", destroyPlanRunId: "reserved_scheduled_plan" },
+      } });
+      case `/api/v1/runs/${destroyPlan.id}`: return Response.json({ run: {
+        ...destroyPlan, status: "running", sourceSnapshotId: undefined,
+      } });
+      default: throw Error("unexpected review request");
+    }
+  });
+  expect(r.code).toBe(1);
+  expect(r.result).toMatchObject({ status: "refused", code: "current_destroy_review_unavailable" });
+  expect(r.result.planRunId).toBeUndefined();
+  expect(r.calls.map(call => call.method)).toEqual(["GET", "GET", "GET"]);
+});
+
 test("current uninstall review distinguishes a manual Plan from an originless scheduled finalizer", async () => {
   const app = {
     ...currentDestroyView, status: "uninstalled",

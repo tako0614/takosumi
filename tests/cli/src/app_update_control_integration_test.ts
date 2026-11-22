@@ -8,7 +8,7 @@ import { createTakosumiService } from "../../../core/bootstrap.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { InMemoryGitInstallPlanStore } from "../../../core/domains/install-plans/store.ts";
-import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
+import type { OpenTofuPlanJob, OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
 import {
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fixtureExecutionEvidence,
@@ -26,7 +26,9 @@ const STATE_DIGEST = `sha256:${"3".repeat(64)}`;
 
 // Identity, policy and Git/OpenTofu transport below are synthetic. The HTTP
 // handler, Accounts authorization, Core ledger and revision coordinator are real.
-async function fixture() {
+async function fixture(options: {
+  readonly beforePlan?: (job: OpenTofuPlanJob) => Promise<void>;
+} = {}) {
   const runnerCalls = { sync: 0, plan: 0, apply: 0, destroy: 0 };
   const runner: OpenTofuRunner = {
     sourceSync: async (job) => {
@@ -51,8 +53,9 @@ async function fixture() {
     readCapsuleSourceFiles: async () => [{
       path: "main.tf", text: "output \"ready\" { value = \"yes\" }\n",
     }],
-    plan: async () => {
+    plan: async (job) => {
       runnerCalls.plan += 1;
+      await options.beforePlan?.(job);
       return {
         planDigest: PLAN_DIGEST,
         planArtifact: {
@@ -304,6 +307,100 @@ test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall wit
     expect(h.runnerCalls.destroy - beforeDestroy.destroy).toBe(1);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("current uninstall review reads the same pending Accounts Destroy Plan after its acknowledgement is lost", async () => {
+  const entered = Promise.withResolvers<OpenTofuPlanJob>();
+  const release = Promise.withResolvers<void>();
+  const h = await fixture({
+    async beforePlan(job) {
+      if (job.planRun.operation !== "destroy") return;
+      entered.resolve(job);
+      await release.promise;
+    },
+  });
+  const readToken = "synthetic-pending-destroy-read-only";
+  h.accounts.savePersonalAccessToken(readToken, {
+    ...h.pat, tokenId: "pat_pending_destroy_read_only", scopes: ["read"],
+  });
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request.clone());
+    return h.dispatch(request);
+  }) as typeof fetch;
+  const output: string[] = [];
+  const errors: string[] = [];
+  const io = { stdout: (line: string) => output.push(line), stderr: (line: string) => errors.push(line) };
+  const currentReviewArgs = ["apps", "recover-uninstall", h.appId, "--current-review",
+    "--token", readToken, "--url", ORIGIN, "--json"];
+  const beforeCreate = { ...h.runnerCalls };
+  let originalCreate: Promise<Response> | undefined;
+  try {
+    originalCreate = h.dispatch(new Request(`${ORIGIN}/api/v1/capsules/${h.appId}/destroy-plan`, {
+      method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: "{}",
+    }));
+    // Retain the actual Accounts/Core operation. Only its caller-facing reply
+    // is lost after the persisted Run reaches the synthetic Runner boundary.
+    const lostAcknowledgement = await Promise.race([
+      originalCreate,
+      entered.promise.then(() => Response.json({ error: "fixture_ack_unavailable" }, { status: 503 })),
+    ]);
+    expect(lostAcknowledgement.status).toBe(503);
+    const job = await entered.promise;
+    const pending = await h.ledger.getPlanRun(job.planRun.id);
+    expect(pending).toMatchObject({
+      id: job.planRun.id, capsuleId: h.appId, operation: "destroy", status: "running", createdBy: OWNER,
+    });
+    const beforeRead = { ...h.runnerCalls };
+    expect(beforeRead.plan - beforeCreate.plan).toBe(1);
+    expect(await main(currentReviewArgs, io)).toBe(0);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      status: "plan_pending", appId: h.appId, planRunId: job.planRun.id,
+      planStatus: "running", reviewUrl: `${ORIGIN}/runs/${job.planRun.id}`,
+    });
+    const expectedReads = [
+      ["GET", `/api/v1/capsules/${h.appId}/app`],
+      ["GET", `/api/v1/runs/${job.planRun.id}`],
+      ["GET", `/api/v1/capsules/${h.appId}/app`],
+    ];
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual(expectedReads);
+    expect(h.runnerCalls).toEqual(beforeRead);
+    expect(await h.ledger.getPlanRun(job.planRun.id)).toEqual(pending);
+    expect(errors).toEqual([]);
+
+    release.resolve();
+    const completed = await originalCreate;
+    expect(completed.status).toBe(201);
+    expect((await completed.json()).run).toMatchObject({
+      id: job.planRun.id, type: "destroy_plan", status: "waiting_approval", capsuleId: h.appId,
+    });
+    requests.length = 0;
+    output.length = 0;
+    expect(await main(currentReviewArgs, io)).toBe(0);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      status: "review_required", appId: h.appId, planRunId: job.planRun.id,
+      reviewUrl: `${ORIGIN}/runs/${job.planRun.id}`,
+      plan: { id: job.planRun.id, status: "waiting_approval" },
+    });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual(expectedReads);
+    expect(requests.every(request => new URL(request.url).origin === ORIGIN)).toBe(true);
+    expect(h.runnerCalls).toEqual(beforeRead);
+    const history = await h.dispatch(new Request(`${ORIGIN}/api/v1/capsules/${h.appId}/runs?type=destroy_plan`, {
+      headers: { authorization: `Bearer ${readToken}` },
+    }));
+    expect(history.status).toBe(200);
+    expect((await history.json()).runs.map((run: { id: string }) => run.id)).toEqual([job.planRun.id]);
+    expect((await h.operations.getRun(job.planRun.id))?.status).toBe("waiting_approval");
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ status: "active", currentStateGeneration: 1 });
+    expect(errors).toEqual([]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    release.resolve();
+    await originalCreate?.catch(() => undefined);
   }
 });
 
