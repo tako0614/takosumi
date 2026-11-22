@@ -9,6 +9,7 @@ import {
 } from "./connections.ts";
 import type { CredentialRecipe } from "./credential-recipes.ts";
 import { canonicalProviderSource, sameProviderSource } from "./provider-env-rules.ts";
+import type { ProviderConnectionResolutionEvidence } from "./provider-resolution.ts";
 import type { ProviderCredentialMintEvidence } from "./security.ts";
 import type { MintedFile } from "./sources.ts";
 
@@ -115,6 +116,17 @@ export type PreserveDestroyCredentialDelivery = (
   appliedEnvNames?: readonly string[],
 ) => readonly string[] | undefined;
 
+type AppliedCredentialShape = Pick<
+  ProviderConnection,
+  "materialization" | "credentialRecipe" | "envNames"
+>;
+
+/** Proposes a value-free shape for an applied digest comparison only. */
+export type RecoverRevokedDestroyCredentialShape = (
+  evidence: ProviderConnectionResolutionEvidence,
+  replacement: ProviderConnection,
+) => AppliedCredentialShape | undefined;
+
 export interface CredentialRecipeRuntimeDriver {
   /** Optional sealed-material renewal. Core atomically fences and seals the result. */
   refresh?(input: CredentialRecipeDriverContext): Promise<Readonly<Record<string, string>> | undefined>;
@@ -140,6 +152,7 @@ export interface CredentialRecipeRuntimeDriver {
   /** Host-owned projection for an explicitly reviewed Destroy replacement. */
   readonly destroyCredentialDelivery?: {
     readonly preserve: PreserveDestroyCredentialDelivery;
+    readonly recoverRevokedShape?: RecoverRevokedDestroyCredentialShape;
     readonly project: (
       connection: ProviderConnection,
       envNames: readonly string[],

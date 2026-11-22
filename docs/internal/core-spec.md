@@ -390,8 +390,14 @@ with the effective replacement. Apply revalidates it, and the Vault and Runner
 manifest use the same environment names. The reference Cloudflare driver uses
 this path for an applied OAuth Connection and a verified API token that can
 preserve its token-only environment. An explicit Zone ID changes credential
-delivery and cannot use this path. The applied Connection record must be
-available when proving a different credential shape. When the
+delivery and cannot use this path. If the original reference Cloudflare OAuth
+Connection was revoked, Core can verify a replacement against the registered
+OAuth shape using the direct successful Apply that produced the current
+StateVersion. It requires that Apply's matching resolution and mint audit for
+the original ID, the current app owner and ownership epoch, and equality of
+the complete applied binding digest. Only the verified replacement can supply
+credentials. Without this evidence a changed credential shape requires the
+original Connection record. When the
 current StateVersion was produced by a prior recovery Plan, a new manual recovery
 starts with the replacements and delivery recorded by that exact Plan. The new explicit
 selection overrides only the named logical bindings. The new Plan records the

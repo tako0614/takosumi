@@ -14547,3 +14547,285 @@ test("pre-provider Apply refusal leaves initial Capsule pending and retryable", 
   expect((await store.getPlanRun(plan.id))?.appliedApplyRunId).toBeUndefined();
   expect(runner.applyJobs).toHaveLength(1);
 });
+
+test("Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence", async () => {
+  const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
+  const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
+  const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
+  const { cloudflareOAuthValues } = await import("../../../../providers/cloudflare/oauth.ts");
+  const { handleCapsules } = await import("../../../../accounts/service/src/control/capsules.ts");
+  const { InMemoryAccountsStore } = await import("../../../../accounts/service/src/store.ts");
+  const { controllerErrorResponse } = await import("../../../../accounts/service/src/control/shared.ts");
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: oidcMaterializedInstallConfig(),
+  });
+  const { InMemoryAppOwnershipStore } = await import("../../../../core/domains/app-ownership/store.ts");
+  const { InMemoryAppMintLeaseStore } = await import("../../../../core/domains/app-authorization/mint-leases.ts");
+  const appOwnership = new InMemoryAppOwnershipStore(store);
+  const ownerAccountId = seeded.workspace.ownerUserId!;
+  const ownership = {
+    capsuleId: seeded.capsule.id,
+    ownerAccountId,
+    ownershipEpoch: 1,
+    managementState: "active" as const,
+    managementEpoch: 1,
+    storageRoot: `apps/${seeded.capsule.id}`,
+  };
+  const actorContext = { actor: ownerAccountId };
+  expect(await appOwnership.initializeOwnershipIfMissing(ownership)).toBe(true);
+  const now = new Date("2026-11-18T07:00:00Z");
+  const accountId = "0123456789abcdef0123456789abcdef";
+  const foreignAccountId = "fedcba9876543210fedcba9876543210";
+  let sequence = 0;
+  const vault = new StaticSecretConnectionVault({
+    store,
+    appOwnership,
+    appAccessResolver: appOwnership,
+    appMintLeases: new InMemoryAppMintLeaseStore(store),
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "synthetic-cloudflare-credential-delivery-fixture-passphrase",
+    }),
+    now: () => now,
+    newId: () => `conn_cloudflare_delivery_${++sequence}`,
+    credentialRecipeResolver: id => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(recipe => recipe.id === id),
+    credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    fetch: async input => {
+      const account = /\/accounts\/([a-f0-9]{32})/.exec(input)?.[1];
+      return Response.json({
+        success: true,
+        result: input.endsWith("/workers/subdomain")
+          ? { subdomain: "synthetic-team" }
+          : account ? { id: account } : { status: "active" },
+      });
+    },
+  });
+  const originalOAuthValues = cloudflareOAuthValues({
+    tokenResponse: {
+      access_token: "synthetic-qa-oauth-token",
+      refresh_token: "synthetic-original-oauth-refresh-token",
+      expires_in: 86_400,
+    },
+    clientId: "synthetic-cloudflare-oauth-client",
+    now: now.getTime(),
+    requestedScopes: [],
+  });
+  const original = await vault.register({
+    scope: "personal",
+    provider: FIXTURE_CLOUDFLARE_PROVIDER,
+    credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" },
+    materialization: "oauth",
+    values: { ...originalOAuthValues, CLOUDFLARE_ACCOUNT_ID: accountId },
+    scopeHints: { providerSettings: { accountId } },
+  }, undefined, ownerAccountId);
+  expect((await vault.test(original.id, undefined, ownerAccountId)).status).toBe("verified");
+  const verifiedOriginal = (await store.getConnection(original.id))!;
+  expect(verifiedOriginal.materialization).toBe("oauth");
+  expect(verifiedOriginal.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
+
+  const registerApiToken = async (id: string, selectedAccount: string, zoneId?: string) => {
+    const values = {
+      CLOUDFLARE_API_TOKEN: `synthetic-${id}-api-token`,
+      CLOUDFLARE_ACCOUNT_ID: selectedAccount,
+      ...(zoneId ? { CLOUDFLARE_ZONE_ID: zoneId } : {}),
+    };
+    const row = await vault.register({
+      scope: "personal",
+      provider: FIXTURE_CLOUDFLARE_PROVIDER,
+      credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
+      values,
+      scopeHints: { providerSettings: { accountId: selectedAccount } },
+    }, undefined, ownerAccountId);
+    expect((await vault.test(row.id, undefined, ownerAccountId)).status).toBe("verified");
+    return (await store.getConnection(row.id))!;
+  };
+  const replacement = await registerApiToken("same", accountId);
+  const foreignAccount = await registerApiToken("different-account", foreignAccountId);
+  expect(replacement.envNames).toEqual(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
+
+  const bindingSet = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
+  await transitionProviderBindingSetForFixture(store, {
+    ...bindingSet,
+    bindings: bindingSet.bindings.map(binding => ({ ...binding, connectionId: original.id })),
+  });
+  const appliedBindingSet = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
+  const runner = recordingRunner();
+  const mintedConnectionIds: string[][] = [];
+  const mint = vault.mintForCapsuleProviderBindings.bind(vault);
+  vault.mintForCapsuleProviderBindings = async (...args) => {
+    mintedConnectionIds.push(args[1].map(entry => entry.connectionId));
+    return await mint(...args);
+  };
+  const controller = controllerWith(store, runner, {
+    vault,
+    appOwnership,
+    moduleVariableMaterializer: fixtureAuthorityBoundModuleVariableMaterializer(),
+  });
+  const initialPlan = await controller.createCapsulePlan(seeded.capsule.id, actorContext);
+  expect(initialPlan.planRun.status, JSON.stringify(initialPlan.planRun.diagnostics)).toBe("succeeded");
+  const envOf = (job: OpenTofuPlanJob | OpenTofuApplyJob | OpenTofuDestroyJob) => {
+    const credentials = job.credentials;
+    return credentials && "env" in credentials ? credentials.env : credentials;
+  };
+  expect(envOf(runner.planJobs[0]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-qa-oauth-token",
+  });
+  expect(envOf(runner.planJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  const initialApply = await controller.createApplyRun({
+    planRunId: initialPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(initialPlan.planRun),
+  }, actorContext);
+  expect(initialApply.applyRun.status).toBe("succeeded");
+  expect(envOf(runner.applyJobs[0]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-qa-oauth-token",
+  });
+  expect(envOf(runner.applyJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+
+  const accountsStore = new InMemoryAccountsStore();
+  type Operations = import("../../../../accounts/service/src/control-operations.ts").ControlPlaneOperations;
+  const operations = {
+    appOwnership,
+    appAccess: appOwnership,
+    capsules: { getCapsule: async () => (await store.getCapsule(seeded.capsule.id))! },
+    workspaces: {
+      getWorkspace: async () => seeded.workspace,
+      getWorkspaceForAccount: async () => seeded.workspace,
+      captureManagementAuthority: () => store.getWorkspaceManagement(seeded.workspace.id),
+    },
+    members: { listMembers: async () => [] },
+    createCapsuleDestroyPlan: (id: string, options?: Parameters<Operations["createCapsuleDestroyPlan"]>[1]) =>
+      controller.createCapsuleDestroyPlan(id, { actor: options?.actor }, {
+        destroyProviderConnectionReplacements: options?.destroyProviderConnectionReplacements,
+      }),
+    getRun: (id: string) => controller.getRun(id),
+    getRunCost: async () => undefined,
+  } as unknown as Operations;
+  const requestDestroyPlan = async (replacementConnectionId: string) => {
+    const url = new URL(`https://fixture.invalid/api/v1/capsules/${seeded.capsule.id}/destroy-plan`);
+    const request = new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ destroyProviderConnectionReplacements: [
+        { connectionId: original.id, replacementConnectionId },
+      ] }),
+    });
+    return await handleCapsules({
+      request,
+      url,
+      operations,
+      store: accountsStore,
+      session: {
+        subject: seeded.workspace.ownerUserId,
+        credential: "session",
+        uninstallRequester: { subject: seeded.workspace.ownerUserId },
+      },
+    }, ["capsules", seeded.capsule.id, "destroy-plan"], "POST").catch(controllerErrorResponse);
+  };
+  const dispatchCounts = () => ({ plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mintedConnectionIds.length });
+  const storedApply = (await store.getApplyRun(initialApply.applyRun.id))!;
+  const storedPlan = (await store.getPlanRun(storedApply.planRunId))!;
+  const storedCapsule = (await store.getCapsule(seeded.capsule.id))!;
+  const storedState = (await store.getStateVersion(storedCapsule.currentStateVersionId!))!;
+  expect(storedPlan.id).toBe(initialPlan.planRun.id);
+  expect(storedPlan.status).toBe("succeeded");
+  expect(storedPlan.resolvedProviderBindingsDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+  expect(storedApply.status).toBe("succeeded");
+  expect(storedApply.stateVersionId).toBe(storedState.id);
+  expect(storedState).toMatchObject({
+    capsuleId: seeded.capsule.id,
+    workspaceId: seeded.workspace.id,
+    createdByRunId: storedApply.id,
+  });
+  const audit = await store.listCredentialMintEventsForRun(storedApply.id);
+  expect(audit).toHaveLength(1);
+  expect(audit[0]).toMatchObject({
+    runId: storedApply.id,
+    phase: "apply",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    connectionId: original.id,
+    connectionOwnerAccountId: ownerAccountId,
+    actorAccountId: ownerAccountId,
+    ownershipEpoch: ownership.ownershipEpoch,
+  });
+  const evidence = (await controller.getRun(storedApply.id)).providerResolutions;
+  expect(evidence).toEqual([expect.objectContaining({
+    connectionId: original.id,
+    materialization: "oauth",
+    evidence: expect.objectContaining({ requiredEnvNames: ["CLOUDFLARE_API_TOKEN"] }),
+  })]);
+  expect(await vault.revoke(original.id, undefined, ownerAccountId)).toBe(true);
+  expect(await store.getConnection(original.id)).toBeUndefined();
+
+  const dispatchBeforeReplacement = dispatchCounts();
+  const wrongAccount = await requestDestroyPlan(foreignAccount.id);
+  expect(wrongAccount.status).toBe(409);
+  expect(dispatchCounts()).toEqual(dispatchBeforeReplacement);
+  expect(await store.getConnection(original.id)).toBeUndefined();
+
+  const readMintEvents = store.listCredentialMintEventsForRun.bind(store);
+  store.listCredentialMintEventsForRun = async (runId) =>
+    (await readMintEvents(runId)).map(({ ownershipEpoch: _legacyMissingEpoch, ...event }) => event);
+  const withoutOwnershipEpoch = await requestDestroyPlan(replacement.id);
+  store.listCredentialMintEventsForRun = readMintEvents;
+  expect(withoutOwnershipEpoch.status).toBe(409);
+  expect(dispatchCounts()).toEqual(dispatchBeforeReplacement);
+
+  const response = await requestDestroyPlan(replacement.id);
+  expect(response.status).toBe(201);
+  const { run } = await response.json() as { run: Run };
+  const { planRun: destroyPlan } = await controller.getPlanRun(run.id);
+  expect(destroyPlan).toMatchObject({
+    operation: "destroy",
+    status: "waiting_approval",
+    baseStateGeneration: 1,
+  });
+  expect(destroyPlan.destroyConnectionRecovery?.replacements).toEqual([{
+    connectionId: original.id,
+    replacementConnectionId: replacement.id,
+  }]);
+  expect(runner.planJobs).toHaveLength(2);
+  expect(envOf(runner.planJobs[1]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-same-api-token",
+  });
+  expect(envOf(runner.planJobs[1]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  expect(mintedConnectionIds.slice(2)).toEqual([[replacement.id]]);
+
+  await controller.approveRun(destroyPlan.id, { approvedBy: ownerAccountId });
+  const beforeApprovalDrift = dispatchCounts();
+  await store.putConnection({ ...replacement, status: "revoked" });
+  await expect(controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  })).rejects.toBeInstanceOf(OpenTofuControllerError);
+  expect(dispatchCounts()).toEqual(beforeApprovalDrift);
+  await store.putConnection(replacement);
+
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  });
+  expect(destroyed.applyRun.status, JSON.stringify(destroyed.applyRun.diagnostics)).toBe("succeeded");
+  expect(destroyed.capsule.status).toBe("destroyed");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(envOf(runner.destroyJobs[0]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-same-api-token",
+  });
+  expect(envOf(runner.destroyJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  expect(mintedConnectionIds.slice(2)).toEqual([[replacement.id], [replacement.id]]);
+  expect(await store.getConnection(original.id)).toBeUndefined();
+  expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))
+    .toEqual(appliedBindingSet);
+  const destroyAudit = await store.listCredentialMintEventsForRun(destroyed.applyRun.id);
+  expect(destroyAudit).toHaveLength(1);
+  expect(destroyAudit[0]).toMatchObject({
+    phase: "destroy",
+    connectionId: replacement.id,
+    connectionOwnerAccountId: ownerAccountId,
+    actorAccountId: ownerAccountId,
+    ownershipEpoch: ownership.ownershipEpoch,
+  });
+  expect(await store.getStateVersion(storedState.id)).toEqual(storedState);
+  expect(await store.listCredentialMintEventsForRun(storedApply.id)).toEqual(audit);
+});
