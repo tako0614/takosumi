@@ -208,6 +208,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         let acceptedEffects = 0;
         let attempts = 0;
         let replacementReads = 0;
+        let replacementHistoryReads = 0;
         let applyReads = 0;
         const held: { release?: () => Promise<void> } = {};
         await page.route("**/api/v1/**", async (route) => {
@@ -252,7 +253,13 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             status: "active", currentStateGeneration: 1, createdAt: plan.createdAt, updatedAt: plan.createdAt,
           } } });
           if (path === `/api/v1/capsules/${capsuleId}/runs`) {
+            const reviewId = url.searchParams.get("planRunId");
+            if (reviewId === replacementId) {
+              replacementHistoryReads += 1;
+              return route.fulfill({ json: { runs: [] } });
+            }
             if (attempts === 0 || url.searchParams.get("type") !== "apply") return route.fulfill({ json: { runs: [] } });
+            expect(reviewId).toBe(planId);
             historyAfterApply.push(url.search);
             if (outcome === "pending" || outcome === "retired") {
               await new Promise<void>((resolve) => {
@@ -301,14 +308,18 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             await expect.poll(() => applyReads).toBeGreaterThan(0);
             await expect(page.locator(".av-run-summary")).toBeVisible();
             expect(historyAfterApply).toEqual(outcome === "accepted"
-              ? ["?limit=100&type=apply", "?limit=100&cursor=older&type=apply"]
-              : ["?limit=100&type=apply"]);
+              ? [
+                `?limit=100&type=apply&planRunId=${planId}`,
+                `?limit=100&cursor=older&type=apply&planRunId=${planId}`,
+              ]
+              : [`?limit=100&type=apply&planRunId=${planId}`]);
           } else if (outcome === "retired") {
             await page.evaluate((id) => {
               history.pushState(null, "", `/runs/${id}`);
               window.dispatchEvent(new PopStateEvent("popstate"));
             }, replacementId);
             await expect.poll(() => replacementReads).toBe(1);
+            await expect.poll(() => replacementHistoryReads).toBe(1);
             await held.release?.();
             await expect(page).toHaveURL(new RegExp(`/runs/${replacementId}$`, "u"));
             await expect(page.getByRole("alert").filter({ hasText: "We couldn't confirm the result." })).toHaveCount(0);
@@ -338,47 +349,79 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
 
     }
 
-    for (const initial of ["consumed", "incomplete", "unavailable"] as const) {
-    test(`a shared app's consumed approval is found beyond its first history page (${initial})`, async ({ page }) => {
+    for (const { initial, planType, applyStatus } of [
+      { initial: "consumed", planType: "plan", applyStatus: "succeeded" },
+      { initial: "consumed", planType: "plan", applyStatus: "failed" },
+      { initial: "incomplete", planType: "plan", applyStatus: "failed" },
+      { initial: "unavailable", planType: "plan", applyStatus: "failed" },
+      { initial: "consumed", planType: "destroy_plan", applyStatus: "succeeded" },
+      { initial: "consumed", planType: "destroy_plan", applyStatus: "failed" },
+    ] as const) {
+    test(`a shared app's consumed approval is found beyond 200 newer Runs (${planType}, ${applyStatus}, ${initial})`, async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       const history: string[] = [];
       const legacyReads: string[] = [];
+      const mutations: string[] = [];
       let recovered = initial === "consumed";
       const capsuleId = "cap_shared_run";
       const planId = "plan_shared_run";
+      const freshPlanId = "plan_shared_run_unexecuted";
+      const applyType = planType === "destroy_plan" ? "destroy_apply" : "apply";
       const plan = {
         id: planId, workspaceId: "ws_alpha", capsuleId,
-        type: "plan", status: "succeeded", policyStatus: "pass",
+        type: planType, status: "succeeded", policyStatus: "pass",
         createdBy: "member", createdAt: "2026-11-04T00:00:00Z",
         planDigest: `sha256:${"a".repeat(64)}`, baseStateGeneration: 1,
+        summary: { add: planType === "plan" ? 1 : 0, change: 0, destroy: planType === "destroy_plan" ? 1 : 0 },
       };
+      const freshPlan = { ...plan, id: freshPlanId, createdAt: "2026-11-05T00:00:00Z" };
+      const consumedBy = { ...plan, id: "apply_shared_run", type: applyType, status: applyStatus, planRunId: planId };
       await page.route("**/api/v1/**", async (route) => {
-        const url = new URL(route.request().url());
+        const request = route.request();
+        const url = new URL(request.url());
         const path = url.pathname;
-        if (path === `/api/v1/runs/${planId}`) return route.fulfill({ json: { run: plan } });
-        if (path === `/api/v1/runs/${planId}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
-        if (path === `/api/v1/runs/${planId}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
-        if (path === `/api/v1/runs/${planId}/cost`) return route.fulfill({ json: { cost: {
-          runId: planId, billingMode: "disabled", estimatedUsdMicros: 0,
+        if (request.method() !== "GET") {
+          mutations.push(`${request.method()} ${path}`);
+          return route.fulfill({ status: 503, json: { error: "unexpected_mutation" } });
+        }
+        const displayed = [plan, freshPlan].find((run) =>
+          path === `/api/v1/runs/${run.id}` || path.startsWith(`/api/v1/runs/${run.id}/`));
+        if (displayed && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+        if (displayed && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        if (displayed && path.endsWith("/cost")) return route.fulfill({ json: { cost: {
+          runId: displayed.id, billingMode: "disabled", estimatedUsdMicros: 0,
           ratingStatus: "not_applicable", blocked: false, reasons: [],
         } } });
+        if (displayed) return route.fulfill({ json: { run: displayed } });
         if (path === `/api/v1/capsules/${capsuleId}`) return route.fulfill({ json: { capsule: {
           id: capsuleId, workspaceId: "ws_alpha", name: "Shared Run App", environment: "production",
           status: "active", currentStateGeneration: 1, createdAt: plan.createdAt, updatedAt: plan.createdAt,
         } } });
         if (path === `/api/v1/capsules/${capsuleId}/runs`) {
           history.push(url.search);
-          if (!recovered) {
-            if (initial === "incomplete") return route.fulfill({ json: { runs: [], nextCursor: "older" } });
-            if (url.searchParams.has("cursor")) return route.fulfill({ status: 503, json: { error: "unavailable" } });
+          const linkedPlanId = url.searchParams.get("planRunId");
+          if (linkedPlanId !== null) {
+            expect([planId, freshPlanId]).toContain(linkedPlanId);
+            expect(url.searchParams.getAll("type")).toEqual([applyType]);
+            if (!recovered) {
+              if (initial === "incomplete") return route.fulfill({ json: { runs: [], nextCursor: "older" } });
+              return route.fulfill({ status: 503, json: { error: "unavailable" } });
+            }
+            return route.fulfill({ json: { runs: linkedPlanId === planId ? [consumedBy] : [] } });
           }
-          return route.fulfill({ json: url.searchParams.get("cursor") === "older"
-            ? { runs: [{ ...plan, id: "apply_shared_run", type: "apply", status: "failed", planRunId: planId }] }
-            : { runs: Array.from({ length: 100 }, (_, index) => ({
-                ...plan, id: `other_${index}`, type: "apply", status: "failed", planRunId: "plan_other",
-              })), nextCursor: "older" },
+          // The old bounded history reader cannot reach the consuming Apply:
+          // both first pages contain only newer, unrelated Runs.
+          const cursor = url.searchParams.get("cursor");
+          if (cursor === "consumed") return route.fulfill({ json: { runs: [consumedBy] } });
+          return route.fulfill({
+            json: {
+              runs: Array.from({ length: 100 }, (_, index) => ({
+                ...consumedBy, id: `other_${cursor ?? "first"}_${index}`, planRunId: "plan_other",
+                createdAt: "2026-11-06T00:00:00Z",
+              })), nextCursor: cursor === "older" ? "consumed" : "older",
+            },
           });
         }
         if (path.startsWith("/api/v1/workspaces/")) {
@@ -395,9 +438,28 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         await page.getByRole("button", { name: "Retry", exact: true }).click();
       }
       await expect(page.locator(".av-run-summary")).toContainText("This review has already been used.");
-      expect(history.slice(-2)).toEqual(["?limit=100", "?limit=100&cursor=older"]);
+      expect(history.length).toBeGreaterThan(0);
+      for (const query of history) {
+        const params = new URLSearchParams(query);
+        expect(params.get("planRunId")).toBe(planId);
+        expect(params.getAll("type")).toEqual([applyType]);
+      }
       expect(legacyReads).toEqual([]);
       await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Run destructive changes anyway", exact: true })).toHaveCount(0);
+      expect(mutations).toEqual([]);
+      if (planType === "plan" && initial === "consumed") {
+        const beforeFresh = history.length;
+        await page.goto(`/runs/${freshPlanId}`, { waitUntil: "domcontentloaded" });
+        await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toBeEnabled();
+        expect(history.length).toBeGreaterThan(beforeFresh);
+        for (const query of history.slice(beforeFresh)) {
+          const params = new URLSearchParams(query);
+          expect(params.get("planRunId")).toBe(freshPlanId);
+          expect(params.getAll("type")).toEqual([applyType]);
+        }
+        expect(mutations).toEqual([]);
+      }
       expect(errors).toEqual([]);
     });
     }

@@ -692,6 +692,7 @@ export interface ControlPlaneOperations {
       readonly limit?: number;
       readonly cursor?: string;
       readonly types?: readonly RunType[];
+      readonly planRunId?: string;
     },
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
   createCapsulePlan(

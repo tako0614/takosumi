@@ -29,10 +29,15 @@ test("the actual reader pages the app ledger and returns only one exact linked o
       runs: Array.from({ length: 100 }, (_, i) => ({ ...apply, id: `older_${i}`, planRunId: "other" })), nextCursor: "older",
     });
   }, async () => expect(await recoverApplyRun(plan, { isCurrent: () => true })).toEqual(apply));
-  expect(calls).toEqual(["GET /api/v1/capsules/app/runs?limit=100&type=apply", "GET /api/v1/capsules/app/runs?limit=100&cursor=older&type=apply", "GET /api/v1/runs/accepted"]);
+  expect(calls).toEqual([
+    `GET /api/v1/capsules/app/runs?limit=100&type=apply&planRunId=${plan.id}`,
+    `GET /api/v1/capsules/app/runs?limit=100&cursor=older&type=apply&planRunId=${plan.id}`,
+    "GET /api/v1/runs/accepted",
+  ]);
   await withFetch(async url => {
     if (url.pathname === "/api/v1/runs/accepted") return Response.json({ run: { ...apply, type: "destroy_apply" } });
     expect(url.searchParams.get("type")).toBe("destroy_apply");
+    expect(url.searchParams.get("planRunId")).toBe(plan.id);
     return Response.json({ runs: [{ ...apply, type: "destroy_apply" }] });
   }, async () => expect((await recoverApplyRun({ ...plan, type: "destroy_plan" }, { isCurrent: () => true }))?.id).toBe(apply.id));
 });

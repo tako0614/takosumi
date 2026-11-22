@@ -2318,6 +2318,7 @@ export async function listCapsuleRuns(
     readonly limit?: number;
     readonly cursor?: string;
     readonly types?: readonly RunType[];
+    readonly planRunId?: string;
     readonly signal?: AbortSignal;
     readonly isCurrent?: () => boolean;
   } = {},
@@ -2328,6 +2329,7 @@ export async function listCapsuleRuns(
   }
   if (options.cursor) params.set("cursor", options.cursor);
   for (const type of options.types ?? []) params.append("type", type);
+  if (options.planRunId !== undefined) params.set("planRunId", options.planRunId);
   const search = params.toString();
   const body = await controlFetch<{ runs?: unknown; nextCursor?: unknown }>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/runs${search ? `?${search}` : ""}`,
@@ -2353,30 +2355,44 @@ export async function listCapsuleRuns(
     : { runs };
 }
 
-/** A bounded newest-first app window for approval and lost-ACK recovery. */
-export async function listRecentCapsuleRuns(
-  capsuleId: string,
-  limit: number,
+export type ApplyReviewRun = Pick<Run, "id" | "type" | "capsuleId" | "workspaceId">;
+
+/** Read the exact Apply attempts for one review. Older servers may ignore
+ * the Plan filter, so check each row and bound the fallback pagination. */
+export async function listPlanApplyRuns(
+  plan: ApplyReviewRun,
+  scope: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<readonly Run[]> {
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Run window limit must be a positive integer.");
-  const runs: Run[] = [];
-  const cursors = new Set<string>();
-  let cursor: string | undefined;
-  // A normal app page fills its requested limit unless it is the final page.
-  // Bound reads even if an invalid server sends empty pages with cursors.
-  const maxPages = Math.ceil(limit / CAPSULE_RUN_PAGE_MAX);
-  for (let pageIndex = 0; pageIndex < maxPages; pageIndex++) {
-    const page = await listCapsuleRuns(capsuleId, {
-      limit: Math.min(CAPSULE_RUN_PAGE_MAX, limit - runs.length),
-      ...(cursor ? { cursor } : {}),
-    });
-    runs.push(...page.runs.slice(0, limit - runs.length));
-    if (runs.length === limit || !page.nextCursor) return runs;
-    if (cursors.has(page.nextCursor)) break;
-    cursor = page.nextCursor;
-    cursors.add(cursor);
+  const { id, capsuleId, workspaceId } = plan;
+  if (!id || !capsuleId || !workspaceId || (plan.type !== "plan" && plan.type !== "destroy_plan")) {
+    throw new Error("An app Plan is required to read Apply history.");
   }
-  throw new ControlApiError(502, "incomplete_capsule_runs_response", "App history window could not be read completely.");
+  const type = plan.type === "plan" ? "apply" : "destroy_apply";
+  const matches: Run[] = [];
+  let cursor: string | undefined;
+  for (let pageIndex = 0; pageIndex < 2; pageIndex++) {
+    throwIfAborted(scope.signal);
+    throwIfReadRetired(scope);
+    const page = await listCapsuleRuns(capsuleId, {
+      ...scope,
+      limit: CAPSULE_RUN_PAGE_MAX,
+      ...(cursor ? { cursor } : {}),
+      types: [type],
+      planRunId: id,
+    });
+    throwIfAborted(scope.signal);
+    throwIfReadRetired(scope);
+    if (page.runs.length > CAPSULE_RUN_PAGE_MAX) break;
+    matches.push(...page.runs.filter((run) =>
+      typeof run.id === "string" && run.id !== "" && run.id !== id &&
+      run.type === type && run.workspaceId === workspaceId &&
+      run.capsuleId === capsuleId && run.planRunId === id
+    ));
+    if (!page.nextCursor) return matches;
+    if (page.nextCursor === cursor) break;
+    cursor = page.nextCursor;
+  }
+  throw new ControlApiError(502, "incomplete_capsule_runs_response", "Apply history could not be read completely.");
 }
 
 // --- Sources ---------------------------------------------------------------

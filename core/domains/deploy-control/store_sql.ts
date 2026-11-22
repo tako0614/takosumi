@@ -4488,6 +4488,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         where: and(
           eq(pgSchema.runs.capsuleId, capsuleId),
           eq(pgSchema.runs.workspaceId, options.workspaceId),
+          options.planRunId !== undefined
+            ? inArray(pgSchema.runs.kind, ["apply", "destroy_apply"])
+            : undefined,
+          options.planRunId !== undefined
+            ? eq(
+                sql`${pgSchema.runs.runJson} ->> 'planRunId'`,
+                options.planRunId,
+              )
+            : undefined,
           options.kinds !== undefined
             ? inArray(pgSchema.runs.kind, [...options.kinds])
             : undefined,

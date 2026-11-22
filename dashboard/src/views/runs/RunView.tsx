@@ -50,7 +50,7 @@ import {
   listStateVersions,
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
-  listRecentCapsuleRuns,
+  listPlanApplyRuns,
   openRunStream,
   type ProviderConnection,
   type ProviderResolution,
@@ -136,7 +136,7 @@ import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
 import { appPageHref } from "../../lib/app-links.ts";
 import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
-import { APPLY_RECOVERY_RUN_LIMIT, recoverApplyRun } from "../../lib/apply-run-recovery.ts";
+import { recoverApplyRun } from "../../lib/apply-run-recovery.ts";
 import {
   createLastGoodValue,
   latestOrUndefined,
@@ -147,7 +147,6 @@ const RELEASE_ACTIVATION_POLL_MS = 3_000;
 /** Newest-slice size of the Workspace Run ledger fetched to decide whether a
  * succeeded review run's deploy approval was already consumed by a later
  * apply (matches the run history's first page). */
-const SIBLING_RUNS_LIMIT = APPLY_RECOVERY_RUN_LIMIT;
 
 export default function RunView() {
   return <Page>{(session) => <Inner session={session} />}</Page>;
@@ -947,7 +946,7 @@ function Inner(props: { readonly session: SessionRecord }) {
   // Whether this plan's deploy approval is still OPEN is not a run-local
   // fact: an apply / destroy_apply explicitly linked by planRunId consumes it
   // (the run history's semantics, shared via lib/run-approval.ts). Read the
-  // newest slice of the app's Run ledger whenever this run COULD await a
+  // exact Apply history whenever this run could await a
   // deploy — an already-applied plan opened from history must not present
   // 承認待ち + an active デプロイを実行 CTA again.
   const [siblingRuns, { refetch: refetchSiblingRuns }] = createResource(
@@ -956,9 +955,9 @@ function Inner(props: { readonly session: SessionRecord }) {
       const r = runLatest();
       if (!r?.capsuleId || !isDeployApprovalCandidate(r)) return null;
       // Key by run id so navigating plan → apply → back re-reads the ledger.
-      return [r.capsuleId, r.id] as const;
+      return [r.capsuleId, r.id, r.workspaceId, r.type] as const;
     },
-    ([capsuleId]) => listRecentCapsuleRuns(capsuleId, SIBLING_RUNS_LIMIT),
+    ([capsuleId, id, workspaceId, type]) => listPlanApplyRuns({ capsuleId, id, workspaceId, type }),
   );
   const isDeployableRun = (r: Run): boolean => {
     if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply()) return false;

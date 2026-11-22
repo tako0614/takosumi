@@ -111,6 +111,11 @@ export async function handleCapsuleRuns(
   }
   const rawCursor = url.searchParams.get("cursor");
   const cursor = rawCursor === null || rawCursor === "" ? undefined : rawCursor;
+  const planRunIds = url.searchParams.getAll("planRunId");
+  if (planRunIds.length > 1 || planRunIds[0]?.trim() === "") {
+    return errorJson("invalid_request", "planRunId must be a single non-empty Run ID", 400);
+  }
+  const planRunId = planRunIds[0];
   const rawTypes = url.searchParams.getAll("type");
   const types: RunType[] = [];
   for (const value of rawTypes) {
@@ -124,6 +129,7 @@ export async function handleCapsuleRuns(
     limit,
     ...(cursor !== undefined ? { cursor } : {}),
     ...(types.length > 0 ? { types } : {}),
+    ...(planRunId !== undefined ? { planRunId } : {}),
   });
   return json({
     runs: await Promise.all(

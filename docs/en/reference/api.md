@@ -740,6 +740,8 @@ the cancel and schedule commands' own admission rules.
 
 `GET /api/v1/capsules/{capsuleId}/runs` pages newest first with `limit`
 (default 50, at most 100) and `cursor`; repeat `type` to filter by Run type.
+Provide one `planRunId` to list only Apply Runs that reference that plan,
+including failed attempts. This filter can be combined with `type`.
 
 ### Interface links
 

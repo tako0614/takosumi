@@ -3762,6 +3762,8 @@ export interface CapsuleRunListOptions {
   readonly after?: RunListPosition;
   /** Exact persisted run kinds (the public Run `type`); absent means all. */
   readonly kinds?: readonly RunType[];
+  /** Exact parent PlanRun, restricted to matching ApplyRun rows. */
+  readonly planRunId?: string;
 }
 
 export interface RuntimeSecretRetirementDispatchClaimInput {
@@ -5739,6 +5741,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       .filter((row) =>
         row.workspaceId === options.workspaceId &&
         storedRunRecordCapsuleId(row) === capsuleId &&
+        (options.planRunId === undefined ||
+          (isApplyRunRecord(row) && row.planRunId === options.planRunId)) &&
         (kinds === undefined || kinds.has(storedRunRecordKind(row)))
       )
       .filter((row) => {

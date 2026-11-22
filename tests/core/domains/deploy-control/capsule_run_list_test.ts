@@ -72,13 +72,18 @@ function planRun(id: string, createdAt: number, over: Partial<PlanRun> = {}): Pl
   };
 }
 
-function applyRun(id: string, planRunId: string, createdAt: number): ApplyRun {
+function applyRun(
+  id: string,
+  planRunId: string,
+  createdAt: number,
+  operation: "update" | "destroy" = "update",
+): ApplyRun {
   return {
     id,
     planRunId,
     workspaceId: "ws_app",
     capsuleId: "cap_app",
-    operation: "update",
+    operation,
     runnerProfileId: "opentofu-default",
     status: "failed",
     expected: {
@@ -183,6 +188,69 @@ test("Capsule Run pages narrow to exact persisted kinds across stores", async ()
       await store.listRunsByCapsulePage("cap_app", { workspaceId: "ws_app", kinds: [] }),
       label,
     ).toEqual({ rows: [], hasMore: false });
+  }
+});
+
+test("Capsule Run pages filter exact failed Apply and Destroy lineage before paging across stores", async () => {
+  for (const [label, store] of await stores()) {
+    await seed(store);
+    // Existing newer unrelated rows prove the Plan filter is applied before
+    // LIMIT. The second failed Apply exercises cursor paging within one Plan.
+    await store.putApplyRun(
+      applyRun("apply_older", "plan_old", 1_893_456_050_000),
+    );
+    await store.putApplyRun(
+      applyRun("destroy_failed", "plan_destroy", 1_893_456_350_000, "destroy"),
+    );
+    await store.putApplyRun({
+      ...applyRun("apply_other_plan", "plan_other", 1_893_456_400_000),
+    });
+    await store.putApplyRun({
+      ...applyRun("apply_other_workspace", "plan_old", 1_893_456_500_000),
+      workspaceId: "ws_other",
+    });
+    await store.putApplyRun({
+      ...applyRun("apply_other_capsule", "plan_old", 1_893_456_600_000),
+      capsuleId: "cap_other",
+    });
+    await store.putCompatibilityCheckRun(
+      publicRun("non_apply_same_link", "2030-01-01T00:13:00.000Z", {
+        planRunId: "plan_old",
+      }),
+    );
+
+    const first = await store.listRunsByCapsulePage("cap_app", {
+      workspaceId: "ws_app",
+      planRunId: "plan_old",
+      kinds: ["apply", "destroy_apply"],
+      limit: 1,
+    });
+    expect(first.rows.map(({ id }) => id), label).toEqual(["apply_mid"]);
+    expect(first.hasMore, label).toBe(true);
+    const second = await store.listRunsByCapsulePage("cap_app", {
+      workspaceId: "ws_app",
+      planRunId: "plan_old",
+      kinds: ["apply", "destroy_apply"],
+      limit: 1,
+      after: { createdAtMillis: 1_893_456_100_000, id: "apply_mid" },
+    });
+    expect(second.rows.map(({ id }) => id), label).toEqual(["apply_older"]);
+    expect(second.hasMore, label).toBe(false);
+
+    const destroy = await store.listRunsByCapsulePage("cap_app", {
+      workspaceId: "ws_app",
+      planRunId: "plan_destroy",
+      kinds: ["destroy_apply"],
+    });
+    expect(destroy.rows.map(({ id }) => id), label).toEqual(["destroy_failed"]);
+    expect(
+      (await store.listRunsByCapsulePage("cap_app", {
+        workspaceId: "ws_app",
+        planRunId: "plan_old",
+        kinds: ["destroy_apply"],
+      })).rows,
+      label,
+    ).toEqual([]);
   }
 });
 
