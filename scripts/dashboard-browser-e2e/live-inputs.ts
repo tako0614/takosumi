@@ -4,6 +4,13 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 export const WORKER_VERSION_ID_PATTERN =
   /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 
+/** Keep the restricted live journey out of the general dashboard suite. */
+export function dashboardBrowserSpec(mode: string, profile: string | undefined): string {
+  return mode === "live" && profile === "shared-auth-install-return"
+    ? "shared_auth_install_return_test.ts"
+    : "dashboard_test.ts";
+}
+
 /** Validate the immutable Worker Version identity supplied by the operator. */
 export function validateExpectedWorkerVersionId(
   value: string,
