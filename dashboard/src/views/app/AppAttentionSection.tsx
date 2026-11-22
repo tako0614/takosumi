@@ -117,6 +117,8 @@ export default function AppAttentionSection(props: {
   readonly notice?: string;
   /** The run of the review open in this section, if any. */
   readonly reviewRunId?: string;
+  /** The current removal Plan that the owner can open in place of the open review. */
+  readonly switchableReviewId?: string;
   readonly review: JSX.Element;
   readonly actions: AttentionActions;
 }): JSX.Element {
@@ -462,7 +464,7 @@ export default function AppAttentionSection(props: {
                   <Button
                     variant="secondary"
                     type="button"
-                    disabled={props.busy}
+                    disabled={props.busy && props.switchableReviewId !== review().runId}
                     onClick={() => props.actions.openReview(review().runId, review().runType)}
                   >
                     {t("app.action.review")}
