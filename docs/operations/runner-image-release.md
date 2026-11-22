@@ -36,12 +36,17 @@ never accepts `--execute`.
 
 ## Source and configuration gates
 
-All runner operations require clean attached source. `staging` accepts the
+Build, reconciliation, journal recovery, and activation verification require
+clean attached source. `staging` accepts the
 current feature branch only when `HEAD` equals both local
 `origin/<current-branch>` and a fresh `git ls-remote` read of the same branch.
 `production` additionally requires `main`, with `HEAD` exactly equal to pushed
 `origin/main`. The evidence records the branch, repository, commit, and source
 authority digest.
+
+The standard staging Runner also supports an explicit read-only
+`verify --staging-code` mode. It accepts a clean detached checkout that
+matches the operator's sibling source pin and the code deployment receipt.
 
 The external Wrangler config must use exactly `takosumi-staging` or `takosumi`
 for the selected environment and contain exactly one `OpenTofuRunnerObject`
@@ -580,6 +585,18 @@ completed native rollout proof used by the platform links both views. It
 then rechecks that the exact Worker Version is still serving.
 Readback is bounded. An unsettled or ambiguous application records incomplete
 evidence and never causes a Worker mutation.
+
+After a routine stage code deployment, pass `--staging-code` to the same
+command and supply its private `takosumi.platform-worker-staging-code@v1`
+ready receipt as `--platform-evidence`. This requires a fresh deployment
+receipt with `sourceProvenance` and the proved build record for the selected
+standard Runner image. Verification checks the exact checkout and config,
+the single serving Worker Version, its tag, the Worker bundle digest in its
+release annotation, and the realized bindings. It reads the Runner application
+and checks the serving Version and local source again before recording success.
+The dashboard digest is copied from the deployment receipt. Reviewed
+activation evidence applies to production, metered Runner, and activation
+verification.
 
 ## Rollback
 

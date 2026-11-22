@@ -2175,7 +2175,7 @@ function assertStagingCodeResumeSource(configPath: string): string {
   return `${platformReleaseSourceAuthorityDigest(pin)}:${checkout.commit}`;
 }
 
-function cleanStagingCodeSource(
+export function cleanStagingCodeSource(
   root: string,
   configPath: string,
   configSha256: string,

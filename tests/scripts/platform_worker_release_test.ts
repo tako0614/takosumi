@@ -34,6 +34,7 @@ import {
   withPlatformForwardContainerPreflight,
 } from "../../scripts/platform-worker-release.ts";
 import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
+import { runRunnerImageRelease } from "../../scripts/runner-image-release.ts";
 import { platformExtensionRoutes } from "../../deploy/platform/platform_extensions.ts";
 import { capsulePublicOriginFromPlatformExtensions, platformExtensionProviderCredentialComposition } from "../../deploy/platform/platform_extension_provider_credentials.ts";
 import {
@@ -502,6 +503,7 @@ async function exerciseCodeLane(options: {
   readonly unrelatedBindingDrift?: boolean;
   readonly bindingReplacedBySecret?: string;
   readonly codeSource?: "clean" | "dirty" | "hidden-index-change" | "file-mode-change" | "during-build" | "after-activation";
+  readonly verifyRunner?: "ready" | "wrong-source" | "wrong-tag" | "missing-provenance" | "serving-drift";
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-code-lane-test-"));
   const configPath = join(directory, "wrangler.toml");
@@ -517,7 +519,14 @@ async function exerciseCodeLane(options: {
       return new TextDecoder().decode(result.stdout).trim();
     };
     git("init", "-q");
-    git("add", "source.ts");
+    if (options.verifyRunner) {
+      mkdirSync(join(codeRoot, "runner"));
+      mkdirSync(join(codeRoot, "deploy/platform"), { recursive: true });
+      mkdirSync(join(codeRoot, "dashboard/dist"), { recursive: true });
+      writeFileSync(join(codeRoot, "deploy/platform/entry-worker.ts"), CODE_BUNDLE);
+      writeFileSync(join(codeRoot, "runner/Dockerfile"), "FROM scratch\n");
+    }
+    git("add", ".");
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
       "commit", "-qm", "pin synthetic worker source");
     const pin = {
@@ -526,6 +535,7 @@ async function exerciseCodeLane(options: {
       commit: git("rev-parse", "HEAD"),
     } as const;
     git("remote", "add", "origin", pin.repository);
+    if (options.verifyRunner) git("checkout", "--detach", "-q", pin.commit);
     writeFileSync(join(directory, "wrangler.source.json"), JSON.stringify(pin), { mode: 0o600 });
     expectedSourceProvenance = {
       sourceCommit: pin.commit,
@@ -704,6 +714,9 @@ async function exerciseCodeLane(options: {
     return Reflect.apply(write, process.stdout, args);
   });
   let error: unknown;
+  let runnerVerification: unknown;
+  let runnerError: unknown;
+  const runnerReads: string[] = [];
   try {
     await (options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
       options.resume
@@ -763,6 +776,92 @@ async function exerciseCodeLane(options: {
         nonce: () => "1".repeat(32),
       },
     );
+    if (options.verifyRunner && expectedSourceProvenance) {
+      const sha256 = (value: string) =>
+        `sha256:${Bun.CryptoHasher.hash("sha256", value, "hex")}`;
+      const mode = options.verifyRunner;
+      const previousImage = PROVED_RUNNER_IMAGE;
+      const buildEvidence = join(directory, "build.jsonl");
+      const platformEvidence = join(directory, "platform.json");
+      const receipt = JSON.parse(resultLines[0]!);
+      if (mode === "wrong-source") receipt.sourceProvenance.sourceTree = "0".repeat(40);
+      if (mode === "wrong-tag") receipt.releaseTag = `tks-stg-code-${"2".repeat(32)}`;
+      if (mode === "missing-provenance") delete receipt.sourceProvenance;
+      writeFileSync(platformEvidence, JSON.stringify(receipt), { mode: 0o600 });
+      const transportTag = "release-1";
+      writeFileSync(buildEvidence, `${JSON.stringify({
+        kind: "takosumi.runner-image-release@v3",
+        operation: "build",
+        status: "published",
+        environment: "staging",
+        release: transportTag,
+        observedAt: "2026-08-27T00:00:00.000Z",
+        source: {
+          branch: "main",
+          repository: "https://github.com/example/takosumi.git",
+          commit: expectedSourceProvenance.sourceCommit,
+          authoritySha256: expectedSourceProvenance.sourceAuthoritySha256,
+          dockerfileSha256: sha256("FROM scratch\n"),
+          buildContextSha256: sha256("fixture build context"),
+        },
+        config: {
+          path: configPath,
+          buildSha256: sha256(source.replace(STATUS_CONTAINER_IMAGE, previousImage)),
+          expectedActivationSha256: sha256(source),
+          previousImage,
+        },
+        image: {
+          transportTag,
+          transportRef: STATUS_CONTAINER_IMAGE.replace(/@sha256:.+/u, `:${transportTag}`),
+          immutableRef: STATUS_CONTAINER_IMAGE,
+          imageConfigDigest: sha256("fixture image"),
+        },
+        runtimeInputPlanProof: {
+          kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+          image: STATUS_CONTAINER_IMAGE,
+        },
+        review: "operator:builder",
+      })}\n`, { mode: 0o600 });
+      try {
+        runnerVerification = await runRunnerImageRelease({
+          command: "verify",
+          environment: "staging",
+          config: configPath,
+          release: transportTag,
+          stagingCode: true,
+          buildEvidence,
+          platformEvidence,
+          evidence: join(directory, "verify.jsonl"),
+          execute: true,
+          review: "operator:fixture",
+        }, {
+          repositoryRoot: codeRoot,
+          command: async (executable, args, cwd) => {
+            if (executable === "git") {
+              const result = Bun.spawnSync([executable, ...args], { cwd });
+              return {
+                exitCode: result.exitCode,
+                stdout: result.stdout.toString(),
+                stderr: result.stderr.toString(),
+              };
+            }
+            const operation = args.slice(1, 3).join(" ");
+            runnerReads.push(operation);
+            if (!["deployments status", "versions view", "secret list", "containers list", "containers info"].includes(operation)) {
+              throw new Error(`unexpected runner operation ${operation}`);
+            }
+            if (mode === "serving-drift" && operation === "deployments status" && runnerReads.length > 1) {
+              return { exitCode: 0, stdout: JSON.stringify({
+                versions: [{ version_id: CODE_PREDECESSOR_ID, percentage: 100 }],
+              }), stderr: "" };
+            }
+            return command([...args]);
+          },
+        });
+      } catch (caught) {
+        runnerError = caught;
+      }
+    }
   } catch (caught) {
     error = caught;
   } finally {
@@ -790,6 +889,9 @@ async function exerciseCodeLane(options: {
     uploadConfigSource,
     activationConfigSource,
     expectedSourceProvenance,
+    runnerVerification,
+    runnerError,
+    runnerReads,
   };
 }
 
@@ -1147,6 +1249,40 @@ test("routine code reports the source provenance of a clean checkout", async () 
     deployedVersionId: CODE_DEPLOYED_ID,
     sourceProvenance: result.expectedSourceProvenance,
   });
+});
+
+test("Runner verify consumes the ordinary code receipt from exact detached staging source", async () => {
+  const result = await exerciseCodeLane({ codeSource: "clean", verifyRunner: "ready" });
+  expect(result.error).toBeUndefined();
+  expect(result.runnerError).toBeUndefined();
+  expect(result.runnerVerification).toMatchObject({
+    status: "verified",
+    image: STATUS_CONTAINER_IMAGE,
+    platform: {
+      kind: "takosumi.platform-worker-staging-code@v1",
+      deployedVersionId: CODE_DEPLOYED_ID,
+      sourceProvenance: result.expectedSourceProvenance,
+    },
+  });
+  expect(result.runnerReads).toEqual([
+    "deployments status", "versions view", "secret list",
+    "containers list", "containers info", "deployments status",
+  ]);
+});
+
+test.each([
+  ["wrong-source", "runner_image_staging_code_source_mismatch", []],
+  ["missing-provenance", "runner_image_staging_code_evidence_invalid", []],
+  ["wrong-tag", "platform_worker_release_version_identity_invalid", ["deployments status", "versions view"]],
+  ["serving-drift", "platform evidence Worker Version is not serving exactly", [
+    "deployments status", "versions view", "secret list",
+    "containers list", "containers info", "deployments status",
+  ]],
+] as const)("Runner verify refuses the staging receipt with %s", async (verifyRunner, message, reads) => {
+  const result = await exerciseCodeLane({ codeSource: "clean", verifyRunner });
+  expect(result.error).toBeUndefined();
+  expect(result.runnerError).toEqual(new Error(message));
+  expect(result.runnerReads).toEqual([...reads]);
 });
 
 test.each(["dirty", "hidden-index-change", "file-mode-change", "during-build", "after-activation"] as const)(
