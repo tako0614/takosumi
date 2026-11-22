@@ -15,6 +15,7 @@
 import type { ProviderConnection } from "takosumi-contract/connections";
 import type { CredentialRecipeRuntimeDriver } from "takosumi-contract/credential-recipe-host";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
+import { REFERENCE_CREDENTIAL_RECIPES } from "../credential-recipes.generated.ts";
 import {
   cloudflareProviderSettings,
   type CloudflareTokenVendingConfig,
@@ -55,6 +56,7 @@ export function hasCloudflareVerifiedAccountScope(connection: ProviderConnection
 
 const TOKEN_ENV = "CLOUDFLARE_API_TOKEN";
 const ACCOUNT_ENV = "CLOUDFLARE_ACCOUNT_ID";
+const REFERENCE_RECIPE = REFERENCE_CREDENTIAL_RECIPES.find((recipe) => recipe.id === "cloudflare");
 
 function cloudflareDestroyTokenMode(
   connection: ProviderConnection,
@@ -79,6 +81,27 @@ function cloudflareDestroyTokenMode(
 export const cloudflareDestroyCredentialDelivery: NonNullable<
   CredentialRecipeRuntimeDriver["destroyCredentialDelivery"]
 > = {
+  recoverRevokedShape(evidence, replacement) {
+    if (cloudflareDestroyTokenMode(replacement) !== "api_token" ||
+      !REFERENCE_RECIPE || evidence.materialization !== "oauth" ||
+      evidence.provider !== replacement.providerSource ||
+      evidence.requiredEnvNames.length !== 1 || evidence.requiredEnvNames[0] !== TOKEN_ENV) return;
+    // The full binding digest must independently confirm this registration
+    // shape before any selected credential can be minted for Destroy.
+    return {
+      materialization: "oauth",
+      envNames: [TOKEN_ENV],
+      credentialRecipe: {
+        id: REFERENCE_RECIPE.id,
+        authMode: "oauth",
+        secretPartition: REFERENCE_RECIPE.secretPartition,
+        envNames: [TOKEN_ENV],
+        fileEnvNames: [],
+        requiredEnvGroups: REFERENCE_RECIPE.requiredEnvGroups ?? [],
+        preRunAction: "cloudflare_oauth",
+      },
+    };
+  },
   preserve(applied, replacement, appliedEnvNames) {
     const originalMode = cloudflareDestroyTokenMode(applied);
     const replacementMode = cloudflareDestroyTokenMode(replacement);

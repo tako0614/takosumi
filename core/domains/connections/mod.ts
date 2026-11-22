@@ -11,7 +11,11 @@ import { InMemoryOpenTofuControlStore } from "../deploy-control/store.ts";
  * Operator/Cloud extensions, not OSS resolver materializations.
  */
 import type { DestroyConnectionCredentialDelivery, ProviderConnection } from "@takosumi/internal/deploy-control-api";
-import type { PreserveDestroyCredentialDelivery } from "takosumi-contract/credential-recipe-host";
+import type {
+  PreserveDestroyCredentialDelivery,
+  RecoverRevokedDestroyCredentialShape,
+} from "takosumi-contract/credential-recipe-host";
+import type { ProviderConnectionResolutionEvidence } from "takosumi-contract/provider-resolution";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { randomUUID } from "node:crypto";
@@ -519,6 +523,9 @@ export class ConnectionsService {
     };
     readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
     readonly preserveCredentialDelivery?: PreserveDestroyCredentialDelivery;
+    readonly resolveRevokedCredentialEvidence?: (connectionId: string) =>
+      Promise<ProviderConnectionResolutionEvidence | undefined>;
+    readonly recoverRevokedCredentialShape?: RecoverRevokedDestroyCredentialShape;
     readonly credentialDelivery?: readonly DestroyConnectionCredentialDelivery[];
     /** Used only while creating a new manual Destroy Plan. */
     readonly captureCredentialDelivery?: boolean;
@@ -625,7 +632,17 @@ export class ConnectionsService {
       if (entry.connection.id === selectedEntry.connection.id) return unchanged;
       const replacementRecipe = entry.connection.credentialRecipe;
       if (!replacementRecipe) return unchanged;
-      const original = await this.#store.getConnection(entry.connection.id).catch(() => undefined);
+      let original = await this.#store.getConnection(entry.connection.id).catch(() => null);
+      if (original === undefined && input.recoverRevokedCredentialShape &&
+        replacements.has(entry.connection.id)) {
+        const evidence = await input.resolveRevokedCredentialEvidence?.(entry.connection.id);
+        if (evidence && sameProviderSource(entry.provider, evidence.provider)) {
+          const shape = input.recoverRevokedCredentialShape(evidence, selectedEntry.connection);
+          // Digest preimage only. The selected row still provides the sole
+          // execution, account verification and mint authority.
+          if (shape) original = { ...entry.connection, ...shape };
+        }
+      }
       const originalRecipe = original?.credentialRecipe;
       if (!original || !originalRecipe || original.scope === "operator" ||
         !sameProviderSource(entry.provider, original.providerSource) ||
