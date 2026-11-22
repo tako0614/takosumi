@@ -106,6 +106,7 @@ import {
   handleSharedAuthRouteRequest,
   handleSharedAuthAccountBoundaryRequest,
   resolveSharedAuthWorkspace,
+  runScheduledSharedAuthMaintenance,
   sharedAuthUnavailableResponse,
   sharedAuthConfigured,
   sharedAuthRequestFailure,
@@ -972,6 +973,10 @@ const platformWorker = {
       typeof event === "object" && event !== null
         ? Reflect.get(event, "cron")
         : undefined;
+    await schedulePlatformSideEffect(
+      runScheduledSharedAuthMaintenance(env, cron),
+      context,
+    );
     await schedulePlatformSideEffect(runSourceMaintenanceSchedule({
       db: env.TAKOSUMI_CONTROL_DB,
       cron,
