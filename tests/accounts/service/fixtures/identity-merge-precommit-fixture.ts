@@ -9,17 +9,27 @@ import type { IdentityMergeMutation } from "../../../../accounts/service/src/ide
  * Keep the opaque checkpoint itself: cloning it deliberately loses provenance. */
 export type IsolatedExpiryBound = "operation" | "session-idle" | "session-absolute" | "proof" | "plan" | "context" | "email" | "email-max-age";
 export async function prepareIsolatedReserveMutation(kind: "memory" | "native-d1" | "postgres", expiryBound?: IsolatedExpiryBound) {
-  const originalMutation = HostedIdentityRecords.prototype.compareAndSetIdentityMerge;
-  let repository: IdentityRecordRepository | undefined;
-  HostedIdentityRecords.prototype.compareAndSetIdentityMerge = function (input) {
-    repository = this.repository;
-    return originalMutation.call(this, input);
-  };
   let fixture: Awaited<ReturnType<typeof identityContextFixture>> | undefined;
   try {
     fixture = await identityContextFixture(kind);
     const f = fixture;
-    let operation = await acceptIsolatedIdentityContexts(f.store, f.operation, f.now);
+    const compareAndSet = f.store.compareAndSetIdentityMerge!;
+    const originalCompare = compareAndSet.bind(f.store);
+    let repository: IdentityRecordRepository | undefined;
+    f.store.compareAndSetIdentityMerge = (input) => {
+      const originalMutation = HostedIdentityRecords.prototype.compareAndSetIdentityMerge;
+      HostedIdentityRecords.prototype.compareAndSetIdentityMerge = function (mutation) {
+        if (this.accounts === f.store) repository = this.repository;
+        return originalMutation.call(this, mutation);
+      };
+      // The store delegates synchronously. Restore the prototype before the
+      // database promise settles so another fixture can never inherit it.
+      try { return originalCompare(input); }
+      finally { HostedIdentityRecords.prototype.compareAndSetIdentityMerge = originalMutation; }
+    };
+    let operation: typeof f.operation;
+    try { operation = await acceptIsolatedIdentityContexts(f.store, f.operation, f.now); }
+    finally { f.store.compareAndSetIdentityMerge = compareAndSet; }
     let now = f.now;
     const deadline = now + 10;
     if (!repository) throw new Error("isolated_repository_not_captured");
@@ -60,7 +70,6 @@ export async function prepareIsolatedReserveMutation(kind: "memory" | "native-d1
       await f.store.saveAccountEmailProof!({ ...proof, ...(expiryBound === "email" ? { validUntil: deadline } : { observedAt: deadline - 300000 - 1 }) });
     }
     const clock = () => now;
-    const originalCompare = f.store.compareAndSetIdentityMerge!.bind(f.store);
     let mutation: IdentityMergeMutation | undefined;
     f.store.compareAndSetIdentityMerge = async (input) => { mutation = input; return false; };
     try {
@@ -70,7 +79,7 @@ export async function prepareIsolatedReserveMutation(kind: "memory" | "native-d1
       throw new Error("isolated_consent_should_stop_before_reservation");
     } catch (error) {
       if (!(error instanceof IdentityMergeConflict) || error.message !== "merge_conflict") throw error;
-    } finally { f.store.compareAndSetIdentityMerge = originalCompare; }
+    } finally { f.store.compareAndSetIdentityMerge = compareAndSet; }
     if (!mutation || !repository) throw new Error("isolated_reservation_not_captured");
     const captured = mutation;
     return { ...f, operation, mutation: captured, repository, clock, deadline,
@@ -79,5 +88,5 @@ export async function prepareIsolatedReserveMutation(kind: "memory" | "native-d1
   } catch (error) {
     await fixture?.close();
     throw error;
-  } finally { HostedIdentityRecords.prototype.compareAndSetIdentityMerge = originalMutation; }
+  }
 }

@@ -71,6 +71,27 @@ async function executeAfterPreparation(f: Fixture, time: number, stage: "prepare
   finally { crypto.subtle.digest = digest; }
 }
 
+test("overlapping identity precommit fixtures retain their own repositories", async () => {
+  const outcomes = await Promise.allSettled([
+    prepareIsolatedReserveMutation("memory"),
+    prepareIsolatedReserveMutation("memory"),
+  ]);
+  try {
+    const fixtures = outcomes.map((outcome) => {
+      if (outcome.status === "rejected") throw outcome.reason;
+      return outcome.value;
+    });
+    expect(fixtures[0]!.repository).not.toBe(fixtures[1]!.repository);
+    for (const fixture of fixtures) {
+      expect(await fixture.repository.get("identity_merge_operations", fixture.operation.operationId))
+        .toEqual(fixture.operation);
+    }
+  } finally {
+    await Promise.all(outcomes.flatMap((outcome) =>
+      outcome.status === "fulfilled" ? [outcome.value.close()] : []));
+  }
+});
+
 for (const kind of ["memory", "native-d1", "postgres"] as const) {
   test(`${kind}: fresh preparation refreshes SQL/audit time and consumes one checkpoint`, async () => {
     const f = await prepareIsolatedReserveMutation(kind);
