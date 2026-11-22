@@ -716,15 +716,22 @@ test("normal two-app installation keeps configuration recovery scoped to live ap
   expect(fixture.planJobs.at(-1)?.planRun.capsuleId).toBe(appA);
   const applied = await route("POST", `/api/v1/runs/${planRunId}/apply`);
   expect(applied.status).toBe(201);
-  // Discard the successful Apply body. Recovery uses the public app Run list,
-  // not that body, an invented Run ID, or a second Apply request.
-  const listed = await route("GET", `/api/v1/capsules/${appA}/runs`);
+  // Discard the successful Apply body. Recovery looks up the Plan's Apply
+  // through the same authorized app Run list, then rereads that exact Run.
+  const listQuery = new URLSearchParams({ planRunId, type: "apply" });
+  const planApplies = `/api/v1/capsules/${appA}/runs?${listQuery}`;
+  const listed = await route("GET", planApplies);
   expect(listed.status).toBe(200);
-  const runRows = (await listed.json()).runs as { id: string; type: string; capsuleId: string }[];
-  const recoveredRows = runRows.filter((r) => r.type === "apply" && !oldRunIds.includes(r.id));
-  expect(recoveredRows).toHaveLength(1);
-  const recoveredId = recoveredRows[0]!.id;
-  expect(recoveredRows[0]!.capsuleId).toBe(appA);
+  const history = await listed.json();
+  expect(history.runs).toHaveLength(1);
+  expect(history.nextCursor).toBeUndefined();
+  expect(history.runs[0]).toMatchObject({ type: "apply", capsuleId: appA, planRunId });
+  const recoveredId = history.runs[0].id as string;
+  expect(oldRunIds).not.toContain(recoveredId);
+  const wrongApp = await route("GET", `/api/v1/capsules/${appB}/runs?${listQuery}`);
+  expect(wrongApp.status).toBe(200);
+  expect((await wrongApp.json()).runs).toEqual([]);
+  expect((await route("GET", `${planApplies}&planRunId=other`)).status).toBe(400);
   const recovered = await route("GET", `/api/v1/runs/${recoveredId}`);
   expect(recovered.status).toBe(200);
   expect((await recovered.json()).run).toMatchObject({ id: recoveredId, capsuleId: appA, status: "succeeded" });
@@ -757,9 +764,11 @@ test("normal two-app installation keeps configuration recovery scoped to live ap
   expect(await fixture.appAccess.resolveAppAccess(member, appB)).toBeUndefined();
   expect((await route("GET", `/api/v1/runs/${recoveredId}`, undefined, undefined, memberSession)).status).toBe(200);
   expect((await route("GET", `/api/v1/runs/${installB.planRunId}`, undefined, undefined, memberSession)).status).toBe(403);
+  expect((await route("GET", planApplies, undefined, undefined, memberSession)).status).toBe(200);
   const removed = await route("DELETE", `/api/v1/capsules/${appA}/members/${member}`);
   expect(removed.status).toBe(204);
   expect(await fixture.appAccess.resolveAppAccess(member, appA)).toBeUndefined();
+  expect((await route("GET", planApplies, undefined, undefined, memberSession)).status).toBe(403);
   expect((await route("GET", `/api/v1/runs/${recoveredId}`, undefined, undefined, memberSession)).status).toBe(403);
   expect((await route("POST", `/api/v1/runs/${planRunId}/apply`, undefined, undefined, memberSession)).status).toBe(403);
   expect((await route("POST", `/api/v1/capsules/${appA}/configuration-plans`,

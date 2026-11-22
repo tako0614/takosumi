@@ -4936,6 +4936,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         where: and(
           eq(schema.runs.capsuleId, capsuleId),
           eq(schema.runs.workspaceId, options.workspaceId),
+          options.planRunId !== undefined
+            ? inArray(schema.runs.type, ["apply", "destroy_apply"])
+            : undefined,
+          options.planRunId !== undefined
+            ? eq(
+                sql`json_extract(${schema.runs.runJson}, '$.planRunId')`,
+                options.planRunId,
+              )
+            : undefined,
           options.kinds !== undefined
             ? inArray(schema.runs.type, [...options.kinds])
             : undefined,
