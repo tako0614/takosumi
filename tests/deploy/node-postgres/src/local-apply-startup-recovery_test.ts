@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultRunnerProfiles } from "../../../../core/domains/deploy-control/runner_profiles.ts";
-import { OpenTofuController, RUN_HEARTBEAT_STALE_MS, applyExpectedGuardFromPlanRun, type OpenTofuApplyJob, type OpenTofuApplyResult, type RunDispatchControl } from "../../../../core/domains/deploy-control/mod.ts";
+import { OpenTofuController, RUN_HEARTBEAT_STALE_MS, applyExpectedGuardFromPlanRun, type OpenTofuApplyJob, type OpenTofuApplyResult, type OpenTofuDestroyJob, type RunDispatchControl } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { stableJsonDigest, sha256Digest } from "../../../../core/adapters/source/digest.ts";
@@ -80,6 +80,102 @@ test("startup adopts the exact encrypted committed Apply through the existing Co
     expect(f.dispatches).toBe(1);
     expect(transport).not.toHaveBeenCalled();
   } finally { transport.mockRestore(); await rm(f.root, { recursive: true, force: true }); }
+});
+
+async function prepareStaleDestroy(f: Awaited<ReturnType<typeof fixture>>) {
+  await f.stateStore.commit(f.receipt);
+  await recoverLocalAppliesAtStartup(f.input);
+  const capsule = (await f.store.getCapsule(f.run.capsuleId!))!;
+  expect(capsule).toMatchObject({ status: "active", currentStateGeneration: 1 });
+  const { planRun } = await f.planning.createCapsuleDestroyPlan(capsule.id);
+  await f.controller.approveRun(planRun.id, { approvedBy: "fixture-owner" });
+  const { applyRun } = await f.controller.createApplyRun({
+    planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const heartbeatAt = f.run.heartbeatAt!;
+  const run = { ...applyRun, status: "running" as const, startedAt: heartbeatAt, heartbeatAt };
+  await f.store.putApplyRun(run);
+  const stateScope = {
+    ...f.job.stateScope!, generation: 2,
+    stateRef: new ObjectKeyArtifactReferenceAllocator().allocate({
+      kind: "state", workspaceId: run.workspaceId, subject: { kind: "capsule", id: capsule.id },
+      environment: capsule.environment, generation: 2, storageRoot: await f.store.getCapsuleStorageRoot(capsule.id),
+    }),
+  };
+  const job: OpenTofuDestroyJob = {
+    applyRun: run, planRun, planArtifact: planRun.planArtifact!, runnerProfile: f.profile, stateScope,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    executionEvidenceCommit: {
+      stateVersionId: `state_${(await stableJsonDigest({ kind: "takosumi.state-version-id@v1", applyRunId: run.id })).slice(7)}`,
+      destroyed: true,
+    },
+  };
+  const stateDigest = await sha256Digest(STATE);
+  const receipt = {
+    ...stateScope, createdByRunId: run.id, action: "destroy" as const, stateDigest, stateBytes: STATE,
+    result: {
+      stateDigest,
+      executionEvidence: { ...fixtureExecutionEvidence(job, "destroy"), committedAt: new Date(heartbeatAt + 1).toISOString() },
+    },
+  };
+  return { capsule, run, receipt };
+}
+
+test("startup settles an exact sealed Destroy once without Runner transport or a new output", async () => {
+  const f = await fixture();
+  const transport = spyOn(globalThis, "fetch").mockImplementation(Object.assign(() => {
+    throw new Error("no Runner HTTP in receipt recovery");
+  }, { preconnect: globalThis.fetch.preconnect }));
+  try {
+    const { capsule, run, receipt } = await prepareStaleDestroy(f);
+    await recoverLocalAppliesAtStartup(f.input);
+    expect((await f.store.getApplyRun(run.id))?.status).toBe("running");
+    expect(f.dispatches).toBe(1);
+
+    await f.stateStore.commit(receipt);
+    await recoverLocalAppliesAtStartup(f.input);
+    const final = await f.store.getApplyRun(run.id);
+    expect(final).toMatchObject({
+      id: run.id, planRunId: run.planRunId, status: "succeeded",
+      executionEvidence: { commit: { destroyed: true } },
+    });
+    expect(final?.outputId).toBeUndefined();
+    expect(await f.store.getCapsule(capsule.id)).toMatchObject({ status: "destroyed", currentStateGeneration: 2 });
+    expect(await f.store.getStateVersion(capsule.currentStateVersionId!)).toMatchObject({ generation: 1 });
+    await recoverLocalAppliesAtStartup(f.input);
+    expect(f.dispatches).toBe(2);
+    expect(transport).not.toHaveBeenCalled();
+  } finally { transport.mockRestore(); await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("startup Destroy receipt cannot fall through if the configured executor has changed", async () => {
+  const f = await fixture();
+  try {
+    const { run, receipt } = await prepareStaleDestroy(f);
+    await f.stateStore.commit(receipt);
+    let ordinaryCalls = 0;
+    const different = {
+      plan: async () => { throw new Error("unexpected Plan"); },
+      apply: async () => { throw new Error("unexpected Apply"); },
+      destroy: async () => { ordinaryCalls++; throw new Error("unexpected ordinary Destroy"); },
+    };
+    const controller = new OpenTofuController({
+      store: f.store, runner: different, runnerProfiles: [f.profile], defaultRunnerProfileId: f.profile.id,
+      artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+      executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+    });
+    let received = 0;
+    await recoverLocalAppliesAtStartup({ ...f.input, operations: {
+      controller,
+      dispatchQueuedRun: async (...args: Parameters<typeof controller.dispatchQueuedRun>) => {
+        received++;
+        await controller.dispatchQueuedRun(...args);
+      },
+    } });
+    expect(received).toBe(1);
+    expect(ordinaryCalls).toBe(0);
+    expect((await f.store.getApplyRun(run.id))?.status).toBe("running");
+  } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
 test("startup leaves fresh, absent, foreign, private-file and unconfigured work untouched", async () => {

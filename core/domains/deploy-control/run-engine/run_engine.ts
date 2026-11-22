@@ -6054,11 +6054,13 @@ export class RunEngine {
     runId: string,
     control: RunDispatchControl = {},
   ): Promise<ApplyRunResponse> {
-    let receiptOnly = control.committedApplyReceipt !== undefined;
-    let observedCompletion = false;
+    const receiptCommand = control.committedApplyReceipt;
     const probeCommand = control.committedApplyReceiptProbe;
     const probe = probeCommand === undefined ? undefined : readCommittedApplyReceiptProbeCommand(probeCommand, runId);
     if (probeCommand !== undefined && !probe) throw new Error("committed Apply receipt probe mismatch");
+    if (receiptCommand !== undefined && probeCommand !== undefined) throw new Error("only one committed receipt authority may be supplied");
+    let receiptOnly = receiptCommand !== undefined || probe?.settlementOnly === true;
+    let observedCompletion = false;
     let applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun) {
       throw new OpenTofuControllerError(
@@ -6099,10 +6101,10 @@ export class RunEngine {
     const planRun = await this.#requirePlanRun(applyRun.planRunId);
     const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
     const runner = this.#runnerForProfile(profile);
-    const receipt = receiptOnly
-      ? readCommittedApplyReceiptCommand(control.committedApplyReceipt!, runner, applyRun.id)
-      : undefined;
-    if (receiptOnly && !receipt) throw new Error("committed Apply receipt command mismatch");
+    const receipt = receiptCommand === undefined
+      ? undefined
+      : readCommittedApplyReceiptCommand(receiptCommand, runner, applyRun.id);
+    if (receiptCommand !== undefined && !receipt) throw new Error("committed Apply receipt command mismatch");
     const receiptAction = applyRun.operation === "destroy" ? "destroy" : "apply";
     const supportsDestroyReceipt = planRun.operation === "destroy" &&
       planRun.source.kind === "git" && Boolean(planRun.sourceSnapshotId) &&
@@ -6110,6 +6112,7 @@ export class RunEngine {
         planRun.origin?.kind === "scheduled_uninstall");
     const observesReceipt = !receipt && probe?.runner === runner && applyRun.status === "running" &&
       (receiptAction === "apply" || supportsDestroyReceipt);
+    if (probe?.settlementOnly && !observesReceipt) return await this.getApplyRun(runId);
     const inspectReceipt = async () => {
       if (control.deadlineAt !== undefined && Date.now() >= control.deadlineAt) return "hold";
       const determination = await probe!.inspect(receiptAction).catch(() => "hold" as const);
@@ -6146,6 +6149,7 @@ export class RunEngine {
       observedCompletion = determination === "completed";
       receiptOnly ||= observedCompletion;
     }
+    if (probe?.settlementOnly && !observedCompletion) return await this.getApplyRun(runId);
     if (receipt && (!inputs || dispatch.lifecycleActions?.length || dispatch.privateRunFileSlots?.length)) {
       throw new Error("committed Apply receipt cannot authorize lifecycle or private-file effects");
     }
