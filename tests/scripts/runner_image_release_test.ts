@@ -1931,6 +1931,33 @@ test("public CLI exposes build and read-only verify, never activate", () => {
   ).toThrow("candidate inputs are accepted only by executing build");
 });
 
+test("staging-code evidence is opt-in for standard staging verification only", async () => {
+  const args = [
+    "verify", "--staging-code",
+    "--config", "/private/wrangler.toml",
+    "--environment", "staging",
+    "--release", "release-1",
+    "--build-evidence", "/private/build.jsonl",
+    "--platform-evidence", "/private/platform.json",
+    "--evidence", "/private/verify.jsonl",
+  ];
+  expect(parseRunnerImageReleaseArgs(args)).toMatchObject({ stagingCode: true, execute: false });
+  expect(() => parseRunnerImageReleaseArgs(args.map((arg) => arg === "staging" ? "production" : arg)))
+    .toThrow("--staging-code requires standard staging verify");
+  expect(() => parseRunnerImageReleaseArgs([...args, "--profile", "hosted-metered-v1"]))
+    .toThrow("--staging-code requires standard staging verify");
+  const input = fixture(NEXT);
+  await expect(runRunnerImageRelease({
+    ...verifyOptions(input),
+    environment: "production",
+    stagingCode: true,
+  })).rejects.toThrow("--staging-code requires standard staging verify");
+  await expect(runRunnerImageRelease({
+    ...buildOptions(input),
+    stagingCode: true,
+  })).rejects.toThrow("--staging-code requires standard staging verify");
+});
+
 test("evidence stays external, physical, and exactly mode 0600", async () => {
   const input = fixture();
   await expect(

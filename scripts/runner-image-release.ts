@@ -30,8 +30,14 @@ import {
   type RunnerImageProfile,
 } from "./lib/runner-image-profile.ts";
 import {
+  assertPlatformWorkerCodeVersionMatchesConfig,
+  assertPublishedVersion,
+  cleanStagingCodeSource,
   dashboardAssetTreeSeal,
+  injectPlatformExecutionEvidencePins,
+  platformTargetForEnvironment,
   readPlatformContainerRollout,
+  secretNames,
 } from "./platform-worker-release.ts";
 import {
   isPublishedRunnerImageBuildRecord,
@@ -88,6 +94,7 @@ export type RunnerImageReleaseOptions = Readonly<{
   state?: string;
   buildEvidence?: string;
   platformEvidence?: string;
+  stagingCode?: boolean;
   candidateImage?: string;
   candidateRecord?: string;
   candidateAttestation?: string;
@@ -260,6 +267,16 @@ type PlatformReadyEvidence = Readonly<{
   reviewer: string;
 }>;
 
+type StagingCodeReadyEvidence = Readonly<{
+  kind: "takosumi.platform-worker-staging-code@v1";
+  deployedVersionId: string;
+  predecessorVersionId: string;
+  releaseTag: string;
+  entryDigest: `sha256:${string}`;
+  dashboardDigest: string;
+  sourceProvenance: NonNullable<ReturnType<typeof cleanStagingCodeSource>>;
+}>;
+
 type RunnerApplicationVersion = number | string;
 
 type RunnerApplicationHealth = Readonly<{
@@ -353,7 +370,7 @@ Usage:
   bun run deploy -- takosumi-runner-image build [--profile hosted-metered-v1] --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl> [--candidate-image <absolute-runner-image.tar> --candidate-record <absolute-candidate.json> --candidate-attestation <absolute-attestation.jsonl>] [--review <review>] [--execute]
   bun run deploy -- takosumi-runner-image recover-journal --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl> --review <review> --execute
   bun run deploy -- takosumi-runner-image reconcile [--profile hosted-metered-v1] --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl>
-  bun run deploy -- takosumi-runner-image verify [--profile hosted-metered-v1] --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --evidence <absolute-jsonl> --build-evidence <absolute-jsonl> --platform-evidence <absolute-json> [--review <review>] [--execute]
+  bun run deploy -- takosumi-runner-image verify [--profile hosted-metered-v1] --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --evidence <absolute-jsonl> --build-evidence <absolute-jsonl> --platform-evidence <absolute-json> [--staging-code] [--review <review>] [--execute]
 
 Build publishes one immutable linux/amd64 takosumi-runner image. Its generated
 transport tag is not a version identity; only the remotely read manifest digest
@@ -361,8 +378,9 @@ is consumed. An unknown publication blocks every later build until reconcile
 reads the exact recorded transport tag. Recover-journal writes only a reviewed
 continuity-unknown local v4 binding and never calls a provider. The platform
 release surface exclusively performs the full Worker and Container mutation.
-Verify consumes its exact ready evidence and performs readback only. Build and
-verify are read-only without --execute.`;
+Verify performs readback only. Standard staging verify can select an exact
+routine code receipt with --staging-code. Build and verify are read-only
+without --execute.`;
 
 export function createRunnerTransportTag(
   sourceCommit: string,
@@ -498,6 +516,7 @@ export function parseRunnerImageReleaseArgs(
   }
   const values = new Map<string, string>();
   let execute = false;
+  let stagingCode = false;
   const names = new Set([
     "config",
     "profile",
@@ -517,6 +536,11 @@ export function parseRunnerImageReleaseArgs(
     if (token === "--execute") {
       if (execute) throw new Error("duplicate argument: --execute");
       execute = true;
+      continue;
+    }
+    if (token === "--staging-code") {
+      if (stagingCode) throw new Error("duplicate argument: --staging-code");
+      stagingCode = true;
       continue;
     }
     if (!token.startsWith("--") || !names.has(token.slice(2))) {
@@ -541,6 +565,7 @@ export function parseRunnerImageReleaseArgs(
   if (environment !== "staging" && environment !== "production") {
     throw new Error("environment must be staging or production");
   }
+  assertStagingCodeVerifyScope({ stagingCode, command: commandValue, environment, profile });
   const release = required("release");
   if (!RELEASE_LABEL.test(release)) {
     throw new Error("runner image release label is invalid");
@@ -606,6 +631,7 @@ export function parseRunnerImageReleaseArgs(
     ...(state ? { state } : {}),
     ...(buildEvidence ? { buildEvidence } : {}),
     ...(platformEvidence ? { platformEvidence } : {}),
+    ...(stagingCode ? { stagingCode } : {}),
     ...(candidateImage ? { candidateImage } : {}),
     ...(candidateRecord ? { candidateRecord } : {}),
     ...(candidateAttestation ? { candidateAttestation } : {}),
@@ -614,11 +640,22 @@ export function parseRunnerImageReleaseArgs(
   };
 }
 
+function assertStagingCodeVerifyScope(
+  options: Pick<RunnerImageReleaseOptions, "stagingCode" | "command" | "environment" | "profile">,
+): void {
+  if (options.stagingCode && (
+    options.command !== "verify" ||
+    options.environment !== "staging" ||
+    runnerImageProfile(options.profile) !== "standard"
+  )) throw new Error("--staging-code requires standard staging verify");
+}
+
 export async function runRunnerImageRelease(
   options: RunnerImageReleaseOptions,
   runtime: RunnerImageReleaseRuntime = {},
 ): Promise<unknown> {
   runnerImageProfile(options.profile);
+  assertStagingCodeVerifyScope(options);
   assertRunnerImageCandidateOptions(options);
   if (options.execute && !options.review?.trim()) {
     throw new Error("--execute requires --review");
@@ -2821,20 +2858,45 @@ async function verifyRunnerImage(
   ) {
     throw new Error("runner_image_activation_config_not_image_only");
   }
-  const platform = await readPlatformEvidence(platformPath);
-  if (
-    platform.sourceRepository !== context.releaseSource.pin.repository ||
-    platform.sourceAuthoritySha256 !== context.releaseSource.authoritySha256
-  ) {
-    throw new Error("runner_image_source_authority_mismatch");
-  }
-  if (
-    platform.environment !== options.environment ||
-    platform.sourceCommit !== context.repository.commit ||
-    platform.configPath !== context.config.path ||
-    platform.configSha256 !== context.config.sha256
-  ) {
-    throw new Error("platform evidence does not bind the runner activation");
+  const platform = options.stagingCode
+    ? await readStagingCodeEvidence(platformPath)
+    : await readPlatformEvidence(platformPath);
+  const code = platform.kind === "takosumi.platform-worker-staging-code@v1"
+    ? platform
+    : undefined;
+  const assertCodeSource = async () => {
+    if (!code) return;
+    const configSha = sha256(await readStablePhysicalFile(context.config.path, "config path"));
+    const source = cleanStagingCodeSource(context.repository.root, context.config.path, configSha);
+    const claimed = code.sourceProvenance;
+    if (
+      !source ||
+      source.sourceCommit !== context.repository.commit ||
+      source.sourceAuthoritySha256 !== context.releaseSource.authoritySha256 ||
+      source.configSha256 !== context.config.sha256 ||
+      source.sourceCommit !== claimed.sourceCommit ||
+      source.sourceTree !== claimed.sourceTree ||
+      source.sourceAuthoritySha256 !== claimed.sourceAuthoritySha256 ||
+      source.configSha256 !== claimed.configSha256
+    ) throw new Error("runner_image_staging_code_source_mismatch");
+  };
+  if (platform.kind === "takosumi.platform-worker-release-evidence@v3") {
+    if (
+      platform.sourceRepository !== context.releaseSource.pin.repository ||
+      platform.sourceAuthoritySha256 !== context.releaseSource.authoritySha256
+    ) {
+      throw new Error("runner_image_source_authority_mismatch");
+    }
+    if (
+      platform.environment !== options.environment ||
+      platform.sourceCommit !== context.repository.commit ||
+      platform.configPath !== context.config.path ||
+      platform.configSha256 !== context.config.sha256
+    ) {
+      throw new Error("platform evidence does not bind the runner activation");
+    }
+  } else {
+    await assertCodeSource();
   }
   const planned = {
     ...runnerReleaseIdentity(context.profile),
@@ -2844,7 +2906,7 @@ async function verifyRunnerImage(
     release: options.release,
     observedAt,
     source: {
-      branch: context.repository.branch,
+      ...(context.repository.branch ? { branch: context.repository.branch } : {}),
       repository: context.releaseSource.pin.repository,
       commit: context.repository.commit,
       authoritySha256: context.releaseSource.authoritySha256,
@@ -2885,6 +2947,38 @@ async function verifyRunnerImage(
       }
     };
     await assertServingVersion();
+    if (code) {
+      const version = await checkedCommand(
+        command,
+        "bunx",
+        ["wrangler", "versions", "view", code.deployedVersionId, "--config", sealedConfig, "--json"],
+        context.repository.root,
+      );
+      const hosted = platformTargetForEnvironment("staging").hostedService;
+      assertPublishedVersion(
+        version.stdout,
+        hosted,
+        code.deployedVersionId,
+        code.releaseTag,
+        `takosumi-platform-staging-code ${code.entryDigest}`,
+      );
+      const names = await checkedCommand(
+        command,
+        "bunx",
+        ["wrangler", "secret", "list", "--format", "json", "--config", sealedConfig],
+        context.repository.root,
+      );
+      assertPlatformWorkerCodeVersionMatchesConfig(
+        version.stdout,
+        injectPlatformExecutionEvidencePins(context.config.source, {
+          controllerArtifactDigest: code.entryDigest,
+          runnerArtifactDigest: code.entryDigest,
+          executorArtifactDigest: immutableRef.slice(immutableRef.lastIndexOf("@") + 1) as `sha256:${string}`,
+        }),
+        hosted,
+        secretNames(names.stdout),
+      );
+    }
     const readApplication = () => readRunnerApplication(
       readbackContext,
       command,
@@ -2934,17 +3028,31 @@ async function verifyRunnerImage(
         "runner image verification did not reach exact healthy state",
       );
     }
+    if (code) {
+      await assertServingVersion();
+      await assertCodeSource();
+    }
     const record = {
       ...planned,
       status: "verified",
       configSha256: context.config.sha256,
       platform: {
         evidence: platformPath,
-        planConfirmation: platform.planConfirmation,
         predecessorVersionId: platform.predecessorVersionId,
         deployedVersionId: platform.deployedVersionId,
-        dashboardAssetsSha256: platform.dashboardAssetsSha256,
-        reviewer: platform.reviewer,
+        ...(platform.kind === "takosumi.platform-worker-staging-code@v1"
+          ? {
+            kind: platform.kind,
+            releaseTag: platform.releaseTag,
+            entryDigest: platform.entryDigest,
+            dashboardDigest: platform.dashboardDigest,
+            sourceProvenance: platform.sourceProvenance,
+          }
+          : {
+            planConfirmation: platform.planConfirmation,
+            dashboardAssetsSha256: platform.dashboardAssetsSha256,
+            reviewer: platform.reviewer,
+          }),
       },
       application,
       review: options.review ?? null,
@@ -2981,6 +3089,7 @@ async function inspectContext(
     repositoryRoot,
     options.environment,
     git,
+    options.stagingCode,
   );
   const configPath = await canonicalFile(options.config, "config path");
   const configSource = new TextDecoder("utf-8", { fatal: true }).decode(
@@ -3060,6 +3169,7 @@ async function repositoryIdentity(
   root: string,
   environment: RunnerImageReleaseEnvironment,
   git: NonNullable<RunnerImageReleaseRuntime["git"]>,
+  stagingCode = false,
 ): Promise<RepositoryIdentity> {
   let replaceRefs: string;
   try {
@@ -3101,8 +3211,16 @@ async function repositoryIdentity(
   ]);
   if (status.trim()) throw new Error(`${root} must be clean`);
   const branch = (await git(root, ["branch", "--show-current"])).trim();
-  if (!branch) throw new Error(`${root} must be on an attached branch`);
+  if (!branch && !stagingCode) throw new Error(`${root} must be on an attached branch`);
   const commit = (await git(root, ["rev-parse", "HEAD"])).trim();
+  if (stagingCode) {
+    // Code-only staging publication allows a reviewed local commit. This mode
+    // performs no publication and independently matches the exact clean source.
+    const remoteRepository = (await git(root, ["remote", "get-url", "origin"])).trim();
+    if (!/^[0-9a-f]{40}$/u.test(commit) || !remoteRepository)
+      throw new Error("runner_image_staging_code_source_mismatch");
+    return { root, branch, commit, remoteCommit: "", remoteRepository };
+  }
   let originCommit = "";
   let remoteCommit = "";
   let remoteRepository = "";
@@ -3504,6 +3622,58 @@ async function readPlatformEvidence(path: string): Promise<PlatformReadyEvidence
   }
   assertReview(value.reviewer);
   return value as unknown as PlatformReadyEvidence;
+}
+
+async function readStagingCodeEvidence(path: string): Promise<StagingCodeReadyEvidence> {
+  let value: unknown;
+  try {
+    value = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        await readStablePrivateFile(path, "staging code ready evidence"),
+      ),
+    ) as unknown;
+  } catch {
+    throw new Error("runner_image_staging_code_evidence_invalid");
+  }
+  const provenance = isRecord(value) ? value.sourceProvenance : undefined;
+  const versionId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u;
+  const gitObjectId = /^[0-9a-f]{40}$/u;
+  if (
+    !isRecord(value) ||
+    !exactRecordKeys(value, [
+      "kind", "status", "predecessorVersionId", "deployedVersionId", "releaseTag",
+      "entryDigest", "dashboardDigest", "sourceProvenance", "historicalRollbackOwner",
+    ]) ||
+    value.kind !== "takosumi.platform-worker-staging-code@v1" ||
+    value.status !== "ready" ||
+    value.historicalRollbackOwner !== "takosumi-platform-staging" ||
+    typeof value.predecessorVersionId !== "string" ||
+    !versionId.test(value.predecessorVersionId) ||
+    typeof value.deployedVersionId !== "string" ||
+    !versionId.test(value.deployedVersionId) ||
+    value.deployedVersionId === value.predecessorVersionId ||
+    typeof value.releaseTag !== "string" ||
+    !/^tks-stg-code-[0-9a-f]{32}$/u.test(value.releaseTag) ||
+    typeof value.entryDigest !== "string" ||
+    !SHA256.test(value.entryDigest) ||
+    typeof value.dashboardDigest !== "string" ||
+    !SHA256.test(value.dashboardDigest) ||
+    !isRecord(provenance) ||
+    !exactRecordKeys(provenance, [
+      "sourceCommit", "sourceTree", "sourceAuthoritySha256", "configSha256",
+    ]) ||
+    typeof provenance.sourceCommit !== "string" ||
+    !gitObjectId.test(provenance.sourceCommit) ||
+    typeof provenance.sourceTree !== "string" ||
+    !gitObjectId.test(provenance.sourceTree) ||
+    typeof provenance.sourceAuthoritySha256 !== "string" ||
+    !SHA256.test(provenance.sourceAuthoritySha256) ||
+    typeof provenance.configSha256 !== "string" ||
+    !SHA256.test(provenance.configSha256)
+  ) {
+    throw new Error("runner_image_staging_code_evidence_invalid");
+  }
+  return value as unknown as StagingCodeReadyEvidence;
 }
 
 function parseServingVersion(source: string): string {
