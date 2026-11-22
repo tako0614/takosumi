@@ -662,9 +662,28 @@ export default function AppManagePage(props: {
     refreshAfterReview();
   };
 
+  const switchableUninstallReview = (view: CapsuleAppView | undefined) => {
+    const active = review();
+    const pending = view?.progress.review;
+    const latest = view?.latestRun;
+    // A lost answer can leave the old removal review open after the server
+    // saved another Plan. Only let the owner explicitly open the current one.
+    return active?.section === "attention" && active.purpose === "uninstall" &&
+      !starting() && !uninstallBusy() && isOwner() && view?.applied &&
+      view.capsuleId === capsuleId() && view.workspaceId === workspaceId() &&
+      !view.progress.run && !view.progress.revisionPreparing &&
+      pending?.runType === "destroy_plan" && latest?.type === "destroy_plan" &&
+      latest.id === pending.runId && (latest.status === "succeeded" || latest.status === "waiting_approval") &&
+      pending.runId !== active.planRunId && pending.runId !== active.initialRunId
+      ? pending
+      : undefined;
+  };
+
   /** Opens the review of a run the server named (a plan waiting, a blocked plan). */
   const openRunReview = (runId: string, runType: RunType) => {
-    if (reviewBusy() || (isAppRemovalRun(runType) && !isOwner())) return;
+    const replacement = switchableUninstallReview(app());
+    if ((isAppRemovalRun(runType) && !isOwner()) ||
+      (reviewBusy() && !(replacement?.runId === runId && replacement.runType === runType))) return;
     setSectionError(undefined);
     setNotice(undefined);
     setReview({
@@ -1192,8 +1211,11 @@ export default function AppManagePage(props: {
         openSection("created");
         return;
       case "review":
-        if (review()?.section === "attention") scrollToSection("review");
-        else openRunReview(step.runId, step.runType);
+        if (review()?.section === "attention" && switchableUninstallReview(view)?.runId !== step.runId) {
+          scrollToSection("review");
+        } else {
+          openRunReview(step.runId, step.runType);
+        }
         return;
       case "retry":
         retry(step.problem);
@@ -1223,7 +1245,7 @@ export default function AppManagePage(props: {
   };
   /** A visible review or the Resources row already provides this action. */
   const primaryOpenInPlace = (view: CapsuleAppView) =>
-    (view.primaryAction === "review" && review()?.section === "attention") ||
+    (view.primaryAction === "review" && review()?.section === "attention" && !switchableUninstallReview(view)) ||
     (view.primaryAction === "view_resources" && managed());
   const primaryBusy = (view: CapsuleAppView) =>
     starting()?.action === view.primaryAction ||
@@ -1480,7 +1502,8 @@ export default function AppManagePage(props: {
                           variant={view().primaryAction === "uninstall_now" ? "danger" : "primary"}
                           type="button"
                           busy={primaryBusy(view())}
-                          disabled={reviewBusy() || uninstallBusy()}
+                          disabled={uninstallBusy() || (reviewBusy() &&
+                            !(view().primaryAction === "review" && switchableUninstallReview(view())))}
                           onClick={() => runPrimary(view())}
                         >
                           {t(label())}
@@ -1608,6 +1631,7 @@ export default function AppManagePage(props: {
                 {...(review()?.section === "attention"
                   ? { reviewRunId: review()!.initialRunId ?? review()!.planRunId }
                   : {})}
+                switchableReviewId={switchableUninstallReview(view())?.runId}
                 review={reviewPanel("attention")}
                 actions={{
                   retry,

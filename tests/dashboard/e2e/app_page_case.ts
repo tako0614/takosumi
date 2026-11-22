@@ -1576,9 +1576,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "staleReview", "partialRecovery", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement"] as const) test({
+    for (const scenario of ["states", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
+      lostReplacementResponse: "a lost replacement Plan response leaves its saved uninstall review reachable",
+      lostReplacementOnInstalledApp: "a lost replacement Plan response leaves its saved uninstall review reachable on an installed app",
       partialRecovery: "a partial uninstall can replace more than the unavailable original connection",
       unusedUnavailable: "uninstall replacement only asks for unavailable connections used by the applied plan",
       unusedOnlyUnavailable: "ordinary uninstall proceeds when only an unused saved alias is unavailable",
@@ -1587,7 +1589,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       indeterminateOpenReview: "an indeterminate uninstall offers no new removal from its open review",
       noReplacement: "uninstall recovery opens connections when no verified replacement is available",
     }[scenario], async ({ page }) => {
-      const staleUninstallReview = scenario === "staleReview";
+      const lostReplacementOnInstalledApp = scenario === "lostReplacementOnInstalledApp";
+      const lostReplacementResponse = scenario === "lostReplacementResponse" || lostReplacementOnInstalledApp;
+      const staleUninstallReview = scenario === "staleReview" || lostReplacementResponse;
       const partialRecovery = scenario === "partialRecovery";
       const unusedUnavailable = scenario === "unusedUnavailable";
       const unusedOnlyUnavailable = scenario === "unusedOnlyUnavailable";
@@ -1715,10 +1719,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             });
           case "uninstall_stale_review":
             return appView(ID, NAME, {
-              status: "uninstalled", state: "uninstalling", primaryAction: "review",
+              ...(lostReplacementOnInstalledApp
+                ? { status: "active", state: "installed", primaryAction: "open", screens: [screen] }
+                : { status: "uninstalled", state: "uninstalling", primaryAction: "review" }),
               latestRun: { ...recoveryPlan, ...currentUninstallReview },
               progress: { revisionPreparing: false, review: { runId: currentUninstallReview.id, runType: "destroy_plan" } },
-              uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "destroying", requestedAt: now, deleteAfter, cancellable: false, blocked: true } },
+              uninstall: lostReplacementOnInstalledApp
+                ? { mode: "none", impact: { usedBy: [] } }
+                : { mode: "scheduled", graceDays: 7, scheduled: { phase: "destroying", requestedAt: now, deleteAfter, cancellable: false, blocked: true } },
             });
           case "updating":
             return appView(ID, NAME, {
@@ -1842,6 +1850,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === `${base}/destroy-plan` && request.method() === "POST") {
           replacementPlanBodies.push(request.postDataJSON());
           if (scene === "uninstall_stale_review") currentUninstallReview = recoveryPlan;
+          if (lostReplacementResponse) {
+            return route.fulfill({ status: 502, json: { error: { code: "unavailable", message: "The Plan response was lost." } } });
+          }
           return route.fulfill({ status: 201, json: { run: recoveryPlan } });
         }
         if (path === `${base}/members`) return route.fulfill({ json: { owner: { accountId: "sub_portable_e2e", displayName: "Portable E2E", email: "portable-e2e@example.test" }, members: [] } });
@@ -2168,7 +2179,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         // The server still names the old Plan as the latest review. A new
         // connection can only start a fresh deletion review.
         await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
-        await header.getByRole("button", { name: "Review", exact: true }).click();
+        const reviewEntry = lostReplacementOnInstalledApp ? problems : header;
+        await reviewEntry.getByRole("button", { name: "Review", exact: true }).click();
         const rejectedReview = page.getByTestId("app-review");
         const allowUninstall = rejectedReview.getByRole("button", { name: "Allow and uninstall" });
         await expect(rejectedReview.getByRole("button", { name: "Choose connection for uninstall" })).toHaveCount(0);
@@ -2190,6 +2202,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await chooseAgain.click();
         await rejectedReview.getByRole("combobox", { name: /Cloudflare/ }).selectOption("conn_saved");
         await rejectedReview.getByRole("button", { name: "Review removal" }).click();
+        if (lostReplacementResponse) {
+          // The old review stays open after the uncertain response, while a
+          // read-only app refresh sees the server's new waiting Plan.
+          const openSavedReview = reviewEntry.getByRole("button", { name: "Review", exact: true });
+          await expect(openSavedReview).toBeEnabled();
+          await openSavedReview.click();
+        }
         await expect(rejectedReview.getByRole("button", { name: "Approve this change", exact: true })).toBeVisible();
         expect(seenMutations).toEqual([
           `POST /api/v1/runs/${refusedPlan.id}/apply`, `POST /api/v1/runs/${refusedPlan.id}/apply`,
@@ -2203,6 +2222,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         expect(traffic.failures.map(({ kind, url, status }) => ({ kind, path: new URL(url).pathname, status }))).toEqual([
           { kind: "response", path: `/api/v1/runs/${refusedPlan.id}/apply`, status: 409 },
           { kind: "response", path: `/api/v1/runs/${refusedPlan.id}/apply`, status: 409 },
+          ...(lostReplacementResponse ? [{ kind: "response", path: `/api/v1/capsules/${ID}/destroy-plan`, status: 502 }] : []),
         ]);
         return;
       }
