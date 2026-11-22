@@ -810,6 +810,82 @@ test("binding digest pins materialization and verified scope metadata", async ()
   ).not.toBe(digest);
 });
 
+test("uninstall distinguishes a different authentication mode only when the applied settings match", async () => {
+  const { store, model, service } = await setup();
+  const { hasCloudflareVerifiedAccountScope } = await import("../../../../providers/cloudflare/credentials.ts");
+  const account = "0123456789abcdef0123456789abcdef";
+  const verifiedScope = (accountId: string) => ({
+    providerSettings: { accountId, workersSubdomain: "team-workers" },
+    moduleInputDefaults: {
+      cloudflare_account_id: accountId,
+      cloudflare_workers_subdomain: "team-workers",
+    },
+  });
+  const original: ProviderConnection = {
+    ...connection({
+      id: "conn_applied_oauth",
+      workspaceId: model.workspace.id,
+      credentialRecipe: { id: "cloudflare", authMode: "oauth", preRunAction: "cloudflare_oauth" },
+      scopeHints: verifiedScope(account),
+    }),
+    credentialVerification: {
+      kind: "takosumi.credential-verification@v1",
+      verifierId: "cloudflare/account-workers-subdomain@v1",
+      capabilities: ["cloudflare.account-workers-subdomain.v1"],
+    },
+  };
+  const replacement: ProviderConnection = {
+    ...original,
+    id: "conn_replacement_api_token",
+    credentialRecipe: { id: "cloudflare", authMode: "api_token" },
+    envNames: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
+  };
+  await store.putConnection(original);
+  await transitionProviderBindingSetForFixture(store, {
+    id: "pb_applied_oauth",
+    capsuleId: model.capsule.id,
+    workspaceId: model.workspace.id,
+    environment: model.capsule.environment,
+    bindings: [{ provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: original.id }],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const requiredProviders = [requiredBinding()];
+  const appliedDigest = await resolvedProviderBindingsDigest(
+    await service.resolveAppliedDestroyProviderBindings(model.capsule, requiredProviders),
+  );
+  const resolve = () => service.resolveProviderBindingsForDestroyRecovery({
+    capsule: model.capsule,
+    requiredProviders,
+    appliedDigest,
+    replacements: [{ connectionId: original.id, replacementConnectionId: replacement.id }],
+    hasVerifiedAccountScope: hasCloudflareVerifiedAccountScope,
+  });
+  const expectRefusal = async (connectionRecoveryFailure: string) => {
+    await expect(resolve()).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "destroy_connection_recovery_unproven", connectionRecoveryFailure },
+    });
+  };
+
+  await store.putConnection(replacement);
+  await expectRefusal("replacement_auth_mode_mismatch");
+
+  for (const scopeHints of [
+    verifiedScope("fedcba9876543210fedcba9876543210"),
+    { ...verifiedScope(account), providerConfig: { base_url: "https://other.example.test/client/v4" } },
+  ]) {
+    await store.putConnection({ ...replacement, scopeHints });
+    await expectRefusal("bindings_mismatch");
+  }
+
+  await store.putConnection({ ...original, id: replacement.id });
+  expect((await resolve())[0]?.connection.id).toBe(replacement.id);
+  await store.putConnection(replacement);
+  expect(await store.deleteConnection(original.id)).toBe(true);
+  await expectRefusal("bindings_mismatch");
+});
+
 test("provider connection listing ignores durable operator rows in favor of release-owned projections", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(

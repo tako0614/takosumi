@@ -504,10 +504,11 @@ export class ConnectionsService {
     readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
   }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const refuse = (
-      connectionRecoveryFailure?: "replacement_unverified" | "bindings_mismatch",
+      connectionRecoveryFailure?: "replacement_unverified" | "replacement_auth_mode_mismatch" | "bindings_mismatch",
     ): never => {
       const messages = {
         replacement_unverified: "The selected connection does not have verified cloud account information.",
+        replacement_auth_mode_mismatch: "The selected connection uses a different authentication method from the applied connection.",
         bindings_mismatch: "The current provider bindings do not match the applied account and settings.",
       };
       throw new OpenTofuControllerError(
@@ -576,8 +577,29 @@ export class ConnectionsService {
       const appliedId = appliedIdsByBinding.get(bindingId) ?? bindingId;
       return appliedId === entry.connection.id ? entry : { ...entry, connection: { ...entry.connection, id: appliedId } };
     });
-    if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse("bindings_mismatch");
-    return selected;
+    if (await resolvedProviderBindingsDigest(comparison) === input.appliedDigest) return selected;
+
+    // Diagnose a different authentication method only if restoring the applied
+    // method's recipe and env names explains the entire mismatch. This preimage
+    // is only used to choose an error and never leaves the refusal path.
+    const withAppliedAuthMode = await Promise.all(comparison.map(async (entry, index) => {
+      if (entry.connection.id === selected[index]!.connection.id) return entry;
+      const replacementRecipe = entry.connection.credentialRecipe;
+      if (!replacementRecipe) return entry;
+      const original = await this.#store.getConnection(entry.connection.id).catch(() => undefined);
+      const originalRecipe = original?.credentialRecipe;
+      if (!original || !originalRecipe || original.scope === "operator" ||
+        !sameProviderSource(entry.provider, original.providerSource) ||
+        originalRecipe.id !== replacementRecipe.id ||
+        originalRecipe.authMode === replacementRecipe.authMode) return entry;
+      return {
+        ...entry,
+        connection: { ...entry.connection, credentialRecipe: originalRecipe, envNames: original.envNames },
+      };
+    }));
+    return refuse(await resolvedProviderBindingsDigest(withAppliedAuthMode) === input.appliedDigest
+      ? "replacement_auth_mode_mismatch"
+      : "bindings_mismatch");
   }
 
   async #selectStoredProviderBindingsForDestroy(

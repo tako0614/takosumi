@@ -183,9 +183,9 @@ test("recovery Plan submission with a lost response sends only the original requ
     .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
 });
 
-test("recover-uninstall distinguishes the three confirmed replacement connection refusals", async () => {
+test("recover-uninstall distinguishes confirmed replacement connection refusals", async () => {
   for (const connectionRecoveryFailure of [
-    "replacement_unverified", "bindings_mismatch", "applied_evidence_unavailable",
+    "replacement_unverified", "replacement_auth_mode_mismatch", "bindings_mismatch", "applied_evidence_unavailable",
   ]) {
     const r = await invoke(recoverArgs, () => Response.json({ error: {
       code: "failed_precondition",

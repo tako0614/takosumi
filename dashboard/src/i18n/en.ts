@@ -766,6 +766,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.reviewConnectionUnavailable": "The connection used for this review is no longer available. Choose a verified connection for the same cloud account to review removal again.",
   "app.uninstall.replacementUnproven": "The selected connection couldn't be verified against the original cloud account and settings.",
   "app.uninstall.replacementVerifyFirst": "This connection has no verified cloud account. Check it in Cloud connections or choose another verified connection to the original account.",
+  "app.uninstall.replacementAuthModeMismatch": "This connection uses a different authentication method from the one used to install the app. Choose a verified connection to the same cloud account that uses the original method.",
   "app.uninstall.replacementSettingsMismatch": "The current connections don't match the app's applied cloud account and settings. Check that the connections match the original setup.",
   "app.uninstall.replacementAppliedEvidenceUnavailable": "The app's applied connection record is unavailable. Refresh the app before trying to choose another connection.",
   "app.uninstall.connectionUnavailable": "Resources stay in your cloud until this app's connection works again.",
