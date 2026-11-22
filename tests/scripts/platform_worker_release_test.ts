@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -33,6 +33,7 @@ import {
   waitForPlatformContainerReadback,
   withPlatformForwardContainerPreflight,
 } from "../../scripts/platform-worker-release.ts";
+import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 import { platformExtensionRoutes } from "../../deploy/platform/platform_extensions.ts";
 import { capsulePublicOriginFromPlatformExtensions, platformExtensionProviderCredentialComposition } from "../../deploy/platform/platform_extension_provider_credentials.ts";
 import {
@@ -500,9 +501,49 @@ async function exerciseCodeLane(options: {
   readonly loginSmokeFails?: boolean;
   readonly unrelatedBindingDrift?: boolean;
   readonly bindingReplacedBySecret?: string;
+  readonly codeSource?: "clean" | "dirty" | "hidden-index-change" | "file-mode-change" | "during-build" | "after-activation";
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-code-lane-test-"));
   const configPath = join(directory, "wrangler.toml");
+  const codeRoot = options.codeSource ? join(directory, "source") : root;
+  const claimPath = join(codeRoot, "source.ts");
+  let expectedSourceProvenance: Record<string, string> | undefined;
+  if (options.codeSource) {
+    mkdirSync(codeRoot);
+    writeFileSync(claimPath, "// pinned synthetic source\n");
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: codeRoot });
+      if (result.exitCode !== 0) throw new Error("synthetic source Git failed");
+      return new TextDecoder().decode(result.stdout).trim();
+    };
+    git("init", "-q");
+    git("add", "source.ts");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+      "commit", "-qm", "pin synthetic worker source");
+    const pin = {
+      kind: "takosumi.platform-release-source@v1",
+      repository: "https://github.com/example/takosumi.git",
+      commit: git("rev-parse", "HEAD"),
+    } as const;
+    git("remote", "add", "origin", pin.repository);
+    writeFileSync(join(directory, "wrangler.source.json"), JSON.stringify(pin), { mode: 0o600 });
+    expectedSourceProvenance = {
+      sourceCommit: pin.commit,
+      sourceTree: git("rev-parse", "HEAD^{tree}"),
+      sourceAuthoritySha256: platformReleaseSourceAuthorityDigest(pin),
+      configSha256: `sha256:${Bun.CryptoHasher.hash("sha256", codeConfigSource(), "hex")}`,
+    };
+    if (options.codeSource === "hidden-index-change") {
+      git("update-index", "--assume-unchanged", "source.ts");
+    }
+    if (options.codeSource === "dirty" || options.codeSource === "hidden-index-change") {
+      writeFileSync(claimPath, "// existing change\n");
+    }
+    if (options.codeSource === "file-mode-change") {
+      git("config", "core.filemode", "false");
+      chmodSync(claimPath, 0o755);
+    }
+  }
   const sharedSource = codeConfigSource().replace("[vars]\n", '[vars]\nTAKOSUMI_SHARED_AUTH_PROFILE = "shared-account"\nTAKOSUMI_SHARED_AUTH_ORIGIN = "https://app-staging.takosumi.com"\n');
   const rateSource = '\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER"\nnamespace_id = "2026111401"\n[ratelimits.simple]\nlimit = 60\nperiod = 60\n\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER"\nnamespace_id = "2026111402"\n[ratelimits.simple]\nlimit = 10\nperiod = 60\n';
   const source = options.loginAdmission
@@ -676,7 +717,7 @@ async function exerciseCodeLane(options: {
       "staging",
       {
         command,
-        repositoryRoot: root,
+        repositoryRoot: codeRoot,
         assertSelectedSource: () => {
           sourceCheckCount += 1;
           if (options.resume === "source-drift" && sourceCheckCount === 2) {
@@ -685,6 +726,7 @@ async function exerciseCodeLane(options: {
         },
         buildDashboard: async () => {
           buildCount += 1;
+          if (options.codeSource === "during-build") writeFileSync(claimPath, "// changed during build\n");
           return { digest: `sha256:${"d".repeat(64)}`, entries: [] };
         },
         runScopedGate: async () => {
@@ -711,6 +753,7 @@ async function exerciseCodeLane(options: {
         publicReadback: async (_environment, versionId) => {
           expect(versionId).toBe(CODE_DEPLOYED_ID);
           publicReadbackCount++;
+          if (options.codeSource === "after-activation") writeFileSync(claimPath, "// changed during readback\n");
         },
         loginStartReadback: async (versionId) => {
           expect(versionId).toBe(CODE_DEPLOYED_ID);
@@ -746,6 +789,7 @@ async function exerciseCodeLane(options: {
     activationArgs,
     uploadConfigSource,
     activationConfigSource,
+    expectedSourceProvenance,
   };
 }
 
@@ -1093,6 +1137,27 @@ test("routine code publishes once and refuses production", async () => {
     runPlatformWorkerCodeRelease(["apply", "--config", "/private/config"], "production"),
   ).rejects.toThrow("platform_worker_code_action_invalid");
 });
+
+test("routine code reports the source provenance of a clean checkout", async () => {
+  const result = await exerciseCodeLane({ codeSource: "clean" });
+  expect(result).toMatchObject({ error: undefined, uploadCount: 1, activationCount: 1 });
+  expect(result.expectedSourceProvenance).toBeDefined();
+  expect(result.results[0]).toMatchObject({
+    status: "ready",
+    deployedVersionId: CODE_DEPLOYED_ID,
+    sourceProvenance: result.expectedSourceProvenance,
+  });
+});
+
+test.each(["dirty", "hidden-index-change", "file-mode-change", "during-build", "after-activation"] as const)(
+  "routine code can deploy while omitting exact source provenance for a %s checkout",
+  async (codeSource) => {
+    const result = await exerciseCodeLane({ codeSource });
+    expect(result).toMatchObject({ error: undefined, uploadCount: 1, activationCount: 1 });
+    expect(result.results[0]).toMatchObject({ status: "ready", deployedVersionId: CODE_DEPLOYED_ID });
+    expect(result.results[0]).not.toHaveProperty("sourceProvenance");
+  },
+);
 
 test("routine code waits for the acknowledged Version and activates it once", async () => {
   const result = await exerciseCodeLane({ candidateReadFailures: 2 });
