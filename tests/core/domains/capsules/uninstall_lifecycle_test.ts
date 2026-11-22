@@ -4,8 +4,11 @@
  * (export evidence, delete-only verification, system-approved teardown).
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
+import { cp, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   OpenTofuApplyJob,
   OpenTofuDestroyJob,
@@ -24,7 +27,10 @@ import {
   type RunnerProfile,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
-import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../../worker/src/d1_opentofu_store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { workerdD1Database, workerdD1Module } from "../../../helpers/deploy-control/workerd_d1.ts";
@@ -445,15 +451,62 @@ const durableStores: readonly [
   ],
 ];
 
-async function openNativeUninstallStore() {
-  const runtime = new Miniflare({
+function nativeUninstallRuntime(directory: string) {
+  return new Miniflare({
     compatibilityDate: "2026-07-17",
     modules: [workerdD1Module("app-uninstall-authority.mjs")],
     d1Databases: { CONTROL: "app-uninstall-authority" },
+    d1Persist: join(directory, "d1"),
   });
-  const database = workerdD1Database(runtime);
-  const store = new CloudflareD1OpenTofuControlStore(database);
-  return { store, appOwnership: new D1AppOwnershipStore(database, store), close: () => runtime.dispose() };
+}
+
+async function createNativeUninstallBaseline(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-uninstall-baseline-"));
+  try {
+    const runtime = nativeUninstallRuntime(directory);
+    try {
+      await ensureD1OpenTofuLedgerSchema(workerdD1Database(runtime));
+    } finally {
+      await runtime.dispose();
+    }
+    return directory;
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+let nativeUninstallBaseline: Promise<string> | undefined;
+afterAll(() =>
+  nativeUninstallBaseline?.then(
+    directory => rm(directory, { recursive: true, force: true }),
+    () => undefined,
+  )
+);
+
+async function openNativeUninstallStore() {
+  const baseline = await (nativeUninstallBaseline ??= createNativeUninstallBaseline());
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-uninstall-native-"));
+  let runtime: Miniflare | undefined;
+  const close = async () => {
+    try {
+      await runtime?.dispose();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  };
+  try {
+    // The baseline is closed and contains only the schema. Every test
+    // gets its own files, Workerd instance, and writable D1 binding.
+    await cp(join(baseline, "d1"), join(directory, "d1"), { recursive: true });
+    runtime = nativeUninstallRuntime(directory);
+    const database = workerdD1Database(runtime);
+    const store = new CloudflareD1OpenTofuControlStore(database);
+    return { store, appOwnership: new D1AppOwnershipStore(database, store), close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 const appAuthorityStores: typeof durableStores = [...durableStores, ["native-d1", openNativeUninstallStore]];
