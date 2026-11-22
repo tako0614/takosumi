@@ -365,6 +365,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
     test("keeps an installed app: open, update, settings, what it created and history in place", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      await page.clock.install();
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
       const origin = resolvePortableOrigin();
@@ -693,8 +694,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#version$`, "u"));
       await capture(page, "app-update-review");
       // A clean Plan waits for consent: no Apply across Run poll intervals.
-      await page.waitForTimeout(3_500);
+      const mutationsBeforeApprovalWindow = [...seenMutations];
+      await page.clock.runFor(3_500);
+      expect(seenMutations).toEqual(mutationsBeforeApprovalWindow);
       expect(seenMutations.filter((entry) => entry.endsWith("/apply"))).toEqual([]);
+      await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeEnabled();
       // Completing the update refetches bindings while its unchanged settings draft is hidden.
       const rereadBindings = page.waitForResponse((response) =>
         new URL(response.url()).pathname === bindingsPath && response.ok());
@@ -1616,6 +1620,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const openReviewFailure = scenario === "failedOpenReview" || indeterminateOpenReview;
       const noReplacement = scenario === "noReplacement";
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      if (scenario === "states") await page.clock.install();
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
       const origin = resolvePortableOrigin();
@@ -2416,7 +2421,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await openAppPane(page, "danger");
       await expect(app.getByTestId("app-uninstall")).toContainText("hasn't created anything in your cloud yet");
       await showAppOverview(page);
-      await page.waitForTimeout(3_500);
+      const mutationsBeforeApprovalWindow = [...seenMutations];
+      await page.clock.runFor(3_500);
+      expect(seenMutations).toEqual(mutationsBeforeApprovalWindow);
+      await expect(problems.getByTestId("app-review").getByRole("button", { name: "Install", exact: true })).toBeEnabled();
 
       // A stalled install is continued through the attempt that owns it, not
       // by planning beside it.
