@@ -411,44 +411,69 @@ async function readDestroyReviewPointer(request: Client, appPath: string, appId:
     throw new Refusal("current_destroy_review_unavailable");
   }
   const { progress, latestRun } = app;
-  const pending = progress.review;
   const scheduled = app.uninstall.scheduled;
   const scheduledPhase = isRecord(scheduled) ? scheduled.phase : undefined;
-  if (progress.run !== undefined || progress.revisionPreparing !== false ||
-    !isRecord(pending) || pending.runType !== "destroy_plan" || !bounded(pending.runId, 256) ||
-    !isRecord(latestRun) || latestRun.id !== pending.runId || latestRun.type !== "destroy_plan" ||
-    (latestRun.status !== "waiting_approval" && latestRun.status !== "succeeded") ||
+  if (progress.revisionPreparing !== false || !isRecord(latestRun) ||
+    latestRun.type !== "destroy_plan" || !bounded(latestRun.id, 256) ||
     ((scheduled !== undefined || app.status === "uninstalled") &&
       scheduledPhase !== "scheduled" && scheduledPhase !== "destroying")) {
     throw new Refusal("current_destroy_review_unavailable");
   }
-  return { id: pending.runId, workspaceId: app.workspaceId, status: latestRun.status, scheduledPhase };
+  const { id, status } = latestRun;
+  if (status === "queued" || status === "running") {
+    const pending = progress.run;
+    if (progress.review !== undefined || !isRecord(pending) ||
+      pending.id !== id || pending.type !== "destroy_plan" || pending.status !== status) {
+      throw new Refusal("current_destroy_review_unavailable");
+    }
+  } else {
+    const review = progress.review;
+    if ((status !== "waiting_approval" && status !== "succeeded") ||
+      progress.run !== undefined || !isRecord(review) ||
+      review.runType !== "destroy_plan" || review.runId !== id) {
+      throw new Refusal("current_destroy_review_unavailable");
+    }
+  }
+  return { id, workspaceId: app.workspaceId, status, scheduledPhase };
 }
 
-/** Find the currently offered manual review, then recheck both the Run and app. */
+/** Find the current manual Destroy Plan, then recheck both the Run and app. */
 async function currentDestroyReview(request: Client, appId: string): Promise<PublicRun> {
   const appPath = `/api/v1/capsules/${encodeURIComponent(appId)}`;
   const selected = await readDestroyReviewPointer(request, appPath, appId);
-  if (selected.scheduledPhase === "destroying") {
+  let needsSourceSnapshot = false;
+  if (selected.scheduledPhase === "scheduled" || selected.scheduledPhase === "destroying") {
     // Older scheduled Plans may lack origin in the Run projection. The
-    // reservation names its own Plan separately from a manual replacement.
+    // reservation names its own Plan before advancing to the destroying phase.
     const body = await request(appPath);
     const capsule = isRecord(body) ? body.capsule : undefined;
     const reservation = isRecord(capsule) ? capsule.uninstall : undefined;
     if (!isRecord(capsule) || capsule.id !== appId || capsule.workspaceId !== selected.workspaceId ||
-      !isRecord(reservation) || reservation.phase !== "destroying" ||
-      !bounded(reservation.destroyPlanRunId, 256) || reservation.destroyPlanRunId === selected.id) {
+      !isRecord(reservation) || reservation.phase !== selected.scheduledPhase ||
+      reservation.destroyPlanRunId === selected.id ||
+      (reservation.destroyPlanRunId === undefined
+        ? selected.scheduledPhase === "destroying"
+        : !bounded(reservation.destroyPlanRunId, 256))) {
       throw new Refusal("current_destroy_review_unavailable");
     }
+    // A pre-v1 source-less finalizer can allocate a different Run ID before
+    // updating the reservation. A Plan with a pinned Git snapshot uses the
+    // path that preserves the finalizer's reserved ID and origin.
+    needsSourceSnapshot = selected.scheduledPhase === "scheduled" &&
+      reservation.destroyPlanRunId !== undefined;
   }
   const run = runFrom(await request(`/api/v1/runs/${encodeURIComponent(selected.id)}`), appId, selected.id);
+  const advanced = (selected.status === "queued" && run.status === "running") ||
+    ((selected.status === "queued" || selected.status === "running") &&
+      (run.status === "waiting_approval" || run.status === "succeeded"));
   if (run.type !== "destroy_plan" || run.workspaceId !== selected.workspaceId ||
-    run.status !== selected.status || run.origin?.kind === "scheduled_uninstall") {
+    (run.status !== selected.status && !advanced) || run.origin?.kind === "scheduled_uninstall" ||
+    (needsSourceSnapshot && !bounded(run.sourceSnapshotId, 256))) {
     throw new Refusal("current_destroy_review_unavailable");
   }
   const current = await readDestroyReviewPointer(request, appPath, appId);
   if (current.id !== selected.id || current.workspaceId !== selected.workspaceId ||
-    current.status !== selected.status || current.scheduledPhase !== selected.scheduledPhase) {
+    current.status !== run.status || current.scheduledPhase !== selected.scheduledPhase) {
     throw new Refusal("current_destroy_review_unavailable");
   }
   return run;
@@ -690,7 +715,7 @@ export function recoverUninstallHelp(): string {
     '[{"connectionId":"old-id","replacementConnectionId":"new-id"}]',
     "takosumi apps recover-uninstall <app-id> --destroy-plan <saved-destroy-plan-run-id>",
     "takosumi apps recover-uninstall <app-id> --current-review",
-    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。--current-review はアプリの現在の削除レビューを読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read a specific saved Plan. Use --current-review to read the app’s current Destroy review. Execution is a separate command.",
+    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。--current-review はアプリの手動削除Planを準備中またはレビュー待ちの状態で読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read a specific saved Plan. Use --current-review to read the app’s pending or reviewable manual Destroy Plan. Execution is a separate command.",
     "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>",
     "Scopes: read,write to prepare; read to review.",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
