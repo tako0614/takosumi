@@ -1,5 +1,6 @@
-/** Ordinary Accounts/PAT clients of the revision, rollback and Run surfaces. */
+/** Ordinary Accounts/PAT clients of the revision, rollback, history and Run surfaces. */
 import type { PublicRun } from "takosumi-contract/runs";
+import { MAX_PAGE_LIMIT } from "takosumi-contract/pagination";
 import { parseDestroyProviderConnectionReplacements } from "takosumi-contract/connections";
 import { isProviderResolutionStatus } from "takosumi-contract/provider-resolution";
 import process from "node:process";
@@ -20,14 +21,15 @@ const ARGUMENT_REFUSALS = new Set([
   "exact_ref_and_idempotency_key_required", "saved_plan_and_explicit_confirmation_required",
   "invalid_connection_replacements", "destroy_plan_id_required", "revision_plan_id_required", "exact_ref_required",
   "state_version_and_idempotency_key_required",
+  "invalid_history_limit", "invalid_history_cursor",
 ]);
 
 /** Preserve inline '=' values, reject unknown flags and extra positionals. */
-function argumentsFor(args: readonly string[], kind: "update" | "rollback" | "apply" | "recover-uninstall") {
+function argumentsFor(args: readonly string[], kind: "update" | "rollback" | "history" | "apply" | "recover-uninstall") {
   const [appId, ...rest] = args;
   if (appId === "--help" || appId === "-h" || rest.includes("--help") || rest.includes("-h")) return { help: true } as const;
   if (!bounded(appId, 256) || appId.startsWith("--")) throw new Refusal("app_id_required");
-  const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], rollback: ["stateVersion", "idempotencyKey"], apply: ["plan", "destroyPlan"],
+  const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], rollback: ["stateVersion", "idempotencyKey"], history: ["limit", "cursor"], apply: ["plan", "destroyPlan"],
     "recover-uninstall": ["connections", "destroyPlan"] }[kind];
   const strings = new Set(["url", "deployControlUrl", "token", "timeoutMs", ...operationOptions]);
   const booleans = new Set(["json", ...(kind === "apply" ? ["yes", "allowDestroy", "observeOnly"] : [])]);
@@ -287,6 +289,50 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
       recovery: revisionPlanId || options.revisionPlan !== undefined
         ? "Retry the same app/ref and coordinator ID with --revision-plan."
         : "Retry only the same app/ref/idempotency key and Accounts identity; no approval or Apply was requested." });
+    return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
+  }
+}
+
+/** Read one page of the same state history used by the app dashboard. */
+export async function runAppHistory(args: string[], io: CliIo): Promise<number> {
+  let options: CliOptions = {};
+  let appId: string | undefined;
+  try {
+    const parsed = argumentsFor(args, "history");
+    if (parsed.help) { io.stdout(historyHelp()); return 0; }
+    ({ appId, options } = parsed);
+    const { limit, cursor } = options;
+    if (limit !== undefined && (typeof limit !== "string" || !/^[1-9][0-9]*$/u.test(limit) || Number(limit) > MAX_PAGE_LIMIT)) {
+      throw new Refusal("invalid_history_limit");
+    }
+    if (cursor !== undefined && !bounded(cursor, 4096)) throw new Refusal("invalid_history_cursor");
+    const query = new URLSearchParams();
+    if (typeof limit === "string") query.set("limit", limit);
+    if (typeof cursor === "string") query.set("cursor", cursor);
+    const selectedApp = appId;
+    const path = `/api/v1/capsules/${encodeURIComponent(selectedApp)}/state-versions${query.size ? `?${query}` : ""}`;
+    const target = selectTarget(options);
+    const page = await within(parsed.wait, signal => client(target, signal)(path));
+    if (!isRecord(page) || !Array.isArray(page.stateVersions) || page.stateVersions.length > Number(limit ?? MAX_PAGE_LIMIT) ||
+      (page.nextCursor !== undefined && (!bounded(page.nextCursor, 4096) || page.nextCursor === cursor))) {
+      throw new Refusal("invalid_state_version_history");
+    }
+    const stateVersions = page.stateVersions.map((version: unknown) => {
+      if (!isRecord(version) || version.capsuleId !== selectedApp || !bounded(version.id, 256) ||
+        !bounded(version.environment, 256) || typeof version.generation !== "number" ||
+        !Number.isSafeInteger(version.generation) || version.generation < 1 ||
+        !bounded(version.createdAt, 128) || !bounded(version.createdByRunId, 256)) {
+        throw new Refusal("state_version_identity_mismatch");
+      }
+      return {
+        id: version.id, generation: version.generation, environment: version.environment,
+        createdAt: version.createdAt, createdByRunId: version.createdByRunId,
+      };
+    });
+    write(io, options, { appId, stateVersions, nextCursor: page.nextCursor });
+    return 0;
+  } catch (error) {
+    write(io, options, { status: "refused", appId, code: errorCode(error) });
     return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
 }
@@ -554,6 +600,12 @@ export function rollbackHelp(): string {
   return ["takosumi apps rollback <app-id> --state-version <state-version-id> --idempotency-key <retained-key>",
     isJapaneseCli() ? "指定した状態バージョンへの復旧Planを準備します。承認とApplyは別操作です。" : "Prepare a rollback Plan for the specified StateVersion. Approval and Apply are separate.",
     "--url <origin> --token <Accounts PAT with read,write> --json --timeout-ms <1..120000>", "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
+}
+function historyHelp(): string {
+  return ["takosumi apps history <app-id> [--limit <count>] [--cursor <nextCursor>]",
+    isJapaneseCli() ? "保存済みの状態バージョンを1ページ表示します。復旧には表示されたIDを指定します。" : "List one page of saved StateVersions. Use the returned ID to select a rollback target.",
+    `--limit <1..${MAX_PAGE_LIMIT}> --url <origin> --token <Accounts PAT with read> --json --timeout-ms <1..120000>`,
+    "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
 }
 export function applyHelp(): string {
   return ["takosumi apps apply <app-id> --plan <saved-update-or-rollback-plan-run-id> --yes [--allow-destroy]",

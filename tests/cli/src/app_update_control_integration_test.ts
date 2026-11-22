@@ -357,15 +357,19 @@ test("apps update saves a reviewable revision Plan; apps apply separately reache
   }
 });
 
-test("apps rollback recovers the exact review after a lost ACK and applies it separately", async () => {
+test("CLI app history finds the rollback target and the exact Plan survives a lost ACK", async () => {
   const h = await fixture();
-  const target = (await h.ledger.getCapsule(h.appId))?.currentStateVersionId;
-  expect(target).toBeString();
+  const previousVersion = (await h.ledger.getCapsule(h.appId))?.currentStateVersionId;
+  expect(previousVersion).toBeString();
+  const readToken = "synthetic-cli-history-read-pat";
+  const otherAppToken = "synthetic-cli-history-other-app-pat";
+  h.accounts.savePersonalAccessToken(readToken, { ...h.pat, tokenId: "pat_cli_history", scopes: ["read"] });
+  h.accounts.savePersonalAccessToken(otherAppToken, { ...h.pat, tokenId: "pat_cli_history_other", scopes: ["read"], appIds: ["cap_other"] });
   const originalFetch = globalThis.fetch;
   const requests: Request[] = [];
   const output: string[] = [];
   const io = { stdout: (line: string) => output.push(line), stderr: () => {} };
-  const rollbackPath = `/api/v1/state-versions/${target}/rollback-plan`;
+  const rollbackPath = `/api/v1/state-versions/${previousVersion}/rollback-plan`;
   let lostPlan: string | undefined;
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init);
@@ -378,13 +382,13 @@ test("apps rollback recovers the exact review after a lost ACK and applies it se
     }
     return response;
   }) as typeof fetch;
-  const common = ["--token", TOKEN, "--url", ORIGIN, "--json"];
-  const run = async (...args: string[]) => {
+  const invokeCli = async (token: string, args: string[]) => {
     output.length = 0;
-    const code = await main(["apps", ...args, ...common], io);
+    const code = await main(["apps", ...args, "--token", token, "--url", ORIGIN, "--json"], io);
     expect(output).toHaveLength(1);
     return { code, result: JSON.parse(output[0]!) };
   };
+  const run = (...args: string[]) => invokeCli(TOKEN, args);
   try {
     const revision = await run("update", h.appId, "--ref", "release/v2", "--idempotency-key", "cli-before-rollback");
     expect(revision.code).toBe(0);
@@ -392,7 +396,20 @@ test("apps rollback recovers the exact review after a lost ACK and applies it se
     expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 2 });
     const before = { ...h.runnerCalls };
     requests.length = 0;
-    const args = ["rollback", h.appId, "--state-version", target!, "--idempotency-key", "cli-exact-state-rollback"];
+    const history = ["history", h.appId, "--limit", "1"];
+    expect(await invokeCli(otherAppToken, history)).toMatchObject({ code: 1, result: { status: "refused" } });
+    const older = await invokeCli(readToken, history);
+    expect(older).toEqual({ code: 0, result: { appId: h.appId, stateVersions: [{
+      id: previousVersion, generation: 1, environment: expect.any(String), createdAt: expect.any(String), createdByRunId: expect.any(String),
+    }], nextCursor: expect.any(String) } });
+    const current = await invokeCli(readToken, [...history, "--cursor", older.result.nextCursor]);
+    expect(current).toMatchObject({ code: 0, result: { stateVersions: [{ generation: 2 }] } });
+    expect(current.result.nextCursor).toBeUndefined();
+    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual(
+      Array.from({ length: 3 }, () => ["GET", `/api/v1/capsules/${h.appId}/state-versions`]));
+    expect(h.runnerCalls).toEqual(before);
+    const target = older.result.stateVersions[0].id;
+    const args = ["rollback", h.appId, "--state-version", target, "--idempotency-key", "cli-exact-state-rollback"];
     const first = await run(...args);
     expect(first.code).toBe(1);
     expect(first.result).toMatchObject({ status: "unconfirmed", stateVersionId: target });

@@ -82,7 +82,15 @@ returns `plan_not_reviewable`. These outcomes exit 1.
 
 ## Prepare a rollback to a saved StateVersion
 
-`apps rollback` prepares a Plan for a StateVersion ID from `GET /api/v1/capsules/<app-id>/state-versions`. It checks that the StateVersion belongs to the app and uses the Accounts personal access token. `review_required` returns the target `stateVersionId` and the saved `planRunId`.
+`apps history` lists one page of saved StateVersions for an app. Compare `generation`, `createdAt`, and `createdByRunId`, then choose the `id` you want to restore. This command requires the Accounts personal access token's `read` scope.
+
+```bash
+takosumi apps history cap_example --limit 10 --url https://takosumi.example.com --json
+```
+
+If the response includes `nextCursor`, pass it to `--cursor` for the same app to read the next page.
+
+`apps rollback` prepares a Plan for the selected StateVersion ID. It checks that the StateVersion belongs to the app and uses the Accounts personal access token. `review_required` returns the target `stateVersionId` and the saved `planRunId`.
 
 ```bash
 takosumi apps rollback cap_example --state-version state_example --idempotency-key restore-example-01 \
