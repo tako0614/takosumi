@@ -182,6 +182,16 @@ const config: UserConfig = {
   cleanUrls: true,
   // Published hosted docs depend on pinned source bytes, not available Git history.
   lastUpdated: false,
+  vue: {
+    features: {
+      componentIdGenerator(filepath, source, isProduction, getHash) {
+        // Vite resolves the bundled theme through its physical dependency path.
+        // Keep that package's client component names independent of the checkout.
+        const clientPath = /(?:^|\/)(node_modules\/vitepress\/dist\/client\/.+)$/u.exec(filepath)?.[1];
+        return getHash((clientPath ?? filepath) + (isProduction ? source : ""));
+      },
+    },
+  },
   vite: {
     build: {
       target: "esnext",
