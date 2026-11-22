@@ -701,6 +701,8 @@ link は雛形の `{origin}` と `{url}` にその画面の URL を入れた後�
 
 `GET /api/v1/capsules/{capsuleId}/runs` は `limit`（既定 50、上限 100）と
 `cursor` で新しい順にページングします。`type` を繰り返すと Run の種類で絞れます。
+`planRunId` を一つ指定すると、その計画を参照する適用 Run だけを返します。
+失敗した適用も含み、種類の指定と併用できます。
 
 新しい Capsule は `POST /api/v1/workspaces/{workspaceId}/install-plans` から
 exact SourceSnapshot と成功済み compatibility declaration を固定して作成し、返された

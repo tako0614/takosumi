@@ -159,6 +159,7 @@ export class RunQueryService {
       readonly limit?: number;
       readonly cursor?: string;
       readonly types?: readonly RunType[];
+      readonly planRunId?: string;
     },
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
     requireNonEmptyString(capsuleId, "capsuleId");
@@ -171,6 +172,7 @@ export class RunQueryService {
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
       ...(after ? { after } : {}),
       ...(options.types !== undefined ? { kinds: options.types } : {}),
+      ...(options.planRunId !== undefined ? { planRunId: options.planRunId } : {}),
     });
     const runs = await this.#projectStoredRuns(page.rows);
     const last = page.rows.at(-1);

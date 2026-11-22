@@ -58,7 +58,7 @@ describe("RunView", () => {
     expect(source).toContain('from "../../lib/run-approval.ts"');
     expect(source).toContain("isDeployApprovalCandidate");
     expect(source).toContain("awaitsDeployApproval(r, siblings)");
-    expect(source).toContain("listRecentCapsuleRuns(capsuleId, SIBLING_RUNS_LIMIT)");
+    expect(source).toContain("listPlanApplyRuns({ capsuleId, id, workspaceId, type })");
     // A failed or unfinished ledger cannot prove approval is still open.
     expect(source).toContain("if (siblings === undefined) return false;");
     expect(source).toContain("if (siblingRuns.error || siblingRuns.loading) return false;");
@@ -87,7 +87,7 @@ describe("RunView", () => {
   test("timeout recovery uses the exact Apply Run -> Plan Run relation", () => {
     const recovery = readFileSync(resolve(import.meta.dir, "../../../../../dashboard/src/lib/apply-run-recovery.ts"), "utf8");
     expect(source).toContain("recoverApplyRun(attempt.plan,");
-    expect(recovery).toContain("candidate.planRunId === planId");
+    expect(recovery).toContain("listPlanApplyRuns(plan,");
     expect(recovery).toContain("current.planRunId === planId");
     expect(recovery).not.toContain("Date.parse(");
   });

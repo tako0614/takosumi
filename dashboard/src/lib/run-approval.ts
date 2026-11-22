@@ -40,8 +40,8 @@ export function isDeployApprovalCandidate(run: Run): boolean {
 /**
  * True when a succeeded review run (plan / destroy_plan) is still waiting on
  * the user's deploy approval: policy passed, and no apply / destroy_apply
- * explicitly references it through `planRunId`. `runs` is the Workspace Run
- * ledger (or the newest slice of it) the plan lives in. Rows without the
+ * explicitly references it through `planRunId`. `runs` must include the
+ * complete Apply history for the plan. Rows without the
  * relation are legacy/unknown and do not consume approval.
  */
 export function awaitsDeployApproval(run: Run, runs: readonly Run[]): boolean {

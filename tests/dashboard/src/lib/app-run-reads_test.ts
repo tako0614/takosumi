@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import {
   listCapsuleActivity,
-  listRecentCapsuleRuns,
+  listPlanApplyRuns,
 } from "../../../../dashboard/src/lib/control-api.ts";
 import { clearSharedAuthSessionPreflight } from "../../../../dashboard/src/lib/shared-auth-session-preflight.ts";
 
@@ -19,44 +19,37 @@ function run(index: number) {
   };
 }
 
-test("a shared app's 200-row approval window follows its app pages without Workspace membership", async () => {
-  const calls: string[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const path = String(input);
-    calls.push(path);
-    if (path === "/api/v1/capsules/cap_shared/runs?limit=100") {
-      return Response.json({ runs: Array.from({ length: 100 }, (_, i) => run(i)), nextCursor: "older" });
-    }
-    if (path === "/api/v1/capsules/cap_shared/runs?limit=100&cursor=older") {
-      return Response.json({ runs: Array.from({ length: 100 }, (_, i) => run(i + 100)) });
-    }
-    return Response.json({ error: "forbidden" }, { status: 403 });
-  }) as typeof fetch;
-  expect(await listRecentCapsuleRuns("cap_shared", 200)).toHaveLength(200);
-  expect(calls).toEqual([
-    "/api/v1/capsules/cap_shared/runs?limit=100",
-    "/api/v1/capsules/cap_shared/runs?limit=100&cursor=older",
-  ]);
-});
+const plan = {
+  id: "plan_shared", capsuleId: "cap_shared", workspaceId: "ws_internal", type: "plan",
+} as const;
 
-test("Apply timeout recovery requests only its app's newest 30 Runs", async () => {
+test("a shared app checks the exact Plan through its app route", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     calls.push(String(input));
-    return Response.json({ runs: [run(1)] });
+    return Response.json({ runs: [
+      run(1),
+      { ...run(2), planRunId: "other_plan" },
+      { ...run(3), workspaceId: "other_workspace" },
+      { ...run(4), capsuleId: "other_app" },
+      { ...run(5), type: "destroy_apply" },
+    ] });
   }) as typeof fetch;
-  expect((await listRecentCapsuleRuns("cap_shared", 30))[0]?.planRunId).toBe("plan_shared");
-  expect(calls).toEqual(["/api/v1/capsules/cap_shared/runs?limit=30"]);
+  expect(await listPlanApplyRuns(plan)).toEqual([run(1)]);
+  expect(calls).toEqual(["/api/v1/capsules/cap_shared/runs?limit=100&type=apply&planRunId=plan_shared"]);
 });
 
-test("an incomplete or non-advancing run window fails rather than claiming approval is open", async () => {
+test("an incomplete or non-advancing legacy run window cannot show approval as open", async () => {
   let reads = 0;
   globalThis.fetch = (async () => {
     reads++;
-    return Response.json({ runs: [], nextCursor: "unchanged" });
+    return Response.json({
+      runs: Array.from({ length: 100 }, (_, index) => ({ ...run(index), planRunId: "other_plan" })),
+      nextCursor: "unchanged",
+    });
   }) as typeof fetch;
-  await expect(listRecentCapsuleRuns("cap_shared", 200)).rejects.toMatchObject({ status: 502 });
-  expect(reads).toBeLessThanOrEqual(2);
+  await expect(listPlanApplyRuns(plan)).rejects.toMatchObject({ status: 502 });
+  expect(reads).toBe(2);
 });
 
 test("app Activity uses its authorized route and never falls back after a denial", async () => {
