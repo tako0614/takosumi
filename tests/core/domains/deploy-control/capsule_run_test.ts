@@ -13446,7 +13446,9 @@ test("v2.6 marked repository Plan refuses a different snapshot API before materi
 });
 
 
-test("Cloudflare OAuth applied state accepts a verified same-account API-token replacement without widening Runner env", async () => {
+for (const originalAuth of ["oauth", "api_token"] as const) test(originalAuth === "oauth"
+  ? "Cloudflare OAuth applied state accepts a verified same-account API-token replacement without widening Runner env"
+  : "Cloudflare API-token applied state accepts a verified same-account API-token replacement without widening Runner env (token-only original)", async () => {
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -13482,9 +13484,10 @@ test("Cloudflare OAuth applied state accepts a verified same-account API-token r
       });
     },
   });
+  const originalToken = "synthetic-original-oauth-token";
   const originalOAuthValues = cloudflareOAuthValues({
     tokenResponse: {
-      access_token: "synthetic-original-oauth-token",
+      access_token: originalToken,
       refresh_token: "synthetic-original-oauth-refresh-token",
       expires_in: 86_400,
     },
@@ -13495,14 +13498,19 @@ test("Cloudflare OAuth applied state accepts a verified same-account API-token r
   const original = await vault.register({
     workspaceId: seeded.workspace.id,
     provider: FIXTURE_CLOUDFLARE_PROVIDER,
-    credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" },
-    materialization: "oauth",
-    values: { ...originalOAuthValues, CLOUDFLARE_ACCOUNT_ID: accountId },
+    credentialRecipe: { id: "cloudflare", authMode: originalAuth, secretPartition: "provider-credentials" },
+    ...(originalAuth === "oauth" ? { materialization: "oauth" as const } : {}),
+    values: originalAuth === "oauth"
+      ? { ...originalOAuthValues, CLOUDFLARE_ACCOUNT_ID: accountId }
+      : { CLOUDFLARE_API_TOKEN: originalToken },
     scopeHints: { providerSettings: { accountId } },
   }, undefined, null);
   expect((await vault.test(original.id, undefined, null)).status).toBe("verified");
   const verifiedOriginal = (await store.getConnection(original.id))!;
-  expect(verifiedOriginal.materialization).toBe("oauth");
+  expect(verifiedOriginal.materialization).toBe(originalAuth === "oauth" ? "oauth" : "secret");
+  expect(verifiedOriginal.credentialRecipe?.authMode).toBe(originalAuth);
+  expect(verifiedOriginal.credentialVerification?.verifierId).toBe("cloudflare/account-workers-subdomain@v1");
+  expect(verifiedOriginal.scopeHints?.providerSettings).toMatchObject({ accountId, workersSubdomain: "synthetic-team" });
   expect(verifiedOriginal.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
 
   const registerApiToken = async (id: string, selectedAccount: string, zoneId?: string) => {
@@ -13575,7 +13583,7 @@ test("Cloudflare OAuth applied state accepts a verified same-account API-token r
     return credentials && "env" in credentials ? credentials.env : credentials;
   };
   expect(envOf(runner.planJobs[0]!)).toMatchObject({
-    CLOUDFLARE_API_TOKEN: "synthetic-original-oauth-token",
+    CLOUDFLARE_API_TOKEN: originalToken,
   });
   expect(envOf(runner.planJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
   const initialApply = await controller.createApplyRun({
@@ -13584,7 +13592,7 @@ test("Cloudflare OAuth applied state accepts a verified same-account API-token r
   });
   expect(initialApply.applyRun.status).toBe("succeeded");
   expect(envOf(runner.applyJobs[0]!)).toMatchObject({
-    CLOUDFLARE_API_TOKEN: "synthetic-original-oauth-token",
+    CLOUDFLARE_API_TOKEN: originalToken,
   });
   expect(envOf(runner.applyJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
 
@@ -14548,7 +14556,9 @@ test("pre-provider Apply refusal leaves initial Capsule pending and retryable", 
   expect(runner.applyJobs).toHaveLength(1);
 });
 
-test("Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence", async () => {
+for (const originalAuth of ["oauth", "api_token"] as const) test(originalAuth === "oauth"
+  ? "Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence"
+  : "Destroy with a revoked Cloudflare API-token connection requires applied ownership evidence (token-only original)", async () => {
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -14601,9 +14611,10 @@ test("Destroy with a revoked Cloudflare OAuth connection requires applied owners
       });
     },
   });
+  const originalToken = "synthetic-qa-oauth-token";
   const originalOAuthValues = cloudflareOAuthValues({
     tokenResponse: {
-      access_token: "synthetic-qa-oauth-token",
+      access_token: originalToken,
       refresh_token: "synthetic-original-oauth-refresh-token",
       expires_in: 86_400,
     },
@@ -14614,14 +14625,19 @@ test("Destroy with a revoked Cloudflare OAuth connection requires applied owners
   const original = await vault.register({
     scope: "personal",
     provider: FIXTURE_CLOUDFLARE_PROVIDER,
-    credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" },
-    materialization: "oauth",
-    values: { ...originalOAuthValues, CLOUDFLARE_ACCOUNT_ID: accountId },
+    credentialRecipe: { id: "cloudflare", authMode: originalAuth, secretPartition: "provider-credentials" },
+    ...(originalAuth === "oauth" ? { materialization: "oauth" as const } : {}),
+    values: originalAuth === "oauth"
+      ? { ...originalOAuthValues, CLOUDFLARE_ACCOUNT_ID: accountId }
+      : { CLOUDFLARE_API_TOKEN: originalToken },
     scopeHints: { providerSettings: { accountId } },
   }, undefined, ownerAccountId);
   expect((await vault.test(original.id, undefined, ownerAccountId)).status).toBe("verified");
   const verifiedOriginal = (await store.getConnection(original.id))!;
-  expect(verifiedOriginal.materialization).toBe("oauth");
+  expect(verifiedOriginal.materialization).toBe(originalAuth === "oauth" ? "oauth" : "secret");
+  expect(verifiedOriginal.credentialRecipe?.authMode).toBe(originalAuth);
+  expect(verifiedOriginal.credentialVerification?.verifierId).toBe("cloudflare/account-workers-subdomain@v1");
+  expect(verifiedOriginal.scopeHints?.providerSettings).toMatchObject({ accountId, workersSubdomain: "synthetic-team" });
   expect(verifiedOriginal.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
 
   const registerApiToken = async (id: string, selectedAccount: string, zoneId?: string) => {
@@ -14669,7 +14685,7 @@ test("Destroy with a revoked Cloudflare OAuth connection requires applied owners
     return credentials && "env" in credentials ? credentials.env : credentials;
   };
   expect(envOf(runner.planJobs[0]!)).toMatchObject({
-    CLOUDFLARE_API_TOKEN: "synthetic-qa-oauth-token",
+    CLOUDFLARE_API_TOKEN: originalToken,
   });
   expect(envOf(runner.planJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
   const initialApply = await controller.createApplyRun({
@@ -14678,7 +14694,7 @@ test("Destroy with a revoked Cloudflare OAuth connection requires applied owners
   }, actorContext);
   expect(initialApply.applyRun.status).toBe("succeeded");
   expect(envOf(runner.applyJobs[0]!)).toMatchObject({
-    CLOUDFLARE_API_TOKEN: "synthetic-qa-oauth-token",
+    CLOUDFLARE_API_TOKEN: originalToken,
   });
   expect(envOf(runner.applyJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
 
@@ -14752,7 +14768,7 @@ test("Destroy with a revoked Cloudflare OAuth connection requires applied owners
   const evidence = (await controller.getRun(storedApply.id)).providerResolutions;
   expect(evidence).toEqual([expect.objectContaining({
     connectionId: original.id,
-    materialization: "oauth",
+    materialization: originalAuth === "oauth" ? "oauth" : "secret",
     evidence: expect.objectContaining({ requiredEnvNames: ["CLOUDFLARE_API_TOKEN"] }),
   })]);
   expect(await vault.revoke(original.id, undefined, ownerAccountId)).toBe(true);
