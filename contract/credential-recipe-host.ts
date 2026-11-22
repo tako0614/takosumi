@@ -109,6 +109,12 @@ export interface CredentialRecipeDriverVerifyResult {
   readonly verifiedScopeHints?: CredentialRecipeVerifiedScopeHints;
 }
 
+export type PreserveDestroyCredentialDelivery = (
+  applied: ProviderConnection,
+  replacement: ProviderConnection,
+  appliedEnvNames?: readonly string[],
+) => readonly string[] | undefined;
+
 export interface CredentialRecipeRuntimeDriver {
   /** Optional sealed-material renewal. Core atomically fences and seals the result. */
   refresh?(input: CredentialRecipeDriverContext): Promise<Readonly<Record<string, string>> | undefined>;
@@ -131,6 +137,15 @@ export interface CredentialRecipeRuntimeDriver {
    * A host without this predicate cannot authorize account-scope recovery.
    */
   readonly hasVerifiedAccountScope?: (connection: ProviderConnection) => boolean;
+  /** Host-owned projection for an explicitly reviewed Destroy replacement. */
+  readonly destroyCredentialDelivery?: {
+    readonly preserve: PreserveDestroyCredentialDelivery;
+    readonly project: (
+      connection: ProviderConnection,
+      envNames: readonly string[],
+      env: Readonly<Record<string, string>>,
+    ) => Readonly<Record<string, string>> | undefined;
+  };
   verify?(
     input: CredentialRecipeDriverContext,
   ): Promise<CredentialRecipeDriverVerifyResult>;

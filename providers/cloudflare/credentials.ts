@@ -13,6 +13,7 @@
  * secret-opening stay in core.
  */
 import type { ProviderConnection } from "takosumi-contract/connections";
+import type { CredentialRecipeRuntimeDriver } from "takosumi-contract/credential-recipe-host";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import {
   cloudflareProviderSettings,
@@ -51,6 +52,55 @@ export function hasCloudflareVerifiedAccountScope(connection: ProviderConnection
     connection.scopeHints?.moduleInputDefaults?.cloudflare_account_id === accountId &&
     connection.scopeHints?.moduleInputDefaults?.cloudflare_workers_subdomain === subdomain;
 }
+
+const TOKEN_ENV = "CLOUDFLARE_API_TOKEN";
+const ACCOUNT_ENV = "CLOUDFLARE_ACCOUNT_ID";
+
+function cloudflareDestroyTokenMode(
+  connection: ProviderConnection,
+): "oauth" | "api_token" | undefined {
+  const recipe = connection.credentialRecipe;
+  if (!hasCloudflareVerifiedAccountScope(connection) || isCloudflareTokenVending(connection) ||
+    recipe?.id !== "cloudflare" ||
+    recipe.runIssuance || recipe.renewableEnv || recipe.runtimeInputs || recipe.declaredEnv ||
+    connection.fileEnvNames?.length || recipe.fileEnvNames?.length ||
+    !connection.envNames.includes(TOKEN_ENV)) return;
+
+  if (recipe.authMode === "oauth" && connection.materialization === "oauth" &&
+    recipe.preRunAction === "cloudflare_oauth" &&
+    connection.envNames.length === 1) return "oauth";
+  if (recipe.authMode === "api_token" && connection.materialization === "secret" &&
+    recipe.preRunAction === undefined &&
+    (connection.envNames.length === 1 ||
+      (connection.envNames.length === 2 && connection.envNames.includes(ACCOUNT_ENV)))) return "api_token";
+}
+
+/** Maintain the applied token-only process environment for a manual Destroy. */
+export const cloudflareDestroyCredentialDelivery: NonNullable<
+  CredentialRecipeRuntimeDriver["destroyCredentialDelivery"]
+> = {
+  preserve(applied, replacement, appliedEnvNames) {
+    const originalMode = cloudflareDestroyTokenMode(applied);
+    const replacementMode = cloudflareDestroyTokenMode(replacement);
+    const names = appliedEnvNames ?? applied.envNames;
+    if (!originalMode || !replacementMode ||
+      names.length !== 1 || names[0] !== TOKEN_ENV ||
+      (appliedEnvNames === undefined && (originalMode !== "oauth" || replacementMode !== "api_token")) ||
+      applied.scopeHints?.providerSettings?.accountId !==
+        replacement.scopeHints?.providerSettings?.accountId ||
+      applied.scopeHints?.providerSettings?.workersSubdomain !==
+        replacement.scopeHints?.providerSettings?.workersSubdomain) return;
+    return [TOKEN_ENV];
+  },
+  project(connection, names, env) {
+    if (!cloudflareDestroyTokenMode(connection) || names.length !== 1 || names[0] !== TOKEN_ENV ||
+      Object.keys(env).length !== connection.envNames.length ||
+      !connection.envNames.every((name) => Object.hasOwn(env, name)) ||
+      !env[TOKEN_ENV] ||
+      (Object.hasOwn(env, ACCOUNT_ENV) && env[ACCOUNT_ENV] !== connection.scopeHints?.providerSettings?.accountId)) return;
+    return { [TOKEN_ENV]: env[TOKEN_ENV]! };
+  },
+};
 
 /**
  * Injected fetch seam so the driver is unit-testable without real network.

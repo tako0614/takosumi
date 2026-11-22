@@ -13446,6 +13446,283 @@ test("v2.6 marked repository Plan refuses a different snapshot API before materi
 });
 
 
+test("Cloudflare OAuth applied state accepts a verified same-account API-token replacement without widening Runner env", async () => {
+  const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
+  const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
+  const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
+  const { cloudflareOAuthValues } = await import("../../../../providers/cloudflare/oauth.ts");
+  const { handleCapsules } = await import("../../../../accounts/service/src/control/capsules.ts");
+  const { InMemoryAccountsStore } = await import("../../../../accounts/service/src/store.ts");
+  const { controllerErrorResponse } = await import("../../../../accounts/service/src/control/shared.ts");
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: oidcMaterializedInstallConfig(),
+  });
+  const now = new Date("2026-11-18T07:00:00Z");
+  const accountId = "0123456789abcdef0123456789abcdef";
+  const foreignAccountId = "fedcba9876543210fedcba9876543210";
+  let sequence = 0;
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "synthetic-cloudflare-credential-delivery-fixture-passphrase",
+    }),
+    now: () => now,
+    newId: () => `conn_cloudflare_delivery_${++sequence}`,
+    credentialRecipeResolver: id => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(recipe => recipe.id === id),
+    credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    fetch: async input => {
+      const account = /\/accounts\/([a-f0-9]{32})/.exec(input)?.[1];
+      return Response.json({
+        success: true,
+        result: input.endsWith("/workers/subdomain")
+          ? { subdomain: "synthetic-team" }
+          : account ? { id: account } : { status: "active" },
+      });
+    },
+  });
+  const originalOAuthValues = cloudflareOAuthValues({
+    tokenResponse: {
+      access_token: "synthetic-original-oauth-token",
+      refresh_token: "synthetic-original-oauth-refresh-token",
+      expires_in: 86_400,
+    },
+    clientId: "synthetic-cloudflare-oauth-client",
+    now: now.getTime(),
+    requestedScopes: [],
+  });
+  const original = await vault.register({
+    workspaceId: seeded.workspace.id,
+    provider: FIXTURE_CLOUDFLARE_PROVIDER,
+    credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" },
+    materialization: "oauth",
+    values: { ...originalOAuthValues, CLOUDFLARE_ACCOUNT_ID: accountId },
+    scopeHints: { providerSettings: { accountId } },
+  }, undefined, null);
+  expect((await vault.test(original.id, undefined, null)).status).toBe("verified");
+  const verifiedOriginal = (await store.getConnection(original.id))!;
+  expect(verifiedOriginal.materialization).toBe("oauth");
+  expect(verifiedOriginal.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
+
+  const registerApiToken = async (id: string, selectedAccount: string, zoneId?: string) => {
+    const values = {
+      CLOUDFLARE_API_TOKEN: `synthetic-${id}-api-token`,
+      CLOUDFLARE_ACCOUNT_ID: selectedAccount,
+      ...(zoneId ? { CLOUDFLARE_ZONE_ID: zoneId } : {}),
+    };
+    const row = await vault.register({
+      workspaceId: seeded.workspace.id,
+      provider: FIXTURE_CLOUDFLARE_PROVIDER,
+      credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
+      values,
+      scopeHints: { providerSettings: { accountId: selectedAccount } },
+    }, undefined, null);
+    expect((await vault.test(row.id, undefined, null)).status).toBe("verified");
+    return (await store.getConnection(row.id))!;
+  };
+  const replacement = await registerApiToken("same-account", accountId);
+  const retryReplacement = await registerApiToken("same-account-retry", accountId);
+  const foreign = await registerApiToken("foreign-account", foreignAccountId);
+  const zoned = await registerApiToken("explicit-zone", accountId, "synthetic-zone-id");
+  expect(replacement.envNames).toEqual(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
+
+  const bindingSet = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
+  await transitionProviderBindingSetForFixture(store, {
+    ...bindingSet,
+    bindings: bindingSet.bindings.map(binding => ({ ...binding, connectionId: original.id })),
+  });
+  const runner = recordingRunner();
+  const mintedConnectionIds: string[][] = [];
+  const mint = vault.mintForCapsuleProviderBindings.bind(vault);
+  vault.mintForCapsuleProviderBindings = async (...args) => {
+    mintedConnectionIds.push(args[1].map(entry => entry.connectionId));
+    return await mint(...args);
+  };
+  const controller = controllerWith(store, runner, {
+    vault,
+    moduleVariableMaterializer: fixtureAuthorityBoundModuleVariableMaterializer(),
+  });
+  let failuresRemaining = 1;
+  runner.destroy = job => {
+    runner.destroyJobs.push(job);
+    if (failuresRemaining > 0) {
+      failuresRemaining -= 1;
+      return Promise.resolve({
+        providerExecutionFailure: {
+          kind: "provider_execution_failed",
+          statePersistence: "persisted",
+          errorCode: "apply_failed",
+        },
+        stateDigest: STATE_DIGEST,
+        providerInstallation: providerInstallationForMutation(job.planRun.requiredProviders),
+        executionEvidence: fixtureExecutionEvidence(job, "destroy", {
+          outcome: "provider_failed_state_persisted",
+        }),
+        diagnostics: [{ severity: "error", code: "apply_failed", message: "provider destroy partially failed" }],
+      });
+    }
+    return Promise.resolve({
+      stateDigest: STATE_DIGEST,
+      providerInstallation: providerInstallationForMutation(job.planRun.requiredProviders),
+      executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+    });
+  };
+  const initialPlan = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(initialPlan.planRun.status).toBe("succeeded");
+  const envOf = (job: OpenTofuPlanJob | OpenTofuApplyJob | OpenTofuDestroyJob) => {
+    const credentials = job.credentials;
+    return credentials && "env" in credentials ? credentials.env : credentials;
+  };
+  expect(envOf(runner.planJobs[0]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-original-oauth-token",
+  });
+  expect(envOf(runner.planJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  const initialApply = await controller.createApplyRun({
+    planRunId: initialPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(initialPlan.planRun),
+  });
+  expect(initialApply.applyRun.status).toBe("succeeded");
+  expect(envOf(runner.applyJobs[0]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-original-oauth-token",
+  });
+  expect(envOf(runner.applyJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+
+  const accountsStore = new InMemoryAccountsStore();
+  type Operations = import("../../../../accounts/service/src/control-operations.ts").ControlPlaneOperations;
+  const operations = {
+    capsules: { getCapsule: async () => (await store.getCapsule(seeded.capsule.id))! },
+    workspaces: {
+      getWorkspace: async () => seeded.workspace,
+      getWorkspaceForAccount: async () => seeded.workspace,
+      captureManagementAuthority: () => store.getWorkspaceManagement(seeded.workspace.id),
+    },
+    members: { listMembers: async () => [] },
+    createCapsuleDestroyPlan: (id: string, options?: Parameters<Operations["createCapsuleDestroyPlan"]>[1]) =>
+      controller.createCapsuleDestroyPlan(id, { actor: options?.actor }, {
+        destroyProviderConnectionReplacements: options?.destroyProviderConnectionReplacements,
+      }),
+    getRun: (id: string) => controller.getRun(id),
+    getRunCost: async () => undefined,
+  } as unknown as Operations;
+  const requestDestroyPlan = async (replacementConnectionId: string) => {
+    const url = new URL(`https://fixture.invalid/api/v1/capsules/${seeded.capsule.id}/destroy-plan`);
+    const request = new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ destroyProviderConnectionReplacements: [
+        { connectionId: original.id, replacementConnectionId },
+      ] }),
+    });
+    return await handleCapsules({
+      request,
+      url,
+      operations,
+      store: accountsStore,
+      session: {
+        subject: seeded.workspace.ownerUserId,
+        credential: "session",
+        uninstallRequester: { subject: seeded.workspace.ownerUserId },
+      },
+    }, ["capsules", seeded.capsule.id, "destroy-plan"], "POST").catch(controllerErrorResponse);
+  };
+  const dispatchCounts = () => ({ plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mintedConnectionIds.length });
+  const beforeRefusals = dispatchCounts();
+  for (const invalidId of [foreign.id, zoned.id]) {
+    const response = await requestDestroyPlan(invalidId);
+    expect(response.status).toBe(409);
+    expect(dispatchCounts()).toEqual(beforeRefusals);
+  }
+
+  const reviewResponse = await requestDestroyPlan(replacement.id);
+  expect(reviewResponse.status).toBe(201);
+  const { run } = await reviewResponse.json() as { run: Run };
+  const { planRun: destroyPlan } = await controller.getPlanRun(run.id);
+  const delivery = [{ connectionId: original.id, envNames: ["CLOUDFLARE_API_TOKEN"] }];
+  expect(destroyPlan.operation).toBe("destroy");
+  expect(destroyPlan.status).toBe("waiting_approval");
+  expect(destroyPlan.destroyConnectionRecovery?.credentialDelivery).toEqual(delivery);
+  expect(runner.planJobs).toHaveLength(2);
+  expect(runner.planJobs[1]?.credentials).toMatchObject({
+    manifest: { bindings: [{ connectionId: replacement.id, envNames: ["CLOUDFLARE_API_TOKEN"] }] },
+  });
+  expect(envOf(runner.planJobs[1]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-same-account-api-token",
+  });
+  expect(envOf(runner.planJobs[1]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  await controller.approveRun(destroyPlan.id, { approvedBy: seeded.workspace.ownerUserId });
+  const partial = await controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  });
+  expect(partial.applyRun.status).toBe("failed");
+  expect(partial.applyRun.operation).toBe("destroy");
+  expect(partial.applyRun.stateVersionId).toBeDefined();
+  expect(partial.capsule.status).toBe("error");
+  expect(partial.capsule.currentStateGeneration).toBe(2);
+  const partialState = await store.getStateVersion(partial.applyRun.stateVersionId!);
+  expect(partialState).toMatchObject({
+    capsuleId: seeded.capsule.id,
+    generation: 2,
+    digest: STATE_DIGEST,
+    createdByRunId: partial.applyRun.id,
+  });
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(envOf(runner.destroyJobs[0]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-same-account-api-token",
+  });
+  expect(envOf(runner.destroyJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  expect(mintedConnectionIds.slice(-2)).toEqual([[replacement.id], [replacement.id]]);
+
+  expect(await store.deleteConnection(replacement.id)).toBe(true);
+  const retryResponse = await requestDestroyPlan(retryReplacement.id);
+  expect(retryResponse.status).toBe(201);
+  const retryRun = await retryResponse.json() as { run: Run };
+  const { planRun: retryPlan } = await controller.getPlanRun(retryRun.run.id);
+  expect(retryPlan.operation).toBe("destroy");
+  expect(retryPlan.status).toBe("waiting_approval");
+  expect(retryPlan.baseStateGeneration).toBe(2);
+  expect(retryPlan.destroyConnectionRecovery?.credentialDelivery).toEqual(delivery);
+  expect(runner.planJobs).toHaveLength(3);
+  expect(envOf(runner.planJobs[2]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-same-account-retry-api-token",
+  });
+  expect(envOf(runner.planJobs[2]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  await controller.approveRun(retryPlan.id, { approvedBy: seeded.workspace.ownerUserId });
+
+  const retryConnection = (await store.getConnection(retryReplacement.id))!;
+  await store.putConnection({
+    ...retryConnection,
+    envNames: [...retryConnection.envNames, "CLOUDFLARE_ZONE_ID"],
+    credentialRecipe: {
+      ...retryConnection.credentialRecipe!,
+      envNames: [...retryConnection.credentialRecipe!.envNames, "CLOUDFLARE_ZONE_ID"],
+    },
+  });
+  const beforeDriftRefusal = dispatchCounts();
+  await expect(controller.createApplyRun({
+    planRunId: retryPlan.id,
+    expected: applyExpectedGuardFromPlanRun(retryPlan),
+  })).rejects.toBeInstanceOf(OpenTofuControllerError);
+  expect(dispatchCounts()).toEqual(beforeDriftRefusal);
+  await store.putConnection(retryConnection);
+
+  const retried = await controller.createApplyRun({
+    planRunId: retryPlan.id,
+    expected: applyExpectedGuardFromPlanRun(retryPlan),
+  });
+  expect(retried.applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(2);
+  expect(runner.destroyJobs[1]?.credentials).toMatchObject({
+    manifest: { bindings: [{ connectionId: retryReplacement.id, envNames: ["CLOUDFLARE_API_TOKEN"] }] },
+  });
+  expect(envOf(runner.destroyJobs[1]!)).toMatchObject({
+    CLOUDFLARE_API_TOKEN: "synthetic-same-account-retry-api-token",
+  });
+  expect(envOf(runner.destroyJobs[1]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  expect(mintedConnectionIds.slice(-2)).toEqual([[retryReplacement.id], [retryReplacement.id]]);
+});
+
 test.each([
   ["explicitly replaces a deleted connection only for its confirmed applied account", "deleted"],
   ["explicitly replaces an expired connection only for its confirmed applied account", "expired"],
