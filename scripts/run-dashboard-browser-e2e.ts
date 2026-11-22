@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  dashboardBrowserSpec,
   resolveExternalStorageState,
   validateExpectedWorkerVersionId,
 } from "./dashboard-browser-e2e/live-inputs.ts";
@@ -15,7 +16,7 @@ if (mode !== "portable" && mode !== "live" && mode !== "public-live") {
 }
 
 const repoRoot = resolve(import.meta.dir, "..");
-const spec = "tests/dashboard/e2e/dashboard_test.ts";
+const spec = `tests/dashboard/e2e/${dashboardBrowserSpec(mode, selectedMode)}`;
 const config = "tests/dashboard/e2e/playwright.config.ts";
 const extraArgs = process.argv.slice(3);
 if (extraArgs[0] === "--") extraArgs.shift();
@@ -71,11 +72,13 @@ if (mode === "portable") {
   const required = [
     "TAKOSUMI_E2E_BASE_URL",
     "TAKOSUMI_E2E_STORAGE_STATE",
-    "TAKOSUMI_E2E_WORKSPACE_NAME",
-    "TAKOSUMI_E2E_SWITCH_WORKSPACE_NAME",
-    "TAKOSUMI_E2E_APP_NAME",
-    "TAKOSUMI_E2E_APP_URL",
-    "TAKOSUMI_E2E_OBJECT_BUCKET_NAME",
+    ...(installReturnProfile ? [] : [
+      "TAKOSUMI_E2E_WORKSPACE_NAME",
+      "TAKOSUMI_E2E_SWITCH_WORKSPACE_NAME",
+      "TAKOSUMI_E2E_APP_NAME",
+      "TAKOSUMI_E2E_APP_URL",
+      "TAKOSUMI_E2E_OBJECT_BUCKET_NAME",
+    ]),
     "TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID",
   ];
   const missing = required.filter((name) => !process.env[name]?.trim());

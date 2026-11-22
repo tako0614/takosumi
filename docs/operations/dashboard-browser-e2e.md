@@ -114,10 +114,10 @@ The same two values may be supplied explicitly for operator tooling with
 `--expected-worker-version-id`) on the direct runner command.
 
 The shared-account install-return profile is a separately selected staging
-journey. It requires the existing live inputs above plus the shared issuer
-origin, expected issuer Worker Version UUID, expected canonical account ID,
-and the encoded install-return query (`git`, `ref`, `name`, `product`, and
-`return_uri`, with optional `sourcePath` and `path`). Its external storage-state
+journey. It requires the staging app URL, external storage state, both
+expected Worker Version UUIDs, the shared issuer origin, expected canonical
+account ID, and the encoded install-return query (`git`, `ref`, `name`,
+`product`, and `return_uri`, with optional `sourcePath` and `path`). Its external storage-state
 file must already contain the real staging issuer SSO cookie; the runner copies
 only that cookie into a fresh RP context with no app cookies or origin storage.
 The selected profile pins the app and issuer to their staging origins, validates
@@ -129,11 +129,6 @@ session and returns to the exact install context.
 ```bash
 TAKOSUMI_E2E_BASE_URL="https://app-staging.takosumi.com" \
 TAKOSUMI_E2E_STORAGE_STATE="/outside-repo/staging-issuer-session.json" \
-TAKOSUMI_E2E_WORKSPACE_NAME="<expected-staging-workspace>" \
-TAKOSUMI_E2E_SWITCH_WORKSPACE_NAME="<existing-live-input>" \
-TAKOSUMI_E2E_APP_NAME="<existing-live-input>" \
-TAKOSUMI_E2E_APP_URL="https://app-staging.takosumi.com/" \
-TAKOSUMI_E2E_OBJECT_BUCKET_NAME="<existing-live-input>" \
 TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID="<staging-worker-uuid>" \
 TAKOSUMI_E2E_SHARED_AUTH_ISSUER_ORIGIN="https://auth-staging.takos.jp" \
 TAKOSUMI_E2E_EXPECTED_ISSUER_VERSION_ID="<staging-issuer-worker-uuid>" \

@@ -3,7 +3,7 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { resolveExternalStorageState } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
+import { dashboardBrowserSpec, resolveExternalStorageState } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 import {
   isExpectedPublicBootstrapDenial,
   isPublicLiveTelemetryRequest,
@@ -20,6 +20,14 @@ import {
 } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
+
+test("only the selected shared-auth live profile loads its dedicated browser spec", () => {
+  const profile = "shared-auth-install-return";
+  expect(dashboardBrowserSpec("live", profile)).toBe("shared_auth_install_return_test.ts");
+  expect(dashboardBrowserSpec("live", undefined)).toBe("dashboard_test.ts");
+  expect(dashboardBrowserSpec("portable", profile)).toBe("dashboard_test.ts");
+  expect(dashboardBrowserSpec("public-live", profile)).toBe("dashboard_test.ts");
+});
 
 test("live storage state rejects repository-local files and symlink escapes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "takosumi-dashboard-e2e-"));

@@ -70,7 +70,6 @@ export function registerInstallAuthReturnCase(mode: DashboardE2EMode): void {
     expect(new URL(page.url()).searchParams.get("return")).toBe(destination);
   });
   if (mode === "portable") registerInstallReturnInputCases();
-  if (selectLiveInstallReturnCase(mode, process.env.TAKOSUMI_E2E_INSTALL_RETURN_PROFILE)) registerLiveInstallReturnCase();
 }
 
 function selectLiveInstallReturnCase(mode: DashboardE2EMode, profile: string | undefined): boolean {
@@ -595,11 +594,12 @@ function makeFakeHttpRoute(request: Request, operations: string[], forwardedCall
   };
 }
 
-function registerLiveInstallReturnCase(): void {
+export function registerLiveInstallReturnCase(mode: DashboardE2EMode): void {
+  if (!selectLiveInstallReturnCase(mode, process.env.TAKOSUMI_E2E_INSTALL_RETURN_PROFILE)) return;
+  // Keep cookies, authorization URLs, callback codes, and form values out of
+  // traces and screenshots. Worker-scoped options must be set at file scope.
+  test.use({ trace: "off", screenshot: "off" });
   test.describe("shared-account live install return", () => {
-    // No raw cookies, authorization URLs, callback codes or hidden form values
-    // belong in traces/screenshots. Failure messages below use fixed labels.
-    test.use({ trace: "off", screenshot: "off" });
     test("a new RP login from existing issuer SSO returns the exact install context", async ({ browser, context }) => {
       const input = liveInstallInputs(process.env);
       const state = issuerOnlyState(await context.storageState(), input, Date.now() / 1000);

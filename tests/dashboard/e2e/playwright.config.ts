@@ -4,6 +4,7 @@ import { defineConfig } from "@playwright/test";
 import { resolvePortableOrigin, resolvePortablePort } from "./portable-origin.ts";
 import { dashboardTimingReporters } from "./timing-reporter.ts";
 import {
+  dashboardBrowserSpec,
   resolveExternalStorageState,
   validateExpectedWorkerVersionId,
 } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
@@ -99,7 +100,7 @@ const storageState =
 
 export default defineConfig({
   testDir: configDir,
-  testMatch: "dashboard_test.ts",
+  testMatch: dashboardBrowserSpec(mode, process.env.TAKOSUMI_E2E_INSTALL_RETURN_PROFILE),
   fullyParallel: false,
   workers: 1,
   retries: 0,
