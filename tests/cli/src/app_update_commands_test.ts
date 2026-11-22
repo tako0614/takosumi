@@ -570,6 +570,10 @@ test("lost Apply ACK is reconciled by exact linked Run reads with only one Apply
   });
   expect(r.code).toBe(0); expect(r.result).toMatchObject({ status: "succeeded", runId: apply.id });
   expect(r.calls.filter(c => c.method === "POST")).toHaveLength(1);
+  const histories = r.calls
+    .map(call => new URL(call.url))
+    .filter(url => url.pathname === "/api/v1/capsules/cap_owned/runs");
+  expect(histories.map(url => url.searchParams.getAll("planRunId"))).toEqual([[plan.id], [plan.id]]);
   expect(JSON.stringify(r.result)).not.toContain("private-must-not-print");
 });
 

@@ -247,6 +247,7 @@ test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall wit
       .filter(r => new URL(r.url).pathname === `/api/v1/capsules/${h.appId}/runs`);
     expect(history.length).toBeGreaterThan(0);
     expect(history.every(r => new URL(r.url).searchParams.getAll("type").join(",") === "destroy_apply")).toBe(true);
+    expect(history.every(r => new URL(r.url).searchParams.get("planRunId") === saved.id)).toBe(true);
 
     const beforeObserve = requests.length;
     output.length = 0;
@@ -591,6 +592,10 @@ test("actual coordinator replays the retained create key and lost Apply ACK obse
     expect(h.runnerCalls.apply - before.apply).toBe(1);
     expect((await h.ledger.getCapsule(h.appId))?.currentStateGeneration).toBe(2);
     expect(requests.filter(r => r.method === "POST" && new URL(r.url).pathname.endsWith("/apply"))).toHaveLength(1);
+    const history = requests
+      .map(req => new URL(req.url))
+      .filter(url => url.pathname === `/api/v1/capsules/${h.appId}/runs`);
+    expect(history.map(url => url.searchParams.get("planRunId"))).toEqual([planId, planId]);
     const beforeObservation = requests.length;
     output.length = 0;
     expect(await main(["apps", "apply", h.appId, "--plan", planId, "--observe-only", "--url", ORIGIN, "--token", TOKEN, "--json"], io)).toBe(0);

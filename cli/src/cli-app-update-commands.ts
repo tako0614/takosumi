@@ -451,10 +451,11 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
 }
 
 async function linkedApply(request: Client, scope: Scope): Promise<PublicRun | undefined> {
-  let cursor: string | undefined; const seen = new Set<string>(); let found: PublicRun | undefined;
+  const query = new URLSearchParams({ limit: "100", type: scope.type, planRunId: scope.planId });
+  const seen = new Set<string>();
+  let found: PublicRun | undefined;
   for (let page = 0; page < 100; page++) {
-    const query = `?limit=100&type=${scope.type}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-    const body = await request(`/api/v1/capsules/${encodeURIComponent(scope.appId)}/runs${query}`);
+    const body = await request(`/api/v1/capsules/${encodeURIComponent(scope.appId)}/runs?${query}`);
     if (!isRecord(body) || !Array.isArray(body.runs)) throw new Refusal("run_history_incomplete");
     for (const row of body.runs) {
       const run = runFrom({ run: row }, scope.appId);
@@ -466,7 +467,8 @@ async function linkedApply(request: Client, scope: Scope): Promise<PublicRun | u
     }
     if (body.nextCursor === undefined) return found;
     if (!bounded(body.nextCursor, 4096) || seen.has(body.nextCursor)) throw new Refusal("run_history_incomplete");
-    cursor = body.nextCursor; seen.add(cursor);
+    query.set("cursor", body.nextCursor);
+    seen.add(body.nextCursor);
   }
   throw new Refusal("run_history_incomplete");
 }
