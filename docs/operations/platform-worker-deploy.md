@@ -301,6 +301,15 @@ the Version, topology, secret names, and Container, it confirms the same
 Version is still serving at 100% if the Version read was retried. Public-header
 and discovery checks still apply.
 
+The ready result from a fresh apply includes `sourceProvenance` when the
+sibling pin matches the same clean Git commit and tree before the build,
+immediately before upload, and after serving readback. It carries that commit,
+tree, source-authority digest, and the frozen config digest beside the
+immutable serving Version ID, release tag, and artifact digests. Dirty,
+unqualifiable, and resumed releases retain the existing byte-level evidence.
+Runner activation verification continues to use reviewed platform release
+evidence.
+
 Asset synchronization is the first possible mutation. A lost acknowledgement
 from upload or activation is `incomplete`. The JSON result includes the
 predecessor, unique Version tag, mutation phase, and sealed entry and dashboard

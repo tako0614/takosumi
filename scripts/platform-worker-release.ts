@@ -2175,6 +2175,48 @@ function assertStagingCodeResumeSource(configPath: string): string {
   return `${platformReleaseSourceAuthorityDigest(pin)}:${checkout.commit}`;
 }
 
+function cleanStagingCodeSource(
+  root: string,
+  configPath: string,
+  configSha256: string,
+): Readonly<{
+  sourceCommit: string;
+  sourceTree: string;
+  sourceAuthoritySha256: string;
+  configSha256: string;
+}> | undefined {
+  try {
+    const pin = readPlatformReleaseSourcePin(configPath);
+    const gitSource = (...args: string[]) =>
+      gitAt(root, ["--no-replace-objects", "--no-optional-locks", ...args]);
+    if (
+      gitSource("rev-parse", "HEAD").trim() !== pin.commit ||
+      !sameGitRemote(gitSource("remote", "get-url", "origin").trim(), pin.repository) ||
+      gitSource("for-each-ref", "--format=%(refname)", "refs/replace").trim() ||
+      // Skip-worktree and assume-unchanged entries can hide different bytes.
+      gitSource("ls-files", "-v", "-z").split("\0").some(
+        (entry) => entry && !entry.startsWith("H "),
+      ) ||
+      gitSource(
+        "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+        "-c", "core.filemode=true", "-c", "core.symlinks=true",
+        "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none",
+      ).trim()
+    ) return undefined;
+    const sourceTree = gitSource("rev-parse", `${pin.commit}^{tree}`).trim();
+    if (!/^[0-9a-f]{40}$/u.test(sourceTree)) return undefined;
+    return {
+      sourceCommit: pin.commit,
+      sourceTree,
+      sourceAuthoritySha256: platformReleaseSourceAuthorityDigest(pin),
+      configSha256,
+    };
+  } catch {
+    // Integration code publication also supports dirty or unprovable source.
+    return undefined;
+  }
+}
+
 async function runPlatformWorkerCodePublication(
   argv: readonly string[],
   environment: PlatformEnvironment,
@@ -2211,6 +2253,14 @@ async function runPlatformWorkerCodePublication(
     return assertPinnedSourceRoot(readPlatformReleaseSourcePin(parsed.config));
   };
   const sourceFence = assertSource();
+  const configSha256 = digest(configBytes);
+  const readCleanSource = () => cleanStagingCodeSource(root, parsed.config, configSha256);
+  let sourceProvenance = !resume && !addLoginAdmission ? readCleanSource() : undefined;
+  const retainSourceProvenance = () => {
+    if (sourceProvenance && !platformWorkerCodeEqual(sourceProvenance, readCleanSource())) {
+      sourceProvenance = undefined;
+    }
+  };
 
   const initialConfig = createPlatformDryRunConfig(
     platformWorkerCodeWithoutMigrations(configSource),
@@ -2318,6 +2368,7 @@ async function runPlatformWorkerCodePublication(
       assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
       initialConfig.assertUnchanged();
       finalConfig!.assertUnchanged();
+      retainSourceProvenance();
     };
 
     const releaseMessage = `takosumi-platform-staging-code ${entryDigest}`;
@@ -2443,6 +2494,7 @@ async function runPlatformWorkerCodePublication(
         versionId,
       })))(deployedVersionId);
     }
+    retainSourceProvenance();
     process.stdout.write(
       `${JSON.stringify({
         kind: addLoginAdmission ? "takosumi.platform-worker-staging-login-admission@v1" : "takosumi.platform-worker-staging-code@v1",
@@ -2452,6 +2504,7 @@ async function runPlatformWorkerCodePublication(
         releaseTag,
         entryDigest,
         dashboardDigest: dashboard.digest,
+        ...(sourceProvenance ? { sourceProvenance } : {}),
         ...(resume ? { resumedUpload: true } : {}),
         historicalRollbackOwner: "takosumi-platform-staging",
       })}\n`,
