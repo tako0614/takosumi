@@ -668,7 +668,13 @@ async function readLatestLifecycleRun(
     types: CAPSULE_APP_LIFECYCLE_RUN_TYPES,
   });
   const run = page.runs[0];
-  return run ? { ...runSummary(run), ...(run.origin ? { origin: run.origin } : {}), ...(run.policyStatus ? { policyStatus: run.policyStatus } : {}) } : undefined;
+  if (!run) return undefined;
+  return {
+    ...runSummary(run),
+    ...(run.origin ? { origin: run.origin } : {}),
+    ...(run.planRunId ? { planRunId: run.planRunId } : {}),
+    ...(run.policyStatus ? { policyStatus: run.policyStatus } : {}),
+  };
 }
 
 /** An optional locator is evidence about this exact failed Plan, never authority. */

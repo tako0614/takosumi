@@ -42,6 +42,7 @@ export const CAPSULE_APP_LIFECYCLE_RUN_TYPES: readonly RunType[] = [
 
 export interface CapsuleAppLatestRun extends CapsuleAppRunSummary {
   readonly origin?: RunPlanOrigin;
+  readonly planRunId?: string;
   readonly policyStatus?: RunPolicyStatus;
 }
 
@@ -299,15 +300,17 @@ function scheduledUninstallStatus(facts: CapsuleAppFacts): CapsuleAppStatus {
   if (record?.phase === "destroying" || finalizerPlan) {
     return status("uninstalling", "none");
   }
-  // A failed manual Plan leaves the grace-period reservation in place.
-  // Ignore older attempts superseded by a finalizer retry, including legacy
-  // Plans that were recorded without a scheduled_uninstall origin.
+  // A failed manual Plan or Apply can leave the grace-period reservation in
+  // place. Use the Apply's exact Plan id to keep the finalizer's run separate.
+  const failedManualRemoval = latestRun?.status === "failed" && (
+    latestRun.type === "destroy_plan"
+      ? latestRun.id !== record?.destroyPlanRunId && latestRun.origin?.kind !== "scheduled_uninstall"
+      : latestRun.type === "destroy_apply" && latestRun.planRunId !== undefined &&
+        latestRun.planRunId !== record?.destroyPlanRunId
+  );
   if (
     record?.phase === "scheduled" &&
-    latestRun?.type === "destroy_plan" &&
-    latestRun.status === "failed" &&
-    latestRun.id !== record.destroyPlanRunId &&
-    latestRun.origin?.kind !== "scheduled_uninstall" &&
+    failedManualRemoval &&
     Date.parse(latestRun.createdAt) >= Date.parse(record.requestedAt) &&
     (record.destroyPlanRequestedAt === undefined ||
       Date.parse(latestRun.createdAt) > Date.parse(record.destroyPlanRequestedAt))
