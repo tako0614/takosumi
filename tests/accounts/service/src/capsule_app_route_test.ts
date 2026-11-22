@@ -1338,6 +1338,42 @@ test("a scheduled uninstall the finalizer blocked before teardown needs the pers
   expect((await h.app()).state).toBe("installed");
 });
 
+test.each(["manual", "finalizer"] as const)(
+  "a failed %s removal Apply does not replace or lose its uninstall reservation",
+  async (startedBy) => {
+    const h = await fixture();
+    expect((await h.request("", h.owner, "DELETE")).status).toBe(202);
+    const scheduled = (await h.ledger.getCapsule(CAPSULE))!.uninstall!;
+    const createdAt = Date.parse(scheduled.requestedAt) + 1;
+    const planId = `destroy_plan_${startedBy}`;
+    const applyId = `destroy_apply_${startedBy}`;
+    if (startedBy === "finalizer") {
+      await advanceUninstall(h, { destroyPlanRunId: planId });
+    }
+    await h.ledger.putPlanRun(planRun(planId, createdAt, { operation: "destroy" }));
+    await h.ledger.putApplyRun(applyRun(applyId, planId, createdAt + 1, {
+      operation: "destroy",
+      status: "failed",
+      diagnostics: [{ severity: "error", code: "provider_connection_not_ready", message: "The connection could not be used." }],
+      finishedAt: createdAt + 1,
+    }));
+
+    const before = await h.ledger.getCapsule(CAPSULE);
+    const app = await h.app();
+    expect(app).toMatchObject({
+      status: "uninstalled",
+      primaryAction: "cancel_uninstall",
+      latestRun: { id: applyId, type: "destroy_apply", status: "failed" },
+      uninstall: { scheduled: { phase: "scheduled", cancellable: true } },
+      ...(startedBy === "manual"
+        ? { state: "needs_attention", problems: [{ code: "uninstall_failed", runId: applyId, runType: "destroy_apply" }] }
+        : { state: "uninstall_scheduled", problems: [{ code: "uninstall_scheduled" }] }),
+    });
+    expect(app.latestRun).not.toHaveProperty("planRunId");
+    expect(await h.ledger.getCapsule(CAPSULE)).toEqual(before);
+  },
+);
+
 test("a teardown blocked after the runtime became unsafe offers uninstall now, and cancel is refused", async () => {
   const h = await fixture();
   const base = Date.now() - 10_000;
