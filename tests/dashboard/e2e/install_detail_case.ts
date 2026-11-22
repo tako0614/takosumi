@@ -370,6 +370,57 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations).toEqual([]);
     });
 
+    test("a late install response cannot take over a different app's page", async ({ page }) => {
+      const f = await detailFixture(page, base, false, false, "not_applicable", { holdSourceReading: () => true });
+      const otherGit = "https://github.com/example/other-service.git";
+      const otherApp = `/new?${new URLSearchParams({ git: otherGit, ref: sourceCommit, path: ".", name: "other-service" })}`;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      await page.route("**/api/v1/install-plans", async (route) => {
+        const request = route.request();
+        if (request.method() !== "POST" || request.postDataJSON().source.url === otherGit) return route.fallback();
+        const attempt = f.attempts.handle({
+          method: "POST",
+          path: "/api/v1/install-plans",
+          body: request.postDataJSON(),
+          idempotencyKey: request.headers()["idempotency-key"],
+        })!;
+        f.mutations.push(attemptPost);
+        await gate;
+        return route.fulfill({ status: attempt.status, json: attempt.json });
+      });
+      try {
+        await page.goto(otherApp);
+        await expect(page.getByTestId("install-app-header")).toContainText("other-service");
+        await page.evaluate((url) => {
+          history.pushState(history.state, "", url);
+          window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+        }, sourceUrl);
+        await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
+        await page.getByTestId("install-start").getByRole("button", { name: "Install", exact: true }).click();
+        await expect.poll(() => f.attempts.log.creates.length).toBe(1);
+        const originalAttempt = f.attempts.latest()!.id;
+
+        await page.goBack();
+        await expect(page.getByTestId("install-app-header")).toContainText("other-service");
+        const start = page.getByTestId("install-start").getByRole("button", { name: "Install", exact: true });
+        await expect(start).toBeEnabled();
+
+        const reply = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/install-plans" &&
+          response.request().method() === "POST" && response.request().postDataJSON().source.url !== otherGit);
+        release();
+        await (await reply).finished();
+        await start.click();
+        await expect(page).toHaveURL((url) => url.searchParams.get("git") === otherGit &&
+          url.searchParams.get("installPlan") === f.attempts.latest()?.id);
+        expect(f.attempts.log.creates).toHaveLength(2);
+        expect(f.attempts.log.creates[1]).toMatchObject({ source: { url: otherGit } });
+        expect(f.mutations.some((mutation) => mutation.includes(`${originalAttempt}/`))).toBe(false);
+      } finally {
+        release();
+      }
+    });
+
     test("opening the app page creates nothing; Install reads the repository as one attempt", async ({ page }) => {
       let readingHeld = true;
       const f = await detailFixture(page, base, false, false, "not_applicable", { holdSourceReading: () => readingHeld });

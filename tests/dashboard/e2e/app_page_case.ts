@@ -2002,6 +2002,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         // Verification offers an explicit navigation action; it never returns
         // or chooses the replacement on the person's behalf.
         await expect(page).toHaveURL(new RegExp(`/connections\\?uninstallApp=${ID}$`, "u"));
+        await page.getByRole("link", { name: "Connections", exact: true }).click();
+        await expect(page).toHaveURL(/\/connections$/u);
+        await expect(backToUninstall).toHaveCount(0);
+        await page.goBack();
+        await expect(page).toHaveURL(new RegExp(`/connections\\?uninstallApp=${ID}$`, "u"));
+        await expect(backToUninstall).toHaveAttribute("href", `/apps/${ID}`);
         await backToUninstall.click();
         await expect(page).toHaveURL(new RegExp(`/apps/${ID}$`, "u"));
         await openAppPane(page, "danger");

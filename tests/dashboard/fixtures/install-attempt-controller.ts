@@ -1465,6 +1465,72 @@ describe("install attempt controller", () => {
     missing: [],
   });
 
+  test("retrying the first Store install recovers the accepted release after Latest advances", async () => {
+    const original = { tag: "v1.4.2", commit: "0123456789abcdef0123456789abcdef01234567" };
+    const newer = { tag: "v1.5.0", commit: "abcdef0123456789abcdef0123456789abcdef01" };
+    let latest = original;
+    const accepted = new Map<string, GitInstallPlanResponse>();
+    reset({
+      resolveStableSourceTag: async () => latest,
+      createGitInstallAttempt: async (_workspace, body, key) => {
+        const existing = accepted.get(key);
+        if (existing) return existing;
+        const ref = (body as { source: { ref: string } }).source.ref;
+        const id = accepted.size === 0 ? ID : "gip_00000000000000b2";
+        const created = withSourceRef(withoutWorkspace(respond(inputs(), 0, "awaiting_input", id)), ref);
+        accepted.set(key, created);
+        if (id === ID) throw new api.ControlApiError(503, "unavailable", "response lost");
+        return created;
+      },
+    });
+    personalOwnership = true;
+    const page = mount(undefined, { fromStore: true });
+    try {
+      await page.attempt.start(candidate, { fromStore: true });
+      expect(page.attemptId()).toBeUndefined();
+      expect(accepted.size).toBe(1);
+      latest = newer;
+      await page.attempt.start(candidate, { fromStore: true });
+      const starts = named("createGitInstallAttempt");
+      expect(starts).toHaveLength(2);
+      expect(starts[1]!.args).toEqual(starts[0]!.args);
+      expect(named("resolveStableSourceTag")).toHaveLength(1);
+      expect(accepted.size).toBe(1);
+      expect(page.attemptId()).toBe(ID);
+      expect(page.attempt.resolvedVersion()).toEqual(original);
+    } finally {
+      page.dispose();
+    }
+  });
+
+  test("starting a different Store module resolves the current release after a lost response", async () => {
+    const original = { tag: "v1.4.2", commit: "0123456789abcdef0123456789abcdef01234567" };
+    const newer = { tag: "v1.5.0", commit: "abcdef0123456789abcdef0123456789abcdef01" };
+    let latest = original;
+    reset({
+      resolveStableSourceTag: async () => latest,
+      createGitInstallAttempt: async () => {
+        if (latest === original) throw new api.ControlApiError(503, "unavailable", "response lost");
+        return withSourceRef(withoutWorkspace(respond(inputs(), 0)), latest.commit);
+      },
+    });
+    personalOwnership = true;
+    const page = mount(undefined, { fromStore: true });
+    try {
+      await page.attempt.start(candidate, { fromStore: true });
+      latest = newer;
+      await page.attempt.start({ ...candidate, modulePath: "deploy/alternate" }, { fromStore: true });
+      const starts = named("createGitInstallAttempt");
+      expect(starts).toHaveLength(2);
+      expect(starts[1]!.args[2]).not.toBe(starts[0]!.args[2]);
+      expect(starts[1]!.args[1]).toMatchObject({ source: { ref: newer.commit }, options: { modulePath: "deploy/alternate" } });
+      expect(named("resolveStableSourceTag")).toHaveLength(2);
+      expect(page.attempt.resolvedVersion()).toEqual(newer);
+    } finally {
+      page.dispose();
+    }
+  });
+
   test("a settings replan keeps the pinned Latest selection, but explicitly entering its commit changes it", async () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
     const server = coordinator({ sheet: settingSheet });

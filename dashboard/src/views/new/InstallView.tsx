@@ -148,7 +148,11 @@ function InstallRoute(props: { readonly principalId: string }) {
         {(capsuleId) => <Navigate href={appPageHref(capsuleId())} />}
       </Match>
       <Match when={namesApp()}>
-        <AppInstallPage principalId={props.principalId} />
+        {/* The attempt locator can change within one install page. A different
+          install link gets a fresh controller and discards late UI responses. */}
+        <Show keyed when={`${location.pathname}${withInstallAttempt(location.search, undefined)}`}>
+          {(_installLocation) => <AppInstallPage principalId={props.principalId} />}
+        </Show>
       </Match>
       <Match when={`${location.pathname}${location.search}` === GIT_INSTALL_ENTRY}>
         <GitInstallPage />
