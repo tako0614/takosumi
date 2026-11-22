@@ -916,6 +916,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     });
     for (const cost of ["rated_zero", "not_applicable", "unrated", "unavailable"] as const) {
       test(`review exposes planned resources and the ${cost} cost before the Install click`, async ({ page }) => {
+        if (cost === "rated_zero") await page.clock.install();
         const f = await detailFixture(page, base, false, false, cost);
         const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(sourceUrl);
@@ -947,7 +948,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         if (cost !== "rated_zero") return;
         await captureInstallState(page, "app-review");
         // A clean Plan waits for consent: no Apply across Run poll intervals.
-        await page.waitForTimeout(3_500);
+        await page.clock.runFor(3_500);
         expect(f.mutations).not.toContain(applyMutation);
         // A reload reopens the same review, read-only: no new attempt, no Apply.
         await page.reload();
