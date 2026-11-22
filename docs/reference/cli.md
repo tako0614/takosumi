@@ -143,14 +143,20 @@ takosumi apps recover-uninstall cap_example \
 `bindings_mismatch` ならアカウントと適用済みの接続設定を確認してください。
 `applied_evidence_unavailable` は、照合に必要な適用記録をサーバーが確認できなかったことを示します。
 `review_required` になったPlanでは、削除内容と `providerConnections` の有効な接続を確認できます。前回の削除から引き継いだ接続も表示します。
-`plan_pending` なら返された `planRunId` を指定して、同じPlanを読み直せます。作成結果が `unconfirmed` なら、先に元のアプリのRun履歴から元のPlan IDを確認してください。
+`plan_pending` なら返された `planRunId` を指定して、同じPlanを読み直せます。作成結果が `unconfirmed` なら、`--current-review` でアプリが現在の確認対象として示す削除Planを読み取れます。
+前の要求が受理されたかは未確認のままです。接続と削除内容を確認してください。
+
+```bash
+takosumi apps recover-uninstall cap_example --current-review \
+  --url https://takosumi.example.com --json
+```
 
 ```bash
 takosumi apps recover-uninstall cap_example --destroy-plan destroy_plan_example \
   --url https://takosumi.example.com --json
 ```
 
-`--destroy-plan` での確認は `read` scopeを使い、指定されたPlanを1回読み取ります。
+両方の確認には `read` scopeを使います。`--destroy-plan` は指定のPlanを読みます。
 
 確認したPlanを実行する場合だけ、別のコマンドで明示します。
 

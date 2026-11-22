@@ -165,12 +165,115 @@ test("recover-uninstall rejects malformed pairs and confirmation flags before HT
     recoverArgs.filter((_, index) => index < 3 || index > 4),
     [...recoverArgs, "--yes"],
     [...recoverArgs, "--destroy-plan", destroyPlan.id],
+    [...recoverArgs, "--current-review"],
+    [...reviewDestroyArgs, "--current-review"],
     [...reviewDestroyArgs, "--yes"],
     reviewDestroyArgs.map(value => value === destroyPlan.id ? " " : value),
   ]) {
     const r = await invoke(args, () => { throw Error("must not send recovery HTTP"); });
     expect(r.code).toBe(2);
     expect(r.calls).toHaveLength(0);
+  }
+});
+
+const currentReviewArgs = ["apps", "recover-uninstall", "cap_owned", "--current-review",
+  "--token", "synthetic-account-pat", "--url", origin, "--json"];
+const currentDestroyView = {
+  kind: "takosumi.capsule-app@v1", capsuleId: destroyPlan.capsuleId, workspaceId: destroyPlan.workspaceId,
+  status: "active", applied: true, latestRun: { id: destroyPlan.id, type: destroyPlan.type, status: destroyPlan.status },
+  uninstall: { mode: "none" },
+  progress: { revisionPreparing: false, review: { runId: destroyPlan.id, runType: "destroy_plan" } },
+};
+
+test("current uninstall review follows the app projection and rereads that exact Plan", async () => {
+  const appRead = "/api/v1/capsules/cap_owned/app";
+  const planRead = `/api/v1/runs/${destroyPlan.id}`;
+  const r = await invoke(currentReviewArgs, req => {
+    const url = new URL(req.url);
+    expect(req.method).toBe("GET");
+    expect(url.origin).toBe(origin);
+    if (url.pathname === appRead) return Response.json({ app: currentDestroyView });
+    if (url.pathname === planRead) return Response.json({ run: destroyPlan });
+    throw Error("unexpected review request");
+  });
+  expect(r.code).toBe(0);
+  expect(r.result).toMatchObject({ status: "review_required", planRunId: destroyPlan.id,
+    reviewUrl: `${origin}/runs/${destroyPlan.id}`, plan: { id: destroyPlan.id, status: "waiting_approval" } });
+  expect(r.calls.map(call => new URL(call.url).pathname)).toEqual([appRead, planRead, appRead]);
+});
+
+test("current uninstall review distinguishes a manual Plan from an originless scheduled finalizer", async () => {
+  const app = {
+    ...currentDestroyView, status: "uninstalled",
+    uninstall: { scheduled: { phase: "destroying" } },
+  };
+  for (const finalizerId of [destroyPlan.id, "previous_scheduled_destroy"]) {
+    const result = await invoke(currentReviewArgs, req => {
+      const path = new URL(req.url).pathname;
+      if (path.endsWith("/app")) return Response.json({ app });
+      if (path === "/api/v1/capsules/cap_owned") return Response.json({ capsule: {
+        id: app.capsuleId, workspaceId: app.workspaceId, status: "uninstalled",
+        uninstall: { phase: "destroying", destroyPlanRunId: finalizerId },
+      } });
+      return Response.json({ run: destroyPlan });
+    });
+    expect(result.calls.every(call => call.method === "GET")).toBe(true);
+    if (finalizerId === destroyPlan.id) {
+      expect(result.code).toBe(1);
+      expect(result.result).toMatchObject({ code: "current_destroy_review_unavailable" });
+      expect(result.calls.map(call => new URL(call.url).pathname))
+        .toEqual(["/api/v1/capsules/cap_owned/app", "/api/v1/capsules/cap_owned"]);
+    } else {
+      expect(result.code).toBe(0);
+      expect(result.result).toMatchObject({ status: "review_required", planRunId: destroyPlan.id });
+    }
+  }
+});
+
+test("current uninstall review refuses a Plan superseded during its detail read", async () => {
+  let detailRead = false;
+  const r = await invoke(currentReviewArgs, req => {
+    if (!new URL(req.url).pathname.endsWith("/app")) {
+      detailRead = true;
+      return Response.json({ run: destroyPlan });
+    }
+    return Response.json({ app: detailRead
+      ? { ...currentDestroyView, latestRun: destroyApply, progress: { revisionPreparing: false, run: destroyApply } }
+      : currentDestroyView });
+  });
+  expect(r.code).toBe(1);
+  expect(r.result).toMatchObject({ status: "refused", code: "current_destroy_review_unavailable" });
+  expect(r.result.planRunId).toBeUndefined();
+  expect(r.calls.map(call => call.method)).toEqual(["GET", "GET", "GET"]);
+});
+
+test("current uninstall review refuses an unavailable, stale, or scheduled removal", async () => {
+  const view = currentDestroyView;
+  for (const app of [
+    { ...view, capsuleId: "another_app" },
+    { ...view, applied: false },
+    { ...view, status: "destroyed" },
+    { ...view, progress: { ...view.progress, revisionPreparing: true } },
+    { ...view, progress: { ...view.progress, run: destroyApply } },
+    { ...view, latestRun: { ...view.latestRun, id: "later_review" } },
+  ]) {
+    const r = await invoke(currentReviewArgs, () => Response.json({ app }));
+    expect(r.code).toBe(1);
+    expect(r.result).toMatchObject({ status: "refused", code: "current_destroy_review_unavailable" });
+    expect(r.calls.map(call => call.method)).toEqual(["GET"]);
+  }
+  for (const response of [
+    () => Response.json({ run: { ...destroyPlan, workspaceId: "other_workspace" } }),
+    () => Response.json({ run: { ...destroyPlan, status: "failed" } }),
+    () => Response.json({ run: { ...destroyPlan, origin: { kind: "scheduled_uninstall", uninstallId: "scheduled" } } }),
+    () => Response.json({ error: { code: "forbidden" } }, { status: 403 }),
+  ]) {
+    const r = await invoke(currentReviewArgs, req => new URL(req.url).pathname.endsWith("/app")
+      ? Response.json({ app: currentDestroyView }) : response());
+    expect(r.code).toBe(1);
+    expect(r.result.status).toBe("refused");
+    expect(r.result.planRunId).toBeUndefined();
+    expect(r.calls.map(call => call.method)).toEqual(["GET", "GET"]);
   }
 });
 
