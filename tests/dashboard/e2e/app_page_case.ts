@@ -1596,6 +1596,22 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const unusedUnavailable = scenario === "unusedUnavailable";
       const unusedOnlyUnavailable = scenario === "unusedOnlyUnavailable";
       const firstRemovalRefusal = scenario === "firstRemovalRefusal";
+      const replacementAccountId = "a".repeat(32);
+      const otherAccountId = "b".repeat(32);
+      const cloudflareAccount = (accountId: string, workersSubdomain: string) => ({
+        credentialVerification: {
+          kind: "takosumi.credential-verification@v1",
+          capabilities: ["cloudflare.account-workers-subdomain.v1"],
+          verifierId: "cloudflare/account-workers-subdomain@v1",
+        },
+        scopeHints: {
+          providerSettings: { accountId, workersSubdomain },
+          moduleInputDefaults: {
+            cloudflare_account_id: accountId,
+            cloudflare_workers_subdomain: workersSubdomain,
+          },
+        },
+      });
       const indeterminateOpenReview = scenario === "indeterminateOpenReview";
       const openReviewFailure = scenario === "failedOpenReview" || indeterminateOpenReview;
       const noReplacement = scenario === "noReplacement";
@@ -1839,7 +1855,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
           { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: partialRecovery || (firstRemovalRefusal && connectionRemoved) || unusedUnavailable || noReplacement ? "revoked" : "verified" },
-          ...(replacementAvailable ? [{ id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: replacementVerified ? "verified" : "pending" }] : []),
+          ...(replacementAvailable ? [{ id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: replacementVerified ? "verified" : "pending",
+            ...(firstRemovalRefusal ? cloudflareAccount(replacementAccountId, "fixture-team") : {}),
+          }] : []),
+          ...(firstRemovalRefusal ? [{
+            id: "conn_other_account", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider,
+            scope: "personal", status: "verified", ...cloudflareAccount(otherAccountId, "other-team"),
+          }, {
+            id: "conn_legacy", displayName: "Older Cloudflare connection", providerSource: connectionProblem.provider,
+            scope: "personal", status: "verified", scopeHints: cloudflareAccount(otherAccountId, "other-team").scopeHints,
+          }] : []),
           { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
           { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "verified" },
           ...(unusedUnavailable || unusedOnlyUnavailable ? [{ id: "conn_unused", displayName: "Unused alias connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" }] : []),
@@ -2098,7 +2123,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         const viewConnections = danger.getByRole("link", { name: "View cloud connections" });
         await expect(viewConnections).toBeVisible();
         await expect(viewConnections).toHaveAttribute("href", `/connections?uninstallApp=${ID}`);
-        await danger.getByRole("combobox", { name: "Cloudflare" }).selectOption("conn_saved");
+        const choices = danger.getByRole("combobox", { name: "Cloudflare" });
+        await expect(choices.getByRole("option", { name: `Existing Cloudflare connection · Cloudflare account ${otherAccountId}`, exact: true })).toHaveCount(1);
+        await expect(choices.getByRole("option", { name: "Older Cloudflare connection", exact: true })).toHaveCount(1);
+        await choices.selectOption({ label: `Existing Cloudflare connection · Cloudflare account ${replacementAccountId}` });
         await danger.getByRole("button", { name: "Review removal" }).click();
         await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
         expect(replacementPlanBodies).toEqual([{

@@ -1,5 +1,31 @@
 import type { JsonValue, ProviderConnection, ConnectionScopeHints } from "takosumi-contract";
 
+/**
+ * Provider-neutral ability proved by the Cloudflare account + Workers
+ * subdomain verifier. Consumers authorize this capability; verifierId remains
+ * implementation provenance and is never an eligibility identity.
+ */
+export const CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY =
+  "cloudflare.account-workers-subdomain.v1" as const;
+export const CLOUDFLARE_ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/u;
+export const CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+
+/** Account metadata must originate from the successful exact-account verifier. */
+export function verifiedCloudflareAccountId(connection: ProviderConnection): string | undefined {
+  const verification = connection.credentialVerification;
+  const accountId = connection.scopeHints?.providerSettings?.accountId;
+  const subdomain = connection.scopeHints?.providerSettings?.workersSubdomain;
+  const matches = connection.providerSource === "registry.opentofu.org/cloudflare/cloudflare" &&
+    verification?.kind === "takosumi.credential-verification@v1" &&
+    verification.capabilities?.includes(CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY) === true &&
+    typeof accountId === "string" && CLOUDFLARE_ACCOUNT_ID_PATTERN.test(accountId) &&
+    typeof subdomain === "string" && CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN.test(subdomain) &&
+    connection.scopeHints?.moduleInputDefaults?.cloudflare_account_id === accountId &&
+    connection.scopeHints?.moduleInputDefaults?.cloudflare_workers_subdomain === subdomain;
+  return matches ? accountId : undefined;
+}
+
 export interface CloudflareTokenVendingConfig {
   readonly policies: readonly CloudflareTokenPolicy[];
   readonly ttlSeconds?: number;

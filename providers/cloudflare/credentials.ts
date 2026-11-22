@@ -17,9 +17,15 @@ import type { CredentialRecipeRuntimeDriver } from "takosumi-contract/credential
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import { REFERENCE_CREDENTIAL_RECIPES } from "../credential-recipes.generated.ts";
 import {
+  CLOUDFLARE_ACCOUNT_ID_PATTERN,
+  CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
+  CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN,
   cloudflareProviderSettings,
+  verifiedCloudflareAccountId,
   type CloudflareTokenVendingConfig,
 } from "./settings.ts";
+
+export { CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY } from "./settings.ts";
 
 /** Cloudflare API origin for the token endpoints. */
 const CLOUDFLARE_API_TOKENS_URL =
@@ -29,29 +35,9 @@ const CLOUDFLARE_API_TOKEN_VERIFY_URL =
 const CLOUDFLARE_ACCOUNTS_URL = "https://api.cloudflare.com/client/v4/accounts";
 export const CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID =
   "cloudflare/account-workers-subdomain@v1" as const;
-/**
- * Provider-neutral ability proved by the Cloudflare account + Workers
- * subdomain verifier. Consumers authorize this capability; verifierId remains
- * implementation provenance and is never an eligibility identity.
- */
-export const CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY =
-  "cloudflare.account-workers-subdomain.v1" as const;
-const CLOUDFLARE_ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/u;
-const CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN =
-  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
-
 /** Account metadata must originate from the successful exact-account verifier. */
 export function hasCloudflareVerifiedAccountScope(connection: ProviderConnection): boolean {
-  const verification = connection.credentialVerification;
-  const accountId = connection.scopeHints?.providerSettings?.accountId;
-  const subdomain = connection.scopeHints?.providerSettings?.workersSubdomain;
-  return connection.providerSource === "registry.opentofu.org/cloudflare/cloudflare" &&
-    verification?.kind === "takosumi.credential-verification@v1" &&
-    verification.capabilities?.includes(CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY) === true &&
-    typeof accountId === "string" && CLOUDFLARE_ACCOUNT_ID_PATTERN.test(accountId) &&
-    typeof subdomain === "string" && CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN.test(subdomain) &&
-    connection.scopeHints?.moduleInputDefaults?.cloudflare_account_id === accountId &&
-    connection.scopeHints?.moduleInputDefaults?.cloudflare_workers_subdomain === subdomain;
+  return verifiedCloudflareAccountId(connection) !== undefined;
 }
 
 const TOKEN_ENV = "CLOUDFLARE_API_TOKEN";
