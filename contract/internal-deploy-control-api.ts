@@ -240,6 +240,12 @@ export interface DeployControlAuditEvent {
   readonly data?: Readonly<Record<string, JsonValue>>;
 }
 
+export interface DestroyConnectionCredentialDelivery {
+  /** Logical binding ID, even when an earlier Destroy used a replacement. */
+  readonly connectionId: string;
+  readonly envNames: readonly string[];
+}
+
 export interface PlanRun {
   readonly id: string;
   readonly workspaceId: string;
@@ -376,6 +382,8 @@ export interface PlanRun {
     readonly appliedPlanRunId: string;
     readonly appliedProviderBindingsDigest: string;
     readonly replacements: readonly import("./connections.ts").DestroyProviderConnectionReplacement[];
+    /** Server-derived delivery for this Destroy Plan's effective replacements. */
+    readonly credentialDelivery?: readonly DestroyConnectionCredentialDelivery[];
   };
   /**
    * Resolved SourceSnapshot this plan was created against. Set for runs created

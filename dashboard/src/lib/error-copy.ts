@@ -188,6 +188,8 @@ function mappedControlApiMessage(
       switch (details.connectionRecoveryFailure) {
         case "replacement_unverified":
           return t("app.uninstall.replacementVerifyFirst");
+        case "replacement_auth_mode_mismatch":
+          return t("app.uninstall.replacementAuthModeMismatch");
         case "bindings_mismatch":
           return t("app.uninstall.replacementSettingsMismatch");
         case "applied_evidence_unavailable":

@@ -38,6 +38,7 @@ import {
 import {
   CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
   CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
+  cloudflareDestroyCredentialDelivery,
   hasCloudflareVerifiedAccountScope,
 } from "./cloudflare/credentials.ts";
 import { cloudflareProviderSettings } from "./cloudflare/settings.ts";
@@ -229,6 +230,7 @@ export function connectionOAuthDescriptorsFromEnv(
 
 const cloudflareDriver: CredentialRecipeRuntimeDriver = {
   hasVerifiedAccountScope: hasCloudflareVerifiedAccountScope,
+  destroyCredentialDelivery: cloudflareDestroyCredentialDelivery,
   evidenceIssuer: "cloudflare_api_token_vending",
   verifierId: CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
   verificationCapabilities: [

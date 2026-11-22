@@ -120,10 +120,12 @@ import { credentialIssuanceAttemptRef } from "../credential_issuance_attempt.ts"
 import { log } from "../../../shared/log.ts";
 import {
   ConnectionsService,
+  destroyConnectionCredentialDelivery,
   resolvedProviderBindingsDigest,
   type ResolvedCapsuleProviderBinding,
   validateRequiredProviderBindingIdentities,
 } from "../../connections/mod.ts";
+import type { PreserveDestroyCredentialDelivery } from "takosumi-contract/credential-recipe-host";
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
 import type { SourcesService } from "../../sources/mod.ts";
@@ -1707,6 +1709,7 @@ export interface RunEngineDependencies {
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
   readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+  readonly preserveDestroyCredentialDelivery: PreserveDestroyCredentialDelivery;
   readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   readonly privateRunFileGrantNow?: () => number;
   readonly privateRunFileRefreshIntervalMs?: number;
@@ -1763,6 +1766,7 @@ export class RunEngine {
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
   readonly #hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+  readonly #preserveDestroyCredentialDelivery: PreserveDestroyCredentialDelivery;
   readonly #privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
   readonly #privateRunFileGrantNow: () => number;
   readonly #privateRunFileRefreshIntervalMs: number;
@@ -1819,6 +1823,7 @@ export class RunEngine {
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
     this.#hasVerifiedAccountScope = deps.hasVerifiedAccountScope;
+    this.#preserveDestroyCredentialDelivery = deps.preserveDestroyCredentialDelivery;
     this.#privateRunFileGrantMinter = deps.privateRunFileGrantMinter;
     this.#privateRunFileGrantNow = deps.privateRunFileGrantNow ?? Date.now;
     const privateRefreshIntervalMs = deps.privateRunFileRefreshIntervalMs ?? 10_000;
@@ -3081,6 +3086,21 @@ export class RunEngine {
           };
         })()
       : undefined;
+    if (destroyConnectionRecovery && destroyProviderRequirements) {
+      const bindings = await this.#resolveDestroyConnectionRecovery(
+        capsule,
+        providerBindingResolutionRequirements(
+          destroyProviderRequirements.requiredProviderRequirements,
+          runnerProfile,
+        ),
+        destroyConnectionRecovery,
+        true,
+      );
+      const credentialDelivery = destroyConnectionCredentialDelivery(bindings);
+      if (credentialDelivery.length) {
+        destroyConnectionRecovery = { ...destroyConnectionRecovery, credentialDelivery };
+      }
+    }
     const stored = await planCreationStage(
       "source_load",
       this.#store.getSource(capsule.sourceId),
@@ -6795,6 +6815,7 @@ export class RunEngine {
     capsule: Capsule,
     requiredProviders: readonly CapsuleProviderRequirement[],
     recovery: NonNullable<PlanRun["destroyConnectionRecovery"]>,
+    captureCredentialDelivery = false,
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
     if (!appliedPlan || appliedPlan.id !== recovery.appliedPlanRunId ||
@@ -6817,6 +6838,9 @@ export class RunEngine {
     return await this.#connectionsService.resolveProviderBindingsForDestroyRecovery({
       capsule, requiredProviders, appliedDigest: recovery.appliedProviderBindingsDigest,
       replacements: recovery.replacements, hasVerifiedAccountScope: this.#hasVerifiedAccountScope,
+      preserveCredentialDelivery: this.#preserveDestroyCredentialDelivery,
+      credentialDelivery: recovery.credentialDelivery,
+      captureCredentialDelivery,
       ...(appliedPlan.destroyConnectionRecovery !== undefined
         ? { appliedPlanRecovery: appliedPlan.destroyConnectionRecovery }
         : {}),

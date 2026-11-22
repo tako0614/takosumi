@@ -1778,6 +1778,8 @@ export class OpenTofuController {
       verification: this.#verification,
       planResolution: this.#planResolution,
       hasVerifiedAccountScope: (connection) => this.#vault?.hasVerifiedAccountScope?.(connection) === true,
+      preserveDestroyCredentialDelivery: (applied, replacement, names) =>
+        this.#vault?.preserveDestroyCredentialDelivery?.(applied, replacement, names),
       ...(dependencies.privateRunFileGrantMinter
         ? { privateRunFileGrantMinter: dependencies.privateRunFileGrantMinter }
         : {}),

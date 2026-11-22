@@ -24,7 +24,9 @@ import type {
   ProviderConnection,
   ConnectionScopeHints,
   CreateConnectionRequest,
+  DestroyConnectionCredentialDelivery,
 } from "@takosumi/internal/deploy-control-api";
+import type { PreserveDestroyCredentialDelivery } from "takosumi-contract/credential-recipe-host";
 import {
   type MintPhase,
   type MintedFile,
@@ -247,6 +249,7 @@ export interface CapsuleProviderBindingMintEntry {
   readonly alias?: string;
   /** The ProviderConnection this provider env binding resolved to. */
   readonly connectionId: string;
+  readonly destroyCredentialDelivery?: DestroyConnectionCredentialDelivery;
   readonly runCredentialSettings?: Readonly<
     Record<string, import("takosumi-contract").JsonValue>
   >;
@@ -263,6 +266,7 @@ export interface CapsuleProviderBindingMintOptions {
 export interface ConnectionVault {
   /** Pure host-driver account predicate; absence refuses destroy reconnection. */
   hasVerifiedAccountScope?(connection: ProviderConnection): boolean;
+  preserveDestroyCredentialDelivery?: PreserveDestroyCredentialDelivery;
   register(
     input: RegisterConnectionInput,
     expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
@@ -1444,6 +1448,18 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     const profileForBudget = planForBudget ? await this.#store.getRunnerProfile(planForBudget.runnerProfileId) : undefined;
     if (planForBudget && planForBudget.workspaceId !== workspaceId) throw connectionVerificationRaceError();
+    const destroyRecovery = planForBudget?.operation === "destroy"
+      ? planForBudget.destroyConnectionRecovery
+      : undefined;
+    for (const { connectionId, destroyCredentialDelivery: delivery } of entries) {
+      if (delivery && (!destroyRecovery?.credentialDelivery?.some((expected) =>
+        expected.connectionId === delivery.connectionId &&
+        JSON.stringify(expected.envNames) === JSON.stringify(delivery.envNames)) ||
+        !destroyRecovery.replacements.some((choice) =>
+          choice.connectionId === delivery.connectionId && choice.replacementConnectionId === connectionId))) {
+        throw new ConnectionVaultError("failed_precondition", "Destroy credential delivery does not match the Plan");
+      }
+    }
     const requiredRunLifetimeSeconds = (profileForBudget?.resourceLimits?.maxRunSeconds ?? 900) + 120;
     const minimumLifetimeSeconds = Math.max(1800, requiredRunLifetimeSeconds);
     const files: MintedFileInternal[] = [];
@@ -1601,7 +1617,20 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           }
         }
         evidence.push(minted.evidence);
-        mergeCredentialEnv(env, minted.values, entry);
+        const delivery = entry.destroyCredentialDelivery;
+        const delivered = delivery
+          ? this.#credentialDriver(connection)?.destroyCredentialDelivery?.project(
+            connection,
+            delivery.envNames,
+            minted.values,
+          )
+          : minted.values;
+        if (!delivered || (delivery && (minted.files?.length ||
+          Object.keys(delivered).length !== delivery.envNames.length ||
+          !delivery.envNames.every((name) => Object.hasOwn(delivered, name) && delivered[name] === minted.values[name])))) {
+          throw new ConnectionVaultError("failed_precondition", "Destroy credential delivery changed before mint");
+        }
+        mergeCredentialEnv(env, delivered, entry);
         if (minted.files) files.push(...minted.files);
       }
       if (mintLease) {
@@ -2475,6 +2504,19 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         JSON.stringify([...(actual.capabilities ?? [])].sort()) !== JSON.stringify([...(expected.capabilities ?? [])].sort())) return false;
       return driver.hasVerifiedAccountScope(structuredClone(connection)) === true;
     } catch { return false; }
+  }
+
+  preserveDestroyCredentialDelivery(
+    applied: ProviderConnection,
+    replacement: ProviderConnection,
+    appliedEnvNames?: readonly string[],
+  ): readonly string[] | undefined {
+    if (!this.hasVerifiedAccountScope(replacement)) return;
+    return this.#credentialDriver(replacement)?.destroyCredentialDelivery?.preserve(
+      applied,
+      replacement,
+      appliedEnvNames,
+    );
   }
 
   #credentialDriver(

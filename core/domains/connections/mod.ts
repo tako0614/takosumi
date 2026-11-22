@@ -10,7 +10,8 @@ import { InMemoryOpenTofuControlStore } from "../deploy-control/store.ts";
  * provider compatibility profile handlers and managed-resource backends are
  * Operator/Cloud extensions, not OSS resolver materializations.
  */
-import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
+import type { DestroyConnectionCredentialDelivery, ProviderConnection } from "@takosumi/internal/deploy-control-api";
+import type { PreserveDestroyCredentialDelivery } from "takosumi-contract/credential-recipe-host";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { randomUUID } from "node:crypto";
@@ -31,7 +32,7 @@ import {
   normalizeProviderSourceAddress,
   sameProviderSource,
 } from "takosumi-contract/provider-env-rules";
-import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import { stableJsonDigest, stableStringify } from "../../adapters/source/digest.ts";
 import {
   OpenTofuControllerError,
   PROVIDER_CONNECTION_NOT_READY_REASON,
@@ -52,6 +53,7 @@ export interface ResolvedCapsuleProviderBinding {
   /** @deprecated Ambiguous pre-v1 alias retained for stored-row compatibility. */
   readonly alias?: string;
   readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
+  readonly destroyCredentialDelivery?: DestroyConnectionCredentialDelivery;
   readonly connection: ProviderConnection;
   readonly materialization: ProviderConnectionMaterialization;
 }
@@ -224,6 +226,9 @@ export async function resolvedProviderBindingsDigest(
       providerSettings: entry.connection.scopeHints?.providerSettings ?? null,
       credentialVerification: entry.connection.credentialVerification ?? null,
       runCredentialSettings: entry.runCredentialSettings ?? null,
+      ...(entry.destroyCredentialDelivery
+        ? { destroyCredentialDelivery: entry.destroyCredentialDelivery }
+        : {}),
     }))
     .sort((a, b) => {
       const providerOrder = compareText(a.provider, b.provider);
@@ -238,6 +243,16 @@ export async function resolvedProviderBindingsDigest(
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function destroyConnectionCredentialDelivery(
+  bindings: readonly ResolvedCapsuleProviderBinding[],
+): readonly DestroyConnectionCredentialDelivery[] {
+  const deliveries = new Map<string, DestroyConnectionCredentialDelivery>();
+  for (const { destroyCredentialDelivery: delivery } of bindings) {
+    if (delivery) deliveries.set(delivery.connectionId, delivery);
+  }
+  return [...deliveries.values()].sort((a, b) => compareText(a.connectionId, b.connectionId));
 }
 
 export interface ConnectionsServiceDependencies {
@@ -500,14 +515,20 @@ export class ConnectionsService {
     /** Replacement IDs used by the exact PlanRun that produced the current StateVersion. */
     readonly appliedPlanRecovery?: {
       readonly replacements: readonly DestroyProviderConnectionReplacement[];
+      readonly credentialDelivery?: readonly DestroyConnectionCredentialDelivery[];
     };
     readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+    readonly preserveCredentialDelivery?: PreserveDestroyCredentialDelivery;
+    readonly credentialDelivery?: readonly DestroyConnectionCredentialDelivery[];
+    /** Used only while creating a new manual Destroy Plan. */
+    readonly captureCredentialDelivery?: boolean;
   }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const refuse = (
-      connectionRecoveryFailure?: "replacement_unverified" | "bindings_mismatch",
+      connectionRecoveryFailure?: "replacement_unverified" | "replacement_auth_mode_mismatch" | "bindings_mismatch",
     ): never => {
       const messages = {
         replacement_unverified: "The selected connection does not have verified cloud account information.",
+        replacement_auth_mode_mismatch: "The selected connection uses a different authentication method from the applied connection.",
         bindings_mismatch: "The current provider bindings do not match the applied account and settings.",
       };
       throw new OpenTofuControllerError(
@@ -532,6 +553,9 @@ export class ConnectionsService {
       catch { return refuse(); }
     }
     const appliedIdsByBinding = new Map(appliedPlanReplacements.map(row => [row.connectionId, row.replacementConnectionId]));
+    const appliedDeliveryByBinding = new Map(
+      (input.appliedPlanRecovery?.credentialDelivery ?? []).map((row) => [row.connectionId, row]),
+    );
     if (selection.some(({ connectionId, replacementConnectionId }) =>
       connectionId === replacementConnectionId && !appliedIdsByBinding.has(connectionId))) refuse();
     const selectedBindings = await this.#selectStoredProviderBindingsForDestroy(
@@ -548,6 +572,15 @@ export class ConnectionsService {
     for (const id of originalBindingIds) {
       if (!selectedIds.has(id) || await this.#isOperatorConnection(id)) refuse();
     }
+    for (const id of appliedDeliveryByBinding.keys()) {
+      if (!appliedIdsByBinding.has(id)) refuse();
+    }
+    const finish = (bindings: readonly ResolvedCapsuleProviderBinding[]) => {
+      if (!input.captureCredentialDelivery &&
+        stableStringify(destroyConnectionCredentialDelivery(bindings)) !==
+          stableStringify(input.credentialDelivery ?? [])) refuse();
+      return bindings;
+    };
     const policy = await this.#policyForCapsule(input.capsule);
     const selected = await Promise.all(selectedBindings.map((binding) => {
       const connectionId = replacements.get(binding.connectionId) ?? binding.connectionId;
@@ -571,13 +604,70 @@ export class ConnectionsService {
     // the current state. A prior recovery may have replaced the binding's
     // stored logical ID without mutating the binding row. Only this comparison
     // aliases those IDs; returned entries and mint retain the new replacement.
-    const comparison = selected.map((entry, index) => {
+    const withPriorDelivery = selected.map((entry, index) => {
+      const delivery = appliedDeliveryByBinding.get(selectedBindings[index]!.connectionId);
+      return delivery ? { ...entry, destroyCredentialDelivery: delivery } : entry;
+    });
+    const comparison = withPriorDelivery.map((entry, index) => {
       const bindingId = selectedBindings[index]!.connectionId;
       const appliedId = appliedIdsByBinding.get(bindingId) ?? bindingId;
       return appliedId === entry.connection.id ? entry : { ...entry, connection: { ...entry.connection, id: appliedId } };
     });
-    if (await resolvedProviderBindingsDigest(comparison) !== input.appliedDigest) refuse("bindings_mismatch");
-    return selected;
+    if (await resolvedProviderBindingsDigest(comparison) === input.appliedDigest) {
+      return finish(withPriorDelivery);
+    }
+
+    // Restore the former credential shape only for the applied digest check.
+    // The selected Connection stays real and retains its current policy checks.
+    const withAppliedAuthMode = await Promise.all(comparison.map(async (entry, index) => {
+      const selectedEntry = withPriorDelivery[index]!;
+      const unchanged = { comparison: entry, selected: selectedEntry, authModeChanged: false };
+      if (entry.connection.id === selectedEntry.connection.id) return unchanged;
+      const replacementRecipe = entry.connection.credentialRecipe;
+      if (!replacementRecipe) return unchanged;
+      const original = await this.#store.getConnection(entry.connection.id).catch(() => undefined);
+      const originalRecipe = original?.credentialRecipe;
+      if (!original || !originalRecipe || original.scope === "operator" ||
+        !sameProviderSource(entry.provider, original.providerSource) ||
+        originalRecipe.id !== replacementRecipe.id) return unchanged;
+      const authModeChanged = originalRecipe.authMode !== replacementRecipe.authMode;
+      if (!authModeChanged && !entry.destroyCredentialDelivery) return unchanged;
+      const appliedEnvNames = entry.destroyCredentialDelivery?.envNames ?? original.envNames;
+      const envNames = input.preserveCredentialDelivery?.(
+        original,
+        selectedEntry.connection,
+        entry.destroyCredentialDelivery?.envNames,
+      );
+      // The Runner has one process environment. Keeping each departing
+      // binding's delivered names equal also keeps their union equal.
+      const sameDelivery = envNames && stableStringify([...envNames].sort()) ===
+        stableStringify([...appliedEnvNames].sort());
+      return {
+        comparison: {
+          ...entry,
+          materialization: original.materialization,
+          connection: {
+            ...entry.connection,
+            materialization: original.materialization,
+            credentialRecipe: originalRecipe,
+            envNames: original.envNames,
+          },
+        },
+        selected: sameDelivery ? {
+          ...selectedEntry,
+          destroyCredentialDelivery: {
+            connectionId: selectedBindings[index]!.connectionId,
+            envNames,
+          },
+        } : undefined,
+        authModeChanged,
+      };
+    }));
+    if (await resolvedProviderBindingsDigest(withAppliedAuthMode.map((row) => row.comparison)) !==
+      input.appliedDigest) return refuse("bindings_mismatch");
+    return finish(withAppliedAuthMode.map((row) =>
+      row.selected ?? refuse(row.authModeChanged ? "replacement_auth_mode_mismatch" : "bindings_mismatch")
+    ));
   }
 
   async #selectStoredProviderBindingsForDestroy(
