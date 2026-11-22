@@ -216,6 +216,39 @@ test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall wit
     expect(h.runnerCalls).toEqual(beforeDestroy);
     expect((await h.operations.getRun(saved.id))?.status).toBe("waiting_approval");
 
+    const savedReview = JSON.parse(output[0]!);
+    const currentReviewArgs = ["apps", "recover-uninstall", h.appId, "--current-review",
+      "--token", "synthetic-destroy-read-only", "--url", ORIGIN, "--json"];
+    requests.length = 0;
+    output.length = 0;
+    errors.length = 0;
+    expect(await main(currentReviewArgs, io)).toBe(0);
+    expect(JSON.parse(output[0]!)).toMatchObject({
+      status: "review_required", appId: h.appId, planRunId: saved.id,
+    });
+    expect(JSON.parse(output[0]!).plan).toEqual(savedReview.plan);
+    expect(requests.map(request => [request.method, new URL(request.url).pathname]))
+      .toEqual([
+        ["GET", `/api/v1/capsules/${h.appId}/app`],
+        ["GET", `/api/v1/runs/${saved.id}`],
+        ["GET", `/api/v1/capsules/${h.appId}/app`],
+      ]);
+    expect(requests.every(request => new URL(request.url).origin === ORIGIN)).toBe(true);
+    expect(requests.some(request => request.method === "POST")).toBe(false);
+    expect(h.runnerCalls).toEqual(beforeDestroy);
+    expect((await h.operations.getRun(saved.id))?.status).toBe("waiting_approval");
+
+    requests.length = 0;
+    output.length = 0;
+    const beforeCurrentReviewRefusal = { ...h.runnerCalls };
+    expect(await main(currentReviewArgs.map(value =>
+      value === "synthetic-destroy-read-only" ? "synthetic-destroy-wrong-app" : value), io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "refused", appId: h.appId });
+    expect(requests.map(request => [request.method, new URL(request.url).pathname]))
+      .toEqual([["GET", `/api/v1/capsules/${h.appId}/app`]]);
+    expect(h.runnerCalls).toEqual(beforeCurrentReviewRefusal);
+    expect((await h.operations.getRun(saved.id))?.status).toBe("waiting_approval");
+
     const args = ["apps", "apply", h.appId, "--destroy-plan", saved.id,
       "--yes", "--token", TOKEN, "--url", ORIGIN, "--json"];
     for (const deniedToken of ["synthetic-destroy-wrong-app", "synthetic-destroy-read-only"]) {
@@ -248,6 +281,18 @@ test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall wit
     expect(history.length).toBeGreaterThan(0);
     expect(history.every(r => new URL(r.url).searchParams.getAll("type").join(",") === "destroy_apply")).toBe(true);
     expect(history.every(r => new URL(r.url).searchParams.get("planRunId") === saved.id)).toBe(true);
+
+    const afterApply = { ...h.runnerCalls };
+    const beforeClosedReview = requests.length;
+    output.length = 0;
+    errors.length = 0;
+    expect(await main(currentReviewArgs, io)).toBe(1);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "refused", appId: h.appId });
+    expect(requests.slice(beforeClosedReview).map(request => [request.method, new URL(request.url).pathname]))
+      .toEqual([["GET", `/api/v1/capsules/${h.appId}/app`]]);
+    expect(requests.slice(beforeClosedReview).some(request =>
+      new URL(request.url).pathname === `/api/v1/runs/${saved.id}`)).toBe(false);
+    expect(h.runnerCalls).toEqual(afterApply);
 
     const beforeObserve = requests.length;
     output.length = 0;

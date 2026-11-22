@@ -1,4 +1,5 @@
 /** Ordinary Accounts/PAT clients of the revision, rollback, history and Run surfaces. */
+import { CAPSULE_APP_VIEW_KIND } from "takosumi-contract/capsules";
 import type { PublicRun } from "takosumi-contract/runs";
 import { MAX_PAGE_LIMIT } from "takosumi-contract/pagination";
 import { parseDestroyProviderConnectionReplacements } from "takosumi-contract/connections";
@@ -32,7 +33,11 @@ function argumentsFor(args: readonly string[], kind: "update" | "rollback" | "hi
   const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], rollback: ["stateVersion", "idempotencyKey"], history: ["limit", "cursor"], apply: ["plan", "destroyPlan"],
     "recover-uninstall": ["connections", "destroyPlan"] }[kind];
   const strings = new Set(["url", "deployControlUrl", "token", "timeoutMs", ...operationOptions]);
-  const booleans = new Set(["json", ...(kind === "apply" ? ["yes", "allowDestroy", "observeOnly"] : [])]);
+  const booleans = new Set([
+    "json",
+    ...(kind === "apply" ? ["yes", "allowDestroy", "observeOnly"] : []),
+    ...(kind === "recover-uninstall" ? ["currentReview"] : []),
+  ]);
   const options: CliOptions = {};
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!;
@@ -396,7 +401,60 @@ export async function runAppRollback(args: string[], io: CliIo): Promise<number>
   }
 }
 
-/** Create a recovery Plan or read an exact Plan through the existing Accounts routes. */
+async function readDestroyReviewPointer(request: Client, appPath: string, appId: string) {
+  const body = await request(`${appPath}/app`);
+  const app = isRecord(body) ? body.app : undefined;
+  if (!isRecord(app) || app.kind !== CAPSULE_APP_VIEW_KIND ||
+    app.capsuleId !== appId || !bounded(app.workspaceId, 256) ||
+    app.applied !== true || app.status === "destroyed" ||
+    !isRecord(app.progress) || !isRecord(app.uninstall)) {
+    throw new Refusal("current_destroy_review_unavailable");
+  }
+  const { progress, latestRun } = app;
+  const pending = progress.review;
+  const scheduled = app.uninstall.scheduled;
+  const scheduledPhase = isRecord(scheduled) ? scheduled.phase : undefined;
+  if (progress.run !== undefined || progress.revisionPreparing !== false ||
+    !isRecord(pending) || pending.runType !== "destroy_plan" || !bounded(pending.runId, 256) ||
+    !isRecord(latestRun) || latestRun.id !== pending.runId || latestRun.type !== "destroy_plan" ||
+    (latestRun.status !== "waiting_approval" && latestRun.status !== "succeeded") ||
+    ((scheduled !== undefined || app.status === "uninstalled") &&
+      scheduledPhase !== "scheduled" && scheduledPhase !== "destroying")) {
+    throw new Refusal("current_destroy_review_unavailable");
+  }
+  return { id: pending.runId, workspaceId: app.workspaceId, status: latestRun.status, scheduledPhase };
+}
+
+/** Find the currently offered manual review, then recheck both the Run and app. */
+async function currentDestroyReview(request: Client, appId: string): Promise<PublicRun> {
+  const appPath = `/api/v1/capsules/${encodeURIComponent(appId)}`;
+  const selected = await readDestroyReviewPointer(request, appPath, appId);
+  if (selected.scheduledPhase === "destroying") {
+    // Older scheduled Plans may lack origin in the Run projection. The
+    // reservation names its own Plan separately from a manual replacement.
+    const body = await request(appPath);
+    const capsule = isRecord(body) ? body.capsule : undefined;
+    const reservation = isRecord(capsule) ? capsule.uninstall : undefined;
+    if (!isRecord(capsule) || capsule.id !== appId || capsule.workspaceId !== selected.workspaceId ||
+      !isRecord(reservation) || reservation.phase !== "destroying" ||
+      !bounded(reservation.destroyPlanRunId, 256) || reservation.destroyPlanRunId === selected.id) {
+      throw new Refusal("current_destroy_review_unavailable");
+    }
+  }
+  const run = runFrom(await request(`/api/v1/runs/${encodeURIComponent(selected.id)}`), appId, selected.id);
+  if (run.type !== "destroy_plan" || run.workspaceId !== selected.workspaceId ||
+    run.status !== selected.status || run.origin?.kind === "scheduled_uninstall") {
+    throw new Refusal("current_destroy_review_unavailable");
+  }
+  const current = await readDestroyReviewPointer(request, appPath, appId);
+  if (current.id !== selected.id || current.workspaceId !== selected.workspaceId ||
+    current.status !== selected.status || current.scheduledPhase !== selected.scheduledPhase) {
+    throw new Refusal("current_destroy_review_unavailable");
+  }
+  return run;
+}
+
+/** Create a recovery Plan or read a saved review through the existing Accounts routes. */
 export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise<number> {
   let options: CliOptions = {};
   let appId: string | undefined;
@@ -408,16 +466,23 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
     ({ appId, options } = parsed);
     const selectedApp = appId;
     const existingPlanId = options.destroyPlan;
+    const useCurrentReview = options.currentReview === true;
+    if (useCurrentReview && (existingPlanId !== undefined || options.connections !== undefined)) {
+      throw new Refusal("conflicting_modes");
+    }
     if (existingPlanId !== undefined) {
       if (options.connections !== undefined) throw new Refusal("conflicting_modes");
       if (!bounded(existingPlanId, 256)) throw new Refusal("destroy_plan_id_required");
       planRunId = existingPlanId;
     }
-    const replacements = existingPlanId === undefined ? connectionReplacements(options.connections) : undefined;
+    const replacements = existingPlanId === undefined && !useCurrentReview
+      ? connectionReplacements(options.connections)
+      : undefined;
     options = selectTarget(options);
     const plan = await within(parsed.wait, async signal => {
       signal.throwIfAborted();
       const request = client(options, signal);
+      if (useCurrentReview) return await currentDestroyReview(request, selectedApp);
       if (existingPlanId !== undefined) {
         return runFrom(await request(`/api/v1/runs/${encodeURIComponent(existingPlanId)}`), selectedApp, existingPlanId);
       }
@@ -445,7 +510,7 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
     const refused = !submitted || error instanceof DeployControlApiError && error.status >= 400 && error.status < 500;
     write(io, options, { status: refused ? "refused" : "unconfirmed", appId, planRunId, code: errorCode(error),
       connectionRecoveryFailure: submitted ? destroyConnectionRecoveryFailure(error) : undefined,
-      recovery: refused ? undefined : "Check the app's Run history for the original Destroy Plan before requesting another." });
+      recovery: refused ? undefined : "Use apps recover-uninstall with the same app and --current-review to inspect its current Destroy Plan, or check the app's Run history before requesting another." });
     return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
 }
@@ -624,7 +689,8 @@ export function recoverUninstallHelp(): string {
   return ["takosumi apps recover-uninstall <app-id> --connections '<JSON array of replacement pairs>'",
     '[{"connectionId":"old-id","replacementConnectionId":"new-id"}]',
     "takosumi apps recover-uninstall <app-id> --destroy-plan <saved-destroy-plan-run-id>",
-    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read the same saved Plan. Execution is a separate command.",
+    "takosumi apps recover-uninstall <app-id> --current-review",
+    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。--current-review はアプリの現在の削除レビューを読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read a specific saved Plan. Use --current-review to read the app’s current Destroy review. Execution is a separate command.",
     "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>",
     "Scopes: read,write to prepare; read to review.",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
