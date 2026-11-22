@@ -45,6 +45,17 @@ The private service implements:
 | `fetchSharedAuth(Request)` | Handle exactly `/auth/oidc/login`, `callback`, `logout` and `session`; return a native `Response` |
 | `authenticateSharedAuth(Request)` | Validate the RP's opaque host-only session and current issuer grant; return an authenticated canonical account ID, unauthenticated, or unavailable |
 | `resolveSharedAuthWorkspace(Request, workspaceId)` | Read the common owner's current active membership; return the same account, exact Workspace and current role, forbidden, or unavailable |
+| `drainSharedAuthRevocations()` (optional) | Purge a bounded slice of expired RP records and retry one pending session family's issuer revocation |
+
+The official staging gateway can opt in to this maintenance with
+`TAKOSUMI_HOSTED_AUTH_MAINTENANCE_ENABLED=1`, a compatible private binding and
+the existing `*/5 * * * *` trigger. With the setting unset, the maintenance is
+disabled. The gateway calls the private method once per matching delivered
+event. A later event can resume a failure from the RP's durable pending state.
+Repeated event delivery can repeat an idempotent issuer revoke. Other scheduled
+tasks and normal login are independent of this optional method. An unavailable
+or failed call logs `hosted_auth_maintenance_failed` without issuer or session
+details.
 
 The private RP keeps access/refresh tokens and verifies their client binding,
 issuer profile, current grant, account fence and revocation. An ID token,

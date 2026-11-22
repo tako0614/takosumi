@@ -29,6 +29,7 @@ export interface SharedAuthRpc {
     request: Request,
     workspaceId: string,
   ): Promise<SharedAuthWorkspace>;
+  drainSharedAuthRevocations?(): Promise<void>;
 }
 
 /** Operator-supplied, approximate per-location admission, never identity. */
@@ -39,6 +40,7 @@ export interface SharedAuthLoginRateLimiter {
 export interface SharedAuthEnvironment {
   readonly TAKOSUMI_SHARED_AUTH_PROFILE?: string;
   readonly TAKOSUMI_SHARED_AUTH_ORIGIN?: string;
+  readonly TAKOSUMI_HOSTED_AUTH_MAINTENANCE_ENABLED?: string;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly HOSTED?: unknown;
@@ -88,6 +90,32 @@ function composition(env: SharedAuthEnvironment): {
     throw new TypeError("shared authentication service is unavailable");
   }
   return { origin: origin.origin, rpc: rpc as SharedAuthRpc };
+}
+
+/** Reuse the existing staging cadence without entering an HTTP auth path. */
+export async function runScheduledSharedAuthMaintenance(
+  env: SharedAuthEnvironment,
+  cron: unknown,
+): Promise<void> {
+  if (
+    cron !== "*/5 * * * *" ||
+    env.TAKOSUMI_HOSTED_AUTH_MAINTENANCE_ENABLED !== "1" ||
+    env.TAKOSUMI_ENVIRONMENT !== "staging" ||
+    env.TAKOSUMI_SHARED_AUTH_PROFILE !== "shared-account" ||
+    env.TAKOSUMI_SHARED_AUTH_ORIGIN !== STAGING_PLATFORM_ORIGIN
+  ) return;
+
+  try {
+    const rpc = composition(env)?.rpc;
+    if (typeof rpc?.drainSharedAuthRevocations === "function") {
+      await rpc.drainSharedAuthRevocations();
+      return;
+    }
+  } catch {
+    // Keep other scheduled maintenance independent. A later tick can resume
+    // from Hosted's durable revocation state.
+  }
+  console.warn(JSON.stringify({ event: "hosted_auth_maintenance_failed" }));
 }
 
 function safeId(value: unknown): value is string {
