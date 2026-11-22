@@ -390,7 +390,10 @@ export default function ConnectionsTab(props: {
   const lastCreatedProviderConnection = () =>
     providerConnectionForConnectionId(lastCreatedConnectionId());
   const verifiedUninstallReturn = () => {
-    if (!uninstallReturn || !lastCreatedConnectionName()) return;
+    // The router retains this component when only the search changes. Keep
+    // the verified result attached to the original app's return context.
+    if (!uninstallReturn || uninstallReturnHref(location.search) !== uninstallReturn ||
+      !lastCreatedConnectionName()) return;
     // Use the stored connection. The redirect's status hint may be stale.
     const connection = lastCreatedProviderConnection();
     if (connection?.status === "verified" && connection.scope !== "operator" &&
