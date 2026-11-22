@@ -381,13 +381,23 @@ checked for the selected replacement.
 The trusted credential driver must explicitly prove its verified account scope;
 the reference Cloudflare driver requires its exact-account verification capability
 and matching account metadata. The complete binding digest must match the applied
-Plan after substituting the old ID **only in the comparison preimage**. When the
+Plan after substituting the old ID **only in the comparison preimage**. A host
+driver may also preserve the applied credential delivery for a verified
+replacement. This comparison uses the saved effective Connection's recipe,
+materialization and declared environment names. All other fields in the applied
+digest still match exactly. The new Destroy Plan records the derived delivery
+with the effective replacement. Apply revalidates it, and the Vault and Runner
+manifest use the same environment names. The reference Cloudflare driver uses
+this path for an applied OAuth Connection and a verified API token that can
+preserve its token-only environment. An explicit Zone ID changes credential
+delivery and cannot use this path. The applied Connection record must be
+available when proving a different credential shape. When the
 current StateVersion was produced by a prior recovery Plan, a new manual recovery
-starts with the replacements recorded by that exact Plan. The new explicit
+starts with the replacements and delivery recorded by that exact Plan. The new explicit
 selection overrides only the named logical bindings. The new Plan records the
 complete effective selection, which is revalidated at Apply. The comparison
 uses the prior Plan's recorded effective IDs against the pinned digest.
-Other applied bindings, aliases, settings, recipe and verification remain exact.
+All remaining applied bindings, aliases, settings and verification remain exact.
 Recovery resolves and mints only for the applied provider identities. A
 Connection referenced solely by unused bindings cannot be selected for replacement.
 Minting uses the effective IDs of the new Plan. Each original Connection can have

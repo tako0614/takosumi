@@ -852,7 +852,7 @@ function credentialManifest(
         connectionId: entry.connection.id,
         recipeId: entry.connection.credentialRecipe?.id ?? "legacy",
         authMode: entry.connection.credentialRecipe?.authMode ?? "legacy",
-        envNames: [...entry.connection.envNames].sort(),
+        envNames: [...(entry.destroyCredentialDelivery?.envNames ?? entry.connection.envNames)].sort(),
         // The rotating path is supplied by the runner, not minted as a Vault
         // file. Admit its env name in the dispatch manifest only.
         fileEnvNames: [
@@ -903,6 +903,9 @@ function providerMintEntriesFromResolved(
         ? { alias: entry.rootAlias ?? entry.alias }
         : {}),
       connectionId: connection.id,
+      ...(entry.destroyCredentialDelivery
+        ? { destroyCredentialDelivery: entry.destroyCredentialDelivery }
+        : {}),
       ...(entry.runCredentialSettings
         ? { runCredentialSettings: entry.runCredentialSettings }
         : {}),
