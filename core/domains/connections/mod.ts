@@ -626,7 +626,7 @@ export class ConnectionsService {
 
     // Restore the former credential shape only for the applied digest check.
     // The selected Connection stays real and retains its current policy checks.
-    const withAppliedAuthMode = await Promise.all(comparison.map(async (entry, index) => {
+    const withAppliedCredentialShape = await Promise.all(comparison.map(async (entry, index) => {
       const selectedEntry = withPriorDelivery[index]!;
       const unchanged = { comparison: entry, selected: selectedEntry, authModeChanged: false };
       if (entry.connection.id === selectedEntry.connection.id) return unchanged;
@@ -648,8 +648,10 @@ export class ConnectionsService {
         !sameProviderSource(entry.provider, original.providerSource) ||
         originalRecipe.id !== replacementRecipe.id) return unchanged;
       const authModeChanged = originalRecipe.authMode !== replacementRecipe.authMode;
-      if (!authModeChanged && !entry.destroyCredentialDelivery) return unchanged;
       const appliedEnvNames = entry.destroyCredentialDelivery?.envNames ?? original.envNames;
+      const appliedDelivery = stableStringify([...appliedEnvNames].sort());
+      if (!authModeChanged && !entry.destroyCredentialDelivery &&
+        stableStringify([...entry.connection.envNames].sort()) === appliedDelivery) return unchanged;
       const envNames = input.preserveCredentialDelivery?.(
         original,
         selectedEntry.connection,
@@ -657,8 +659,7 @@ export class ConnectionsService {
       );
       // The Runner has one process environment. Keeping each departing
       // binding's delivered names equal also keeps their union equal.
-      const sameDelivery = envNames && stableStringify([...envNames].sort()) ===
-        stableStringify([...appliedEnvNames].sort());
+      const sameDelivery = envNames && stableStringify([...envNames].sort()) === appliedDelivery;
       return {
         comparison: {
           ...entry,
@@ -680,9 +681,9 @@ export class ConnectionsService {
         authModeChanged,
       };
     }));
-    if (await resolvedProviderBindingsDigest(withAppliedAuthMode.map((row) => row.comparison)) !==
+    if (await resolvedProviderBindingsDigest(withAppliedCredentialShape.map((row) => row.comparison)) !==
       input.appliedDigest) return refuse("bindings_mismatch");
-    return finish(withAppliedAuthMode.map((row) =>
+    return finish(withAppliedCredentialShape.map((row) =>
       row.selected ?? refuse(row.authModeChanged ? "replacement_auth_mode_mismatch" : "bindings_mismatch")
     ));
   }

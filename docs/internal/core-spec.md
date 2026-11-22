@@ -387,12 +387,12 @@ replacement. This comparison uses the saved effective Connection's recipe,
 materialization and declared environment names. All other fields in the applied
 digest still match exactly. The new Destroy Plan records the derived delivery
 with the effective replacement. Apply revalidates it, and the Vault and Runner
-manifest use the same environment names. The reference Cloudflare driver uses
-this path for an applied OAuth Connection and a verified API token that can
-preserve its token-only environment. An explicit Zone ID changes credential
-delivery and cannot use this path. If the original reference Cloudflare OAuth
-Connection was revoked, Core can verify a replacement against the registered
-OAuth shape using the direct successful Apply that produced the current
+manifest use the same environment names. The reference Cloudflare driver can
+preserve the token-only environment of an applied OAuth or API token Connection
+when a verified API token supplies the same account. An explicit Zone ID changes
+credential delivery and cannot use this path. If the original Cloudflare
+Connection was revoked, Core can verify a replacement against the applicable
+token-only shape using the direct successful Apply that produced the current
 StateVersion. It requires that Apply's matching resolution and mint audit for
 the original ID, the current app owner and ownership epoch, and equality of
 the complete applied binding digest. Only the verified replacement can supply
