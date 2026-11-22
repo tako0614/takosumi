@@ -27,7 +27,7 @@ import type {
   CapsuleUninstall,
 } from "takosumi-contract/capsules";
 import { CAPSULE_APP_PROBLEM_CODES } from "takosumi-contract/capsules";
-import type { RunPolicyStatus, RunType } from "takosumi-contract/runs";
+import type { RunPlanOrigin, RunPolicyStatus, RunType } from "takosumi-contract/runs";
 
 /** A never-applied app with no progress this long needs the person. */
 export const CAPSULE_APP_INSTALL_STALL_AFTER_MS = 30 * 60 * 1000;
@@ -41,6 +41,7 @@ export const CAPSULE_APP_LIFECYCLE_RUN_TYPES: readonly RunType[] = [
 ];
 
 export interface CapsuleAppLatestRun extends CapsuleAppRunSummary {
+  readonly origin?: RunPlanOrigin;
   readonly policyStatus?: RunPolicyStatus;
 }
 
@@ -297,6 +298,30 @@ function scheduledUninstallStatus(facts: CapsuleAppFacts): CapsuleAppStatus {
   }
   if (record?.phase === "destroying" || finalizerPlan) {
     return status("uninstalling", "none");
+  }
+  // A failed manual Plan leaves the grace-period reservation in place.
+  // Ignore older attempts superseded by a finalizer retry, including legacy
+  // Plans that were recorded without a scheduled_uninstall origin.
+  if (
+    record?.phase === "scheduled" &&
+    latestRun?.type === "destroy_plan" &&
+    latestRun.status === "failed" &&
+    latestRun.id !== record.destroyPlanRunId &&
+    latestRun.origin?.kind !== "scheduled_uninstall" &&
+    Date.parse(latestRun.createdAt) >= Date.parse(record.requestedAt) &&
+    (record.destroyPlanRequestedAt === undefined ||
+      Date.parse(latestRun.createdAt) > Date.parse(record.destroyPlanRequestedAt))
+  ) {
+    const failure = runProblem(latestRun);
+    const problems = ordered([
+      ...connections,
+      failure.code === "policy_blocked" ? failure : { ...failure, code: "uninstall_failed" },
+    ]);
+    return status(
+      "needs_attention",
+      facts.uninstallCancellable ? "cancel_uninstall" : actionFor(problems, false),
+      problems,
+    );
   }
   return status(
     "uninstall_scheduled",
