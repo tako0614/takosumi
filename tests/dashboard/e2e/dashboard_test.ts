@@ -565,9 +565,20 @@ async function startReadinessBrowserFixture(
   page: Page,
   onReadinessRead: ReadinessRouteHandler,
   onActivityRead?: ReadinessRouteHandler,
+  applyErrorCode?: "apply_failed" | "runner_mutation_indeterminate",
 ): Promise<ReadinessBrowserFixture> {
   const applyPosts: string[] = [];
   const readinessRequests: string[] = [];
+  const applyRun = {
+    id: "run_provider_apply_e2e",
+    workspaceId: "ws_alpha",
+    capsuleId: "cap_provider_destination_e2e",
+    type: "apply",
+    status: applyErrorCode ? "failed" : "succeeded",
+    ...(applyErrorCode ? { errorCode: applyErrorCode } : {}),
+    createdBy: "portable-e2e",
+    createdAt: "2026-08-01T00:00:00.000Z",
+  };
   await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
   await stubProviderDestinationFixture(page, [], []);
   await page.route("**/api/v1/**", async (route) => {
@@ -578,26 +589,10 @@ async function startReadinessBrowserFixture(
       request.method() === "POST"
     ) {
       applyPosts.push(path);
-      return route.fulfill({ json: { run: {
-        id: "run_provider_apply_e2e",
-        workspaceId: "ws_alpha",
-        capsuleId: "cap_provider_destination_e2e",
-        type: "apply",
-        status: "succeeded",
-        createdBy: "portable-e2e",
-        createdAt: "2026-08-01T00:00:00.000Z",
-      } } });
+      return route.fulfill({ json: { run: applyRun } });
     }
     if (path === "/api/v1/runs/run_provider_apply_e2e") {
-      return route.fulfill({ json: { run: {
-        id: "run_provider_apply_e2e",
-        workspaceId: "ws_alpha",
-        capsuleId: "cap_provider_destination_e2e",
-        type: "apply",
-        status: "succeeded",
-        createdBy: "portable-e2e",
-        createdAt: "2026-08-01T00:00:00.000Z",
-      } } });
+      return route.fulfill({ json: { run: applyRun } });
     }
     if (path === "/api/v1/runs/run_provider_apply_e2e/stream") {
       return route.fulfill({
@@ -648,6 +643,27 @@ test.describe("Takosumi dashboard browser surface", () => {
     mode === "public-live",
     "public-live is an unauthenticated read-only profile",
   );
+
+  for (const errorCode of ["runner_mutation_indeterminate", "apply_failed"] as const) {
+    const unknown = errorCode === "runner_mutation_indeterminate";
+    test(`install review ${unknown ? "holds an unknown Apply outcome" : "offers retry after a definite Apply failure"}`, async ({ page }) => {
+      test.skip(mode !== "portable", "synthetic install Run results are portable-only");
+      const errors = pageErrors(page);
+      const fixture = await startReadinessBrowserFixture(
+        page, (route) => route.fulfill({ json: { stateVersions: [] } }), undefined, errorCode,
+      );
+      await fixture.startApply();
+      const review = installReview(page);
+      await expect(review.getByRole("alert").filter({ hasText: unknown ? "operation's outcome is unknown" : "Check the reason and logs" })).toBeVisible();
+      await expect(review.getByRole("link", { name: "Technical details" })).toHaveAttribute("href", "/runs/run_provider_apply_e2e");
+      const retry = review.getByRole("button", { name: "Retry installation", exact: true });
+      if (unknown) await expect(retry).toHaveCount(0);
+      else await expect(retry).toBeVisible();
+      expect(fixture.applyPosts).toHaveLength(1);
+      expect(fixture.readinessRequests).toEqual([]);
+      await assertNoPageErrors(errors);
+    });
+  }
 
   for (const stalledAt of ["fetch", "body"] as const) {
     test(`Install review keeps one Run read in flight through ${stalledAt} stalls`, async ({ page }) => {

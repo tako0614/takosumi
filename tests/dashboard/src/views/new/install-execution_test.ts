@@ -310,9 +310,9 @@ test("only the first install retries by re-planning the app as it stands", () =>
   // planCapsule (no snapshot) is reachable only for the install purpose; any
   // other review retries through the request that created it.
   expect(source).toContain("const canRetryApply = () => isInstall();");
-  expect(source).toContain("<Show when={isInstall() && isApplyRun(current().type) && canRetryApply()}>");
-  expect(source).toContain("<Show when={isInstall() && isReviewRun(current().type)}>");
-  expect(source).toContain("<Show when={!isInstall() && canRestart()}>");
+  expect(source).toContain("<Show when={!mutationOutcomeUnknown() && isInstall() && isApplyRun(current().type) && canRetryApply()}>");
+  expect(source).toContain("<Show when={!mutationOutcomeUnknown() && isInstall() && isReviewRun(current().type)}>");
+  expect(source).toContain("<Show when={!mutationOutcomeUnknown() && !isInstall() && canRestart()}>");
   expect(source).toContain("const canRestart = () => Boolean(props.onRestart) && (!isInstall() || !hasSeenApply());");
 });
 
