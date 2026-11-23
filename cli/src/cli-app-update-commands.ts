@@ -437,10 +437,16 @@ async function readDestroyReviewPointer(request: Client, appPath: string, appId:
   return { id, workspaceId: app.workspaceId, status, scheduledPhase };
 }
 
-/** Find the current manual Destroy Plan, then recheck both the Run and app. */
-async function currentDestroyReview(request: Client, appId: string): Promise<PublicRun> {
-  const appPath = `/api/v1/capsules/${encodeURIComponent(appId)}`;
-  const selected = await readDestroyReviewPointer(request, appPath, appId);
+function destroyReviewAdvanced(before: string, after: string): boolean {
+  return (before === "queued" && after === "running") ||
+    ((before === "queued" || before === "running") &&
+      (after === "waiting_approval" || after === "succeeded"));
+}
+
+async function readManualDestroyPlan(
+  request: Client, appPath: string, appId: string,
+  selected: Awaited<ReturnType<typeof readDestroyReviewPointer>>,
+): Promise<PublicRun> {
   let needsSourceSnapshot = false;
   if (selected.scheduledPhase === "scheduled" || selected.scheduledPhase === "destroying") {
     // Older scheduled Plans may lack origin in the Run projection. The
@@ -463,20 +469,31 @@ async function currentDestroyReview(request: Client, appId: string): Promise<Pub
       reservation.destroyPlanRunId !== undefined;
   }
   const run = runFrom(await request(`/api/v1/runs/${encodeURIComponent(selected.id)}`), appId, selected.id);
-  const advanced = (selected.status === "queued" && run.status === "running") ||
-    ((selected.status === "queued" || selected.status === "running") &&
-      (run.status === "waiting_approval" || run.status === "succeeded"));
   if (run.type !== "destroy_plan" || run.workspaceId !== selected.workspaceId ||
-    (run.status !== selected.status && !advanced) || run.origin?.kind === "scheduled_uninstall" ||
+    (run.status !== selected.status && !destroyReviewAdvanced(selected.status, run.status)) ||
+    run.origin?.kind === "scheduled_uninstall" ||
     (needsSourceSnapshot && !bounded(run.sourceSnapshotId, 256))) {
     throw new Refusal("current_destroy_review_unavailable");
   }
-  const current = await readDestroyReviewPointer(request, appPath, appId);
-  if (current.id !== selected.id || current.workspaceId !== selected.workspaceId ||
-    current.status !== run.status || current.scheduledPhase !== selected.scheduledPhase) {
-    throw new Refusal("current_destroy_review_unavailable");
-  }
   return run;
+}
+
+/** Find the current manual Destroy Plan, then recheck both the Run and app. */
+async function currentDestroyReview(request: Client, appId: string): Promise<PublicRun> {
+  const appPath = `/api/v1/capsules/${encodeURIComponent(appId)}`;
+  let selected = await readDestroyReviewPointer(request, appPath, appId);
+  for (;;) {
+    const run = await readManualDestroyPlan(request, appPath, appId, selected);
+    const current = await readDestroyReviewPointer(request, appPath, appId);
+    if (current.id !== selected.id || current.workspaceId !== selected.workspaceId ||
+      current.scheduledPhase !== selected.scheduledPhase) break;
+    if (current.status === run.status) return run;
+    // Only a forward transition warrants another read. Queued and running are
+    // the only nonterminal states in this projection, so there are at most two.
+    if (!destroyReviewAdvanced(run.status, current.status)) break;
+    selected = current;
+  }
+  throw new Refusal("current_destroy_review_unavailable");
 }
 
 /** Create a recovery Plan or read a saved review through the existing Accounts routes. */
