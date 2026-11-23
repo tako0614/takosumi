@@ -93,6 +93,69 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       });
     }
 
+    for (const retire of [true, false]) {
+      test(retire
+        ? "leaving a failed install Run retires its start-over confirmation"
+        : "an active start-over confirmation abandons only the reviewed unfinished install", async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+        const capsuleId = "cap_restart_unapplied";
+        const sourceId = "src_restart_unapplied";
+        const configId = "cfg_restart_unapplied";
+        const git = "https://github.com/example/restart-unapplied.git";
+        const createdAt = "2026-11-23T00:00:00Z";
+        const abandonedPath = `/api/v1/capsules/${capsuleId}/abandon`;
+        const failed = { id: "plan_restart_unapplied", capsuleId, workspaceId: "ws_alpha", type: "plan",
+          status: "failed", baseStateGeneration: 0, createdBy: "portable-e2e", createdAt };
+        const next = { ...failed, id: "plan_restart_replacement", capsuleId: "cap_restart_replacement", status: "succeeded" };
+        const capsule = { id: capsuleId, workspaceId: failed.workspaceId, name: "Unfinished install", slug: "unfinished-install",
+          environment: "production", installConfigId: configId, sourceId, status: "error", currentStateGeneration: 0,
+          createdAt, updatedAt: createdAt };
+        const writes: string[] = [];
+        await page.route("**/api/v1/**", (route) => {
+          const request = route.request();
+          const path = new URL(request.url()).pathname;
+          if (request.method() !== "GET") writes.push(`${request.method()} ${path}`);
+          if (path === abandonedPath) return route.fulfill({ json: { abandoned: true, capsule: { ...capsule, status: "destroyed" } } });
+          if (path === `/api/v1/capsules/${capsuleId}`) return route.fulfill({ json: { capsule } });
+          if (path === `/api/v1/capsules/${next.capsuleId}`) return route.fulfill({ json: { capsule: { ...capsule, id: next.capsuleId, name: "Replacement app" } } });
+          if (path === `/api/v1/sources/${sourceId}`) return route.fulfill({ json: { source: {
+            id: sourceId, workspaceId: failed.workspaceId, name: capsule.name, url: git, defaultRef: "main",
+            defaultPath: ".", status: "active", autoSync: false, createdAt, updatedAt: createdAt,
+          } } });
+          if (path === `/api/v1/capsule-configs/${configId}`) return route.fulfill({ json: { installConfig: { id: configId, modulePath: "deploy/cloudflare" } } });
+          if (path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+          if (path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (path.endsWith("/runs")) return route.fulfill({ json: { runs: [] } });
+          const run = [failed, next].find(({ id }) => path === `/api/v1/runs/${id}`);
+          if (run) return route.fulfill({ json: { run } });
+          return route.fallback();
+        });
+        await page.goto(`/runs/${failed.id}`, { waitUntil: "domcontentloaded" });
+        const caption = "Start over with the latest source";
+        const startOver = page.getByRole("button", { name: caption, exact: true });
+        await expect(startOver).toBeEnabled();
+        await startOver.click();
+        const dialog = page.getByRole("dialog", { name: `${caption}?`, exact: true });
+        await expect(dialog).toContainText("Unfinished install");
+        expect(writes).toEqual([]);
+
+        if (retire) {
+          await page.evaluate((path) => {
+            history.pushState(history.state, "", path);
+            window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+          }, `/runs/${next.id}`);
+          await expect(page).toHaveURL(new RegExp(`/runs/${next.id}$`, "u"));
+          await expect(dialog).toHaveCount(0);
+          expect(writes).toEqual([]);
+        } else {
+          await dialog.getByRole("button", { name: caption, exact: true }).click();
+          await expect(page).toHaveURL((url) => url.pathname === "/new" && url.searchParams.get("git") === git &&
+            url.searchParams.get("path") === "deploy/cloudflare" && !url.searchParams.has("ref"));
+          expect(writes).toEqual([`POST ${abandonedPath}`]);
+        }
+      });
+    }
+
     test("an indeterminate Destroy Apply explains the unknown outcome without offering another review", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const capsuleId = "cap_unknown_destroy";

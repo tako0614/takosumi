@@ -6,6 +6,7 @@ export interface ConfirmDialogOptions {
   confirmText?: string;
   cancelText?: string;
   danger?: boolean;
+  signal?: AbortSignal;
 }
 
 interface ConfirmDialogState {
@@ -28,12 +29,22 @@ const initialState: ConfirmDialogState = {
 const [confirmDialogState, setConfirmDialogState] = createSignal(initialState);
 
 export function useConfirmDialog() {
-  const confirm = (options: ConfirmDialogOptions): Promise<boolean> =>
+  const confirm = ({ signal, ...options }: ConfirmDialogOptions): Promise<boolean> =>
     new Promise<boolean>((resolve) => {
+      if (signal?.aborted) return resolve(false);
+      const finish = (accepted: boolean) => {
+        signal?.removeEventListener("abort", abort);
+        resolve(accepted);
+      };
+      const abort = () => {
+        setConfirmDialogState((current) => current.resolve === finish ? initialState : current);
+        finish(false);
+      };
+      signal?.addEventListener("abort", abort, { once: true });
       setConfirmDialogState({
         isOpen: true,
         ...options,
-        resolve,
+        resolve: finish,
       });
     });
 

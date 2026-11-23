@@ -1090,6 +1090,15 @@ function Inner(props: { readonly session: SessionRecord }) {
   });
 
   const { confirm } = useConfirmDialog();
+  const [restartConfirmation, setRestartConfirmation] = createSignal<{
+    readonly controller: AbortController;
+    readonly isCurrent: () => boolean;
+  }>();
+  createEffect(() => {
+    const pending = restartConfirmation();
+    if (pending && !pending.isCurrent()) pending.controller.abort();
+  });
+  onCleanup(() => restartConfirmation()?.controller.abort());
 
   const restartFailedInitialPlan = createAction(async () => {
     const currentRun = runLatest();
@@ -1104,56 +1113,71 @@ function Inner(props: { readonly session: SessionRecord }) {
       throw new Error(t("run.restartLatestSourceUnavailable"));
     }
 
-    // Re-read every authority immediately before the destructive abandonment.
-    // The Run and old immutable SourceSnapshot remain in history; only the
-    // never-applied Capsule is abandoned and rebuilt from fresh source.
-    const currentCapsule = await getCapsule(instId);
-    if (
-      currentCapsule.currentStateGeneration !== 0 ||
-      currentCapsule.currentStateVersionId ||
-      !currentCapsule.sourceId
-    ) {
-      throw new Error(t("run.restartLatestSourceUnavailable"));
-    }
-    const [source, installConfig] = await Promise.all([
-      getSource(currentCapsule.sourceId),
-      getInstallConfig(currentCapsule.installConfigId),
-    ]);
-    const restartPath = installReturnPathFromPrefill({
-      git: source.url,
-      sourcePath: source.defaultPath,
-      ...(installConfig.modulePath ? { path: installConfig.modulePath } : {}),
-      name: currentCapsule.name,
-    });
-    if (!restartPath) {
-      throw new Error(t("run.restartLatestSourceUnavailable"));
-    }
+    const attempt = { plan: currentRun, epoch: runEpoch };
+    const { subject, primaryAccountId } = props.session;
+    const isCurrent = () => ownsApply(attempt) &&
+      props.session.subject === subject && props.session.primaryAccountId === primaryAccountId;
+    if (!isCurrent()) return;
 
-    const accepted = await confirm({
-      title: t("run.restartLatestSourceConfirm.title"),
-      message: t("run.restartLatestSourceConfirm.message", {
+    try {
+      // The old Run and immutable snapshot remain in history. The server
+      // atomically checks that only the never-applied app is abandoned.
+      const currentCapsule = await getCapsule(instId, { isCurrent });
+      if (!isCurrent()) return;
+      if (
+        currentCapsule.id !== instId ||
+        currentCapsule.workspaceId !== currentRun.workspaceId ||
+        currentCapsule.currentStateGeneration !== 0 ||
+        currentCapsule.currentStateVersionId ||
+        !currentCapsule.sourceId
+      ) {
+        throw new Error(t("run.restartLatestSourceUnavailable"));
+      }
+      const [source, installConfig] = await Promise.all([
+        getSource(currentCapsule.sourceId, { isCurrent }),
+        getInstallConfig(currentCapsule.installConfigId, { isCurrent }),
+      ]);
+      if (!isCurrent()) return;
+      const restartPath = installReturnPathFromPrefill({
+        git: source.url,
+        sourcePath: source.defaultPath,
+        ...(installConfig.modulePath ? { path: installConfig.modulePath } : {}),
         name: currentCapsule.name,
-      }),
-      confirmText: t("run.restartLatestSource"),
-      cancelText: t("common.cancel"),
-      danger: true,
-    });
-    if (!accepted) return;
+      });
+      if (!restartPath) {
+        throw new Error(t("run.restartLatestSourceUnavailable"));
+      }
 
-    // Repeating this after a dropped response is intentional. The server may
-    // now report alreadyDeleted; the shared classifier still requires the
-    // authoritative destroyed projection before navigation.
-    const deleted = await abandonUnappliedCapsule(instId);
-    if (
-      !capsuleAbandonmentCompleted(deleted, {
-        id: currentCapsule.id,
-        workspaceId: currentCapsule.workspaceId,
-      })
-    ) {
-      throw new Error(t("run.restartLatestSourceUnavailable"));
+      const pending = { controller: new AbortController(), isCurrent };
+      setRestartConfirmation(pending);
+      const accepted = await confirm({
+        title: t("run.restartLatestSourceConfirm.title"),
+        message: t("run.restartLatestSourceConfirm.message", { name: currentCapsule.name }),
+        confirmText: t("run.restartLatestSource"),
+        cancelText: t("common.cancel"),
+        danger: true,
+        signal: pending.controller.signal,
+      });
+      if (restartConfirmation() === pending) setRestartConfirmation(undefined);
+      if (!accepted || !isCurrent()) return;
+
+      // After a dropped response the server may report alreadyDeleted; the
+      // destroyed projection is still required before navigation.
+      const deleted = await abandonUnappliedCapsule(instId, { isCurrent });
+      if (!isCurrent()) return;
+      if (
+        !capsuleAbandonmentCompleted(deleted, {
+          id: currentCapsule.id,
+          workspaceId: currentCapsule.workspaceId,
+        })
+      ) {
+        throw new Error(t("run.restartLatestSourceUnavailable"));
+      }
+      clearWorkspaceProjectionCaches(currentCapsule.workspaceId);
+      navigate(appendAppHandoff(restartPath, appHandoff) ?? restartPath);
+    } catch (cause) {
+      if (isCurrent()) throw cause;
     }
-    clearWorkspaceProjectionCaches(currentCapsule.workspaceId);
-    navigate(appendAppHandoff(restartPath, appHandoff) ?? restartPath);
   });
 
   const retryPlan = createAction(async () => {
@@ -1195,6 +1219,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     deploy.clearError();
     recheckApply.clearError();
     retryPlan.clearError();
+    restartFailedInitialPlan.clearError();
     approve.clearError();
     cancel.clearError();
     setApplied(false);
