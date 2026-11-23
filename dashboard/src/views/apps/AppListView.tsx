@@ -22,6 +22,7 @@ import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { appPageHref } from "../../lib/app-links.ts";
 import { screenOpenRoute } from "../../lib/open-choice-state.ts";
 import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
+import { GIT_INSTALL_ENTRY } from "../../lib/install-link.ts";
 
 type MarkKind = "alert" | "info" | "warn" | "quiet";
 const STATE_MARK: Readonly<Partial<Record<AppState, { readonly label: MessageKey; readonly kind: MarkKind }>>> = {
@@ -225,9 +226,10 @@ function AppStartPanel() {
       <div class="av-start-copy">
         <h1 class="av-start-title">{t("apps.start.titleEmpty")}</h1>
       </div>
-      <a href="/new" class="av-start-action">
-        <span>{t("apps.start.optionStore")}</span>
-      </a>
+      <div class="av-start-actions">
+        <a href="/new" class="av-start-action"><span>{t("apps.start.optionStore")}</span></a>
+        <a href={GIT_INSTALL_ENTRY} class="av-start-secondary">{t("installStore.fromGit")}</a>
+      </div>
     </section>
   );
 }

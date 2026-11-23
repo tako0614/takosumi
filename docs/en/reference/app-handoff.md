@@ -111,8 +111,8 @@ supported. How to use it is in
 The URL does not install anything by itself. It only pre-fills an explicit
 dashboard flow. The person presses **Install** to read the Git version, sets the app name,
 connections, and settings, then reviews the planned changes under **What this install does**.
-They choose **Allow and install** to apply them. From the Store, a manually entered Git URL uses
-**Install from a Git repository** and **Continue** before opening the install screen.
+They choose **Allow and install** to apply them. To enter a Git URL manually, choose **Install from Git** on an empty Home or in the Store. Enter the URL
+and choose **Continue** to open the install screen.
 
 The underlying technical sequence covers preparation, review, and application:
 

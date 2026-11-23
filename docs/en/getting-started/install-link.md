@@ -175,8 +175,8 @@ The first screen is the same one shown in the
 2. The app page shows its name, description and a compact version choice. **About this app** contains the repository and pinned version.
 3. Pressing **Install** pins `ref` to a commit and checks the repository. The person checks the
    version, configuration, required connections and settings, and cost, then chooses
-   **Allow and install** to apply them. From the Store, manually entered Git URLs use
-   **Install from a Git repository** and **Continue** before the install screen. An existing app
+   **Allow and install** to apply them. To enter a Git URL manually, choose **Install from Git** on an empty Home or in the Store, enter the URL,
+   then choose **Continue**. An existing app
    also offers **Open** and **Install another**.
 
 Link values end up in browser history and logs. Keep secrets out of the link.
