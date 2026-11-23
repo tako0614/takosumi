@@ -669,7 +669,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       // Automatic updates are a plain switch.
       await openAppPane(page, "version");
-      await app.getByRole("checkbox", { name: "Update automatically when a newer version is found" }).check();
+      const [autoUpdateResponse] = await Promise.all([
+        page.waitForResponse((response) =>
+          response.url() === `${origin}/api/v1/capsules/${CAPSULE_ID}` &&
+          response.request().method() === "PATCH",
+        ),
+        app.getByRole("checkbox", { name: "Update automatically when a newer version is found" }).check(),
+      ]);
+      expect(autoUpdateResponse.status()).toBe(200);
+      expect(await autoUpdateResponse.finished()).toBeNull();
       await expect.poll(() => autoUpdate).toBe(true);
 
       // A newer version: reviewed in place, applied only by Allow and update.
