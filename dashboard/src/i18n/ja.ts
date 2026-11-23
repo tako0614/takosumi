@@ -772,6 +772,7 @@ export const ja = {
   "app.uninstall.connectionRemoved": "このアプリの削除に使っていたクラウド接続が失われています。",
   "app.uninstall.chooseReplacement": "削除に使う接続を選ぶ",
   "app.uninstall.replacementCloudflareAccount": "{name} · Cloudflareアカウント {accountId}",
+  "app.uninstall.replacementNeedsVerification": "{name} · クラウド接続でアカウントを確認",
   "app.uninstall.replacementHint": "元と同じクラウドアカウントの接続を選んでください。",
   "app.uninstall.replacementPlaceholder": "接続を選択",
   "app.uninstall.keepConnection": "この接続を使う",

@@ -760,6 +760,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.connectionRemoved": "The cloud connection for this uninstall was removed.",
   "app.uninstall.chooseReplacement": "Choose connection for uninstall",
   "app.uninstall.replacementCloudflareAccount": "{name} · Cloudflare account {accountId}",
+  "app.uninstall.replacementNeedsVerification": "{name} · Confirm account in Cloud connections",
   "app.uninstall.replacementHint": "Choose a connection to the original cloud account.",
   "app.uninstall.replacementPlaceholder": "Choose a connection",
   "app.uninstall.keepConnection": "Keep this connection",
