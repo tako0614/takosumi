@@ -179,6 +179,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.noLogs": "No logs yet.",
   "installStore.closePanel": "Close",
   "installStore.manageApp": "Manage app",
+  "installStore.manageVersion": "Manage version",
   "installStore.cloudConnection": "Cloud connection",
   "installStore.logs": "Progress and logs",
   "installStore.retryInstall": "Retry installation",

@@ -189,6 +189,7 @@ export const ja = {
   "installStore.noLogs": "ログはまだありません。",
   "installStore.closePanel": "閉じる",
   "installStore.manageApp": "アプリを管理",
+  "installStore.manageVersion": "バージョンを管理",
   "installStore.cloudConnection": "クラウド接続",
   "installStore.logs": "進捗とログ",
   "installStore.retryInstall": "インストールを再試行",
