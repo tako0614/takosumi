@@ -276,6 +276,86 @@ test.each([false, true])(
   },
 );
 
+test("current uninstall recovery rereads a Plan that failed after the detail read", async () => {
+  const errorCode = "provider_credential_env_conflict";
+  const running = pendingDestroyView("running");
+  const failed = {
+    ...running, latestRun: { ...running.latestRun, status: "failed" },
+    progress: { revisionPreparing: false },
+  };
+  const appRead = "/api/v1/capsules/cap_owned/app";
+  const planRead = `/api/v1/runs/${destroyPlan.id}`;
+  let appReads = 0;
+  let planReads = 0;
+  const result = await invoke(currentReviewArgs, request => {
+    switch (new URL(request.url).pathname) {
+      case appRead: return Response.json({ app: appReads++ === 0 ? running : failed });
+      case planRead: return Response.json({ run: planReads++ === 0
+        ? { ...destroyPlan, status: "running" }
+        : { ...destroyPlan, status: "failed", errorCode },
+      });
+      default: throw new Error("unexpected review request");
+    }
+  });
+  expect(result.code).toBe(1);
+  expect(result.result).toMatchObject({
+    status: "failed", planRunId: destroyPlan.id, planStatus: "failed", code: errorCode,
+  });
+  expect(result.result.plan).toBeUndefined();
+  expect(result.calls.map(call => [call.method, new URL(call.url).pathname])).toEqual(
+    [appRead, planRead, appRead, planRead, appRead].map(path => ["GET", path]),
+  );
+});
+
+test.each(["unreported failure", "finalizer", "rescheduled during read"] as const)(
+  "current uninstall recovery refuses a failed Plan outside the current reservation (%s)",
+  async scenario => {
+    const appPath = "/api/v1/capsules/cap_owned";
+    const scheduled = {
+      phase: "scheduled", requestedAt: "2026-11-21T12:30:00.000Z",
+      deleteAfter: "2026-11-28T12:30:00.000Z",
+    };
+    const app = {
+      ...currentDestroyView, status: "uninstalled", uninstall: { scheduled },
+      latestRun: { ...currentDestroyView.latestRun, status: "failed" },
+      progress: { revisionPreparing: false },
+      problems: scenario === "unreported failure" ? [] : [
+        { code: "uninstall_failed", runId: destroyPlan.id, runType: "destroy_plan" },
+      ],
+    };
+    let appReads = 0;
+    const result = await invoke(currentReviewArgs, request => {
+      switch (new URL(request.url).pathname) {
+        case `${appPath}/app`: return Response.json({ app:
+          appReads++ === 0 ? app : {
+            ...app, uninstall: { scheduled: { ...scheduled, requestedAt: "2026-11-21T12:31:00.000Z" } },
+          },
+        });
+        case appPath: return Response.json({ capsule: {
+          id: app.capsuleId, workspaceId: app.workspaceId, status: app.status,
+          uninstall: {
+            phase: scheduled.phase, requestedAt: scheduled.requestedAt, scheduledDestroyAt: scheduled.deleteAfter,
+            destroyPlanRunId: scenario === "finalizer" ? destroyPlan.id : "other_finalizer",
+          },
+        } });
+        case `/api/v1/runs/${destroyPlan.id}`: return Response.json({ run: { ...destroyPlan, status: "failed" } });
+        default: throw new Error("unexpected review request");
+      }
+    });
+    expect(result.code).toBe(1);
+    expect(result.result).toMatchObject({ status: "refused", code: "current_destroy_review_unavailable" });
+    expect(result.result.planRunId).toBeUndefined();
+    const expected = [`${appPath}/app`];
+    if (scenario !== "unreported failure") expected.push(appPath);
+    if (scenario === "rescheduled during read") {
+      expected.push(`/api/v1/runs/${destroyPlan.id}`, `${appPath}/app`);
+    }
+    expect(result.calls.map(call => [call.method, new URL(call.url).pathname])).toEqual(
+      expected.map(path => ["GET", path]),
+    );
+  },
+);
+
 test.each(["scheduled", "destroying"] as const)(
   "current uninstall recovery distinguishes a pending manual Plan during the %s phase",
   async phase => {
@@ -389,6 +469,11 @@ test("current uninstall review refuses an unavailable, stale, or scheduled remov
     { ...view, progress: { ...view.progress, revisionPreparing: true } },
     { ...view, progress: { ...view.progress, run: destroyApply } },
     { ...view, latestRun: { ...view.latestRun, id: "later_review" } },
+    { ...view, latestRun: { ...view.latestRun, status: "failed" } },
+    {
+      ...pendingDestroyView("running"),
+      latestRun: { ...view.latestRun, status: "failed" },
+    },
   ]) {
     const r = await invoke(currentReviewArgs, () => Response.json({ app }));
     expect(r.code).toBe(1);

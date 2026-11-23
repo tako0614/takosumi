@@ -310,7 +310,11 @@ test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall wit
   }
 });
 
-test("current uninstall review reads the same pending Accounts Destroy Plan after its acknowledgement is lost", async () => {
+test.each([
+  ["waiting for review", "waiting_approval", false],
+  ["failed", "failed", false],
+  ["failed during a reservation", "failed", true],
+] as const)("current uninstall review finds the same Accounts Destroy Plan after a lost acknowledgement (%s)", async (_case, finalStatus, scheduled) => {
   const entered = Promise.withResolvers<OpenTofuPlanJob>();
   const release = Promise.withResolvers<void>();
   const h = await fixture({
@@ -318,8 +322,20 @@ test("current uninstall review reads the same pending Accounts Destroy Plan afte
       if (job.planRun.operation !== "destroy") return;
       entered.resolve(job);
       await release.promise;
+      if (finalStatus === "failed") throw new Error("synthetic Destroy Plan failure");
     },
   });
+  const appPath = `/api/v1/capsules/${h.appId}`;
+  const beforeSchedule = { ...h.runnerCalls };
+  if (scheduled) {
+    const response = await h.dispatch(new Request(`${ORIGIN}${appPath}/uninstall`, {
+      method: "POST", headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${SESSION}` },
+    }));
+    expect({ status: response.status, body: await response.json() }).toMatchObject({
+      status: 202, body: { capsule: { uninstall: { phase: "scheduled" } } },
+    });
+    expect(h.runnerCalls).toEqual(beforeSchedule);
+  }
   const readToken = "synthetic-pending-destroy-read-only";
   h.accounts.savePersonalAccessToken(readToken, {
     ...h.pat, tokenId: "pat_pending_destroy_read_only", scopes: ["read"],
@@ -363,10 +379,11 @@ test("current uninstall review reads the same pending Accounts Destroy Plan afte
       planStatus: "running", reviewUrl: `${ORIGIN}/runs/${job.planRun.id}`,
     });
     const expectedReads = [
-      ["GET", `/api/v1/capsules/${h.appId}/app`],
-      ["GET", `/api/v1/runs/${job.planRun.id}`],
-      ["GET", `/api/v1/capsules/${h.appId}/app`],
-    ];
+      `${appPath}/app`,
+      ...(scheduled ? [appPath] : []),
+      `/api/v1/runs/${job.planRun.id}`,
+      `${appPath}/app`,
+    ].map(path => ["GET", path]);
     expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual(expectedReads);
     expect(h.runnerCalls).toEqual(beforeRead);
     expect(await h.ledger.getPlanRun(job.planRun.id)).toEqual(pending);
@@ -375,17 +392,27 @@ test("current uninstall review reads the same pending Accounts Destroy Plan afte
     release.resolve();
     const completed = await originalCreate;
     expect(completed.status).toBe(201);
-    expect((await completed.json()).run).toMatchObject({
-      id: job.planRun.id, type: "destroy_plan", status: "waiting_approval", capsuleId: h.appId,
+    const { run: finishedRun } = await completed.json();
+    expect(finishedRun).toMatchObject({
+      id: job.planRun.id, type: "destroy_plan", status: finalStatus, capsuleId: h.appId,
     });
     requests.length = 0;
     output.length = 0;
-    expect(await main(currentReviewArgs, io)).toBe(0);
-    expect(JSON.parse(output[0]!)).toMatchObject({
-      status: "review_required", appId: h.appId, planRunId: job.planRun.id,
+    expect(await main(currentReviewArgs, io)).toBe(finalStatus === "failed" ? 1 : 0);
+    const observation = JSON.parse(output[0]!);
+    expect(observation).toMatchObject({
+      appId: h.appId, planRunId: job.planRun.id, planStatus: finalStatus,
       reviewUrl: `${ORIGIN}/runs/${job.planRun.id}`,
-      plan: { id: job.planRun.id, status: "waiting_approval" },
     });
+    if (finalStatus === "failed") {
+      expect(finishedRun.errorCode).toBe("plan_failed");
+      expect(observation).toMatchObject({ status: "failed", code: finishedRun.errorCode });
+      expect(observation.plan).toBeUndefined();
+    } else {
+      expect(observation).toMatchObject({
+        status: "review_required", plan: { id: job.planRun.id, status: "waiting_approval" },
+      });
+    }
     expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual(expectedReads);
     expect(requests.every(request => new URL(request.url).origin === ORIGIN)).toBe(true);
     expect(h.runnerCalls).toEqual(beforeRead);
@@ -394,8 +421,11 @@ test("current uninstall review reads the same pending Accounts Destroy Plan afte
     }));
     expect(history.status).toBe(200);
     expect((await history.json()).runs.map((run: { id: string }) => run.id)).toEqual([job.planRun.id]);
-    expect((await h.operations.getRun(job.planRun.id))?.status).toBe("waiting_approval");
-    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ status: "active", currentStateGeneration: 1 });
+    expect((await h.operations.getRun(job.planRun.id))?.status).toBe(finalStatus);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({
+      status: scheduled ? "uninstalled" : "active", currentStateGeneration: 1,
+      ...(scheduled ? { uninstall: { phase: "scheduled" } } : {}),
+    });
     expect(errors).toEqual([]);
   } finally {
     globalThis.fetch = originalFetch;
