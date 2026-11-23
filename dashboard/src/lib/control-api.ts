@@ -2357,17 +2357,31 @@ export async function listCapsuleRuns(
 
 export type ApplyReviewRun = Pick<Run, "id" | "type" | "capsuleId" | "workspaceId">;
 
+function applyRunTypeForReview(plan: ApplyReviewRun): "apply" | "destroy_apply" | undefined {
+  if (!plan.id || !plan.capsuleId || !plan.workspaceId) return;
+  if (plan.type === "plan") return "apply";
+  if (plan.type === "destroy_plan") return "destroy_apply";
+}
+
+export function matchesReviewedApplyRun(plan: ApplyReviewRun, candidate: unknown): boolean {
+  const type = applyRunTypeForReview(plan);
+  return type !== undefined && isRecord(candidate) &&
+    typeof candidate.id === "string" && candidate.id !== "" && candidate.id !== plan.id &&
+    candidate.type === type && candidate.workspaceId === plan.workspaceId &&
+    candidate.capsuleId === plan.capsuleId && candidate.planRunId === plan.id;
+}
+
 /** Read the exact Apply attempts for one review. Older servers may ignore
  * the Plan filter, so check each row and bound the fallback pagination. */
 export async function listPlanApplyRuns(
   plan: ApplyReviewRun,
   scope: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<readonly Run[]> {
-  const { id, capsuleId, workspaceId } = plan;
-  if (!id || !capsuleId || !workspaceId || (plan.type !== "plan" && plan.type !== "destroy_plan")) {
+  const { id, capsuleId } = plan;
+  const type = applyRunTypeForReview(plan);
+  if (!type || !capsuleId) {
     throw new Error("An app Plan is required to read Apply history.");
   }
-  const type = plan.type === "plan" ? "apply" : "destroy_apply";
   const matches: Run[] = [];
   let cursor: string | undefined;
   for (let pageIndex = 0; pageIndex < 2; pageIndex++) {
@@ -2383,11 +2397,7 @@ export async function listPlanApplyRuns(
     throwIfAborted(scope.signal);
     throwIfReadRetired(scope);
     if (page.runs.length > CAPSULE_RUN_PAGE_MAX) break;
-    matches.push(...page.runs.filter((run) =>
-      typeof run.id === "string" && run.id !== "" && run.id !== id &&
-      run.type === type && run.workspaceId === workspaceId &&
-      run.capsuleId === capsuleId && run.planRunId === id
-    ));
+    matches.push(...page.runs.filter((run) => matchesReviewedApplyRun(plan, run)));
     if (!page.nextCursor) return matches;
     if (page.nextCursor === cursor) break;
     cursor = page.nextCursor;
@@ -2996,16 +3006,19 @@ function isAbortError(error: unknown): boolean {
 }
 
 /**
- * Applies a reviewed plan Run through the unified Run surface. `planRunId` is
- * the id of the `plan` Run shown in the Run detail view. The backend rebuilds
- * the apply guard from the reviewed plan and re-checks every precondition.
+ * Applies a reviewed app Plan through the unified Run surface. The backend
+ * rebuilds its apply guard and the browser accepts only the linked Apply.
  */
 export async function createApplyRun(
-  planRunId: string,
+  plan: ApplyReviewRun,
   input: {
     readonly timeoutMs?: number;
   } = {},
 ): Promise<{ readonly run: Run }> {
+  if (!applyRunTypeForReview(plan)) {
+    throw new ControlApiError(400, "invalid_apply_plan", "An app Plan is required to create an Apply.");
+  }
+  const planRunId = plan.id;
   const attempt = async (): Promise<{ readonly run: Run }> => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const controller =
@@ -3024,14 +3037,14 @@ export async function createApplyRun(
           body: {},
         },
       );
-      if (!isRecord(body) || !isRecord(body.run) || typeof body.run.id !== "string") {
+      if (!isRecord(body) || !matchesReviewedApplyRun(plan, body.run)) {
         throw new ControlApiError(
           502,
           "invalid_apply_response",
           "Apply returned an invalid response.",
         );
       }
-      return { run: body.run as unknown as Run };
+      return { run: body.run as Run };
     } catch (error) {
       if (controller?.signal.aborted && isAbortError(error)) {
         throw new ControlApiError(

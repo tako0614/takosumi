@@ -231,11 +231,13 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
     });
 
-    for (const recoveryCase of ["transport", "read-refused", "server-error"] as const) {
+    for (const recoveryCase of ["transport", "read-refused", "server-error", "wrong-ack"] as const) {
     test(recoveryCase === "read-refused"
       ? "an individual Run refusal keeps a lost Apply unconfirmed without another mutation"
       : recoveryCase === "server-error"
       ? "an Apply gateway error recovers the exact existing Run with one POST"
+      : recoveryCase === "wrong-ack"
+      ? "an Apply acknowledgement for another review is reconciled against the original Plan"
       : "lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors: string[] = [];
@@ -246,6 +248,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const applyId = outcome === "accepted" ? "apply/accepted?result#opaque" : `apply_${outcome}`;
         const applyPathId = encodeURIComponent(applyId);
         const replacementId = `replacement_${outcome}`;
+        const unrelatedId = `unrelated_${outcome}`;
         const plan = {
           id: planId, workspaceId: "ws_alpha", capsuleId,
           type: "plan", status: "succeeded", policyStatus: "pass",
@@ -261,6 +264,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         let replacementReads = 0;
         let replacementHistoryReads = 0;
         let applyReads = 0;
+        let unrelatedReads = 0;
         const held: { release?: () => Promise<void> } = {};
         await page.route("**/api/v1/**", async (route) => {
           const request = route.request();
@@ -273,7 +277,14 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             if (outcome !== "absent" && acceptedEffects === 0) acceptedEffects += 1;
             if (outcome === "normal") return route.fulfill({ status: 201, json: { run: apply } });
             if (outcome === "server-error") return route.fulfill({ status: 503, json: { error: "gateway_unavailable" } });
+            if (outcome === "wrong-ack") return route.fulfill({
+              status: 201, json: { run: { ...apply, id: unrelatedId, planRunId: "another_plan" } },
+            });
             return route.abort("failed");
+          }
+          if (path === `/api/v1/runs/${unrelatedId}`) {
+            unrelatedReads += 1;
+            return route.fulfill({ json: { run: { ...apply, id: unrelatedId, planRunId: "another_plan" } } });
           }
           if (path === `/api/v1/runs/${replacementId}`) {
             replacementReads += 1;
@@ -341,7 +352,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const allow = page.getByRole("button", { name: "Allow and apply", exact: true });
         await expect(allow).toBeEnabled();
         await allow.click();
-        const expectedPosts = outcome === "normal" || outcome === "rejected" || outcome === "server-error" ? 1 : 2;
+        const expectedPosts = outcome === "normal" || outcome === "rejected" || outcome === "server-error" || outcome === "wrong-ack" ? 1 : 2;
         if (outcome === "normal" || outcome === "rejected") {
           await expect.poll(() => attempts).toBe(1);
           if (outcome === "normal") {
@@ -354,7 +365,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           await expect.poll(() => attempts).toBe(expectedPosts);
           const pages = outcome === "accepted" || outcome === "incomplete" ? 2 : 1;
           await expect.poll(() => historyAfterApply.length).toBe(pages);
-          if (outcome === "accepted" || outcome === "server-error") {
+          if (outcome === "accepted" || outcome === "server-error" || outcome === "wrong-ack") {
             await expect(page).toHaveURL(new URL(`/runs/${applyPathId}`, page.url()).href);
             await expect.poll(() => applyReads).toBeGreaterThan(0);
             await expect(page.locator(".av-run-summary")).toBeVisible();
@@ -392,6 +403,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           }
         }
         expect(acceptedEffects).toBe(outcome === "absent" || outcome === "rejected" ? 0 : 1);
+        expect(unrelatedReads).toBe(0);
         expect(mutations).toEqual(Array.from({ length: expectedPosts }, () => `POST /api/v1/runs/${planId}/apply`));
         await page.unroute("**/api/v1/**");
       }
