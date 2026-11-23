@@ -23,6 +23,7 @@ import {
   destroyPlanCapsule,
   extractRunId,
   getRun,
+  matchesReviewedApplyRun,
   planCapsule,
   type Run,
 } from "./control-api.ts";
@@ -131,8 +132,13 @@ export async function previewRetryChange(
   api: Pick<RetryPlanApi, "getRun"> = STANDARD_REQUESTS,
   isCurrent?: () => boolean,
 ): Promise<RetryChange> {
-  const plan = run.type === "apply" && run.planRunId ? await api.getRun(run.planRunId, isCurrent ? { isCurrent } : {}) : undefined;
-  return retryChangeForRun({ run, ...(plan ? { plan } : {}), capsule });
+  const planId = run.type === "apply" ? run.planRunId : undefined;
+  if (!planId) return retryChangeForRun({ run, capsule });
+  const plan = await api.getRun(planId, isCurrent ? { isCurrent } : {});
+  if (!plan || !matchesReviewedApplyRun(plan, run)) {
+    throw new ControlApiError(409, "retry_plan_identity_mismatch", t("controlError.sourceRevisionMismatch"));
+  }
+  return retryChangeForRun({ run, plan, capsule });
 }
 
 /** Plans the failed run's change again; resolves to the new Plan's id. */
