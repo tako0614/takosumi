@@ -439,7 +439,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
       // A Git link has no publisher description: avoid the generic install boilerplate.
       await expect(page.locator('[data-testid="install-app-header"] > div > p:not(.iv-provenance)')).toHaveCount(0);
-      await expect(page.getByRole("link", { name: "Back to Store", exact: true })).toHaveAttribute("href", "/new");
+      await expect(page.getByRole("link", { name: "Install from Git", exact: true }))
+        .toHaveAttribute("href", "/new?entry=git");
       await expect(page.getByTestId("install-start")).not.toContainText("Nothing is created in your cloud yet");
       await sourceDetails.click();
       await captureInstallState(page, "app-not-installed");
