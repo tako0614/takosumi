@@ -82,6 +82,7 @@ import type {
   MembershipActor,
 } from "../control-operations.ts";
 import {
+  bearerChallenge,
   errorJson,
   json,
   methodNotAllowed,
@@ -368,7 +369,7 @@ export function runStatusStream(
         if (cancelled) return false;
         if (!force && timing.now() < nextReauthAt) return true;
         try {
-          if (!session.reauthorizeBearer || !(await session.reauthorizeBearer()))
+          if (await session.reauthorizeBearer?.() !== "current")
             return false;
           const auth = await requireResourceAccess({
             operations,
@@ -544,7 +545,7 @@ async function approveRun(ctx: ControlDispatchContext, runId: string): Promise<R
   // app role. Re-read both before admitting a new approval, using the same
   // app/legacy/shared-account intersections as the initial route decision.
   ctx.assertActive?.();
-  if (session.reauthorizeBearer && !(await session.reauthorizeBearer())) {
+  if (session.reauthorizeBearer && await session.reauthorizeBearer() !== "current") {
     return errorJson("forbidden", "Run approval credentials are no longer valid.", 403);
   }
   const current = await operations.getRun(runId);
@@ -603,8 +604,12 @@ async function applyPlanRun(
   });
   if (!auth.ok) return auth.response;
   // The Plan and resource checks can outlive the credential accepted at ingress.
-  if (session.reauthorizeBearer && !(await session.reauthorizeBearer())) {
-    return errorJson("forbidden", "Run apply credentials are no longer valid.", 403);
+  if (session.reauthorizeBearer) {
+    const recheck = await session.reauthorizeBearer();
+    if (recheck === "signed_out") return bearerChallenge("invalid_token");
+    if (recheck !== "current") {
+      return errorJson("forbidden", "Run apply credentials are no longer valid.", 403);
+    }
   }
   const applyRequest: CreateApplyRunRequest = {
     planRunId: planRun.id,

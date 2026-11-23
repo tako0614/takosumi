@@ -69,7 +69,7 @@ function fixture() {
     session: {
       subject: "tsub_viewer",
       requiredAccess: "read",
-      reauthorizeBearer: async () => true,
+      reauthorizeBearer: async () => "current",
     },
   } satisfies ControlDispatchContext;
   const timing = {

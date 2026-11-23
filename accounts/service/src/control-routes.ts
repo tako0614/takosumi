@@ -34,6 +34,7 @@ import type { AccountsStore } from "./store.ts";
 import type { RunReadWaiter } from "./control/run-read-deadline.ts";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 import {
+  type ControlCredentialRecheck,
   type ControlDispatchContext,
   type ControlSession,
   type RunStreamTiming,
@@ -481,7 +482,7 @@ export async function handleAuthenticatedControlRoute(
     readonly credential?: "session";
     readonly workspaceId?: string;
     readonly requireCurrentMembership?: true;
-    readonly reauthorizeBearer?: () => Promise<boolean>;
+    readonly reauthorizeBearer?: () => Promise<ControlCredentialRecheck>;
     /** Which composition entry authenticated the subject (telemetry only). */
     readonly entry?: Exclude<LegacyWorkspaceEntry, "public">;
   },
@@ -715,7 +716,7 @@ export async function handleControlRoute(
   if (!bearer.ok) return appendServerTiming(bearer.response, timings);
 
   const initialAuth = bearer.auth;
-  const reauthorizeBearer = async (): Promise<boolean> => {
+  const reauthorizeBearer = async (): Promise<ControlCredentialRecheck> => {
     // The canonical gate observes revocation, expiry, scope changes and account
     // deletion, and requires the same subject, principal, Workspace restriction
     // and credential kind throughout this request.
@@ -725,13 +726,19 @@ export async function handleControlRoute(
       scope: requiredAccess,
       recheck: true,
     });
-    return current.ok &&
+    if (!current.ok) {
+      return initialAuth.credential === "session" && current.response.status === 401
+        ? "signed_out"
+        : "denied";
+    }
+    const sameCredential =
       current.auth.subject === initialAuth.subject &&
       current.auth.principalSubject === initialAuth.principalSubject &&
       current.auth.workspaceId === initialAuth.workspaceId &&
       JSON.stringify(current.auth.appIds) === JSON.stringify(initialAuth.appIds) &&
       current.auth.credential === initialAuth.credential &&
       controlRouteRequiredScope(request) === requiredAccess;
+    return sameCredential ? "current" : "denied";
   };
 
   return await dispatchAuthenticatedControlRoute(

@@ -9,6 +9,7 @@ import { OpenTofuControllerError } from "../../../../core/domains/deploy-control
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { InMemoryOpenTofuControlStore, planRunExecutionInputsDigestMaterial } from "../../../../core/domains/deploy-control/store.ts";
 import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
+import { handlePlatformSharedAuthControlRequest } from "../../../../deploy/platform/worker.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const OWNER = "tsub_approval_owner";
@@ -149,12 +150,18 @@ for (const change of ["member removed", "PAT revoked", "PAT expired", "PAT write
   });
 }
 
-for (const credential of ["session", "shared"] as const) {
-  test(`Apply checks the current ${credential} credential after loading the approved Plan`, async () => {
+for (const [credential, change, status] of [
+  ["session", "signed out", 401],
+  ["shared", "signed out", 401],
+  ["shared", "unavailable", 403],
+  ["shared", "different account", 403],
+] as const) {
+  test(`Apply refuses a ${credential} credential that is ${change} after loading the approved Plan`, async () => {
     const h = await runFixture(credential);
     await h.core.approveRun(PLAN, { approvedBy: MEMBER });
     const approved = await h.ledger.getPlanRun(PLAN);
     expect(approved?.status).toBe("succeeded");
+    let changeDuringPlanRead = false;
     let current = true;
     let planReads = 0;
     let applyCalls = 0;
@@ -163,7 +170,10 @@ for (const credential of ["session", "shared"] as const) {
       getPlanRun: async (id: string) => {
         const result = await h.operations.getPlanRun(id);
         planReads++;
-        if (!current) await h.accounts.deleteAccountSession(SESSION_ID);
+        if (changeDuringPlanRead) {
+          current = false;
+          if (credential === "session") await h.accounts.deleteAccountSession(SESSION_ID);
+        }
         return result;
       },
       createApplyRun: async () => {
@@ -171,21 +181,39 @@ for (const credential of ["session", "shared"] as const) {
         throw new OpenTofuControllerError("failed_precondition", "Fixture dispatch boundary");
       },
     };
+    const origin = "https://app.takosumi.test";
     const apply = () => {
-      const request = new Request(`https://app.takosumi.test/api/v1/runs/${PLAN}/apply`, {
-        method: "POST", headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${SESSION_ID}` },
+      const request = new Request(`${origin}/api/v1/runs/${PLAN}/apply`, {
+        method: "POST",
+        headers: {
+          origin,
+          cookie: credential === "shared" ? "__Host-takosumi_hosted_session=synthetic-hosted-session"
+            : `${ACCOUNT_SESSION_COOKIE_NAME}=${SESSION_ID}`,
+        },
       });
       const context = { request, url: new URL(request.url), store: h.accounts, operations };
-      return credential === "shared" ? handleAuthenticatedControlRoute({
-        ...context, subject: MEMBER, credential: "session", requireCurrentMembership: true,
-        reauthorizeBearer: async () => current,
-      }) : handleControlRoute(context);
+      if (credential === "session") return handleControlRoute(context);
+      return handlePlatformSharedAuthControlRequest(request, {
+        TAKOSUMI_SHARED_AUTH_PROFILE: "shared-account",
+        TAKOSUMI_SHARED_AUTH_ORIGIN: origin,
+        TAKOSUMI_ENVIRONMENT: "staging",
+        HOSTED: {
+          fetchSharedAuth: async () => new Response(null, { status: 204 }),
+          authenticateSharedAuth: async () => {
+            if (current) return { kind: "authenticated" as const, accountId: MEMBER };
+            if (change === "signed out") return { kind: "unauthenticated" as const };
+            if (change === "unavailable") return { kind: "unavailable" as const };
+            return { kind: "authenticated" as const, accountId: OWNER };
+          },
+          resolveSharedAuthWorkspace: async () => { throw new Error("unexpected Workspace RPC"); },
+        },
+      }, { store: h.accounts, resolveOperations: async () => operations });
     };
 
     expect((await apply())?.status).toBe(409);
     expect(applyCalls).toBe(1);
-    current = false;
-    expect((await apply())?.status).toBe(403);
+    changeDuringPlanRead = true;
+    expect((await apply())?.status).toBe(status);
     expect(planReads).toBe(2);
     expect(applyCalls).toBe(1);
     expect(await h.ledger.getPlanRun(PLAN)).toEqual(approved);
