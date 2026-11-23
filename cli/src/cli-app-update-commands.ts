@@ -616,11 +616,15 @@ async function watch(request: Client, run: PublicRun, scope: Scope, signal: Abor
 }
 
 function writeTerminalApply(io: CliIo, options: CliOptions, appId: string | undefined, planId: string | undefined, run: PublicRun): number {
-  write(io, options, { status: run.status === "succeeded" ? "succeeded" : "failed", appId, planRunId: planId,
+  const succeeded = run.status === "succeeded";
+  const outcomeUnknown = run.status === "failed" && run.errorCode === "runner_mutation_indeterminate";
+  write(io, options, { status: outcomeUnknown ? "indeterminate" : succeeded ? "succeeded" : "failed", appId, planRunId: planId,
     runId: run.id, runStatus: run.status, runUrl: runUrl(options, run.id),
     code: run.errorCode && TOKEN.test(run.errorCode) ? run.errorCode : undefined,
-    note: run.status !== "succeeded" ? "A failed or stopped Apply may have effects. Do not repeat it as a new Plan." : undefined });
-  return run.status === "succeeded" ? 0 : 1;
+    note: outcomeUnknown
+      ? "The Runner did not confirm the outcome. Ask an operator to reconcile the saved Run and actual state before running it again."
+      : succeeded ? undefined : "A failed or stopped Apply may have effects. Do not repeat it as a new Plan." });
+  return succeeded ? 0 : 1;
 }
 
 function applyPlanIdentity(plan: PublicRun): string {
