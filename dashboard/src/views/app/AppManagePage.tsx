@@ -1148,12 +1148,12 @@ export default function AppManagePage(props: {
         ? view
         : undefined;
     };
-    if (mode === "failed") {
-      // The just-failed Run can arrive before the app view catches up.
-      onMount(() => {
-        if (isCurrent()) void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
-      });
-    }
+    onMount(() => {
+      // The approval or just-failed Run can arrive before the app view catches up.
+      if (isCurrent() && (mode === "failed" || !reviewedApp(app()))) {
+        void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
+      }
+    });
     return (
       <Show when={isCurrent() && reviewedApp(app())}>
         {(view) => (

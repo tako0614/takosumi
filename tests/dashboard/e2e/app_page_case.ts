@@ -1602,6 +1602,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       noReplacement: "uninstall recovery opens connections when no verified replacement is available",
     }[scenario], async ({ page }) => {
       const lostReplacementOnInstalledApp = scenario === "lostReplacementOnInstalledApp";
+      const startsAwaitingApproval = scenario === "staleReview";
+      const installedUninstallReview = startsAwaitingApproval || lostReplacementOnInstalledApp;
       const lostReplacementResponse = scenario === "lostReplacementResponse" || lostReplacementOnInstalledApp;
       const staleUninstallReview = scenario === "staleReview" || lostReplacementResponse;
       const partialRecovery = scenario === "partialRecovery";
@@ -1702,7 +1704,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["delete"] }],
       };
       const refusedPlan = {
-        ...recoveryPlan, id: "run_refused_uninstall", status: "succeeded" as const,
+        ...recoveryPlan, id: "run_refused_uninstall",
+        status: startsAwaitingApproval ? "waiting_approval" as const : "succeeded" as const,
       };
       let currentUninstallReview: Pick<typeof recoveryPlan, "id" | "status"> = refusedPlan;
       let staleReviewApplyAttempts = 0;
@@ -1748,12 +1751,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             });
           case "uninstall_stale_review":
             return appView(ID, NAME, {
-              ...(lostReplacementOnInstalledApp
+              ...(installedUninstallReview
                 ? { status: "active", state: "installed", primaryAction: "open", screens: [screen] }
                 : { status: "uninstalled", state: "uninstalling", primaryAction: "review" }),
               latestRun: { ...recoveryPlan, ...currentUninstallReview },
               progress: { revisionPreparing: false, review: { runId: currentUninstallReview.id, runType: "destroy_plan" } },
-              uninstall: lostReplacementOnInstalledApp
+              uninstall: installedUninstallReview
                 ? { mode: "none", impact: { usedBy: [] } }
                 : { mode: "scheduled", graceDays: 7, scheduled: { phase: "destroying", requestedAt: now, deleteAfter, cancellable: false, blocked: true } },
             });
@@ -1992,6 +1995,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           if (suffix === "/cost") return route.fulfill({ json: { cost: { runId: id, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
           if (suffix === "/logs") return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
           if (suffix === "/stream") return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+          if (startsAwaitingApproval && suffix === "/approve" && id === refusedPlan.id && request.method() === "POST") {
+            const approved = { ...refusedPlan, status: "succeeded" as const };
+            currentUninstallReview = approved;
+            runsById.set(approved.id, approved);
+            return route.fulfill({ json: { run: approved } });
+          }
           if (suffix === "/apply" && id === refusedPlan.id && request.method() === "POST") {
             if (openReviewFailure) {
               scene = "uninstall_failed";
@@ -2220,11 +2229,17 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         // The server still names the old Plan as the latest review. A new
         // connection can only start a fresh deletion review.
         await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
-        const reviewEntry = lostReplacementOnInstalledApp ? problems : header;
+        const reviewEntry = installedUninstallReview ? problems : header;
         await reviewEntry.getByRole("button", { name: "Review", exact: true }).click();
         const rejectedReview = page.getByTestId("app-review");
         const allowUninstall = rejectedReview.getByRole("button", { name: "Allow and uninstall" });
         await expect(rejectedReview.getByRole("button", { name: "Choose connection for uninstall" })).toHaveCount(0);
+        const initialMutations: string[] = [];
+        if (startsAwaitingApproval) {
+          await rejectedReview.getByRole("button", { name: "Approve this change", exact: true }).click();
+          await page.getByRole("dialog", { name: "Run this deletion?" }).getByRole("button", { name: "Approve this change", exact: true }).click();
+          initialMutations.push(`POST /api/v1/runs/${refusedPlan.id}/approve`);
+        }
         await rejectedReview.getByRole("checkbox").check();
         await allowUninstall.click();
         await expect(rejectedReview.getByRole("alert")).toContainText("An unrelated conflict.");
@@ -2238,8 +2253,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await expect(rejectedReview.getByRole("alert")).not.toContainText("conn_old_missing");
         await expect(allowUninstall).toHaveCount(0);
         expect(seenMutations).toEqual([
+          ...initialMutations,
           `POST /api/v1/runs/${refusedPlan.id}/apply`, `POST /api/v1/runs/${refusedPlan.id}/apply`,
         ]);
+        await expect(chooseAgain).toBeVisible();
         await chooseAgain.click();
         await rejectedReview.getByRole("combobox", { name: /Cloudflare/ }).selectOption("conn_saved");
         await rejectedReview.getByRole("button", { name: "Review removal" }).click();
@@ -2252,6 +2269,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         await expect(rejectedReview.getByRole("button", { name: "Approve this change", exact: true })).toBeVisible();
         expect(seenMutations).toEqual([
+          ...initialMutations,
           `POST /api/v1/runs/${refusedPlan.id}/apply`, `POST /api/v1/runs/${refusedPlan.id}/apply`,
           `POST /api/v1/capsules/${ID}/destroy-plan`,
         ]);
