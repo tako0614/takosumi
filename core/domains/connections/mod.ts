@@ -62,6 +62,15 @@ export interface ResolvedCapsuleProviderBinding {
   readonly materialization: ProviderConnectionMaterialization;
 }
 
+/** Hashes of the binding facts admitted for a manual replacement Destroy.
+ * Stored only in private PlanRunInputs, never used to reconstruct credentials.
+ */
+export interface DestroyReceiptBindingProof {
+  readonly contextDigest: string;
+  readonly resolvedBindingsDigest: string;
+  readonly connections: readonly { readonly id: string; readonly digest: string }[];
+}
+
 type ProviderBindingIdentity = Pick<
   ProviderBinding,
   "provider" | "moduleLocalName" | "childAlias" | "alias"
@@ -575,6 +584,7 @@ export class ConnectionsService {
       Promise<ProviderConnectionResolutionEvidence | undefined>;
     readonly recoverRevokedCredentialShape?: RecoverRevokedDestroyCredentialShape;
     readonly credentialDelivery?: readonly DestroyConnectionCredentialDelivery[];
+    readonly recordReceiptBindingProof?: (proof: DestroyReceiptBindingProof) => void;
     /** Used only while creating a new manual Destroy Plan. */
     readonly captureCredentialDelivery?: boolean;
   }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
@@ -630,10 +640,20 @@ export class ConnectionsService {
     for (const id of appliedDeliveryByBinding.keys()) {
       if (!appliedIdsByBinding.has(id)) refuse();
     }
-    const finish = (bindings: readonly ResolvedCapsuleProviderBinding[]) => {
+    const finish = async (bindings: readonly ResolvedCapsuleProviderBinding[]) => {
       if (!input.captureCredentialDelivery &&
         stableStringify(destroyConnectionCredentialDelivery(bindings)) !==
           stableStringify(input.credentialDelivery ?? [])) refuse();
+      if (input.recordReceiptBindingProof) {
+        const connections = new Map(bindings.map(({ connection }) => [connection.id, connection]));
+        input.recordReceiptBindingProof({
+          contextDigest: await this.#destroyReceiptBindingContextDigest(input.capsule, selectedBindings, policy),
+          resolvedBindingsDigest: await resolvedProviderBindingsDigest(bindings),
+          connections: await Promise.all([...connections].map(async ([id, connection]) => ({
+            id, digest: await stableJsonDigest(connection),
+          }))),
+        });
+      }
       return bindings;
     };
     const policy = await this.#policyForCapsule(input.capsule);
@@ -650,8 +670,7 @@ export class ConnectionsService {
       const replacementId = replacements.get(bindingId);
       if (replacementId === undefined) continue;
       if (entry.connection.id !== replacementId) refuse();
-      if (entry.connection.expiresAt !== undefined &&
-        (!Number.isFinite(Date.parse(entry.connection.expiresAt)) || Date.parse(entry.connection.expiresAt) <= Date.parse(this.#now()))) refuse();
+      if (!verifiedConnectionExpiryAllowsUse(entry.connection, this.#now())) refuse();
       if (entry.connection.scope === "operator") refuse();
       if (!input.hasVerifiedAccountScope(entry.connection)) refuse("replacement_unverified");
     }
@@ -736,6 +755,62 @@ export class ConnectionsService {
     return finish(withAppliedCredentialShape.map((row) =>
       row.selected ?? refuse(row.authModeChanged ? "replacement_auth_mode_mismatch" : "bindings_mismatch")
     ));
+  }
+
+  /**
+   * Observe a completed mutation after its selected Connection was deleted.
+   * A present row still has to match the admitted row. An absent row is allowed
+   * only for an explicitly selected replacement, and supplies no executable binding.
+   */
+  async matchesDeletedDestroyReceiptBindings(input: {
+    readonly capsule: Capsule;
+    readonly requiredProviders: readonly RequiredProviderBindingIdentity[];
+    readonly replacements: readonly DestroyProviderConnectionReplacement[];
+    readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+    readonly proof: DestroyReceiptBindingProof;
+  }): Promise<boolean> {
+    const replacements = new Map(input.replacements.map(row => [row.connectionId, row.replacementConnectionId]));
+    const bindings = await this.#selectStoredProviderBindingsForDestroy(input.capsule, input.requiredProviders);
+    const policy = await this.#policyForCapsule(input.capsule);
+    if (await this.#destroyReceiptBindingContextDigest(input.capsule, bindings, policy) !== input.proof.contextDigest) {
+      return false;
+    }
+    const fingerprints = new Map(input.proof.connections.map(row => [row.id, row.digest]));
+    const ids = new Set(bindings.map(binding => replacements.get(binding.connectionId) ?? binding.connectionId));
+    if (ids.size !== fingerprints.size || [...ids].some(id => !fingerprints.has(id))) return false;
+
+    const selectedReplacements = new Set(replacements.values());
+    const unchangedIds = new Set(bindings.filter(binding => !replacements.has(binding.connectionId))
+      .map(binding => binding.connectionId));
+    const rows = await Promise.all([...ids].map(async id => ({
+      id,
+      connection: this.#operatorProviderConnections.get(id) ?? await this.#store.getConnection(id),
+    })));
+    let deletedReplacement = false;
+    for (const { id, connection } of rows) {
+      if (connection) {
+        if (await stableJsonDigest(connection) !== fingerprints.get(id)) return false;
+        if (selectedReplacements.has(id) &&
+          (!verifiedConnectionExpiryAllowsUse(connection, this.#now()) ||
+            !input.hasVerifiedAccountScope(connection))) return false;
+      } else {
+        if (!selectedReplacements.has(id) || unchangedIds.has(id)) return false;
+        deletedReplacement = true;
+      }
+    }
+    return deletedReplacement;
+  }
+
+  async #destroyReceiptBindingContextDigest(
+    capsule: Capsule, bindings: ProviderBindings, policy: PolicyConfig | undefined,
+  ): Promise<string> {
+    const workspace = await this.#store.getWorkspace(capsule.workspaceId);
+    const ownership = await this.#appOwnership?.getOwnership(capsule.id);
+    return await stableJsonDigest({
+      capsuleId: capsule.id, workspaceId: capsule.workspaceId,
+      workspaceOwner: workspace?.ownerUserId ?? null, ownership: ownership ?? null,
+      installConfigId: capsule.installConfigId, bindings, policy: policy ?? null,
+    });
   }
 
   async #selectStoredProviderBindingsForDestroy(
@@ -1244,6 +1319,10 @@ function connectionUsableForProviderBinding(
   connection: ProviderConnection,
 ): boolean {
   return connection.status === "verified";
+}
+
+function verifiedConnectionExpiryAllowsUse(connection: ProviderConnection, now: string): boolean {
+  return connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.parse(now);
 }
 
 /** Collects the connection ids a run's vault-backed credential mint may draw from. */

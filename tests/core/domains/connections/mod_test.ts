@@ -12,6 +12,7 @@ import {
   ConnectionsService,
   mintableConnectionIds,
   resolvedProviderBindingsDigest,
+  type DestroyReceiptBindingProof,
   type RequiredProviderBindingIdentity,
 } from "../../../../core/domains/connections/mod.ts";
 
@@ -885,6 +886,64 @@ test("uninstall distinguishes a different authentication mode only when the appl
   expect(await store.deleteConnection(original.id)).toBe(true);
   await expectRefusal("bindings_mismatch");
 });
+
+test.each(["unchanged binding", "expired remaining replacement", "changed remaining verifier"] as const)(
+  "a missing replacement cannot remove the live checks for another binding (%s)",
+  async change => {
+    const { store, model } = await setup();
+    let time = NOW;
+    const service = new ConnectionsService({ store, now: () => time });
+    const workspaceId = model.workspace.id;
+    const row = (id: string): ProviderConnection => connection({ id, workspaceId });
+    const secondOriginal = change === "unchanged binding" ? "replacement_a" : "original_b";
+    const expiry = "2026-06-06T01:00:00.000Z";
+    for (const id of new Set(["original_a", "replacement_a", secondOriginal])) {
+      await store.putConnection(row(id));
+    }
+    await store.putConnection({ ...row("replacement_b"), expiresAt: expiry });
+    await transitionProviderBindingSetForFixture(store, {
+      id: "pb_mixed_replacements",
+      capsuleId: model.capsule.id,
+      workspaceId,
+      environment: model.capsule.environment,
+      bindings: [
+        { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "original_a" },
+        { provider: CLOUDFLARE, moduleLocalName: "cloudflare", childAlias: "other", connectionId: secondOriginal },
+      ],
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const requiredProviders = [requiredBinding(), requiredBinding({ childAlias: "other" })];
+    const appliedDigest = await resolvedProviderBindingsDigest(
+      await service.resolveAppliedDestroyProviderBindings(model.capsule, requiredProviders),
+    );
+    const replacements = [{ connectionId: "original_a", replacementConnectionId: "replacement_a" }];
+    if (change !== "unchanged binding") {
+      replacements.push({ connectionId: "original_b", replacementConnectionId: "replacement_b" });
+    }
+    let proof: DestroyReceiptBindingProof | undefined;
+    let acceptsRemaining = true;
+    const composition = {
+      capsule: model.capsule, requiredProviders, replacements,
+      hasVerifiedAccountScope: (row: ProviderConnection) => row.id !== "replacement_b" || acceptsRemaining,
+    };
+    await service.resolveProviderBindingsForDestroyRecovery({
+      ...composition, appliedDigest,
+      recordReceiptBindingProof: value => { proof = value; },
+    });
+    expect(proof).toBeDefined();
+    expect(await store.deleteConnection("replacement_a")).toBe(true);
+    const matches = () => service.matchesDeletedDestroyReceiptBindings({ ...composition, proof: proof! });
+    if (change === "unchanged binding") {
+      expect(await matches()).toBe(false);
+    } else {
+      expect(await matches()).toBe(true);
+      if (change === "expired remaining replacement") time = expiry;
+      else acceptsRemaining = false;
+      expect(await matches()).toBe(false);
+    }
+  },
+);
 
 test("provider connection listing ignores durable operator rows in favor of release-owned projections", async () => {
   const { store, model, service } = await setup();

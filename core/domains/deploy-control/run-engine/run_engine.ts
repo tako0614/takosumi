@@ -124,6 +124,7 @@ import {
   ConnectionsService,
   destroyConnectionCredentialDelivery,
   resolvedProviderBindingsDigest,
+  type DestroyReceiptBindingProof,
   type ResolvedCapsuleProviderBinding,
   validateRequiredProviderBindingIdentities,
 } from "../../connections/mod.ts";
@@ -495,6 +496,7 @@ export async function destroyRuntimeInputNonce(input: {
 type RunEnginePlanRunInternalContext = PlanRunInternalContext & {
   readonly legacySourcelessDestroyRecovery?: true;
   readonly appliedDestroyProviderScope?: true;
+  readonly destroyReceiptBindingProof?: DestroyReceiptBindingProof;
   /** Authority used to derive the private Capsule Plan request/root. */
   readonly capsulePlanExecutionAuthority?: CapsulePlanExecutionAuthority;
   /**
@@ -2568,6 +2570,7 @@ export class RunEngine {
       ...(runtimeInputs ? { runtimeInputs } : {}),
       ...(privateRunFileSlots ? { privateRunFileSlots } : {}),
       ...(lifecycleActions ? { lifecycleActions } : {}),
+      ...(internal.destroyReceiptBindingProof ? { destroyReceiptBindingProof: internal.destroyReceiptBindingProof } : {}),
     };
     // Keep the original no-dependency digest frame so unapplied independent
     // Plans created before retirement remain executable.
@@ -3094,6 +3097,7 @@ export class RunEngine {
           };
         })()
       : undefined;
+    let destroyReceiptBindingProof: DestroyReceiptBindingProof | undefined;
     if (destroyConnectionRecovery && destroyProviderRequirements) {
       const bindings = await this.#resolveDestroyConnectionRecovery(
         capsule,
@@ -3102,7 +3106,10 @@ export class RunEngine {
           runnerProfile,
         ),
         destroyConnectionRecovery,
-        { captureCredentialDelivery: true },
+        {
+          captureCredentialDelivery: true,
+          recordReceiptBindingProof: proof => { destroyReceiptBindingProof = proof; },
+        },
       );
       const credentialDelivery = destroyConnectionCredentialDelivery(bindings);
       if (credentialDelivery.length) {
@@ -3383,6 +3390,7 @@ export class RunEngine {
         sourceSnapshotId: snapshot.id,
         ...appliedDestroyProviderScope,
         ...(destroyConnectionRecovery ? { destroyConnectionRecovery } : {}),
+        ...(destroyReceiptBindingProof ? { destroyReceiptBindingProof } : {}),
         ...(internal.planRunId ? { planRunId: internal.planRunId } : {}),
         baseStateGeneration,
         ...(compatibilityReport
@@ -6848,6 +6856,7 @@ export class RunEngine {
     options: {
       readonly captureCredentialDelivery?: boolean;
       readonly evidencePurpose?: "retirement";
+      readonly recordReceiptBindingProof?: (proof: DestroyReceiptBindingProof) => void;
     } = {},
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
@@ -6877,6 +6886,7 @@ export class RunEngine {
       recoverRevokedCredentialShape: this.#recoverRevokedDestroyCredentialShape,
       credentialDelivery: recovery.credentialDelivery,
       captureCredentialDelivery: options.captureCredentialDelivery,
+      recordReceiptBindingProof: options.recordReceiptBindingProof,
       ...(appliedPlan.destroyConnectionRecovery !== undefined
         ? { appliedPlanRecovery: appliedPlan.destroyConnectionRecovery }
         : {}),
@@ -10004,21 +10014,22 @@ export class RunEngine {
       // Mint provider credentials NOW (just before dispatch). Apply runs resolve
       // requiredProviders from the reviewed PlanRun. The bundle is attached to the
       // runner dispatch ONLY — never stored, never logged.
-      const runEnvironment = await this.#runEnv.resolveRunEnvironment({
-        planRun,
-        phase: planRun.operation === "destroy" ? "destroy" : "apply",
-        auditRunId: running.id,
-        ...(recovered ? { mintCredentials: false } : {}),
-        issuanceGenerationRef: await credentialIssuanceAttemptRef(
-          running.id,
-          leaseToken,
-          0,
-        ),
-      });
-      const runningWithEnv = recovered ? running : withRunEnvironmentEvidence(
-        running,
-        runEnvironment,
-      );
+      let runEnvironment: ResolvedRunEnvironment | undefined;
+      if (recovered) {
+        await this.#revalidateReceiptProviderBindings(running, planRun, profile, inputs);
+      } else {
+        runEnvironment = await this.#runEnv.resolveRunEnvironment({
+          planRun,
+          phase: planRun.operation === "destroy" ? "destroy" : "apply",
+          auditRunId: running.id,
+          issuanceGenerationRef: await credentialIssuanceAttemptRef(
+            running.id,
+            leaseToken,
+            0,
+          ),
+        });
+      }
+      const runningWithEnv = runEnvironment ? withRunEnvironmentEvidence(running, runEnvironment) : running;
       runningForFailure = runningWithEnv;
       if (planRun.operation === "destroy") {
         return await this.#executeDestroyApply(
@@ -10027,7 +10038,7 @@ export class RunEngine {
           profile,
           startedAt,
           plannedCapsule,
-          runEnvironment.credentials,
+          runEnvironment?.credentials,
           dispatch,
           inputs,
           leaseToken,
@@ -10073,7 +10084,7 @@ export class RunEngine {
                   running: runningWithEnv,
                   planRun,
                   profile,
-                  credentials: runEnvironment.credentials,
+                  credentials: runEnvironment?.credentials,
                   phase: "apply",
                   leaseToken,
                 },
@@ -10085,7 +10096,7 @@ export class RunEngine {
                     planRun,
                     profile,
                     dispatch,
-                    credentials: runEnvironment.credentials,
+                    credentials: runEnvironment?.credentials,
                     privateRunFiles,
                     leaseToken,
                     onDispatch: () => {
@@ -10733,9 +10744,57 @@ export class RunEngine {
     await this.#revalidateModuleVariableMaterialization(plan, inputs, destroy ? "apply_check" : "apply");
     // Preserve the normal pinned ProviderBinding/current policy checks without
     // minting, refreshing or materializing a new credential bundle.
-    await this.#runEnv.resolveRunEnvironment({ planRun: plan, phase: destroy ? "destroy" : "apply", auditRunId: run.id, mintCredentials: false });
+    await this.#revalidateReceiptProviderBindings(run, plan, profile, inputs);
     const context = await this.#prepareApplyReceiptDispatch(run, plan, profile, dispatch);
     return context;
+  }
+
+  async #revalidateReceiptProviderBindings(
+    run: ApplyRun, plan: PlanRun, profile: RunnerProfile, inputs: PlanRunInputs | undefined,
+  ): Promise<void> {
+    try {
+      await this.#runEnv.resolveRunEnvironment({
+        planRun: plan, phase: plan.operation === "destroy" ? "destroy" : "apply",
+        auditRunId: run.id, mintCredentials: false,
+      });
+    } catch (error) {
+      if (!(await this.#hasDeletedDestroyReceiptBindingProof(run, plan, profile, inputs))) throw error;
+    }
+  }
+
+  async #hasDeletedDestroyReceiptBindingProof(
+    run: ApplyRun, plan: PlanRun, profile: RunnerProfile, inputs: PlanRunInputs | undefined,
+  ): Promise<boolean> {
+    const proof = inputs?.destroyReceiptBindingProof;
+    const recovery = plan.destroyConnectionRecovery;
+    if (!proof || !recovery || plan.operation !== "destroy" || plan.source.kind !== "git" ||
+      plan.status !== "succeeded" || !plan.approval || plan.origin?.kind === "scheduled_uninstall" ||
+      plan.createdBy === "system:scheduled-uninstall" || !plan.requiredProviderRequirements ||
+      proof.resolvedBindingsDigest !== plan.resolvedProviderBindingsDigest ||
+      proof.resolvedBindingsDigest !== run.expected.resolvedProviderBindingsDigest ||
+      plan.planDigest !== run.expected.planDigest ||
+      plan.planArtifact?.digest !== run.expected.planArtifactDigest) return false;
+
+    const capsule = await this.#requireCurrentPlannedCapsule(plan);
+    const applied = await this.#currentStatePlanRunForCapsule(capsule);
+    const currentPlan = await this.#store.getPlanRun(plan.id);
+    if (applied?.id !== recovery.appliedPlanRunId ||
+      applied.resolvedProviderBindingsDigest !== recovery.appliedProviderBindingsDigest ||
+      stableStringify(currentPlan) !== stableStringify(plan)) return false;
+
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+      appOwnership: this.#appOwnership,
+      operatorProviderConnections: this.#operatorProviderConnections,
+      allowOperatorScopedProviderConnections: this.#allowOperatorScopedProviderConnections,
+    });
+    return await this.#connectionsService.matchesDeletedDestroyReceiptBindings({
+      capsule,
+      requiredProviders: providerBindingResolutionRequirements(plan.requiredProviderRequirements, profile),
+      replacements: recovery.replacements,
+      hasVerifiedAccountScope: this.#hasVerifiedAccountScope,
+      proof,
+    });
   }
 
   async #validateCommittedApplyReceipt(
