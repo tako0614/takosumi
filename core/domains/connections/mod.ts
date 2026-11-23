@@ -681,8 +681,10 @@ export class ConnectionsService {
       const replacementRecipe = entry.connection.credentialRecipe;
       if (!replacementRecipe) return unchanged;
       let original = await this.#store.getConnection(entry.connection.id).catch(() => null);
+      // The selection names the logical binding. The missing row may be
+      // its effective replacement from a prior partial Destroy.
       if (original === undefined && input.recoverRevokedCredentialShape &&
-        replacements.has(entry.connection.id)) {
+        replacements.has(selectedBindings[index]!.connectionId)) {
         const evidence = await input.resolveRevokedCredentialEvidence?.(entry.connection.id);
         if (evidence && sameProviderSource(entry.provider, evidence.provider)) {
           const shape = input.recoverRevokedCredentialShape(evidence, selectedEntry.connection);

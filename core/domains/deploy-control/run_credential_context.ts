@@ -265,9 +265,13 @@ export async function readPersistedProviderPartialDestroyPlan(
   failedDestroyApplyRunId: string,
   capsule: Capsule,
   plannedStateVersionId: string,
+  purpose: "recovery" | "retirement" = "recovery",
 ) {
+  // Retirement only reads this prior cursor after verifying the completed
+  // Destroy that consumed it. Live recovery still requires the error state.
+  const expectedStatus = purpose === "retirement" ? "destroyed" : "error";
   if (
-    capsule.status !== "error" ||
+    capsule.status !== expectedStatus ||
     capsule.currentStateVersionId !== plannedStateVersionId ||
     capsule.currentOutputId !== undefined ||
     capsule.currentStateGeneration === undefined
