@@ -2009,12 +2009,17 @@ function safeInstalledAppIcon(value: unknown): string | undefined {
   }
 }
 
+type StoreInstalledApp = InstalledAppSummary & { readonly updateAvailable?: true };
+
 /** Reads value-free installed app identities for matching Store listings. */
-export async function listInstalledApps(workspaceId?: string): Promise<ListInstalledAppsResponse> {
+export async function listInstalledApps(workspaceId?: string): Promise<{
+  readonly installedApps: readonly StoreInstalledApp[];
+  readonly complete: boolean;
+}> {
   // The account-owned app list is the same authority used by listAccessibleApps,
   // but this discovery read has a strict ceiling so a long account cannot make
   // Store load an unbounded number of detail/config requests.
-  const apps: { capsuleId: string; state: InstalledAppSummary["state"] }[] = [];
+  const apps: Pick<StoreInstalledApp, "capsuleId" | "state" | "updateAvailable">[] = [];
   const seenIds = new Set<string>();
   const seenCursors = new Set<string>();
   let inspected = 0;
@@ -2077,6 +2082,7 @@ export async function listInstalledApps(workspaceId?: string): Promise<ListInsta
       apps.push({
         capsuleId: raw.capsuleId,
         state: raw.state === "update_available" ? "installed" : raw.state as InstalledAppSummary["state"],
+        ...(raw.state === "update_available" ? { updateAvailable: true } : {}),
       });
     }
     if (inspected === INSTALLED_APP_LIST_LIMIT) {
@@ -2092,7 +2098,7 @@ export async function listInstalledApps(workspaceId?: string): Promise<ListInsta
     seenCursors.add(cursor);
   }
 
-  const rows: (InstalledAppSummary | undefined)[] = new Array(apps.length);
+  const rows: (StoreInstalledApp | undefined)[] = new Array(apps.length);
   let next = 0;
   const readOne = async (index: number) => {
     const app = apps[index]!;
@@ -2136,6 +2142,7 @@ export async function listInstalledApps(workspaceId?: string): Promise<ListInsta
         ...(displayName ? { displayName } : {}),
         ...(iconUrl ? { iconUrl } : {}),
         state: app.state,
+        ...(app.updateAvailable ? { updateAvailable: true } : {}),
         installedFrom: {
           url: displaySourceUrl,
           path,
@@ -2151,7 +2158,7 @@ export async function listInstalledApps(workspaceId?: string): Promise<ListInsta
     while (next < apps.length) await readOne(next++);
   });
   await Promise.all(workers);
-  return { installedApps: rows.filter((row): row is InstalledAppSummary => row !== undefined), complete };
+  return { installedApps: rows.filter((row): row is StoreInstalledApp => row !== undefined), complete };
 }
 
 /** The view kind this dashboard build understands. */

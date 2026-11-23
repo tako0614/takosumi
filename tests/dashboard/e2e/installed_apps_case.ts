@@ -16,7 +16,7 @@ function app(capsuleId: string, name: string): InstalledAppSummary {
   return { capsuleId, name, state: "installed", installedFrom: { url: `${repository}.git/`, path: `./${modulePath}/` } };
 }
 
-type FixtureOptions = { readonly legacy?: boolean };
+type FixtureOptions = { readonly legacy?: boolean; readonly updateAvailableFor?: string };
 
 async function fixture(page: Page, apps: readonly InstalledAppSummary[], complete = true, options: FixtureOptions = {}) {
   await page.addInitScript(() => {
@@ -58,7 +58,7 @@ async function fixture(page: Page, apps: readonly InstalledAppSummary[], complet
       name: row.name,
       role: "owner",
       ownerDisplayName: "Portable E2E",
-      state: row.state,
+      state: row.capsuleId === options.updateAvailableFor ? "update_available" : row.state,
       primaryAction: "open",
     }));
     // Model a bounded list whose one incomplete per-app detail makes the
@@ -233,15 +233,23 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
     });
 
     test("shows two distinct installed apps and excludes a different module", async ({ page }) => {
-      const h = await fixture(page, [app("cap_repository_office", "office-personal"), app("cap_imported_state", "office-team")]);
+      const h = await fixture(page, [app("cap_repository_office", "office-personal"), app("cap_imported_state", "office-team")],
+        true, { updateAvailableFor: "cap_imported_state" });
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
       await expect(card.getByRole("heading", { name: "共有オフィス" })).toBeVisible();
       await capture(page, "store-installed-two");
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
-      await expect(page.getByTestId("install-existing-apps").getByText("2件インストール済み", { exact: true })).toBeVisible();
-      await expect(page.getByTestId("install-existing-apps").getByRole("link", { name: /^開く:/u })).toHaveCount(2);
+      const existing = page.getByTestId("install-existing-apps");
+      await expect(existing.getByText("2件インストール済み", { exact: true })).toBeVisible();
+      await expect(existing.getByRole("link", { name: "開く: office-personal", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office");
+      await expect(existing.getByRole("link", { name: "バージョンを管理: office-personal", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office#version");
+      await expect(existing.getByRole("link", { name: "開く: office-team", exact: true })).toHaveAttribute("href", "/apps/cap_imported_state");
+      const update = existing.getByRole("link", { name: "更新: office-team", exact: true });
+      await expect(update).toHaveAttribute("href", "/apps/cap_imported_state#version");
       await capture(page, "new-installed-two");
+      await update.click();
+      await expect(page).toHaveURL(/\/apps\/cap_imported_state#version$/u);
       expect(h.mutations).toEqual([]);
       const query = new URLSearchParams({ git: repository, path: "deploy/other", ref: "main", name: "other-module" });
       await page.goto(`/new?${query}`);

@@ -484,11 +484,18 @@ function AppInstallPage(props: { readonly principalId: string }) {
                       <p class="iv-muted">{installedLabel()}</p>
                       <div class="iv-action-row">
                         <For each={existingApps()}>{(app) => {
-                          const label = () => app.displayName?.[locale()] || title();
+                          const multiple = () => existingApps().length > 1;
+                          const label = () => multiple() ? app.name : app.displayName?.[locale()] || title();
+                          const versionAction = () => t(app.updateAvailable ? "app.version.update" : "installStore.manageVersion");
                           return (
-                            <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${label()}`}>
-                              {t("installStore.open")}<Show when={existingApps().length > 1}> · {label()}</Show>
-                            </Button>
+                            <>
+                              <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${label()}`}>
+                                {t("installStore.open")}<Show when={multiple()}> · {label()}</Show>
+                              </Button>
+                              <Button variant="secondary" href={appPageHref(app.capsuleId, "version")} aria-label={`${versionAction()}: ${label()}`}>
+                                {versionAction()}<Show when={multiple()}> · {label()}</Show>
+                              </Button>
+                            </>
                           );
                         }}</For>
                       </div>
