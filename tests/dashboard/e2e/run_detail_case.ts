@@ -231,7 +231,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
     });
 
-    for (const recoveryCase of ["transport", "read-refused", "server-error", "wrong-ack", "post-retired-401"] as const) {
+    for (const recoveryCase of ["transport", "read-refused", "server-error", "wrong-ack", "post-retired-401", "pending"] as const) {
     test(recoveryCase === "read-refused"
       ? "an individual Run refusal keeps a lost Apply unconfirmed without another mutation"
       : recoveryCase === "server-error"
@@ -240,8 +240,11 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       ? "an Apply acknowledgement for another review is reconciled against the original Plan"
       : recoveryCase === "post-retired-401"
       ? "a late Apply 401 cannot redirect the replacement Run page"
+      : recoveryCase === "pending"
+      ? "a pending Apply recovery enables Retry at its deadline"
       : "lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      if (recoveryCase === "pending") await page.clock.install();
       if (recoveryCase === "post-retired-401") {
         await page.addInitScript(() => {
           const fetch = window.fetch.bind(window);
@@ -260,7 +263,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       }
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      for (const outcome of recoveryCase !== "transport" ? [recoveryCase] : ["accepted", "absent", "ambiguous", "foreign", "wrong-kind", "wrong-plan", "incomplete", "pending", "retired", "rejected", "normal"] as const) {
+      for (const outcome of recoveryCase !== "transport" ? [recoveryCase] : ["accepted", "absent", "ambiguous", "foreign", "wrong-kind", "wrong-plan", "incomplete", "retired", "rejected", "normal"] as const) {
         const capsuleId = `cap_apply_${outcome}`;
         const planId = `plan_apply_${outcome}`;
         const applyId = outcome === "accepted" ? "apply/accepted?result#opaque" : `apply_${outcome}`;
@@ -307,6 +310,10 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             if (outcome === "wrong-ack") return route.fulfill({
               status: 201, json: { run: { ...apply, id: unrelatedId, planRunId: "another_plan" } },
             });
+            if (outcome === "pending" && attempts === 2) {
+              // Freeze before the final failure can start the recovery timer.
+              await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
+            }
             return route.abort("failed");
           }
           if (path === `/api/v1/runs/${unrelatedId}`) {
@@ -437,6 +444,11 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             await expect(page.getByRole("alert").filter({ hasText: "We couldn't confirm the result." })).toBeVisible();
             await expect(allow).toHaveCount(0);
             const retry = page.getByRole("button", { name: "Retry", exact: true });
+            if (outcome === "pending") {
+              await page.clock.runFor(4_999);
+              await expect(retry).toBeDisabled();
+              await page.clock.runFor(1);
+            }
             await expect(retry).toBeEnabled();
             if (outcome === "read-refused") expect(applyReads).toBe(1);
             if (outcome === "pending") await held.release?.();
