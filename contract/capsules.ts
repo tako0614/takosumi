@@ -933,6 +933,12 @@ export interface CapsuleAppUninstall {
    */
   readonly recoveryConnectionIds?: readonly string[];
   /**
+   * Logical recovery IDs whose effective connection is known to be unavailable for a
+   * manual replacement Plan. Owner-only and tied to the current applied state.
+   * An omitted list means no such availability observation was made.
+   */
+  readonly unavailableRecoveryConnectionIds?: readonly string[];
+  /**
    * All stored connection IDs used by an ordinary Destroy with exact applied
    * provenance. An omitted list leaves the connection scope unknown.
    */

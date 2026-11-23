@@ -1588,12 +1588,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement"] as const) test({
+    for (const scenario of ["states", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
       lostReplacementResponse: "a lost replacement Plan response leaves its saved uninstall review reachable",
       lostReplacementOnInstalledApp: "a lost replacement Plan response leaves its saved uninstall review reachable on an installed app",
       partialRecovery: "a partial uninstall can replace more than the unavailable original connection",
+      effectiveRequiredNoOption: "a failed uninstall cannot review another replacement while its effective key has no alternative",
+      effectiveRequiredWithOption: "a failed uninstall requires the effective unavailable key even when another replacement is selected",
+      effectiveHealthyOptional: "a prior effective key can keep a revoked original without forcing its replacement",
       unusedUnavailable: "uninstall replacement only asks for unavailable connections used by the applied plan",
       unusedOnlyUnavailable: "ordinary uninstall proceeds when only an unused saved alias is unavailable",
       firstRemovalRefusal: "a refused first uninstall refreshes the app and offers a replacement connection",
@@ -1607,6 +1610,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const lostReplacementResponse = scenario === "lostReplacementResponse" || lostReplacementOnInstalledApp;
       const staleUninstallReview = scenario === "staleReview" || lostReplacementResponse;
       const partialRecovery = scenario === "partialRecovery";
+      const effectiveRequiredNoOption = scenario === "effectiveRequiredNoOption";
+      const effectiveRequiredWithOption = scenario === "effectiveRequiredWithOption";
+      const effectiveHealthyOptional = scenario === "effectiveHealthyOptional";
+      const effectiveRecovery = effectiveRequiredNoOption || effectiveRequiredWithOption || effectiveHealthyOptional;
       const unusedUnavailable = scenario === "unusedUnavailable";
       const unusedOnlyUnavailable = scenario === "unusedOnlyUnavailable";
       const firstRemovalRefusal = scenario === "firstRemovalRefusal";
@@ -1639,7 +1646,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const NAME = "State Echo";
       const now = "2026-10-20T00:00:00.000Z";
       type Scene = "uninstall_scheduled" | "uninstall_immediate" | "uninstall_failed" | "uninstall_stale_review" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
-      let scene: Scene = partialRecovery ? "uninstall_failed"
+      let scene: Scene = partialRecovery || effectiveRecovery ? "uninstall_failed"
         : firstRemovalRefusal || unusedUnavailable || unusedOnlyUnavailable || noReplacement ? "uninstall_immediate"
           : staleUninstallReview || openReviewFailure ? "uninstall_stale_review" : "uninstall_scheduled";
       let connectionRemoved = noReplacement;
@@ -1744,10 +1751,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               state: "needs_attention", primaryAction: "retry", screens: [screen],
               latestRun: failedRemoval,
               problems: [
-                ...(partialRecovery ? [connectionProblem] : []),
+                ...(partialRecovery || effectiveRequiredWithOption || effectiveHealthyOptional ? [connectionProblem] : []),
+                ...(effectiveRequiredNoOption ? [{ ...connectionProblem, provider: "registry.opentofu.org/hashicorp/aws", connectionId: "conn_aws_required" }] : []),
                 { code: "run_failed", severity: "error", runId: failedRemoval.id, runType: "destroy_apply" },
               ],
-              uninstall: { mode: "none", impact: { usedBy: [] } },
+              uninstall: {
+                mode: "none", impact: { usedBy: [] },
+                ...(effectiveRecovery ? { unavailableRecoveryConnectionIds: effectiveRequiredNoOption
+                  ? ["conn_aws_required"] : effectiveRequiredWithOption ? ["conn_removed"] : [] } : {}),
+              },
             });
           case "uninstall_stale_review":
             return appView(ID, NAME, {
@@ -1870,7 +1882,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           return route.fulfill({ json: { status: "verified" } });
         }
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
-          { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: partialRecovery || (firstRemovalRefusal && connectionRemoved) || unusedUnavailable || noReplacement ? "revoked" : "verified" },
+          { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: partialRecovery || effectiveRequiredWithOption || effectiveHealthyOptional || (firstRemovalRefusal && connectionRemoved) || unusedUnavailable || noReplacement ? "revoked" : "verified" },
           ...(replacementAvailable ? [{ id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: replacementVerified ? "verified" : "pending",
             ...(firstRemovalRefusal ? cloudflareAccount(replacementAccountId, "fixture-team") : {}),
           }] : []),
@@ -1882,7 +1894,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             scope: "personal", status: "verified", scopeHints: cloudflareAccount(otherAccountId, "other-team").scopeHints,
           }] : []),
           { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
-          { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "verified" },
+          { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: effectiveRequiredNoOption ? "expired" : "verified" },
+          ...(effectiveRequiredNoOption ? [{ id: "conn_aws_required", displayName: "Required AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "revoked" }] : []),
           ...(unusedUnavailable || unusedOnlyUnavailable ? [{ id: "conn_unused", displayName: "Unused alias connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" }] : []),
           ...(scene === "uninstall_failed" ? [{
             id: "conn_second", displayName: "Secondary Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: "verified",
@@ -1979,6 +1992,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             bindings: [
               { connectionId: "conn_removed", provider: connectionProblem.provider },
               { connectionId: "conn_second", provider: connectionProblem.provider, rootAlias: "secondary" },
+              ...(effectiveRequiredNoOption ? [{ connectionId: "conn_aws_required", provider: "registry.opentofu.org/hashicorp/aws" }] : []),
             ],
           } } });
         }
@@ -2185,6 +2199,55 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             { connectionId: "conn_second", replacementConnectionId: "conn_saved" },
           ],
         }]);
+        expect(errors).toEqual([]);
+        traffic.assertNoFailures();
+        return;
+      }
+
+      if (effectiveRecovery) {
+        await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+        const failed = problems.locator('[data-problem="uninstall"]');
+        await failed.getByRole("button", { name: "Choose connection for uninstall" }).click();
+        const recovery = failed.getByRole("button", { name: "Review removal" });
+        const original = failed.getByRole("combobox", { name: /Original Cloudflare connection/ });
+        const secondary = failed.getByRole("combobox", { name: /Secondary Cloudflare connection/ });
+        await expect(recovery).toBeDisabled();
+        if (effectiveRequiredNoOption) {
+          await expect(failed.getByRole("group", { name: /Required AWS connection/ }))
+            .toContainText("No verified connection is available to select.");
+          await expect(failed.getByRole("link", { name: "View cloud connections" })).toBeVisible();
+          await original.selectOption("conn_saved");
+          await expect(recovery).toBeDisabled();
+          expect(replacementPlanBodies).toEqual([]);
+          expect(seenMutations).toEqual([]);
+        } else if (effectiveRequiredWithOption) {
+          await secondary.selectOption("conn_saved");
+          await expect(recovery).toBeDisabled();
+          expect(replacementPlanBodies).toEqual([]);
+          await original.selectOption("conn_saved");
+          await expect(recovery).toBeEnabled();
+          await recovery.click();
+          await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+          expect(replacementPlanBodies).toEqual([{
+            destroyProviderConnectionReplacements: [
+              { connectionId: "conn_removed", replacementConnectionId: "conn_saved" },
+              { connectionId: "conn_second", replacementConnectionId: "conn_saved" },
+            ],
+          }]);
+        } else {
+          // The server says the prior effective replacement is healthy even
+          // though the stored original still appears as revoked in Problems.
+          await secondary.selectOption("conn_saved");
+          await expect(recovery).toBeEnabled();
+          await recovery.click();
+          await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+          expect(replacementPlanBodies).toEqual([{
+            destroyProviderConnectionReplacements: [
+              { connectionId: "conn_second", replacementConnectionId: "conn_saved" },
+            ],
+          }]);
+        }
+        expect(failedUninstallBindingReads).toBe(1);
         expect(errors).toEqual([]);
         traffic.assertNoFailures();
         return;

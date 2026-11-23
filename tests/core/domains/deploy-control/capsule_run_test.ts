@@ -14211,7 +14211,27 @@ test.each(["1", "2", "2-selective", "1-original", "1-original-repeat"] as const)
   }
 
   if (useOriginal) {
+    const owner = { ...ownership, role: "owner" as const };
+    const beforeRead = { plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mints.length };
+    await store.putConnection({ ...original, status: "revoked" });
+    expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, owner)).toEqual({
+      requiredConnectionIds: [original.id],
+      recoveryConnectionIds: [original.id],
+      unavailableRecoveryConnectionIds: [],
+    });
+    await store.putConnection(original);
     await store.putConnection({ ...firstReplacement, status: "revoked" });
+    expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, owner)).toEqual({
+      requiredConnectionIds: [original.id],
+      recoveryConnectionIds: [original.id],
+      unavailableRecoveryConnectionIds: [original.id],
+    });
+    expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, {
+      ...owner,
+      ownershipEpoch: owner.ownershipEpoch + 1,
+    })).not.toHaveProperty("unavailableRecoveryConnectionIds");
+    expect({ plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mints.length }).toEqual(beforeRead);
+
     const { handleCapsules } = await import("../../../../accounts/service/src/control/capsules.ts");
     const { InMemoryAccountsStore } = await import("../../../../accounts/service/src/store.ts");
     const { controllerErrorResponse } = await import("../../../../accounts/service/src/control/shared.ts");

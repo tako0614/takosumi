@@ -61,7 +61,7 @@ import type {
   WorkspaceRole,
   WorkspaceType,
 } from "takosumi-contract/workspaces";
-import type { AppAccessResolver } from "takosumi-contract/app-access";
+import type { AppAccess, AppAccessResolver } from "takosumi-contract/app-access";
 import type { AppOwnershipStore } from "../../../core/domains/app-ownership/store.ts";
 import type { AppViewerLists } from "../../../core/domains/app-ownership/list-visibility.ts";
 import type { Project } from "takosumi-contract/projects";
@@ -743,9 +743,11 @@ export interface ControlPlaneOperations {
   /** Value-free teardown and replacement targets for one app/state snapshot. */
   listCapsuleAppliedDestroyConnectionIds?(
     capsule: Capsule,
+    owner?: AppAccess,
   ): Promise<{
     readonly requiredConnectionIds: readonly string[];
     readonly recoveryConnectionIds: readonly string[];
+    readonly unavailableRecoveryConnectionIds?: readonly string[];
   } | undefined>;
   /**
    * Reads the internal PlanRun projection by id. The control surface uses it to

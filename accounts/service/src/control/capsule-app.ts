@@ -4,6 +4,7 @@ import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsul
 import { capsuleInstallConfigReAdoptionAuthoritySnapshot } from "./install-config-re-adoptions.ts";
 import { matchesCurrentRevision, revisionTargetIdentity } from "./install-config-re-adoption-context.ts";
 import { sameGitName } from "./revision-plans.ts";
+import type { AppAccess } from "takosumi-contract/app-access";
 /**
  * Per-app reads for the installed-app page (TASK-0115):
  *
@@ -145,6 +146,7 @@ export async function handleCapsuleApp(
   ctx: ControlDispatchContext,
   capsule: Capsule,
   method: string,
+  owner?: AppAccess,
 ): Promise<Response> {
   if (method !== "GET") return methodNotAllowed("GET");
   // The newest lifecycle Run decides the state; without the per-Capsule Run
@@ -152,7 +154,7 @@ export async function handleCapsuleApp(
   if (typeof ctx.operations.listCapsuleRunsPage !== "function") {
     return controlPlaneUnavailable();
   }
-  const app = await readCapsuleAppView(ctx, capsule, Date.now());
+  const app = await readCapsuleAppView(ctx, capsule, Date.now(), owner);
   return json({ app } satisfies CapsuleAppResponse, 200, {
     "cache-control": "no-store",
   });
@@ -248,6 +250,7 @@ export async function readCapsuleAppView(
   ctx: ControlDispatchContext,
   capsule: Capsule,
   now: number,
+  owner?: AppAccess,
 ): Promise<CapsuleAppView> {
   const { operations } = ctx;
   const [overview, source, adopted] = await Promise.all([
@@ -271,7 +274,7 @@ export async function readCapsuleAppView(
     optional(async () => new Map(await Promise.all([...overview.linkedApps.values()].map(async (app) =>
       [app.id, await linkedAppDisplay(ctx, app)] as const)))),
     readDestroyIds && needsDestroyIds
-      ? optional(() => readDestroyIds.call(operations, capsule))
+      ? optional(() => readDestroyIds.call(operations, capsule, owner))
       : undefined,
   ]);
   if (source.failed || adopted.failed) incomplete.add("version");
