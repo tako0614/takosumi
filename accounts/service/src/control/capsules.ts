@@ -460,7 +460,10 @@ export async function handleCapsules(
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
     if (leaf === "app" && segments.length === 3) {
-      return await handleCapsuleApp(ctx, capsule, method);
+      const owner = directUninstallRequester && ctx.session.uninstallRequester?.subject === actor &&
+        auth.authority === "app" && auth.access.role === "owner" && auth.access.ownerAccountId === actor
+        ? auth.access : undefined;
+      return await handleCapsuleApp(ctx, capsule, method, owner);
     }
     if (leaf === "activity" && segments.length === 3) {
       return await handleCapsuleActivity(ctx, capsule, method);

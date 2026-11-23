@@ -2103,8 +2103,8 @@ export class OpenTofuController {
       : undefined;
   }
 
-  async listCapsuleAppliedDestroyConnectionIds(capsule: Capsule) {
-    return await this.#runEngine.listCapsuleAppliedDestroyConnectionIds(capsule);
+  async listCapsuleAppliedDestroyConnectionIds(...args: Parameters<RunEngine["listCapsuleAppliedDestroyConnectionIds"]>) {
+    return await this.#runEngine.listCapsuleAppliedDestroyConnectionIds(...args);
   }
 
   async getCurrentOutput(capsuleId: string): Promise<OutputResponse> {

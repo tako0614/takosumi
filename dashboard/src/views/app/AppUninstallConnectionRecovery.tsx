@@ -48,6 +48,8 @@ export default function AppUninstallConnectionRecovery(props: {
     return { verified, connections, bindings: bindingSet?.bindings ?? [] };
   });
   const available = () => inventory.state === "ready" ? inventory() : undefined;
+  const unavailableIds = createMemo(() => new Set(props.mode === "unavailable"
+    ? [] : props.app.uninstall.unavailableRecoveryConnectionIds ?? []));
   const options = (provider: string, originalConnectionId: string) =>
     (available()?.verified ?? []).filter((connection) =>
       connection.id !== originalConnectionId && sameProviderSource(provider, connection.providerSource));
@@ -65,8 +67,8 @@ export default function AppUninstallConnectionRecovery(props: {
       if (props.app.uninstall.recoveryConnectionIds !== undefined &&
         !props.app.uninstall.recoveryConnectionIds.includes(connectionId)) continue;
       const original = originals.get(connectionId);
-      if ((original && (original.scope === "operator" || !sameProviderSource(provider, original.providerSource))) ||
-        options(provider, connectionId).length === 0) continue;
+      if (original && (original.scope === "operator" || !sameProviderSource(provider, original.providerSource))) continue;
+      if (options(provider, connectionId).length === 0 && !unavailableIds().has(connectionId)) continue;
       rows.set(connectionId, {
         connectionId,
         provider,
@@ -82,7 +84,9 @@ export default function AppUninstallConnectionRecovery(props: {
       return replacementConnectionId && options(provider, connectionId).some((connection) => connection.id === replacementConnectionId)
         ? [{ connectionId, replacementConnectionId }] : [];
     });
-    return selected.length > 0 && (props.mode !== "unavailable" || selected.length === rows().length)
+    return selected.length > 0 &&
+      (props.mode !== "unavailable" || selected.length === rows().length) &&
+      [...unavailableIds()].every((connectionId) => selected.some((row) => row.connectionId === connectionId))
       ? selected : undefined;
   });
 
@@ -99,25 +103,30 @@ export default function AppUninstallConnectionRecovery(props: {
             <p role="alert">{t("app.uninstall.replacementLoadFailed")}</p>
             <Button variant="secondary" type="button" onClick={() => void refetch()}>{t("common.retry")}</Button>
           </Match>
-          <Match when={inventory.state === "ready" && (rows().length === 0 || rows().some(({ provider, connectionId }) => options(provider, connectionId).length === 0))}>
+          <Match when={inventory.state === "ready" && (rows().length === 0 ||
+            (props.mode === "unavailable" && rows().some(({ provider, connectionId }) => options(provider, connectionId).length === 0)))}>
             <p>{t("app.uninstall.noReplacement")}</p>
           </Match>
           <Match when={inventory.state === "ready"}>
             <p>{t("app.uninstall.replacementHint")}</p>
             <For each={rows()}>{({ connectionId, provider, label }) => (
-              <FormField label={label}>
-                <Select value={selection().get(connectionId) ?? ""} disabled={props.disabled} onChange={(event) =>
-                  setSelection(new Map(selection()).set(connectionId, event.currentTarget.value))}>
-                  <option value="">{t(props.mode !== "unavailable" && rows().length > 1
-                    ? "app.uninstall.keepConnection"
-                    : "app.uninstall.replacementPlaceholder")}</option>
-                  <For each={options(provider, connectionId)}>{(connection) => (
-                    <option value={connection.id}>
-                      {replacementConnectionLabel(connection)}
-                    </option>
-                  )}</For>
-                </Select>
-              </FormField>
+              <Show when={options(provider, connectionId).length > 0} fallback={
+                <FormField label={label} as="group"><p>{t("app.uninstall.noReplacement")}</p></FormField>
+              }>
+                <FormField label={label}>
+                  <Select value={selection().get(connectionId) ?? ""} disabled={props.disabled} onChange={(event) =>
+                    setSelection(new Map(selection()).set(connectionId, event.currentTarget.value))}>
+                    <option value="">{t(props.mode !== "unavailable" && !unavailableIds().has(connectionId) && rows().length > 1
+                      ? "app.uninstall.keepConnection"
+                      : "app.uninstall.replacementPlaceholder")}</option>
+                    <For each={options(provider, connectionId)}>{(connection) => (
+                      <option value={connection.id}>
+                        {replacementConnectionLabel(connection)}
+                      </option>
+                    )}</For>
+                  </Select>
+                </FormField>
+              </Show>
             )}</For>
             <Button variant="primary" type="button" disabled={props.disabled || !replacements()} onClick={() => {
               const selected = replacements();

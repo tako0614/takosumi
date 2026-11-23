@@ -45,6 +45,7 @@ import type {
   RunnerSecretExposurePolicy,
 } from "@takosumi/internal/deploy-control-api";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
+import type { AppAccess } from "takosumi-contract/app-access";
 import type {
   PrivateRunFileDispatch,
   PrivateRunFileGrantMinter,
@@ -6791,9 +6792,11 @@ export class RunEngine {
   /** Read the exact teardown scope without resolving or minting keys. */
   async listCapsuleAppliedDestroyConnectionIds(
     capsule: Capsule,
+    owner?: AppAccess,
   ): Promise<{
     readonly requiredConnectionIds: readonly string[];
     readonly recoveryConnectionIds: readonly string[];
+    readonly unavailableRecoveryConnectionIds?: readonly string[];
   } | undefined> {
     if (!capsule.sourceId || capsule.status === "destroyed") return undefined;
     const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
@@ -6811,20 +6814,31 @@ export class RunEngine {
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections: this.#allowOperatorScopedProviderConnections,
     });
-    const ids = await this.#connectionsService.listAppliedDestroyConnectionIds(
+    const includeAvailability = owner?.role === "owner" && owner.capsuleId === capsule.id;
+    const scope = await this.#connectionsService.listAppliedDestroyConnectionIds(
       capsule,
       requirements,
+      includeAvailability ? {
+        appliedReplacements: appliedPlan.destroyConnectionRecovery?.replacements,
+        now: this.#now(),
+      } : undefined,
     );
-    const current = await this.#store.getCapsule(capsule.id);
-    return current?.status === capsule.status &&
+    const [current, ownership] = await Promise.all([
+      this.#store.getCapsule(capsule.id),
+      includeAvailability ? this.#appOwnership?.getOwnership(capsule.id).catch(() => undefined) : undefined,
+    ]);
+    if (!(current?.status === capsule.status &&
       current.workspaceId === capsule.workspaceId &&
       current.environment === capsule.environment &&
       current.sourceId === capsule.sourceId &&
       current.installConfigId === capsule.installConfigId &&
       current.currentStateVersionId === capsule.currentStateVersionId &&
-      current.currentStateGeneration === capsule.currentStateGeneration
-      ? ids
-      : undefined;
+      current.currentStateGeneration === capsule.currentStateGeneration)) return;
+    if (owner && ownership?.capsuleId === capsule.id &&
+      ownership.ownerAccountId === owner.ownerAccountId && ownership.ownershipEpoch === owner.ownershipEpoch) {
+      return scope;
+    }
+    return { requiredConnectionIds: scope.requiredConnectionIds, recoveryConnectionIds: scope.recoveryConnectionIds };
   }
 
   async #resolveDestroyConnectionRecovery(

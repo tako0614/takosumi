@@ -407,9 +407,21 @@ test("uninstall recovery targets come from current state, and all connection iss
   expect(view.latestRun?.id).toBe("destroy_later");
   expect(view.uninstall.requiredConnectionIds).toEqual([appliedId]);
   expect(view.uninstall.recoveryConnectionIds).toEqual([appliedId]);
+  expect(view.uninstall).not.toHaveProperty("unavailableRecoveryConnectionIds");
   expect(view.problems
     .filter((problem) => problem.code === "connection_unavailable")
     .map((problem) => problem.connectionId).sort()).toEqual([appliedId, unusedId]);
+
+  expect(await h.core.appOwnership.initializeOwnershipIfMissing({
+    capsuleId: CAPSULE, ownerAccountId: OWNER, ownershipEpoch: 1,
+    managementState: "active", managementEpoch: 1, storageRoot: `apps/${CAPSULE}`,
+  })).toBe(true);
+  expect((await h.app()).uninstall.unavailableRecoveryConnectionIds).toEqual([appliedId]);
+  expect(await h.core.appOwnership.putMember({
+    capsuleId: CAPSULE, accountId: STRANGER, status: "active",
+    createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
+  })).toBe(true);
+  expect((await h.app(h.stranger)).uninstall).not.toHaveProperty("unavailableRecoveryConnectionIds");
 
   await h.ledger.putConnection({
     id: appliedId,
@@ -426,11 +438,13 @@ test("uninstall recovery targets come from current state, and all connection iss
   const operatorBindingView = await h.app();
   expect(operatorBindingView.uninstall.requiredConnectionIds).toEqual([appliedId]);
   expect(operatorBindingView.uninstall.recoveryConnectionIds).toEqual([]);
+  expect(operatorBindingView.uninstall.unavailableRecoveryConnectionIds).toEqual([]);
 
   await h.ledger.putPlanRun({ ...applied, requiredProviderRequirements: undefined });
   const legacyView = await h.app();
   expect(legacyView.uninstall.requiredConnectionIds).toBeUndefined();
   expect(legacyView.uninstall.recoveryConnectionIds).toEqual([]);
+  expect(legacyView.uninstall).not.toHaveProperty("unavailableRecoveryConnectionIds");
 });
 
 test("app connection issues include the canonical owner's personal connections", async () => {
