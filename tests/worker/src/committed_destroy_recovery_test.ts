@@ -286,7 +286,7 @@ async function fixture(options: {
     operations, { action: "apply", runId: run.id, workspaceId: run.workspaceId }, { deadlineAt: Date.now() + 5_000 },
   );
   providerFetch.mockClear();
-  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, providerFetch, validateUninstallRequester };
+  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, providerFetch, validateUninstallRequester, vault };
 }
 
 for (const persistedFailure of [false, true]) {
@@ -384,6 +384,93 @@ test.each([false, true])("an approved same-account replacement Destroy settles o
     expect(f.inspect.mock.calls).toEqual([[f.run.id, "destroy"]]);
     expect(f.adopt).toHaveBeenCalledTimes(1);
     expect(f.fetch).not.toHaveBeenCalled();
+    expect(f.providerFetch).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  } finally {
+    mint.mockRestore();
+    destroy.mockRestore();
+  }
+});
+
+test.each([false, true])("a completed replacement Destroy settles after local revocation (persisted failure: %s)", async (persistedFailure) => {
+  const f = await fixture({
+    replacement: true,
+    persistedFailure,
+    afterWorkerUpdate: true,
+    admittedExecutionAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  });
+  expect(await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null)).toBe(true);
+  expect(await f.store.getConnection(f.replacement!.replacementConnectionId)).toBeUndefined();
+  const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+  const destroy = spyOn(f.runner, "destroy");
+  try {
+    await f.dispatch();
+    expect(await f.store.getApplyRun(f.run.id)).toMatchObject({
+      status: persistedFailure ? "failed" : "succeeded", stateVersionId: f.stateVersionId,
+    });
+    expect(await f.store.getCapsule(f.capsule.id)).toMatchObject({
+      status: persistedFailure ? "error" : "destroyed", currentStateGeneration: 2,
+    });
+    expect(f.adopt).toHaveBeenCalledTimes(1);
+    await f.dispatch();
+    expect(f.adopt).toHaveBeenCalledTimes(1);
+    expect(f.providerFetch).not.toHaveBeenCalled();
+    expect(f.fetch).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  } finally {
+    mint.mockRestore();
+    destroy.mockRestore();
+  }
+});
+
+test.each(["legacy", "credential policy", "workspace owner"] as const)(
+  "a deleted replacement holds when the admitted binding context cannot be proved (%s)",
+  async (change) => {
+    const f = await fixture({ replacement: true });
+    await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null);
+    if (change === "legacy") {
+      const { destroyReceiptBindingProof: _proof, ...legacyInputs } =
+        (await f.store.getPlanRunInputs(f.planRun.id))!;
+      await f.store.putPlanRunInputs(legacyInputs);
+      await f.store.putPlanRun({
+        ...f.planRun,
+        executionInputsDigest: await stableJsonDigest(planRunExecutionInputsDigestMaterial(legacyInputs)),
+      });
+    } else {
+      const workspace = (await f.store.getWorkspace(f.capsule.workspaceId))!;
+      await f.store.putWorkspace(change === "workspace owner"
+        ? { ...workspace, ownerUserId: "different_account" }
+        : { ...workspace, policy: { providerCredentials: {
+            forbiddenConnectionIds: [f.replacement!.replacementConnectionId],
+          } } });
+    }
+    await expectHeld(f, 0);
+    expect(f.providerFetch).not.toHaveBeenCalled();
+  },
+);
+
+test("deleting the selected replacement cannot authorize a receipt for another Plan", async () => {
+  const f = await fixture({
+    replacement: true,
+    changeReceipt: receipt => { receipt.executionEvidence = { ...receipt.executionEvidence as object, planRunId: "another-plan" }; },
+  });
+  await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null);
+  await expectHeld(f, 1);
+});
+
+test("a bound replacement proof cannot dispatch a queued Destroy after revocation", async () => {
+  const f = await fixture({ replacement: true, phase: "queued" });
+  await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null);
+  const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+  const destroy = spyOn(f.runner, "destroy");
+  try {
+    await f.dispatch();
+    expect(await f.store.getApplyRun(f.run.id)).toMatchObject({ status: "failed" });
+    expect(await f.store.getCapsule(f.capsule.id)).toMatchObject({ currentStateGeneration: 1 });
+    expect(f.inspect).not.toHaveBeenCalled();
+    expect(f.adopt).not.toHaveBeenCalled();
     expect(f.providerFetch).not.toHaveBeenCalled();
     expect(mint).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();

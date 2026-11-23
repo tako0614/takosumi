@@ -583,6 +583,8 @@ export interface PlanRunInputs {
   readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
   /** Exact value-free service declaration; grants are minted per winning Run. */
   readonly privateRunFileSlots?: readonly { readonly slot: string }[];
+  /** Non-secret binding proof usable only for a completed manual Destroy receipt. */
+  readonly destroyReceiptBindingProof?: import("../connections/mod.ts").DestroyReceiptBindingProof;
   /** Read-only legacy envelope retained for historical PlanRun rows. */
   readonly sealed?: LegacySealedPlanRunInputs;
 }
