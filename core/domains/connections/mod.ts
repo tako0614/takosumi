@@ -670,8 +670,7 @@ export class ConnectionsService {
       const replacementId = replacements.get(bindingId);
       if (replacementId === undefined) continue;
       if (entry.connection.id !== replacementId) refuse();
-      if (entry.connection.expiresAt !== undefined &&
-        (!Number.isFinite(Date.parse(entry.connection.expiresAt)) || Date.parse(entry.connection.expiresAt) <= Date.parse(this.#now()))) refuse();
+      if (!verifiedConnectionExpiryAllowsUse(entry.connection, this.#now())) refuse();
       if (entry.connection.scope === "operator") refuse();
       if (!input.hasVerifiedAccountScope(entry.connection)) refuse("replacement_unverified");
     }
@@ -767,6 +766,7 @@ export class ConnectionsService {
     readonly capsule: Capsule;
     readonly requiredProviders: readonly RequiredProviderBindingIdentity[];
     readonly replacements: readonly DestroyProviderConnectionReplacement[];
+    readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
     readonly proof: DestroyReceiptBindingProof;
   }): Promise<boolean> {
     const replacements = new Map(input.replacements.map(row => [row.connectionId, row.replacementConnectionId]));
@@ -780,6 +780,8 @@ export class ConnectionsService {
     if (ids.size !== fingerprints.size || [...ids].some(id => !fingerprints.has(id))) return false;
 
     const selectedReplacements = new Set(replacements.values());
+    const unchangedIds = new Set(bindings.filter(binding => !replacements.has(binding.connectionId))
+      .map(binding => binding.connectionId));
     const rows = await Promise.all([...ids].map(async id => ({
       id,
       connection: this.#operatorProviderConnections.get(id) ?? await this.#store.getConnection(id),
@@ -788,8 +790,11 @@ export class ConnectionsService {
     for (const { id, connection } of rows) {
       if (connection) {
         if (await stableJsonDigest(connection) !== fingerprints.get(id)) return false;
+        if (selectedReplacements.has(id) &&
+          (!verifiedConnectionExpiryAllowsUse(connection, this.#now()) ||
+            !input.hasVerifiedAccountScope(connection))) return false;
       } else {
-        if (!selectedReplacements.has(id)) return false;
+        if (!selectedReplacements.has(id) || unchangedIds.has(id)) return false;
         deletedReplacement = true;
       }
     }
@@ -1314,6 +1319,10 @@ function connectionUsableForProviderBinding(
   connection: ProviderConnection,
 ): boolean {
   return connection.status === "verified";
+}
+
+function verifiedConnectionExpiryAllowsUse(connection: ProviderConnection, now: string): boolean {
+  return connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.parse(now);
 }
 
 /** Collects the connection ids a run's vault-backed credential mint may draw from. */

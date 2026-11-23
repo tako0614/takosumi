@@ -10792,6 +10792,7 @@ export class RunEngine {
       capsule,
       requiredProviders: providerBindingResolutionRequirements(plan.requiredProviderRequirements, profile),
       replacements: recovery.replacements,
+      hasVerifiedAccountScope: this.#hasVerifiedAccountScope,
       proof,
     });
   }
