@@ -3102,7 +3102,7 @@ export class RunEngine {
           runnerProfile,
         ),
         destroyConnectionRecovery,
-        true,
+        { captureCredentialDelivery: true },
       );
       const credentialDelivery = destroyConnectionCredentialDelivery(bindings);
       if (credentialDelivery.length) {
@@ -6841,7 +6841,10 @@ export class RunEngine {
     capsule: Capsule,
     requiredProviders: readonly CapsuleProviderRequirement[],
     recovery: NonNullable<PlanRun["destroyConnectionRecovery"]>,
-    captureCredentialDelivery = false,
+    options: {
+      readonly captureCredentialDelivery?: boolean;
+      readonly evidencePurpose?: "retirement";
+    } = {},
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
     if (!appliedPlan || appliedPlan.id !== recovery.appliedPlanRunId ||
@@ -6866,10 +6869,10 @@ export class RunEngine {
       replacements: recovery.replacements, hasVerifiedAccountScope: this.#hasVerifiedAccountScope,
       preserveCredentialDelivery: this.#preserveDestroyCredentialDelivery,
       resolveRevokedCredentialEvidence: (connectionId) =>
-        this.#revokedDestroyCredentialEvidence(capsule, appliedPlan, connectionId),
+        this.#revokedDestroyCredentialEvidence(capsule, appliedPlan, connectionId, options.evidencePurpose),
       recoverRevokedCredentialShape: this.#recoverRevokedDestroyCredentialShape,
       credentialDelivery: recovery.credentialDelivery,
-      captureCredentialDelivery,
+      captureCredentialDelivery: options.captureCredentialDelivery,
       ...(appliedPlan.destroyConnectionRecovery !== undefined
         ? { appliedPlanRecovery: appliedPlan.destroyConnectionRecovery }
         : {}),
@@ -6880,8 +6883,10 @@ export class RunEngine {
     capsule: Capsule,
     appliedPlan: PlanRun,
     connectionId: string,
+    purpose?: "retirement",
   ): Promise<ProviderConnectionResolutionEvidence | undefined> {
-    if (appliedPlan.operation === "destroy" || appliedPlan.destroyConnectionRecovery) return;
+    const partialDestroy = appliedPlan.operation === "destroy";
+    if (!partialDestroy && appliedPlan.destroyConnectionRecovery !== undefined) return;
     const [state, ownership] = await Promise.all([
       this.#currentStateVersionForCapsule(capsule),
       this.#appOwnership?.getOwnership(capsule.id),
@@ -6889,13 +6894,29 @@ export class RunEngine {
     if (!state || ownership?.capsuleId !== capsule.id ||
       appliedPlan.ownershipEpoch !== ownership.ownershipEpoch) return;
     const apply = await this.#store.getApplyRun(state.createdByRunId);
-    if (apply?.status !== "succeeded" || appliedPlan.appliedApplyRunId !== apply.id ||
+    if (!apply || apply.status !== (partialDestroy ? "failed" : "succeeded") ||
+      appliedPlan.appliedApplyRunId !== apply.id ||
       !applyRunMatchesStateVersion(capsule, state, apply) ||
       !planRunMatchesAppliedState(capsule, state, apply, appliedPlan) ||
       apply.expected.resolvedProviderBindingsDigest !== appliedPlan.resolvedProviderBindingsDigest) return;
-    const approvedBy = apply.approval?.approvedBy ?? appliedPlan.createdBy;
+    const approvedBy = partialDestroy
+      ? appliedPlan.approval?.approvedBy
+      : apply.approval?.approvedBy ?? appliedPlan.createdBy;
+    if (partialDestroy) {
+      // Only a manually approved Destroy with an exact persisted partial
+      // result can supply the prior shape. An unknown result supplies none.
+      if (appliedPlan.origin?.kind === "scheduled_uninstall" || appliedPlan.createdBy === "system:scheduled-uninstall" ||
+        approvedBy !== ownership.ownerAccountId ||
+        (apply.approval !== undefined && apply.approval.approvedBy !== approvedBy)) return;
+      const witnessedPlan = await readPersistedProviderPartialDestroyPlan(
+        this.#store, apply.id, capsule, state.id, purpose,
+      );
+      if (witnessedPlan?.id !== appliedPlan.id ||
+        witnessedPlan.resolvedProviderBindingsDigest !== appliedPlan.resolvedProviderBindingsDigest) return;
+    }
+    const phase = partialDestroy ? "destroy" : "apply";
     const mints = (await this.#store.listCredentialMintEventsForRun(apply.id))
-      .filter((event) => event.phase === "apply" && event.connectionId === connectionId);
+      .filter((event) => event.phase === phase && event.connectionId === connectionId);
     const [mint] = mints;
     if (mints.length !== 1 || !mint || !approvedBy || mint.actorAccountId !== approvedBy ||
       mint.runId !== apply.id || mint.capsuleId !== capsule.id || mint.workspaceId !== capsule.workspaceId ||
@@ -12919,6 +12940,7 @@ export class RunEngine {
           { ...capsule, currentStateVersionId: prior.id, currentStateGeneration: prior.generation },
           providerBindingResolutionRequirements(input.planRun.requiredProviderRequirements, profile),
           input.planRun.destroyConnectionRecovery,
+          { evidencePurpose: "retirement" },
         );
       } else {
         resolvedProviderBindings = (await this.#resolveRunProviderBindings(input.planRun)) ?? [];
