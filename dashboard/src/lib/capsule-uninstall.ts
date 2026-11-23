@@ -1,5 +1,6 @@
 import type { Capsule, CapsuleAppView, ProviderConnection } from "./control-api.ts";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
+import { verifiedCloudflareAccountId } from "../../../providers/cloudflare/settings.ts";
 import { isAppRemovalRun } from "./app-access.ts";
 import { runMutationOutcomeUnknown } from "./run-errors.ts";
 import { formatDateTime, t, type MessageKey } from "../i18n/index.ts";
@@ -9,7 +10,7 @@ export function isUninstallReplacementReady(connection: ProviderConnection, now 
   return connection.scope !== "operator" && connection.status === "verified" &&
     (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > now) &&
     (!sameProviderSource(connection.providerSource, "cloudflare/cloudflare") ||
-      connection.credentialVerification?.kind === "takosumi.credential-verification@v1");
+      verifiedCloudflareAccountId(connection) !== undefined);
 }
 
 export function appUninstallConnectionNotice(
