@@ -231,15 +231,33 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
     });
 
-    for (const recoveryCase of ["transport", "read-refused", "server-error", "wrong-ack"] as const) {
+    for (const recoveryCase of ["transport", "read-refused", "server-error", "wrong-ack", "post-retired-401"] as const) {
     test(recoveryCase === "read-refused"
       ? "an individual Run refusal keeps a lost Apply unconfirmed without another mutation"
       : recoveryCase === "server-error"
       ? "an Apply gateway error recovers the exact existing Run with one POST"
       : recoveryCase === "wrong-ack"
       ? "an Apply acknowledgement for another review is reconciled against the original Plan"
+      : recoveryCase === "post-retired-401"
+      ? "a late Apply 401 cannot redirect the replacement Run page"
       : "lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      if (recoveryCase === "post-retired-401") {
+        await page.addInitScript(() => {
+          const fetch = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const response = await fetch(...args);
+            if (response.status === 401 && new URL(response.url).pathname.endsWith("/plan_apply_post-retired-401/apply")) {
+              // Observe the browser after the fetch continuation and any
+              // synchronous sign-in redirect from its 401 handler.
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                document.documentElement.dataset.retiredApplySettled = "true";
+              }));
+            }
+            return response;
+          };
+        });
+      }
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       for (const outcome of recoveryCase !== "transport" ? [recoveryCase] : ["accepted", "absent", "ambiguous", "foreign", "wrong-kind", "wrong-plan", "incomplete", "pending", "retired", "rejected", "normal"] as const) {
@@ -276,6 +294,15 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             if (outcome === "rejected") return route.fulfill({ status: 409, json: { error: "conflict" } });
             if (outcome !== "absent" && acceptedEffects === 0) acceptedEffects += 1;
             if (outcome === "normal") return route.fulfill({ status: 201, json: { run: apply } });
+            if (outcome === "post-retired-401") {
+              await new Promise<void>((resolve) => {
+                held.release = async () => {
+                  await route.fulfill({ status: 401, json: { error: "invalid_token" } });
+                  resolve();
+                };
+              });
+              return;
+            }
             if (outcome === "server-error") return route.fulfill({ status: 503, json: { error: "gateway_unavailable" } });
             if (outcome === "wrong-ack") return route.fulfill({
               status: 201, json: { run: { ...apply, id: unrelatedId, planRunId: "another_plan" } },
@@ -352,6 +379,25 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const allow = page.getByRole("button", { name: "Allow and apply", exact: true });
         await expect(allow).toBeEnabled();
         await allow.click();
+        if (outcome === "post-retired-401") {
+          await expect.poll(() => held.release !== undefined).toBe(true);
+          await page.evaluate((id) => {
+            history.pushState(null, "", `/runs/${id}`);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          }, replacementId);
+          await expect.poll(() => replacementHistoryReads).toBe(1);
+          const settled = Promise.race([
+            page.waitForRequest(request => request.isNavigationRequest() && new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+            page.waitForFunction(() => document.documentElement.dataset.retiredApplySettled === "true").then(() => "stayed"),
+          ]);
+          await held.release?.();
+          expect(await settled).toBe("stayed");
+          await expect(page).toHaveURL(new RegExp(`/runs/${replacementId}$`, "u"));
+          expect(historyAfterApply).toEqual([]);
+          expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
+          await page.unroute("**/api/v1/**");
+          continue;
+        }
         const expectedPosts = outcome === "normal" || outcome === "rejected" || outcome === "server-error" || outcome === "wrong-ack" ? 1 : 2;
         if (outcome === "normal" || outcome === "rejected") {
           await expect.poll(() => attempts).toBe(1);

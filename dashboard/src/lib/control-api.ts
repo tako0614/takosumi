@@ -205,6 +205,7 @@ function controlErrorDetails(body: unknown): unknown {
 
 interface RequestOpts {
   readonly cache?: "no-store";
+  readonly acceptResponseAfterAbort?: boolean;
   readonly isCurrent?: () => boolean;
   readonly method?: string;
   readonly body?: unknown;
@@ -255,9 +256,12 @@ export async function controlFetch<T>(
     ...(opts.cache ? { cache: opts.cache } : {}),
   });
 
-  // Recovery owns a particular UI scope. A late read must not redirect a
-  // replacement screen or clear its ownership cache after that scope retires.
-  throwIfReadRetired(opts);
+  // A late response must not redirect a replacement screen or clear its
+  // ownership cache after the requesting scope retires. Apply also keeps a
+  // received HTTP decision when only its transport deadline has expired.
+  throwIfReadRetired(opts.acceptResponseAfterAbort
+    ? { isCurrent: opts.isCurrent }
+    : opts);
   if (res.status === 401) {
     resetAppOwnershipCache();
     // The control routes share the account-plane session gate. On expiry, send
@@ -3013,12 +3017,14 @@ export async function createApplyRun(
   plan: ApplyReviewRun,
   input: {
     readonly timeoutMs?: number;
+    readonly isCurrent?: () => boolean;
   } = {},
 ): Promise<{ readonly run: Run }> {
   if (!applyRunTypeForReview(plan)) {
     throw new ControlApiError(400, "invalid_apply_plan", "An app Plan is required to create an Apply.");
   }
   const planRunId = plan.id;
+  throwIfReadRetired(input);
   const attempt = async (): Promise<{ readonly run: Run }> => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const controller =
@@ -3034,9 +3040,12 @@ export async function createApplyRun(
         {
           method: "POST",
           signal: controller?.signal,
+          isCurrent: input.isCurrent,
+          acceptResponseAfterAbort: true,
           body: {},
         },
       );
+      throwIfReadRetired(input);
       if (!isRecord(body) || !matchesReviewedApplyRun(plan, body.run)) {
         throw new ControlApiError(
           502,
@@ -3073,6 +3082,7 @@ export async function createApplyRun(
       throw unconfirmed(firstError);
     }
     if (!isApplyRetryableTransportError(firstError)) throw firstError;
+    if (input.isCurrent?.() === false) throw unconfirmed(firstError);
   }
   // Keep the bounded retry for a missing response or timeout on this exact
   // PlanRun. A refusal of that retry does not establish the first outcome.
