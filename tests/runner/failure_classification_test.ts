@@ -61,6 +61,26 @@ test("keeps a provider process startup error in the Plan diagnostics", () => {
   expect(payload.stderr).toBe(stderr);
 });
 
+test("a Plan resource precondition reports a stable code without copying its message into the code", () => {
+  const stderr =
+    "\nError: Resource precondition failed\n\n" +
+    "The fixture's private input was fixture-private-value.\n";
+  const payload = commandFailurePayload(
+    "run_test",
+    "plan",
+    { exitCode: 1, stdout: "", stderr },
+    { env: {}, redactionValues: ["fixture-private-value"] },
+    "plan",
+  );
+
+  expect(payload.errorCode).toBe("opentofu_resource_precondition_failed");
+  expect(payload.stderr).not.toContain("fixture-private-value");
+  expect(classifyOpenTofuFailure(stderr, "apply")).toBeUndefined();
+  expect(
+    classifyOpenTofuFailure("Provider says a Resource precondition failed", "plan"),
+  ).toBe("opentofu_plan_failed");
+});
+
 test("keeps source preparation failures out of infrastructure retries", () => {
   expect(
     classifyOpenTofuFailure(

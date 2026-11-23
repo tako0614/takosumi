@@ -2516,6 +2516,43 @@ test("OpenTofu runner Durable Object normalizes arbitrary non-2xx runner payload
   });
 });
 
+test("OpenTofu runner Durable Object relays the precondition code without module output", async () => {
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      if (request.method === "GET") return Response.json({ status: "ok" });
+      return Response.json(
+        {
+          errorCode: "opentofu_resource_precondition_failed",
+          stdout: "fixture stdout",
+          stderr: "fixture module-authored message",
+          detail: "fixture detail",
+        },
+        { status: 500 },
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_precondition", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_precondition",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    status: "failed",
+    errorCode: "opentofu_resource_precondition_failed",
+    phase: "plan",
+  });
+});
+
 test("OpenTofu runner Durable Object keeps the fixed run-deadline marker on a normalized plan failure", async () => {
   const runner = runnerWithContainer(new FakeR2Bucket(), {
     async containerFetch(request) {

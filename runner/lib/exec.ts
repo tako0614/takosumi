@@ -472,12 +472,18 @@ export type OpenTofuFailureCode =
   | "provider_checksum_mismatch"
   | "opentofu_init_failed"
   | "source_build_failed"
+  | "opentofu_resource_precondition_failed"
   | "opentofu_plan_failed";
 
 export function classifyOpenTofuFailure(
   text: string,
   phase?: "init" | "plan" | "apply" | "runtime",
 ): OpenTofuFailureCode | undefined {
+  // The no-color OpenTofu heading is fixed. The following message belongs
+  // to the module and can contain input values.
+  if (phase === "plan" && /^Error: Resource precondition failed\r?$/mu.test(text)) {
+    return "opentofu_resource_precondition_failed";
+  }
   const normalized = text.toLowerCase();
   if (
     normalized.includes("is denied before opentofu init") ||

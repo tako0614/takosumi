@@ -20,6 +20,7 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   state_generation_mismatch: "runError.stateGenerationMismatch",
   provider_credential_env_conflict: "runError.providerCredentialEnvConflict",
   runner_mutation_indeterminate: "runError.mutationIndeterminate",
+  opentofu_resource_precondition_failed: "runError.resourcePreconditionFailed",
   plan_failed: "runError.planFailed",
   apply_failed: "runError.applyFailed",
   run_failed: "runError.runFailed",
