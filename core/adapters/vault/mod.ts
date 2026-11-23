@@ -2585,6 +2585,8 @@ function mergeCredentialEnv(
         `provider credential env ${name} has conflicting values for provider ${entry.provider}` +
           `${entry.alias ? ` alias ${entry.alias}` : ""}` +
           ` connection ${entry.connectionId}`,
+        undefined,
+        "provider_credential_env_conflict",
       );
     }
     target[name] = value;

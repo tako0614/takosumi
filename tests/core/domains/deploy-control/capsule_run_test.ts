@@ -14033,11 +14033,12 @@ test.each([
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
 
-test.each(["1", "2", "2-selective", "1-original", "1-original-repeat"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
+test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repeat"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
   const selective = variant === "2-selective";
+  const conflictingAlias = variant === "2-conflict";
   const repeatOriginal = variant === "1-original-repeat";
   const useOriginal = variant === "1-original" || repeatOriginal;
-  const bindingCount = variant === "2" || selective ? 2 : 1;
+  const bindingCount = variant === "2" || selective || conflictingAlias ? 2 : 1;
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -14087,8 +14088,9 @@ test.each(["1", "2", "2-selective", "1-original", "1-original-repeat"] as const)
   };
   const original = await register(undefined, "synthetic-original-token");
   const sharedReplacementToken = selective ? "synthetic-shared-replacement-token" : undefined;
+  const differentToken = "synthetic-distinct-same-account-key";
   const firstReplacement = await register(undefined, sharedReplacementToken);
-  const nextReplacement = await register(undefined, sharedReplacementToken);
+  const nextReplacement = await register(undefined, conflictingAlias ? differentToken : sharedReplacementToken);
   const foreign = await register("fedcba9876543210fedcba9876543210");
   const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
   const bindings = originalBinding.bindings.map(binding => ({ ...binding, connectionId: original.id }));
@@ -14360,6 +14362,21 @@ test.each(["1", "2", "2-selective", "1-original", "1-original-repeat"] as const)
     expect(mints).toHaveLength(mintCount);
     await store.putConnection(firstReplacement);
   }
+
+  if (conflictingAlias) {
+    const conflict = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+      destroyProviderConnectionReplacements: [nextSelection[1]!],
+    });
+    const conflictRun = await controller.getRun(conflict.planRun.id);
+    expect(conflictRun).toMatchObject({ status: "failed", errorCode: "provider_credential_env_conflict" });
+    expect(JSON.stringify(conflictRun)).not.toContain(differentToken);
+    expect(await store.listCredentialMintEventsForRun(conflict.planRun.id)).toEqual([]);
+    expect(mints).toHaveLength(mintCount + 1);
+    expect(runner.planJobs).toHaveLength(planCount);
+    expect(runner.destroyJobs).toHaveLength(destroyCount);
+    expect((await store.getCapsule(seeded.capsule.id))?.currentStateVersionId).toBe(partialState!.id);
+  }
+  const mintCountBeforeRetry = mints.length;
   const secondRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
     destroyProviderConnectionReplacements: nextSelection,
   });
@@ -14412,7 +14429,7 @@ test.each(["1", "2", "2-selective", "1-original", "1-original-repeat"] as const)
   omitPriorExecutionEvidence = true;
   expect(await capsuleRunRuntimeSafetyMatches(safetyLedger, safetyInput)).toBe(false);
   expect(runner.destroyJobs).toHaveLength(destroyCountBeforeReceiptProbe);
-  expect(mints).toHaveLength(mintCount + 1);
+  expect(mints).toHaveLength(mintCountBeforeRetry + 1);
   const completed = await controller.createApplyRun({
     planRunId: secondRecovery.planRun.id,
     expected: applyExpectedGuardFromPlanRun(secondRecovery.planRun),

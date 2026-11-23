@@ -2,6 +2,7 @@ import { expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { locale, setLocale, t } from "../../../../../dashboard/src/i18n/index.ts";
 import { installRunNeedsFallbackRead } from "../../../../../dashboard/src/views/new/install-run-polling.ts";
 
 const source = readFileSync(
@@ -64,6 +65,27 @@ test("install failure hint localizes known codes and hides raw codes", () => {
   expect(runFailureHint("apply_failed")).not.toContain("apply_failed");
   expect(runFailureHint("extension_private_failure"))
     .not.toContain("extension_private_failure");
+});
+
+test("shared credential setting conflicts explain an explicit new removal review in both locales", () => {
+  const previous = locale();
+  try {
+    setLocale("en");
+    const english = runFailureHint("provider_credential_env_conflict");
+    expect(english).toBe(t("runError.providerCredentialEnvConflict"));
+    expect(english).toContain("same verified connection");
+    expect(english).toContain("If providers differ");
+    expect(english).toContain("review the change again");
+    expect(english).not.toContain("provider_credential_env_conflict");
+    setLocale("ja");
+    const japanese = runFailureHint("provider_credential_env_conflict");
+    expect(japanese).toBe(t("runError.providerCredentialEnvConflict"));
+    expect(japanese).toContain("同じ確認済み接続");
+    expect(japanese).toContain("プロバイダーが異なる場合");
+    expect(japanese).not.toContain("provider_credential_env_conflict");
+  } finally {
+    setLocale(previous);
+  }
 });
 
 test("waiting approval exposes technical run details before approval", () => {

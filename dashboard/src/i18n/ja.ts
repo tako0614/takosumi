@@ -958,6 +958,8 @@ export const ja = {
     "指定されたバージョンが見つかりませんでした。バージョンを確認して、もう一度お試しください。",
   "runError.stateGenerationMismatch":
     "別の変更が先に適用されました。もう一度内容を確認してから適用してください。",
+  "runError.providerCredentialEnvConflict":
+    "選んだキーが、この実行で共通の設定に異なる値を渡しています。接続を確認し、同じプロバイダーの対象行には同じ確認済み接続を選んでください。プロバイダーが異なる場合は競合する設定を直し、変更内容をもう一度確認してください。",
   "runError.mutationIndeterminate":
     "操作が完了したか確認できません。実行を繰り返す前に、管理者に結果の確認を依頼してください。",
   "runError.planFailed":
