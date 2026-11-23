@@ -14660,11 +14660,13 @@ test("pre-provider Apply refusal leaves initial Capsule pending and retryable", 
 });
 
 const destroyKeyRotationCases = [
-  { originalAuth: "oauth", revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence" },
-  { originalAuth: "api_token", revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare API-token connection requires applied ownership evidence (token-only original)" },
-  { originalAuth: "api_token", revokeBeforePlan: false, name: "Destroy keeps the reviewed replacement key when the original is revoked after approval" },
+  { originalAuth: "oauth", originalIncludesAccount: false, revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence" },
+  { originalAuth: "api_token", originalIncludesAccount: false, revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare API-token connection requires applied ownership evidence (token-only original)" },
+  { originalAuth: "api_token", originalIncludesAccount: false, revokeBeforePlan: false, name: "Destroy keeps the reviewed replacement key when the original is revoked after approval" },
+  { originalAuth: "api_token", originalIncludesAccount: true, revokeBeforePlan: false, name: "Destroy preserves the verified Cloudflare account for a token-only replacement" },
+  { originalAuth: "api_token", originalIncludesAccount: true, revokeBeforePlan: true, name: "Destroy recovers the applied Cloudflare account and token layout after revocation" },
 ] as const;
-for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) test(name, async () => {
+for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of destroyKeyRotationCases) test(name, async () => {
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -14735,7 +14737,10 @@ for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) 
     ...(originalAuth === "oauth" ? { materialization: "oauth" as const } : {}),
     values: originalAuth === "oauth"
       ? { ...originalOAuthValues, CLOUDFLARE_ACCOUNT_ID: accountId }
-      : { CLOUDFLARE_API_TOKEN: originalToken },
+      : {
+        CLOUDFLARE_API_TOKEN: originalToken,
+        ...(originalIncludesAccount ? { CLOUDFLARE_ACCOUNT_ID: accountId } : {}),
+      },
     scopeHints: { providerSettings: { accountId } },
   }, undefined, ownerAccountId);
   expect((await vault.test(original.id, undefined, ownerAccountId)).status).toBe("verified");
@@ -14744,13 +14749,15 @@ for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) 
   expect(verifiedOriginal.credentialRecipe?.authMode).toBe(originalAuth);
   expect(verifiedOriginal.credentialVerification?.verifierId).toBe("cloudflare/account-workers-subdomain@v1");
   expect(verifiedOriginal.scopeHints?.providerSettings).toMatchObject({ accountId, workersSubdomain: "synthetic-team" });
-  expect(verifiedOriginal.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
+  const appliedEnvNames = originalIncludesAccount
+    ? ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]
+    : ["CLOUDFLARE_API_TOKEN"];
+  expect(verifiedOriginal.envNames).toEqual(appliedEnvNames);
 
-  const registerApiToken = async (id: string, selectedAccount: string, zoneId?: string) => {
+  const registerApiToken = async (id: string, selectedAccount: string) => {
     const values = {
       CLOUDFLARE_API_TOKEN: `synthetic-${id}-api-token`,
-      CLOUDFLARE_ACCOUNT_ID: selectedAccount,
-      ...(zoneId ? { CLOUDFLARE_ZONE_ID: zoneId } : {}),
+      ...(originalIncludesAccount ? {} : { CLOUDFLARE_ACCOUNT_ID: selectedAccount }),
     };
     const row = await vault.register({
       scope: "personal",
@@ -14764,7 +14771,9 @@ for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) 
   };
   const replacement = await registerApiToken("same", accountId);
   const foreignAccount = await registerApiToken("different-account", foreignAccountId);
-  expect(replacement.envNames).toEqual(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
+  expect(replacement.envNames).toEqual(originalIncludesAccount
+    ? ["CLOUDFLARE_API_TOKEN"]
+    : ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
 
   const bindingSet = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
   await transitionProviderBindingSetForFixture(store, {
@@ -14793,7 +14802,7 @@ for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) 
   expect(envOf(runner.planJobs[0]!)).toMatchObject({
     CLOUDFLARE_API_TOKEN: originalToken,
   });
-  expect(envOf(runner.planJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  expect(envOf(runner.planJobs[0]!)?.CLOUDFLARE_ACCOUNT_ID).toBe(originalIncludesAccount ? accountId : undefined);
   const initialApply = await controller.createApplyRun({
     planRunId: initialPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(initialPlan.planRun),
@@ -14802,7 +14811,7 @@ for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) 
   expect(envOf(runner.applyJobs[0]!)).toMatchObject({
     CLOUDFLARE_API_TOKEN: originalToken,
   });
-  expect(envOf(runner.applyJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  expect(envOf(runner.applyJobs[0]!)?.CLOUDFLARE_ACCOUNT_ID).toBe(originalIncludesAccount ? accountId : undefined);
 
   const accountsStore = new InMemoryAccountsStore();
   type Operations = import("../../../../accounts/service/src/control-operations.ts").ControlPlaneOperations;
@@ -14875,7 +14884,7 @@ for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) 
   expect(evidence).toEqual([expect.objectContaining({
     connectionId: original.id,
     materialization: originalAuth === "oauth" ? "oauth" : "secret",
-    evidence: expect.objectContaining({ requiredEnvNames: ["CLOUDFLARE_API_TOKEN"] }),
+    evidence: expect.objectContaining({ requiredEnvNames: appliedEnvNames }),
   })]);
   const revokeOriginal = async () => {
     expect(await vault.revoke(original.id, undefined, ownerAccountId)).toBe(true);
@@ -14912,16 +14921,28 @@ for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) 
     connectionId: original.id,
     replacementConnectionId: replacement.id,
   }]);
+  expect(destroyPlan.destroyConnectionRecovery?.credentialDelivery).toEqual([{
+    connectionId: original.id,
+    envNames: appliedEnvNames,
+  }]);
   expect(runner.planJobs).toHaveLength(2);
   expect(envOf(runner.planJobs[1]!)).toMatchObject({
     CLOUDFLARE_API_TOKEN: "synthetic-same-api-token",
   });
-  expect(envOf(runner.planJobs[1]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  expect(envOf(runner.planJobs[1]!)?.CLOUDFLARE_ACCOUNT_ID).toBe(originalIncludesAccount ? accountId : undefined);
   expect(mintedConnectionIds.slice(2)).toEqual([[replacement.id]]);
 
   await controller.approveRun(destroyPlan.id, { approvedBy: ownerAccountId });
   if (!revokeBeforePlan) await revokeOriginal();
   const beforeApprovalDrift = dispatchCounts();
+  if (originalIncludesAccount) {
+    await store.putConnection({ ...foreignAccount, id: replacement.id });
+    await expect(controller.createApplyRun({
+      planRunId: destroyPlan.id,
+      expected: applyExpectedGuardFromPlanRun(destroyPlan),
+    })).rejects.toBeInstanceOf(OpenTofuControllerError);
+    expect(dispatchCounts()).toEqual(beforeApprovalDrift);
+  }
   await store.putConnection({ ...replacement, status: "revoked" });
   await expect(controller.createApplyRun({
     planRunId: destroyPlan.id,
@@ -14940,7 +14961,7 @@ for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) 
   expect(envOf(runner.destroyJobs[0]!)).toMatchObject({
     CLOUDFLARE_API_TOKEN: "synthetic-same-api-token",
   });
-  expect(envOf(runner.destroyJobs[0]!)).not.toHaveProperty("CLOUDFLARE_ACCOUNT_ID");
+  expect(envOf(runner.destroyJobs[0]!)?.CLOUDFLARE_ACCOUNT_ID).toBe(originalIncludesAccount ? accountId : undefined);
   expect(mintedConnectionIds.slice(2)).toEqual([[replacement.id], [replacement.id]]);
   expect(await store.getConnection(original.id)).toBeUndefined();
   expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))
