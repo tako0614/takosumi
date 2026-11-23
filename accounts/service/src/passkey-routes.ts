@@ -429,7 +429,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
     // are not the primary user of this endpoint.
     const cookie = serializeAccountSessionCookie(rotated.sessionId, {
       secure: input.secureCookie,
-      maxAgeSeconds: Math.max(1, Math.floor(ttlMs / 1000)),
+      maxAgeSeconds: Math.max(1, Math.floor((rotated.cookieExpiresAt - now) / 1000)),
       hostedPolicy: input.passkeys.hostedSessionPolicy,
     });
     return json(

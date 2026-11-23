@@ -274,11 +274,77 @@ test("browser-cookie expiry preserves offline grant but explicit global logout r
 
 test("hosted cookies are host-only, Secure, HttpOnly, bounded and fresh opaque values",async()=>{
   const f=await fixture();const cookie=serializeAccountSessionCookie(f.session.sessionId,{secure:true,maxAgeSeconds:365*24*60*60,hostedPolicy:true});
-  expect(cookie).toStartWith("__Host-takosumi_session=sess_h_");expect(cookie).toContain("Secure");expect(cookie).toContain("HttpOnly");expect(cookie).toContain("Path=/");expect(cookie).toContain("SameSite=Lax");expect(cookie).toContain("Max-Age=604800");expect(cookie).not.toContain("Domain");
+  expect(cookie).toStartWith("__Host-takosumi_session=sess_h_");expect(cookie).toContain("Secure");expect(cookie).toContain("HttpOnly");expect(cookie).toContain("Path=/");expect(cookie).toContain("SameSite=Lax");expect(cookie).toContain("Max-Age=2592000");expect(cookie).not.toContain("Domain");
   expect(()=>serializeAccountSessionCookie(f.session.sessionId,{secure:false,maxAgeSeconds:300})).toThrow("Secure");
   const record=(await f.store.findAccountSession(f.session.sessionId))!;expect(record.expiresAt-record.createdAt).toBe(HOSTED_SESSION_IDLE_MS);
   await f.store.saveAccountSession({...record,absoluteExpiresAt:Date.now()-1});
   const response=await f.handler(new Request(f.authorizeUrl(),{headers:{cookie:f.cookie}}));expect(new URL(response.headers.get("location")!).pathname).toBe("/sign-in");
+});
+
+test("new hosted sessions survive a day of inactivity and expire after three idle days", async () => {
+  const realNow = Date.now;
+  const day = 24 * 60 * 60 * 1000;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    const f = await fixture();
+    const request = new Request(`${issuer}/api/v1/account/session/me`, { headers: { cookie: f.cookie } });
+    expect(f.session.expiresAt).toBe(clock + 3 * day);
+    expect(f.session.cookieExpiresAt).toBe(clock + 30 * day);
+
+    clock += day;
+    expect((await requireAccountSession({ request, store: f.store })).ok).toBe(true);
+    expect((await f.store.findAccountSession(f.session.sessionId))?.expiresAt).toBe(clock + 3 * day);
+
+    clock += 3 * day;
+    expect((await requireAccountSession({ request, store: f.store })).ok).toBe(false);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("continuous use does not extend a new hosted session beyond 30 days", async () => {
+  const realNow = Date.now;
+  const day = 24 * 60 * 60 * 1000;
+  const issuedAt = realNow();
+  let clock = issuedAt;
+  Date.now = () => clock;
+  try {
+    const f = await fixture();
+    const request = new Request(`${issuer}/api/v1/workspaces`, { headers: { cookie: f.cookie } });
+    for (let daysAfterIssue = 2; daysAfterIssue < 30; daysAfterIssue += 2) {
+      clock = issuedAt + daysAfterIssue * day;
+      expect((await requireAccountsBearer({ request, store: f.store, scope: "read" })).ok).toBe(true);
+    }
+    expect((await f.store.findAccountSession(f.session.sessionId))?.expiresAt).toBe(issuedAt + 30 * day);
+
+    clock = issuedAt + 30 * day;
+    expect((await requireAccountsBearer({ request, store: f.store, scope: "read" })).ok).toBe(false);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a previously issued hosted session keeps its twelve-hour idle deadline on use", async () => {
+  const realNow = Date.now;
+  const hour = 60 * 60 * 1000;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    const f = await fixture();
+    const stored = (await f.store.findAccountSession(f.session.sessionId))!;
+    await f.store.saveAccountSession({ ...stored, expiresAt: clock + 12 * hour, absoluteExpiresAt: clock + 7 * 24 * hour });
+    const request = new Request(`${issuer}/api/v1/account/session/me`, { headers: { cookie: f.cookie } });
+
+    clock += 11 * hour;
+    expect((await requireAccountSession({ request, store: f.store })).ok).toBe(true);
+    expect((await f.store.findAccountSession(f.session.sessionId))?.expiresAt).toBe(clock + 12 * hour);
+
+    clock += 12 * hour;
+    expect((await requireAccountSession({ request, store: f.store })).ok).toBe(false);
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("identity-only access token never authorizes account APIs, even with corrupt delegation scope",async()=>{

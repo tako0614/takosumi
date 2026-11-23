@@ -158,7 +158,7 @@ async function issueSession(options: PasswordRouteOptions, credential: PasswordC
   }
   return response({ subject: credential.subject }, 200, {
     "Set-Cookie": serializeAccountSessionCookie(next.sessionId, {
-      secure: secureCookie, hostedPolicy, maxAgeSeconds: Math.max(1, Math.floor((next.expiresAt - now) / 1000)),
+      secure: secureCookie, hostedPolicy, maxAgeSeconds: Math.max(1, Math.floor((next.cookieExpiresAt - now) / 1000)),
     }),
   });
 }

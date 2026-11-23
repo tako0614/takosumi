@@ -52,6 +52,17 @@ type AccountSessionCredential = {
   readonly source: "header" | "hosted-cookie" | "legacy-cookie";
 };
 
+const legacyHostedSessionIdleMs = 12 * 60 * 60 * 1000;
+
+function hostedSessionIdleExpiresAt(session: AccountSessionRecord, now: number): number {
+  const absoluteExpiresAt = session.absoluteExpiresAt ?? now;
+  // A session's immutable absolute lifetime identifies the policy at issuance.
+  const idleMs = absoluteExpiresAt - session.createdAt === HOSTED_SESSION_ABSOLUTE_MS
+    ? HOSTED_SESSION_IDLE_MS
+    : legacyHostedSessionIdleMs;
+  return Math.min(now + idleMs, absoluteExpiresAt);
+}
+
 // Restrictive service policy for this actual Request's lifetime. It carries
 // no authenticated identity and leaves private Request-bound references intact.
 const hostedSessionCookieRequests = new WeakSet<Request>();
@@ -96,7 +107,7 @@ export async function requireAccountSession(input: {
   if (session.policy === "hosted") {
     const now = Date.now();
     if (!(await hostedSessionIsCurrent(input.store,session,now))) return {ok:false,response:bearerChallenge("invalid_session")};
-    if (!input.store.touchHostedAccountSession || !(await input.store.touchHostedAccountSession(sessionId, now, Math.min(now + HOSTED_SESSION_IDLE_MS, session.absoluteExpiresAt!)))) {
+    if (!input.store.touchHostedAccountSession || !(await input.store.touchHostedAccountSession(sessionId, now, hostedSessionIdleExpiresAt(session, now)))) {
       return { ok: false, response: bearerChallenge("invalid_session") };
     }
   } else if (!await ordinarySessionGenerationIsCurrent(input.store, session)) {
@@ -193,7 +204,7 @@ export async function rotateAccountSession(input: {
   hostedPolicy?: boolean;
   authenticationTime?: number;
   freshlyAuthenticatedAt?: number;
-}): Promise<{ sessionId: string; expiresAt: number }> {
+}): Promise<{ sessionId: string; expiresAt: number; cookieExpiresAt: number }> {
   if (input.hostedPolicy && [input.authenticationTime,input.freshlyAuthenticatedAt].some((value)=>value !== undefined && (!Number.isSafeInteger(value) || value < 0 || value > Math.floor(input.now/1000)+60))) {
     throw new TypeError("hosted authentication times must be verified integer timestamps");
   }
@@ -258,7 +269,7 @@ export async function rotateAccountSession(input: {
   } else {
     await input.store.saveAccountSession(next);
   }
-  return { sessionId, expiresAt };
+  return { sessionId, expiresAt, cookieExpiresAt: next.absoluteExpiresAt ?? expiresAt };
 }
 
 export interface AccountSessionCookieOptions {
@@ -503,7 +514,7 @@ export async function requireAccountsBearer(input: {
         await hostedSessionIsCurrent(input.store, sessionRecord, now, assertActive)) {
         assertActive?.();
         if (input.store.touchHostedAccountSession) {
-          current = await input.store.touchHostedAccountSession(token, now, Math.min(now + HOSTED_SESSION_IDLE_MS, sessionRecord.absoluteExpiresAt!));
+          current = await input.store.touchHostedAccountSession(token, now, hostedSessionIdleExpiresAt(sessionRecord, now));
           assertActive?.();
         }
       }

@@ -178,6 +178,8 @@ test("hosted upstream callback consumes browser-bound server PKCE transaction an
   const first = await handleUpstreamCallbackRequest({ request, url: callback, store, upstreamOAuth: options, secureCookie: true });
   expect(first.status).toBe(200);
   expect(first.headers.get("set-cookie")).toContain("__Host-takosumi_session=");
+  expect(first.headers.getSetCookie().find((cookie) => cookie.startsWith("__Host-takosumi_session=")))
+    .toContain("Max-Age=2592000");
   expect(await first.clone().text()).not.toContain("sess_");
   const verifier = new URLSearchParams(await requests[0]!.text()).get("code_verifier");
   expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/u);

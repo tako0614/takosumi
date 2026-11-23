@@ -7,8 +7,8 @@ export const HOSTED_CODE_TTL_MS = 60_000;
 export const HOSTED_TOKEN_TTL_SECONDS = 300;
 export const HOSTED_REFRESH_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
 export const HOSTED_REFRESH_ABSOLUTE_MS = 30 * 24 * 60 * 60 * 1000;
-export const HOSTED_SESSION_IDLE_MS = 12 * 60 * 60 * 1000;
-export const HOSTED_SESSION_ABSOLUTE_MS = 7 * 24 * 60 * 60 * 1000;
+export const HOSTED_SESSION_IDLE_MS = 3 * 24 * 60 * 60 * 1000;
+export const HOSTED_SESSION_ABSOLUTE_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function hostedOpaqueId(prefix: string): string {
   return prefix + base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(32)));

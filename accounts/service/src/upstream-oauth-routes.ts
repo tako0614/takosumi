@@ -505,7 +505,7 @@ async function handleUpstreamCallbackRequestUncached(input: {
 
     const sessionCookie = serializeAccountSessionCookie(rotated.sessionId, {
       secure: input.secureCookie,
-      maxAgeSeconds: Math.max(1, Math.floor((rotated.expiresAt - now) / 1000)),
+      maxAgeSeconds: Math.max(1, Math.floor((rotated.cookieExpiresAt - now) / 1000)),
       hostedPolicy: input.upstreamOAuth.hostedSessionPolicy,
     });
     // Build a single set-cookie header value that clears the previous state
