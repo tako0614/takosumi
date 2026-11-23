@@ -88,7 +88,7 @@ describe("RunView", () => {
     const recovery = readFileSync(resolve(import.meta.dir, "../../../../../dashboard/src/lib/apply-run-recovery.ts"), "utf8");
     expect(source).toContain("recoverApplyRun(attempt.plan,");
     expect(recovery).toContain("listPlanApplyRuns(plan,");
-    expect(recovery).toContain("current.planRunId === planId");
+    expect(recovery).toContain("current?.id === candidate.id && matchesReviewedApplyRun(plan, current)");
     expect(recovery).not.toContain("Date.parse(");
   });
 
