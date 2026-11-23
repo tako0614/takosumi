@@ -44,23 +44,22 @@ const TOKEN_ENV = "CLOUDFLARE_API_TOKEN";
 const ACCOUNT_ENV = "CLOUDFLARE_ACCOUNT_ID";
 const REFERENCE_RECIPE = REFERENCE_CREDENTIAL_RECIPES.find((recipe) => recipe.id === "cloudflare");
 
-function cloudflareDestroyTokenMode(
-  connection: ProviderConnection,
-): "oauth" | "api_token" | undefined {
+function hasCloudflareDestroyBearerCredential(connection: ProviderConnection): boolean {
   const recipe = connection.credentialRecipe;
   if (!hasCloudflareVerifiedAccountScope(connection) || isCloudflareTokenVending(connection) ||
     recipe?.id !== "cloudflare" ||
     recipe.runIssuance || recipe.renewableEnv || recipe.runtimeInputs || recipe.declaredEnv ||
     connection.fileEnvNames?.length || recipe.fileEnvNames?.length ||
-    !connection.envNames.includes(TOKEN_ENV)) return;
+    !connection.envNames.includes(TOKEN_ENV)) return false;
 
-  if (recipe.authMode === "oauth" && connection.materialization === "oauth" &&
-    recipe.preRunAction === "cloudflare_oauth" &&
-    connection.envNames.length === 1) return "oauth";
-  if (recipe.authMode === "api_token" && connection.materialization === "secret" &&
+  if (recipe.authMode === "oauth") {
+    return connection.materialization === "oauth" &&
+      recipe.preRunAction === "cloudflare_oauth" && connection.envNames.length === 1;
+  }
+  return recipe.authMode === "api_token" && connection.materialization === "secret" &&
     recipe.preRunAction === undefined &&
     (connection.envNames.length === 1 ||
-      (connection.envNames.length === 2 && connection.envNames.includes(ACCOUNT_ENV)))) return "api_token";
+      (connection.envNames.length === 2 && connection.envNames.includes(ACCOUNT_ENV)));
 }
 
 function cloudflareDestroyEnvNames(names: readonly string[]) {
@@ -76,7 +75,7 @@ export const cloudflareDestroyCredentialDelivery: NonNullable<
   recoverRevokedShape(evidence, replacement) {
     const materialization = evidence.materialization;
     const envNames = cloudflareDestroyEnvNames(evidence.requiredEnvNames);
-    if (cloudflareDestroyTokenMode(replacement) !== "api_token" ||
+    if (!hasCloudflareDestroyBearerCredential(replacement) ||
       !REFERENCE_RECIPE || (materialization !== "oauth" && materialization !== "secret") ||
       evidence.provider !== replacement.providerSource ||
       !envNames || (envNames.length === 2 && materialization !== "secret")) return;
@@ -97,12 +96,9 @@ export const cloudflareDestroyCredentialDelivery: NonNullable<
     };
   },
   preserve(applied, replacement, appliedEnvNames) {
-    const originalMode = cloudflareDestroyTokenMode(applied);
-    const replacementMode = cloudflareDestroyTokenMode(replacement);
     const names = cloudflareDestroyEnvNames(appliedEnvNames ?? applied.envNames);
-    if (!originalMode || !replacementMode ||
-      !names || (names.length === 2 && (originalMode !== "api_token" || replacementMode !== "api_token")) ||
-      (appliedEnvNames === undefined && replacementMode !== "api_token") ||
+    if (!names || !hasCloudflareDestroyBearerCredential(applied) ||
+      !hasCloudflareDestroyBearerCredential(replacement) ||
       applied.scopeHints?.providerSettings?.accountId !==
         replacement.scopeHints?.providerSettings?.accountId ||
       applied.scopeHints?.providerSettings?.workersSubdomain !==
@@ -110,10 +106,9 @@ export const cloudflareDestroyCredentialDelivery: NonNullable<
     return names;
   },
   project(connection, names, env): Readonly<Record<string, string>> | undefined {
-    const mode = cloudflareDestroyTokenMode(connection);
     const layout = cloudflareDestroyEnvNames(names);
     const accountId = verifiedCloudflareAccountId(connection);
-    if (!mode || !layout || !accountId || (layout.length === 2 && mode !== "api_token") ||
+    if (!hasCloudflareDestroyBearerCredential(connection) || !layout || !accountId ||
       Object.keys(env).length !== connection.envNames.length ||
       !connection.envNames.every((name) => Object.hasOwn(env, name)) ||
       !env[TOKEN_ENV] ||

@@ -14033,17 +14033,19 @@ test.each([
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
 
-test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repeat", "1-revoked-effective"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
+test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repeat", "1-revoked-effective", "1-revoked-effective-oauth"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
   const selective = variant === "2-selective";
   const conflictingAlias = variant === "2-conflict";
   const repeatOriginal = variant === "1-original-repeat";
   const useOriginal = variant === "1-original" || repeatOriginal;
-  const revokedEffective = variant === "1-revoked-effective";
+  const projectedOAuth = variant === "1-revoked-effective-oauth";
+  const revokedEffective = variant === "1-revoked-effective" || projectedOAuth;
   const ownerScoped = useOriginal || revokedEffective;
   const bindingCount = variant === "2" || selective || conflictingAlias ? 2 : 1;
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
+  const { cloudflareOAuthValues } = await import("../../../../providers/cloudflare/oauth.ts");
   const store = new InMemoryOpenTofuControlStore();
   const seeded = await seedRunnableCapsuleModel(store, { environment: "preview", installConfig: oidcMaterializedInstallConfig() });
   const { InMemoryAppOwnershipStore } = await import("../../../../core/domains/app-ownership/store.ts");
@@ -14080,22 +14082,28 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     accountId = "0123456789abcdef0123456789abcdef",
     token = `synthetic-fixture-token-${sequence}`,
     tokenOnly = false,
+    oauth = false,
   ) => {
     const owner = revokedEffective ? ownership.ownerAccountId : null;
     const row = await vault.register({
       ...(revokedEffective ? { scope: "personal" as const } : { workspaceId: seeded.workspace.id }),
       provider: FIXTURE_CLOUDFLARE_PROVIDER,
-      credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
-      values: { CLOUDFLARE_API_TOKEN: token, ...(tokenOnly ? {} : { CLOUDFLARE_ACCOUNT_ID: accountId }) },
-      ...(tokenOnly ? { scopeHints: { providerSettings: { accountId } } } : {}),
+      credentialRecipe: { id: "cloudflare", authMode: oauth ? "oauth" : "api_token", secretPartition: "provider-credentials" },
+      ...(oauth ? { materialization: "oauth" as const } : {}),
+      values: oauth ? cloudflareOAuthValues({
+        tokenResponse: { access_token: token, expires_in: 86_400 },
+        clientId: "fixture-cloudflare-client",
+        now: Date.parse("2026-11-18T07:00:00Z"),
+      }) : { CLOUDFLARE_API_TOKEN: token, ...(tokenOnly ? {} : { CLOUDFLARE_ACCOUNT_ID: accountId }) },
+      ...(oauth || tokenOnly ? { scopeHints: { providerSettings: { accountId } } } : {}),
     }, undefined, owner);
     expect((await vault.test(row.id, undefined, owner)).status).toBe("verified");
     return (await store.getConnection(row.id))!;
   };
-  const original = await register(undefined, "synthetic-original-token", revokedEffective);
+  const original = await register(undefined, "synthetic-original-token", revokedEffective && !projectedOAuth);
   const sharedReplacementToken = selective ? "synthetic-shared-replacement-token" : undefined;
   const differentToken = "synthetic-distinct-same-account-key";
-  const firstReplacement = await register(undefined, sharedReplacementToken, revokedEffective);
+  const firstReplacement = await register(undefined, sharedReplacementToken, revokedEffective, projectedOAuth);
   const nextReplacement = await register(undefined, conflictingAlias ? differentToken : sharedReplacementToken);
   const foreign = await register("fedcba9876543210fedcba9876543210");
   const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
@@ -14385,7 +14393,9 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
   if (revokedEffective) {
     expect(firstReplacement.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
     expect(nextReplacement.envNames).toEqual(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
-    expect(firstRecovery.planRun.destroyConnectionRecovery?.credentialDelivery).toBeUndefined();
+    expect(firstRecovery.planRun.destroyConnectionRecovery?.credentialDelivery).toEqual(
+      projectedOAuth ? [{ connectionId: original.id, envNames: original.envNames }] : undefined,
+    );
     expect(await vault.revoke(firstReplacement.id, undefined, ownership.ownerAccountId)).toBe(true);
     expect(await store.getConnection(firstReplacement.id)).toBeUndefined();
     expect(await store.listCredentialMintEventsForRun(partial.applyRun.id)).toEqual([
@@ -14441,7 +14451,7 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
   expect(mints.at(-1)).toEqual(expectedNextMint);
   if (revokedEffective) {
     expect(secondRecovery.planRun.destroyConnectionRecovery?.credentialDelivery).toEqual([
-      { connectionId: original.id, envNames: ["CLOUDFLARE_API_TOKEN"] },
+      { connectionId: original.id, envNames: original.envNames },
     ]);
   }
   expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
@@ -14660,16 +14670,19 @@ test("pre-provider Apply refusal leaves initial Capsule pending and retryable", 
 });
 
 const destroyKeyRotationCases = [
-  { originalAuth: "oauth", originalIncludesAccount: false, revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence" },
-  { originalAuth: "api_token", originalIncludesAccount: false, revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare API-token connection requires applied ownership evidence (token-only original)" },
-  { originalAuth: "api_token", originalIncludesAccount: false, revokeBeforePlan: false, name: "Destroy keeps the reviewed replacement key when the original is revoked after approval" },
-  { originalAuth: "api_token", originalIncludesAccount: true, revokeBeforePlan: false, name: "Destroy preserves the verified Cloudflare account for a token-only replacement" },
-  { originalAuth: "api_token", originalIncludesAccount: true, revokeBeforePlan: true, name: "Destroy recovers the applied Cloudflare account and token layout after revocation" },
+  { originalAuth: "oauth", replacementAuth: "api_token", originalIncludesAccount: false, revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence" },
+  { originalAuth: "api_token", replacementAuth: "api_token", originalIncludesAccount: false, revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare API-token connection requires applied ownership evidence (token-only original)" },
+  { originalAuth: "api_token", replacementAuth: "api_token", originalIncludesAccount: false, revokeBeforePlan: false, name: "Destroy keeps the reviewed replacement key when the original is revoked after approval" },
+  { originalAuth: "api_token", replacementAuth: "api_token", originalIncludesAccount: true, revokeBeforePlan: false, name: "Destroy preserves the verified Cloudflare account for a token-only replacement" },
+  { originalAuth: "api_token", replacementAuth: "api_token", originalIncludesAccount: true, revokeBeforePlan: true, name: "Destroy recovers the applied Cloudflare account and token layout after revocation" },
+  { originalAuth: "api_token", replacementAuth: "oauth", originalIncludesAccount: false, revokeBeforePlan: false, name: "Destroy uses a verified Cloudflare OAuth replacement for an applied token-only key" },
+  { originalAuth: "api_token", replacementAuth: "oauth", originalIncludesAccount: true, revokeBeforePlan: false, name: "Destroy preserves the verified Cloudflare account with an OAuth replacement after late revocation" },
+  { originalAuth: "api_token", replacementAuth: "oauth", originalIncludesAccount: true, revokeBeforePlan: true, name: "Destroy uses a verified Cloudflare OAuth replacement after revoking the applied two-field key" },
 ] as const;
-for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of destroyKeyRotationCases) test(name, async () => {
+for (const { originalAuth, replacementAuth, originalIncludesAccount, revokeBeforePlan, name } of destroyKeyRotationCases) test(name, async () => {
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
-  const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
+  const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION, referenceCredentialDriversFromEnv } = await import("../../../../providers/registry.ts");
   const { cloudflareOAuthValues } = await import("../../../../providers/cloudflare/oauth.ts");
   const { handleCapsules } = await import("../../../../accounts/service/src/control/capsules.ts");
   const { InMemoryAccountsStore } = await import("../../../../accounts/service/src/store.ts");
@@ -14696,6 +14709,8 @@ for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of 
   const now = new Date("2026-11-18T07:00:00Z");
   const accountId = "0123456789abcdef0123456789abcdef";
   const foreignAccountId = "fedcba9876543210fedcba9876543210";
+  const clientId = "synthetic-cloudflare-oauth-client";
+  const scopes = ["account-settings.read", "workers-scripts.admin"];
   let sequence = 0;
   const vault = new StaticSecretConnectionVault({
     store,
@@ -14708,7 +14723,10 @@ for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of 
     now: () => now,
     newId: () => `conn_cloudflare_delivery_${++sequence}`,
     credentialRecipeResolver: id => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(recipe => recipe.id === id),
-    credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    credentialDrivers: referenceCredentialDriversFromEnv({
+      TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: clientId,
+      TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES: scopes.join(" "),
+    }),
     fetch: async input => {
       const account = /\/accounts\/([a-f0-9]{32})/.exec(input)?.[1];
       return Response.json({
@@ -14720,15 +14738,15 @@ for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of 
     },
   });
   const originalToken = "synthetic-qa-oauth-token";
-  const originalOAuthValues = cloudflareOAuthValues({
+  const oauthValues = (accessToken: string) => cloudflareOAuthValues({
     tokenResponse: {
-      access_token: originalToken,
-      refresh_token: "synthetic-original-oauth-refresh-token",
+      access_token: accessToken,
+      refresh_token: "synthetic-oauth-refresh-token",
       expires_in: 86_400,
     },
-    clientId: "synthetic-cloudflare-oauth-client",
+    clientId,
     now: now.getTime(),
-    requestedScopes: [],
+    requestedScopes: scopes,
   });
   const original = await vault.register({
     scope: "personal",
@@ -14736,7 +14754,7 @@ for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of 
     credentialRecipe: { id: "cloudflare", authMode: originalAuth, secretPartition: "provider-credentials" },
     ...(originalAuth === "oauth" ? { materialization: "oauth" as const } : {}),
     values: originalAuth === "oauth"
-      ? { ...originalOAuthValues, CLOUDFLARE_ACCOUNT_ID: accountId }
+      ? { ...oauthValues(originalToken), CLOUDFLARE_ACCOUNT_ID: accountId }
       : {
         CLOUDFLARE_API_TOKEN: originalToken,
         ...(originalIncludesAccount ? { CLOUDFLARE_ACCOUNT_ID: accountId } : {}),
@@ -14754,24 +14772,26 @@ for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of 
     : ["CLOUDFLARE_API_TOKEN"];
   expect(verifiedOriginal.envNames).toEqual(appliedEnvNames);
 
-  const registerApiToken = async (id: string, selectedAccount: string) => {
-    const values = {
-      CLOUDFLARE_API_TOKEN: `synthetic-${id}-api-token`,
-      ...(originalIncludesAccount ? {} : { CLOUDFLARE_ACCOUNT_ID: selectedAccount }),
-    };
+  const replacementToken = (id: string) => `synthetic-${id}-${replacementAuth}`;
+  const registerReplacement = async (id: string, selectedAccount: string) => {
+    const token = replacementToken(id);
     const row = await vault.register({
       scope: "personal",
       provider: FIXTURE_CLOUDFLARE_PROVIDER,
-      credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
-      values,
+      credentialRecipe: { id: "cloudflare", authMode: replacementAuth, secretPartition: "provider-credentials" },
+      ...(replacementAuth === "oauth" ? { materialization: "oauth" as const } : {}),
+      values: replacementAuth === "oauth" ? oauthValues(token) : {
+        CLOUDFLARE_API_TOKEN: token,
+        ...(originalIncludesAccount ? {} : { CLOUDFLARE_ACCOUNT_ID: selectedAccount }),
+      },
       scopeHints: { providerSettings: { accountId: selectedAccount } },
     }, undefined, ownerAccountId);
     expect((await vault.test(row.id, undefined, ownerAccountId)).status).toBe("verified");
     return (await store.getConnection(row.id))!;
   };
-  const replacement = await registerApiToken("same", accountId);
-  const foreignAccount = await registerApiToken("different-account", foreignAccountId);
-  expect(replacement.envNames).toEqual(originalIncludesAccount
+  const replacement = await registerReplacement("same", accountId);
+  const foreignAccount = await registerReplacement("different-account", foreignAccountId);
+  expect(replacement.envNames).toEqual(originalIncludesAccount || replacementAuth === "oauth"
     ? ["CLOUDFLARE_API_TOKEN"]
     : ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
 
@@ -14927,8 +14947,9 @@ for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of 
   }]);
   expect(runner.planJobs).toHaveLength(2);
   expect(envOf(runner.planJobs[1]!)).toMatchObject({
-    CLOUDFLARE_API_TOKEN: "synthetic-same-api-token",
+    CLOUDFLARE_API_TOKEN: replacementToken("same"),
   });
+  expect(envOf(runner.planJobs[1]!)?.CLOUDFLARE_OAUTH_SESSION).toBeUndefined();
   expect(envOf(runner.planJobs[1]!)?.CLOUDFLARE_ACCOUNT_ID).toBe(originalIncludesAccount ? accountId : undefined);
   expect(mintedConnectionIds.slice(2)).toEqual([[replacement.id]]);
 
@@ -14959,8 +14980,9 @@ for (const { originalAuth, originalIncludesAccount, revokeBeforePlan, name } of 
   expect(destroyed.capsule.status).toBe("destroyed");
   expect(runner.destroyJobs).toHaveLength(1);
   expect(envOf(runner.destroyJobs[0]!)).toMatchObject({
-    CLOUDFLARE_API_TOKEN: "synthetic-same-api-token",
+    CLOUDFLARE_API_TOKEN: replacementToken("same"),
   });
+  expect(envOf(runner.destroyJobs[0]!)?.CLOUDFLARE_OAUTH_SESSION).toBeUndefined();
   expect(envOf(runner.destroyJobs[0]!)?.CLOUDFLARE_ACCOUNT_ID).toBe(originalIncludesAccount ? accountId : undefined);
   expect(mintedConnectionIds.slice(2)).toEqual([[replacement.id], [replacement.id]]);
   expect(await store.getConnection(original.id)).toBeUndefined();
