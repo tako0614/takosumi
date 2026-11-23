@@ -1966,6 +1966,80 @@ test("the HTTP adapter can reprepare an exact interrupted Destroy without a prov
   }
 });
 
+test.each(["delayed reply", "cancelled execution", "expired host deadline"] as const)(
+  "the HTTP adapter bounds local Destroy reservation (%s)",
+  async (outcome) => {
+    const runId = `destroy_reservation_wait_${crypto.randomUUID().replace(/-/g, "")}`;
+    const planId = `plan_${runId}`;
+    const planBytes = new TextEncoder().encode("reviewed destroy plan");
+    const planDigest = await sha256(planBytes);
+    const controller = new AbortController();
+    let reservations = 0;
+    let planArtifactWrites = 0;
+    let providerPosts = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "GET" && path === `/runs/${planId}/artifacts/tfplan`)
+          return new Response(planBytes);
+        if (request.method === "POST" && path === `/runs/${runId}/plan-state-metadata`)
+          return Response.json({ lineage: "", serial: 0 });
+        if (request.method === "PUT" && path === `/runs/${runId}/mutation-preparation`) {
+          reservations += 1;
+          const response = await handleRunnerRequestV2(request);
+          if (outcome === "cancelled execution") controller.abort();
+          if (outcome === "delayed reply" && reservations === 1)
+            await Bun.sleep(5_150);
+          return response;
+        }
+        if (request.method === "PUT" && path === `/runs/${runId}/artifacts/tfplan`) {
+          planArtifactWrites += 1;
+          return Response.json({ error: "interrupted before dispatch" }, { status: 503 });
+        }
+        if (request.method === "POST" && path === `/runs/${runId}`) providerPosts += 1;
+        return await handleRunnerRequestV2(request);
+      },
+    });
+    try {
+      const runner = createHttpOpenTofuRunner({
+        stateStore: unusedStateStore,
+        archiveStore: { write: async () => {}, read: async () => { throw new Error("unused"); } },
+        baseUrl: server.url.href,
+      });
+      const job = {
+        applyRun: { id: runId },
+        planRun: { id: planId, planDigest },
+        planArtifact: { kind: "runner-local", ref: `runner-local://${planId}/tfplan`, digest: planDigest },
+        runnerProfile: { id: "opentofu-default", executorId: "opentofu.default" },
+        stateScope: {
+          workspaceId: "workspace_reservation_wait",
+          subject: { kind: "resource", id: "resource_reservation_wait" },
+          environment: "integration", generation: 1, stateRef: `state://reservation-wait/${runId}`,
+        },
+      } as Parameters<typeof runner.destroy>[0];
+      const destroy = runner.destroy(job, {
+        signal: controller.signal,
+        ...(outcome === "expired host deadline" ? { deadlineAt: Date.now() - 1 } : {}),
+      });
+      if (outcome === "delayed reply") {
+        await expect(destroy).rejects.toThrow("failed to restore plan artifact");
+      } else if (outcome === "cancelled execution") {
+        await expect(destroy).rejects.toMatchObject({ reason: "runner_mutation_indeterminate" });
+      } else {
+        await expect(destroy).rejects.toThrow();
+      }
+      expect(reservations).toBe(outcome === "expired host deadline" ? 0 : 1);
+      expect(planArtifactWrites).toBe(outcome === "delayed reply" ? 1 : 0);
+      expect(providerPosts).toBe(0);
+    } finally {
+      server.stop(true);
+    }
+  },
+  12_000,
+);
+
 test("an unfinished v2 preparation cannot transfer to another runner process", async () => {
   const runId = `apply_process_${crypto.randomUUID().replace(/-/g, "")}`;
   const request = { applyRun: { id: runId }, planRun: { id: "plan_process" } };

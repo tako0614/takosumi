@@ -59,7 +59,7 @@ import {
   withRunRootWriter,
   type RunRootOwnership,
 } from "./run_root_ownership.ts";
-import { RUN_ROOT } from "./constants.ts";
+import { LOCAL_MUTATION_RUN_ID_PATTERN, RUN_ROOT } from "./constants.ts";
 import { PROVIDER_LOCK_RESTORE_DIGEST_HEADER } from "./transport.ts";
 import {
   RUNNER_RUN_BUDGET_MS_HEADER,
@@ -78,6 +78,7 @@ import {
   localMutationSuccessReadbackResponse,
   reserveLocalMutation,
   reserveLocalMutationPreparation,
+  validAttemptId,
   withLocalMutationGate,
   type LocalMutationSyncFault,
 } from "./run_completion.ts";
@@ -90,6 +91,8 @@ interface RunnerRequestDependencies {
   readonly localPreparationV2?: boolean;
   /** Private filesystem fault injection; never selectable by an HTTP caller. */
   readonly localMutationSyncFault?: LocalMutationSyncFault;
+  /** The HTTP server can give an admitted local reservation more time to sync. */
+  readonly extendLocalMutationReservationResponse?: () => void;
   /** Acquired for the canonical RUN_ROOT before the server accepts requests. */
   readonly runRootOwnership?: RunRootOwnership;
 }
@@ -348,10 +351,12 @@ async function handleRunnerRequestBody(
       const embeddedRun = envelope.request && typeof envelope.request === "object" &&
         "applyRun" in envelope.request ? envelope.request.applyRun : undefined;
       if ((action !== "apply" && action !== "destroy") || envelope.runId !== runId ||
+        !LOCAL_MUTATION_RUN_ID_PATTERN.test(runId) ||
         !envelope.request || typeof envelope.request !== "object" ||
         !embeddedRun || typeof embeddedRun !== "object" ||
         !("id" in embeddedRun) || embeddedRun.id !== runId ||
-        typeof envelope.attemptId !== "string") return indeterminate();
+        !validAttemptId(envelope.attemptId)) return indeterminate();
+      dependencies.extendLocalMutationReservationResponse?.();
       return await withLocalMutationGate(runId, async () => {
         try {
           const epoch = await reserveLocalMutationPreparation(
@@ -386,6 +391,7 @@ async function handleRunnerRequestBody(
       if (
         (action !== "apply" && action !== "destroy") ||
         envelope.runId !== runId ||
+        !LOCAL_MUTATION_RUN_ID_PATTERN.test(runId) ||
         !envelope.request ||
         typeof envelope.request !== "object" ||
         !embeddedRun ||
@@ -398,6 +404,7 @@ async function handleRunnerRequestBody(
           { status: 409 },
         );
       }
+      dependencies.extendLocalMutationReservationResponse?.();
       const token = await withLocalMutationGate(runId, () => reserveLocalMutation(
         runId, action, envelope.request,
         request.headers.get(PROVIDER_LOCK_RESTORE_DIGEST_HEADER) ?? undefined,

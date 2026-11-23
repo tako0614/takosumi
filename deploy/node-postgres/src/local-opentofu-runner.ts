@@ -84,6 +84,7 @@ import type {
 import { RUN_EXECUTION_EVIDENCE_CONTRACT } from "../../../contract/runs.ts";
 import { assertRunExecutionEvidence } from "../../../contract/runs.ts";
 import { handleRunnerRequestWithDependencies } from "../../../runner/entrypoint.ts";
+import { LOCAL_MUTATION_RESERVATION_TIMEOUT_MS } from "../../../runner/lib/constants.ts";
 import { readResponseBytesWithCap } from "../../../runner/lib/exec.ts";
 import { SAVED_PLAN_PREFLIGHT_MAX_BYTES, SAVED_PLAN_TFSTATE_MAX_BYTES } from "../../../runner/lib/saved_plan_state_metadata.ts";
 import { mutationRequestDigest } from "../../../runner/lib/run_completion.ts";
@@ -1205,12 +1206,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       preparationV2,
     );
     if (!result) {
+      const signal = localMutationPreparationSignal(control);
       const prepared = await this.preflightSavedPlan(
         job.applyRun.id,
         job,
         job.planRun.id,
         job.planArtifact,
-        control?.signal,
+        signal,
       );
       const reservation = await reserveLocalMutationBeforePreparation(
         this.transport,
@@ -1219,11 +1221,12 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         job,
         expectedRestoredProviderLockDigest(job.planRun),
         preparationV2,
+        signal,
       );
       await this.restoreSourceArchive(
         job.applyRun.id,
         job.sourceArchive,
-        control?.signal,
+        signal,
         reservation,
       );
       await this.restorePriorState(
@@ -1231,21 +1234,21 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         "apply",
         job,
         prepared.priorStateBytes,
-        control?.signal,
+        signal,
         reservation,
       );
       await restoreRunnerLocalPlanArtifact(
         this.transport,
         job.applyRun.id,
         prepared.planBytes,
-        control?.signal,
+        signal,
         reservation,
       );
       const restoredProviderLockDigest = await this.restoreProviderLockArtifact(
         job.applyRun.id,
         job.planRun,
         job.planArtifact,
-        control?.signal,
+        signal,
         reservation,
       );
       const privateDispatch = this.#privateRunFileDispatch(job, privateSession);
@@ -1266,6 +1269,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
           identity: mutationEvidenceIdentity(job, job.executionEvidenceCommit),
         });
       }
+      signal?.throwIfAborted();
       const dispatched = await runLocalMutationWithCustody(
         this.transport,
         "apply",
@@ -1401,12 +1405,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       preparationV2,
     );
     if (!result) {
+      const signal = localMutationPreparationSignal(control);
       const prepared = await this.preflightSavedPlan(
         job.applyRun.id,
         job,
         job.planRun.id,
         job.planArtifact,
-        control?.signal,
+        signal,
       );
       const reservation = await reserveLocalMutationBeforePreparation(
         this.transport,
@@ -1415,11 +1420,12 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         job,
         expectedRestoredProviderLockDigest(job.planRun),
         preparationV2,
+        signal,
       );
       await this.restoreSourceArchive(
         job.applyRun.id,
         job.sourceArchive,
-        control?.signal,
+        signal,
         reservation,
       );
       await this.restorePriorState(
@@ -1427,24 +1433,25 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         "destroy",
         job,
         prepared.priorStateBytes,
-        control?.signal,
+        signal,
         reservation,
       );
       await restoreRunnerLocalPlanArtifact(
         this.transport,
         job.applyRun.id,
         prepared.planBytes,
-        control?.signal,
+        signal,
         reservation,
       );
       const restoredProviderLockDigest = await this.restoreProviderLockArtifact(
         job.applyRun.id,
         job.planRun,
         job.planArtifact,
-        control?.signal,
+        signal,
         reservation,
       );
       const privateDispatch = this.#privateRunFileDispatch(job, privateSession);
+      signal?.throwIfAborted();
       const dispatched = await runLocalMutationWithCustody(
         this.transport,
         "destroy",
@@ -2509,6 +2516,17 @@ async function assertLocalMutationCustodyMode(
   }
 }
 
+function localMutationPreparationSignal(
+  control?: RunExecutionControl,
+): AbortSignal | undefined {
+  if (control?.deadlineAt === undefined) return control?.signal;
+  const remainingMs = Math.floor(control.deadlineAt - Date.now());
+  const deadline = remainingMs <= 0
+    ? AbortSignal.abort(new DOMException("Local preparation deadline exceeded", "TimeoutError"))
+    : AbortSignal.timeout(Math.min(remainingMs, 2 ** 31 - 1));
+  return control.signal ? AbortSignal.any([control.signal, deadline]) : deadline;
+}
+
 /** A lost HTTP response is resolved by a read, never a second provider POST. */
 async function reserveLocalMutationBeforePreparation(
   transport: RunnerTransport,
@@ -2517,18 +2535,23 @@ async function reserveLocalMutationBeforePreparation(
   request: unknown,
   restoredProviderLockDigest?: string,
   preparationV2 = false,
+  signal?: AbortSignal,
 ): Promise<LocalMutationReservation> {
   const attemptId = crypto.randomUUID();
   try {
-    const acquire = async (): Promise<LocalMutationReservation> => {
+    const acquire = async (timeoutMs: number): Promise<LocalMutationReservation> => {
+      signal?.throwIfAborted();
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const requestSignal = signal
+        ? AbortSignal.any([signal, controller.signal])
+        : controller.signal;
       try {
         const response = await transport.fetch(
           `/runs/${encodeURIComponent(runId)}/${preparationV2 ? "mutation-preparation" : "mutation-reservation"}`,
           {
             method: "PUT",
-            signal: controller.signal,
+            signal: requestSignal,
             headers: {
               "content-type": "application/json",
               ...(restoredProviderLockDigest
@@ -2543,6 +2566,7 @@ async function reserveLocalMutationBeforePreparation(
         const body = parseObject(new TextDecoder().decode(
           await readResponseBytesWithCap(response, 1024, "local mutation reservation"),
         ));
+        requestSignal.throwIfAborted();
         if (preparationV2) {
           if (!Number.isSafeInteger(body.epoch) || (body.epoch as number) < 1 || (body.epoch as number) > 64)
             throw new Error("local runner mutation preparation is indeterminate");
@@ -2556,11 +2580,11 @@ async function reserveLocalMutationBeforePreparation(
       }
     };
     try {
-      return await acquire();
+      return await acquire(LOCAL_MUTATION_RESERVATION_TIMEOUT_MS);
     } catch {
       if (!preparationV2) throw new Error("local runner mutation reservation is indeterminate");
       // The same attempt reads back a lost acknowledgement without changing owner.
-      return await acquire();
+      return await acquire(5_000);
     }
   } catch {
     throw new OpenTofuRunnerExecutionError(
