@@ -389,10 +389,13 @@ digest still match exactly. The new Destroy Plan records the derived delivery
 with the effective replacement. Apply revalidates it, and the Vault and Runner
 manifest use the same environment names. The reference Cloudflare driver can
 preserve the token-only environment of an applied OAuth or API token Connection
-when a verified API token supplies the same account. An explicit Zone ID changes
-credential delivery and cannot use this path. If the original Cloudflare
-Connection was revoked, Core can verify a replacement against the applicable
-token-only shape using the Run that produced the current StateVersion. This
+when a verified API token supplies the same account. For an applied API token
+that also delivered an account ID, a verified same-account API token retains
+both names. The Vault checks any missing account ID against the replacement's
+verifier-owned setting and preserves the minted token exactly. An explicit Zone
+ID changes credential delivery and cannot use this path. If the original Cloudflare
+Connection was revoked, Core can verify a replacement against the applied
+credential layout using the Run that produced the current StateVersion. This
 can be a successful Apply or an owner-approved manual Destroy with an exact
 receipt for a persisted provider failure. It requires the Run's matching
 resolution and mint audit for the effective Connection ID, the current app
