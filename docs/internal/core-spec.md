@@ -392,12 +392,13 @@ preserve the token-only environment of an applied OAuth or API token Connection
 when a verified API token supplies the same account. An explicit Zone ID changes
 credential delivery and cannot use this path. If the original Cloudflare
 Connection was revoked, Core can verify a replacement against the applicable
-token-only shape using the direct successful Apply that produced the current
-StateVersion. It requires that Apply's matching resolution and mint audit for
-the original ID, the current app owner and ownership epoch, and equality of
-the complete applied binding digest. Only the verified replacement can supply
-credentials. Without this evidence a changed credential shape requires the
-original Connection record. When the
+token-only shape using the Run that produced the current StateVersion. This
+can be a successful Apply or an owner-approved manual Destroy with an exact
+receipt for a persisted provider failure. It requires the Run's matching
+resolution and mint audit for the effective Connection ID, the current app
+owner and ownership epoch, and equality of the complete applied binding
+digest. Only the verified replacement can supply credentials. Without this
+evidence a changed credential shape requires the prior Connection record. When the
 current StateVersion was produced by a prior recovery Plan, a new manual recovery
 starts with the replacements and delivery recorded by that exact Plan. The new explicit
 selection overrides only the named logical bindings. The new Plan records the

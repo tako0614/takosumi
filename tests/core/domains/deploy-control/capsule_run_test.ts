@@ -14033,11 +14033,13 @@ test.each([
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
 
-test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repeat"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
+test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repeat", "1-revoked-effective"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
   const selective = variant === "2-selective";
   const conflictingAlias = variant === "2-conflict";
   const repeatOriginal = variant === "1-original-repeat";
   const useOriginal = variant === "1-original" || repeatOriginal;
+  const revokedEffective = variant === "1-revoked-effective";
+  const ownerScoped = useOriginal || revokedEffective;
   const bindingCount = variant === "2" || selective || conflictingAlias ? 2 : 1;
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
@@ -14055,7 +14057,7 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     managementEpoch: 1,
     storageRoot: `apps/${seeded.capsule.id}`,
   };
-  const actorContext = useOriginal ? { actor: ownership.ownerAccountId } : {};
+  const actorContext = ownerScoped ? { actor: ownership.ownerAccountId } : {};
   let sequence = 0;
   const vault = new StaticSecretConnectionVault({
     store,
@@ -14064,7 +14066,7 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     newId: () => `conn_partial_rotation_${++sequence}`,
     credentialRecipeResolver: id => REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(recipe => recipe.id === id),
     credentialDrivers: REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
-    ...(useOriginal ? {
+    ...(ownerScoped ? {
       appOwnership,
       appAccessResolver: appOwnership,
       appMintLeases: new InMemoryAppMintLeaseStore(store),
@@ -14077,19 +14079,23 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
   const register = async (
     accountId = "0123456789abcdef0123456789abcdef",
     token = `synthetic-fixture-token-${sequence}`,
+    tokenOnly = false,
   ) => {
+    const owner = revokedEffective ? ownership.ownerAccountId : null;
     const row = await vault.register({
-      workspaceId: seeded.workspace.id, provider: FIXTURE_CLOUDFLARE_PROVIDER,
+      ...(revokedEffective ? { scope: "personal" as const } : { workspaceId: seeded.workspace.id }),
+      provider: FIXTURE_CLOUDFLARE_PROVIDER,
       credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
-      values: { CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: accountId },
-    }, undefined, null);
-    expect((await vault.test(row.id, undefined, null)).status).toBe("verified");
+      values: { CLOUDFLARE_API_TOKEN: token, ...(tokenOnly ? {} : { CLOUDFLARE_ACCOUNT_ID: accountId }) },
+      ...(tokenOnly ? { scopeHints: { providerSettings: { accountId } } } : {}),
+    }, undefined, owner);
+    expect((await vault.test(row.id, undefined, owner)).status).toBe("verified");
     return (await store.getConnection(row.id))!;
   };
-  const original = await register(undefined, "synthetic-original-token");
+  const original = await register(undefined, "synthetic-original-token", revokedEffective);
   const sharedReplacementToken = selective ? "synthetic-shared-replacement-token" : undefined;
   const differentToken = "synthetic-distinct-same-account-key";
-  const firstReplacement = await register(undefined, sharedReplacementToken);
+  const firstReplacement = await register(undefined, sharedReplacementToken, revokedEffective);
   const nextReplacement = await register(undefined, conflictingAlias ? differentToken : sharedReplacementToken);
   const foreign = await register("fedcba9876543210fedcba9876543210");
   const originalBinding = (await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment))!;
@@ -14161,11 +14167,11 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     ...fixtureAuthorityBoundModuleVariableMaterializer(),
     async retire(input) { retiredBindings.push(input.resolvedProviderBindings.map(entry => entry.connection.id)); },
   };
-  if (useOriginal) expect(await appOwnership.initializeOwnershipIfMissing(ownership)).toBe(true);
+  if (ownerScoped) expect(await appOwnership.initializeOwnershipIfMissing(ownership)).toBe(true);
   const controller = controllerWith(store, runner, {
     vault,
     moduleVariableMaterializer,
-    ...(useOriginal ? { appOwnership } : {}),
+    ...(ownerScoped ? { appOwnership } : {}),
   });
   const initialPlan = await controller.createCapsulePlan(seeded.capsule.id, actorContext);
   expect(initialPlan.planRun.status, JSON.stringify(initialPlan.planRun.diagnostics)).toBe("succeeded");
@@ -14318,7 +14324,7 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
   const destroyCount = runner.destroyJobs.length;
   const mintCount = mints.length;
   await store.putConnection({ ...foreign, id: nextReplacement.id });
-  await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+  await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
     destroyProviderConnectionReplacements: nextSelection,
   })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "destroy_connection_recovery_unproven" } });
   expect(runner.planJobs).toHaveLength(planCount);
@@ -14330,7 +14336,7 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     const mixedSelection = selective
       ? [{ ...nextSelection[0]!, replacementConnectionId: foreign.id }]
       : [nextSelection[0]!, { ...nextSelection[1]!, replacementConnectionId: foreign.id }];
-    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
       destroyProviderConnectionReplacements: mixedSelection,
     })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "destroy_connection_recovery_unproven" } });
     expect(runner.planJobs).toHaveLength(planCount);
@@ -14344,17 +14350,17 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     const getConnection = store.getConnection.bind(store);
     store.getConnection = async (id) => id === firstReplacement.id ? undefined : getConnection(id);
     try {
-      await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+      await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
         destroyProviderConnectionReplacements: nextSelection,
       })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "provider_connection_not_ready" } });
     } finally {
       store.getConnection = getConnection;
     }
-    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
       destroyProviderConnectionReplacements: [{ ...nextSelection[0]!, replacementConnectionId: "conn_unknown_replacement" }],
     })).rejects.toMatchObject({ code: "not_found", details: { reason: "provider_connection_setup_required" } });
     await store.putConnection({ ...firstReplacement, status: "revoked" });
-    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+    await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
       destroyProviderConnectionReplacements: nextSelection,
     })).rejects.toMatchObject({ code: "failed_precondition", details: { reason: "provider_connection_not_ready" } });
     expect(runner.planJobs).toHaveLength(planCount);
@@ -14364,7 +14370,7 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
   }
 
   if (conflictingAlias) {
-    const conflict = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+    const conflict = await controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
       destroyProviderConnectionReplacements: [nextSelection[1]!],
     });
     const conflictRun = await controller.getRun(conflict.planRun.id);
@@ -14376,8 +14382,53 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     expect(runner.destroyJobs).toHaveLength(destroyCount);
     expect((await store.getCapsule(seeded.capsule.id))?.currentStateVersionId).toBe(partialState!.id);
   }
+  if (revokedEffective) {
+    expect(firstReplacement.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
+    expect(nextReplacement.envNames).toEqual(["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
+    expect(firstRecovery.planRun.destroyConnectionRecovery?.credentialDelivery).toBeUndefined();
+    expect(await vault.revoke(firstReplacement.id, undefined, ownership.ownerAccountId)).toBe(true);
+    expect(await store.getConnection(firstReplacement.id)).toBeUndefined();
+    expect(await store.listCredentialMintEventsForRun(partial.applyRun.id)).toEqual([
+      expect.objectContaining({
+        runId: partial.applyRun.id, phase: "destroy", connectionId: firstReplacement.id,
+        connectionOwnerAccountId: ownership.ownerAccountId, actorAccountId: ownership.ownerAccountId,
+        ownershipEpoch: ownership.ownershipEpoch,
+      }),
+    ]);
+
+    expect((await store.getPlanRun(firstRecovery.planRun.id))?.approval)
+      .toMatchObject({ approvedBy: ownership.ownerAccountId });
+    expect(partial.applyRun.providerResolutions).toEqual([
+      expect.objectContaining({
+        connectionId: firstReplacement.id, status: "resolved_provider_connection",
+        evidence: expect.objectContaining({ requiredEnvNames: ["CLOUDFLARE_API_TOKEN"] }),
+      }),
+    ]);
+    const readMintEvents = store.listCredentialMintEventsForRun.bind(store);
+    const assertUnproven = async () => {
+      await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
+        destroyProviderConnectionReplacements: nextSelection,
+      })).rejects.toMatchObject({
+        code: "failed_precondition", details: { reason: "destroy_connection_recovery_unproven" },
+      });
+      expect(runner.planJobs).toHaveLength(planCount);
+      expect(runner.destroyJobs).toHaveLength(destroyCount);
+      expect(mints).toHaveLength(mintCount);
+    };
+    await store.putApplyRun({ ...partial.applyRun, executionEvidence: undefined });
+    await assertUnproven();
+    await store.putApplyRun(partial.applyRun);
+    store.listCredentialMintEventsForRun = async (runId) =>
+      (await readMintEvents(runId)).map(event => ({ ...event, ownershipEpoch: ownership.ownershipEpoch + 1 }));
+    await assertUnproven();
+    store.listCredentialMintEventsForRun = readMintEvents;
+    await store.putConnection({ ...foreign, id: nextReplacement.id });
+    await assertUnproven();
+    await store.putConnection(nextReplacement);
+  }
+
   const mintCountBeforeRetry = mints.length;
-  const secondRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
+  const secondRecovery = await controller.createCapsuleDestroyPlan(seeded.capsule.id, actorContext, {
     destroyProviderConnectionReplacements: nextSelection,
   });
   expect(secondRecovery.planRun.status).toBe("waiting_approval");
@@ -14388,8 +14439,13 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     replacements: effectiveNextSelection,
   });
   expect(mints.at(-1)).toEqual(expectedNextMint);
+  if (revokedEffective) {
+    expect(secondRecovery.planRun.destroyConnectionRecovery?.credentialDelivery).toEqual([
+      { connectionId: original.id, envNames: ["CLOUDFLARE_API_TOKEN"] },
+    ]);
+  }
   expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
-  await controller.approveRun(secondRecovery.planRun.id);
+  await controller.approveRun(secondRecovery.planRun.id, { approvedBy: actorContext.actor });
   const safetyProbeId = "apply_partial_rotation_receipt_probe";
   const safetyProbe: ApplyRun = {
     ...partial.applyRun,
@@ -14430,10 +14486,20 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
   expect(await capsuleRunRuntimeSafetyMatches(safetyLedger, safetyInput)).toBe(false);
   expect(runner.destroyJobs).toHaveLength(destroyCountBeforeReceiptProbe);
   expect(mints).toHaveLength(mintCountBeforeRetry + 1);
-  const completed = await controller.createApplyRun({
+  const applyRequest = {
     planRunId: secondRecovery.planRun.id,
     expected: applyExpectedGuardFromPlanRun(secondRecovery.planRun),
-  });
+  };
+  if (revokedEffective) {
+    await store.putApplyRun({ ...partial.applyRun, executionEvidence: undefined });
+    await expect(controller.createApplyRun(applyRequest, actorContext)).rejects.toMatchObject({
+      code: "failed_precondition", details: { reason: "destroy_connection_recovery_unproven" },
+    });
+    expect(runner.destroyJobs).toHaveLength(destroyCount);
+    expect(mints).toHaveLength(mintCountBeforeRetry + 1);
+    await store.putApplyRun(partial.applyRun);
+  }
+  const completed = await controller.createApplyRun(applyRequest, actorContext);
   expect(completed.applyRun.status).toBe("succeeded");
   expect(completed.capsule.status).toBe("destroyed");
   expect(runner.destroyJobs).toHaveLength(2);
