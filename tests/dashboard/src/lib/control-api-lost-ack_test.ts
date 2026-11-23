@@ -98,7 +98,7 @@ describe("createApplyRun acknowledgement recovery", () => {
       return json({ error: "invalid_token" }, 401);
     }) as typeof fetch;
     try {
-      await expect(createApplyRun(plan)).rejects.toMatchObject({
+      await expect(createApplyRun(plan, { isCurrent: () => true })).rejects.toMatchObject({
         status: 401,
         code: "unauthorized",
       });
@@ -109,6 +109,44 @@ describe("createApplyRun acknowledgement recovery", () => {
       else Reflect.deleteProperty(globalThis, "location");
     }
   });
+
+  test.each(["unauthorized", "missing response", "accepted"] as const)(
+    "ignores %s once the reviewed screen has retired",
+    async (outcome) => {
+      const descriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
+      const destinations: string[] = [];
+      const calls: string[] = [];
+      let current = true;
+      Object.defineProperty(globalThis, "location", {
+        configurable: true,
+        value: {
+          pathname: "/runs/replacement",
+          search: "",
+          hash: "",
+          assign: (target: string) => { destinations.push(target); },
+        },
+      });
+      globalThis.fetch = (async (input, init) => {
+        calls.push(`${init?.method} ${String(input)}`);
+        current = false;
+        if (outcome === "unauthorized") return json({ error: "invalid_token" }, 401);
+        if (outcome === "accepted") return json({ run: apply }, 201);
+        throw new TypeError("response lost");
+      }) as typeof fetch;
+      const options = { timeoutMs: 1_000, isCurrent: () => current };
+      try {
+        const outcome = await createApplyRun(plan, options).then(() => "accepted", () => "retired");
+        expect({ calls, destinations, outcome }).toEqual({
+          calls: ["POST /api/v1/runs/plan_1/apply"],
+          destinations: [],
+          outcome: "retired",
+        });
+      } finally {
+        if (descriptor) Object.defineProperty(globalThis, "location", descriptor);
+        else Reflect.deleteProperty(globalThis, "location");
+      }
+    },
+  );
 
   test("does not retain a malformed success body in the thrown error", async () => {
     let calls = 0;
@@ -263,7 +301,7 @@ describe("createApplyRun acknowledgement recovery", () => {
     }) as typeof fetch;
 
     await expect(
-      createApplyRun({ ...plan, id: "plan_delayed_rejection" }, { timeoutMs: 1 }),
+      createApplyRun({ ...plan, id: "plan_delayed_rejection" }, { timeoutMs: 1, isCurrent: () => true }),
     ).rejects.toMatchObject({ status: 409, code: "failed_precondition" });
     expect(calls).toBe(1);
   });
