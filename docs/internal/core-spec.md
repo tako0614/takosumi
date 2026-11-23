@@ -1199,7 +1199,7 @@ from the saved receipt; it does not infer past dispatch authority from that
 receipt. Lifecycle and private-file effects remain outside startup recovery.
 
 The Worker RunOwner uses an explicitly composed, host-only receipt observer for
-stale non-destroy Apply Runs without lifecycle or private-file effects. Core
+stale Apply and Git-backed Destroy Runs without lifecycle or private-file effects. Core
 allocates the state and raw-output coordinates; the selected Runner object's
 completed receipt must authenticate the exact R2 content/length, evidence
 reference/digest, outcome, raw-output range and immutable execution
@@ -1218,8 +1218,17 @@ admission, elapsed dispatch deadline or invalid completed artifact holds the
 original Run without a new failure, credential or mutation. A noncompleted
 valid phase (or absent authority) does not grant dispatch: the unchanged normal
 DO preparation fence still owns pre-dispatch admission and legacy R2 replay.
-Fresh/queued, Destroy, lifecycle/private-file and other configured executors
-keep their existing paths. No new public route or sweep is enabled.
+Fresh or queued Runs, operator-module Destroy, lifecycle/private-file work
+and other configured executors keep their existing paths.
+
+A manual replacement Destroy keeps private digests of its verified bindings,
+connection records and credential policy with the prepared Plan inputs. If
+the selected replacement Connection was deleted after the Runner committed
+the result, Core can settle that exact approved Run using the recorded
+digests and the current ownership, policy, bindings and state. Any remaining
+connection must match its captured record. A plan without that proof keeps
+the live binding check. The digests supply no credentials or dispatch
+authority.
 
 The private local HTTP preparation-v2 candidate is opt-in and is not yet the
 default advertised runner protocol. It permits an exact byte-identical
