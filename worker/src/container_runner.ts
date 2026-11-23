@@ -1432,6 +1432,12 @@ function runnerExecutionErrorFromPayload(
   action: ContainerRunnerAction,
 ): OpenTofuRunnerExecutionError | undefined {
   const errorCode = stringFromRecord(payload, "errorCode");
+  if (action === "plan" && errorCode === "opentofu_resource_precondition_failed") {
+    const reason = payload.runDeadlineExceeded === true
+      ? RUN_DEADLINE_EXCEEDED_REASON
+      : errorCode;
+    return new OpenTofuRunnerExecutionError(runnerFailureMessage(reason), { reason });
+  }
   if (
     action === "source_sync" &&
     errorCode === SOURCE_REF_NOT_FOUND_REASON

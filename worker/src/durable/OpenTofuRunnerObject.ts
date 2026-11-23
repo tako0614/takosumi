@@ -9046,11 +9046,17 @@ function finiteRunnerFailureCode(
   | "provider_checksum_mismatch"
   | "opentofu_init_failed"
   | "source_build_failed"
+  | "opentofu_resource_precondition_failed"
   | "opentofu_plan_failed" {
   if (isTerminalReleaseCommandFailure(payload, phase, releaseActionIds)) {
     return RUNNER_RELEASE_COMMAND_FAILED_CODE;
   }
   const value = stringField(payload, "errorCode");
+  // Keep this code outside the detail allowlist and the mutation failure
+  // classification. Module preconditions can include arbitrary messages.
+  if (phase === "plan" && value === "opentofu_resource_precondition_failed") {
+    return value;
+  }
   if (
     phase === "source_sync" &&
     value === RUNNER_SOURCE_REF_NOT_FOUND_CODE

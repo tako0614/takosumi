@@ -374,6 +374,44 @@ test("a plan failure the run deadline caused reports the fixed reason", async ()
   );
 });
 
+for (const runDeadlineExceeded of [false, true]) {
+  test(`a plan precondition keeps only the fixed reason with deadline=${runDeadlineExceeded}`, async () => {
+    const runner = new CloudflareContainerOpenTofuRunner(
+      envAnswering(() =>
+        Response.json(
+          {
+            status: "failed",
+            errorCode: "opentofu_resource_precondition_failed",
+            phase: "plan",
+            detail: "module-authored message must not escape",
+            runDeadlineExceeded,
+          },
+          { status: 500 },
+        ),
+      ),
+    );
+
+    const failure = await runner
+      .plan(
+        { planRun: { id: "plan_precondition" } } as Parameters<
+          CloudflareContainerOpenTofuRunner["plan"]
+        >[0],
+        { deadlineAt: Date.now() + 60_000 },
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(OpenTofuRunnerExecutionError);
+    const executionError = failure as OpenTofuRunnerExecutionError;
+    expect(executionError.reason).toBe(
+      runDeadlineExceeded ? "run_deadline_exceeded" : "opentofu_resource_precondition_failed",
+    );
+    expect(executionError.detail).toBeUndefined();
+  });
+}
+
 test("a release command dispatch carries the run deadline", async () => {
   const deadlineAt = Date.parse("2026-10-11T08:30:59.920Z");
   const headers: (string | null)[] = [];

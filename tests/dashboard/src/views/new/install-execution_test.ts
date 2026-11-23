@@ -1,6 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { locale, setLocale } from "../../../../../dashboard/src/i18n/index.ts";
 
 import { installRunNeedsFallbackRead } from "../../../../../dashboard/src/views/new/install-run-polling.ts";
 
@@ -64,6 +65,21 @@ test("install failure hint localizes known codes and hides raw codes", () => {
   expect(runFailureHint("apply_failed")).not.toContain("apply_failed");
   expect(runFailureHint("extension_private_failure"))
     .not.toContain("extension_private_failure");
+});
+
+test("a resource precondition points to the app's setup and connections", () => {
+  const previous = locale();
+  const code = "opentofu_resource_precondition_failed";
+  try {
+    setLocale("en");
+    expect(runFailureHint(code)).toContain("setup instructions, settings and connections");
+    expect(runFailureHint(code)).not.toContain(code);
+    setLocale("ja");
+    expect(runFailureHint(code)).toContain("導入手順と設定・接続");
+    expect(runFailureHint(code)).not.toContain(code);
+  } finally {
+    setLocale(previous);
+  }
 });
 
 test("waiting approval exposes technical run details before approval", () => {
