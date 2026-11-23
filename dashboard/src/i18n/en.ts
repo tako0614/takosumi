@@ -949,6 +949,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The selected keys conflict for a setting shared by this run. Check the connections. For affected rows of the same provider, choose the same verified connection. If providers differ, correct their conflicting settings. Then review the change again.",
   "runError.mutationIndeterminate":
     "The operation's outcome is unknown. Ask an operator to check it before running it again.",
+  "runError.resourcePreconditionFailed":
+    "A requirement declared by this app was not met. Check the app's setup instructions, settings and connections before reviewing the change again.",
   "runError.planFailed":
     "The change review failed. Check the details, then try again.",
   "runError.applyFailed":

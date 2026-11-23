@@ -67,6 +67,21 @@ test("install failure hint localizes known codes and hides raw codes", () => {
     .not.toContain("extension_private_failure");
 });
 
+test("a resource precondition points to the app's setup and connections", () => {
+  const previous = locale();
+  const code = "opentofu_resource_precondition_failed";
+  try {
+    setLocale("en");
+    expect(runFailureHint(code)).toContain("setup instructions, settings and connections");
+    expect(runFailureHint(code)).not.toContain(code);
+    setLocale("ja");
+    expect(runFailureHint(code)).toContain("導入手順と設定・接続");
+    expect(runFailureHint(code)).not.toContain(code);
+  } finally {
+    setLocale(previous);
+  }
+});
+
 test("shared credential setting conflicts explain an explicit new removal review in both locales", () => {
   const previous = locale();
   try {
