@@ -1075,6 +1075,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     try {
       envelope = await createApplyRun(currentRun, {
         timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
+        isCurrent: () => ownsApply(attempt),
       });
     } catch (error) {
       if (!ownsApply(attempt)) return;
