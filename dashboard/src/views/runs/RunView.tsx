@@ -149,7 +149,7 @@ const RELEASE_ACTIVATION_POLL_MS = 3_000;
  * apply (matches the run history's first page). */
 
 export default function RunView() {
-  return <Page>{(session) => <Inner session={session} />}</Page>;
+  return <Page>{(session) => <Inner session={session()} />}</Page>;
 }
 
 /** True when the run fetch failed because the run genuinely does not exist —

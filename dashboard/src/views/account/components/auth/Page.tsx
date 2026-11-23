@@ -1,4 +1,4 @@
-import { createEffect, type JSX } from "solid-js";
+import { type Accessor, createEffect, type JSX } from "solid-js";
 import AuthGuard from "./AuthGuard.tsx";
 import type { SessionRecord } from "../../lib/session.ts";
 import { dashboardProductName } from "../../../../lib/runtime-capabilities.ts";
@@ -10,7 +10,7 @@ interface Props {
    * that set the title dynamically inside their body.
    */
   title?: string;
-  children: (session: SessionRecord) => JSX.Element;
+  children: (session: Accessor<SessionRecord>) => JSX.Element;
 }
 
 /**
