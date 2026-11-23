@@ -650,18 +650,29 @@ export default function InstallExecution(props: Props) {
     executionEpoch += 1;
     recoveryController?.abort();
     setRecoverableApply(undefined); setCheckingApply(false); setApplying(false); setApproving(false);
+    setRestarting(false);
     setConfirmed(false); setApplyUnconfirmed(false); setError(null); setRefusedConnectionPlanId(undefined);
     mutate(undefined); setRunId(id);
   });
   const retryFailedApply = async () => {
-    if (mutationOutcomeUnknown()) return;
+    const previous = runLatest();
+    const capsuleId = previous?.capsuleId;
+    if (!previous || !capsuleId || restarting() || mutationOutcomeUnknown()) return;
+    const attempt = applyAttempt(previous);
+    const isCurrent = () => ownsApply(attempt);
+    if (!isCurrent()) return;
     setRestarting(true); setError(null);
     try {
-      const id = extractRunId(await planCapsule(props.capsuleId));
+      const result = await planCapsule(capsuleId, { isCurrent });
+      if (!isCurrent()) return;
+      const id = extractRunId(result);
       if (!id) throw new Error(t("installStore.planMissing"));
       setConfirmed(false); setApplyUnconfirmed(false); mutate(undefined); setRunId(id);
-    } catch (cause) { setError(friendlyError(cause, t).message); }
-    finally { setRestarting(false); }
+    } catch (cause) {
+      if (isCurrent()) setError(friendlyError(cause, t).message);
+    } finally {
+      if (sameOwner(attempt)) setRestarting(false);
+    }
   };
 
   const retryReadiness = () => {
@@ -670,15 +681,18 @@ export default function InstallExecution(props: Props) {
   };
 
   const restartWithLatestSource = async () => {
-    if (mutationOutcomeUnknown()) return;
+    const previous = runLatest();
+    if (!previous || restarting() || mutationOutcomeUnknown()) return;
+    const attempt = applyAttempt(previous);
+    if (!ownsApply(attempt)) return;
     setRestarting(true);
     setError(null);
     try {
       await props.onRestart?.();
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      if (ownsApply(attempt)) setError(friendlyError(cause, t).message);
     } finally {
-      setRestarting(false);
+      if (sameOwner(attempt)) setRestarting(false);
     }
   };
 

@@ -1284,6 +1284,71 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.some((m) => m.includes("/abandon") || m.startsWith("DELETE "))).toBe(false);
       await expect(review.getByRole("link", { name: "Technical details", exact: true })).toHaveAttribute("href", "/runs/run_retry_fixture_1");
     });
+    for (const retired of [true, false]) {
+    test(retired
+      ? "a late install retry 401 cannot redirect a replacement app page"
+      : "a current install retry 401 preserves its review as the sign-in destination", async ({ page }) => {
+      const f = await detailFixture(page, base);
+      const planPath = `/api/v1/capsules/${capId}/plan`;
+      await page.addInitScript((path) => {
+        const fetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+          const response = await fetch(...args);
+          if (response.status === 401 && new URL(response.url).pathname === path) {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              document.documentElement.dataset.installRetrySettled = "true";
+            }));
+          }
+          return response;
+        };
+      }, planPath);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let planPosts = 0;
+      await page.route(`**${planPath}`, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        planPosts += 1;
+        await held;
+        return route.fulfill({ status: 401, json: { error: "invalid_token" } });
+      });
+      try {
+        await page.goto(sourceUrl);
+        await openInstallSheet(page);
+        const review = await waitForPlan(page);
+        await review.getByRole("button", { name: "Install", exact: true }).click();
+        await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
+        f.fail(true);
+        await review.getByRole("button", { name: "Retry installation", exact: true }).click();
+        await expect.poll(() => planPosts).toBe(1);
+        const current = new URL(page.url());
+        const next = sourceUrl.replaceAll("cloudflare-service", "other-service");
+        if (retired) {
+          await page.evaluate((url) => {
+            history.pushState(history.state, "", url);
+            window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+          }, next);
+          await expect(page.getByTestId("install-app-header")).toContainText("other-service");
+          await expect(review).toHaveCount(0);
+        }
+        const settled = Promise.race([
+          page.waitForRequest((request) => request.isNavigationRequest() && new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+          page.waitForFunction(() => document.documentElement.dataset.installRetrySettled === "true").then(() => "stayed"),
+        ]);
+        release();
+        expect(await settled).toBe(retired ? "stayed" : "redirected");
+        if (retired) {
+          await expect(page).toHaveURL(new URL(next, current.origin).href);
+        } else {
+          await expect(page).toHaveURL((url) => url.pathname === "/sign-in" &&
+            url.searchParams.get("return") === current.pathname + current.search + current.hash);
+        }
+        expect(planPosts).toBe(1);
+        expect(f.mutations.filter((m) => m.endsWith("/apply"))).toEqual([applyMutation]);
+      } finally {
+        release();
+      }
+    });
+    }
     test("an unconfirmed Apply is held and reload does not restore consent", async ({ page }) => {
       await detailFixture(page, base);
       let posts = 0;
