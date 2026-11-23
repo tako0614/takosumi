@@ -323,7 +323,7 @@ test("a failed health read never enters apply's bounded POST retry", async () =>
     throw new Error("apply was dispatched");
   }) as typeof fetch;
   await probeInitialSharedAuthSession();
-  await expect(createApplyRun("plan_current")).rejects.toBeInstanceOf(
+  await expect(createApplyRun({ id: "plan_current", type: "plan", capsuleId: "cap_current", workspaceId: "ws_current" })).rejects.toBeInstanceOf(
     SharedAuthSessionPreflightError,
   );
   expect(healthReads).toBe(2);

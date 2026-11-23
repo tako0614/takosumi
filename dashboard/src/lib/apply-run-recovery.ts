@@ -1,4 +1,4 @@
-import { getRunWithOptions, listPlanApplyRuns, type ApplyReviewRun, type Run } from "./control-api.ts";
+import { getRunWithOptions, listPlanApplyRuns, matchesReviewedApplyRun, type ApplyReviewRun, type Run } from "./control-api.ts";
 
 const APPLY_RECOVERY_TIMEOUT_MS = 5_000;
 
@@ -12,7 +12,6 @@ export async function recoverApplyRun(
   if (!options.isCurrent() || options.signal?.aborted || !planId ||
     !capsuleId || !workspaceId ||
     (plan.type !== "plan" && plan.type !== "destroy_plan")) return;
-  const type = plan.type === "plan" ? "apply" : "destroy_apply";
   const controller = new AbortController();
   let abort!: () => void;
   const stopped = new Promise<undefined>((resolve) => {
@@ -31,8 +30,7 @@ export async function recoverApplyRun(
     // exact lineage before either caller leaves its unconfirmed state.
     const current = await getRunWithOptions(candidate.id, { signal: controller.signal, cache: "no-store", isCurrent: options.isCurrent });
     if (!options.isCurrent() || controller.signal.aborted) return;
-    return current?.id === candidate.id && current.type === type &&
-        current.workspaceId === workspaceId && current.capsuleId === capsuleId && current.planRunId === planId
+    return current?.id === candidate.id && matchesReviewedApplyRun(plan, current)
       ? current : undefined;
   };
   try {

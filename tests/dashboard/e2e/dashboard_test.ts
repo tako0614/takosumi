@@ -573,6 +573,7 @@ async function startReadinessBrowserFixture(
     id: "run_provider_apply_e2e",
     workspaceId: "ws_alpha",
     capsuleId: "cap_provider_destination_e2e",
+    planRunId: "run_provider_plan_e2e",
     type: "apply",
     status: applyErrorCode ? "failed" : "succeeded",
     ...(applyErrorCode ? { errorCode: applyErrorCode } : {}),
@@ -1070,6 +1071,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         return route.fulfill({ json: { run: {
           id: "run_provider_apply_e2e", workspaceId: "ws_alpha",
           capsuleId: "cap_provider_destination_e2e", type: "apply", status: "succeeded",
+          planRunId: "run_provider_plan_e2e",
           createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
         } } });
       }
@@ -1077,6 +1079,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         return route.fulfill({ json: { run: {
           id: "run_provider_apply_e2e", workspaceId: "ws_alpha",
           capsuleId: "cap_provider_destination_e2e", type: "apply", status: "succeeded",
+          planRunId: "run_provider_plan_e2e",
           createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
         } } });
       }

@@ -7,6 +7,9 @@ import {
 
 const realFetch = globalThis.fetch;
 
+const plan = { id: "plan_1", type: "plan", capsuleId: "cap_1", workspaceId: "ws_1" } as const;
+const apply = { ...plan, id: "apply_1", type: "apply", planRunId: plan.id } as const;
+
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
@@ -34,11 +37,11 @@ describe("createApplyRun acknowledgement recovery", () => {
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       });
       if (attempts === 1) throw new Error("commit response lost");
-      return json({ run: { id: "apply_1" } }, 201);
+      return json({ run: apply }, 201);
     }) as typeof fetch;
 
-    await expect(createApplyRun("plan_1")).resolves.toEqual({
-      run: { id: "apply_1" },
+    await expect(createApplyRun(plan)).resolves.toEqual({
+      run: apply,
     });
     expect(calls).toEqual([
       {
@@ -69,7 +72,7 @@ describe("createApplyRun acknowledgement recovery", () => {
       );
     }) as typeof fetch;
 
-    await expect(createApplyRun("plan_1")).rejects.toMatchObject({
+    await expect(createApplyRun(plan)).rejects.toMatchObject({
       status: 409,
       code: "failed_precondition",
     });
@@ -95,7 +98,7 @@ describe("createApplyRun acknowledgement recovery", () => {
       return json({ error: "invalid_token" }, 401);
     }) as typeof fetch;
     try {
-      await expect(createApplyRun("plan_1")).rejects.toMatchObject({
+      await expect(createApplyRun(plan)).rejects.toMatchObject({
         status: 401,
         code: "unauthorized",
       });
@@ -117,7 +120,7 @@ describe("createApplyRun acknowledgement recovery", () => {
 
     let error: unknown;
     try {
-      await createApplyRun("plan_invalid_success");
+      await createApplyRun({ ...plan, id: "plan_invalid_success" });
     } catch (caught) {
       error = caught;
     }
@@ -131,6 +134,35 @@ describe("createApplyRun acknowledgement recovery", () => {
     expect(calls).toBe(1);
   });
 
+  test.each([
+    ["empty Run ID", { id: "" }],
+    ["the review's own ID", { id: plan.id }],
+    ["another Plan", { planRunId: "another_plan" }],
+    ["unlinked Run", { planRunId: undefined }],
+    ["another app", { capsuleId: "another_app" }],
+    ["another Workspace", { workspaceId: "another_workspace" }],
+    ["another Run type", { type: "destroy_apply" }],
+  ] as const)("treats an acknowledgement with %s as indeterminate", async (_label, change) => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push(`${init?.method} ${String(input)}`);
+      return json({ run: { ...apply, ...change } }, 201);
+    }) as typeof fetch;
+    await expect(createApplyRun(plan)).rejects.toMatchObject({
+      operation: "apply",
+      code: "request_indeterminate",
+      causeSummary: { status: 502, code: "invalid_apply_response" },
+    });
+    expect(calls).toEqual(["POST /api/v1/runs/plan_1/apply"]);
+  });
+
+  test("binds a successful Destroy acknowledgement to its own review", async () => {
+    const destroyPlan = { ...plan, type: "destroy_plan" as const };
+    const destroyApply = { ...apply, type: "destroy_apply" };
+    globalThis.fetch = (async () => json({ run: destroyApply }, 201)) as typeof fetch;
+    await expect(createApplyRun(destroyPlan)).resolves.toEqual({ run: destroyApply });
+  });
+
   test("leaves HTTP 5xx to read-only reconciliation without resending Apply", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -138,7 +170,7 @@ describe("createApplyRun acknowledgement recovery", () => {
       return json({ error: "gateway_unavailable" }, 503);
     }) as typeof fetch;
 
-    await expect(createApplyRun("plan_1")).rejects.toMatchObject({
+    await expect(createApplyRun(plan)).rejects.toMatchObject({
       operation: "apply",
       code: "request_indeterminate",
       causeSummary: { status: 503, code: "gateway_unavailable" },
@@ -154,7 +186,7 @@ describe("createApplyRun acknowledgement recovery", () => {
       return json({ error: "failed_precondition" }, 409);
     }) as typeof fetch;
 
-    await expect(createApplyRun("plan_1")).rejects.toMatchObject({
+    await expect(createApplyRun(plan)).rejects.toMatchObject({
       operation: "apply",
       code: "request_indeterminate",
       causeSummary: { status: 409, code: "failed_precondition" },
@@ -171,7 +203,7 @@ describe("createApplyRun acknowledgement recovery", () => {
 
     let error: unknown;
     try {
-      await createApplyRun("plan_1");
+      await createApplyRun(plan);
     } catch (caught) {
       error = caught;
     }
@@ -199,12 +231,12 @@ describe("createApplyRun acknowledgement recovery", () => {
           });
         });
       }
-      return Promise.resolve(json({ run: { id: "apply_1" } }, 201));
+      return Promise.resolve(json({ run: { ...apply, planRunId: "plan_timeout" } }, 201));
     }) as typeof fetch;
 
     await expect(
-      createApplyRun("plan_timeout", { timeoutMs: 1 }),
-    ).resolves.toEqual({ run: { id: "apply_1" } });
+      createApplyRun({ ...plan, id: "plan_timeout" }, { timeoutMs: 1 }),
+    ).resolves.toEqual({ run: { ...apply, planRunId: "plan_timeout" } });
     expect(calls).toBe(2);
   });
 
@@ -231,7 +263,7 @@ describe("createApplyRun acknowledgement recovery", () => {
     }) as typeof fetch;
 
     await expect(
-      createApplyRun("plan_delayed_rejection", { timeoutMs: 1 }),
+      createApplyRun({ ...plan, id: "plan_delayed_rejection" }, { timeoutMs: 1 }),
     ).rejects.toMatchObject({ status: 409, code: "failed_precondition" });
     expect(calls).toBe(1);
   });
