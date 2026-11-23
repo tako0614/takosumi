@@ -76,6 +76,37 @@ describe("createApplyRun acknowledgement recovery", () => {
     expect(calls).toBe(1);
   });
 
+  test("signs in again at the same Plan after a confirmed logout without resending Apply", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
+    const destinations: string[] = [];
+    const calls: string[] = [];
+    const review = "/runs/plan_1?activity=review#plan";
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: {
+        pathname: "/runs/plan_1",
+        search: "?activity=review",
+        hash: "#plan",
+        assign: (target: string) => { destinations.push(target); },
+      },
+    });
+    globalThis.fetch = (async (input, init) => {
+      calls.push((init?.method ?? "GET") + " " + String(input));
+      return json({ error: "invalid_token" }, 401);
+    }) as typeof fetch;
+    try {
+      await expect(createApplyRun("plan_1")).rejects.toMatchObject({
+        status: 401,
+        code: "unauthorized",
+      });
+      expect(destinations).toEqual(["/sign-in?return=" + encodeURIComponent(review)]);
+      expect(calls).toEqual(["POST /api/v1/runs/plan_1/apply"]);
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, "location", descriptor);
+      else Reflect.deleteProperty(globalThis, "location");
+    }
+  });
+
   test("does not retain a malformed success body in the thrown error", async () => {
     let calls = 0;
     const rawMarker = "secret-raw-response-marker";
