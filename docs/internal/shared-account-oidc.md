@@ -74,9 +74,12 @@ family limit. Durable hashed custody and consumed-chain evidence make code or
 refresh replay revoke the grant across replicas. Current grant, client status,
 issuer, subject, authentication generation, account fences and revocation are
 checked on use. Global logout revokes all grants of the current issuer session.
-Issuer cookies are host-only, Secure, HttpOnly, SameSite=Lax; their idle limit is
-12 hours and absolute limit seven days. Each RP owns its opaque cookie and
-encrypted token custody. An RP cookie never becomes an issuer cookie.
+Issuer cookies are host-only, Secure, HttpOnly, SameSite=Lax. New Hosted sessions
+expire after three days idle or 30 days from issuance. The cookie lasts until
+that absolute limit, while the server enforces the idle limit on each use.
+Previously issued sessions keep their twelve-hour idle and seven-day absolute
+limits. Each RP owns its opaque cookie and encrypted token custody. An RP cookie
+never becomes an issuer cookie.
 
 The Hosted handler accepts only `__Host-takosumi_session` as its browser session
 cookie. Its request-lifetime restrictive policy excludes a selected legacy

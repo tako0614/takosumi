@@ -88,6 +88,23 @@ test("OAuth and password sign in to the same account; a change revokes prior ses
   expect((await request(methods + "/password", { currentPassword: replacement, password }, cookieOf(changed))).status).toBe(200);
 });
 
+test("hosted password login sets a cookie that can outlast the first idle deadline", async () => {
+  const store = new InMemoryAccountsStore();
+  const request = client(await createEphemeralAccountsHandler({ issuer, store, passwordAuthMode: "login" }));
+  const { cookie } = seed(store);
+  expect((await request(methods + "/password", { password, username }, cookie)).status).toBe(200);
+
+  const hostedIssuer = "https://auth.example.test";
+  const hosted = client(await createEphemeralAccountsHandler({
+    issuer: hostedIssuer, store, passwordAuthMode: "login", hostedSessionPolicy: true,
+    allowEphemeralKeyOnHttpsIssuer: true,
+  }), hostedIssuer);
+  const response = await hosted(login, { username, password });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("set-cookie")).toStartWith("__Host-takosumi_session=");
+  expect(response.headers.get("set-cookie")).toContain("Max-Age=2592000");
+});
+
 test("existing OAuth accounts can enroll without email while stale sessions still need fresh proof", async () => {
   for (const age of [0, 600_000]) {
     const store = new InMemoryAccountsStore();
