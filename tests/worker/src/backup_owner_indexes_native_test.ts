@@ -11,6 +11,13 @@ import { stableStringify } from "../../../core/adapters/source/digest.ts";
 import { storedDigest, type StoredServiceComposition } from "../../../worker/src/stored-service-usage.ts";
 
 const NOW = "2026-10-14T00:00:00.000Z";
+const FIXTURE_MAINTENANCE_IDENTITY = {
+  sourceCommit: "a".repeat(40),
+  manifestDigest: "sha256:" + "b".repeat(64),
+  environment: "backup-index-native-test",
+  databaseRole: "in_place",
+  releasePolicy: "in_place",
+} as const;
 const PHYSICAL = "backups_created_by_run_id_idx", LEGACY = "backups_legacy_created_by_run_text_idx";
 const EXPR = "cast((case when json_valid(record_json) = 1 then json_extract(record_json, '$.createdByRunId') else null end) as text)";
 const ORIGINAL = `select r.id, r.space_id, r.source_id, r.installation_id, r.environment,
@@ -45,7 +52,7 @@ async function fixture(head = 74) {
     const native = await runtime.getD1Database("DB"), captures: Captured[] = [];
     const db = bridge(native, captures);
     await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: head });
-    const fence = await acquireControlD1MaintenanceFence(db, { sourceCommit: "a".repeat(40), manifestDigest: "sha256:" + "b".repeat(64), environment: "backup-index-native-test", databaseRole: "in_place", releasePolicy: "in_place" }, NOW);
+    const fence = await acquireControlD1MaintenanceFence(db, FIXTURE_MAINTENANCE_IDENTITY, NOW);
     await releaseControlD1MaintenanceFence(db, fence, "2026-10-14T00:01:00.000Z");
     return { runtime, native, db, captures, fence, store: new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" }), async close() { await runtime.dispose(); } };
   } catch (error) { await runtime.dispose(); throw error; }
@@ -326,14 +333,18 @@ test("native74 index migration rolls both index creations back on a failing seco
 }, 30_000);
 
 test("native exact71/72/73/74/75/76 request bridge separates ordinary, billing, identity and indexed floors without DDL", async () => {
-  for (const head of [71, 72, 73, 74, 75, 76]) {
-    const f = await fixture(head);
-    try {
-      const workspace = { id: "workspace_bridge", handle: "workspace-bridge", displayName: "Native bridge", type: "personal" as const, ownerUserId: "owner_bridge", createdAt: NOW, updatedAt: NOW };
-      await f.store.putWorkspace(workspace);
-      const member = { id: "member_bridge", workspaceId: workspace.id, accountId: workspace.ownerUserId, roles: ["owner"], status: "active", createdAt: NOW, updatedAt: NOW };
-      await f.native.prepare("insert into workspace_members(id,workspace_id,account_id,status,record_json,created_at,updated_at) values(?,?,?,'active',?,?,?)")
-        .bind(member.id, member.workspaceId, member.accountId, JSON.stringify(member), NOW, NOW).run();
+  const f = await fixture(71);
+  try {
+    const workspace = { id: "workspace_bridge", handle: "workspace-bridge", displayName: "Native bridge", type: "personal" as const, ownerUserId: "owner_bridge", createdAt: NOW, updatedAt: NOW };
+    await f.store.putWorkspace(workspace);
+    const member = { id: "member_bridge", workspaceId: workspace.id, accountId: workspace.ownerUserId, roles: ["owner"], status: "active", createdAt: NOW, updatedAt: NOW };
+    await f.native.prepare("insert into workspace_members(id,workspace_id,account_id,status,record_json,created_at,updated_at) values(?,?,?,'active',?,?,?)")
+      .bind(member.id, member.workspaceId, member.accountId, JSON.stringify(member), NOW, NOW).run();
+
+    // Reuse the historical prefix while exercising cold request bindings at each exact head.
+    for (const head of [71, 72, 73, 74, 75, 76]) {
+      if (head > 71) await ensureD1OpenTofuLedgerSchema(f.db, { throughMigrationVersion: head });
+      expect(await f.native.prepare("select max(version) as version from schema_migrations").first("version")).toBe(head);
       const readonly: D1Database = { prepare(sql) {
         if (!/^\s*(?:select|pragma|with)\b/iu.test(sql)) throw new Error("request attempted schema mutation");
         return f.db.prepare(sql);
@@ -351,10 +362,11 @@ test("native exact71/72/73/74/75/76 request bridge separates ordinary, billing, 
       if (head >= 75) await verifyD1OpenTofuLedgerSchemaPredeployed(readonly);
       else await expect(verifyD1OpenTofuLedgerSchemaPredeployed(readonly)).rejects.toThrow();
       expect((await f.native.prepare("select name from sqlite_master where type='index' and name in (?,?)").bind(PHYSICAL, LEGACY).all()).results).toHaveLength(head >= 74 ? 2 : 0);
-      await f.native.prepare("update _takosumi_control_schema_maintenance set active=1,released_at=null where singleton=1").run();
+      const fence = await acquireControlD1MaintenanceFence(f.db, FIXTURE_MAINTENANCE_IDENTITY, NOW);
       await expect(store.getWorkspace(workspace.id)).rejects.toThrow("maintenance_fence_active");
       await expect(coldPage.listWorkspacesForAccountPage(member.accountId, { limit: 1 })).rejects.toThrow("maintenance_fence_active");
       await expect(verifyD1BackupOwnerIndexesPredeployed(readonly)).rejects.toThrow();
-    } finally { await f.close(); }
-  }
+      await releaseControlD1MaintenanceFence(f.db, fence, "2026-10-14T00:01:00.000Z");
+    }
+  } finally { await f.close(); }
 }, 60_000);
