@@ -2748,6 +2748,7 @@ export async function planCapsule(
   options: {
     readonly compatibilityReportId?: string;
     readonly timeoutMs?: number;
+    readonly isCurrent?: () => boolean;
   } = {},
 ): Promise<unknown> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -2764,6 +2765,7 @@ export async function planCapsule(
       {
         method: "POST",
         signal: controller?.signal,
+        isCurrent: options.isCurrent,
         body: options.compatibilityReportId
           ? { compatibilityReportId: options.compatibilityReportId }
           : {},
