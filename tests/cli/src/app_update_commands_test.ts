@@ -1048,6 +1048,46 @@ test("201 queued is not completion; deadline preserves the known Apply id and on
   expect(r.calls.filter(c => c.method === "POST")).toHaveLength(1);
 });
 
+for (const [kind, savedPlan, accepted, args, serve] of [
+  ["revision", plan, apply, applyArgs, normal],
+  ["uninstall", destroyPlan, destroyApply, destroyApplyArgs, normalDestroy],
+] as const) {
+  test(`an accepted ${kind} Apply is read by ID even if the history list omits it`, async () => {
+    const r = await invoke([...args, "--timeout-ms", "100"], (req) => {
+      const path = new URL(req.url).pathname;
+      if (path === `/api/v1/runs/${accepted.id}`) return Response.json({ run: accepted });
+      return serve(req, {
+        plan: { ...savedPlan, status: "succeeded" }, apply: { ...accepted, status: "queued" },
+      });
+    });
+    expect(r.code).toBe(0);
+    expect(r.result).toMatchObject({ status: "succeeded", runId: accepted.id });
+    expect(r.calls.map(c => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
+      `GET /api/v1/runs/${savedPlan.id}`,
+      "GET /api/v1/capsules/cap_owned/runs",
+      "GET /api/v1/capsules/cap_owned",
+      `POST /api/v1/runs/${savedPlan.id}/apply`,
+      `GET /api/v1/runs/${accepted.id}`,
+    ]);
+  });
+}
+
+test("a refused individual read preserves the accepted Apply ID and its last known status", async () => {
+  const r = await invoke([...applyArgs, "--timeout-ms", "100"], (req) => {
+    if (new URL(req.url).pathname === `/api/v1/runs/${apply.id}`) {
+      return Response.json({ error: { code: "forbidden" } }, { status: 403 });
+    }
+    return normal(req, { apply: { ...apply, status: "queued" } });
+  });
+  expect(r.code).toBe(1);
+  expect(r.result).toMatchObject({
+    status: "pending", runId: apply.id, runStatus: "queued", runUrl: `${origin}/runs/${apply.id}`,
+  });
+  expect(r.calls.filter(c => new URL(c.url).pathname.endsWith("/runs"))).toHaveLength(1);
+  expect(r.calls.filter(c => c.method === "POST")).toHaveLength(1);
+  expect(r.calls.at(-1)?.url).toBe(`${origin}/api/v1/runs/${apply.id}`);
+});
+
 test("a parked Plan is approved once and reread before applying the unchanged saved intent", async () => {
   let approved = false;
   const parked = { ...plan, status: "waiting_approval", requiresApproval: true };
