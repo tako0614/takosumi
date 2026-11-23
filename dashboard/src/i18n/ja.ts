@@ -774,6 +774,7 @@ export const ja = {
   "app.uninstall.replacementCloudflareAccount": "{name} · Cloudflareアカウント {accountId}",
   "app.uninstall.replacementNeedsVerification": "{name} · クラウド接続でアカウントを確認",
   "app.uninstall.replacementHint": "元と同じクラウドアカウントの接続を選んでください。",
+  "app.uninstall.replacementPermissionsHint": "接続に対象リソースの削除権限があるか確認してください。別の接続を使う場合は、元と同じクラウドアカウントの接続を選んでください。",
   "app.uninstall.replacementPlaceholder": "接続を選択",
   "app.uninstall.keepConnection": "この接続を使う",
   "app.uninstall.noReplacement": "選べる確認済みの接続がありません。",

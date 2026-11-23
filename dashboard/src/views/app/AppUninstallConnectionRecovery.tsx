@@ -26,6 +26,12 @@ export default function AppUninstallConnectionRecovery(props: {
   readonly onReview: (replacements: readonly DestroyProviderConnectionReplacement[]) => void;
 }) {
   const [open, setOpen] = createSignal(false);
+  const failedDestroyApply = () => props.mode === "failed" &&
+    props.app.latestRun?.type === "destroy_apply" &&
+    props.app.latestRun.status === "failed" && props.app.latestRun.errorCode === "apply_failed";
+  const replacementHint = () => t(failedDestroyApply()
+    ? "app.uninstall.replacementPermissionsHint"
+    : "app.uninstall.replacementHint");
   const capsuleId = createMemo(() => props.app.capsuleId);
   const workspaceId = createMemo(() => props.app.workspaceId);
   const bindingRunId = createMemo(() => props.mode === "unavailable" ? undefined : props.app.latestRun?.id);
@@ -96,9 +102,12 @@ export default function AppUninstallConnectionRecovery(props: {
 
   return (
     <Show when={open()} fallback={
-      <Button variant="secondary" type="button" disabled={props.disabled} onClick={() => setOpen(true)}>
-        {t("app.uninstall.chooseReplacement")}
-      </Button>
+      <>
+        <Show when={failedDestroyApply()}><p>{replacementHint()}</p></Show>
+        <Button variant="secondary" type="button" disabled={props.disabled} onClick={() => setOpen(true)}>
+          {t("app.uninstall.chooseReplacement")}
+        </Button>
+      </>
     }>
       <div class="wa-stack">
         <Switch>
@@ -112,7 +121,7 @@ export default function AppUninstallConnectionRecovery(props: {
             <p>{t("app.uninstall.noReplacement")}</p>
           </Match>
           <Match when={inventory.state === "ready"}>
-            <p>{t("app.uninstall.replacementHint")}</p>
+            <p>{replacementHint()}</p>
             <For each={rows()}>{({ connectionId, provider, label }) => (
               <Show when={options(provider, connectionId).length > 0} fallback={
                 <FormField label={label} as="group"><p>{t("app.uninstall.noReplacement")}</p></FormField>
