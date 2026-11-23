@@ -947,6 +947,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The selected version was not found. Check the version, then try again.",
   "runError.stateGenerationMismatch":
     "Another change was applied first. Review again before applying.",
+  "runError.providerCredentialEnvConflict":
+    "The selected keys conflict for a setting shared by this run. Check the connections. For affected rows of the same provider, choose the same verified connection. If providers differ, correct their conflicting settings. Then review the change again.",
   "runError.mutationIndeterminate":
     "The operation's outcome is unknown. Ask an operator to check it before running it again.",
   "runError.planFailed":
