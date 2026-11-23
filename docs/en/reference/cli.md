@@ -146,8 +146,8 @@ When a `refused` result includes `connectionRecoveryFailure`, verify the replace
 or check the account and applied connection settings for `bindings_mismatch`.
 `applied_evidence_unavailable` means the server could not confirm the applied record needed for the comparison.
 When the result is `review_required`, inspect what the Plan will remove and its effective `providerConnections`, including replacements carried forward from a previous attempt.
-For `plan_pending`, use the returned `planRunId` to read the same Plan again. If the result is `unconfirmed`, `--current-review` finds the app's current manual Destroy Plan while it is pending or available for review.
-Whether the earlier request was accepted is still unconfirmed. Inspect the connections and planned changes.
+For `plan_pending`, use the returned `planRunId` to read the same Plan again. If the result is `unconfirmed`, `--current-review` finds the latest manual Destroy Plan if it is pending, reviewable, or failed.
+A `failed` result includes the Plan ID and the failure code when available. Whether the earlier request was accepted is still unconfirmed.
 
 ```bash
 takosumi apps recover-uninstall cap_example --current-review \

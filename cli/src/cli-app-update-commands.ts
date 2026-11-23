@@ -412,7 +412,8 @@ async function readDestroyReviewPointer(request: Client, appPath: string, appId:
   }
   const { progress, latestRun } = app;
   const scheduled = app.uninstall.scheduled;
-  const scheduledPhase = isRecord(scheduled) ? scheduled.phase : undefined;
+  const reservation = isRecord(scheduled) ? scheduled : undefined;
+  const { phase: scheduledPhase, requestedAt, deleteAfter } = reservation ?? {};
   if (progress.revisionPreparing !== false || !isRecord(latestRun) ||
     latestRun.type !== "destroy_plan" || !bounded(latestRun.id, 256) ||
     ((scheduled !== undefined || app.status === "uninstalled") &&
@@ -426,6 +427,19 @@ async function readDestroyReviewPointer(request: Client, appPath: string, appId:
       pending.id !== id || pending.type !== "destroy_plan" || pending.status !== status) {
       throw new Refusal("current_destroy_review_unavailable");
     }
+  } else if (status === "failed") {
+    if (progress.run !== undefined || progress.review !== undefined) {
+      throw new Refusal("current_destroy_review_unavailable");
+    }
+    if (reservation) {
+      // Accounts omits this problem for an older reservation or the finalizer.
+      if (scheduledPhase !== "scheduled" || !bounded(requestedAt, 64) || !bounded(deleteAfter, 64) ||
+        !Array.isArray(app.problems) || !app.problems.some(problem =>
+          isRecord(problem) && problem.runId === id && problem.runType === "destroy_plan" &&
+          (problem.code === "uninstall_failed" || problem.code === "policy_blocked"))) {
+        throw new Refusal("current_destroy_review_unavailable");
+      }
+    }
   } else {
     const review = progress.review;
     if ((status !== "waiting_approval" && status !== "succeeded") ||
@@ -434,13 +448,13 @@ async function readDestroyReviewPointer(request: Client, appPath: string, appId:
       throw new Refusal("current_destroy_review_unavailable");
     }
   }
-  return { id, workspaceId: app.workspaceId, status, scheduledPhase };
+  return { id, workspaceId: app.workspaceId, status, scheduledPhase, requestedAt, deleteAfter };
 }
 
 function destroyReviewAdvanced(before: string, after: string): boolean {
   return (before === "queued" && after === "running") ||
     ((before === "queued" || before === "running") &&
-      (after === "waiting_approval" || after === "succeeded"));
+      (after === "waiting_approval" || after === "succeeded" || after === "failed"));
 }
 
 async function readManualDestroyPlan(
@@ -456,6 +470,8 @@ async function readManualDestroyPlan(
     const reservation = isRecord(capsule) ? capsule.uninstall : undefined;
     if (!isRecord(capsule) || capsule.id !== appId || capsule.workspaceId !== selected.workspaceId ||
       !isRecord(reservation) || reservation.phase !== selected.scheduledPhase ||
+      (selected.requestedAt !== undefined && reservation.requestedAt !== selected.requestedAt) ||
+      (selected.deleteAfter !== undefined && reservation.scheduledDestroyAt !== selected.deleteAfter) ||
       reservation.destroyPlanRunId === selected.id ||
       (reservation.destroyPlanRunId === undefined
         ? selected.scheduledPhase === "destroying"
@@ -486,7 +502,8 @@ async function currentDestroyReview(request: Client, appId: string): Promise<Pub
     const run = await readManualDestroyPlan(request, appPath, appId, selected);
     const current = await readDestroyReviewPointer(request, appPath, appId);
     if (current.id !== selected.id || current.workspaceId !== selected.workspaceId ||
-      current.scheduledPhase !== selected.scheduledPhase) break;
+      current.scheduledPhase !== selected.scheduledPhase ||
+      current.requestedAt !== selected.requestedAt || current.deleteAfter !== selected.deleteAfter) break;
     if (current.status === run.status) return run;
     // Only a forward transition warrants another read. Queued and running are
     // the only nonterminal states in this projection, so there are at most two.
@@ -732,7 +749,7 @@ export function recoverUninstallHelp(): string {
     '[{"connectionId":"old-id","replacementConnectionId":"new-id"}]',
     "takosumi apps recover-uninstall <app-id> --destroy-plan <saved-destroy-plan-run-id>",
     "takosumi apps recover-uninstall <app-id> --current-review",
-    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。--current-review はアプリの手動削除Planを準備中またはレビュー待ちの状態で読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read a specific saved Plan. Use --current-review to read the app’s pending or reviewable manual Destroy Plan. Execution is a separate command.",
+    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。--current-review はアプリの最新の手動削除Planが準備中、レビュー可能、または失敗した場合に、その状態を読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read a specific saved Plan. Use --current-review to read the app’s latest manual Destroy Plan if it is pending, reviewable, or failed. Execution is a separate command.",
     "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>",
     "Scopes: read,write to prepare; read to review.",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
