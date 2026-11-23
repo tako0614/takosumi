@@ -58,7 +58,7 @@ export default function AccountView() {
 
   return (
     <Page title={t("account.title")}>
-      {(session) => <Inner session={session} />}
+      {(session) => <Inner session={session()} />}
     </Page>
   );
 }

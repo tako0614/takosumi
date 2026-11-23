@@ -123,7 +123,7 @@ const SCREEN_READ_DELAY_MS = 3_000;
 export default function InstallView() {
   return (
     <Page title={t("installStore.title")}>
-      {(session) => <InstallRoute principalId={session.subject} />}
+      {(session) => <InstallRoute principalId={session().subject} />}
     </Page>
   );
 }

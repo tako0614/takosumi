@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "@solidjs/router";
 import {
+  type Accessor,
   createMemo,
   createSignal,
   type JSX,
@@ -23,7 +24,7 @@ import Button from "../../../../components/ui/Button.tsx";
 import { isHostedSessionUnavailable } from "../../../../lib/shared-auth-session-preflight.ts";
 
 interface Props {
-  children: (session: SessionRecord) => JSX.Element;
+  children: (session: Accessor<SessionRecord>) => JSX.Element;
   loadingFallback?: JSX.Element;
 }
 
@@ -180,7 +181,19 @@ export default function AuthGuard(props: Props) {
         </main>
       </Match>
       <Match when={state() === "authenticated" && session()}>
-        {(s) => <Show when={sessionOwner()} keyed>{(_owner) => props.children(s())}</Show>}
+        {(s) => (
+          <Show when={sessionOwner()} keyed>
+            {(owner) => {
+              // Keep revalidated fields live in this subtree without letting
+              // its accessor cross the identity boundary during an update.
+              const current = createMemo(
+                (previous: SessionRecord) => sessionOwner() === owner ? s() : previous,
+                s(),
+              );
+              return props.children(current);
+            }}
+          </Show>
+        )}
       </Match>
     </Switch>
   );

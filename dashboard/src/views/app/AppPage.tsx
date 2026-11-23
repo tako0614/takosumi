@@ -31,8 +31,8 @@ export default function AppPage() {
           {(capsuleId) => (
             <AppManagePage
               capsuleId={capsuleId}
-              principalId={session.subject}
-              accountId={session.primaryAccountId ?? session.subject}
+              principalId={session().subject}
+              accountId={session().primaryAccountId ?? session().subject}
               {...(section() ? { section: section()! } : {})}
               openChooser={openChooser()}
             />
