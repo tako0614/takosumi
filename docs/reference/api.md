@@ -657,6 +657,11 @@ StateVersion を作った適用済みプランの Provider に対応する保存
 空配列は対象を確定できなかった場合も含みます。交換先は破棄プラン作成と Apply 時に検証します。
 `uninstall.requiredConnectionIds` は、適用済みプランから確定できた通常削除の接続 ID です。
 運用者の接続も含みます。省略時は対象を確定していません。
+`uninstall.unavailableRecoveryConnectionIds` は、手動で接続を選び直すときに現在使えない接続の
+保存済みIDです。部分削除の後は、現在のStateVersionを作った削除計画で使った接続を調べます。
+該当した場合も、値は `recoveryConnectionIds` と同じ保存済みIDです。代替接続のIDや資格情報は
+含みません。現在のアプリ所有者が本人のセッションまたは個人アクセストークンで読むときに返し、
+確認できなければ省略します。削除計画とApplyでは、選んだ接続をサーバーが再確認します。
 画面が `document.clients` でスマホの専用アプリを宣言していれば、`screens[].clients` に検査を通った
 ものだけが入ります（`preferred`、`ios` の `verified` / `trustedClientId` / `target` / `name` /
 `appStoreId` / `bundleId` / `open` / `universalLink` / `storeUrl`、`android` の `verified` /

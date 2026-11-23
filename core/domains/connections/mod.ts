@@ -483,9 +483,14 @@ export class ConnectionsService {
   async listAppliedDestroyConnectionIds(
     capsule: Capsule,
     requiredProviders: readonly RequiredProviderBindingIdentity[],
+    replacementReadiness?: {
+      readonly appliedReplacements?: readonly DestroyProviderConnectionReplacement[];
+      readonly now: number;
+    },
   ): Promise<{
     readonly requiredConnectionIds: readonly string[];
     readonly recoveryConnectionIds: readonly string[];
+    readonly unavailableRecoveryConnectionIds?: readonly string[];
   }> {
     const bindings = await this.#selectStoredProviderBindingsForDestroy(
       capsule,
@@ -495,10 +500,53 @@ export class ConnectionsService {
     const eligible = await Promise.all(ids.map(async (id) =>
       await this.#isOperatorConnection(id) ? undefined : id
     ));
-    return {
+    const scope = {
       requiredConnectionIds: ids,
       recoveryConnectionIds: eligible.flatMap((id) => id === undefined ? [] : [id]),
     };
+    if (!replacementReadiness) return scope;
+
+    try {
+      const prior = replacementReadiness.appliedReplacements === undefined
+        ? []
+        : parseDestroyProviderConnectionReplacements(
+            replacementReadiness.appliedReplacements,
+            { allowOriginalConnection: true },
+          );
+      const recoverable = new Set(scope.recoveryConnectionIds);
+      if (prior.some(({ connectionId }) => !recoverable.has(connectionId))) return scope;
+      const effectiveIds = new Map(prior.map(({ connectionId, replacementConnectionId }) =>
+        [connectionId, replacementConnectionId]));
+      // A replacement review retains unselected effective bindings from the
+      // applied partial Destroy. Check those rows without opening credentials.
+      const policy = await this.#policyForCapsule(capsule);
+      const unavailable = await Promise.all(
+        bindings.filter(({ connectionId }) => recoverable.has(connectionId))
+          .map(async (binding) => {
+            const effectiveId = effectiveIds.get(binding.connectionId) ?? binding.connectionId;
+            try {
+              const { connection } = await this.#resolveBinding(
+                capsule, { ...binding, connectionId: effectiveId }, policy, "stored",
+              );
+              if (connection.expiresAt && Date.parse(connection.expiresAt) <= replacementReadiness.now) {
+                return binding.connectionId;
+              }
+            } catch (error) {
+              if (!(error instanceof OpenTofuControllerError)) throw error;
+              if (isRecord(error.details) && error.details.reason === PROVIDER_CONNECTION_NOT_READY_REASON) {
+                return binding.connectionId;
+              }
+            }
+          }),
+      );
+      return {
+        ...scope,
+        unavailableRecoveryConnectionIds: [...new Set(unavailable.filter((id) => id !== undefined))],
+      };
+    } catch {
+      // Optional readback failures must not erase the existing binding scope.
+      return scope;
+    }
   }
 
   async resolveAppliedDestroyProviderBindings(
