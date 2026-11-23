@@ -24,3 +24,11 @@ test("reference runner executes provider and module code as the unprivileged Bun
   }
   expect(text).toContain("chmod -R a+rX ./contract ./core ./lib ./runner");
 });
+
+test.each(["Dockerfile", "Dockerfile.hosted-metered"])(
+  "%s makes the baked CLI config readable by the runtime user",
+  async (name) => {
+    const text = await readFile(resolve(import.meta.dir, "../../runner", name), "utf8");
+    expect(text).toContain('chmod 0644 "$TF_CLI_CONFIG_FILE"');
+  },
+);
