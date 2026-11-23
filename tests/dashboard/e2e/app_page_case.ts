@@ -1914,6 +1914,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           }, {
             id: "conn_legacy", displayName: "Older Cloudflare connection", providerSource: connectionProblem.provider,
             scope: "personal", status: "verified", scopeHints: cloudflareAccount(otherAccountId, "other-team").scopeHints,
+          }, {
+            id: "conn_unverified_account", displayName: "Cloudflare token without account confirmation", providerSource: connectionProblem.provider,
+            scope: "personal", status: "verified", ...cloudflareAccount(replacementAccountId, "fixture-team"),
+            credentialVerification: { kind: "takosumi.credential-verification@v1", verifierId: "cloudflare/token@v1" },
           }] : []),
           { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
           { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: effectiveRequiredNoOption ? "expired" : "verified" },
@@ -2194,8 +2198,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         const legacyChoice = choices.getByRole("option", { name: /Older Cloudflare connection/u });
         await expect(legacyChoice).toHaveJSProperty("disabled", true);
         await expect(legacyChoice).toContainText("Confirm account in Cloud connections");
+        const unverifiedAccountChoice = choices.getByRole("option", { name: /Cloudflare token without account confirmation/u });
+        await expect(unverifiedAccountChoice).toHaveJSProperty("disabled", true);
+        await expect(unverifiedAccountChoice).toContainText("Confirm account in Cloud connections");
         await choices.evaluate((element) => {
-          (element as HTMLSelectElement).value = "conn_legacy";
+          (element as HTMLSelectElement).value = "conn_unverified_account";
           element.dispatchEvent(new Event("change", { bubbles: true }));
         });
         await expect(danger.getByRole("button", { name: "Review removal" })).toBeDisabled();
