@@ -75,6 +75,7 @@ import {
 } from "../../../components/ui/index.ts";
 import ConnectionCreateForm from "../connections/ConnectionCreateForm.tsx";
 import { appPageHref, uninstallReturnHref } from "../../../lib/app-links.ts";
+import { isUninstallReplacementReady } from "../../../lib/capsule-uninstall.ts";
 import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
 
 const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
@@ -396,8 +397,7 @@ export default function ConnectionsTab(props: {
       !lastCreatedConnectionName()) return;
     // Use the stored connection. The redirect's status hint may be stale.
     const connection = lastCreatedProviderConnection();
-    if (connection?.status === "verified" && connection.scope !== "operator" &&
-      (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.now())) return uninstallReturn;
+    if (connection && isUninstallReplacementReady(connection)) return uninstallReturn;
   };
   const lastCreatedReady = () =>
     lastCreatedProviderConnection()?.status === "verified" ||
