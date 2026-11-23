@@ -2341,6 +2341,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
         await header.getByRole("button", { name: "Review", exact: true }).click();
         const review = page.getByTestId("app-review");
+        const permissionHint = review.getByText(
+          "Check that the connection can delete this app's cloud resources. If you switch connections, use the same cloud account.",
+          { exact: true },
+        );
+        await expect(permissionHint).toHaveCount(0);
         await review.getByRole("checkbox").check();
         await review.getByRole("button", { name: "Allow and uninstall" }).click();
         await expect(review.locator(".iv-error")).toBeVisible();
@@ -2350,14 +2355,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (indeterminateOpenReview) {
           await expect(app).toHaveAttribute("data-app-state", "needs_attention");
           await expect(choose).toHaveCount(0);
+          await expect(permissionHint).toHaveCount(0);
           await expect(page.getByRole("button", { name: "Review again", exact: true })).toHaveCount(0);
         } else {
           await expect(choose).toBeVisible();
+          await expect(permissionHint).toBeVisible();
           await expect(problems.getByRole("button", { name: "Choose connection for uninstall" })).toHaveCount(1);
           await choose.click();
           await review.getByRole("combobox", { name: /Original Cloudflare connection/ }).selectOption("conn_saved");
+          await expect(permissionHint).toBeVisible();
           await review.getByRole("button", { name: "Review removal" }).click();
           await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toBeVisible();
+          await expect(permissionHint).toHaveCount(0);
           expect(failedUninstallBindingReads).toBe(1);
           expect(replacementPlanBodies).toEqual([{
             destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
