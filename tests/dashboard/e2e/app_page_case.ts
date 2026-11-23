@@ -1588,12 +1588,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement"] as const) test({
+    for (const scenario of ["states", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
       lostReplacementResponse: "a lost replacement Plan response leaves its saved uninstall review reachable",
       lostReplacementOnInstalledApp: "a lost replacement Plan response leaves its saved uninstall review reachable on an installed app",
       partialRecovery: "a partial uninstall can replace more than the unavailable original connection",
+      sharedKeyConflict: "a shared-key Destroy Plan failure explains how to review both provider rows with one verified connection",
       effectiveRequiredNoOption: "a failed uninstall cannot review another replacement while its effective key has no alternative",
       effectiveRequiredWithOption: "a failed uninstall requires the effective unavailable key even when another replacement is selected",
       effectiveHealthyOptional: "a prior effective key can keep a revoked original without forcing its replacement",
@@ -1610,6 +1611,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const lostReplacementResponse = scenario === "lostReplacementResponse" || lostReplacementOnInstalledApp;
       const staleUninstallReview = scenario === "staleReview" || lostReplacementResponse;
       const partialRecovery = scenario === "partialRecovery";
+      const sharedKeyConflict = scenario === "sharedKeyConflict";
       const effectiveRequiredNoOption = scenario === "effectiveRequiredNoOption";
       const effectiveRequiredWithOption = scenario === "effectiveRequiredWithOption";
       const effectiveHealthyOptional = scenario === "effectiveHealthyOptional";
@@ -1646,7 +1648,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const NAME = "State Echo";
       const now = "2026-10-20T00:00:00.000Z";
       type Scene = "uninstall_scheduled" | "uninstall_immediate" | "uninstall_failed" | "uninstall_stale_review" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
-      let scene: Scene = partialRecovery || effectiveRecovery ? "uninstall_failed"
+      let scene: Scene = partialRecovery || sharedKeyConflict || effectiveRecovery ? "uninstall_failed"
         : firstRemovalRefusal || unusedUnavailable || unusedOnlyUnavailable || noReplacement ? "uninstall_immediate"
           : staleUninstallReview || openReviewFailure ? "uninstall_stale_review" : "uninstall_scheduled";
       let connectionRemoved = noReplacement;
@@ -1659,6 +1661,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         : Promise.resolve();
       const replacementPlanBodies: unknown[] = [];
       let failedUninstallBindingReads = 0;
+      let sharedKeyFailedAppReads = 0;
+      let sharedKeyFailedRunReads = 0;
       let firstRemovalAttempts = 0;
       let appReadsAfterFirstRemoval = 0;
       const connectionProblem = {
@@ -1710,6 +1714,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         policyStatus: "pass", requiresApproval: true, summary: { add: 0, change: 0, destroy: 1 },
         planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["delete"] }],
       };
+      const sharedKeyFailedPlan = {
+        ...recoveryPlan, id: "run_shared_key_conflict", status: "failed" as const,
+        errorCode: "provider_credential_env_conflict",
+      };
+      let sharedKeyPlanPhase: "initial" | "failed" | "ready" = "initial";
       const refusedPlan = {
         ...recoveryPlan, id: "run_refused_uninstall",
         status: startsAwaitingApproval ? "waiting_approval" as const : "succeeded" as const,
@@ -1718,7 +1727,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       let staleReviewApplyAttempts = 0;
       const runsById = new Map<string, Record<string, unknown>>([
         [blockedPlan.id, blockedPlan], [updateApply.id, updateApply], [installPlan.id, installPlan],
-        [revisionPlanRun.id, revisionPlanRun], [recoveryPlan.id, recoveryPlan], [failedRemoval.id, failedRemoval], [refusedPlan.id, refusedPlan],
+        [revisionPlanRun.id, revisionPlanRun], [recoveryPlan.id, recoveryPlan], [sharedKeyFailedPlan.id, sharedKeyFailedPlan],
+        [failedRemoval.id, failedRemoval], [refusedPlan.id, refusedPlan],
       ]);
       // Older history: thirty-two applied changes, read twenty at a time.
       const olderRuns = Array.from({ length: 32 }, (_, index) =>
@@ -1748,13 +1758,25 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             });
           case "uninstall_failed":
             return appView(ID, NAME, {
-              state: "needs_attention", primaryAction: "retry", screens: [screen],
-              latestRun: failedRemoval,
-              problems: [
-                ...(partialRecovery || effectiveRequiredWithOption || effectiveHealthyOptional ? [connectionProblem] : []),
-                ...(effectiveRequiredNoOption ? [{ ...connectionProblem, provider: "registry.opentofu.org/hashicorp/aws", connectionId: "conn_aws_required" }] : []),
-                { code: "run_failed", severity: "error", runId: failedRemoval.id, runType: "destroy_apply" },
-              ],
+              screens: [screen],
+              ...(sharedKeyConflict && sharedKeyPlanPhase === "ready"
+                ? {
+                    state: "installed" as const, primaryAction: "review" as const,
+                    latestRun: recoveryPlan,
+                    progress: { revisionPreparing: false, review: { runId: recoveryPlan.id, runType: "destroy_plan" as const } },
+                    problems: [],
+                  }
+                : {
+                    state: "needs_attention" as const, primaryAction: "retry" as const,
+                    latestRun: sharedKeyConflict && sharedKeyPlanPhase === "failed" ? sharedKeyFailedPlan : failedRemoval,
+                    problems: [
+                      ...(partialRecovery || effectiveRequiredWithOption || effectiveHealthyOptional ? [connectionProblem] : []),
+                      ...(effectiveRequiredNoOption ? [{ ...connectionProblem, provider: "registry.opentofu.org/hashicorp/aws", connectionId: "conn_aws_required" }] : []),
+                      sharedKeyConflict && sharedKeyPlanPhase === "failed"
+                        ? { code: "run_failed", severity: "error", runId: sharedKeyFailedPlan.id, runType: "destroy_plan" }
+                        : { code: "run_failed", severity: "error", runId: failedRemoval.id, runType: "destroy_apply" },
+                    ],
+                  }),
               uninstall: {
                 mode: "none", impact: { usedBy: [] },
                 ...(effectiveRecovery ? { unavailableRecoveryConnectionIds: effectiveRequiredNoOption
@@ -1903,6 +1925,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         ] } });
         if (path === `${base}/destroy-plan` && request.method() === "POST") {
           replacementPlanBodies.push(request.postDataJSON());
+          if (sharedKeyConflict) {
+            sharedKeyPlanPhase = replacementPlanBodies.length === 1 ? "failed" : "ready";
+            return route.fulfill({ status: 201, json: { run: sharedKeyPlanPhase === "failed" ? sharedKeyFailedPlan : recoveryPlan } });
+          }
           if (scene === "uninstall_stale_review") currentUninstallReview = recoveryPlan;
           if (lostReplacementResponse) {
             return route.fulfill({ status: 502, json: { error: { code: "unavailable", message: "The Plan response was lost." } } });
@@ -1925,6 +1951,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === base) return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
         if (path === `${base}/app`) {
           if (firstRemovalAttempts > 0) appReadsAfterFirstRemoval += 1;
+          if (sharedKeyConflict && sharedKeyPlanPhase === "failed") sharedKeyFailedAppReads += 1;
           return viewUnavailable
             ? route.fulfill({ status: 404, json: { error: "fixture_route_not_found" } })
             : route.fulfill({ json: { app: view() } });
@@ -2027,7 +2054,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               details: { reason: staleReviewApplyAttempts === 1 ? "unrelated_conflict" : "provider_connection_not_ready" },
             } } });
           }
-          if (!suffix) return route.fulfill({ json: { run: runsById.get(id!) } });
+          if (!suffix) {
+            if (sharedKeyConflict && id === sharedKeyFailedPlan.id) sharedKeyFailedRunReads += 1;
+            return route.fulfill({ json: { run: runsById.get(id!) } });
+          }
         }
         return route.fallback();
       });
@@ -2199,6 +2229,46 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             { connectionId: "conn_second", replacementConnectionId: "conn_saved" },
           ],
         }]);
+        expect(errors).toEqual([]);
+        traffic.assertNoFailures();
+        return;
+      }
+
+      if (sharedKeyConflict) {
+        await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+        const failed = problems.locator('[data-problem="uninstall"]');
+        await failed.getByRole("button", { name: "Choose connection for uninstall" }).click();
+        const original = failed.getByRole("combobox", { name: /Original Cloudflare connection/ });
+        const secondary = failed.getByRole("combobox", { name: /Secondary Cloudflare connection/ });
+        await expect(secondary).toHaveValue("");
+        await original.selectOption("conn_saved");
+        await failed.getByRole("button", { name: "Review removal" }).click();
+        const review = page.getByTestId("app-review");
+        await expect(review.locator(".iv-error")).toContainText("keys conflict for a setting shared by this run");
+        await expect(review.locator(".iv-error")).toContainText("review the change again");
+        expect(sharedKeyFailedRunReads).toBeGreaterThan(0);
+        await expect.poll(() => sharedKeyFailedAppReads).toBeGreaterThan(0);
+        expect(replacementPlanBodies).toEqual([{
+          destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
+        }]);
+        const chooseAgain = review.getByRole("button", { name: "Choose connection for uninstall" });
+        await expect(chooseAgain).toBeVisible();
+        await chooseAgain.click();
+        await review.getByRole("combobox", { name: /Original Cloudflare connection/ }).selectOption("conn_saved");
+        await review.getByRole("combobox", { name: /Secondary Cloudflare connection/ }).selectOption("conn_saved");
+        await review.getByRole("button", { name: "Review removal" }).click();
+        await expect(review.getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+        await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toBeVisible();
+        expect(replacementPlanBodies).toEqual([{
+          destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
+        }, {
+          destroyProviderConnectionReplacements: [
+            { connectionId: "conn_removed", replacementConnectionId: "conn_saved" },
+            { connectionId: "conn_second", replacementConnectionId: "conn_saved" },
+          ],
+        }]);
+        expect(seenMutations).toEqual(Array(2).fill(`POST /api/v1/capsules/${ID}/destroy-plan`));
+        expect(failedUninstallBindingReads).toBe(2);
         expect(errors).toEqual([]);
         traffic.assertNoFailures();
         return;
