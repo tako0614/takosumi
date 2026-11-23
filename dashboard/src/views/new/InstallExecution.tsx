@@ -601,7 +601,7 @@ export default function InstallExecution(props: Props) {
     setApplying(true);
     setError(null);
     try {
-      const envelope = await createApplyRun(plan.id, { timeoutMs: 30_000 });
+      const envelope = await createApplyRun(plan, { timeoutMs: 30_000 });
       identifyApply(envelope.run.id, attempt);
     } catch (cause) {
       if (!ownsApply(attempt)) return;

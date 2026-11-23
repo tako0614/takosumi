@@ -1073,7 +1073,7 @@ function Inner(props: { readonly session: SessionRecord }) {
       return;
     }
     try {
-      envelope = await createApplyRun(currentRun.id, {
+      envelope = await createApplyRun(currentRun, {
         timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
       });
     } catch (error) {
