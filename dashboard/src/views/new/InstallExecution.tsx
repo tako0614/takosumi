@@ -38,7 +38,7 @@ import {
 import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
-import { runFailureHint } from "../../lib/run-errors.ts";
+import { runFailureHint, runMutationOutcomeUnknown } from "../../lib/run-errors.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
 import { runStatusLabel } from "../../lib/labels.ts";
 import {
@@ -336,6 +336,7 @@ export default function InstallExecution(props: Props) {
   // 3s fallback read below means one 5xx mid-install replaced the whole app
   // with the root reload card. A failed refetch keeps the last good run.
   const runLatest = createLastGoodValue(run, (r) => r.id === runId() && r.capsuleId === props.capsuleId);
+  const mutationOutcomeUnknown = () => runMutationOutcomeUnknown(runLatest());
   const [applying, setApplying] = createSignal(false);
   const [refusedConnectionPlanId, setRefusedConnectionPlanId] = createSignal<string>();
   const refusedConnectionPlan = () => {
@@ -650,6 +651,7 @@ export default function InstallExecution(props: Props) {
     mutate(undefined); setRunId(id);
   });
   const retryFailedApply = async () => {
+    if (mutationOutcomeUnknown()) return;
     setRestarting(true); setError(null);
     try {
       const id = extractRunId(await planCapsule(props.capsuleId));
@@ -665,6 +667,7 @@ export default function InstallExecution(props: Props) {
   };
 
   const restartWithLatestSource = async () => {
+    if (mutationOutcomeUnknown()) return;
     setRestarting(true);
     setError(null);
     try {
@@ -1047,10 +1050,10 @@ export default function InstallExecution(props: Props) {
                 <strong>{t(copy().failed)}</strong>
                 <p>{runFailureHint(current().errorCode)}</p>
                 <div class="iv-action-row">
-                  <Show when={isInstall() && isApplyRun(current().type) && canRetryApply()}>
+                  <Show when={!mutationOutcomeUnknown() && isInstall() && isApplyRun(current().type) && canRetryApply()}>
                     <Button type="button" variant="primary" busy={restarting()} onClick={() => void retryFailedApply()}>{t("installStore.retryInstall")}</Button>
                   </Show>
-                  <Show when={isInstall() && isReviewRun(current().type)}>
+                  <Show when={!mutationOutcomeUnknown() && isInstall() && isReviewRun(current().type)}>
                     <Button
                       type="button"
                       variant="primary"
@@ -1061,7 +1064,7 @@ export default function InstallExecution(props: Props) {
                       {canRestart() ? (props.restartLabel ?? t("installStore.restartWithLatestSource")) : t("installStore.retryInstall")}
                     </Button>
                   </Show>
-                  <Show when={!isInstall() && canRestart()}>
+                  <Show when={!mutationOutcomeUnknown() && !isInstall() && canRestart()}>
                     <Button
                       type="button"
                       variant="primary"
@@ -1082,7 +1085,7 @@ export default function InstallExecution(props: Props) {
                   {closeButton()}
                 </div>
               </div>
-              <Show when={current().status === "failed" && isAppRemovalRun(current().type) && current().id} keyed>
+              <Show when={!mutationOutcomeUnknown() && current().status === "failed" && isAppRemovalRun(current().type) && current().id} keyed>
                 {(runId) => props.uninstallConnectionRecovery?.(runId, "failed")}
               </Show>
             </Show>
