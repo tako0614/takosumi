@@ -63,26 +63,33 @@ function cloudflareDestroyTokenMode(
       (connection.envNames.length === 2 && connection.envNames.includes(ACCOUNT_ENV)))) return "api_token";
 }
 
-/** Maintain the applied token-only process environment for a manual Destroy. */
+function cloudflareDestroyEnvNames(names: readonly string[]) {
+  if (names.length === 1 && names[0] === TOKEN_ENV) return [TOKEN_ENV];
+  if (names.length === 2 && names.includes(ACCOUNT_ENV) && names.includes(TOKEN_ENV)) return [ACCOUNT_ENV, TOKEN_ENV];
+}
+
+/** Maintain the applied Cloudflare process environment for a manual Destroy. */
 export const cloudflareDestroyCredentialDelivery: NonNullable<
   CredentialRecipeRuntimeDriver["destroyCredentialDelivery"]
 > = {
+  verifiedProviderSettings: { [ACCOUNT_ENV]: "accountId" },
   recoverRevokedShape(evidence, replacement) {
     const materialization = evidence.materialization;
+    const envNames = cloudflareDestroyEnvNames(evidence.requiredEnvNames);
     if (cloudflareDestroyTokenMode(replacement) !== "api_token" ||
       !REFERENCE_RECIPE || (materialization !== "oauth" && materialization !== "secret") ||
       evidence.provider !== replacement.providerSource ||
-      evidence.requiredEnvNames.length !== 1 || evidence.requiredEnvNames[0] !== TOKEN_ENV) return;
+      !envNames || (envNames.length === 2 && materialization !== "secret")) return;
     // The full binding digest must independently confirm this registration
     // shape before any selected credential can be minted for Destroy.
     return {
       materialization,
-      envNames: [TOKEN_ENV],
+      envNames,
       credentialRecipe: {
         id: REFERENCE_RECIPE.id,
         authMode: materialization === "oauth" ? "oauth" : "api_token",
         secretPartition: REFERENCE_RECIPE.secretPartition,
-        envNames: [TOKEN_ENV],
+        envNames,
         fileEnvNames: [],
         requiredEnvGroups: REFERENCE_RECIPE.requiredEnvGroups ?? [],
         ...(materialization === "oauth" ? { preRunAction: "cloudflare_oauth" as const } : {}),
@@ -92,23 +99,28 @@ export const cloudflareDestroyCredentialDelivery: NonNullable<
   preserve(applied, replacement, appliedEnvNames) {
     const originalMode = cloudflareDestroyTokenMode(applied);
     const replacementMode = cloudflareDestroyTokenMode(replacement);
-    const names = appliedEnvNames ?? applied.envNames;
+    const names = cloudflareDestroyEnvNames(appliedEnvNames ?? applied.envNames);
     if (!originalMode || !replacementMode ||
-      names.length !== 1 || names[0] !== TOKEN_ENV ||
+      !names || (names.length === 2 && (originalMode !== "api_token" || replacementMode !== "api_token")) ||
       (appliedEnvNames === undefined && replacementMode !== "api_token") ||
       applied.scopeHints?.providerSettings?.accountId !==
         replacement.scopeHints?.providerSettings?.accountId ||
       applied.scopeHints?.providerSettings?.workersSubdomain !==
         replacement.scopeHints?.providerSettings?.workersSubdomain) return;
-    return [TOKEN_ENV];
+    return names;
   },
-  project(connection, names, env) {
-    if (!cloudflareDestroyTokenMode(connection) || names.length !== 1 || names[0] !== TOKEN_ENV ||
+  project(connection, names, env): Readonly<Record<string, string>> | undefined {
+    const mode = cloudflareDestroyTokenMode(connection);
+    const layout = cloudflareDestroyEnvNames(names);
+    const accountId = verifiedCloudflareAccountId(connection);
+    if (!mode || !layout || !accountId || (layout.length === 2 && mode !== "api_token") ||
       Object.keys(env).length !== connection.envNames.length ||
       !connection.envNames.every((name) => Object.hasOwn(env, name)) ||
       !env[TOKEN_ENV] ||
-      (Object.hasOwn(env, ACCOUNT_ENV) && env[ACCOUNT_ENV] !== connection.scopeHints?.providerSettings?.accountId)) return;
-    return { [TOKEN_ENV]: env[TOKEN_ENV]! };
+      (Object.hasOwn(env, ACCOUNT_ENV) && env[ACCOUNT_ENV] !== accountId)) return;
+    return layout.length === 2
+      ? { [ACCOUNT_ENV]: accountId, [TOKEN_ENV]: env[TOKEN_ENV]! }
+      : { [TOKEN_ENV]: env[TOKEN_ENV]! };
   },
 };
 

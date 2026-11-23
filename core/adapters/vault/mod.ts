@@ -1622,8 +1622,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         }
         evidence.push(minted.evidence);
         const delivery = entry.destroyCredentialDelivery;
+        const deliveryDriver = delivery ? this.#credentialDriver(connection) : undefined;
         const delivered = delivery
-          ? this.#credentialDriver(connection)?.destroyCredentialDelivery?.project(
+          ? deliveryDriver?.destroyCredentialDelivery?.project(
             connection,
             delivery.envNames,
             minted.values,
@@ -1631,7 +1632,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           : minted.values;
         if (!delivered || (delivery && (minted.files?.length ||
           Object.keys(delivered).length !== delivery.envNames.length ||
-          !delivery.envNames.every((name) => Object.hasOwn(delivered, name) && delivered[name] === minted.values[name])))) {
+          !delivery.envNames.every((name) => {
+            if (!Object.hasOwn(delivered, name) || typeof delivered[name] !== "string") return false;
+            // A projection cannot replace a value issued by the selected connection.
+            const expected = Object.hasOwn(minted.values, name)
+              ? minted.values[name]
+              : verifiedDestroyProviderSetting(connection, deliveryDriver, name);
+            return delivered[name] === expected;
+          })))) {
           throw new ConnectionVaultError("failed_precondition", "Destroy credential delivery changed before mint");
         }
         mergeCredentialEnv(env, delivered, entry);
@@ -2859,6 +2867,22 @@ function invalidCredentialVerificationDescriptor(
 interface VerifiedScopeHintKeyOwnership {
   readonly moduleInputDefaults?: ReadonlySet<string>;
   readonly providerSettings?: ReadonlySet<string>;
+}
+
+function verifiedDestroyProviderSetting(
+  connection: ProviderConnection,
+  driver: CredentialRecipeRuntimeDriver | undefined,
+  envName: string,
+): string | undefined {
+  const declared = driver?.destroyCredentialDelivery?.verifiedProviderSettings;
+  if (!declared || !Object.hasOwn(declared, envName) ||
+    connection.status !== "verified" || !driver?.verifierId ||
+    connection.credentialVerification?.verifierId !== driver.verifierId ||
+    !driver.hasVerifiedAccountScope?.(connection)) return;
+  const key = declared[envName]!;
+  if (!verifiedScopeHintOwnershipForDriver(driver)?.providerSettings?.has(key)) return;
+  const value = connection.scopeHints?.providerSettings?.[key];
+  if (typeof value === "string" && value.length > 0) return value;
 }
 
 const VERIFIED_SCOPE_HINT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;

@@ -153,6 +153,8 @@ export interface CredentialRecipeRuntimeDriver {
   readonly destroyCredentialDelivery?: {
     readonly preserve: PreserveDestroyCredentialDelivery;
     readonly recoverRevokedShape?: RecoverRevokedDestroyCredentialShape;
+    /** Allow stated environment names to come from verifier-owned non-secret provider settings. */
+    readonly verifiedProviderSettings?: Readonly<Record<string, string>>;
     readonly project: (
       connection: ProviderConnection,
       envNames: readonly string[],
