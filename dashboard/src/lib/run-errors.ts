@@ -26,6 +26,10 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   backup_failed: "runError.backupFailed",
 };
 
+export function runMutationOutcomeUnknown(run: { readonly errorCode?: string } | undefined): boolean {
+  return run?.errorCode === "runner_mutation_indeterminate";
+}
+
 /** Friendly failure hint for a run summary — never the raw error code. */
 export function runFailureHint(errorCode: string | undefined): string {
   const key = errorCode ? KNOWN_RUN_ERROR_HINTS[errorCode] : undefined;

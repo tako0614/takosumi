@@ -1,5 +1,6 @@
 import type { Capsule, CapsuleAppView } from "./control-api.ts";
 import { isAppRemovalRun } from "./app-access.ts";
+import { runMutationOutcomeUnknown } from "./run-errors.ts";
 import { formatDateTime, t, type MessageKey } from "../i18n/index.ts";
 
 export function appUninstallConnectionNotice(
@@ -56,8 +57,9 @@ export function appUninstallRecoveryMode(
   // A failed teardown may have used replacement keys. The reported issues
   // describe the applied bindings, so use the full binding set when retrying.
   const run = app.latestRun;
+  if (runMutationOutcomeUnknown(run)) return;
   if (app.applied && app.state === "needs_attention" && run?.status === "failed" &&
-    isAppRemovalRun(run.type) && run.errorCode !== "runner_mutation_indeterminate" &&
+    isAppRemovalRun(run.type) &&
     run.errorCode !== "policy_denied" && !app.problems.some((problem) =>
       problem.code === "policy_blocked" && problem.runId === run.id)) return "failed";
   if (appUninstallConnectionNotice(app) && appUninstallRecoveryConnections(app).length > 0) return "unavailable";
