@@ -1815,10 +1815,11 @@ export function capsuleAbandonmentCompleted(
  */
 export async function abandonUnappliedCapsule(
   capsuleId: string,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<DeleteCapsuleResult | unknown> {
   return await controlFetch<DeleteCapsuleResult | unknown>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/abandon`,
-    { method: "POST" },
+    { method: "POST", isCurrent: options.isCurrent },
   );
 }
 
@@ -1884,6 +1885,7 @@ export async function listInstallConfigs(
 
 export type GetInstallConfigOptions = {
   readonly signal?: AbortSignal;
+  readonly isCurrent?: () => boolean;
 };
 
 export function getInstallConfig(
@@ -1901,9 +1903,12 @@ export async function getInstallConfig(
   const signal = isRecord(options)
     ? (options.signal as AbortSignal | undefined)
     : undefined;
+  const isCurrent = isRecord(options) && typeof options.isCurrent === "function"
+    ? options.isCurrent as () => boolean
+    : undefined;
   const body = await controlFetch<{ installConfig: InstallConfig }>(
     `${BASE}/capsule-configs/${encodeURIComponent(id)}`,
-    { signal },
+    { signal, isCurrent },
   );
   return body.installConfig;
 }
@@ -2420,9 +2425,13 @@ export async function listSources(
   );
 }
 
-export async function getSource(sourceId: string): Promise<Source> {
+export async function getSource(
+  sourceId: string,
+  options: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<Source> {
   const body = await controlFetch<unknown>(
     `${BASE}/sources/${encodeURIComponent(sourceId)}`,
+    options,
   );
   return decodeSourceEnvelope(body);
 }

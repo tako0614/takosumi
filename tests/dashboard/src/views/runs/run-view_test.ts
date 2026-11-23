@@ -156,15 +156,15 @@ describe("RunView", () => {
     expect(restart).toContain('currentRun.type !== "plan"');
     expect(restart).toContain("currentCapsule.currentStateGeneration !== 0");
     expect(restart).toContain("currentCapsule.currentStateVersionId");
-    expect(restart).toContain("getSource(currentCapsule.sourceId)");
-    expect(restart).toContain("getInstallConfig(currentCapsule.installConfigId)");
+    expect(restart).toContain("getSource(currentCapsule.sourceId, { isCurrent })");
+    expect(restart).toContain("getInstallConfig(currentCapsule.installConfigId, { isCurrent })");
     expect(restart).toContain("installReturnPathFromPrefill({");
     expect(restart).not.toContain("ref:");
-    expect(restart).toContain("await abandonUnappliedCapsule(instId)");
+    expect(restart).toContain("await abandonUnappliedCapsule(instId, { isCurrent })");
     expect(restart).toContain("capsuleAbandonmentCompleted(deleted, {");
     expect(restart).not.toContain('currentCapsule.status === "destroyed"');
     expect(restart).toContain("alreadyDeleted");
-    expect(restart.indexOf("getSource(currentCapsule.sourceId)")).toBeLessThan(
+    expect(restart.indexOf("getSource(currentCapsule.sourceId, { isCurrent })")).toBeLessThan(
       restart.indexOf("await abandonUnappliedCapsule"),
     );
     expect(restart.indexOf("await abandonUnappliedCapsule")).toBeLessThan(
