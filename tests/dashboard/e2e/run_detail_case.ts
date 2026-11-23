@@ -15,15 +15,19 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           ? `/api/v1/state-versions/${stateVersionId}/rollback-plan`
           : capsulePath + "/revision-plans";
         const expectedRequest = kind === "version" ? { ref: "v2.0.0" } : null;
-        const failed = {
-          id: "plan_failed_version_retry", capsuleId, workspaceId: "ws_alpha",
-          type: "plan", status: "failed", origin: kind === "rollback" ? { kind: "rollback", stateVersionId } : { kind: "revision", ref: "v2.0.0" },
+        const original = {
+          id: "plan_original_version_retry", capsuleId, workspaceId: "ws_alpha",
+          type: "plan", status: "succeeded", origin: kind === "rollback" ? { kind: "rollback", stateVersionId } : { kind: "revision", ref: "v2.0.0" },
           baseStateGeneration: 1, createdBy: "portable-e2e", createdAt: "2026-11-18T00:00:00Z",
         };
-        const review = { ...failed, id: "plan_original_version_retry", status: "succeeded", policyStatus: "pass",
+        const failed = { ...original, id: "apply_failed_version_retry", type: "apply", status: "failed",
+          origin: undefined, planRunId: original.id, errorCode: "apply_failed" };
+        const review = { ...original, id: "plan_prepared_version_retry", policyStatus: "pass",
           planDigest: `sha256:${"a".repeat(64)}`, summary: { add: 0, change: 1, destroy: 0 } };
         const attempts: { key: string | undefined; request: unknown }[] = [];
         const writes: string[] = [];
+        let originalReads = 0;
+        let originalMatches = kind !== "rollback";
         await page.route("**/api/v1/**", (route) => {
           const request = route.request();
           const path = new URL(request.url()).pathname;
@@ -49,6 +53,12 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             currentStateVersionId: "state_revision_retry", createdAt: failed.createdAt, updatedAt: failed.createdAt,
           } } });
           if (path === capsulePath + "/runs") return route.fulfill({ json: { runs: [] } });
+          if (path === `/api/v1/runs/${original.id}`) {
+            originalReads += 1;
+            const run = originalMatches ? original : { ...original, capsuleId: "cap_other",
+              origin: { kind: "rollback", stateVersionId: "state_other" } };
+            return route.fulfill({ json: { run } });
+          }
           const current = [failed, review].find(run => path === `/api/v1/runs/${run.id}` || path.startsWith(`/api/v1/runs/${run.id}/`));
           if (current && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
           if (current && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
@@ -61,6 +71,14 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         });
         await page.goto(`/runs/${failed.id}`);
         const retry = page.getByRole("button", { name: "Review changes again", exact: true });
+        if (!originalMatches) {
+          await retry.click();
+          await expect.poll(() => originalReads).toBe(1);
+          await expect(retry).toBeEnabled();
+          expect(writes).toEqual([]);
+          await expect(page.getByText("The source identity or exact version changed. Review the current app again.", { exact: true })).toBeVisible();
+          originalMatches = true;
+        }
         await retry.click();
         await expect.poll(() => attempts.length).toBe(1);
         await expect(retry).toBeEnabled();

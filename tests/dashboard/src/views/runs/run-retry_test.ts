@@ -246,6 +246,20 @@ describe("retryPlanForRun", () => {
     expect(calls).toEqual(["read run_plan_failed", "rollback sv_1"]);
   });
 
+  test.each([
+    { id: "run_other" },
+    { capsuleId: "cap_other" },
+    { workspaceId: "ws_other" },
+    { type: "destroy_plan" as const },
+  ])("rejects a mismatched original Plan before retrying a failed Apply (%j)", async (mismatch) => {
+    const { api, calls } = recorder({
+      run_plan_failed: { ...plan({ kind: "rollback", stateVersionId: "sv_1" }), ...mismatch },
+    });
+    await expect(retryPlanForRun(run({ planRunId: "run_plan_failed" }), capsule(), api))
+      .rejects.toMatchObject({ code: "retry_plan_identity_mismatch" });
+    expect(calls).toEqual(["read run_plan_failed"]);
+  });
+
   test("a failed Workspace update plans the tracked ref again", async () => {
     const { api, calls } = recorder({ run_plan_failed: plan({ kind: "update" }) });
     expect(await retryPlanForRun(run({ planRunId: "run_plan_failed" }), capsule(), api)).toBe("run_tracked");
