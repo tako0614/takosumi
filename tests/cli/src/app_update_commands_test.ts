@@ -239,6 +239,43 @@ test("current uninstall recovery returns the review when the same pending Plan f
   expect(r.calls.map(call => call.method)).toEqual(["GET", "GET", "GET"]);
 });
 
+test.each([false, true])(
+  "current uninstall recovery rechecks the same Plan when the app view advances after the Run read (superseded: %s)",
+  async superseded => {
+    const appRead = "/api/v1/capsules/cap_owned/app";
+    const planRead = `/api/v1/runs/${destroyPlan.id}`;
+    let appReads = 0;
+    let planReads = 0;
+    const r = await invoke(currentReviewArgs, req => {
+      if (new URL(req.url).pathname === appRead) {
+        appReads += 1;
+        if (appReads === 1) return Response.json({ app: pendingDestroyView("running") });
+        if (appReads === 3 && superseded) {
+          return Response.json({ app: {
+            ...currentDestroyView,
+            latestRun: { ...currentDestroyView.latestRun, id: "other_review" },
+            progress: { ...currentDestroyView.progress, review: { runId: "other_review", runType: "destroy_plan" } },
+          } });
+        }
+        return Response.json({ app: currentDestroyView });
+      }
+      planReads += 1;
+      return Response.json({ run: planReads === 1 ? { ...destroyPlan, status: "running" } : destroyPlan });
+    });
+    expect(r.calls.map(call => [call.method, new URL(call.url).pathname])).toEqual([
+      ["GET", appRead], ["GET", planRead], ["GET", appRead], ["GET", planRead], ["GET", appRead],
+    ]);
+    if (superseded) {
+      expect(r.code).toBe(1);
+      expect(r.result).toMatchObject({ status: "refused", code: "current_destroy_review_unavailable" });
+      expect(r.result.planRunId).toBeUndefined();
+    } else {
+      expect(r.code).toBe(0);
+      expect(r.result).toMatchObject({ status: "review_required", planRunId: destroyPlan.id });
+    }
+  },
+);
+
 test.each(["scheduled", "destroying"] as const)(
   "current uninstall recovery distinguishes a pending manual Plan during the %s phase",
   async phase => {
