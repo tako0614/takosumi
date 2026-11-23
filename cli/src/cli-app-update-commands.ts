@@ -695,25 +695,29 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
     });
     return writeTerminalApply(io, options, appId, planId, lastRun);
   } catch (error) {
-    // An uncertain mutation is never followed by another mutation. Fresh,
-    // separately bounded reads can observe its exact linked Apply only.
+    // Recovery only reads. Use a Run we already verified directly; search
+    // the Plan's history only when a mutation could have lost its response.
     // Keep recovery evidence local: a late response from the aborted command
     // must not change its result while a fresh readback is being refused.
-    let observedRun = lastRun; const observedApplyId = locatedApplyId; let observedPlan = lastPlan; let readbackConfirmed = false;
-    if (scope && mutationAttempted && observedApplyId === undefined) {
+    const knownRun = lastRun;
+    let observedRun = knownRun; const observedApplyId = locatedApplyId; let observedPlan = lastPlan; let readbackConfirmed = false;
+    if (scope && (knownRun || (mutationAttempted && observedApplyId === undefined))) {
+      const recoveryScope = scope;
       try { observedRun = await within(5_000, async signal => {
         const request = client(options, signal);
-        const freshPlan = savedApplyPlan(runFrom(await request(`/api/v1/runs/${encodeURIComponent(scope!.planId)}`), scope!.appId, scope!.planId), scope!.type);
-        if (freshPlan.workspaceId !== scope!.workspaceId || applyPlanIdentity(freshPlan) !== expectedPlanIdentity) throw new Refusal("observed_plan_changed");
+        if (knownRun) return await readApply(request, knownRun.id, recoveryScope);
+        const freshPlan = savedApplyPlan(runFrom(await request(`/api/v1/runs/${encodeURIComponent(recoveryScope.planId)}`), recoveryScope.appId, recoveryScope.planId), recoveryScope.type);
+        if (freshPlan.workspaceId !== recoveryScope.workspaceId || applyPlanIdentity(freshPlan) !== expectedPlanIdentity) throw new Refusal("observed_plan_changed");
         observedPlan = freshPlan;
-        const observed = await linkedApply(request, scope!);
+        const observed = await linkedApply(request, recoveryScope);
         if (!observed) return undefined;
-        return await readApply(request, observed.id, scope!);
+        return await readApply(request, observed.id, recoveryScope);
       }); readbackConfirmed = true; } catch { /* unavailable readback is not proof of no effect */ }
     }
     if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
     write(io, options, { status: observedRun && !SETTLED.has(observedRun.status) ? "pending" : mutationAttempted || options.observeOnly === true ? "indeterminate" : "refused",
       appId, planRunId: planId, lastObservedPlanStatus: observedPlan?.status, runId: observedRun?.id ?? observedApplyId, runStatus: observedRun?.status, code: errorCode(error),
+      runUrl: observedRun ? runUrl(options, observedRun.id) : undefined,
       recovery: applyType === "destroy_apply"
         ? "Use apps apply with the same app, --destroy-plan and --observe-only for readback."
         : "Use apps apply with the same app/plan and --observe-only for readback; no new Plan, key, approval or Apply is created by observation." });
