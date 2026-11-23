@@ -602,6 +602,10 @@ async function applyPlanRun(
     session,
   });
   if (!auth.ok) return auth.response;
+  // The Plan and resource checks can outlive the credential accepted at ingress.
+  if (session.reauthorizeBearer && !(await session.reauthorizeBearer())) {
+    return errorJson("forbidden", "Run apply credentials are no longer valid.", 403);
+  }
   const applyRequest: CreateApplyRunRequest = {
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
