@@ -174,6 +174,10 @@ test("replacement can be offered after a failed removal even with verified conne
     }],
   } as const;
   expect(appUninstallRecoveryMode(withUnavailableBinding)).toBe("failed");
+  expect(appUninstallRecoveryMode({
+    ...withUnavailableBinding,
+    latestRun: { ...latestRun, errorCode: "runner_mutation_indeterminate" },
+  })).toBeUndefined();
   expect(appUninstallRecoveryMode({ ...withUnavailableBinding, latestRun: undefined })).toBe("unavailable");
 });
 

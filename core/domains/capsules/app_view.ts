@@ -250,7 +250,8 @@ function actionFor(
   uninstallCancellable: boolean,
 ): CapsuleAppAction {
   const first = problems.find((problem) => problem.severity === "error");
-  if (!first || first.code === "uninstall_scheduled") return "none";
+  if (!first || first.code === "uninstall_scheduled" ||
+    first.errorCode === "runner_mutation_indeterminate") return "none";
   if (first.code === "uninstall_blocked") {
     return uninstallCancellable ? "cancel_uninstall" : "uninstall_now";
   }

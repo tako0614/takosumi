@@ -2336,6 +2336,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (indeterminateOpenReview) {
           await expect(app).toHaveAttribute("data-app-state", "needs_attention");
           await expect(choose).toHaveCount(0);
+          await expect(page.getByRole("button", { name: "Review again", exact: true })).toHaveCount(0);
         } else {
           await expect(choose).toBeVisible();
           await expect(problems.getByRole("button", { name: "Choose connection for uninstall" })).toHaveCount(1);
