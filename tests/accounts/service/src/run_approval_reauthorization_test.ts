@@ -5,6 +5,7 @@ import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/ac
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { InMemoryOpenTofuControlStore, planRunExecutionInputsDigestMaterial } from "../../../../core/domains/deploy-control/store.ts";
 import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
@@ -18,7 +19,7 @@ const TOKEN = "synthetic-approval-pat";
 const TOKEN_ID = "pat_approval_reauthorization";
 const SESSION_ID = "synthetic-approval-session";
 
-async function fixture(credential: "pat" | "session" | "shared" = "pat") {
+async function runFixture(credential: "pat" | "session" | "shared") {
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, { capsuleId: CAPSULE });
   const { operations: core } = await createTakosumiService({
@@ -70,6 +71,11 @@ async function fixture(credential: "pat" | "session" | "shared" = "pat") {
       listAccessibleApps: core.appAccess.listAccessibleApps.bind(core.appAccess),
     },
   } as unknown as ControlPlaneOperations;
+  return { ledger, core, accounts, pat, membership, operations };
+}
+
+async function fixture(credential: "pat" | "session" | "shared" = "pat") {
+  const { ledger, core, accounts, pat, membership, operations } = await runFixture(credential);
   let release!: () => void;
   const reading = new Promise<void>(resolve => { release = resolve; });
   let body!: ReadableStreamDefaultController<Uint8Array>;
@@ -140,5 +146,48 @@ for (const change of ["member removed", "PAT revoked", "PAT expired", "PAT write
       approvalAudit: stored.auditEvents.some(event => event.type === "plan.approved") })
       .toEqual({ approved: false, status: "waiting_approval", approvalAudit: false });
     expect(response!.status).toBe(403);
+  });
+}
+
+for (const credential of ["session", "shared"] as const) {
+  test(`Apply checks the current ${credential} credential after loading the approved Plan`, async () => {
+    const h = await runFixture(credential);
+    await h.core.approveRun(PLAN, { approvedBy: MEMBER });
+    const approved = await h.ledger.getPlanRun(PLAN);
+    expect(approved?.status).toBe("succeeded");
+    let current = true;
+    let planReads = 0;
+    let applyCalls = 0;
+    const operations = {
+      ...h.operations,
+      getPlanRun: async (id: string) => {
+        const result = await h.operations.getPlanRun(id);
+        planReads++;
+        if (!current) await h.accounts.deleteAccountSession(SESSION_ID);
+        return result;
+      },
+      createApplyRun: async () => {
+        applyCalls++;
+        throw new OpenTofuControllerError("failed_precondition", "Fixture dispatch boundary");
+      },
+    };
+    const apply = () => {
+      const request = new Request(`https://app.takosumi.test/api/v1/runs/${PLAN}/apply`, {
+        method: "POST", headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${SESSION_ID}` },
+      });
+      const context = { request, url: new URL(request.url), store: h.accounts, operations };
+      return credential === "shared" ? handleAuthenticatedControlRoute({
+        ...context, subject: MEMBER, credential: "session", requireCurrentMembership: true,
+        reauthorizeBearer: async () => current,
+      }) : handleControlRoute(context);
+    };
+
+    expect((await apply())?.status).toBe(409);
+    expect(applyCalls).toBe(1);
+    current = false;
+    expect((await apply())?.status).toBe(403);
+    expect(planReads).toBe(2);
+    expect(applyCalls).toBe(1);
+    expect(await h.ledger.getPlanRun(PLAN)).toEqual(approved);
   });
 }
