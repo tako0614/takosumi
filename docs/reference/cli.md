@@ -114,7 +114,9 @@ Apply Runの作成応答だけでは成功にしません。既定で最大120�
 `--timeout-ms <1..120000>`は観測budgetであり、観測終了はserverのRun取消ではありません。
 承認・Apply応答が不明な場合は別の最大5秒で同じPlanとlinked Applyを読むだけで、POSTを自動再送しません。
 この再読で終端Runを照合できた場合は、通常の観測と同じ`status`、Run自身の`code`と注意書き、`runUrl`を返します。
-`failed`・`cancelled`・`expired`は`status: failed`でexit 1です。再読の拒否・照合失敗を、期限後に届いた元応答で成功へ置き換えません。
+通常の`failed`・`cancelled`・`expired`は`status: failed`でexit 1です。
+保存Runが`failed`で`code: runner_mutation_indeterminate`なら、結果は不明のため`status: indeterminate`、`runStatus: failed`でexit 1になります。
+このRunと実際の状態を確認してから次の操作を判断します。再読の拒否・照合失敗を、期限後に届いた元応答で成功へ置き換えません。
 `pending`や`indeterminate`はexit 1で元IDを保持します。以後の読取は次を使います（`read` scopeが必要です）。
 
 ```bash

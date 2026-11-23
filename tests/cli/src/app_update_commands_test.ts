@@ -942,6 +942,40 @@ test("terminal Apply readback rejects changed evidence and current authorization
   }
 });
 
+for (const [kind, savedPlan, resultRun, args, serve] of [
+  ["revision", plan, apply, applyArgs, normal],
+  ["uninstall", destroyPlan, destroyApply, destroyApplyArgs, normalDestroy],
+] as const) {
+  test(`a persisted unknown ${kind} result stays indeterminate on Apply and exact readback`, async () => {
+    const approvedPlan = { ...savedPlan, status: "succeeded" };
+    const terminal = { ...resultRun, status: "failed", errorCode: "runner_mutation_indeterminate" };
+    for (const mode of ["execute", "observe", "lost-ack"] as const) {
+      let posted = false;
+      const r = await invoke(mode === "observe" ? args.filter((arg) => arg !== "--yes").concat("--observe-only") : args, (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === `/api/v1/runs/${savedPlan.id}/apply` && req.method === "POST") {
+          posted = true;
+          if (mode === "lost-ack") throw new Error("synthetic lost acknowledgement");
+        }
+        if (url.pathname.endsWith("/runs")) expect(url.searchParams.getAll("planRunId")).toEqual([savedPlan.id]);
+        return serve(req, { plan: approvedPlan, apply: terminal,
+          history: { runs: mode === "observe" || posted ? [terminal] : [] } });
+      });
+      expect(r.code).toBe(1);
+      expect(r.result).toMatchObject({
+        status: "indeterminate", appId: "cap_owned", planRunId: savedPlan.id,
+        runId: resultRun.id, runStatus: "failed", code: "runner_mutation_indeterminate",
+        runUrl: `${origin}/runs/${resultRun.id}`,
+      });
+      expect(r.calls.filter((call) => call.method !== "GET").map((call) => new URL(call.url).pathname))
+        .toEqual(mode === "observe" ? [] : [`/api/v1/runs/${savedPlan.id}/apply`]);
+      if (mode !== "execute") {
+        expect(r.calls.at(-1)?.url).toBe(`${origin}/api/v1/runs/${resultRun.id}`);
+      }
+    }
+  });
+}
+
 test("late Apply response cannot replace refused fresh readback with success", async () => {
   let posted = false; let finish: (() => void) | undefined;
   const r = await invoke([...applyArgs, "--timeout-ms", "15"], async req => {
