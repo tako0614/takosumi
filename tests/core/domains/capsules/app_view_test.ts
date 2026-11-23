@@ -730,6 +730,21 @@ test("an unapplied review does not hide connection or Capsule errors", () => {
   expect(errored.problems[0]?.code).toBe("capsule_error");
 });
 
+test("the app keeps an indeterminate mutation visible without offering a retry", () => {
+  for (const [type, capsule, problem] of [
+    ["apply", APPLIED, "run_failed"],
+    ["destroy_apply", TEARDOWN_FAILED, "uninstall_failed"],
+    ["destroy_apply", uninstalled(SCHEDULED), "uninstall_failed"],
+  ] as const) {
+    const latestRun = run({ type, status: "failed", errorCode: "runner_mutation_indeterminate",
+      planRunId: "manual_plan" });
+    expect(deriveCapsuleAppStatus(facts({ capsule, latestRun }))).toMatchObject({
+      state: "needs_attention", primaryAction: "none",
+      problems: [{ code: problem, runId: latestRun.id, errorCode: latestRun.errorCode }],
+    });
+  }
+});
+
 test("problems carry the exact Run, connection, blocked reason and teardown Run", () => {
   const failed = deriveCapsuleAppStatus(facts({
     latestRun: run({ id: "run_failed_1", type: "apply", status: "failed", errorCode: "credential_mint_failed" }),

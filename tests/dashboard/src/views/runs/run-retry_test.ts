@@ -214,6 +214,18 @@ describe("retryPlanForRun", () => {
     expect(calls).toEqual(["read run_plan_failed"]);
   });
 
+  test.each(["apply", "destroy_apply"] as const)(
+    "an indeterminate %s cannot start a replacement Plan",
+    async type => {
+      const { api, calls } = recorder();
+      const failure = run({ type, errorCode: "runner_mutation_indeterminate" });
+      await expect(retryPlanForRun(failure, capsule(), api)).rejects.toMatchObject({
+        code: "runner_mutation_indeterminate",
+      });
+      expect(calls).toEqual([]);
+    },
+  );
+
   test("a failed removal is retried as a removal", async () => {
     for (const type of ["destroy_plan", "destroy_apply"] as const) {
       const { api, calls } = recorder();

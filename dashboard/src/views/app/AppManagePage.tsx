@@ -114,6 +114,7 @@ import {
   retryPlanForRun,
   type RetryPlanApi,
 } from "../../lib/run-retry.ts";
+import { runMutationOutcomeUnknown } from "../../lib/run-errors.ts";
 import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.ts";
 import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
 import { AppManagementRow, AppSection, AppSectionVisibility, OpenAppButton } from "./app-ui.tsx";
@@ -1124,7 +1125,7 @@ export default function AppManagePage(props: {
   // The immediate teardown is a plan reviewed in place: its removal list,
   // the explicit check and the approval dialog all stay in front of it.
   const uninstallNow = () => {
-    if (!isOwner() || uninstallConnectionNotice()) return;
+    if (!isOwner() || uninstallConnectionNotice() || runMutationOutcomeUnknown(app()?.latestRun)) return;
     void startReview(
       "attention",
       "uninstall",
@@ -1817,7 +1818,8 @@ export default function AppManagePage(props: {
                           variant="danger"
                           type="button"
                           busy={starting()?.action === "uninstall_now"}
-                          disabled={reviewBusy() || uninstallBusy() || Boolean(uninstallConnectionNotice())}
+                          disabled={reviewBusy() || uninstallBusy() || Boolean(uninstallConnectionNotice()) ||
+                            runMutationOutcomeUnknown(view().latestRun)}
                           onClick={uninstallNow}
                         >
                           {t("app.uninstall.now")}

@@ -75,6 +75,57 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       });
     }
 
+    test("an indeterminate Destroy Apply explains the unknown outcome without offering another review", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const capsuleId = "cap_unknown_destroy";
+      const now = "2026-11-18T00:00:00Z";
+      const base = {
+        workspaceId: "ws_alpha", capsuleId, type: "destroy_apply", status: "failed",
+        planRunId: "plan_unknown_destroy", createdBy: "portable-e2e", createdAt: now,
+      } as const;
+      const unknown = { ...base, id: "destroy_unknown_result", errorCode: "runner_mutation_indeterminate" };
+      const known = { ...base, id: "destroy_known_failure", errorCode: "apply_failed" };
+      const writes: string[] = [];
+      const reads: string[] = [];
+      await page.route("**/api/v1/**", (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (request.method() !== "GET") {
+          writes.push(`${request.method()} ${path}`);
+          return route.fulfill({ status: 503, json: { error: "unexpected_mutation" } });
+        }
+        const current = [unknown, known].find((run) => path === `/api/v1/runs/${run.id}` || path.startsWith(`/api/v1/runs/${run.id}/`));
+        if (current && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+        if (current && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        if (current && path.endsWith("/cost")) return route.fulfill({ json: { cost: {
+          runId: current.id, billingMode: "disabled", ratingStatus: "not_applicable",
+          estimatedUsdMicros: 0, blocked: false, reasons: [],
+        } } });
+        if (current) { reads.push(current.id); return route.fulfill({ json: { run: current } }); }
+        if (path === `/api/v1/capsules/${capsuleId}`) return route.fulfill({ json: { capsule: {
+          id: capsuleId, workspaceId: "ws_alpha", name: "Unknown Destroy app", environment: "production",
+          status: "error", currentStateGeneration: 1, currentStateVersionId: "state_unknown_destroy",
+          createdAt: now, updatedAt: now,
+        } } });
+        if (path === `/api/v1/capsules/${capsuleId}/runs`) return route.fulfill({ json: { runs: [] } });
+        return route.fallback();
+      });
+
+      await page.goto(`/runs/${unknown.id}`, { waitUntil: "domcontentloaded" });
+      await expect(page.locator(".av-run-summary")).toContainText("The operation's outcome is unknown.");
+      await expect(page.locator(".av-run-summary")).toContainText("Ask an operator to check it before running it again.");
+      await expect(page.getByRole("button", { name: "Review changes again", exact: true })).toHaveCount(0);
+      expect(reads).toContain(unknown.id);
+      expect(writes).toEqual([]);
+
+      // A terminal failure with a known outcome still offers ordinary review.
+      await page.goto(`/runs/${known.id}`, { waitUntil: "domcontentloaded" });
+      await expect(page.locator(".av-run-summary")).toContainText("Check the reason and logs, then try again.");
+      await expect(page.getByRole("button", { name: "Review changes again", exact: true })).toBeVisible();
+      expect(reads).toContain(known.id);
+      expect(writes).toEqual([]);
+    });
+
     test("a cancel confirmation stays with its displayed Run", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const a = "run_confirm_a", b = "run_confirm_b";

@@ -25,7 +25,7 @@ import {
 import { installAttemptHref, uninstallConnectionsHref } from "../../lib/app-links.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
 import { appUninstallBanner, appUninstallConnectionNotice, appUninstallExportNote, appUninstallFailure, appUninstallRecoveryMode } from "../../lib/capsule-uninstall.ts";
-import { runFailureHint } from "../../lib/run-errors.ts";
+import { runFailureHint, runMutationOutcomeUnknown } from "../../lib/run-errors.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
@@ -206,8 +206,9 @@ export default function AppAttentionSection(props: {
     scheduled()?.phase === "destroying" && !scheduled()?.blocked && !uninstallFailed();
   const offerCancel = () =>
     props.canUninstall !== false && scheduled()?.cancellable === true && app().primaryAction !== "cancel_uninstall";
+  const outcomeUnknown = () => runMutationOutcomeUnknown(app().latestRun);
   const offerUninstallNow = () =>
-    props.canUninstall !== false && !teardownRunning() && app().primaryAction !== "uninstall_now" &&
+    props.canUninstall !== false && !outcomeUnknown() && !teardownRunning() && app().primaryAction !== "uninstall_now" &&
     app().state !== "uninstalling";
 
   const detailsLink = (runId: string) => (
@@ -226,7 +227,9 @@ export default function AppAttentionSection(props: {
   );
   const actionButton = (problem: CapsuleAppProblem) => {
     const action = PROBLEM_ACTION[problem.code];
-    if (!action || isPrimary(problem, action) || (props.canUninstall === false && (isAppRemovalRun(problem.runType) || problem.code === "uninstall_failed"))) return null;
+    if (!action || isPrimary(problem, action) ||
+      (action === "retry" && (outcomeUnknown() || runMutationOutcomeUnknown(problem))) ||
+      (props.canUninstall === false && (isAppRemovalRun(problem.runType) || problem.code === "uninstall_failed"))) return null;
     switch (action) {
       case "review_interface_link":
         return (
@@ -341,7 +344,8 @@ export default function AppAttentionSection(props: {
                 >
                   {(problem) => (
                     <>
-                      <Show when={props.canUninstall !== false && !isPrimary(problem(), "retry") && !uninstallConnectionNotice()}>
+                      <Show when={props.canUninstall !== false && !outcomeUnknown() &&
+                        !runMutationOutcomeUnknown(problem()) && !isPrimary(problem(), "retry") && !uninstallConnectionNotice()}>
                         <Button
                           variant="secondary"
                           type="button"
