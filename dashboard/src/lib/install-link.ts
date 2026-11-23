@@ -23,6 +23,8 @@ import {
   takosumiAppHandoffFromSearch,
 } from "takosumi-contract";
 
+export const GIT_INSTALL_ENTRY = "/new?entry=git";
+
 export interface InstallPrefill {
   readonly git: string;
   readonly ref: string;

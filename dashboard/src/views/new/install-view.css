@@ -10,9 +10,11 @@
 .iv-catalogue { padding: var(--tg-s-5); }
 .iv-workbench { width: min(100%, 46rem); margin-inline: auto; padding: var(--tg-s-5); }
 .iv-section-head { display: grid; gap: var(--tg-s-1); margin-bottom: var(--tg-s-5); }
-.iv-manual, .iv-advanced { margin-top: var(--tg-s-5); border-top: 1px solid var(--tg-line); padding-top: var(--tg-s-4); }
-.iv-manual summary, .iv-advanced summary { min-height: 2.75rem; cursor: pointer; color: var(--tg-fg-muted); font-weight: 650; }
-.iv-manual-row { display: grid; gap: var(--tg-s-3); }
+.iv-advanced { margin-top: var(--tg-s-5); border-top: 1px solid var(--tg-line); padding-top: var(--tg-s-4); }
+.iv-advanced summary { min-height: 2.75rem; cursor: pointer; color: var(--tg-fg-muted); font-weight: 650; }
+.iv-page.iv-git-entry { width: min(100%, 38rem); }
+.iv-git-entry .iv-form > .tg-btn { margin-top: 0; }
+.iv-git-example { margin: var(--tg-s-5) 0 0; }
 .iv-form, .iv-fields { display: grid; gap: var(--tg-s-4); }
 .iv-form > .tg-btn, .iv-workbench > .tg-btn:last-child { justify-self: start; margin-top: var(--tg-s-5); white-space: nowrap; }
 .iv-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); margin-top: var(--tg-s-5); }
@@ -33,7 +35,6 @@
 .iv-log-lines { max-height: 18rem; overflow: auto; padding: var(--tg-s-3); background: var(--tg-bg-subtle); border-radius: var(--tg-r-md); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (min-width: 40rem) {
-  .iv-manual-row { grid-template-columns: minmax(0, 1fr) auto; }
   .iv-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -45,7 +46,20 @@
 }
 
 /* The Store page and its unfinished installs. */
-.iv-browse-page .iv-page-heading { margin-bottom: var(--tg-s-4); }
+.iv-browse-page .iv-page-heading {
+  flex-flow: row wrap;
+  align-items: center;
+  margin-bottom: var(--tg-s-4);
+}
+.iv-git-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-inline-start: auto;
+  font-size: var(--tg-fs-sm);
+}
+.app-shell .iv-git-link { color: var(--tg-fg-muted); }
+.app-shell .iv-git-link:is(:hover, :focus-visible) { color: var(--tg-accent-text); }
 .iv-browse-page .iv-page-heading h1 { font-size: var(--tg-page-heading); line-height: 1.2; }
 .iv-page .iv-catalogue.iv-catalogue-browse { border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0; }
 

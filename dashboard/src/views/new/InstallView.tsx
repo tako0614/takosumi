@@ -25,7 +25,7 @@ import { StoreGallery, StoreOfferDetails, StoreRating } from "../store/StoreList
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { listConnections, listInstalledApps } from "../../lib/control-api.ts";
-import { capsuleNameFromUrl, hasInstallPrefillParams, isSafeHttpsGitUrl, parseInstallPrefill } from "../../lib/install-link.ts";
+import { capsuleNameFromUrl, GIT_INSTALL_ENTRY, hasInstallPrefillParams, parseInstallPrefill } from "../../lib/install-link.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import {
   appendAppHandoff,
@@ -154,6 +154,9 @@ function InstallRoute(props: { readonly principalId: string }) {
           {(_installLocation) => <AppInstallPage principalId={props.principalId} />}
         </Show>
       </Match>
+      <Match when={`${location.pathname}${location.search}` === GIT_INSTALL_ENTRY}>
+        <GitInstallPage />
+      </Match>
     </Switch>
   );
 }
@@ -165,8 +168,6 @@ function StorePage(props: {
   readonly catalogCache: StoreCatalogCache;
 }) {
   const navigate = useNavigate();
-  const [gitUrl, setGitUrl] = createSignal("");
-  const [gitError, setGitError] = createSignal<string>();
   // Selecting a listing reflects it into the URL, so back and share work.
   const choose = (listing: TcsListing) => {
     pickedListing = listing;
@@ -174,7 +175,10 @@ function StorePage(props: {
   };
   return (
     <div class="iv-page iv-browse-page">
-      <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
+      <header class="iv-hero iv-page-heading">
+        <h1>{t("installStore.title")}</h1>
+        <a class="iv-git-link" href={GIT_INSTALL_ENTRY}>{t("installStore.fromGit")}</a>
+      </header>
       <Show when={props.rejectedInstallLink}>
         <div class="iv-error" role="alert" data-testid="install-link-refusal">
           <p>{t("installStore.invalidInstallLink")}</p>
@@ -189,34 +193,51 @@ function StorePage(props: {
           showSourceControls={true}
           showSortControl={true}
         />
-        <details class="iv-manual">
-          <summary>{t("installStore.manual")}</summary>
-          <form
-            class="iv-manual-row"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const url = gitUrl().trim();
-              const path = isSafeHttpsGitUrl(url) ? installReturnPathFromPrefill({ git: url }) : undefined;
-              if (!path) {
-                setGitError(t("installStore.invalidSource"));
-                return;
-              }
-              setGitError(undefined);
-              navigate(path);
-            }}
-          >
-            <Input
-              value={gitUrl()}
-              onInput={(event) => setGitUrl(event.currentTarget.value)}
-              placeholder="https://github.com/example/service.git"
-              aria-label={t("installStore.sourceUrl")}
-              spellcheck={false}
-            />
-            <Button type="submit" variant="secondary">{t("installStore.continue")}</Button>
-          </form>
-          <Show when={gitError()}>{(message) => <p class="iv-muted" role="alert">{message()}</p>}</Show>
-        </details>
       </section>
+    </div>
+  );
+}
+
+// The same provider-free example as the standalone quickstart.
+const standaloneExample = installReturnPathFromPrefill({
+  git: "https://github.com/tako0614/takosumi.git",
+  ref: "v2.0.0",
+  path: "examples/opentofu-basic",
+  name: "OpenTofu sample",
+});
+
+function GitInstallPage() {
+  const navigate = useNavigate();
+  const [gitUrl, setGitUrl] = createSignal("");
+  const [invalid, setInvalid] = createSignal(false);
+  return (
+    <div class="iv-page iv-browse-page iv-git-entry">
+      <header class="iv-hero iv-page-heading"><h1>{t("installStore.fromGit")}</h1></header>
+      <form class="iv-form" onSubmit={(event) => {
+        event.preventDefault();
+        const path = installReturnPathFromPrefill({ git: gitUrl() });
+        if (!path) {
+          setInvalid(true);
+          return;
+        }
+        navigate(path);
+      }}>
+        <FormField label={t("installStore.sourceUrl")} error={invalid() ? t("installStore.invalidSource") : undefined}>
+          <Input
+            value={gitUrl()}
+            onInput={(event) => { setGitUrl(event.currentTarget.value); setInvalid(false); }}
+            placeholder="https://github.com/example/service.git"
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </FormField>
+        <Button type="submit">{t("installStore.continue")}</Button>
+      </form>
+      <Show when={standaloneExample}>
+        {(href) => <p class="iv-muted iv-git-example">
+          <a href={href()}>{t("installStore.tryExample")}</a>
+        </p>}
+      </Show>
     </div>
   );
 }
@@ -434,7 +455,9 @@ function AppInstallPage(props: { readonly principalId: string }) {
 
   return (
     <div class="iv-page iv-configure-page" data-install-state={stage()}>
-      <a class="iv-back-link" href="/new"><ArrowLeft size={18} aria-hidden="true" />{t("installStore.back")}</a>
+      <a class="iv-back-link" href={fromStore() ? "/new" : GIT_INSTALL_ENTRY}>
+        <ArrowLeft size={18} aria-hidden="true" />{t(fromStore() ? "installStore.back" : "installStore.fromGit")}
+      </a>
       <article class="iv-app-surface" aria-labelledby="iv-app-title">
         <header class="iv-app-detail" data-testid="install-app-header">
           <AppFace name={title()} iconUrl={listed()?.iconUrl} class="iv-app-icon" monogramFrameClass="iv-app-monogram" />
