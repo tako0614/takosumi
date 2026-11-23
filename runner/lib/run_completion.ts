@@ -15,7 +15,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { RUN_ROOT } from "./constants.ts";
+import { LOCAL_MUTATION_RUN_ID_PATTERN, RUN_ROOT } from "./constants.ts";
 import { digestBytes, isRecord } from "./util.ts";
 import { readModuleDir, workspaceForRun } from "./artifacts.ts";
 
@@ -429,7 +429,7 @@ async function readDurable(
   }
 }
 
-function validAttemptId(value: unknown): value is string {
+export function validAttemptId(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f-]{36}$/u.test(value);
 }
 
@@ -530,7 +530,7 @@ export async function reserveLocalMutationPreparation(
   restoredProviderLockDigest?: string,
   syncFault?: LocalMutationSyncFault,
 ): Promise<number | undefined> {
-  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(runId) || !validAttemptId(attemptId)) return undefined;
+  if (!LOCAL_MUTATION_RUN_ID_PATTERN.test(runId) || !validAttemptId(attemptId)) return undefined;
   const requestDigest = await mutationRequestDigest(runId, action, request, restoredProviderLockDigest);
   const attemptDigest = await digestBytes(new TextEncoder().encode(attemptId));
   await ensureCustodyDirectory(true);
@@ -700,7 +700,7 @@ export async function claimLocalMutation(
   readonly status: "claimed" | "completed" | "indeterminate";
   readonly completion?: Completion;
 }> {
-  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(runId))
+  if (!LOCAL_MUTATION_RUN_ID_PATTERN.test(runId))
     return { status: "indeterminate" };
   const requestDigest = await mutationRequestDigest(
     runId,

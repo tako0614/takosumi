@@ -19,6 +19,8 @@ export const PROVIDER_PLUGIN_CACHE_DIR_ENV =
   "TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR";
 export const SOURCE_BUILD_CACHE_DIR_ENV = "TAKOSUMI_SOURCE_BUILD_CACHE_DIR";
 export const RUNNER_START_SERVER_ENV = "TAKOSUMI_RUNNER_START_SERVER";
+export const LOCAL_MUTATION_RESERVATION_TIMEOUT_MS = 30_000;
+export const LOCAL_MUTATION_RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 /**
  * JSON object mapping opaque backup adapter ids to exact runner strategies.
  * Provider names never select an adapter. Example:

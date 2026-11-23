@@ -12,7 +12,12 @@ import {
   handleRunnerRequestWithDependencies,
   runnerMutationCustodyMode,
 } from "./lib/http_server.ts";
-import { port, RUN_ROOT, RUNNER_START_SERVER_ENV } from "./lib/constants.ts";
+import {
+  LOCAL_MUTATION_RESERVATION_TIMEOUT_MS,
+  port,
+  RUN_ROOT,
+  RUNNER_START_SERVER_ENV,
+} from "./lib/constants.ts";
 import { ensureCustodyDirectory } from "./lib/run_completion.ts";
 import {
   acquireRunRootOwnership,
@@ -90,10 +95,12 @@ export async function startRunnerHttpServer(options: {
     server = Bun.serve({
       hostname: options.hostname ?? "0.0.0.0",
       port: options.port ?? port,
-      fetch: (request) => handleRunnerRequestWithDependencies(request, {
+      fetch: (request, server) => handleRunnerRequestWithDependencies(request, {
         ...(custodyMode ? { mutationCustodyMode: custodyMode } : {}),
         localPreparationV2: options.localPreparationV2 === true,
         runRootOwnership: owner,
+        extendLocalMutationReservationResponse: () =>
+          server.timeout(request, LOCAL_MUTATION_RESERVATION_TIMEOUT_MS / 1_000 + 5),
       }),
     });
   } catch (error) {
