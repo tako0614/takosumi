@@ -491,9 +491,14 @@ function requiredProviderRequirementsForPlanRun(
   const exactSources = new Set(
     requiredProviderRequirements.map((entry) => entry.source),
   );
+  // The pinned Git module can reach packages used only by its descendants.
+  // The Runner verifies that full inventory. Only the selected root's exact
+  // provider tuples may resolve bindings and credentials here.
+  const hasGitSourceSnapshot = planRun.source.kind === "git" &&
+    Boolean(planRun.sourceSnapshotId);
   if (
-    declaredSources.size !== exactSources.size ||
-    [...declaredSources].some((source) => !exactSources.has(source))
+    [...exactSources].some((source) => !declaredSources.has(source)) ||
+    (!hasGitSourceSnapshot && declaredSources.size !== exactSources.size)
   ) {
     throw new OpenTofuControllerError(
       "failed_precondition",

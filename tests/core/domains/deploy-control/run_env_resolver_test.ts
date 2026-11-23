@@ -16,6 +16,7 @@ import {
 } from "../../../../core/domains/deploy-control/run_env_resolver.ts";
 
 const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
+const RANDOM_PROVIDER = "registry.opentofu.org/hashicorp/random";
 const AWS_PROVIDER = "registry.opentofu.org/hashicorp/aws";
 const NULL_PROVIDER = "registry.opentofu.org/hashicorp/null";
 
@@ -377,6 +378,140 @@ test("RunEnvResolver never falls back from a present empty exact field", async (
       auditRunId: "plan_malformed_empty_exact",
     }),
   ).rejects.toThrow(/do not match requiredProviders/);
+});
+
+test("RunEnvResolver resolves only reviewed root bindings from a pinned Git provider inventory", async () => {
+  const calls: Array<{
+    phase: string;
+    auditRunId: string;
+    context: "opentofu" | "release_command";
+  }> = [];
+  const subject = resolver({
+    calls,
+    resolved: [
+      {
+        provider: CLOUDFLARE_PROVIDER,
+        moduleLocalName: "cloudflare",
+        materialization: "secret",
+        connection: connection(),
+      },
+      {
+        provider: RANDOM_PROVIDER,
+        moduleLocalName: "random",
+        materialization: "secret",
+        connection: connection({
+          id: "conn_child_only",
+          provider: RANDOM_PROVIDER,
+          providerSource: RANDOM_PROVIDER,
+        }),
+      },
+    ],
+    credentials: () => runCredentials({ CLOUDFLARE_API_TOKEN: "fixture-token" }),
+  });
+
+  const result = await subject.resolveRunEnvironment({
+    planRun: planRun({
+      sourceSnapshotId: "snapshot_pinned_git",
+      requiredProviders: [CLOUDFLARE_PROVIDER, RANDOM_PROVIDER],
+      requiredProviderRequirements: [{
+        source: CLOUDFLARE_PROVIDER,
+        moduleLocalName: "cloudflare",
+        allowed: true,
+        credentialRequired: true,
+      }],
+    }),
+    phase: "plan",
+    auditRunId: "plan_pinned_root_only",
+  });
+
+  expect(calls).toEqual([{ phase: "plan", auditRunId: "plan_pinned_root_only", context: "opentofu" }]);
+  expect(result.providerResolutions).toHaveLength(1);
+  expect(result.providerResolutions[0]).toMatchObject({
+    connectionId: "conn_1",
+    requirement: { providerSource: CLOUDFLARE_PROVIDER },
+  });
+  expect(result.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [{ provider: CLOUDFLARE_PROVIDER, alias: null, configuration: {} }],
+  });
+  expect(result.credentials?.env).toEqual({ CLOUDFLARE_API_TOKEN: "fixture-token" });
+});
+
+test("RunEnvResolver keeps an explicitly empty pinned Git root graph empty", async () => {
+  let bindingReads = 0;
+  const subject = new RunEnvResolver({
+    credentials: {
+      mintRunCredentials: async () => undefined,
+      mintReleaseCommandCredentials: async () => undefined,
+    },
+    resolveRunProviderBindings: async () => {
+      bindingReads++;
+      return [{
+        provider: RANDOM_PROVIDER,
+        moduleLocalName: "random",
+        materialization: "secret",
+        connection: connection({ id: "conn_child_only", provider: RANDOM_PROVIDER, providerSource: RANDOM_PROVIDER }),
+      }];
+    },
+  });
+
+  const result = await subject.resolveRunEnvironment({
+    planRun: planRun({
+      sourceSnapshotId: "snapshot_child_only",
+      requiredProviders: [RANDOM_PROVIDER],
+      requiredProviderRequirements: [],
+    }),
+    phase: "plan",
+    auditRunId: "plan_empty_pinned_root",
+  });
+
+  expect(bindingReads).toBe(0);
+  expect(result.providerResolutions).toEqual([]);
+  expect(result.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [],
+  });
+  expect(result.credentials).toBeUndefined();
+});
+
+test("RunEnvResolver rejects a pinned Git root identity outside the reviewed provider packages before mint", async () => {
+  let bindingReads = 0;
+  let credentialMints = 0;
+  const subject = new RunEnvResolver({
+    credentials: {
+      mintRunCredentials: async () => {
+        credentialMints++;
+        return runCredentials({ CLOUDFLARE_API_TOKEN: "fixture-token" });
+      },
+      mintReleaseCommandCredentials: async () => undefined,
+    },
+    resolveRunProviderBindings: async () => {
+      bindingReads++;
+      return [{
+        provider: CLOUDFLARE_PROVIDER,
+        moduleLocalName: "cloudflare",
+        materialization: "secret",
+        connection: connection(),
+      }];
+    },
+  });
+
+  await expect(subject.resolveRunEnvironment({
+    planRun: planRun({
+      sourceSnapshotId: "snapshot_pinned_other_package",
+      requiredProviders: [RANDOM_PROVIDER],
+      requiredProviderRequirements: [{
+        source: CLOUDFLARE_PROVIDER,
+        moduleLocalName: "cloudflare",
+        allowed: true,
+        credentialRequired: true,
+      }],
+    }),
+    phase: "plan",
+    auditRunId: "plan_unreviewed_root_identity",
+  })).rejects.toThrow(/do not match requiredProviders/);
+  expect(bindingReads).toBe(0);
+  expect(credentialMints).toBe(0);
 });
 
 test("RunEnvResolver distinguishes a pre-field stored row from explicit empty requirements", async () => {
