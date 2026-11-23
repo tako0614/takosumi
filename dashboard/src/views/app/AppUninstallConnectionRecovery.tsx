@@ -7,11 +7,14 @@ import { uninstallConnectionsHref } from "../../lib/app-links.ts";
 import { providerName } from "../../lib/app-page.ts";
 import { getCapsuleProviderBindingSet, listProviderConnectionsWithSignal, type CapsuleAppView } from "../../lib/control-api.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
-import { appUninstallRecoveryConnections } from "../../lib/capsule-uninstall.ts";
+import { appUninstallRecoveryConnections, isUninstallReplacementReady } from "../../lib/capsule-uninstall.ts";
 import { verifiedCloudflareAccountId } from "../../../../providers/cloudflare/settings.ts";
 
 function replacementConnectionLabel(connection: ProviderConnection): string {
   const name = providerConnectionDisplayName(connection);
+  if (!isUninstallReplacementReady(connection)) {
+    return t("app.uninstall.replacementNeedsVerification", { name });
+  }
   const accountId = verifiedCloudflareAccountId(connection);
   return accountId ? t("app.uninstall.replacementCloudflareAccount", { name, accountId }) : name;
 }
@@ -81,7 +84,8 @@ export default function AppUninstallConnectionRecovery(props: {
   const replacements = createMemo(() => {
     const selected = rows().flatMap(({ connectionId, provider }) => {
       const replacementConnectionId = selection().get(connectionId);
-      return replacementConnectionId && options(provider, connectionId).some((connection) => connection.id === replacementConnectionId)
+      return replacementConnectionId && options(provider, connectionId).some((connection) =>
+        connection.id === replacementConnectionId && isUninstallReplacementReady(connection))
         ? [{ connectionId, replacementConnectionId }] : [];
     });
     return selected.length > 0 &&
@@ -120,7 +124,7 @@ export default function AppUninstallConnectionRecovery(props: {
                       ? "app.uninstall.keepConnection"
                       : "app.uninstall.replacementPlaceholder")}</option>
                     <For each={options(provider, connectionId)}>{(connection) => (
-                      <option value={connection.id}>
+                      <option value={connection.id} disabled={!isUninstallReplacementReady(connection)}>
                         {replacementConnectionLabel(connection)}
                       </option>
                     )}</For>
