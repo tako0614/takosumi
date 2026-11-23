@@ -14659,9 +14659,12 @@ test("pre-provider Apply refusal leaves initial Capsule pending and retryable", 
   expect(runner.applyJobs).toHaveLength(1);
 });
 
-for (const originalAuth of ["oauth", "api_token"] as const) test(originalAuth === "oauth"
-  ? "Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence"
-  : "Destroy with a revoked Cloudflare API-token connection requires applied ownership evidence (token-only original)", async () => {
+const destroyKeyRotationCases = [
+  { originalAuth: "oauth", revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare OAuth connection requires applied ownership evidence" },
+  { originalAuth: "api_token", revokeBeforePlan: true, name: "Destroy with a revoked Cloudflare API-token connection requires applied ownership evidence (token-only original)" },
+  { originalAuth: "api_token", revokeBeforePlan: false, name: "Destroy keeps the reviewed replacement key when the original is revoked after approval" },
+] as const;
+for (const { originalAuth, revokeBeforePlan, name } of destroyKeyRotationCases) test(name, async () => {
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -14874,22 +14877,27 @@ for (const originalAuth of ["oauth", "api_token"] as const) test(originalAuth ==
     materialization: originalAuth === "oauth" ? "oauth" : "secret",
     evidence: expect.objectContaining({ requiredEnvNames: ["CLOUDFLARE_API_TOKEN"] }),
   })]);
-  expect(await vault.revoke(original.id, undefined, ownerAccountId)).toBe(true);
-  expect(await store.getConnection(original.id)).toBeUndefined();
+  const revokeOriginal = async () => {
+    expect(await vault.revoke(original.id, undefined, ownerAccountId)).toBe(true);
+    expect(await store.getConnection(original.id)).toBeUndefined();
+  };
+  if (revokeBeforePlan) await revokeOriginal();
 
   const dispatchBeforeReplacement = dispatchCounts();
   const wrongAccount = await requestDestroyPlan(foreignAccount.id);
   expect(wrongAccount.status).toBe(409);
   expect(dispatchCounts()).toEqual(dispatchBeforeReplacement);
-  expect(await store.getConnection(original.id)).toBeUndefined();
 
-  const readMintEvents = store.listCredentialMintEventsForRun.bind(store);
-  store.listCredentialMintEventsForRun = async (runId) =>
-    (await readMintEvents(runId)).map(({ ownershipEpoch: _legacyMissingEpoch, ...event }) => event);
-  const withoutOwnershipEpoch = await requestDestroyPlan(replacement.id);
-  store.listCredentialMintEventsForRun = readMintEvents;
-  expect(withoutOwnershipEpoch.status).toBe(409);
-  expect(dispatchCounts()).toEqual(dispatchBeforeReplacement);
+  if (revokeBeforePlan) {
+    expect(await store.getConnection(original.id)).toBeUndefined();
+    const readMintEvents = store.listCredentialMintEventsForRun.bind(store);
+    store.listCredentialMintEventsForRun = async (runId) =>
+      (await readMintEvents(runId)).map(({ ownershipEpoch: _legacyMissingEpoch, ...event }) => event);
+    const withoutOwnershipEpoch = await requestDestroyPlan(replacement.id);
+    store.listCredentialMintEventsForRun = readMintEvents;
+    expect(withoutOwnershipEpoch.status).toBe(409);
+    expect(dispatchCounts()).toEqual(dispatchBeforeReplacement);
+  }
 
   const response = await requestDestroyPlan(replacement.id);
   expect(response.status).toBe(201);
@@ -14912,6 +14920,7 @@ for (const originalAuth of ["oauth", "api_token"] as const) test(originalAuth ==
   expect(mintedConnectionIds.slice(2)).toEqual([[replacement.id]]);
 
   await controller.approveRun(destroyPlan.id, { approvedBy: ownerAccountId });
+  if (!revokeBeforePlan) await revokeOriginal();
   const beforeApprovalDrift = dispatchCounts();
   await store.putConnection({ ...replacement, status: "revoked" });
   await expect(controller.createApplyRun({
