@@ -706,6 +706,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.continued()).toBeUndefined();
     });
     test("a secret setting is write-only and leaves the page only in the confirming answer", async ({ page }) => {
+      await page.clock.install();
       const f = await detailFixture(page, base, false, false, "not_applicable", {
         variables: [{ name: "api_token", type: "string", required: true, sensitive: true, label: { en: "API token", ja: "APIトークン" } }],
       });
@@ -727,12 +728,12 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expandDetails(page, "install-planned-resources");
       await expect(planned.locator('li[data-resource-type="cloudflare_workers_script"]')).toBeVisible();
       await expect(planned.locator('li[data-resource-type="cloudflare_d1_database"]')).toContainText("×2");
-      await page.waitForTimeout(1_500);
+      await page.clock.runFor(1_500);
       expect(f.continued()).toBeUndefined();
       // Typed text counts once its field is left (Enter here).
       await secret.fill("fixture-secret-value");
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Checked once you finish typing");
-      await page.waitForTimeout(1_200);
+      await page.clock.runFor(1_200);
       expect(f.continued()).toBeUndefined();
       await secret.press("Enter");
       await waitForPlan(page);
@@ -1000,6 +1001,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.some((m) => m.endsWith("/apply") || m.startsWith("DELETE /api/v1/capsules/") || m.includes("/abandon"))).toBe(false);
     });
     test("Stop installing while reading waits for the coordinator and then discards", async ({ page }) => {
+      await page.clock.install();
       const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 1_000 });
       await page.goto(sourceUrl);
       await page.getByRole("button", { name: "Install", exact: true }).click();
@@ -1011,7 +1013,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.locator(".iv-error")).toHaveCount(0);
       expect(f.mutations.filter((m) => m.startsWith("DELETE /api/v1/install-plans/"))).toHaveLength(1);
       const reconcilesAfterStop = f.attempts.log.reconciles;
-      await page.waitForTimeout(1_000);
+      await page.clock.runFor(1_000);
       expect(f.attempts.log.reconciles).toBe(reconcilesAfterStop);
     });
     test("the app name is edited before the app exists; a taken name offers a free one", async ({ page }) => {
