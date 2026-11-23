@@ -163,8 +163,11 @@ export interface ControlSession {
   readonly requiredAccess?: Exclude<AccountsBearerRequiredScope, "admin">;
   /** Revalidate the exact request bearer before a sensitive commit or at stream checkpoints. Installed by
    * the ordinary account credential dispatcher. */
-  readonly reauthorizeBearer?: () => Promise<boolean>;
+  readonly reauthorizeBearer?: () => Promise<ControlCredentialRecheck>;
 }
+
+/** "signed_out" requires confirmation that the original browser session is inactive. */
+export type ControlCredentialRecheck = "current" | "signed_out" | "denied";
 
 export interface RunStreamTiming {
   readonly now: () => number;

@@ -64,7 +64,7 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
     const initialAuthority = await ctx.operations.workspaces.captureManagementAuthority(controllingWorkspaceId);
     const writeFence: InterfaceLinkWriteFence = { assertCurrent: async () => {
       ctx.assertActive?.();
-      if (ctx.session.reauthorizeBearer && !(await ctx.session.reauthorizeBearer())) throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
+      if (ctx.session.reauthorizeBearer && await ctx.session.reauthorizeBearer() !== "current") throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
       if (!(await decide(controlling, "change_interface_link", { ...ctx.session, requiredAccess: "write" })).ok) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
       const current = await ctx.operations.workspaces.captureManagementAuthority(controllingWorkspaceId);
       if (current.managementEpoch !== initialAuthority.managementEpoch) throw new InterfaceServiceError("conflict", "Workspace management authority changed");
@@ -143,7 +143,7 @@ async function handleInterfaceLinkRequests(ctx: ControlDispatchContext, provider
     // transfer (epoch) or a changed bearer fails closed.
     const writeFence: InterfaceLinkWriteFence = { assertCurrent: async () => {
       ctx.assertActive?.();
-      if (ctx.session.reauthorizeBearer && !(await ctx.session.reauthorizeBearer())) throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
+      if (ctx.session.reauthorizeBearer && await ctx.session.reauthorizeBearer() !== "current") throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
       if (!(await credentialMayDecide()) || !(await decide({ ...ctx.session, requiredAccess: "write" })).ok) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
       const current = await ctx.operations.workspaces.captureManagementAuthority(provider.workspaceId);
       if (current.managementEpoch !== initialAuthority.managementEpoch) throw new InterfaceServiceError("conflict", "Workspace management authority changed");

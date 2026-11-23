@@ -365,7 +365,7 @@ async function listAppConnectionLabels(
   }
   const current = await operations.appAccess?.resolveAppAccess(session.subject, capsuleId);
   if (!current || current.capsuleId !== capsuleId || current.ownerAccountId !== owner || current.ownershipEpoch !== access.ownershipEpoch || current.role !== access.role ||
-    !(await (session.reauthorizeBearer?.() ?? Promise.resolve(true)))) {
+    (session.reauthorizeBearer && await session.reauthorizeBearer() !== "current")) {
     return errorJson("app_access_denied", "App access is required.", 403);
   }
   return json({ connections: page.items.map((connection) => ({

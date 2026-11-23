@@ -214,7 +214,7 @@ test("Connection labels retain bearer and Workspace attenuation", async () => {
     expect((await readLabels(operations, "", session)).response?.status).toBe(403);
   }
   expect([connectionReads, ownerPages]).toEqual([[], []]);
-  expect((await readLabels(operations, "", { subject: "member", credential: "personal-access-token", reauthorizeBearer: async () => false })).response?.status).toBe(403);
+  expect((await readLabels(operations, "", { subject: "member", credential: "personal-access-token", reauthorizeBearer: async () => "denied" })).response?.status).toBe(403);
   expect(connectionReads).toEqual(["conn_good"]);
   expect(ownerPages).toHaveLength(1);
 });

@@ -2181,7 +2181,10 @@ export async function handlePlatformSharedAuthControlRequest(
       ...(dependencies.runStreamTiming ? { runStreamTiming: dependencies.runStreamTiming } : {}),
       reauthorizeBearer: async () => {
         const current = await authenticateSharedAuthRequest(request, env);
-        return current?.kind === "authenticated" && current.accountId === identity.accountId;
+        if (current?.kind === "unauthenticated") return "signed_out";
+        return current?.kind === "authenticated" && current.accountId === identity.accountId
+          ? "current"
+          : "denied";
       },
     });
     if (!response) return Response.json({ error: "not found" }, { status: 404 });
