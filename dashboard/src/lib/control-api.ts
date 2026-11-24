@@ -207,6 +207,7 @@ interface RequestOpts {
   readonly cache?: "no-store";
   readonly acceptResponseAfterAbort?: boolean;
   readonly isCurrent?: () => boolean;
+  readonly beforeDispatch?: () => void;
   readonly method?: string;
   readonly body?: unknown;
   readonly signal?: AbortSignal;
@@ -247,6 +248,7 @@ export async function controlFetch<T>(
   if (preflight) await preflight;
   throwIfSharedAuthCallerAborted(opts.signal);
   throwIfReadRetired(opts);
+  opts.beforeDispatch?.();
   const res = await fetch(path, {
     method: opts.method ?? "GET",
     headers,
@@ -1891,7 +1893,7 @@ export async function getCapsuleProviderBindingSet(
 export function createCapsuleDestroyRecoveryPlan(
   capsuleId: string,
   replacements: readonly DestroyProviderConnectionReplacement[],
-  options: { readonly isCurrent?: () => boolean } = {},
+  options: Pick<RequestOpts, "isCurrent" | "beforeDispatch"> = {},
 ): Promise<unknown> {
   return controlFetch(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`, {
     method: "POST",
