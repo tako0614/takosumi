@@ -856,6 +856,89 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
+  test("a lost reconcile response waits out a peer lease on reads of the same attempt", async () => {
+    let writes = 0;
+    let reads = 0;
+    reset({
+      createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, 0),
+      reconcileGitInstallPlan: async () => {
+        writes += 1;
+        if (writes === 1) throw new api.ControlApiError(502, undefined, "upstream closed");
+        if (writes === 2) throw new api.ControlApiError(409, "reconcile_in_progress", "lease held", {
+          error: { details: { retryAfterMs: 30_000 } },
+        });
+        expect(reads).toBe(7);
+        return respond(inputs(), 2);
+      },
+      getGitInstallPlan: async () => {
+        reads += 1;
+        // Only the settlement changes phase, in the same claimed generation.
+        const phase = reads === 7 ? "compiling_install" : "syncing_source";
+        return respond({ kind: "wait", phase }, 1);
+      },
+    });
+    const page = mount();
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => !page.attempt.driving(), "finishing the attempt follow");
+    expect(page.attempt.view().stage).toBe("provide_inputs");
+    expect(writes).toBe(3);
+    expect(reads).toBe(7);
+    expect(calls.filter(({ name }) => name === "createGitInstallAttempt")).toHaveLength(1);
+    expect(calls.filter(({ name }) => name === "reconcileGitInstallPlan").map(({ args }) => args[0]))
+      .toEqual([ID, ID, ID]);
+    expect(page.attempt.error()).toBeUndefined();
+    page.dispose();
+  });
+
+  test("observing the completed phase clears the failure streak after a lost response", async () => {
+    let writes = 0;
+    const phases = ["compiling_install", "analyzing_compatibility", "creating_capsule"] as const;
+    reset({
+      createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, 0),
+      reconcileGitInstallPlan: async () => {
+        writes += 1;
+        if (writes <= phases.length) throw new api.ControlApiError(502, undefined, "upstream closed");
+        return respond(inputs(), writes);
+      },
+      getGitInstallPlan: async () => respond({ kind: "wait", phase: phases[writes - 1]! }, writes),
+    });
+    const page = mount();
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => !page.attempt.driving(), "finishing the attempt follow");
+    expect(page.attempt.view().stage).toBe("provide_inputs");
+    expect(writes).toBe(4);
+    expect(page.attempt.error()).toBeUndefined();
+    page.dispose();
+  });
+
+  test("a held attempt with no visible settlement can be reconciled after the busy wait", async () => {
+    let writes = 0;
+    let reads = 0;
+    reset({
+      createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, 0),
+      reconcileGitInstallPlan: async () => {
+        writes += 1;
+        if (writes === 1) throw new api.ControlApiError(409, "reconcile_in_progress", "lease held", {
+          error: { details: { retryAfterMs: 30_000 } },
+        });
+        expect(reads).toBeGreaterThan(3);
+        return respond(inputs(), 2);
+      },
+      getGitInstallPlan: async () => {
+        reads += 1;
+        return respond({ kind: "wait", phase: "syncing_source" }, 1);
+      },
+    });
+    const page = mount();
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => !page.attempt.driving(), "ending the busy wait");
+    expect(page.attempt.view().stage).toBe("provide_inputs");
+    expect(writes).toBe(2);
+    expect(page.clock.now).toBeGreaterThanOrEqual(30_000);
+    expect(page.clock.now).toBeLessThan(120_000);
+    page.dispose();
+  });
+
   test("a coordinator that only waits is followed with a growing pause and then left to Continue", async () => {
     const random = Math.random;
     Math.random = () => 1;

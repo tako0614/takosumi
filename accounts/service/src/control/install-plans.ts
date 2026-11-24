@@ -1786,6 +1786,8 @@ async function reconcileInstallPlan(
           "Another reconciler currently owns this install plan.",
           409,
           ctx.request,
+          { "cache-control": "no-store" },
+          { retryAfterMs: GIT_INSTALL_PLAN_RECONCILE_LEASE_MS },
         )
       : errorJson(
           "reconcile_conflict",

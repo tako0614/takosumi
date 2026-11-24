@@ -4520,6 +4520,13 @@ test("discard never abandons a Capsule under a lease holder and finishes after a
   });
   expect(claim.status).toBe("claimed");
   const leasedGeneration = planningPlan.generation + 1;
+  const peerReconcile = await fixture.reconcile(planId);
+  expect(peerReconcile.status).toBe(409);
+  expect(peerReconcile.headers.get("cache-control")).toBe("no-store");
+  expect((await peerReconcile.json()).error).toMatchObject({
+    code: "reconcile_in_progress",
+    details: { retryAfterMs: 30_000 },
+  });
   const busy = await discard(fixture, planId, leasedGeneration);
   expect(busy.status).toBe(409);
   expect((await busy.json()).error.code).toBe("reconcile_in_progress");
