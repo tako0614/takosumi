@@ -14033,15 +14033,16 @@ test.each([
   expect(retiredBindings).toEqual([[replacement.id]]);
 });
 
-test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repeat", "1-revoked-effective", "1-revoked-effective-oauth"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
+test.each(["1", "2", "2-selective", "2-conflict", "2-restore-original", "1-original", "1-original-repeat", "1-revoked-effective", "1-revoked-effective-oauth"] as const)("destroy recovery resolves %s bindings again after a failed apply persists partial state", async (variant) => {
   const selective = variant === "2-selective";
   const conflictingAlias = variant === "2-conflict";
   const repeatOriginal = variant === "1-original-repeat";
+  const restoreOneOriginal = variant === "2-restore-original";
   const useOriginal = variant === "1-original" || repeatOriginal;
   const projectedOAuth = variant === "1-revoked-effective-oauth";
   const revokedEffective = variant === "1-revoked-effective" || projectedOAuth;
-  const ownerScoped = useOriginal || revokedEffective;
-  const bindingCount = variant === "2" || selective || conflictingAlias ? 2 : 1;
+  const ownerScoped = useOriginal || revokedEffective || restoreOneOriginal;
+  const bindingCount = variant === "2" || selective || conflictingAlias || restoreOneOriginal ? 2 : 1;
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } = await import("../../../../providers/registry.ts");
@@ -14226,26 +14227,29 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
       .toEqual(replacementsFor(firstReplacement.id));
   }
 
-  if (useOriginal) {
+  if (useOriginal || restoreOneOriginal) {
     const owner = { ...ownership, role: "owner" as const };
     const beforeRead = { plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mints.length };
+    const originalIds = bindings.map(({ connectionId }) => connectionId);
     await store.putConnection({ ...original, status: "revoked" });
     expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, owner)).toEqual({
-      requiredConnectionIds: [original.id],
-      recoveryConnectionIds: [original.id],
+      requiredConnectionIds: originalIds,
+      recoveryConnectionIds: originalIds,
       unavailableRecoveryConnectionIds: [],
+      restorableOriginalConnectionIds: originalIds,
     });
     await store.putConnection(original);
     await store.putConnection({ ...firstReplacement, status: "revoked" });
     expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, owner)).toEqual({
-      requiredConnectionIds: [original.id],
-      recoveryConnectionIds: [original.id],
-      unavailableRecoveryConnectionIds: [original.id],
+      requiredConnectionIds: originalIds,
+      recoveryConnectionIds: originalIds,
+      unavailableRecoveryConnectionIds: originalIds,
+      restorableOriginalConnectionIds: originalIds,
     });
     expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, {
       ...owner,
       ownershipEpoch: owner.ownershipEpoch + 1,
-    })).not.toHaveProperty("unavailableRecoveryConnectionIds");
+    })).toEqual({ requiredConnectionIds: originalIds, recoveryConnectionIds: originalIds });
     expect({ plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mints.length }).toEqual(beforeRead);
 
     const { handleCapsules } = await import("../../../../accounts/service/src/control/capsules.ts");
@@ -14263,16 +14267,22 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
       createCapsuleDestroyPlan: (id: string, options?: Parameters<Operations["createCapsuleDestroyPlan"]>[1]) =>
         controller.createCapsuleDestroyPlan(id, {
           actor: options?.actor, actorOwnershipEpoch: options?.actorOwnershipEpoch,
-        }),
+        }, { destroyProviderConnectionReplacements: options?.destroyProviderConnectionReplacements }),
       getRun: (id: string) => controller.getRun(id),
       getRunCost: async () => undefined,
     } as unknown as Operations;
-    const startReview = async (actor = ownership.ownerAccountId) => {
-      const request = new Request(`https://fixture.invalid/api/v1/capsules/${seeded.capsule.id}?immediate=true`, { method: "DELETE" });
+    const startReview = async (actor = ownership.ownerAccountId, explicit = restoreOneOriginal) => {
+      const segments = ["capsules", seeded.capsule.id];
+      const base = `https://fixture.invalid/api/v1/capsules/${seeded.capsule.id}`;
+      if (explicit) segments.push("destroy-plan");
+      const request = explicit ? new Request(base + "/destroy-plan", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ destroyProviderConnectionReplacements: replacementsFor(original.id) }),
+      }) : new Request(base + "?immediate=true", { method: "DELETE" });
       return (await handleCapsules({
         request, url: new URL(request.url), operations, store: accountsStore,
         session: { subject: actor, credential: "session", uninstallRequester: { subject: actor } },
-      }, ["capsules", seeded.capsule.id], "DELETE").catch(controllerErrorResponse))!;
+      }, segments, request.method).catch(controllerErrorResponse))!;
     };
     const beforeRetry = { plans: runner.planJobs.length, destroys: runner.destroyJobs.length, mints: mints.length };
     expect((await startReview("fixture-app-member")).status).toBe(403);
@@ -14280,7 +14290,14 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
       actor: ownership.ownerAccountId,
       actorOwnershipEpoch: ownership.ownershipEpoch + 1,
     })).rejects.toMatchObject({ details: { reason: "app_owner_changed" } });
+    if (restoreOneOriginal) {
+      const sibling = (await store.getConnection(bindings[1]!.connectionId))!;
+      await store.putConnection({ ...sibling, status: "revoked" });
+      expect((await startReview(ownership.ownerAccountId, false)).status).toBe(409);
+    }
     await store.putApplyRun({ ...partial.applyRun, executionEvidence: undefined });
+    expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, owner)).not
+      .toHaveProperty("restorableOriginalConnectionIds");
     const withoutReceipt = await startReview();
     expect(withoutReceipt.status).toBe(409);
     expect(await withoutReceipt.json()).toMatchObject({ error: { details: { reason: "destroy_connection_recovery_unproven" } } });
@@ -14293,13 +14310,14 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
     const finalBaseGeneration = repeatOriginal ? 3 : 2;
     for (let generation = 2; generation <= finalBaseGeneration; generation += 1) {
       const requested = await startReview();
-      expect(requested.status).toBe(202);
+      expect(requested.status).toBe(restoreOneOriginal ? 201 : 202);
       const { run } = await requested.json() as { run: Run };
       const { planRun: retry } = await controller.getPlanRun(run.id);
       expect(retry.status).toBe("waiting_approval");
       expect(retry.baseStateGeneration).toBe(generation);
       expect(retry.destroyConnectionRecovery?.replacements).toEqual(replacementsFor(original.id));
       expect(mints.at(-1)).toEqual(expectedMint(original.id));
+      expect(runner.destroyJobs).toHaveLength(generation - 1);
       await controller.approveRun(retry.id, { approvedBy: ownership.ownerAccountId });
 
       const result = await controller.createApplyRun({
@@ -14312,7 +14330,7 @@ test.each(["1", "2", "2-selective", "2-conflict", "1-original", "1-original-repe
       expect(mints.at(-1)).toEqual(expectedMint(original.id));
     }
     expect(runner.destroyJobs).toHaveLength(finalBaseGeneration);
-    expect(retiredBindings).toEqual([[original.id]]);
+    expect(retiredBindings).toEqual([bindings.map(() => original.id)]);
     expect(await store.getProviderBindingSetByCapsule(seeded.capsule.id, seeded.capsule.environment)).toEqual(bindingBefore);
     return;
   }

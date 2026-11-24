@@ -662,6 +662,10 @@ StateVersion を作った適用済みプランの Provider に対応する保存
 該当した場合も、値は `recoveryConnectionIds` と同じ保存済みIDです。代替接続のIDや資格情報は
 含みません。現在のアプリ所有者が本人のセッションまたは個人アクセストークンで読むときに返し、
 確認できなければ省略します。削除計画とApplyでは、選んだ接続をサーバーが再確認します。
+`uninstall.restorableOriginalConnectionIds` は、部分削除で別の接続を使ったことが確認でき、
+元の接続を明示選択できる保存済みIDです。現在のアプリ所有者にだけ返します。
+該当する行では手動削除Planの `destroyProviderConnectionReplacements` で両方のIDに同じ元のIDを指定できます。
+現在のStateVersion、部分削除の証跡、所有者、接続のアカウントと設定を計画時に検証し、Applyには新しい承認が必要です。
 画面が `document.clients` でスマホの専用アプリを宣言していれば、`screens[].clients` に検査を通った
 ものだけが入ります（`preferred`、`ios` の `verified` / `trustedClientId` / `target` / `name` /
 `appStoreId` / `bundleId` / `open` / `universalLink` / `storeUrl`、`android` の `verified` /
