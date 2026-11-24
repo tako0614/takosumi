@@ -1649,7 +1649,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionLostResponse: "a missing uninstall Plan response keeps the previous approval held during readback",
@@ -1668,6 +1668,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       failedOpenReview: "a failed uninstall offers another connection inside its open review",
       indeterminateOpenReview: "an indeterminate uninstall offers no new removal from its open review",
       noReplacement: "uninstall recovery opens connections when no verified replacement is available",
+      reverifyReplacement: "uninstall recovery can return after rechecking a saved connection",
     }[scenario], async ({ page }) => {
       const lostReplacementOnInstalledApp = scenario === "lostReplacementOnInstalledApp";
       const lostResponseBeforeApproval = scenario === "reviewDifferentConnectionLostResponse";
@@ -1704,7 +1705,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       });
       const indeterminateOpenReview = scenario === "indeterminateOpenReview";
       const openReviewFailure = scenario === "failedOpenReview" || indeterminateOpenReview;
-      const noReplacement = scenario === "noReplacement";
+      const reverifyReplacement = scenario === "reverifyReplacement";
+      const noReplacement = scenario === "noReplacement" || reverifyReplacement;
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       if (scenario === "states") await page.clock.install();
       const errors = pageErrors(page);
@@ -1719,8 +1721,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         : firstRemovalRefusal || unusedUnavailable || unusedOnlyUnavailable || noReplacement ? "uninstall_immediate"
           : reviewDifferentConnection || staleUninstallReview || openReviewFailure ? "uninstall_stale_review" : "uninstall_scheduled";
       let connectionRemoved = noReplacement;
-      let replacementAvailable = !noReplacement && !restoreOriginal;
+      let replacementAvailable = reverifyReplacement || (!noReplacement && !restoreOriginal);
       let replacementVerified = !noReplacement;
+      let incompleteReplacementTested = false;
       let replacementTesting = false;
       let releaseReplacementVerification = () => {};
       const replacementVerification = noReplacement
@@ -1981,6 +1984,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           replacementVerified = true;
           return route.fulfill({ json: { status: "verified" } });
         }
+        if (reverifyReplacement && path === "/api/v1/connections/conn_incomplete/test" && request.method() === "POST") {
+          incompleteReplacementTested = true;
+          return route.fulfill({ json: { status: "verified" } });
+        }
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
           { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal",
             status: partialRecovery || effectiveRequiredWithOption || effectiveHealthyOptional || (firstRemovalRefusal && connectionRemoved) || unusedUnavailable || noReplacement ? "revoked" : "verified",
@@ -1988,6 +1995,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           },
           ...(replacementAvailable ? [{ id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: replacementVerified ? "verified" : "pending",
             ...(replacementVerified ? cloudflareAccount(replacementAccountId, "fixture-team") : {}),
+          }] : []),
+          ...(reverifyReplacement ? [{ id: "conn_incomplete", displayName: "Second Cloudflare connection", providerSource: connectionProblem.provider,
+            scope: "personal", status: incompleteReplacementTested ? "verified" : "pending",
           }] : []),
           ...(firstRemovalRefusal ? [{
             id: "conn_other_account", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider,
@@ -2175,23 +2185,41 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await expect(backToUninstall).toHaveCount(0);
         // This explicit uninstall intent opens the ordinary connection form.
         // Saving does not make its still-unverified connection a return choice.
-        await page.locator("#connection-provider").selectOption({ label: "Cloudflare — API token" });
-        await expect(page.locator("#connection-field-CLOUDFLARE_API_TOKEN")).toBeVisible();
         expect(seenMutations).toEqual([]);
-        await page.locator("#connection-display-name").fill("Existing Cloudflare connection");
-        await page.locator("#connection-field-CLOUDFLARE_API_TOKEN").fill("fixture-only-token");
-        await page.locator("#connection-field-CLOUDFLARE_ACCOUNT_ID").fill("fixture-account");
+        const verificationPath = "POST /api/v1/connections/conn_saved/test";
+        const setupMutations = reverifyReplacement ? [verificationPath] : ["POST /api/v1/connections", verificationPath];
         try {
-          await page.getByRole("button", { name: "Save connection", exact: true }).click();
+          if (reverifyReplacement) {
+            const row = page.getByRole("listitem").filter({ hasText: "Existing Cloudflare connection" });
+            await row.locator("summary").click();
+            await row.getByRole("button", { name: "Test connection", exact: true }).click();
+          } else {
+            await page.locator("#connection-provider").selectOption({ label: "Cloudflare — API token" });
+            await expect(page.locator("#connection-field-CLOUDFLARE_API_TOKEN")).toBeVisible();
+            await page.locator("#connection-display-name").fill("Existing Cloudflare connection");
+            await page.locator("#connection-field-CLOUDFLARE_API_TOKEN").fill("fixture-only-token");
+            await page.locator("#connection-field-CLOUDFLARE_ACCOUNT_ID").fill("fixture-account");
+            await page.getByRole("button", { name: "Save connection", exact: true }).click();
+          }
           await expect.poll(() => replacementTesting).toBe(true);
           await expect(backToUninstall).toHaveCount(0);
           await expect(page).toHaveURL(new RegExp(`/connections\\?uninstallApp=${ID}$`, "u"));
           expect(replacementPlanBodies).toEqual([]);
-          expect(seenMutations).toEqual(["POST /api/v1/connections", "POST /api/v1/connections/conn_saved/test"]);
+          expect(seenMutations).toEqual(setupMutations);
         } finally {
           releaseReplacementVerification();
         }
         await expect(backToUninstall).toHaveAttribute("href", `/apps/${ID}`);
+        if (reverifyReplacement) {
+          const row = page.getByRole("listitem").filter({ hasText: "Second Cloudflare connection" });
+          await row.locator("summary").click();
+          const testConnection = row.getByRole("button", { name: "Test connection", exact: true });
+          await testConnection.click();
+          await expect(row.getByText("Verified", { exact: true })).toBeVisible();
+          await expect(testConnection).toBeEnabled();
+          await expect(backToUninstall).toHaveAttribute("href", `/apps/${ID}`);
+          setupMutations.push("POST /api/v1/connections/conn_incomplete/test");
+        }
         // Verification offers an explicit navigation action; it never returns
         // or chooses the replacement on the person's behalf.
         await expect(page).toHaveURL(new RegExp(`/connections\\?uninstallApp=${ID}$`, "u"));
@@ -2208,6 +2236,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         const choices = danger.getByRole("combobox", { name: "Cloudflare" });
         await expect(choices).toHaveValue("");
         await expect(reviewRemoval).toBeDisabled();
+        if (reverifyReplacement) await expect(choices.locator('option[value="conn_incomplete"]')).toHaveJSProperty("disabled", true);
         await choices.selectOption("conn_saved");
         await reviewRemoval.click();
         await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
@@ -2215,7 +2244,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
         }]);
         expect(seenMutations).toEqual([
-          "POST /api/v1/connections", "POST /api/v1/connections/conn_saved/test",
+          ...setupMutations,
           `POST /api/v1/capsules/${ID}/destroy-plan`,
         ]);
         expect(errors).toEqual([]);
