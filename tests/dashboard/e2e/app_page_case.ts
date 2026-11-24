@@ -1649,7 +1649,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionLostResponse: "a missing uninstall Plan response keeps the previous approval held during readback",
@@ -1659,6 +1659,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       reviewDifferentConnectionApprovedElsewhere: "a held uninstall review stays in the same tab if the old Plan was approved elsewhere",
       reviewDifferentConnectionRejected: "a definite uninstall connection mismatch releases only its provisional hold",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
+      staleReviewSetupRequired: "an uninstall connection rejected by the current policy can be replaced after approval",
       lostReplacementResponse: "a lost replacement Plan response leaves its saved uninstall review reachable",
       lostReplacementOnInstalledApp: "a lost replacement Plan response leaves its saved uninstall review reachable on an installed app",
       partialRecovery: "a partial uninstall can replace more than the unavailable original connection",
@@ -1684,10 +1685,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const lostResponseBeforeApproval = scenario === "reviewDifferentConnectionLostResponse" || savesReplacementLate;
       const reviewDifferentConnection = scenario === "reviewDifferentConnection" || lostResponseBeforeApproval ||
         replacementSaveTimesOut || reloadsBeforeReplacementResponse || replacementIsRejected;
-      const startsAwaitingApproval = reviewDifferentConnection || scenario === "staleReview";
+      const staleReviewSetupRequired = scenario === "staleReviewSetupRequired";
+      const startsAwaitingApproval = reviewDifferentConnection || scenario === "staleReview" || staleReviewSetupRequired;
       const installedUninstallReview = startsAwaitingApproval || lostReplacementOnInstalledApp;
       const lostReplacementResponse = scenario === "lostReplacementResponse" || lostReplacementOnInstalledApp;
-      const staleUninstallReview = scenario === "staleReview" || lostReplacementResponse;
+      const staleUninstallReview = scenario === "staleReview" || staleReviewSetupRequired || lostReplacementResponse;
       const partialRecovery = scenario === "partialRecovery";
       const sharedKeyConflict = scenario === "sharedKeyConflict";
       const effectiveRequiredNoOption = scenario === "effectiveRequiredNoOption";
@@ -2180,10 +2182,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               return route.fulfill({ status: 201, json: { run: failedRemoval } });
             }
             staleReviewApplyAttempts += 1;
+            const refusal = staleReviewSetupRequired
+              ? { reason: "provider_connection_setup_required", message: "Connection no longer meets the credential policy." }
+              : { reason: "provider_connection_not_ready", message: "connection conn_old_missing is revoked (not verified)" };
             return route.fulfill({ status: 409, json: { error: {
               code: "failed_precondition",
-              message: staleReviewApplyAttempts === 1 ? "An unrelated conflict." : "connection conn_old_missing is revoked (not verified)",
-              details: { reason: staleReviewApplyAttempts === 1 ? "unrelated_conflict" : "provider_connection_not_ready" },
+              message: staleReviewApplyAttempts === 1 ? "An unrelated conflict." : refusal.message,
+              details: { reason: staleReviewApplyAttempts === 1 ? "unrelated_conflict" : refusal.reason },
             } } });
           }
           if (!suffix) {
@@ -2676,7 +2681,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       }
 
       if (staleUninstallReview) {
-        // The reviewed connection was revoked before this Apply was admitted.
+        // The reviewed connection is no longer usable when Apply checks it.
         // The server still names the old Plan as the latest review. A new
         // connection can only start a fresh deletion review.
         await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });

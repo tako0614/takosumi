@@ -627,10 +627,11 @@ export default function InstallExecution(props: Props) {
       } else {
         // These typed refusals also occur before Apply admission while
         // checking materialized inputs against the selected connection.
+        const connectionUnavailable = cause.reason === "provider_connection_not_ready" ||
+          cause.reason === "provider_connection_setup_required";
         const canReplaceConnection = props.uninstallConnectionRecovery && plan.type === "destroy_plan" && cause.status === 409 &&
-          cause.code === "failed_precondition" && (cause.reason === "provider_connection_not_ready" ||
-            cause.reason === "destroy_connection_recovery_unproven");
-        setError(canReplaceConnection && cause.reason === "provider_connection_not_ready"
+          cause.code === "failed_precondition" && (connectionUnavailable || cause.reason === "destroy_connection_recovery_unproven");
+        setError(canReplaceConnection && connectionUnavailable
           ? t("app.uninstall.reviewConnectionUnavailable")
           : friendlyError(cause, t).message);
         if (canReplaceConnection) {
