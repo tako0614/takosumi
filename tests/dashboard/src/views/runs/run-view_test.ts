@@ -71,10 +71,10 @@ describe("RunView", () => {
   });
 
   test("a retained Restore Run has a history message and both approval guards apply", () => {
-    expect(source).toContain('<Show when={canApproveRun(r())}>');
-    expect(source).toContain('if (!r || !canApproveRun(r) || approve.busy()) return;');
-    expect(source).toContain('if (!ownsApply(attempt) || !canApproveRun(runLatest())) return;');
-    expect(source).toContain('if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest())');
+    expect(source).toContain('<Show when={canApproveRun(r()) && !heldUninstallApp(r())}>');
+    expect(source).toContain('if (!r || !canApproveRun(r) || approve.busy() || heldUninstallApp(r)) return;');
+    expect(source).toContain('if (!ownsApply(attempt) || !canApproveRun(current) || heldUninstallApp(current)) return;');
+    expect(source).toContain('if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest()) || approve.busy() || heldUninstallApp(r)) return;');
     expect(source).toContain('if (r.type === "restore" && r.status === "waiting_approval")');
     expect(source).toContain('t("run.summary.restoreApprovalRetired")');
     expect(source).not.toContain('run.approveConfirm.restore');
