@@ -29,6 +29,9 @@ Shard test files run sequentially within each shard. Do not add Bun's
 `--parallel` to a shard run: worker concurrency can make timing-sensitive tests
 flaky. The two isolated `workerd` tests run only in shard 1, so CI executes that
 runtime setup once. A full unsharded test run also executes them once.
+The portable test runner disables Miniflare's default remote `Request.cf`
+metadata fetch in its child processes. Workerd and D1 fixtures still run
+locally and can supply their own explicit metadata.
 
 To select phases for focused work, use `bun run check --only tests` or
 `bun run check --except tests,dashboard-browser,docs-browser`. Unknown names

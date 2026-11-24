@@ -86,7 +86,15 @@ export async function runPortableTestCommands(
 ): Promise<number> {
   for (const command of commands) {
     console.error(`[portable-tests] ${command.join(" ")}`);
-    const child = Bun.spawn([...command], { cwd, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    const child = Bun.spawn([...command], {
+      cwd,
+      // Synthetic Workers need the local Request.cf fallback, not a network
+      // request during each Miniflare startup.
+      env: { ...process.env, CLOUDFLARE_CF_FETCH_ENABLED: "false" },
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
     const code = await child.exited;
     if (code !== 0) return code;
   }
