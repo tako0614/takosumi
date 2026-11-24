@@ -273,8 +273,8 @@ unchanged, so the new Version carries the same attachment; the Container
 application itself (image, instances, rollout) is read separately and must stay
 identical from baseline to final readback.
 
-The lane builds the dashboard and its hosted-docs overlay once, runs
-`check:cloudflare-worker-build` once, and performs two `versions upload`
+The lane runs `check:cloudflare-worker-build` once, builds the dashboard and
+its hosted-docs overlay once, and performs two `versions upload`
 dry-runs. The first derives the sealed entry digest; the second injects the
 three execution-evidence digest variables and must produce the same entry.
 Migration declarations are omitted only from the transient upload projection,

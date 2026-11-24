@@ -491,6 +491,7 @@ async function exerciseCodeLane(options: {
   readonly containerDrift?: boolean;
   readonly containerFailsAfterActivation?: boolean;
   readonly uploadFails?: boolean;
+  readonly scopedGateFails?: boolean;
   readonly uploadReadbackFails?: boolean;
   readonly candidateReadFailures?: number;
   readonly candidateReadErrorCode?: number;
@@ -744,6 +745,7 @@ async function exerciseCodeLane(options: {
         },
         runScopedGate: async () => {
           gateCount += 1;
+          if (options.scopedGateFails) throw new Error("synthetic Worker build unavailable");
         },
         nativeRead: async (path) => {
           if (path === "/workers/scripts") topologySnapshot += 1;
@@ -894,6 +896,15 @@ async function exerciseCodeLane(options: {
     runnerReads,
   };
 }
+
+test("staging code stops at a failed Worker build before building assets or uploading", async () => {
+  const result = await exerciseCodeLane({ scopedGateFails: true });
+  expect(String(result.error)).toContain("synthetic Worker build unavailable");
+  expect(result.gateCount).toBe(1);
+  expect(result.buildCount).toBe(0);
+  expect(result.uploadCount).toBe(0);
+  expect(result.activationCount).toBe(0);
+});
 
 test("routine code Version matcher accepts the observed shape and only three prior digest vars", () => {
   const source = codeConfigSource();
