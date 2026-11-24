@@ -750,6 +750,13 @@ export default function AppManagePage(props: {
     if (switchableUninstallReview(app())) return t("app.uninstall.reviewReplaced");
     if (isUninstallReviewHeld(uninstallReviewScope(active.planRunId))) return t("app.uninstall.replacementReviewUnconfirmed");
   };
+  const heldRemovalDetails = (held: ActiveReview) => {
+    const canOpen = () => review() === held && isOwner() && !starting() && !uninstallBusy() &&
+      !switchableUninstallReview(app()) && isUninstallReviewHeld(uninstallReviewScope(held.planRunId));
+    return canOpen() ? () => {
+      if (canOpen()) navigate(`/runs/${encodeURIComponent(held.planRunId)}`);
+    } : undefined;
+  };
   const refreshUnconfirmedUninstallReview = (held: ActiveReview) => {
     const scope = uninstallScope();
     const epoch = uninstallEpoch;
@@ -788,6 +795,7 @@ export default function AppManagePage(props: {
             blockedReason={uninstallReviewBlockedReason()}
             {...(active().purpose === "uninstall" ? {
               uninstallConnectionScope: uninstallScope(),
+              onOpenHeldRemovalDetails: heldRemovalDetails(active()),
               uninstallConnectionRecovery: (runId: string, stage: UninstallConnectionReviewStage, disabled?: () => boolean) =>
                 uninstallReviewRecovery(active(), runId, stage, disabled),
             } : {})}
