@@ -210,6 +210,20 @@ test("private output refuses existing entries, nonprivate parents and checkout a
   }
 });
 
+test("portable test children disable Miniflare request metadata fetching", async () => {
+  const original = process.env.CLOUDFLARE_CF_FETCH_ENABLED;
+  process.env.CLOUDFLARE_CF_FETCH_ENABLED = "true";
+  try {
+    expect(await runPortableTestCommands([
+      [process.execPath, "--eval", 'process.exit(process.env.CLOUDFLARE_CF_FETCH_ENABLED === "false" ? 0 : 19)'],
+    ])).toBe(0);
+    expect(process.env.CLOUDFLARE_CF_FETCH_ENABLED).toBe("true");
+  } finally {
+    if (original === undefined) delete process.env.CLOUDFLARE_CF_FETCH_ENABLED;
+    else process.env.CLOUDFLARE_CF_FETCH_ENABLED = original;
+  }
+});
+
 test("command execution preserves the original nonzero and stops later commands", async () => {
   const root = await mkdtemp(join(tmpdir(), "takosumi-test-exit-"));
   try {
