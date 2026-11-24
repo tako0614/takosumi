@@ -2182,7 +2182,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await viewConnections.click();
         await expect(page).toHaveURL(new RegExp(`/connections\\?uninstallApp=${ID}$`, "u"));
         const backToUninstall = page.getByRole("link", { name: "Back to uninstall", exact: true });
+        const backToApp = page.getByRole("link", { name: "Back to app", exact: true });
         await expect(backToUninstall).toHaveCount(0);
+        await expect(backToApp).toHaveAttribute("href", `/apps/${ID}`);
         // This explicit uninstall intent opens the ordinary connection form.
         // Saving does not make its still-unverified connection a return choice.
         expect(seenMutations).toEqual([]);
@@ -2226,10 +2228,32 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await page.getByRole("link", { name: "Connections", exact: true }).click();
         await expect(page).toHaveURL(/\/connections$/u);
         await expect(backToUninstall).toHaveCount(0);
+        await expect(backToApp).toHaveCount(0);
+        if (reverifyReplacement) {
+          // A search-only navigation retains the Connections view. A different
+          // app gets its own back link without carrying the prior ready hint.
+          await page.evaluate(() => {
+            history.pushState(null, "", "/connections?uninstallApp=cap_other");
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          });
+          await expect(backToApp).toHaveAttribute("href", "/apps/cap_other");
+          await expect(backToUninstall).toHaveCount(0);
+          await page.goBack();
+          await expect(page).toHaveURL(/\/connections$/u);
+          await expect(backToApp).toHaveCount(0);
+        }
         await page.goBack();
         await expect(page).toHaveURL(new RegExp(`/connections\\?uninstallApp=${ID}$`, "u"));
         await expect(backToUninstall).toHaveAttribute("href", `/apps/${ID}`);
-        await backToUninstall.click();
+        if (reverifyReplacement) {
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await expect(backToUninstall).toHaveCount(0);
+          await expect(backToApp).toHaveAttribute("href", `/apps/${ID}`);
+          expect(seenMutations).toEqual(setupMutations);
+          await backToApp.click();
+        } else {
+          await backToUninstall.click();
+        }
         await expect(page).toHaveURL(new RegExp(`/apps/${ID}$`, "u"));
         await openAppPane(page, "danger");
         await choose.click();

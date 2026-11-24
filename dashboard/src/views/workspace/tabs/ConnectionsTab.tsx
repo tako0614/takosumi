@@ -179,9 +179,10 @@ export default function ConnectionsTab(props: {
   const [reverifiedUninstallConnectionIds, setReverifiedUninstallConnectionIds] =
     createSignal<ReadonlySet<string>>(new Set());
   const location = useLocation();
-  const uninstallReturn = props.embedded ? undefined : uninstallReturnHref(location.search);
+  const currentUninstallReturn = () => props.embedded ? undefined : uninstallReturnHref(location.search);
+  const uninstallReturn = currentUninstallReturn();
   const inUninstallReturnContext = () => uninstallReturn !== undefined &&
-    uninstallReturnHref(location.search) === uninstallReturn;
+    currentUninstallReturn() === uninstallReturn;
   const installReturn = props.embedded || uninstallReturn ? undefined : currentInstallReturnContext();
   const [createFormOpen, setCreateFormOpen] = createSignal(
     Boolean(installReturn || uninstallReturn || props.embedded),
@@ -676,11 +677,11 @@ export default function ConnectionsTab(props: {
         )}
       </Show>
 
-      <Show when={verifiedUninstallReturn()}>
+      <Show when={currentUninstallReturn()}>
         {(href) => (
           <div class="conn-add-action">
             <Button variant="secondary" href={href()} icon={<ArrowLeft size={16} />}>
-              {t("conn.uninstall.returnCta")}
+              {t(verifiedUninstallReturn() ? "conn.uninstall.returnCta" : "conn.uninstall.backToApp")}
             </Button>
           </div>
         )}
