@@ -155,9 +155,15 @@ export default function AppAttentionSection(props: {
   const cardKeys = createMemo(() => cards().map(problemKey), undefined, { equals: sameKeys });
   const cardByKey = () => new Map(cards().map((problem) => [problemKey(problem), problem]));
   const pendingReview = () => {
-    const review = app().progress.review;
+    const view = app();
+    const review = view.progress.review;
+    const latest = view.latestRun;
+    const awaitingRemovalReview = view.state === "needs_attention" && view.applied && !view.uninstall.scheduled &&
+      review?.runType === "destroy_plan" && latest?.id === review.runId && latest.type === "destroy_plan" &&
+      (latest.status === "waiting_approval" || latest.status === "succeeded");
     // A review the server is waiting on that is not already open here.
-    return review && (props.canUninstall !== false || !isAppRemovalRun(review.runType)) && review.runId !== props.reviewRunId && app().state === "installed"
+    return review && (props.canUninstall !== false || !isAppRemovalRun(review.runType)) && review.runId !== props.reviewRunId &&
+      (view.state === "installed" || awaitingRemovalReview)
       ? review
       : undefined;
   };

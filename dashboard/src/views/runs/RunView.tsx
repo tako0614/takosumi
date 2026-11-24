@@ -84,6 +84,7 @@ import {
   isReviewRun,
 } from "../../lib/run-approval.ts";
 import { canCancelRun } from "../../lib/run-cancel.ts";
+import { isUninstallReviewHeld } from "../../lib/uninstall-review-hold.ts";
 import { initialPlanRetryReport } from "../../lib/initial-plan-retry.ts";
 import { defaultRetryPlanApi, retryPlanForRun } from "../../lib/run-retry.ts";
 import type { RevisionPlanAttemptStore } from "../../lib/revision-plan-attempt.ts";
@@ -923,9 +924,18 @@ function Inner(props: { readonly session: SessionRecord }) {
       current?.id === plan.id && current.capsuleId === plan.capsuleId &&
       current.workspaceId === plan.workspaceId && current.type === plan.type;
   };
+  const heldUninstallApp = (r: Run | undefined): string | undefined =>
+    r?.type === "destroy_plan" && isUninstallReviewHeld([
+      props.session.subject,
+      props.session.primaryAccountId ?? props.session.subject,
+      r.workspaceId,
+      r.capsuleId,
+      r.id,
+    ]) ? r.capsuleId : undefined;
 
   const approve = createAction(async (attempt: ApplyAttempt) => {
-    if (!ownsApply(attempt) || !canApproveRun(runLatest())) return;
+    const current = runLatest();
+    if (!ownsApply(attempt) || !canApproveRun(current) || heldUninstallApp(current)) return;
     try {
       const approved = await approveRun(attempt.plan, { isCurrent: () => ownsApply(attempt) });
       if (!ownsApply(attempt)) return;
@@ -963,7 +973,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     ([capsuleId, id, workspaceId, type]) => listPlanApplyRuns({ capsuleId, id, workspaceId, type }),
   );
   const isDeployableRun = (r: Run): boolean => {
-    if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply()) return false;
+    if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply() || heldUninstallApp(r)) return false;
     // A failed or unfinished history read cannot prove approval is still open.
     if (siblingRuns.error || siblingRuns.loading) return false;
     const siblings = siblingRuns.latest;
@@ -1064,7 +1074,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     let envelope: unknown;
     const currentRun = runLatest();
     if (!currentRun || currentRun.id !== runId() || !currentRun.capsuleId ||
-      !currentRun.workspaceId || !isReviewRun(currentRun) || unconfirmedApply()) return;
+      !currentRun.workspaceId || !isReviewRun(currentRun) || unconfirmedApply() || heldUninstallApp(currentRun)) return;
     const attempt = { plan: currentRun, epoch: runEpoch };
     if (
       currentRun &&
@@ -1230,7 +1240,7 @@ function Inner(props: { readonly session: SessionRecord }) {
 
   const confirmApprove = async (): Promise<void> => {
     const r = runLatest();
-    if (!r || !canApproveRun(r) || approve.busy()) return;
+    if (!r || !canApproveRun(r) || approve.busy() || heldUninstallApp(r)) return;
     const attempt = { plan: r, epoch: runEpoch };
     if (!ownsApply(attempt)) return;
     if (r.type !== "destroy_plan") {
@@ -1247,7 +1257,7 @@ function Inner(props: { readonly session: SessionRecord }) {
       cancelText: t("common.cancel"),
       danger: true,
     });
-    if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest()) || approve.busy()) return;
+    if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest()) || approve.busy() || heldUninstallApp(r)) return;
     await approve.run(attempt);
   };
   const confirmCancel = async (): Promise<void> => {
@@ -1767,7 +1777,16 @@ function Inner(props: { readonly session: SessionRecord }) {
 
                   {/* primary action */}
                   <div class="wa-form-actions">
-                    <Show when={canApproveRun(r())}>
+                    <Show when={(canApproveRun(r()) || (isDeployApprovalCandidate(r()) && !deployApprovalConsumed(r()))) &&
+                      heldUninstallApp(r())}>
+                      {(id) => (
+                        <>
+                          <p role="status">{t("app.uninstall.replacementReviewUnconfirmed")}</p>
+                          <Button variant="secondary" href={appPageHref(id())}>{t("run.backToApp")}</Button>
+                        </>
+                      )}
+                    </Show>
+                    <Show when={canApproveRun(r()) && !heldUninstallApp(r())}>
                       <Button
                         variant={
                           r().type === "destroy_plan" ? "danger" : "primary"
