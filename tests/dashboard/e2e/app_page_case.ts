@@ -1723,6 +1723,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       let connectionRemoved = noReplacement;
       let replacementAvailable = reverifyReplacement || (!noReplacement && !restoreOriginal);
       let replacementVerified = !noReplacement;
+      let incompleteReplacementTested = false;
       let replacementTesting = false;
       let releaseReplacementVerification = () => {};
       const replacementVerification = noReplacement
@@ -1983,6 +1984,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           replacementVerified = true;
           return route.fulfill({ json: { status: "verified" } });
         }
+        if (reverifyReplacement && path === "/api/v1/connections/conn_incomplete/test" && request.method() === "POST") {
+          incompleteReplacementTested = true;
+          return route.fulfill({ json: { status: "verified" } });
+        }
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
           { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal",
             status: partialRecovery || effectiveRequiredWithOption || effectiveHealthyOptional || (firstRemovalRefusal && connectionRemoved) || unusedUnavailable || noReplacement ? "revoked" : "verified",
@@ -1990,6 +1995,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           },
           ...(replacementAvailable ? [{ id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: replacementVerified ? "verified" : "pending",
             ...(replacementVerified ? cloudflareAccount(replacementAccountId, "fixture-team") : {}),
+          }] : []),
+          ...(reverifyReplacement ? [{ id: "conn_incomplete", displayName: "Second Cloudflare connection", providerSource: connectionProblem.provider,
+            scope: "personal", status: incompleteReplacementTested ? "verified" : "pending",
           }] : []),
           ...(firstRemovalRefusal ? [{
             id: "conn_other_account", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider,
@@ -2202,6 +2210,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           releaseReplacementVerification();
         }
         await expect(backToUninstall).toHaveAttribute("href", `/apps/${ID}`);
+        if (reverifyReplacement) {
+          const row = page.getByRole("listitem").filter({ hasText: "Second Cloudflare connection" });
+          await row.locator("summary").click();
+          const testConnection = row.getByRole("button", { name: "Test connection", exact: true });
+          await testConnection.click();
+          await expect(row.getByText("Verified", { exact: true })).toBeVisible();
+          await expect(testConnection).toBeEnabled();
+          await expect(backToUninstall).toHaveAttribute("href", `/apps/${ID}`);
+          setupMutations.push("POST /api/v1/connections/conn_incomplete/test");
+        }
         // Verification offers an explicit navigation action; it never returns
         // or chooses the replacement on the person's behalf.
         await expect(page).toHaveURL(new RegExp(`/connections\\?uninstallApp=${ID}$`, "u"));
@@ -2218,6 +2236,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         const choices = danger.getByRole("combobox", { name: "Cloudflare" });
         await expect(choices).toHaveValue("");
         await expect(reviewRemoval).toBeDisabled();
+        if (reverifyReplacement) await expect(choices.locator('option[value="conn_incomplete"]')).toHaveJSProperty("disabled", true);
         await choices.selectOption("conn_saved");
         await reviewRemoval.click();
         await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();

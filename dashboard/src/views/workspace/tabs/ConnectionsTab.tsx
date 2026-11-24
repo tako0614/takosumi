@@ -176,7 +176,8 @@ export default function ConnectionsTab(props: {
   >(null);
   const [lastCreatedVerifiedHint, setLastCreatedVerifiedHint] =
     createSignal(false);
-  const [reverifiedUninstallConnectionId, setReverifiedUninstallConnectionId] = createSignal<string>();
+  const [reverifiedUninstallConnectionIds, setReverifiedUninstallConnectionIds] =
+    createSignal<ReadonlySet<string>>(new Set());
   const location = useLocation();
   const uninstallReturn = props.embedded ? undefined : uninstallReturnHref(location.search);
   const inUninstallReturnContext = () => uninstallReturn !== undefined &&
@@ -325,7 +326,12 @@ export default function ConnectionsTab(props: {
 
   const runTest = async (id: string) => {
     const fromUninstall = inUninstallReturnContext();
-    if (reverifiedUninstallConnectionId() === id) setReverifiedUninstallConnectionId(undefined);
+    setReverifiedUninstallConnectionIds((ids) => {
+      if (!ids.has(id)) return ids;
+      const next = new Set(ids);
+      next.delete(id);
+      return next;
+    });
     setTestBusy(id, true);
     setTestError(id, null);
     try {
@@ -349,7 +355,9 @@ export default function ConnectionsTab(props: {
         });
       } else if (result?.status === "verified") {
         if (isLastCreated) setLastCreatedVerifiedHint(true);
-        if (!disposed && fromUninstall && inUninstallReturnContext()) setReverifiedUninstallConnectionId(id);
+        if (!disposed && fromUninstall && inUninstallReturnContext()) {
+          setReverifiedUninstallConnectionIds((ids) => new Set(ids).add(id));
+        }
       }
     } catch (e) {
       // Raw server / exception text (English internals, HTTP status) never
@@ -405,7 +413,7 @@ export default function ConnectionsTab(props: {
       const connection = providerConnectionForConnectionId(id);
       return connection !== undefined && isUninstallReplacementReady(connection);
     };
-    if (ready(reverifiedUninstallConnectionId()) ||
+    if ([...reverifiedUninstallConnectionIds()].some(ready) ||
       (lastCreatedConnectionName() && ready(lastCreatedConnectionId()))) return uninstallReturn;
   };
   const lastCreatedReady = () =>
