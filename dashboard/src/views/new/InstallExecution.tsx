@@ -144,10 +144,16 @@ interface Props {
   readonly blockedReasonId?: string;
   /** An Apply was started (or may have been): what it applies can no longer change. */
   readonly onApplyStarted?: () => void;
-  /** Offers a fresh uninstall Plan after refusal or failure of the removal. */
-  readonly uninstallConnectionRecovery?: (runId: string, mode: "refused" | "failed") => JSX.Element;
+  /** Offers a fresh uninstall Plan with a different Provider Connection. */
+  readonly uninstallConnectionRecovery?: (
+    runId: string,
+    mode: UninstallConnectionReviewStage,
+    disabled?: () => boolean,
+  ) => JSX.Element;
   readonly uninstallConnectionScope?: string;
 }
+
+export type UninstallConnectionReviewStage = "before_approval" | "refused" | "failed";
 
 const READINESS_READ_ATTEMPTS = 3;
 const READINESS_RETRY_DELAY_MS = 1_000;
@@ -906,12 +912,20 @@ export default function InstallExecution(props: Props) {
                   </Button>
                   <Button
                     href={`/runs/${encodeURIComponent(current().id)}`}
+                    disabled={isRemoval() && Boolean(props.blockedReason)}
                     variant="ghost"
                     icon={<ExternalLink size={16} />}
                   >
                     {t("installStore.runDetails")}
                   </Button>
+                  <Show when={isRemoval() && props.blockedReason}>{closeButton()}</Show>
                 </div>
+              </Show>
+
+              <Show when={current().type === "destroy_plan" && current().status === "waiting_approval" &&
+                current().policyStatus === "pass" && current().origin?.kind !== "scheduled_uninstall"
+                ? current().id : undefined} keyed>
+                {(runId) => props.uninstallConnectionRecovery?.(runId, "before_approval", approving)}
               </Show>
 
               <Show when={planReady() && !refusedConnectionPlan()}>

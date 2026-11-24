@@ -116,7 +116,7 @@ import {
 } from "../../lib/run-retry.ts";
 import { runMutationOutcomeUnknown } from "../../lib/run-errors.ts";
 import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.ts";
-import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
+import InstallExecution, { type ReviewPurpose, type UninstallConnectionReviewStage } from "../new/InstallExecution.tsx";
 import { AppManagementRow, AppSection, AppSectionVisibility, OpenAppButton } from "./app-ui.tsx";
 import { currentOpenPlatform, rememberedOpenChoice } from "../../lib/open-choice-state.ts";
 import { phoneClient } from "../../lib/open-routing.ts";
@@ -511,6 +511,7 @@ export default function AppManagePage(props: {
   let reviewScopeEpoch = 0;
   const [reAdoptionRevisionId, setReAdoptionRevisionId] = createSignal<string>();
   const reAdoptionTargetId = () => reAdoptionRevisionId() ?? reAdoptionRevisionFromApp(app());
+  const [unconfirmedUninstallReview, setUnconfirmedUninstallReview] = createSignal<ActiveReview>();
   const [starting, setStarting] = createSignal<
     { readonly section: ReviewSection; readonly action?: CapsuleAppAction | "continue_revision" }
   >();
@@ -546,6 +547,7 @@ export default function AppManagePage(props: {
         revisionAttempts.clear();
         rollbackAttemptKeys.clear();
         setReview(undefined);
+        setUnconfirmedUninstallReview(undefined);
         setReAdoptionRevisionId(undefined);
         setStarting(undefined);
         setSectionError(undefined);
@@ -631,7 +633,20 @@ export default function AppManagePage(props: {
           (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
             : cause instanceof TypeError);
-        if (uninstallConnectionRefused || responseUncertain) {
+        const replacedReview = responseUncertain ? options.replaceReview : undefined;
+        if (purpose === "uninstall" && replacedReview) {
+          setUnconfirmedUninstallReview(replacedReview);
+          // Keep the old approval held while checking whether the new Plan was saved.
+          try {
+            const fresh = await refetchApp({ isCurrent });
+            if (isCurrent() && fresh?.progress.review?.runId === replacedReview.planRunId &&
+              fresh.latestRun?.id === replacedReview.planRunId && fresh.latestRun.status === "waiting_approval") {
+              setUnconfirmedUninstallReview(undefined);
+            }
+          } catch {
+            // Keep the approval held when the readback also fails.
+          }
+        } else if (uninstallConnectionRefused || responseUncertain) {
           // The app view can report unavailable connections or work accepted
           // before a lost response; this fetch never repeats the mutation.
           try {
@@ -719,6 +734,13 @@ export default function AppManagePage(props: {
 
   const policyReasonsOnCard = (runId: string) =>
     app()?.problems.some((problem) => problem.code === "policy_blocked" && problem.runId === runId) === true;
+  const uninstallReviewBlockedReason = () => {
+    const active = review();
+    if (active?.purpose !== "uninstall") return;
+    if (starting()?.action === "uninstall_now") return t("app.review.loading");
+    if (switchableUninstallReview(app())) return t("app.uninstall.reviewReplaced");
+    if (unconfirmedUninstallReview() === active) return t("app.review.notStarted");
+  };
   const reviewPanel = (section: ReviewSection) => (
     <Show when={review()?.section === section && (review()?.purpose !== "uninstall" || isOwner()) ? review() : undefined}>
       {(active) => (
@@ -733,9 +755,11 @@ export default function AppManagePage(props: {
             {...(active().initialRunId ? { initialRunId: active().initialRunId! } : {})}
             capsuleId={capsuleId()}
             onDone={() => finishReview(active())}
+            blockedReason={uninstallReviewBlockedReason()}
             {...(active().purpose === "uninstall" ? {
               uninstallConnectionScope: uninstallScope(),
-              uninstallConnectionRecovery: (runId: string, mode: "refused" | "failed") => uninstallReviewRecovery(active(), runId, mode),
+              uninstallConnectionRecovery: (runId: string, stage: UninstallConnectionReviewStage, disabled?: () => boolean) =>
+                uninstallReviewRecovery(active(), runId, stage, disabled),
             } : {})}
             // An install review has nothing to cancel on this page: the app
             // stays installable, and Uninstall removes it.
@@ -1137,7 +1161,12 @@ export default function AppManagePage(props: {
       { restartable: false, action: "uninstall_now" },
     );
   };
-  const uninstallReviewRecovery = (heldReview: ActiveReview, runId: string, mode: "refused" | "failed") => {
+  const uninstallReviewRecovery = (
+    heldReview: ActiveReview,
+    runId: string,
+    mode: UninstallConnectionReviewStage,
+    disabled?: () => boolean,
+  ) => {
     const scope = uninstallScope();
     const epoch = uninstallEpoch;
     let active = true;
@@ -1148,8 +1177,10 @@ export default function AppManagePage(props: {
       if (!view?.applied || view.capsuleId !== capsuleId() || view.workspaceId !== workspaceId() ||
         view.progress.run || view.progress.revisionPreparing || view.latestRun?.id !== runId) return;
       if (mode === "failed") return appUninstallRecoveryMode(view) === "failed" ? view : undefined;
+      if (mode === "before_approval" && !view.uninstall.recoveryConnectionIds?.length) return;
       return view.progress.review?.runType === "destroy_plan" && view.progress.review.runId === runId &&
-        view.latestRun.type === "destroy_plan" && view.latestRun.status === "succeeded"
+        view.latestRun.type === "destroy_plan" &&
+        view.latestRun.status === (mode === "before_approval" ? "waiting_approval" : "succeeded")
         ? view
         : undefined;
     };
@@ -1165,9 +1196,10 @@ export default function AppManagePage(props: {
           <AppUninstallConnectionRecovery
             app={view()}
             mode={mode}
-            disabled={starting() !== undefined || uninstallBusy()}
+            disabled={starting() !== undefined || uninstallBusy() ||
+              unconfirmedUninstallReview() === heldReview || disabled?.() === true}
             onReview={(replacements) => {
-              if (!isCurrent() || !reviewedApp(app())) return;
+              if (unconfirmedUninstallReview() === heldReview || disabled?.() || !isCurrent() || !reviewedApp(app())) return;
               void startReview("attention", "uninstall", async () => {
                 const fresh = reviewedApp(await refetchApp({ isCurrent }));
                 const allowed = fresh?.uninstall.recoveryConnectionIds;

@@ -769,6 +769,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.noReplacement": "No verified connection is available to select.",
   "app.uninstall.replacementLoadFailed": "Cloud connections couldn't be loaded.",
   "app.uninstall.replacementReview": "Review removal",
+  "app.uninstall.reviewReplaced": "A newer removal review is ready. Open it to continue.",
   "app.uninstall.reviewConnectionUnavailable": "The connection used for this review is no longer available. Choose a verified connection for the same cloud account to review removal again.",
   "app.uninstall.replacementUnproven": "The selected connection couldn't be verified against the original cloud account and settings.",
   "app.uninstall.replacementVerifyFirst": "This connection has no verified cloud account. Check it in Cloud connections or choose another verified connection to the original account.",
