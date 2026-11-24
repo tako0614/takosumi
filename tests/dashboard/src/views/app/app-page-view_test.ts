@@ -174,7 +174,7 @@ describe("installed app page", () => {
   test("version changes keep one idempotency key per requested ref", () => {
     expect(page).toContain("defaultRetryPlanApi(revisionAttempts, rollbackAttemptKeys)");
     expect(page).toContain("versionPlanApi.planRevision(capsuleId(), ref, isCurrent)");
-    expect(page).toContain("versionPlanApi.planRollback(stateVersionId, isCurrent)");
+    expect(page).toContain("planRollbackFromHistory(stateVersionId, isCurrent, capsule()?.currentStateVersionId)");
     expect(version).toContain('t("app.version.rollback")');
     expect(version).toContain('t("app.version.pinReview")');
     expect(version).toContain("props.version.autoUpdate === true");
