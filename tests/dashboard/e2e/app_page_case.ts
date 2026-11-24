@@ -14,6 +14,7 @@ import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-reci
 import reAdoptionCoreSeam from "../fixtures/re-adoption-core-seam.json" with { type: "json" };
 import {
   PORTABLE_APPS,
+  PORTABLE_CAPSULES,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SHARED_APP_MEMBERS,
@@ -954,7 +955,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
     for (const action of ["update", "retireUpdate", "rollback"] as const) test({
       update: "a lost Update response reads the same app once and recovers only its existing review",
       retireUpdate: "leaving a version check lets the user continue its accepted request from the app",
-      rollback: "a lost rollback response reads the same app once and recovers only its existing review",
+      rollback: "a lost rollback response recovers the same review from history after reload",
     }[action], async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
@@ -962,6 +963,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const retireUpdate = action === "retireUpdate";
       const rollback = action === "rollback";
       const previousState = "sv_lost_response_previous";
+      const currentState = "sv_lost_response_current";
       const actionPath = rollback ? `/api/v1/state-versions/${previousState}/rollback-plan` : `/api/v1/capsules/${CAPSULE_ID}/revision-plans`;
       const actionName = rollback ? "Go back to this version" : "Check for updates";
       const resourceName = rollback ? "existing_rollback" : "existing_update";
@@ -1017,6 +1019,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               },
           }) } });
         }
+        if (rollback && path === `/api/v1/capsules/${CAPSULE_ID}`) {
+          return route.fulfill({ json: {
+            capsule: { ...PORTABLE_CAPSULES.ws_alpha[0], currentStateVersionId: currentState, currentStateGeneration: 2 },
+            installConfigReAdoption: { authorityGuard: `sha256:${"a".repeat(64)}` },
+          } });
+        }
         if (rollback && path === `/api/v1/capsules/${CAPSULE_ID}/state-versions`) {
           return route.fulfill({ json: { stateVersions: [{
             id: previousState, capsuleId: CAPSULE_ID, workspaceId: "ws_alpha", environment: "production",
@@ -1026,7 +1034,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === actionPath && request.method() === "POST") {
           if (rollback) {
             rollbackKeys.push(request.headers()["idempotency-key"]);
-            if (rollbackKeys.length === 2) return route.fulfill({ status: 201, json: { run: plan } });
+            if (rollbackKeys.length === 2) {
+              const run = rollbackKeys[1] === rollbackKeys[0] ? plan : { ...plan, id: `${plan.id}_duplicate` };
+              return route.fulfill({ status: 201, json: { run } });
+            }
           } else {
             expect(request.postDataJSON()).toEqual({ ref: "main" });
             expect(request.headers()["idempotency-key"]).toBeTruthy();
@@ -1048,6 +1059,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           if (definiteRejection) {
             return route.fulfill({ status: 409, json: { error: { code: "fixture_update_refused", message: "The update was refused." } } });
           }
+          if (rollback) return route.fulfill({ status: 502, json: { error: "fixture_response_lost" } });
           return route.abort("failed");
         }
         if (path === `/api/v1/revision-plans/${revisionId}/reconcile` && request.method() === "POST") {
@@ -1115,7 +1127,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           ? page.waitForResponse((response) => response.url().endsWith(actionPath) && response.status() === 409)
           : undefined;
         const start = page.getByTestId("app-version").getByRole("button", { name: actionName, exact: true });
+        await expect(start).toBeEnabled();
         await start.click();
+        if (rollback) await expect.poll(() => rollbackKeys.length).toBe(1);
         if (rejected) {
           await rejected;
           await expect(start).toBeEnabled();
@@ -1157,12 +1171,19 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           expect(rollbackKeys[0]).toBeTruthy();
           if (holdReadback) {
             // The original Plan is durable but neither the create response
-            // nor the first read reached the browser. Retrying is explicit.
+            // nor the first read reached the browser. The first app view after
+            // reload has not listed it yet. Retrying is still explicit.
+            holdReadback = false;
+            committed = false;
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await expect(start).toBeEnabled();
+            expect(mutations).toEqual([`POST ${actionPath}`]);
             await start.click();
+            await expect.poll(() => rollbackKeys.length).toBe(2);
+            expect(rollbackKeys).toEqual([rollbackKeys[0], rollbackKeys[0]]);
             const review = page.getByTestId("app-review");
             await expect(review).toContainText(resourceName);
             await expect(review.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
-            expect(rollbackKeys).toEqual([rollbackKeys[0], rollbackKeys[0]]);
             expect(mutations).toEqual([`POST ${actionPath}`, `POST ${actionPath}`]);
           }
         }
