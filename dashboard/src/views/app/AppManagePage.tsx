@@ -902,7 +902,7 @@ export default function AppManagePage(props: {
       "update",
       async (isCurrent) => {
         const forCapsule = capsuleId();
-        const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent });
+        const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent, expectedCapsuleId: forCapsule });
         if (!isCurrent()) return;
         const plan = response.revisionPlan;
         if (plan.id === revisionPlanId && plan.capsuleId === forCapsule &&
