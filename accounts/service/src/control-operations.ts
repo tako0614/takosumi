@@ -748,6 +748,7 @@ export interface ControlPlaneOperations {
     readonly requiredConnectionIds: readonly string[];
     readonly recoveryConnectionIds: readonly string[];
     readonly unavailableRecoveryConnectionIds?: readonly string[];
+    readonly restorableOriginalConnectionIds?: readonly string[];
   } | undefined>;
   /**
    * Reads the internal PlanRun projection by id. The control surface uses it to

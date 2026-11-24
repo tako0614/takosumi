@@ -329,7 +329,7 @@ export interface DestroyProviderConnectionReplacement {
   readonly replacementConnectionId: string;
 }
 
-/** Opaque IDs only. The original ID is legal only in server-owned Plan evidence. */
+/** Opaque IDs only. An original ID requires the caller to establish partial Destroy evidence. */
 export function parseDestroyProviderConnectionReplacements(
   value: unknown,
   options: { readonly allowOriginalConnection?: boolean } = {},

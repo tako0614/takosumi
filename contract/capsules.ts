@@ -939,6 +939,12 @@ export interface CapsuleAppUninstall {
    */
   readonly unavailableRecoveryConnectionIds?: readonly string[];
   /**
+   * Owner-only logical IDs that can explicitly select their original connection
+   * after a persisted partial Destroy used a different one. The server still
+   * verifies the selected connection before creating the new Plan.
+   */
+  readonly restorableOriginalConnectionIds?: readonly string[];
+  /**
    * All stored connection IDs used by an ordinary Destroy with exact applied
    * provenance. An omitted list leaves the connection scope unknown.
    */

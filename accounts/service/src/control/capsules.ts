@@ -408,7 +408,12 @@ export async function handleCapsules(
       catch { return errorJson("invalid_argument", "Destroy Plan body must be a JSON object.", 400); }
       let destroyProviderConnectionReplacements: ReturnType<typeof parseDestroyProviderConnectionReplacements> | undefined;
       if (body && Object.hasOwn(body, "destroyProviderConnectionReplacements")) {
-        try { destroyProviderConnectionReplacements = parseDestroyProviderConnectionReplacements(body.destroyProviderConnectionReplacements); }
+        try {
+          destroyProviderConnectionReplacements = parseDestroyProviderConnectionReplacements(
+            body.destroyProviderConnectionReplacements,
+            { allowOriginalConnection: retryOwnershipEpoch !== undefined },
+          );
+        }
         catch { return errorJson("invalid_argument", "Invalid destroy Provider Connection replacement selection.", 400); }
       }
       const runnerProfileId =
@@ -421,13 +426,16 @@ export async function handleCapsules(
       if (destroyProviderConnectionReplacements && (!ctx.session.uninstallRequester || !directUninstallRequester)) {
         return errorJson("forbidden", "Connection recovery requires an account session or personal access token.", 403, request);
       }
+      const restoresOriginal = destroyProviderConnectionReplacements?.some(
+        ({ connectionId, replacementConnectionId }) => connectionId === replacementConnectionId,
+      );
       const response = await operations.createCapsuleDestroyPlan(
         capsuleId,
         {
           ...(destroyProviderConnectionReplacements ? { destroyProviderConnectionReplacements } : {}),
           ...(runnerProfileId ? { runnerProfileId } : {}),
           actor,
-          ...(retryOwnershipEpoch !== undefined && destroyProviderConnectionReplacements === undefined
+          ...(retryOwnershipEpoch !== undefined && (destroyProviderConnectionReplacements === undefined || restoresOriginal)
             ? { actorOwnershipEpoch: retryOwnershipEpoch }
             : {}),
         },
