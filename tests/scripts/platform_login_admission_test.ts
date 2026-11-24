@@ -38,18 +38,56 @@ test("fresh login-start smoke uses one anonymous manual GET and retains no redir
   }
 });
 
-test("fresh login-start smoke rejects unavailable, wrong origin/version/path and sanitizes failures", async () => {
-  for (const response of [
-    new Response(null, { status: 503 }), new Response(null, { status: 200 }),
+test("fresh login-start smoke reports sanitized failure evidence from one request", async () => {
+  const redirect = `${issuer}/oauth/authorize?state=fixture-sensitive`;
+  const response = (status: number, location?: string, version?: string) => new Response(
+    "fixture-sensitive-body",
+    { status, headers: {
+      "set-cookie": "fixture-sensitive-cookie",
+      ...(location ? { location } : {}),
+      ...(version ? { "x-takosumi-version-id": version } : {}),
+    } },
+  );
+  for (const [reply, expected] of [
+    [response(429, undefined, versionId), { reason: "unexpected_http_status", httpStatus: 429, servingVersion: "match" }],
+    [response(503), { reason: "unexpected_http_status", httpStatus: 503, servingVersion: "missing" }],
+    [response(303, redirect, "fixture-sensitive-version"), { reason: "serving_version_mismatch", httpStatus: 303, servingVersion: "mismatch" }],
+    [response(303, redirect), { reason: "serving_version_missing", httpStatus: 303, servingVersion: "missing" }],
+    [response(303, undefined, versionId), { reason: "redirect_missing", httpStatus: 303, servingVersion: "match" }],
+    [response(303, "fixture-sensitive-location", versionId), { reason: "redirect_invalid", httpStatus: 303, servingVersion: "match" }],
     ...[
-      ["https://foreign.test/oauth/authorize?state=fixture-sensitive", versionId],
-      [`${issuer}/other?state=fixture-sensitive`, versionId],
-      [`${issuer}/oauth/authorize?state=fixture-sensitive`, "different-version"],
-    ].map(([location, version]) => new Response(null, { status: 302, headers: { location: location!, "x-takosumi-version-id": version! } })),
-  ]) {
+      "https://foreign.test/oauth/authorize?state=fixture-sensitive",
+      `${issuer}/other?state=fixture-sensitive`,
+      `${issuer}/oauth/authorize#fixture-sensitive`,
+      "https://login:fixture-sensitive@auth-staging.takos.jp/oauth/authorize",
+    ].map((target) => [
+      response(302, target, versionId), { reason: "redirect_target_mismatch", httpStatus: 302, servingVersion: "match" },
+    ] as const),
+  ] as const) {
     let calls = 0;
-    await expect(verifyPlatformLoginStart({ origin, issuer, versionId, fetcher: async () => { calls++; return response; } })).rejects.toThrow("platform_worker_login_start_readback_invalid");
+    const failure = await verifyPlatformLoginStart({
+      origin, issuer, versionId, fetcher: async () => { calls++; return reply; },
+    }).catch((cause: unknown) => cause);
+    expect(failure).toMatchObject({ message: "platform_worker_login_start_readback_invalid", diagnostic: expected });
+    expect(JSON.stringify(failure)).not.toContain("fixture-sensitive");
+    expect((failure as Error).cause).toBeUndefined();
+    expect(reply.bodyUsed).toBe(true);
     expect(calls).toBe(1);
   }
-  await expect(verifyPlatformLoginStart({ origin, issuer, versionId, fetcher: async () => { throw new Error("fixture-sensitive-cookie"); } })).rejects.toThrow("platform_worker_login_start_readback_invalid");
+});
+
+test("fresh login-start smoke distinguishes timeout and transport without retaining the exception", async () => {
+  for (const [error, reason] of [
+    [new Error("fixture-sensitive-transport"), "request_failed"],
+    [new DOMException("fixture-sensitive-timeout", "TimeoutError"), "request_timeout"],
+  ] as const) {
+    let calls = 0;
+    const failure = await verifyPlatformLoginStart({
+      origin, issuer, versionId, fetcher: async () => { calls++; throw error; },
+    }).catch((cause: unknown) => cause);
+    expect(failure).toMatchObject({ message: "platform_worker_login_start_readback_invalid", diagnostic: { reason } });
+    expect((failure as Error).cause).toBeUndefined();
+    expect(JSON.stringify(failure)).not.toContain("fixture-sensitive");
+    expect(calls).toBe(1);
+  }
 });

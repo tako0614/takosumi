@@ -84,6 +84,25 @@ export function platformLoginAdmissionPredecessorSource(source: string, origin: 
   return before;
 }
 
+interface LoginStartResponseFailure {
+  readonly reason:
+    | "unexpected_http_status"
+    | "serving_version_missing"
+    | "serving_version_mismatch"
+    | "redirect_missing"
+    | "redirect_invalid"
+    | "redirect_target_mismatch";
+  readonly httpStatus: number;
+  readonly servingVersion: "match" | "missing" | "mismatch";
+}
+
+export class PlatformLoginStartReadbackError extends Error {
+  constructor(readonly diagnostic: LoginStartResponseFailure | { readonly reason: "request_timeout" | "request_failed" }) {
+    super("platform_worker_login_start_readback_invalid");
+    this.name = "PlatformLoginStartReadbackError";
+  }
+}
+
 /** One fresh anonymous GET; never follow or retain the state/cookie/Location. */
 export async function verifyPlatformLoginStart(input: {
   readonly origin: string;
@@ -91,21 +110,32 @@ export async function verifyPlatformLoginStart(input: {
   readonly versionId: string;
   readonly fetcher?: (url: string, init: RequestInit) => Promise<Response>;
 }): Promise<void> {
-  let response: Response | undefined;
+  const signal = AbortSignal.timeout(10_000);
+  let response: Response;
   try {
     response = await (input.fetcher ?? fetch)(`${input.origin}/auth/oidc/login?return=%2F`, {
-      redirect: "manual", cache: "no-store", headers: { "cache-control": "no-cache" }, signal: AbortSignal.timeout(10_000),
+      redirect: "manual", cache: "no-store", headers: { "cache-control": "no-cache" }, signal,
     });
+  } catch (error) {
+    const timedOut = signal.aborted || (error instanceof DOMException && error.name === "TimeoutError");
+    throw new PlatformLoginStartReadbackError({ reason: timedOut ? "request_timeout" : "request_failed" });
+  }
+  try {
+    const version = response.headers.get("x-takosumi-version-id");
+    const servingVersion = version === input.versionId ? "match" : version ? "mismatch" : "missing";
+    const fail = (reason: LoginStartResponseFailure["reason"]) =>
+      new PlatformLoginStartReadbackError({ reason, httpStatus: response.status, servingVersion });
+
+    if (response.status !== 302 && response.status !== 303) throw fail("unexpected_http_status");
+    if (servingVersion === "missing") throw fail("serving_version_missing");
+    if (servingVersion === "mismatch") throw fail("serving_version_mismatch");
     const location = response.headers.get("location");
-    const destination = location ? new URL(location) : undefined;
-    if ((response.status !== 302 && response.status !== 303) ||
-      response.headers.get("x-takosumi-version-id") !== input.versionId ||
-      destination?.origin !== input.issuer || destination.pathname !== "/oauth/authorize" || destination.username || destination.password || destination.hash) {
-      throw invalid();
-    }
-  } catch {
-    throw new Error("platform_worker_login_start_readback_invalid");
+    if (!location) throw fail("redirect_missing");
+    const destination = URL.parse(location);
+    if (!destination) throw fail("redirect_invalid");
+    if (destination.origin !== input.issuer || destination.pathname !== "/oauth/authorize" ||
+      destination.username || destination.password || destination.hash) throw fail("redirect_target_mismatch");
   } finally {
-    await response?.body?.cancel().catch(() => {});
+    await response.body?.cancel().catch(() => {});
   }
 }
