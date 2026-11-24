@@ -548,7 +548,7 @@ export default function InstallExecution(props: Props) {
     setApproving(true);
     setError(null);
     try {
-      const approved = await approveRun(plan.id, { reason: "dashboard install review" });
+      const approved = await approveRun(plan, { reason: "dashboard install review", isCurrent: () => ownsApply(attempt) });
       if (ownsApply(attempt)) mutate(approved);
     } catch (cause) {
       if (ownsApply(attempt)) setError(friendlyError(cause, t).message);

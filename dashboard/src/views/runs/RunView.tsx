@@ -927,8 +927,10 @@ function Inner(props: { readonly session: SessionRecord }) {
   const approve = createAction(async (attempt: ApplyAttempt) => {
     if (!ownsApply(attempt) || !canApproveRun(runLatest())) return;
     try {
-      await approveRun(attempt.plan.id);
-      if (ownsApply(attempt)) await Promise.all([refetchRun(), refetchLogs()]);
+      const approved = await approveRun(attempt.plan, { isCurrent: () => ownsApply(attempt) });
+      if (!ownsApply(attempt)) return;
+      mutateRun(approved);
+      await Promise.all([run.error ? refetchRun() : undefined, refetchLogs()]);
     } catch (cause) {
       if (ownsApply(attempt)) throw cause;
     }
