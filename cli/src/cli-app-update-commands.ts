@@ -147,7 +147,8 @@ function savedApplyPlan(run: PublicRun, type: ApplyRunType): PublicRun {
 function connectionReplacements(value: unknown) {
   if (typeof value !== "string") throw new Refusal("invalid_connection_replacements");
   try {
-    return parseDestroyProviderConnectionReplacements(JSON.parse(value));
+    // Accounts and Core check whether partial Destroy evidence permits restoring an original Connection.
+    return parseDestroyProviderConnectionReplacements(JSON.parse(value), { allowOriginalConnection: true });
   } catch {
     throw new Refusal("invalid_connection_replacements");
   }

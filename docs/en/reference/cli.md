@@ -145,6 +145,8 @@ takosumi apps recover-uninstall cap_example \
 ```
 
 The server checks current ownership, the cloud account, and the applied connection settings before preparing a Destroy Plan.
+To restore the original Connection for a binding that used a replacement during a partial Destroy, pass the original ID in both `connectionId` and `replacementConnectionId`.
+The server checks the current app owner's verified selection against the saved partial Destroy record.
 When a `refused` result includes `connectionRecoveryFailure`, verify the replacement connection for `replacement_unverified`,
 or check the account and applied connection settings for `bindings_mismatch`.
 `applied_evidence_unavailable` means the server could not confirm the applied record needed for the comparison.

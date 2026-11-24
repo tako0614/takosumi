@@ -141,6 +141,8 @@ takosumi apps recover-uninstall cap_example \
 ```
 
 サーバーが現在の所有者、クラウドアカウント、適用済みの接続設定を照合し、削除Planを準備します。
+部分削除で代替した割当を元の接続に戻す場合は、`connectionId` と `replacementConnectionId` に同じ元のIDを指定します。
+現在のアプリ所有者が選んだ確認済み接続を、サーバーが保存済みの部分削除の記録と照合します。
 `refused` に `connectionRecoveryFailure` がある場合、`replacement_unverified` なら代替接続を確認し、
 `bindings_mismatch` ならアカウントと適用済みの接続設定を確認してください。
 `applied_evidence_unavailable` は、照合に必要な適用記録をサーバーが確認できなかったことを示します。

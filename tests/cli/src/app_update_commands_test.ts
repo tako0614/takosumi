@@ -149,10 +149,23 @@ test("apps recover-uninstall creates one reviewed Destroy Plan with exact shared
   expect(await r.calls[0]!.json()).toEqual({ destroyProviderConnectionReplacements: destroyPairs });
 });
 
+test("recover-uninstall submits an explicit original Connection selection for review", async () => {
+  const pairs = [
+    { connectionId: "conn_old_a", replacementConnectionId: "conn_old_a" },
+    { connectionId: "conn_old_b", replacementConnectionId: "conn_old_a" },
+  ];
+  const args = recoverArgs.map(value => value === JSON.stringify(destroyPairs) ? JSON.stringify(pairs) : value);
+  const result = await invoke(args, () => Response.json({ run: destroyPlan }, { status: 201 }));
+  expect(result.code).toBe(0);
+  expect(result.calls.map(call => [call.method, new URL(call.url).pathname]))
+    .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
+  expect(await result.calls[0]!.json()).toEqual({ destroyProviderConnectionReplacements: pairs });
+  expect(result.result).toMatchObject({ status: "review_required", planRunId: destroyPlan.id });
+});
+
 test("recover-uninstall rejects malformed pairs and confirmation flags before HTTP", async () => {
   for (const pairs of [
     "not-json", "{}", "[]", "[{}]",
-    JSON.stringify([{ connectionId: "conn_old_a", replacementConnectionId: "conn_old_a" }]),
     JSON.stringify([destroyPairs[0], destroyPairs[0]]),
     JSON.stringify([{ ...destroyPairs[0], accountId: "account_claim" }]),
   ]) {

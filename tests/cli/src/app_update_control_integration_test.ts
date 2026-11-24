@@ -163,6 +163,30 @@ async function fixture(options: {
   return { accounts, pat, appId, ledger, operations, dispatch, runnerCalls };
 }
 
+test("Accounts refuses a CLI original Connection selection without partial Destroy evidence", async () => {
+  const h = await fixture();
+  const before = { ...h.runnerCalls };
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  const output: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request.clone());
+    return h.dispatch(request);
+  }) as typeof fetch;
+  try {
+    const pairs = [{ connectionId: "conn_original", replacementConnectionId: "conn_original" }];
+    expect(await main(["apps", "recover-uninstall", h.appId, "--connections", JSON.stringify(pairs),
+      "--token", TOKEN, "--url", ORIGIN, "--json"], { stdout: line => output.push(line), stderr() {} })).toBe(1);
+    expect(requests.map(request => [request.method, new URL(request.url).pathname]))
+      .toEqual([["POST", `/api/v1/capsules/${h.appId}/destroy-plan`]]);
+    expect(JSON.parse(output[0]!)).toEqual({ status: "refused", appId: h.appId, code: "invalid_argument" });
+    expect(h.runnerCalls).toEqual(before);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall with PAT fences", async () => {
   const h = await fixture();
   const path = `/api/v1/capsules/${h.appId}/destroy-plan`;
