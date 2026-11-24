@@ -166,7 +166,7 @@ export async function retryPlanForRun(
   }
 }
 
-type RollbackViewScope = readonly [subject: string, accountId: string, runId: string];
+type RollbackViewScope = readonly [subject: string, accountId: string, viewId: string];
 
 function rollbackAttemptStorage(scope: string | undefined): Storage | undefined {
   if (!scope) return;
@@ -182,7 +182,7 @@ function rollbackAttemptStorage(scope: string | undefined): Storage | undefined 
 export function defaultRetryPlanApi(
   attempts: RevisionPlanAttemptStore = new Map(),
   rollbackAttempts: Map<string, string> = new Map(),
-  rollbackViewScope?: () => RollbackViewScope,
+  rollbackViewScope?: () => RollbackViewScope | undefined,
 ): RetryPlanApi {
   return {
     ...STANDARD_REQUESTS,
