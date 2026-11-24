@@ -14239,6 +14239,22 @@ test.each(["1", "2", "2-selective", "2-conflict", "2-restore-original", "1-origi
       restorableOriginalConnectionIds: originalIds,
     });
     await store.putConnection(original);
+    if (restoreOneOriginal) {
+      const workspace = (await store.getWorkspace(seeded.workspace.id))!;
+      await store.putWorkspace({
+        ...workspace,
+        policy: {
+          ...workspace.policy,
+          providerCredentials: {
+            ...workspace.policy?.providerCredentials,
+            forbiddenConnectionIds: [firstReplacement.id],
+          },
+        },
+      });
+      expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, owner))
+        .toMatchObject({ unavailableRecoveryConnectionIds: originalIds });
+      await store.putWorkspace(workspace);
+    }
     await store.putConnection({ ...firstReplacement, status: "revoked" });
     expect(await controller.listCapsuleAppliedDestroyConnectionIds(partial.capsule, owner)).toEqual({
       requiredConnectionIds: originalIds,

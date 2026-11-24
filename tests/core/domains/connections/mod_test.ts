@@ -1778,15 +1778,21 @@ test("an owned app can bind its owner's bridged connection across legacy namespa
   await store.putConnection(ownedConnection);
   await transitionProviderBindingSetForFixture(store, {
     id: "binding_owner_bridge", workspaceId: model.workspace.id, capsuleId: model.capsule.id,
-    environment: model.capsule.environment, bindings: [{ provider: CLOUDFLARE, connectionId: ownedConnection.id }],
+    environment: model.capsule.environment,
+    bindings: [{ provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: ownedConnection.id }],
     createdAt: NOW, updatedAt: NOW,
   });
   const capsule = { ...model.capsule, ownerAccountId: "stale-json-owner" };
+  const recoveryScope = () => service.listAppliedDestroyConnectionIds(capsule, [requiredBinding()], {
+    now: Date.parse(NOW),
+  });
   expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId, ownershipEpoch: 0,
     managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsule.id}` })).toBe(true);
   expect((await service.resolveProviderBindings(capsule))[0]?.connection.id).toBe(ownedConnection.id);
+  expect(await recoveryScope()).toMatchObject({ unavailableRecoveryConnectionIds: [] });
   expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: "someone_else", ownershipEpoch: 1,
     managementState: "active", managementEpoch: 1, storageRoot: `apps/${capsule.id}` })).toBe(true);
   await expect(service.resolveProviderBindings(capsule))
     .rejects.toMatchObject({ code: "permission_denied", details: { reason: "connection_not_owned_by_app_owner" } });
+  expect(await recoveryScope()).toMatchObject({ unavailableRecoveryConnectionIds: [ownedConnection.id] });
 });
