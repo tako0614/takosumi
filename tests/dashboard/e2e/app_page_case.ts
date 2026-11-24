@@ -1649,13 +1649,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionRejected", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionLostResponse: "a missing uninstall Plan response keeps the previous approval held during readback",
       reviewDifferentConnectionSavedLate: "an uninstall connection change keeps the old approval held when its Plan is saved late",
       reviewDifferentConnectionTimedOut: "an uninstall Plan save timeout keeps old approval held and permits an explicit new review",
       reviewDifferentConnectionReloaded: "reloading during an uninstall connection change keeps the old approval held",
+      reviewDifferentConnectionApprovedElsewhere: "a held uninstall review stays in the same tab if the old Plan was approved elsewhere",
       reviewDifferentConnectionRejected: "a definite uninstall connection mismatch releases only its provisional hold",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
       lostReplacementResponse: "a lost replacement Plan response leaves its saved uninstall review reachable",
@@ -1677,7 +1678,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const lostReplacementOnInstalledApp = scenario === "lostReplacementOnInstalledApp";
       const savesReplacementLate = scenario === "reviewDifferentConnectionSavedLate";
       const replacementSaveTimesOut = scenario === "reviewDifferentConnectionTimedOut";
-      const reloadsBeforeReplacementResponse = scenario === "reviewDifferentConnectionReloaded";
+      const approvedElsewhere = scenario === "reviewDifferentConnectionApprovedElsewhere";
+      const reloadsBeforeReplacementResponse = scenario === "reviewDifferentConnectionReloaded" || approvedElsewhere;
       const replacementIsRejected = scenario === "reviewDifferentConnectionRejected";
       const lostResponseBeforeApproval = scenario === "reviewDifferentConnectionLostResponse" || savesReplacementLate;
       const reviewDifferentConnection = scenario === "reviewDifferentConnection" || lostResponseBeforeApproval ||
@@ -2161,6 +2163,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           if (suffix === "/cost") return route.fulfill({ json: { cost: { runId: id, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
           if (suffix === "/logs") return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
           if (suffix === "/stream") return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+          if (reloadsBeforeReplacementResponse && suffix === "/cancel" && id === refusedPlan.id && request.method() === "POST") {
+            const cancelled = { ...refusedPlan, status: "cancelled" as const };
+            runsById.set(cancelled.id, cancelled);
+            return route.fulfill({ json: { run: cancelled } });
+          }
           if (startsAwaitingApproval && suffix === "/approve" && id === refusedPlan.id && request.method() === "POST") {
             const approved = { ...refusedPlan, status: "succeeded" as const };
             currentUninstallReview = approved;
@@ -2576,13 +2583,30 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           await expect(review.getByText("Technical details", { exact: true })).toHaveAttribute("aria-disabled", "true");
           await expect(review.getByRole("link", { name: "Technical details", exact: true })).toHaveCount(0);
           if (reloadsBeforeReplacementResponse) {
+            if (approvedElsewhere) {
+              // Another client can approve the old Plan while this tab still holds it.
+              const approved = { ...refusedPlan, status: "succeeded" as const };
+              runsById.set(approved.id, approved);
+              currentUninstallReview = approved;
+            }
             await page.reload({ waitUntil: "domcontentloaded" });
             await problems.getByRole("button", { name: "Review", exact: true }).click();
-            await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toHaveAttribute("aria-disabled", "true");
-            await page.goto(`/runs/${refusedPlan.id}`, { waitUntil: "domcontentloaded" });
+            await expect(review.getByRole("button", {
+              name: approvedElsewhere ? "Allow and uninstall" : "Approve this change", exact: true,
+            })).toHaveAttribute("aria-disabled", "true");
+            await expect(review.getByRole("link", { name: "Technical details", exact: true })).toHaveCount(0);
+            await review.getByRole("button", { name: "Technical details", exact: true }).press("Enter");
+            await expect(page).toHaveURL(new RegExp(`/runs/${refusedPlan.id}$`));
             await expect(page.getByText("Couldn't confirm the removal review for the new connection. Refresh to check its status.", { exact: true })).toBeVisible();
             await expect(page.getByRole("button", { name: "Approve this change", exact: true })).toHaveCount(0);
+            await expect(page.getByRole("button", { name: "Run destructive changes anyway", exact: true })).toHaveCount(0);
             expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+            if (!approvedElsewhere) {
+              await page.getByRole("button", { name: "Cancel this run", exact: true }).click();
+              await page.getByRole("dialog", { name: "Cancel this run?" })
+                .getByRole("button", { name: "Cancel run", exact: true }).click();
+            }
+            await expect(page.getByRole("button", { name: "Cancel this run", exact: true })).toHaveCount(0);
           }
         } finally {
           finishReplacementPlan();
@@ -2632,7 +2656,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         await expect(review.getByRole("link", { name: "Technical details", exact: true })).toHaveAttribute("href", `/runs/${recoveryPlan.id}`);
         await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toBeVisible();
-        expect(seenMutations).toEqual(Array(replacementSaveTimesOut ? 2 : 1).fill(`POST /api/v1/capsules/${ID}/destroy-plan`));
+        expect(seenMutations).toEqual([
+          ...Array(replacementSaveTimesOut ? 2 : 1).fill(`POST /api/v1/capsules/${ID}/destroy-plan`),
+          ...(reloadsBeforeReplacementResponse && !approvedElsewhere ? [`POST /api/v1/runs/${refusedPlan.id}/cancel`] : []),
+        ]);
         expect(replacementPlanBodies).toEqual(Array(replacementSaveTimesOut ? 2 : 1).fill({
           destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
         }));

@@ -109,10 +109,12 @@ test("waiting approval exposes technical run details before approval", () => {
   )?.[1];
 
   expect(waitingApproval).toBeDefined();
-  expect(waitingApproval).toContain(
-    "href={`/runs/${encodeURIComponent(current().id)}`}",
+  expect(waitingApproval).toContain("{runDetailsButton(current().id)}");
+  const details = source.match(/const runDetailsButton = [\s\S]*?<\/Button>/u)?.[0];
+  expect(details).toContain(
+    "href={props.onOpenHeldRemovalDetails ? undefined : `/runs/${encodeURIComponent(runId)}`}",
   );
-  expect(waitingApproval).toContain('t("installStore.runDetails")');
+  expect(details).toContain('t("installStore.runDetails")');
   expect(waitingApproval).toContain('t("installStore.approve")');
 });
 

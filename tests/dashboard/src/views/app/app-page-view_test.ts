@@ -119,7 +119,10 @@ describe("installed app page", () => {
     // all open the shared review; nothing navigates to the run page to apply.
     expect(page).toContain("<InstallExecution");
     expect(page).toContain("purpose={active().purpose}");
-    expect(page).not.toMatch(/navigate\(`\/runs\//u);
+    const heldRemovalDetails = page.match(/  const heldRemovalDetails = [\s\S]*?\n  \};/u)?.[0];
+    expect(heldRemovalDetails).toContain("isUninstallReviewHeld(");
+    expect(heldRemovalDetails).toContain('if (canOpen()) navigate(`/runs/${encodeURIComponent(held.planRunId)}`)');
+    expect(page.replace(heldRemovalDetails!, "")).not.toMatch(/navigate\(`\/runs\//u);
     expect(allAppSources).not.toContain("auto=update");
     expect(allAppSources).not.toContain("autoApply");
     expect(allAppSources).not.toContain("sessionStorage");

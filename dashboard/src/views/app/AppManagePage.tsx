@@ -750,6 +750,13 @@ export default function AppManagePage(props: {
     if (switchableUninstallReview(app())) return t("app.uninstall.reviewReplaced");
     if (isUninstallReviewHeld(uninstallReviewScope(active.planRunId))) return t("app.uninstall.replacementReviewUnconfirmed");
   };
+  const heldRemovalDetails = (held: ActiveReview) => {
+    const canOpen = () => review() === held && isOwner() && !starting() && !uninstallBusy() &&
+      !switchableUninstallReview(app()) && isUninstallReviewHeld(uninstallReviewScope(held.planRunId));
+    return canOpen() ? () => {
+      if (canOpen()) navigate(`/runs/${encodeURIComponent(held.planRunId)}`);
+    } : undefined;
+  };
   const refreshUnconfirmedUninstallReview = (held: ActiveReview) => {
     const scope = uninstallScope();
     const epoch = uninstallEpoch;
@@ -786,6 +793,8 @@ export default function AppManagePage(props: {
             capsuleId={capsuleId()}
             onDone={() => finishReview(active())}
             blockedReason={uninstallReviewBlockedReason()}
+            // Details can change during submission without remounting the connection recovery.
+            onOpenHeldRemovalDetails={active().purpose === "uninstall" ? heldRemovalDetails(active()) : undefined}
             {...(active().purpose === "uninstall" ? {
               uninstallConnectionScope: uninstallScope(),
               uninstallConnectionRecovery: (runId: string, stage: UninstallConnectionReviewStage, disabled?: () => boolean) =>
