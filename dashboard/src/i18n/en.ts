@@ -1145,6 +1145,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.saved.needsTest": "Saved {name}. Check the connection.",
   "conn.saved.testCta": "Test connection",
   "conn.uninstall.returnCta": "Back to uninstall",
+  "conn.uninstall.backToApp": "Back to app",
   "conn.saved.returnCta": "Back to install",
   "conn.add.provider": "Cloud to connect",
   "conn.add.genericEnvOption": "Connect a cloud that isn't listed",
