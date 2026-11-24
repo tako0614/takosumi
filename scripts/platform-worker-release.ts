@@ -2310,12 +2310,12 @@ async function runPlatformWorkerCodePublication(
     }
     assertPlatformContainerComplete(baseline.container, runnerImage);
 
+    await (runtime.runScopedGate ??
+      (() => runPlatformWorkerCodeGate(command, root)))();
     const dashboard = await (runtime.buildDashboard ??
       ((selected) => buildPlatformDashboardOnce(selected, command, root)))(
       environment,
     );
-    await (runtime.runScopedGate ??
-      (() => runPlatformWorkerCodeGate(command, root)))();
 
     initialOutput = createGlobalTransientDirectory("takosumi-code-dry-run-");
     const initialSeal = await buildPlatformWorkerCodeDryRunSeal(
