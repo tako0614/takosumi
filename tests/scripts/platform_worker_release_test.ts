@@ -33,6 +33,7 @@ import {
   waitForPlatformContainerReadback,
   withPlatformForwardContainerPreflight,
 } from "../../scripts/platform-worker-release.ts";
+import { verifyPlatformLoginStart } from "../../scripts/platform-login-admission.ts";
 import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 import { runRunnerImageRelease } from "../../scripts/runner-image-release.ts";
 import { platformExtensionRoutes } from "../../deploy/platform/platform_extensions.ts";
@@ -773,7 +774,17 @@ async function exerciseCodeLane(options: {
         loginStartReadback: async (versionId) => {
           expect(versionId).toBe(CODE_DEPLOYED_ID);
           loginSmokeCount++;
-          if (options.loginSmokeFails) throw new Error("synthetic login unavailable");
+          if (options.loginSmokeFails) {
+            await verifyPlatformLoginStart({
+              origin: "https://app-staging.takosumi.com",
+              issuer: "https://auth-staging.takos.jp",
+              versionId,
+              fetcher: async () => new Response("fixture-sensitive-body", { status: 503, headers: {
+                "set-cookie": "fixture-sensitive-cookie",
+                "x-takosumi-version-id": versionId,
+              } }),
+            });
+          }
         },
         nonce: () => "1".repeat(32),
       },
@@ -1578,8 +1589,18 @@ test("login admission refuses missing composition, partial predecessors and unre
 
 test("login admission failed post-activation smoke stays incomplete without a second mutation", async () => {
   const result = await exerciseCodeLane({ loginAdmission: "transition", loginSmokeFails: true });
-  expect(result.error).toBeDefined();
+  expect((result.error as Error).message).toBe("platform_worker_code_release_incomplete");
   expect(result).toMatchObject({ uploadCount: 1, activationCount: 1, loginSmokeCount: 1 });
+  expect(result.results).toHaveLength(1);
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "activate",
+    predecessorVersionId: CODE_PREDECESSOR_ID,
+    candidateVersionId: CODE_DEPLOYED_ID,
+    observedServingVersionId: CODE_DEPLOYED_ID,
+    loginStartFailure: { reason: "unexpected_http_status", httpStatus: 503, servingVersion: "match" },
+  });
+  expect(JSON.stringify(result.results[0])).not.toContain("fixture-sensitive");
 });
 
 test("routine code refuses every route drift before upload and after activation", async () => {

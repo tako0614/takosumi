@@ -333,7 +333,10 @@ this composition before building, verifies both exact typed bindings against
 the serving Version, and performs one fresh anonymous login-start GET after
 activation. The GET follows no redirect and accepts only the expected Version
 redirecting to the staging issuer's authorization endpoint. It does not prove
-SSO completion, and does not print or retain cookies, state or the Location URL.
+SSO completion. On failure, the incomplete receipt includes `loginStartFailure`
+with a fixed reason and, when the request returned a response, its HTTP status
+and whether the serving Version matched. The receipt never retains a response
+body, raw Version header, cookie, redirect URL, or transport exception.
 
 If the existing staging Version has neither binding, the operator selects two
 unused, distinct positive-integer namespace strings in its private config.

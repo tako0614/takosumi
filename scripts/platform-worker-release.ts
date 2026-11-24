@@ -31,6 +31,7 @@ import { REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES } from "../providers/cred
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
   assertPlatformLoginAdmission,
+  PlatformLoginStartReadbackError,
   platformLoginAdmissionPredecessorSource,
   platformRateLimitBindings,
   verifyPlatformLoginStart,
@@ -2523,6 +2524,9 @@ async function runPlatformWorkerCodePublication(
         observedServingVersionId,
         authorityDrift: error instanceof PlatformWorkerCodeAuthorityDriftError
           ? error.sections
+          : undefined,
+        loginStartFailure: error instanceof PlatformLoginStartReadbackError
+          ? error.diagnostic
           : undefined,
         recoveryStatus:
           "read the tagged Version and deployment history before rollback or forward repair; no mutation was retried",
