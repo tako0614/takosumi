@@ -910,7 +910,6 @@ export default function InstallExecution(props: Props) {
                   >
                     {t("installStore.approve")}
                   </Button>
-                  <Show when={isRemoval() && props.blockedReason}>{closeButton()}</Show>
                   <Button
                     href={`/runs/${encodeURIComponent(current().id)}`}
                     disabled={isRemoval() && Boolean(props.blockedReason)}
@@ -919,6 +918,7 @@ export default function InstallExecution(props: Props) {
                   >
                     {t("installStore.runDetails")}
                   </Button>
+                  <Show when={isRemoval() && props.blockedReason}>{closeButton()}</Show>
                 </div>
               </Show>
 
