@@ -84,6 +84,7 @@ import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
 import {
   releaseObservedRevisionPlanAttempt,
+  type RevisionPlanAttemptScope,
   type RevisionPlanAttemptStore,
 } from "../../lib/revision-plan-attempt.ts";
 import { appUninstallConnectionNotice, appUninstallRecoveryMode, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
@@ -797,7 +798,18 @@ export default function AppManagePage(props: {
 
   // --- version actions -----------------------------------------------------------
   // Use the same request/key handling as a retry from Run details.
-  const versionPlanApi = defaultRetryPlanApi(revisionAttempts, rollbackAttemptKeys);
+  const revisionAttemptScope = (id: string): RevisionPlanAttemptScope | undefined => {
+    const { principalId, accountId } = props;
+    const current = capsule();
+    if (principalId && accountId && current?.id === id &&
+      current.workspaceId && current.sourceId && current.currentStateVersionId) {
+      return [
+        principalId, accountId, current.workspaceId, current.sourceId,
+        current.currentStateVersionId, current.currentStateGeneration, current.installConfigId,
+      ];
+    }
+  };
+  const versionPlanApi = defaultRetryPlanApi(revisionAttempts, rollbackAttemptKeys, undefined, revisionAttemptScope);
   const planRollbackFromHistory = defaultRetryPlanApi(revisionAttempts, rollbackAttemptKeys, () => {
     const { principalId, accountId } = props;
     if (principalId && accountId) return [principalId, accountId, `app-history:${capsuleId()}`];
@@ -926,6 +938,7 @@ export default function AppManagePage(props: {
       "update",
       async (isCurrent) => {
         const forCapsule = capsuleId();
+        const scope = revisionAttemptScope(forCapsule);
         const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent, expectedCapsuleId: forCapsule });
         if (!isCurrent()) return;
         const plan = response.revisionPlan;
@@ -934,7 +947,7 @@ export default function AppManagePage(props: {
           ((response.nextAction === "review_run" && plan.planRunId) ||
             (response.nextAction === "none" && plan.phase === "failed"))) {
           releaseObservedRevisionPlanAttempt(
-            revisionAttempts, forCapsule, JSON.stringify({ ref: plan.revision.targetRef }), plan.id,
+            revisionAttempts, forCapsule, JSON.stringify({ ref: plan.revision.targetRef }), plan.id, scope,
           );
         }
         return requireReviewableRevisionPlan(response).revisionPlan.planRunId;
