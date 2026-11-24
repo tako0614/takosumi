@@ -10,6 +10,7 @@
 //   bun run deploy -- takosumi-platform-staging plan ...
 //   bun run deploy -- takosumi-platform-staging-code apply --config <absolute>
 //   bun run deploy -- takosumi-platform-staging-code resume --config <absolute> --version <uuid> --tag <tag> --predecessor <uuid>
+//   bun run deploy -- takosumi-platform-staging-code confirm --config <absolute> --version <uuid> --tag <tag> --entry-digest <sha256:hex>
 //   bun run deploy -- takosumi-platform plan ...
 //   bun run deploy -- takosumi-platform-staging restore ...
 //   bun run deploy -- takosumi-platform restore ...
@@ -177,7 +178,7 @@ const CONTRACT = {
         reversal:
           "prints the predecessor Version and names takosumi-platform-staging as the historical rollback owner; this routine lane does not invent a second restore mechanism",
         "failure-handling":
-          "refuses any pre-upload authority drift; an incomplete result includes the recovery tag, predecessor, sealed artifact digests, acknowledged or verified candidate Version when known, and observed serving Version when read; explicitly resuming a verified Version rechecks the exact healthy predecessor and skips the upload",
+          "refuses any pre-upload authority drift; an incomplete result includes the recovery tag, predecessor, sealed artifact digests, acknowledged or verified candidate Version when known, and observed serving Version when read; explicitly resuming a verified Version rechecks the exact healthy predecessor and skips the upload; confirm reads the exact already-serving tagged Version, its configured runtime and public endpoints without building or mutating",
       },
     },
     platformContract(PLATFORM_STAGING),

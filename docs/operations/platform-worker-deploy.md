@@ -325,6 +325,24 @@ the candidate. Historical rollback remains owned by
 `takosumi-platform-staging`; this lane creates no plan, journal, archive, or
 parallel restore mechanism.
 
+For an acknowledged candidate that is already serving, use the values from
+the original upload and the same realized config.
+
+```sh
+bun run deploy -- takosumi-platform-staging-code confirm \
+  --config /absolute/operator-private/wrangler.staging.toml \
+  --version <candidateVersionId> --tag <releaseTag> --entry-digest <entryDigest>
+```
+
+This verifies that the expected Version is the sole serving Version, matches
+the tag and entry digest in immutable Version metadata and the execution pins,
+and has the configured bindings, topology, and healthy Runner. It checks the
+public endpoints and then reads the serving Version again. The result is a
+`takosumi.platform-worker-staging-code-confirmation@v1` observation of current
+serving state. Keep it beside the original release receipt to preserve the
+source and mutation history. The Runner verifier still requires its own ready
+release evidence.
+
 ### Add the missing shared-login admission bindings in staging
 
 Shared-account login requires both `HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER`

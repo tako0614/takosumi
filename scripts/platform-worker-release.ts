@@ -2107,6 +2107,10 @@ export async function runPlatformWorkerCodeRelease(
   environment: PlatformEnvironment = "staging",
   runtime: PlatformWorkerCodeRuntime = {},
 ): Promise<void> {
+  if (argv[0] === "confirm") {
+    if (environment !== "staging") throw new Error("platform_worker_code_action_invalid");
+    return confirmPlatformWorkerCode(argv.slice(1), runtime);
+  }
   return runPlatformWorkerCodePublication(argv, environment, runtime, false);
 }
 
@@ -2119,35 +2123,97 @@ export async function runPlatformWorkerLoginAdmissionRelease(
   return runPlatformWorkerCodePublication(argv, environment, runtime, true);
 }
 
-type StagingCodeResume = Readonly<{
-  config: string;
-  version: string;
-  tag: string;
-  predecessor: string;
-}>;
-
-function parseStagingCodeResume(args: readonly string[]): StagingCodeResume {
-  const keys = new Set(["--config", "--version", "--tag", "--predecessor"]);
+function parseStagingCodeVersionArgs(args: readonly string[], action: "resume" | "confirm") {
+  const extraFlag = action === "resume" ? "--predecessor" : "--entry-digest";
+  const keys = new Set(["--config", "--version", "--tag", extraFlag]);
+  const invalid = () => new Error(`platform_worker_code_${action}_arguments_invalid`);
   const values = new Map<string, string>();
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index];
     const value = args[index + 1];
-    if (!key || !keys.has(key) || values.has(key) || !value || value.startsWith("--")) {
-      throw new Error("platform_worker_code_resume_arguments_invalid");
-    }
+    if (!key || !keys.has(key) || values.has(key) || !value || value.startsWith("--")) throw invalid();
     values.set(key, value);
   }
   const config = values.get("--config");
   const version = values.get("--version");
   const tag = values.get("--tag");
-  const predecessor = values.get("--predecessor");
+  const expected = values.get(extraFlag);
   const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u;
-  if (!config || !version || !uuid.test(version) ||
-    !predecessor || !uuid.test(predecessor) || version === predecessor ||
-    !tag || !/^tks-stg-code-[0-9a-f]{32}$/u.test(tag)) {
-    throw new Error("platform_worker_code_resume_arguments_invalid");
+  if (!config || !version || !uuid.test(version) || !expected ||
+    (action === "resume" ? !uuid.test(expected) || expected === version : !SHA256.test(expected)) ||
+    !tag || !/^tks-stg-code-[0-9a-f]{32}$/u.test(tag)) throw invalid();
+  return { config: absolute(config), version, tag, expected };
+}
+
+async function confirmPlatformWorkerCode(args: readonly string[], runtime: PlatformWorkerCodeRuntime): Promise<void> {
+  const { config, version, tag, expected } = parseStagingCodeVersionArgs(args, "confirm");
+  const entryDigest = expected as `sha256:${string}`;
+  const environment = "staging";
+  const target = platformTargetForEnvironment(environment);
+  const command = runtime.command ?? requiredCommand;
+  const configBytes = readStablePhysicalBytes(config, "platform_worker_code_config_invalid");
+  const source = new TextDecoder("utf-8", { fatal: true }).decode(configBytes);
+  assertConfigTargetsSource(source, environment);
+  const requiresLoginAdmission = assertPlatformLoginAdmission(source);
+  const projection = createPlatformDryRunConfig(
+    platformWorkerCodeWithoutMigrations(source),
+    config,
+    runtime.repositoryRoot ?? ROOT,
+  );
+  try {
+    const assertServing = async () => {
+      if (await readServingVersion(projection.path, command) !== version) {
+        throw new Error("platform_worker_code_confirm_version_mismatch");
+      }
+    };
+    await assertServing();
+    const versionSource = await readPlatformWorkerCodeVersion(projection.path, version, command);
+    assertPublishedVersion(versionSource, target.hostedService, version, tag, `takosumi-platform-staging-code ${entryDigest}`);
+    const runnerImage = configuredRunnerImage(projection.path);
+    const expectedSource = injectPlatformExecutionEvidencePins(source, {
+      controllerArtifactDigest: entryDigest,
+      runnerArtifactDigest: entryDigest,
+      executorArtifactDigest: runnerImage.slice(runnerImage.lastIndexOf("@") + 1) as `sha256:${string}`,
+    });
+    const nativeRead = runtime.nativeRead ?? await platformWorkerCodeNativeReader(
+      projection.path, platformContainerAccountIdFromConfig(projection.path), target.workerName, command,
+    );
+    const authority = await readPlatformWorkerCodeAuthority(
+      projection.path, expectedSource, environment, false, command, nativeRead, { id: version, source: versionSource },
+    );
+    assertPlatformContainerComplete(authority.container, runnerImage);
+    await readPlatformWorkerCodePublicEndpoints(environment, version, requiresLoginAdmission, runtime);
+    await assertServing();
+    assertPlatformWorkerCodeInputUnchanged(config, configBytes);
+    projection.assertUnchanged();
+    process.stdout.write(`${JSON.stringify({
+      kind: "takosumi.platform-worker-staging-code-confirmation@v1",
+      status: "verified",
+      versionId: version,
+      releaseTag: tag,
+      entryDigest,
+      configSha256: digest(configBytes),
+      loginStartVerified: requiresLoginAdmission,
+    })}\n`);
+  } finally {
+    projection.dispose();
   }
-  return { config: absolute(config), version, tag, predecessor };
+}
+
+async function readPlatformWorkerCodePublicEndpoints(
+  environment: "staging",
+  version: string,
+  requiresLoginAdmission: boolean,
+  runtime: PlatformWorkerCodeRuntime,
+): Promise<void> {
+  await (runtime.publicReadback ?? verifyPublicReadback)(environment, version);
+  if (requiresLoginAdmission) {
+    await (runtime.loginStartReadback ?? ((versionId) => verifyPlatformLoginStart({
+      origin: platformTargetForEnvironment(environment).origin,
+      issuer: AUTH_STAGING_ISSUER,
+      versionId,
+    })))(version);
+  }
 }
 
 /**
@@ -2228,7 +2294,7 @@ async function runPlatformWorkerCodePublication(
     (argv[0] !== "apply" && (argv[0] !== "resume" || addLoginAdmission))) {
     throw new Error("platform_worker_code_action_invalid");
   }
-  const resume = argv[0] === "resume" ? parseStagingCodeResume(argv.slice(1)) : undefined;
+  const resume = argv[0] === "resume" ? parseStagingCodeVersionArgs(argv.slice(1), "resume") : undefined;
   const parsed = resume ?? parsePlatformWorkerReleaseArgs(["status", ...argv.slice(1)]);
   if ("action" in parsed && parsed.action !== "status") {
     throw new Error("platform_worker_code_arguments_invalid");
@@ -2306,7 +2372,7 @@ async function runPlatformWorkerCodePublication(
       );
     const baseline = await readAuthority(initialConfig.path, predecessorSource, true);
     predecessorVersionId = baseline.versionId;
-    if (resume && predecessorVersionId !== resume.predecessor) {
+    if (resume && predecessorVersionId !== resume.expected) {
       throw new Error("platform_worker_code_resume_predecessor_changed");
     }
     assertPlatformContainerComplete(baseline.container, runnerImage);
@@ -2484,17 +2550,7 @@ async function runPlatformWorkerCodePublication(
     }
     assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
     activationConfig.assertUnchanged();
-    await (runtime.publicReadback ?? verifyPublicReadback)(
-      environment,
-      deployedVersionId,
-    );
-    if (requiresLoginAdmission) {
-      await (runtime.loginStartReadback ?? ((versionId) => verifyPlatformLoginStart({
-        origin: platformTargetForEnvironment(environment).origin,
-        issuer: AUTH_STAGING_ISSUER,
-        versionId,
-      })))(deployedVersionId);
-    }
+    await readPlatformWorkerCodePublicEndpoints(environment, deployedVersionId, requiresLoginAdmission, runtime);
     retainSourceProvenance();
     process.stdout.write(
       `${JSON.stringify({

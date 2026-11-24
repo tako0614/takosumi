@@ -500,6 +500,7 @@ async function exerciseCodeLane(options: {
   readonly postActivationVersions?: readonly string[];
   readonly postActivationCandidateReadFailures?: number;
   readonly resume?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-version" | "wrong-predecessor" | "already-serving" | "unhealthy" | "source-drift";
+  readonly confirm?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-pins" | "not-serving" | "serving-drift";
   readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
   readonly loginSmokeFails?: boolean;
   readonly unrelatedBindingDrift?: boolean;
@@ -579,6 +580,13 @@ async function exerciseCodeLane(options: {
     { name: "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER", type: "ratelimit", namespace_id: "2026111401", simple: { limit: 60, period: 60 } },
     { name: "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER", type: "ratelimit", namespace_id: "2026111402", simple: { limit: 10, period: 60 } },
   ];
+  if (options.confirm === "wrong-pins") {
+    const pin = deployed.resources.bindings.find((binding: { name: string }) =>
+      binding.name === "TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST"
+    );
+    if (!pin) throw new Error("test execution pin missing");
+    pin.text = `sha256:${"0".repeat(64)}`;
+  }
   if (options.loginAdmission && options.loginAdmission !== "missing") deployed.resources.bindings.push(...rateBindings);
   if (options.loginAdmission === "normal" || options.loginAdmission === "already-present") predecessor.resources.bindings.push(...rateBindings);
   if (options.loginAdmission === "partial") predecessor.resources.bindings.push(rateBindings[0]);
@@ -596,7 +604,8 @@ async function exerciseCodeLane(options: {
     listedSecrets.push(name);
   }
   const container = statusContainerSource({ failed: options.resume === "unhealthy" ? 1 : 0 });
-  let activated = options.resume === "already-serving";
+  let activated = options.resume === "already-serving" || Boolean(options.confirm && options.confirm !== "not-serving");
+  let confirmationReads = 0;
   let uploadCount = 0;
   let activationCount = 0;
   let buildCount = 0;
@@ -647,6 +656,7 @@ async function exerciseCodeLane(options: {
     if (argv[1] === "deployments" && argv[2] === "status") {
       operationOrder.push("serving");
       let versionId = activated ? CODE_DEPLOYED_ID : CODE_PREDECESSOR_ID;
+      if (options.confirm === "serving-drift" && ++confirmationReads > 1) versionId = CODE_PREDECESSOR_ID;
       if (activationCount > 0) {
         versionId = options.postActivationVersions?.[postActivationReadCount] ?? versionId;
         postActivationReadCount++;
@@ -721,7 +731,13 @@ async function exerciseCodeLane(options: {
   const runnerReads: string[] = [];
   try {
     await (options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
-      options.resume
+      options.confirm
+        ? [
+          "confirm", "--config", configPath, "--version", CODE_DEPLOYED_ID,
+          "--tag", options.confirm === "wrong-tag" ? `tks-stg-code-${"2".repeat(32)}` : tag,
+          "--entry-digest", options.confirm === "wrong-digest" ? `sha256:${"0".repeat(64)}` : pins.controllerArtifactDigest,
+        ]
+        : options.resume
         ? [
           "resume", "--config", configPath,
           "--version", options.resume === "wrong-version" ? STATUS_VERSION_ID : CODE_DEPLOYED_ID,
@@ -1371,6 +1387,54 @@ test("routine code skips candidate waits on other errors and explicit resume, an
     mutation: "upload",
     candidateVersionId: CODE_DEPLOYED_ID,
   });
+});
+
+test("routine code confirms the already serving Version without building or mutating", async () => {
+  const result = await exerciseCodeLane({ confirm: "valid", loginAdmission: "normal" });
+  expect(result.error).toBeUndefined();
+  expect(result).toMatchObject({
+    uploadCount: 0, activationCount: 0, buildCount: 0, gateCount: 0,
+    publicReadbackCount: 1, loginSmokeCount: 1,
+  });
+  expect(result.operationOrder).toEqual(["serving", "candidate", "serving"]);
+  expect(result.results).toEqual([{
+    kind: "takosumi.platform-worker-staging-code-confirmation@v1",
+    status: "verified",
+    versionId: CODE_DEPLOYED_ID,
+    releaseTag: `tks-stg-code-${"1".repeat(32)}`,
+    entryDigest: platformExecutionEvidenceReleasePins(CODE_BUNDLE, STATUS_CONTAINER_IMAGE).controllerArtifactDigest,
+    configSha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+    loginStartVerified: true,
+  }]);
+});
+
+test("routine code confirmation fails closed on unmatched evidence or an unhealthy target", async () => {
+  for (const [options, error] of [
+    [{ confirm: "not-serving" }, "platform_worker_code_confirm_version_mismatch"],
+    [{ confirm: "wrong-tag" }, "platform_worker_release_version_identity_invalid"],
+    [{ confirm: "wrong-digest" }, "platform_worker_release_version_identity_invalid"],
+    [{ confirm: "wrong-pins" }, "platform_worker_code_binding_mismatch"],
+    [{ confirm: "serving-drift" }, "platform_worker_code_confirm_version_mismatch"],
+    [{ confirm: "valid", containerFailsAfterActivation: true }, "platform_worker_release_container_not_ready"],
+    [{ confirm: "valid", loginSmokeFails: true }, "platform_worker_login_start_readback_invalid"],
+  ] as const) {
+    const result = await exerciseCodeLane({ loginAdmission: "normal", ...options });
+    expect(result.error).toBeInstanceOf(Error);
+    expect((result.error as Error).message).toBe(error);
+    expect(result).toMatchObject({ uploadCount: 0, activationCount: 0, buildCount: 0, gateCount: 0, results: [] });
+  }
+});
+
+test("routine code confirmation is staging-only and requires its exact identity fields", async () => {
+  const args = [
+    "confirm", "--config", "/private/staging.toml", "--version", CODE_DEPLOYED_ID,
+    "--tag", `tks-stg-code-${"1".repeat(32)}`,
+    "--entry-digest", platformExecutionEvidenceReleasePins(CODE_BUNDLE, STATUS_CONTAINER_IMAGE).controllerArtifactDigest,
+  ];
+  await expect(runPlatformWorkerCodeRelease(args, "production")).rejects.toThrow("platform_worker_code_action_invalid");
+  await expect(runPlatformWorkerLoginAdmissionRelease(args, "staging")).rejects.toThrow("platform_worker_code_action_invalid");
+  await expect(runPlatformWorkerCodeRelease(args.slice(0, -2))).rejects.toThrow("platform_worker_code_confirm_arguments_invalid");
+  await expect(runPlatformWorkerCodeRelease([...args, "--version", STATUS_VERSION_ID])).rejects.toThrow("platform_worker_code_confirm_arguments_invalid");
 });
 
 test("routine code resumes an existing exact Version without uploading", async () => {
