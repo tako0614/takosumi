@@ -670,6 +670,66 @@ test("Destroy apply observe-only reads a linked failed Run and sends no mutation
   expect(r.calls.every(c => c.method === "GET")).toBe(true);
 });
 
+test("apps apply identifies a confirmed Destroy connection refusal without resubmitting", async () => {
+  for (const reason of ["provider_connection_setup_required", "provider_connection_not_ready"]) {
+    const applyPath = `/api/v1/runs/${destroyPlan.id}/apply`;
+    const result = await invoke(destroyApplyArgs, req => {
+      if (new URL(req.url).pathname === applyPath && req.method === "POST") {
+        return Response.json({ error: {
+          code: "failed_precondition", message: "private-connection-diagnostic", details: { reason },
+        } }, { status: 409 });
+      }
+      return normalDestroy(req, { plan: { ...destroyPlan, status: "succeeded" } });
+    });
+    expect(result.code).toBe(1);
+    expect(result.result).toMatchObject({ status: "refused", planRunId: destroyPlan.id,
+      lastObservedPlanStatus: "succeeded", code: "failed_precondition", reason });
+    expect(result.result.recovery).toContain("apps recover-uninstall");
+    expect(result.result.recovery).toContain("--connections");
+    expect(JSON.stringify(result.result)).not.toContain("private-connection-diagnostic");
+    expect(result.calls.map(req => `${req.method} ${new URL(req.url).pathname}`)).toEqual([
+      `GET /api/v1/runs/${destroyPlan.id}`, "GET /api/v1/capsules/cap_owned/runs",
+      "GET /api/v1/capsules/cap_owned", `POST ${applyPath}`,
+      `GET /api/v1/runs/${destroyPlan.id}`, "GET /api/v1/capsules/cap_owned/runs",
+    ]);
+  }
+});
+
+test("apps apply preserves unknown or observed Destroy outcomes after a connection refusal", async () => {
+  for (const mode of ["unrelated", "approval", "readback-denied", "changed-plan", "linked-apply"]) {
+    const receipt = Response.json({ error: {
+      code: "failed_precondition", details: {
+        reason: mode === "unrelated" ? "some_other_conflict" : "provider_connection_setup_required",
+      },
+    } }, { status: 409 });
+    let sent = false;
+    const result = await invoke(destroyApplyArgs, req => {
+      const path = new URL(req.url).pathname;
+      const receiptPath = `/api/v1/runs/${destroyPlan.id}/${mode === "approval" ? "approve" : "apply"}`;
+      if (path === receiptPath && req.method === "POST") {
+        sent = true;
+        return receipt;
+      }
+      if (sent && mode === "readback-denied") return Response.json({ error: "forbidden" }, { status: 403 });
+      return normalDestroy(req, {
+        plan: { ...destroyPlan, status: mode === "approval" ? "waiting_approval" : "succeeded",
+          planDigest: sent && mode === "changed-plan" ? `sha256:${"b".repeat(64)}` : destroyPlan.planDigest },
+        history: { runs: sent && mode === "linked-apply" ? [destroyApply] : [] },
+      });
+    });
+    expect(result.calls.filter(req => req.method === "POST")).toHaveLength(1);
+    expect(result.result.reason).toBeUndefined();
+    if (mode === "linked-apply") {
+      expect(result.code).toBe(0);
+      expect(result.result).toMatchObject({ status: "succeeded", runId: destroyApply.id });
+    } else {
+      expect(result.code).toBe(1);
+      expect(result.result).toMatchObject({ status: "indeterminate", planRunId: destroyPlan.id });
+      expect(result.result.recovery).toContain("--observe-only");
+    }
+  }
+});
+
 test("revision and Destroy Plan selectors are reciprocal and stale Destroy state cannot write", async () => {
   const wrongRevision = await invoke(
     destroyApplyArgs, req => normalDestroy(req, { plan: { ...plan, id: destroyPlan.id } }));

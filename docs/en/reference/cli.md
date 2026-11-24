@@ -173,7 +173,9 @@ takosumi apps apply cap_example --destroy-plan destroy_plan_example --yes \
   --url https://takosumi.example.com --json
 ```
 
-`--destroy-plan` selects a saved Destroy Plan. If the result is uncertain, replace `--yes` with `--observe-only` for the same Plan ID to read its linked Destroy Run.
+`--destroy-plan` selects a saved Destroy Plan. When Apply is rejected for connection readiness or credential policy and a fresh read of the same Plan finds no linked Destroy Run, the CLI returns `refused` with the reason.
+Select a verified connection for the same cloud account and use `apps recover-uninstall --connections` to prepare and review a new Destroy Plan.
+If the result is uncertain, replace `--yes` with `--observe-only` for the same Plan ID to read its linked Destroy Run.
 Use `apps uninstall <app-id> --yes` to schedule a normal uninstall.
 
 ## Setting up the CLI
