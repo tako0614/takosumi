@@ -375,6 +375,7 @@ export const APP_HISTORY_RUN_TYPES: readonly Run["type"][] = [
 export type AppHistoryKind =
   | "install"
   | "update"
+  | "rollback"
   | "version"
   | "settings"
   | "change"
@@ -468,9 +469,9 @@ export function stateVersionLabels(input: {
 /**
  * This app's history, newest first, told from its own Runs (read page by page
  * from the server, so nothing depends on a Workspace-wide window). Applied
- * changes say what they were — install, update, version change, settings —
- * using the StateVersion each one created and the snapshot it used; when that
- * evidence is not loaded the event only says a change was applied. Failed
+ * changes identify explicit rollbacks from their Plans. Other version and
+ * settings changes use the StateVersion each one created and the snapshot it
+ * used; when that evidence is not loaded the event only says a change was applied. Failed
  * and running attempts, plans a policy blocked and plans waiting for an
  * approval are listed too. A plan that was simply reviewed is not an event.
  */
@@ -510,6 +511,11 @@ export function appRunHistory(input: {
     const version = versionsByRun.get(run.id);
     const snapshotId = snapshotIdOf(run, runsById);
     const label = labelFor(version, snapshotId);
+    const plan = run.planRunId ? runsById.get(run.planRunId) : undefined;
+    if (plan?.type === "plan" && plan.capsuleId === run.capsuleId &&
+      plan.workspaceId === run.workspaceId && plan.origin?.kind === "rollback") {
+      return { kind: "rollback", ...(label ? { version: label } : {}) };
+    }
     if (version?.generation === 1) return { kind: "install", ...(label ? { version: label } : {}) };
     const previous = version
       ? [...versionsByGeneration].reverse().find((item) => item.generation < version.generation)
