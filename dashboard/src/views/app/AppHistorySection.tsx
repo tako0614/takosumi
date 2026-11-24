@@ -16,6 +16,7 @@ import { AppSection, RelativeTime } from "./app-ui.tsx";
 const KIND_LABEL: Readonly<Record<AppHistoryKind, MessageKey>> = {
   install: "app.history.install",
   update: "app.history.update",
+  rollback: "app.history.rollback",
   version: "app.history.version",
   settings: "app.history.settings",
   change: "app.history.change",

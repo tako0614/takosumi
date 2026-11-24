@@ -694,6 +694,7 @@ export const ja = {
   "app.history.empty": "まだ出来事はありません。",
   "app.history.install": "インストール",
   "app.history.update": "更新",
+  "app.history.rollback": "以前のバージョンに戻した",
   "app.history.version": "バージョンを変更",
   "app.history.settings": "設定を変更",
   "app.history.change": "変更を適用",
