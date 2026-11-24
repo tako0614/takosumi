@@ -774,6 +774,10 @@ export default function AppManagePage(props: {
   // --- version actions -----------------------------------------------------------
   // Use the same request/key handling as a retry from Run details.
   const versionPlanApi = defaultRetryPlanApi(revisionAttempts, rollbackAttemptKeys);
+  const planRollbackFromHistory = defaultRetryPlanApi(revisionAttempts, rollbackAttemptKeys, () => {
+    const { principalId, accountId } = props;
+    if (principalId && accountId) return [principalId, accountId, `app-history:${capsuleId()}`];
+  }).planRollback;
   // The installed ref, from the server's view or the Capsule's adopted
   // revision. An installed app never falls back to the Source's default ref:
   // without a known ref there is nothing to update.
@@ -797,7 +801,7 @@ export default function AppManagePage(props: {
     void startReview("version", "update", (isCurrent) => createRevisionRun(ref, isCurrent));
   const startRollback = (stateVersionId: string) =>
     void startReview("version", "apply", async (isCurrent) =>
-      extractRunId(await versionPlanApi.planRollback(stateVersionId, isCurrent)));
+      extractRunId(await planRollbackFromHistory(stateVersionId, isCurrent, capsule()?.currentStateVersionId)));
   const [autoUpdateBusy, setAutoUpdateBusy] = createSignal(false);
   const [autoUpdateError, setAutoUpdateError] = createSignal<string>();
   const toggleAutoUpdate = async (enabled: boolean) => {
