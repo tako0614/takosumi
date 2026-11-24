@@ -9,6 +9,7 @@ import {
   type InstallAttemptFixture,
   type InstallAttemptFixtureOptions,
 } from "./fixture-data.ts";
+import { observeInstallMutationDispatches } from "./traffic-monitor.ts";
 
 type BaseFixture = { readonly mutations: string[] };
 type CostFixture = "not_applicable" | "rated_zero" | "unrated" | "unavailable";
@@ -866,6 +867,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(errors).toEqual([]);
     });
     test("a change after the Plan marks it out of date and prepares the install again with the same answers", async ({ page }) => {
+      await page.clock.install();
+      const mutationDispatches = await observeInstallMutationDispatches(page);
       const f = await detailFixture(page, base, true, false, "not_applicable", {
         connections: () => [{ ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], id: "pc_only", displayName: "Only Cloudflare", status: "verified" }],
         planRunIdFor: (sequence) => (sequence === 1 ? planId : `run_retry_fixture_replan${sequence}`),
@@ -910,7 +913,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       ]);
       expect(JSON.stringify(f.attempts.log.creates)).not.toContain("edited.example.com");
       // Prepared once for one change; nothing applied without the click.
-      await page.waitForTimeout(1_500);
+      const before = await mutationDispatches();
+      await page.clock.runFor(1_500);
+      expect(await mutationDispatches()).toBe(before);
       expect(f.attempts.log.creates).toHaveLength(2);
       expect(f.mutations.some((m) => m.endsWith("/apply"))).toBe(false);
       await expectNothingStored(page, "edited.example.com");
@@ -1096,6 +1101,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       });
     });
     test("a reopened attempt is read only until the person continues", async ({ page }) => {
+      await page.clock.install();
+      const mutationDispatches = await observeInstallMutationDispatches(page);
       const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 3 });
       await page.goto(sourceUrl);
       await page.getByRole("button", { name: "Install", exact: true }).click();
@@ -1107,7 +1114,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(progress).toHaveAttribute("data-progress", "paused");
       await expect(progress).toContainText("Reading stopped partway.");
       const reconciles = f.attempts.log.reconciles;
-      await page.waitForTimeout(1_000);
+      await page.clock.runFor(1_000);
+      expect(await mutationDispatches()).toBe(0);
       expect(f.attempts.log.reconciles).toBe(reconciles);
       await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
       await progress.getByRole("button", { name: "Continue", exact: true }).click();
