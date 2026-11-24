@@ -2096,7 +2096,10 @@ type PlatformWorkerCodeAuthority = Readonly<{
 type PlatformWorkerCodeAuthoritySection = keyof PlatformWorkerCodeAuthority;
 
 class PlatformWorkerCodeAuthorityDriftError extends Error {
-  constructor(readonly sections: readonly PlatformWorkerCodeAuthoritySection[]) {
+  constructor(
+    readonly sections: readonly PlatformWorkerCodeAuthoritySection[],
+    readonly containerFields?: readonly string[],
+  ) {
     super("platform_worker_code_authority_drift");
   }
 }
@@ -2581,6 +2584,9 @@ async function runPlatformWorkerCodePublication(
         authorityDrift: error instanceof PlatformWorkerCodeAuthorityDriftError
           ? error.sections
           : undefined,
+        containerDriftFields: error instanceof PlatformWorkerCodeAuthorityDriftError
+          ? error.containerFields
+          : undefined,
         loginStartFailure: error instanceof PlatformLoginStartReadbackError
           ? error.diagnostic
           : undefined,
@@ -2705,8 +2711,24 @@ function assertPlatformWorkerCodeAuthorityUnchanged(
     }
   }
   if (sections.length > 0) {
-    throw new PlatformWorkerCodeAuthorityDriftError(sections);
+    const containerFields = sections.includes("container")
+      ? platformContainerDriftFields(baseline.container, current.container)
+      : undefined;
+    throw new PlatformWorkerCodeAuthorityDriftError(sections, containerFields);
   }
+}
+
+function platformContainerDriftFields(
+  baseline: PlatformContainerState,
+  current: PlatformContainerState,
+): string[] {
+  const details = ["id", "name", "state", "image", "version", "hasActiveRollout"] as const;
+  const health = ["failed", "starting", "scheduling", "errorCount"] as const;
+  return [
+    ...details.filter((field) => !Object.is(baseline[field], current[field])),
+    ...health.filter((field) => !Object.is(baseline.health[field], current.health[field]))
+      .map((field) => `health.${field}`),
+  ];
 }
 
 function assertPlatformWorkerCodeInputUnchanged(
