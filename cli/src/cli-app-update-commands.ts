@@ -21,7 +21,7 @@ const ARGUMENT_REFUSALS = new Set([
   "unexpected_argument", "duplicate_option", "invalid_timeout", "invalid_origin", "conflicting_modes",
   "exact_ref_and_idempotency_key_required", "saved_plan_and_explicit_confirmation_required",
   "invalid_connection_replacements", "destroy_plan_id_required", "revision_plan_id_required", "exact_ref_required",
-  "state_version_and_idempotency_key_required",
+  "state_version_and_idempotency_key_required", "state_version_required", "rollback_plan_id_required",
   "invalid_history_limit", "invalid_history_cursor",
 ]);
 
@@ -30,7 +30,7 @@ function argumentsFor(args: readonly string[], kind: "update" | "rollback" | "hi
   const [appId, ...rest] = args;
   if (appId === "--help" || appId === "-h" || rest.includes("--help") || rest.includes("-h")) return { help: true } as const;
   if (!bounded(appId, 256) || appId.startsWith("--")) throw new Refusal("app_id_required");
-  const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], rollback: ["stateVersion", "idempotencyKey"], history: ["limit", "cursor"], apply: ["plan", "destroyPlan"],
+  const operationOptions = { update: ["ref", "idempotencyKey", "revisionPlan"], rollback: ["stateVersion", "idempotencyKey", "rollbackPlan"], history: ["limit", "cursor"], apply: ["plan", "destroyPlan"],
     "recover-uninstall": ["connections", "destroyPlan"] }[kind];
   const strings = new Set(["url", "deployControlUrl", "token", "timeoutMs", ...operationOptions]);
   const booleans = new Set([
@@ -360,8 +360,15 @@ export async function runAppRollback(args: string[], io: CliIo): Promise<number>
     if (parsed.help) { io.stdout(rollbackHelp()); return 0; }
     ({ appId, options } = parsed);
     const target = options.stateVersion;
-    const key = options.idempotencyKey;
-    if (!bounded(target, 256) || !bounded(key, 256)) throw new Refusal("state_version_and_idempotency_key_required");
+    const key = typeof options.idempotencyKey === "string" ? options.idempotencyKey : undefined;
+    const savedPlanId = typeof options.rollbackPlan === "string" ? options.rollbackPlan : undefined;
+    if (savedPlanId !== undefined) {
+      if (key !== undefined) throw new Refusal("conflicting_modes");
+      if (!TOKEN.test(savedPlanId)) throw new Refusal("rollback_plan_id_required");
+      if (!bounded(target, 256)) throw new Refusal("state_version_required");
+    } else if (!bounded(target, 256) || !bounded(key, 256)) {
+      throw new Refusal("state_version_and_idempotency_key_required");
+    }
     stateVersionId = target;
     options = selectTarget(options);
     const selectedApp = appId;
@@ -378,12 +385,17 @@ export async function runAppRollback(args: string[], io: CliIo): Promise<number>
         if (run.workspaceId !== version.workspaceId) throw new Refusal("rollback_plan_mismatch");
         return run;
       };
-      signal.throwIfAborted();
-      submitted = true;
-      const accepted = scopedRun(await request(`${path}/rollback-plan`, "POST", {}, key));
-      planRunId = accepted.id;
+      let selectedPlanId = savedPlanId;
+      if (selectedPlanId === undefined) {
+        signal.throwIfAborted();
+        submitted = true;
+        const accepted = scopedRun(await request(`${path}/rollback-plan`, "POST", {}, key));
+        selectedPlanId = accepted.id;
+        planRunId = selectedPlanId;
+      }
       for (;;) {
-        const run = scopedRun(await request(`/api/v1/runs/${encodeURIComponent(accepted.id)}`), accepted.id);
+        const run = scopedRun(await request(`/api/v1/runs/${encodeURIComponent(selectedPlanId)}`), selectedPlanId);
+        planRunId = run.id;
         if (run.status !== "queued" && run.status !== "running") return run;
         await pause(1_000, signal);
       }
@@ -399,10 +411,18 @@ export async function runAppRollback(args: string[], io: CliIo): Promise<number>
     return 0;
   } catch (error) {
     const refused = !submitted || (!planRunId && error instanceof DeployControlApiError && error.status >= 400 && error.status < 500);
+    let recovery: string | undefined;
+    if (submitted && !refused) {
+      if (planRunId) {
+        recovery = isJapaneseCli()
+          ? "同じ接続先・本人・アプリ・状態バージョンで、返された planRunId を --rollback-plan に渡して読み直してください。"
+          : "Use --rollback-plan with the returned planRunId and the same URL, Accounts identity, app, and StateVersion.";
+      } else {
+        recovery = "Retry only the same app, StateVersion, idempotency key, target URL, and Accounts identity.";
+      }
+    }
     write(io, options, { status: refused ? "refused" : "unconfirmed", appId, stateVersionId, planRunId, code: errorCode(error),
-      recovery: submitted && !refused
-        ? "Retry only the same app, StateVersion, idempotency key, target URL, and Accounts identity."
-        : undefined });
+      recovery });
     return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
 }
@@ -752,8 +772,10 @@ export function updateHelp(): string {
 }
 export function rollbackHelp(): string {
   return ["takosumi apps rollback <app-id> --state-version <state-version-id> --idempotency-key <retained-key>",
+    "takosumi apps rollback <app-id> --state-version <state-version-id> --rollback-plan <plan-run-id>",
     isJapaneseCli() ? "指定した状態バージョンへの復旧Planを準備します。承認とApplyは別操作です。" : "Prepare a rollback Plan for the specified StateVersion. Approval and Apply are separate.",
-    "--url <origin> --token <Accounts PAT with read,write> --json --timeout-ms <1..120000>", "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
+    isJapaneseCli() ? "--rollback-plan は保存済みPlanを読み取ります。PATには read scope が必要で、作成には write scope も必要です。" : "Read a saved Plan with --rollback-plan and an Accounts PAT with read scope. Preparation also requires write scope.",
+    "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>", "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
 }
 function historyHelp(): string {
   return ["takosumi apps history <app-id> [--limit <count>] [--cursor <nextCursor>]",

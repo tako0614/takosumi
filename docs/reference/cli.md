@@ -92,7 +92,14 @@ takosumi apps rollback cap_example --state-version state_example --idempotency-k
   --url https://takosumi.example.com --json
 ```
 
-受付結果が不明なら、同じ接続先・本人・アプリ・状態バージョン・キーで再実行します。CLI内の待機は同じRunの読取りです。
+`planRunId` を受け取った後に読取りが途切れた場合は、同じ接続先・本人・アプリ・状態バージョンで、保存済みの復旧Planを `--rollback-plan` から読み直せます。Accounts PATの `read` scopeで実行し、状態バージョンとPlanの一致を照合します。
+
+```bash
+takosumi apps rollback cap_example --state-version state_example --rollback-plan plan_example \
+  --url https://takosumi.example.com --json
+```
+
+この操作は読取りのみです。作成の受付が不明で `planRunId` がまだ分からない場合は、同じ接続先・本人・アプリ・状態バージョン・キーで作成コマンドを再実行します。
 
 ## 保存Planを実行する
 

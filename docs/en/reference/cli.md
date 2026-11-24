@@ -97,7 +97,14 @@ takosumi apps rollback cap_example --state-version state_example --idempotency-k
   --url https://takosumi.example.com --json
 ```
 
-If the response is lost, use the same URL, account, app, StateVersion, and idempotency key. While waiting, the CLI reads the same Run.
+If reading is interrupted after you receive a `planRunId`, use `--rollback-plan` to read the saved Plan with the same URL, account, app, and StateVersion. The CLI verifies that the Plan belongs to the selected StateVersion. This command only needs an Accounts PAT with `read` scope.
+
+```bash
+takosumi apps rollback cap_example --state-version state_example --rollback-plan plan_example \
+  --url https://takosumi.example.com --json
+```
+
+If the creation response was lost before you received a `planRunId`, retry the creation command with the same URL, account, app, StateVersion, and idempotency key.
 
 ## Execute a saved Plan
 
