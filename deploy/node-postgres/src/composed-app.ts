@@ -644,6 +644,20 @@ export async function buildComposedApp(
       ),
     ),
   );
+  // This composition uses the local Accounts session. Tell the dashboard the
+  // Hosted probe is unmounted before the SPA fallback can return index.html.
+  const sessionProbePath = "/auth/oidc/session";
+  app.get(sessionProbePath, (c, next) => {
+    const request = c.req.raw;
+    const url = new URL(request.url);
+    if (request.method !== "GET" || url.pathname !== sessionProbePath || url.search !== "") {
+      return next();
+    }
+    return c.json({ error: "not_found" }, 404, {
+      "cache-control": "no-store",
+      "x-takosumi-shared-auth-absent": "1",
+    });
+  });
   // Serve the dashboard SPA for non-API navigations (after preHandle's
   // /healthz, before the API routes). API namespaces are
   // skipped inside the responder so the service / accounts handlers keep

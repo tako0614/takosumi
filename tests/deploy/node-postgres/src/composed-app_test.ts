@@ -1,6 +1,9 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createAccountsHandler,
   InMemoryAccountsStore,
@@ -151,6 +154,38 @@ test("composed app builds Accounts with the canonical control operations facade"
     new Request("http://localhost/dashboard"),
   );
   assert.equal(res.headers.get("x-handled-by"), "accounts");
+});
+
+test("Node composition reports the absent Hosted session route before SPA fallback", async () => {
+  const staticAssets = await mkdtemp(join(tmpdir(), "takosumi-session-spa-"));
+  try {
+    await writeFile(join(staticAssets, "index.html"), "<!doctype html><title>Dashboard</title>");
+    const { app } = await buildTestApp({ staticAssets });
+    const get = (path: string) => app.fetch(new Request(`https://app.takosumi.test${path}`));
+
+    const session = await get("/auth/oidc/session");
+    assert.equal(session.status, 404);
+    assert.equal(session.headers.get("x-takosumi-shared-auth-absent"), "1");
+    assert.equal(session.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await session.json(), { error: "not_found" });
+
+    const navigation = await get("/runs/plan_example");
+    assert.equal(navigation.status, 200);
+    assert.match(await navigation.text(), /<title>Dashboard<\/title>/);
+    const account = await get("/api/v1/account/session/me");
+    assert.equal(account.headers.get("x-handled-by"), "accounts");
+
+    for (const request of [
+      new Request("https://app.takosumi.test/auth/oidc/session?other=1"),
+      new Request("https://app.takosumi.test/auth/oidc/%73ession"),
+      new Request("https://app.takosumi.test/auth/oidc/session", { method: "HEAD" }),
+      new Request("https://app.takosumi.test/auth/oidc/session", { method: "POST" }),
+    ]) {
+      assert.equal((await app.fetch(request)).headers.get("x-takosumi-shared-auth-absent"), null);
+    }
+  } finally {
+    await rm(staticAssets, { recursive: true, force: true });
+  }
 });
 
 test("default-frozen Node composition bootstraps a fresh account and accepts its install plan", async () => {
