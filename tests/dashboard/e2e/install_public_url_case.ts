@@ -4,7 +4,7 @@ import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_SOURCE_COMMIT,
 } from "./fixture-data.ts";
-import { monitorDashboardTraffic } from "./traffic-monitor.ts";
+import { monitorDashboardTraffic, observeInstallMutationDispatches } from "./traffic-monitor.ts";
 import type { DashboardE2EMode } from "./traffic-policy.ts";
 
 const provider = "registry.opentofu.org/cloudflare/cloudflare";
@@ -200,6 +200,8 @@ export function registerInstallPublicUrlCases(mode: DashboardE2EMode): void {
     });
 
     test("cannot continue with an old suggestion after switching to a connection without metadata", async ({ page }, info) => {
+      await page.clock.install();
+      const mutationDispatches = await observeInstallMutationDispatches(page);
       const fixture = await publicUrlFixture(page, { alsoOfferConnectionB: true });
       const traffic = monitorDashboardTraffic(page, mode);
       try {
@@ -218,7 +220,9 @@ export function registerInstallPublicUrlCases(mode: DashboardE2EMode): void {
         await expect(output).toHaveCount(0);
         await expect(page.getByTestId("install-plan-preview").getByRole("button", { name: "Install", exact: true })).toBeDisabled();
         // Hold the read across the 900 ms automatic preparation debounce.
-        await page.waitForTimeout(1_100);
+        const before = await mutationDispatches();
+        await page.clock.runFor(1_100);
+        expect(await mutationDispatches()).toBe(before);
         expect(fixture.continues()).toEqual([]);
 
         fixture.finishConnectionReadB();

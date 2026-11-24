@@ -36,6 +36,28 @@ export interface DashboardTrafficMonitor {
   assertNoFailures(): void;
 }
 
+/** Count install mutations at dispatch, before asynchronous route handlers can observe them. */
+export async function observeInstallMutationDispatches(page: Page): Promise<() => Promise<number>> {
+  type ObservedWindow = Window & { installMutationDispatches: number };
+  await page.addInitScript(() => {
+    const observed = window as ObservedWindow;
+    const fetch = window.fetch.bind(window);
+    observed.installMutationDispatches = 0;
+    window.fetch = (input, init) => {
+      const request = input instanceof Request ? input : undefined;
+      const url = new URL(request ? request.url : String(input), location.href);
+      const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+      if (url.origin === location.origin && method !== "GET" &&
+        (/^\/api\/v1\/(?:workspaces\/[^/]+\/)?install-plans(?:\/|$)/u.test(url.pathname) ||
+          /^\/api\/v1\/runs\/[^/]+\/apply$/u.test(url.pathname))) {
+        observed.installMutationDispatches += 1;
+      }
+      return fetch(input, init);
+    };
+  });
+  return () => page.evaluate(() => (window as ObservedWindow).installMutationDispatches);
+}
+
 function expectedOrigin(mode: DashboardE2EMode): string {
   return mode === "portable"
     ? resolvePortableOrigin()
