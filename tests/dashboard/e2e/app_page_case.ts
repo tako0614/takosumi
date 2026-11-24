@@ -1649,12 +1649,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionRejected", "staleReview", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionLostResponse: "a missing uninstall Plan response keeps the previous approval held during readback",
       reviewDifferentConnectionSavedLate: "an uninstall connection change keeps the old approval held when its Plan is saved late",
       reviewDifferentConnectionTimedOut: "an uninstall Plan save timeout keeps old approval held and permits an explicit new review",
+      reviewDifferentConnectionReloaded: "reloading during an uninstall connection change keeps the old approval held",
+      reviewDifferentConnectionRejected: "a definite uninstall connection mismatch releases only its provisional hold",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
       lostReplacementResponse: "a lost replacement Plan response leaves its saved uninstall review reachable",
       lostReplacementOnInstalledApp: "a lost replacement Plan response leaves its saved uninstall review reachable on an installed app",
@@ -1675,8 +1677,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const lostReplacementOnInstalledApp = scenario === "lostReplacementOnInstalledApp";
       const savesReplacementLate = scenario === "reviewDifferentConnectionSavedLate";
       const replacementSaveTimesOut = scenario === "reviewDifferentConnectionTimedOut";
+      const reloadsBeforeReplacementResponse = scenario === "reviewDifferentConnectionReloaded";
+      const replacementIsRejected = scenario === "reviewDifferentConnectionRejected";
       const lostResponseBeforeApproval = scenario === "reviewDifferentConnectionLostResponse" || savesReplacementLate;
-      const reviewDifferentConnection = scenario === "reviewDifferentConnection" || lostResponseBeforeApproval || replacementSaveTimesOut;
+      const reviewDifferentConnection = scenario === "reviewDifferentConnection" || lostResponseBeforeApproval ||
+        replacementSaveTimesOut || reloadsBeforeReplacementResponse || replacementIsRejected;
       const startsAwaitingApproval = reviewDifferentConnection || scenario === "staleReview";
       const installedUninstallReview = startsAwaitingApproval || lostReplacementOnInstalledApp;
       const lostReplacementResponse = scenario === "lostReplacementResponse" || lostReplacementOnInstalledApp;
@@ -1871,7 +1876,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           case "uninstall_stale_review":
             return appView(ID, NAME, {
               ...(installedUninstallReview
-                ? { status: "active", state: savesReplacementLate && currentUninstallReview.id === recoveryPlan.id ? "needs_attention" : "installed", primaryAction: "open", screens: [screen] }
+                ? { status: "active", state: (savesReplacementLate || reloadsBeforeReplacementResponse) &&
+                    currentUninstallReview.id === recoveryPlan.id ? "needs_attention" : "installed", primaryAction: "open", screens: [screen] }
                 : { status: "uninstalled", state: "uninstalling", primaryAction: "review" }),
               latestRun: { ...recoveryPlan, ...currentUninstallReview },
               progress: { revisionPreparing: false, review: { runId: currentUninstallReview.id, runType: "destroy_plan" } },
@@ -2030,6 +2036,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return route.fulfill({ status: 201, json: { run: sharedKeyPlanPhase === "failed" ? sharedKeyFailedPlan : recoveryPlan } });
           }
           await replacementPlanPending;
+          if (replacementIsRejected) {
+            return route.fulfill({ status: 409, json: { error: {
+              code: "failed_precondition",
+              message: "The selected connection could not be verified for removal.",
+              details: { reason: "destroy_connection_recovery_unproven" },
+            } } });
+          }
           if (replacementSaveTimesOut && replacementPlanBodies.length === 1) {
             return route.fulfill({ status: 409, json: { error: {
               code: "failed_precondition",
@@ -2552,7 +2565,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await problems.getByRole("button", { name: "Review", exact: true }).click();
         const review = page.getByTestId("app-review");
         await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toBeEnabled();
-        await review.getByRole("button", { name: "Choose connection for uninstall" }).click();
+        const choose = review.getByRole("button", { name: "Choose connection for uninstall" });
+        if (reloadsBeforeReplacementResponse || replacementIsRejected) await choose.press("Enter");
+        else await choose.click();
         await review.getByRole("combobox", { name: /Cloudflare/ }).selectOption("conn_saved");
         await review.getByRole("button", { name: "Review removal" }).click();
         try {
@@ -2560,8 +2575,34 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toHaveAttribute("aria-disabled", "true");
           await expect(review.getByText("Technical details", { exact: true })).toHaveAttribute("aria-disabled", "true");
           await expect(review.getByRole("link", { name: "Technical details", exact: true })).toHaveCount(0);
+          if (reloadsBeforeReplacementResponse) {
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await problems.getByRole("button", { name: "Review", exact: true }).click();
+            await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toHaveAttribute("aria-disabled", "true");
+            await page.goto(`/runs/${refusedPlan.id}`, { waitUntil: "domcontentloaded" });
+            await expect(page.getByText("Couldn't confirm the removal review for the new connection. Refresh to check its status.", { exact: true })).toBeVisible();
+            await expect(page.getByRole("button", { name: "Approve this change", exact: true })).toHaveCount(0);
+            expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+          }
         } finally {
           finishReplacementPlan();
+        }
+        if (replacementIsRejected) {
+          await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toBeEnabled();
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await problems.getByRole("button", { name: "Review", exact: true }).click();
+          await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toBeEnabled();
+          expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+          expect(traffic.failures.map(({ kind, url, status }) => ({ kind, path: new URL(url).pathname, status })))
+            .toEqual([{ kind: "response", path: `/api/v1/capsules/${ID}/destroy-plan`, status: 409 }]);
+          expect(errors).toEqual([]);
+          return;
+        }
+        if (reloadsBeforeReplacementResponse) {
+          currentUninstallReview = recoveryPlan;
+          await page.getByRole("link", { name: "Back to the app", exact: true }).first().click();
+          await expect(app).toHaveAttribute("data-app-state", "needs_attention");
+          await problems.getByRole("button", { name: "Review", exact: true }).click();
         }
         if (lostResponseBeforeApproval || replacementSaveTimesOut) {
           const oldApproval = review.getByRole("button", { name: "Approve this change", exact: true });
@@ -2599,6 +2640,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (lostResponseBeforeApproval || replacementSaveTimesOut) {
           expect(traffic.failures.map(({ kind, url, status }) => ({ kind, path: new URL(url).pathname, status })))
             .toEqual([{ kind: "response", path: `/api/v1/capsules/${ID}/destroy-plan`, status: replacementSaveTimesOut ? 409 : 502 }]);
+        } else if (reloadsBeforeReplacementResponse) {
+          expect(traffic.failures.filter(({ kind, url }) =>
+            kind !== "requestfailed" || new URL(url).pathname !== `/api/v1/capsules/${ID}/destroy-plan`
+          )).toEqual([]);
         } else traffic.assertNoFailures();
         return;
       }
