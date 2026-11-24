@@ -3017,11 +3017,13 @@ export class RunEngine {
       );
     }
     let destroyConnectionRecovery: PlanRun["destroyConnectionRecovery"];
-    const retryWithOriginalConnections = internal.destroyProviderConnectionReplacements === undefined &&
+    const canRetryWithOriginalConnections =
       appliedPlan?.operation === "destroy" && appliedPlan.destroyConnectionRecovery !== undefined &&
       capsule.status === "error" && capsule.currentOutputId === undefined &&
       internal.origin === undefined && internal.sourceSnapshotId === undefined &&
       context.actorOwnershipEpoch !== undefined && context.actor !== "system:scheduled-uninstall";
+    const retryWithOriginalConnections = canRetryWithOriginalConnections &&
+      internal.destroyProviderConnectionReplacements === undefined;
     if (internal.destroyProviderConnectionReplacements !== undefined || retryWithOriginalConnections) {
       const refuse = () =>
         new OpenTofuControllerError(
@@ -3042,14 +3044,6 @@ export class RunEngine {
           },
         );
       }
-      if (retryWithOriginalConnections) {
-        const safety = await this.#store.getCapsuleRuntimeSafety(capsule.id);
-        if (safety?.phase !== "unknown" || safety.runType !== "destroy_apply" ||
-          capsule.currentStateVersionId === undefined ||
-          (await readPersistedProviderPartialDestroyPlan(
-            this.#store, safety.runId, capsule, capsule.currentStateVersionId,
-          ))?.id !== appliedPlan.id) throw refuse();
-      }
       try {
         const prior = appliedPlan.destroyConnectionRecovery
           ? parseDestroyProviderConnectionReplacements(
@@ -3062,7 +3056,17 @@ export class RunEngine {
         // person previously chose for a different Plan.
         const selected = retryWithOriginalConnections
           ? prior.map(({ connectionId }) => ({ connectionId, replacementConnectionId: connectionId }))
-          : parseDestroyProviderConnectionReplacements(internal.destroyProviderConnectionReplacements);
+          : parseDestroyProviderConnectionReplacements(
+              internal.destroyProviderConnectionReplacements, { allowOriginalConnection: true },
+            );
+        const originalSelections = selected.filter(({ connectionId, replacementConnectionId }) =>
+          connectionId === replacementConnectionId);
+        if (originalSelections.length > 0) {
+          if (!canRetryWithOriginalConnections ||
+            (!retryWithOriginalConnections && originalSelections.some(({ connectionId }) =>
+              !prior.some(row => row.connectionId === connectionId && row.replacementConnectionId !== connectionId))) ||
+            !(await this.#hasPersistedPartialDestroy(capsule, appliedPlan))) throw refuse();
+        }
         // Persist the effective selection once so subsequent Apply and
         // recovery resolve exactly the connections reviewed in this Plan.
         const effective = new Map(prior.map((row) => [row.connectionId, row]));
@@ -6793,7 +6797,16 @@ export class RunEngine {
       ));
   }
 
-  /** Read the exact teardown scope without resolving or minting keys. */
+  async #hasPersistedPartialDestroy(capsule: Capsule, appliedPlan: PlanRun): Promise<boolean> {
+    if (capsule.currentStateVersionId === undefined) return false;
+    const safety = await this.#store.getCapsuleRuntimeSafety(capsule.id);
+    return safety?.phase === "unknown" && safety.runType === "destroy_apply" &&
+      (await readPersistedProviderPartialDestroyPlan(
+        this.#store, safety.runId, capsule, capsule.currentStateVersionId,
+      ))?.id === appliedPlan.id;
+  }
+
+  /** Read the exact teardown scope without opening or minting keys. */
   async listCapsuleAppliedDestroyConnectionIds(
     capsule: Capsule,
     owner?: AppAccess,
@@ -6801,6 +6814,7 @@ export class RunEngine {
     readonly requiredConnectionIds: readonly string[];
     readonly recoveryConnectionIds: readonly string[];
     readonly unavailableRecoveryConnectionIds?: readonly string[];
+    readonly restorableOriginalConnectionIds?: readonly string[];
   } | undefined> {
     if (!capsule.sourceId || capsule.status === "destroyed") return undefined;
     const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
@@ -6827,6 +6841,14 @@ export class RunEngine {
         now: this.#now(),
       } : undefined,
     );
+    const restorableOriginalConnectionIds = includeAvailability &&
+        scope.unavailableRecoveryConnectionIds !== undefined && appliedPlan.destroyConnectionRecovery &&
+        await this.#hasPersistedPartialDestroy(capsule, appliedPlan).catch(() => false)
+      ? appliedPlan.destroyConnectionRecovery.replacements
+        .filter(({ connectionId, replacementConnectionId }) => connectionId !== replacementConnectionId &&
+          scope.recoveryConnectionIds.includes(connectionId))
+        .map(({ connectionId }) => connectionId)
+      : [];
     const [current, ownership] = await Promise.all([
       this.#store.getCapsule(capsule.id),
       includeAvailability ? this.#appOwnership?.getOwnership(capsule.id).catch(() => undefined) : undefined,
@@ -6840,7 +6862,10 @@ export class RunEngine {
       current.currentStateGeneration === capsule.currentStateGeneration)) return;
     if (owner && ownership?.capsuleId === capsule.id &&
       ownership.ownerAccountId === owner.ownerAccountId && ownership.ownershipEpoch === owner.ownershipEpoch) {
-      return scope;
+      return {
+        ...scope,
+        ...(restorableOriginalConnectionIds.length > 0 ? { restorableOriginalConnectionIds } : {}),
+      };
     }
     return { requiredConnectionIds: scope.requiredConnectionIds, recoveryConnectionIds: scope.recoveryConnectionIds };
   }

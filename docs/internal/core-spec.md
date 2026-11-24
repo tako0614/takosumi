@@ -393,7 +393,7 @@ Connection referenced solely by unused bindings cannot be selected for replaceme
 Minting uses the effective IDs of the new Plan. Each original Connection can have
 one replacement. Several original Connections may use the same replacement when
 the account and configuration match for every affected binding. Missing or
-legacy evidence, changed metadata, self-replacements and ambiguous selections
+legacy evidence, changed metadata and ambiguous selections
 are refused. This option is not available to
 create/update, source-less legacy teardown, or automatic scheduled retries.
 After a previous manual recovery saved a partial Destroy, the app owner can start the
@@ -402,10 +402,13 @@ previously selected replacement is no longer usable.
 Accounts supplies the current app owner and epoch for this review. Core requires the exact
 failed Destroy receipt and current StateVersion, verifies the original connections against
 the applied account and binding digest, and records the effective original IDs in the new Plan.
-The public replacement input still requires distinct IDs. The new review requires its own
-approval and the ordinary Apply verification. These recorded rows can repeat the original ID
-as the selected ID. Keep a compatible Core reader for unfinished Plans or retained partial
-state whose provenance contains one of these rows. An older reader refuses this evidence.
+The owner can also explicitly choose the original ID for an individual logical binding
+that used a different connection in the partial Destroy. Other selections still require
+distinct IDs. The owner-facing app view offers those original IDs only while the saved partial
+Destroy evidence matches the current state. Plan creation verifies the same receipt and
+ownership epoch before resolving the selected connections.
+Keep a compatible Core reader for unfinished Plans or retained partial state whose provenance
+records the original ID as the selected ID. An older reader refuses this evidence.
 The new destroy Plan still needs explicit approval and Apply, which recheck the
 same evidence and current authority. A blocked reservation can coexist with this
 manual recovery; it is not rewritten or automatically resumed. Existing no-body
