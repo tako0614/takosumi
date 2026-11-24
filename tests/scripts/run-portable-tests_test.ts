@@ -240,13 +240,32 @@ test("command execution preserves the original nonzero and stops later commands"
 test("CI preserves failed-run artifacts without changing shard count or job guards", async () => {
   const workflow = parse(await readFile(resolve(import.meta.dir, "../../.github/workflows/quality.yml"), "utf8")) as {
     permissions: { contents: string };
-    jobs: { tests: { "timeout-minutes": number; strategy: { "fail-fast": boolean; matrix: { shard: number[] } }; steps: { name: string; if?: string; with?: Record<string, unknown> }[] } };
+    jobs: { tests: { "timeout-minutes": number; strategy: { "fail-fast": boolean; matrix: { shard: number[] } }; steps: { name: string; if?: string; run?: string; "timeout-minutes"?: number; "continue-on-error"?: boolean; with?: Record<string, unknown> }[] } };
   };
   expect(workflow.permissions).toEqual({ contents: "read" });
   const job = workflow.jobs.tests;
   expect(job.strategy.matrix.shard).toEqual([1, 2, 3, 4, 5, 6]);
   expect(job.strategy["fail-fast"]).toBe(false);
   expect(job["timeout-minutes"]).toBe(40);
+  const testIndex = job.steps.findIndex((step) => step.name === "Run test phase shard");
+  expect(testIndex).toBeGreaterThan(job.steps.findIndex((step) => step.name === "Prepare private timing output"));
+  expect(job.steps.find((step) => step.name === "Mark test shard started")).toBeUndefined();
+  const run = job.steps[testIndex]!;
+  const lines = run.run?.trim().split("\n");
+  expect(lines).toHaveLength(3);
+  expect(lines?.[0]).toBe("umask 077");
+  const markerPayload = lines?.[1]?.match(/printf '%s\\n' '([^']+)' >/u)?.[1];
+  expect(markerPayload).toBeDefined();
+  expect(lines?.[1]).toBe(
+    `printf '%s\\n' '${markerPayload}' > "\${RUNNER_TEMP}/takosumi-test-timings/started.json"`,
+  );
+  const started = JSON.parse(markerPayload!) as Record<string, unknown>;
+  expect(started).toEqual({ version: 1, phase: "started", complete: false });
+  expect(lines?.[2]).toBe("exec bun run check --only tests");
+  expect(run["timeout-minutes"]).toBe(35);
+  expect(run["timeout-minutes"]!).toBeLessThan(job["timeout-minutes"]);
+  expect(run["continue-on-error"]).toBeUndefined();
+  expect(job.steps.findIndex((step) => step.name === "Save measured shard timings")).toBeGreaterThan(testIndex);
   const upload = job.steps.find((step) => step.name === "Save measured shard timings");
   expect(upload?.if).toBe("always()");
   expect(upload?.with?.["if-no-files-found"]).toBe("error");

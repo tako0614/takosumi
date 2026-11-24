@@ -45,6 +45,18 @@ function selectedPhases(command: string) {
   return selectPortableGatePhases(tokens.slice(3));
 }
 
+function testShardGateCommand(script: string): string {
+  const lines = script.trim().split("\n");
+  expect(lines).toHaveLength(3);
+  expect(lines[0]).toBe("umask 077");
+  expect(lines[1]).toMatch(
+    /^printf '%s\\n' '[^']+' > "\$\{RUNNER_TEMP\}\/takosumi-test-timings\/started\.json"$/u,
+  );
+  const command = lines[2];
+  requireCondition(command?.startsWith("exec "), "test shard must exec its gate command");
+  return command.slice("exec ".length);
+}
+
 function assertWorkflow(workflow: Workflow): void {
   const jobs = workflow.jobs;
   requireCondition(jobs && typeof jobs === "object", "workflow jobs are required");
@@ -77,7 +89,7 @@ function assertWorkflow(workflow: Workflow): void {
   const shardCount = shards.length;
   expect(testsJob.name).toBe("tests (${{ matrix.shard }}/" + shardCount + ")");
   const testsCommand = commandFor(testsJob, "Run test phase shard");
-  const testPhases = selectedPhases(testsCommand);
+  const testPhases = selectedPhases(testShardGateCommand(testsCommand));
   expect(testPhases.map(({ name }) => name)).toEqual(["tests"]);
   const testsStep = (testsJob.steps as Record<string, unknown>[]).find(
     (step) => step.name === "Run test phase shard",
@@ -230,6 +242,23 @@ test("workflow regression checks reject omitted, unknown, and restricted phases"
   restrictedStep.run =
     "bun run check --except tests,dashboard-browser,docs-browser --only tools";
   expect(() => assertWorkflow(restricted)).toThrow();
+
+  const duplicated = structuredClone(workflow);
+  const duplicatedStep = (duplicated.jobs!.tests!.steps as Record<string, unknown>[]).find(
+    (step) => step.name === "Run test phase shard",
+  )!;
+  duplicatedStep.run = `${duplicatedStep.run}\nbun run check --only tests`;
+  expect(() => assertWorkflow(duplicated)).toThrow();
+
+  const hidden = structuredClone(workflow);
+  const hiddenStep = (hidden.jobs!.tests!.steps as Record<string, unknown>[]).find(
+    (step) => step.name === "Run test phase shard",
+  )!;
+  hiddenStep.run = String(hiddenStep.run).replace(
+    "exec bun run check --only tests",
+    "bun run check --only tools; exec bun run check --only tests",
+  );
+  expect(() => assertWorkflow(hidden)).toThrow();
 });
 
 test("workflow regression checks reject incomplete shards and aggregator wiring", async () => {

@@ -114,10 +114,14 @@ jobs:
         run: mkdir -m 700 "${RUNNER_TEMP}/takosumi-test-timings"
 
       - name: Run test phase shard
+        timeout-minutes: 35
         env:
           TAKOSUMI_TEST_SHARD: ${{ matrix.shard }}/6
           TAKOSUMI_TEST_TIMINGS_OUTPUT: ${{ runner.temp }}/takosumi-test-timings/timings.json
-        run: bun run check --only tests
+        run: |
+          umask 077
+          printf '%s\n' '{"version":1,"phase":"started","complete":false}' > "${RUNNER_TEMP}/takosumi-test-timings/started.json"
+          exec bun run check --only tests
 
       # These are actual per-file measurements, not automatically adopted weights.
       # Preserve partial output and its nonzero provenance when tests fail.
