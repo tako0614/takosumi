@@ -512,7 +512,7 @@ export default function AppManagePage(props: {
   let reviewScopeEpoch = 0;
   const [reAdoptionRevisionId, setReAdoptionRevisionId] = createSignal<string>();
   const reAdoptionTargetId = () => reAdoptionRevisionId() ?? reAdoptionRevisionFromApp(app());
-  const [unconfirmedUninstallReview, setUnconfirmedUninstallReview] = createSignal<ActiveReview>();
+  const [unconfirmedUninstallPlanId, setUnconfirmedUninstallPlanId] = createSignal<string>();
   const [starting, setStarting] = createSignal<
     { readonly section: ReviewSection; readonly action?: CapsuleAppAction | "continue_revision" }
   >();
@@ -548,7 +548,7 @@ export default function AppManagePage(props: {
         revisionAttempts.clear();
         rollbackAttemptKeys.clear();
         setReview(undefined);
-        setUnconfirmedUninstallReview(undefined);
+        setUnconfirmedUninstallPlanId(undefined);
         setReAdoptionRevisionId(undefined);
         setStarting(undefined);
         setSectionError(undefined);
@@ -578,10 +578,10 @@ export default function AppManagePage(props: {
       readonly restartable?: boolean;
       readonly action?: CapsuleAppAction | "continue_revision";
       readonly isCurrent?: () => boolean;
-      readonly replaceReview?: ActiveReview;
+      readonly replaceReview?: { readonly previous: ActiveReview; readonly didRequest: () => boolean };
     } = {},
   ) => {
-    const busy = options.replaceReview ? starting() !== undefined || review() !== options.replaceReview : reviewBusy();
+    const busy = options.replaceReview ? starting() !== undefined || review() !== options.replaceReview.previous : reviewBusy();
     if (busy || appRole() === undefined || (purpose === "uninstall" && !isOwner())) return;
     // A result that arrives after the page moved to another app is dropped.
     const forCapsule = capsuleId();
@@ -596,12 +596,16 @@ export default function AppManagePage(props: {
       (!options.isCurrent || options.isCurrent());
     setSectionError(undefined);
     setNotice(undefined);
+    let missingPlanId = false;
     try {
       const planRunId = await create(isCurrent);
       if (!isCurrent()) return;
       // The work continues elsewhere (an install that waits on its own page).
       if (planRunId === null) return;
-      if (!planRunId) throw new Error(t("app.review.notStarted"));
+      if (!planRunId) {
+        missingPlanId = true;
+        throw new Error(t("app.review.notStarted"));
+      }
       setReview({
         section,
         purpose,
@@ -634,16 +638,18 @@ export default function AppManagePage(props: {
           (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
             : cause instanceof TypeError);
-        const replacedReview = responseUncertain ? options.replaceReview : undefined;
-        if (purpose === "uninstall" && replacedReview) {
-          setUnconfirmedUninstallReview(replacedReview);
-          // Keep the old approval held while checking whether the new Plan was saved.
+        const replacedReview = purpose === "uninstall" && options.replaceReview?.didRequest()
+          ? options.replaceReview.previous
+          : undefined;
+        const details = replacedReview && cause instanceof ControlApiError ? cause.details : undefined;
+        const savingTimedOut = cause instanceof ControlApiError && cause.status === 409 &&
+          cause.code === "failed_precondition" && cause.reason === "capsule_plan_creation_timeout" &&
+          typeof details === "object" && details !== null && "stage" in details && details.stage === "plan_run_create";
+        if (replacedReview && (responseUncertain || missingPlanId || savingTimedOut)) {
+          setUnconfirmedUninstallPlanId(replacedReview.planRunId);
+          // The old Plan can still be the latest while the replacement request is in flight.
           try {
-            const fresh = await refetchApp({ isCurrent });
-            if (isCurrent() && fresh?.progress.review?.runId === replacedReview.planRunId &&
-              fresh.latestRun?.id === replacedReview.planRunId && fresh.latestRun.status === "waiting_approval") {
-              setUnconfirmedUninstallReview(undefined);
-            }
+            await refetchApp({ isCurrent });
           } catch {
             // Keep the approval held when the readback also fails.
           }
@@ -740,12 +746,33 @@ export default function AppManagePage(props: {
     if (active?.purpose !== "uninstall") return;
     if (starting()?.action === "uninstall_now") return t("app.review.loading");
     if (switchableUninstallReview(app())) return t("app.uninstall.reviewReplaced");
-    if (unconfirmedUninstallReview() === active) return t("app.review.notStarted");
+    if (unconfirmedUninstallPlanId() === active.planRunId) return t("app.uninstall.replacementReviewUnconfirmed");
+  };
+  const refreshUnconfirmedUninstallReview = (held: ActiveReview) => {
+    const scope = uninstallScope();
+    const epoch = uninstallEpoch;
+    const isCurrent = () => !disposed && isOwner() && review() === held &&
+      uninstallScope() === scope && uninstallEpoch === epoch;
+    if (isCurrent()) void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
   };
   const reviewPanel = (section: ReviewSection) => (
     <Show when={review()?.section === section && (review()?.purpose !== "uninstall" || isOwner()) ? review() : undefined}>
       {(active) => (
         <div class="ap-review" id="app-review" data-testid="app-review" data-review-purpose={active().purpose}>
+          <Show when={active().purpose === "uninstall" && unconfirmedUninstallPlanId() === active().planRunId && !starting()}>
+            <Show when={switchableUninstallReview(app())} fallback={
+              <Button type="button" variant="secondary" busy={appView.loading}
+                onClick={() => refreshUnconfirmedUninstallReview(active())}>
+                {t("common.refresh")}
+              </Button>
+            }>
+              {(latest) => (
+                <Button type="button" variant="secondary" onClick={() => openRunReview(latest().runId, latest().runType)}>
+                  {t("app.uninstall.openLatestReview")}
+                </Button>
+              )}
+            </Show>
+          </Show>
           {/* A blocked plan's problem card already names its reasons. */}
           <Show when={!policyReasonsOnCard(active().planRunId)}>
             <RunPolicyReasons runId={active().planRunId} capsuleId={capsuleId()} />
@@ -1209,10 +1236,10 @@ export default function AppManagePage(props: {
           <AppUninstallConnectionRecovery
             app={view()}
             mode={mode}
-            disabled={starting() !== undefined || uninstallBusy() ||
-              unconfirmedUninstallReview() === heldReview || disabled?.() === true}
+            disabled={starting() !== undefined || uninstallBusy() || disabled?.() === true}
             onReview={(replacements) => {
-              if (unconfirmedUninstallReview() === heldReview || disabled?.() || !isCurrent() || !reviewedApp(app())) return;
+              if (disabled?.() || !isCurrent() || !reviewedApp(app())) return;
+              let requested = false;
               void startReview("attention", "uninstall", async () => {
                 const fresh = reviewedApp(await refetchApp({ isCurrent }));
                 const allowed = fresh?.uninstall.recoveryConnectionIds;
@@ -1220,8 +1247,9 @@ export default function AppManagePage(props: {
                   (allowed !== undefined && replacements.some(({ connectionId }) => !allowed.includes(connectionId)))) {
                   throw new Error(t("app.uninstall.replacementAppliedEvidenceUnavailable"));
                 }
+                requested = true;
                 return extractRunId(await createCapsuleDestroyRecoveryPlan(fresh.capsuleId, replacements, { isCurrent }));
-              }, { restartable: false, action: "uninstall_now", replaceReview: heldReview, isCurrent });
+              }, { restartable: false, action: "uninstall_now", replaceReview: { previous: heldReview, didRequest: () => requested }, isCurrent });
             }}
           />
         )}
