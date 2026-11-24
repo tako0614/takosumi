@@ -17,9 +17,51 @@ export interface RevisionPlanAttempt {
 }
 
 export type RevisionPlanAttemptStore = Map<string, RevisionPlanAttempt>;
+export type RevisionPlanAttemptScope = readonly [
+  subject: string,
+  accountId: string,
+  workspaceId: string,
+  sourceId: string,
+  stateVersionId: string,
+  stateGeneration: number,
+  installConfigId: string,
+];
 
-function attemptKey(capsuleId: string, requestJson: string): string {
-  return `${capsuleId}\u0000${requestJson}`;
+function attemptKey(capsuleId: string, requestJson: string, scope?: RevisionPlanAttemptScope): string {
+  return scope
+    ? `takosumi.revision-attempt:${JSON.stringify([...scope, capsuleId, requestJson])}`
+    : `${capsuleId}\u0000${requestJson}`;
+}
+
+function storedAttempt(key: string, requestJson: string): RevisionPlanAttempt | undefined {
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return;
+    const { idempotencyKey, revisionPlanId } = JSON.parse(raw);
+    if (typeof idempotencyKey !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(idempotencyKey)) return;
+    return {
+      requestJson, idempotencyKey,
+      ...(typeof revisionPlanId === "string" && revisionPlanId.trim() ? { revisionPlanId } : {}),
+    };
+  } catch {
+    // Missing, blocked or malformed tab storage falls back to the live attempt.
+  }
+}
+
+function retainAttempt(
+  attempts: RevisionPlanAttemptStore,
+  key: string,
+  attempt: RevisionPlanAttempt,
+  scope?: RevisionPlanAttemptScope,
+): void {
+  attempts.set(key, attempt);
+  if (!scope) return;
+  try {
+    const { idempotencyKey, revisionPlanId } = attempt;
+    window.sessionStorage.setItem(key, JSON.stringify({ idempotencyKey, revisionPlanId }));
+  } catch {
+    // Keep the attempt in memory when tab storage is unavailable.
+  }
 }
 
 /** Returns the retained attempt or mints one for this exact request. */
@@ -27,16 +69,15 @@ export function getOrCreateRevisionPlanAttempt(
   attempts: RevisionPlanAttemptStore,
   capsuleId: string,
   requestJson: string,
+  scope?: RevisionPlanAttemptScope,
 ): RevisionPlanAttempt {
-  const key = attemptKey(capsuleId, requestJson);
-  const retained = attempts.get(key);
-  if (retained) return retained;
-  const created = {
+  const key = attemptKey(capsuleId, requestJson, scope);
+  const attempt = attempts.get(key) ?? (scope && storedAttempt(key, requestJson)) ?? {
     requestJson,
     idempotencyKey: randomUuid(),
   };
-  attempts.set(key, created);
-  return created;
+  retainAttempt(attempts, key, attempt, scope);
+  return attempt;
 }
 
 /** Bind a create acknowledgement only to the still-retained exact attempt. */
@@ -50,13 +91,14 @@ export function observeRevisionPlanAttempt(
     readonly capsuleId: string;
     readonly revision: { readonly targetRef: string };
   },
+  scope?: RevisionPlanAttemptScope,
 ): void {
-  const key = attemptKey(capsuleId, requestJson);
+  const key = attemptKey(capsuleId, requestJson, scope);
   if (attempts.get(key) !== attempt || plan.capsuleId !== capsuleId ||
     typeof plan.id !== "string" || !plan.id.trim() ||
     typeof plan.revision?.targetRef !== "string" ||
     JSON.stringify({ ref: plan.revision.targetRef }) !== requestJson) return;
-  attempts.set(key, { ...attempt, revisionPlanId: plan.id });
+  retainAttempt(attempts, key, { ...attempt, revisionPlanId: plan.id }, scope);
 }
 
 /** A continued Plan releases only the attempt whose create ACK named it. */
@@ -65,10 +107,12 @@ export function releaseObservedRevisionPlanAttempt(
   capsuleId: string,
   requestJson: string,
   revisionPlanId: string,
+  scope?: RevisionPlanAttemptScope,
 ): void {
-  const key = attemptKey(capsuleId, requestJson);
-  if (revisionPlanId && attempts.get(key)?.revisionPlanId === revisionPlanId) {
-    attempts.delete(key);
+  const key = attemptKey(capsuleId, requestJson, scope);
+  const attempt = attempts.get(key) ?? (scope && storedAttempt(key, requestJson));
+  if (revisionPlanId && attempt?.revisionPlanId === revisionPlanId) {
+    releaseRevisionPlanAttempt(attempts, capsuleId, requestJson, attempt.idempotencyKey, scope);
   }
 }
 
@@ -78,9 +122,17 @@ export function releaseRevisionPlanAttempt(
   capsuleId: string,
   requestJson: string,
   expectedIdempotencyKey?: string,
+  scope?: RevisionPlanAttemptScope,
 ): void {
-  const key = attemptKey(capsuleId, requestJson);
-  if (expectedIdempotencyKey !== undefined &&
-    attempts.get(key)?.idempotencyKey !== expectedIdempotencyKey) return;
+  const key = attemptKey(capsuleId, requestJson, scope);
+  const stored = scope && storedAttempt(key, requestJson);
+  const attempt = attempts.get(key) ?? stored;
+  if (expectedIdempotencyKey !== undefined && attempt?.idempotencyKey !== expectedIdempotencyKey) return;
   attempts.delete(key);
+  if (!stored || stored.idempotencyKey !== attempt?.idempotencyKey) return;
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Tab storage can be revoked after the attempt was read.
+  }
 }

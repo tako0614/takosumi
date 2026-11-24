@@ -952,9 +952,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const action of ["update", "retireUpdate", "rollback"] as const) test({
+    for (const action of ["update", "retireUpdate", "reloadUpdate", "rollback"] as const) test({
       update: "a lost Update response reads the same app once and recovers only its existing review",
       retireUpdate: "leaving a version check lets the user continue its accepted request from the app",
+      reloadUpdate: "a lost revision create response keeps the same request after reload",
       rollback: "a lost rollback response recovers the same review from history after reload",
     }[action], async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
@@ -962,6 +963,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const now = "2026-10-01T00:00:00.000Z";
       const retireUpdate = action === "retireUpdate";
       const rollback = action === "rollback";
+      const reloadUpdate = action === "reloadUpdate";
       const previousState = "sv_lost_response_previous";
       const currentState = "sv_lost_response_current";
       const actionPath = rollback ? `/api/v1/state-versions/${previousState}/rollback-plan` : `/api/v1/capsules/${CAPSULE_ID}/revision-plans`;
@@ -987,7 +989,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       let appReadsAfterSubmit = 0;
       const mutations: string[] = [];
       const appReadIds: string[] = [];
-      const rollbackKeys: (string | undefined)[] = [];
+      const requestKeys: (string | undefined)[] = [];
       await page.route("**/api/v1/**", async (route) => {
         const request = route.request();
         const path = new URL(request.url()).pathname;
@@ -1019,7 +1021,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               },
           }) } });
         }
-        if (rollback && path === `/api/v1/capsules/${CAPSULE_ID}`) {
+        if ((rollback || reloadUpdate) && path === `/api/v1/capsules/${CAPSULE_ID}`) {
           return route.fulfill({ json: {
             capsule: { ...PORTABLE_CAPSULES.ws_alpha[0], currentStateVersionId: currentState, currentStateGeneration: 2 },
             installConfigReAdoption: { authorityGuard: `sha256:${"a".repeat(64)}` },
@@ -1033,14 +1035,28 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === actionPath && request.method() === "POST") {
           if (rollback) {
-            rollbackKeys.push(request.headers()["idempotency-key"]);
-            if (rollbackKeys.length === 2) {
-              const run = rollbackKeys[1] === rollbackKeys[0] ? plan : { ...plan, id: `${plan.id}_duplicate` };
+            requestKeys.push(request.headers()["idempotency-key"]);
+            if (requestKeys.length === 2) {
+              const run = requestKeys[1] === requestKeys[0] ? plan : { ...plan, id: `${plan.id}_duplicate` };
               return route.fulfill({ status: 201, json: { run } });
             }
           } else {
             expect(request.postDataJSON()).toEqual({ ref: "main" });
             expect(request.headers()["idempotency-key"]).toBeTruthy();
+            if (reloadUpdate) {
+              const key = request.headers()["idempotency-key"];
+              requestKeys.push(key);
+              if (requestKeys.length === 2) {
+                if (key !== requestKeys[0]) return route.fulfill({ status: 409, json: {
+                  error: { code: "failed_precondition", message: "An update is already being prepared." },
+                } });
+                return route.fulfill({ status: 200, json: {
+                  revisionPlan: { ...revision, phase: "planning" }, nextAction: "reconcile",
+                } });
+              }
+              submitted = true;
+              return route.fulfill({ status: 502, json: { error: "fixture_response_lost" } });
+            }
           }
           // Model server acceptance independently of the response observed by
           // the actual browser fetch. No second operation is manufactured.
@@ -1074,6 +1090,30 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === `/api/v1/runs/${planId}/stream`) return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
         return route.fallback();
       });
+
+      if (reloadUpdate) {
+        await page.goto(`/apps/${CAPSULE_ID}#version`, { waitUntil: "domcontentloaded" });
+        const start = page.getByTestId("app-version").getByRole("button", { name: actionName, exact: true });
+        await start.click();
+        await expect.poll(() => appReadsAfterSubmit).toBe(1);
+        await expect(start).toBeEnabled();
+        expect(requestKeys).toHaveLength(1);
+        expect(requestKeys[0]).toBeTruthy();
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await expect(start).toBeEnabled();
+        expect(mutations).toEqual([`POST ${actionPath}`]);
+        await start.click();
+        await expect.poll(() => requestKeys.length).toBe(2);
+        expect(requestKeys).toEqual([requestKeys[0], requestKeys[0]]);
+        const review = page.getByTestId("app-review");
+        await expect(review).toContainText("existing_update");
+        await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeVisible();
+        expect(mutations).toEqual([
+          `POST ${actionPath}`, `POST ${actionPath}`, `POST /api/v1/revision-plans/${revisionId}/reconcile`,
+        ]);
+        expect(errors).toEqual([]);
+        return;
+      }
 
       if (retireUpdate) {
         await page.setViewportSize({ width: 1440, height: 900 });
@@ -1120,7 +1160,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         appReadsAfterSubmit = 0;
         mutations.length = 0;
         appReadIds.length = 0;
-        rollbackKeys.length = 0;
+        requestKeys.length = 0;
         await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
         await openAppPane(page, "version");
         const rejected = definiteRejection
@@ -1129,7 +1169,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         const start = page.getByTestId("app-version").getByRole("button", { name: actionName, exact: true });
         await expect(start).toBeEnabled();
         await start.click();
-        if (rollback) await expect.poll(() => rollbackKeys.length).toBe(1);
+        if (rollback) await expect.poll(() => requestKeys.length).toBe(1);
         if (rejected) {
           await rejected;
           await expect(start).toBeEnabled();
@@ -1167,8 +1207,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         expect(appReadsAfterSubmit).toBe(definiteRejection ? 0 : 1);
         await (releaseReadback as (() => Promise<void>) | undefined)?.();
         if (rollback) {
-          expect(rollbackKeys).toHaveLength(1);
-          expect(rollbackKeys[0]).toBeTruthy();
+          expect(requestKeys).toHaveLength(1);
+          expect(requestKeys[0]).toBeTruthy();
           if (holdReadback) {
             // The original Plan is durable but neither the create response
             // nor the first read reached the browser. The first app view after
@@ -1179,8 +1219,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             await expect(start).toBeEnabled();
             expect(mutations).toEqual([`POST ${actionPath}`]);
             await start.click();
-            await expect.poll(() => rollbackKeys.length).toBe(2);
-            expect(rollbackKeys).toEqual([rollbackKeys[0], rollbackKeys[0]]);
+            await expect.poll(() => requestKeys.length).toBe(2);
+            expect(requestKeys).toEqual([requestKeys[0], requestKeys[0]]);
             const review = page.getByTestId("app-review");
             await expect(review).toContainText(resourceName);
             await expect(review.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();

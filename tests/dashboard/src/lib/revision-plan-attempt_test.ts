@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { getOrCreateRevisionPlanAttempt, observeRevisionPlanAttempt, releaseObservedRevisionPlanAttempt, releaseRevisionPlanAttempt } from "../../../../dashboard/src/lib/revision-plan-attempt.ts";
+import { getOrCreateRevisionPlanAttempt, observeRevisionPlanAttempt, releaseObservedRevisionPlanAttempt, releaseRevisionPlanAttempt, type RevisionPlanAttemptScope } from "../../../../dashboard/src/lib/revision-plan-attempt.ts";
 
 test("retains A after an unknown A outcome and a definite B failure", () => {
   const attempts = new Map();
@@ -93,4 +93,62 @@ test("late responses cannot claim or release a replacement intent", () => {
   observeRevisionPlanAttempt(attempts, "capsule_a", request, next, { ...oldPlan, id: "revision_new" });
   releaseObservedRevisionPlanAttempt(attempts, "capsule_a", request, oldPlan.id);
   expect(getOrCreateRevisionPlanAttempt(attempts, "capsule_a", request)).toEqual({ ...next, revisionPlanId: "revision_new" });
+});
+
+test("tab storage binds an uncertain revision to its exact scope and releases only that attempt", () => {
+  const saved = new Map<string, string>();
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      sessionStorage: {
+        getItem: (key: string) => saved.get(key) ?? null,
+        setItem: (key: string, value: string) => saved.set(key, value),
+        removeItem: (key: string) => saved.delete(key),
+      },
+    },
+  });
+  try {
+    const ref = "release/a";
+    const request = JSON.stringify({ ref });
+    const capsule = "capsule_a";
+    const scope = ["person_a", "account_a", "ws_a", "source_a", "state_a", 1, "cfg_a"] as const;
+    const first = getOrCreateRevisionPlanAttempt(new Map(), capsule, request, scope);
+    const reloaded = new Map();
+    const retry = getOrCreateRevisionPlanAttempt(reloaded, capsule, request, scope);
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    const differentScopes: readonly RevisionPlanAttemptScope[] = [
+      ["person_b", "account_a", "ws_a", "source_a", "state_a", 1, "cfg_a"],
+      ["person_a", "account_b", "ws_a", "source_a", "state_a", 1, "cfg_a"],
+      ["person_a", "account_a", "ws_b", "source_a", "state_a", 1, "cfg_a"],
+      ["person_a", "account_a", "ws_a", "source_b", "state_a", 1, "cfg_a"],
+      ["person_a", "account_a", "ws_a", "source_a", "state_b", 1, "cfg_a"],
+      ["person_a", "account_a", "ws_a", "source_a", "state_a", 2, "cfg_a"],
+      ["person_a", "account_a", "ws_a", "source_a", "state_a", 1, "cfg_b"],
+    ];
+    for (const different of differentScopes) {
+      const isolated = getOrCreateRevisionPlanAttempt(new Map(), capsule, request, different);
+      expect(isolated.idempotencyKey).not.toBe(first.idempotencyKey);
+    }
+    expect(getOrCreateRevisionPlanAttempt(new Map(), "capsule_b", request, scope).idempotencyKey)
+      .not.toBe(first.idempotencyKey);
+    expect(getOrCreateRevisionPlanAttempt(new Map(), capsule, JSON.stringify({ ref: "main" }), scope).idempotencyKey)
+      .not.toBe(first.idempotencyKey);
+    releaseObservedRevisionPlanAttempt(new Map(), capsule, request, "revision_a", scope);
+    expect(getOrCreateRevisionPlanAttempt(new Map(), capsule, request, scope).idempotencyKey)
+      .toBe(first.idempotencyKey);
+    observeRevisionPlanAttempt(reloaded, capsule, request, retry, {
+      id: "revision_a", capsuleId: capsule, revision: { targetRef: ref },
+    }, scope);
+    releaseObservedRevisionPlanAttempt(new Map(), capsule, request, "revision_other", scope);
+    expect(getOrCreateRevisionPlanAttempt(new Map(), capsule, request, scope).revisionPlanId).toBe("revision_a");
+    releaseObservedRevisionPlanAttempt(new Map(), capsule, request, "revision_a", scope);
+    const next = getOrCreateRevisionPlanAttempt(new Map(), capsule, request, scope);
+    expect(next.idempotencyKey).not.toBe(first.idempotencyKey);
+    releaseRevisionPlanAttempt(new Map(), capsule, request, first.idempotencyKey, scope);
+    expect(getOrCreateRevisionPlanAttempt(new Map(), capsule, request, scope)).toEqual(next);
+  } finally {
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
 });

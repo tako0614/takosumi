@@ -34,6 +34,7 @@ import {
   observeRevisionPlanAttempt,
   releaseObservedRevisionPlanAttempt,
   releaseRevisionPlanAttempt,
+  type RevisionPlanAttemptScope,
   type RevisionPlanAttemptStore,
 } from "./revision-plan-attempt.ts";
 import { runMutationOutcomeUnknown } from "./run-errors.ts";
@@ -183,6 +184,7 @@ export function defaultRetryPlanApi(
   attempts: RevisionPlanAttemptStore = new Map(),
   rollbackAttempts: Map<string, string> = new Map(),
   rollbackViewScope?: () => RollbackViewScope | undefined,
+  revisionViewScope?: (capsuleId: string) => RevisionPlanAttemptScope | undefined,
 ): RetryPlanApi {
   return {
     ...STANDARD_REQUESTS,
@@ -237,25 +239,27 @@ export function defaultRetryPlanApi(
       }
     },
     planRevision: async (capsuleId, ref, isCurrent) => {
+      if (isCurrent && !isCurrent()) return;
       const request = { ref };
       const requestJson = JSON.stringify(request);
-      const attempt = getOrCreateRevisionPlanAttempt(attempts, capsuleId, requestJson);
+      const scope = revisionViewScope?.(capsuleId);
+      const attempt = getOrCreateRevisionPlanAttempt(attempts, capsuleId, requestJson, scope);
       const { revisionPlan } = await createReviewableGitRevisionPlan(capsuleId, request, {
         idempotencyKey: attempt.idempotencyKey,
         ...(isCurrent ? { isCurrent } : {}),
         onCreated: ({ revisionPlan: created }) => observeRevisionPlanAttempt(
-          attempts, capsuleId, requestJson, attempt, created,
+          attempts, capsuleId, requestJson, attempt, created, scope,
         ),
         onSettled: (response) => {
           const settled = response.revisionPlan;
           if (response.nextAction === "none" && settled.phase === "failed" &&
             settled.capsuleId === capsuleId && settled.revision?.targetRef === ref) {
-            releaseObservedRevisionPlanAttempt(attempts, capsuleId, requestJson, settled.id);
+            releaseObservedRevisionPlanAttempt(attempts, capsuleId, requestJson, settled.id, scope);
           }
         },
       });
       if (revisionPlan.planRunId) {
-        releaseRevisionPlanAttempt(attempts, capsuleId, requestJson, attempt.idempotencyKey);
+        releaseRevisionPlanAttempt(attempts, capsuleId, requestJson, attempt.idempotencyKey, scope);
       }
       return revisionPlan.planRunId;
     },
