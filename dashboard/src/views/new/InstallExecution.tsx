@@ -142,6 +142,8 @@ interface Props {
   readonly blockedReason?: string;
   /** Reuse the parent screen's visible progress instead of repeating it. */
   readonly blockedReasonId?: string;
+  /** Same-tab navigation preserves a held removal review on the Run screen. */
+  readonly onOpenHeldRemovalDetails?: () => void;
   /** An Apply was started (or may have been): what it applies can no longer change. */
   readonly onApplyStarted?: () => void;
   /** Offers a fresh uninstall Plan with a different Provider Connection. */
@@ -775,6 +777,18 @@ export default function InstallExecution(props: Props) {
       )}
     </Show>
   );
+  const runDetailsButton = (runId: string) => (
+    <Button
+      type={props.onOpenHeldRemovalDetails ? "button" : undefined}
+      href={props.onOpenHeldRemovalDetails ? undefined : `/runs/${encodeURIComponent(runId)}`}
+      disabled={isRemoval() && Boolean(props.blockedReason) && !props.onOpenHeldRemovalDetails}
+      onClick={props.onOpenHeldRemovalDetails}
+      variant="ghost"
+      icon={<ExternalLink size={16} />}
+    >
+      {t("installStore.runDetails")}
+    </Button>
+  );
 
   const resourceDetails = (current: () => NonNullable<ReturnType<typeof runLatest>>) => (<>
               <details class="iv-disclosure iv-resource-disclosure" data-testid="install-resource-details"
@@ -910,14 +924,7 @@ export default function InstallExecution(props: Props) {
                   >
                     {t("installStore.approve")}
                   </Button>
-                  <Button
-                    href={`/runs/${encodeURIComponent(current().id)}`}
-                    disabled={isRemoval() && Boolean(props.blockedReason)}
-                    variant="ghost"
-                    icon={<ExternalLink size={16} />}
-                  >
-                    {t("installStore.runDetails")}
-                  </Button>
+                  {runDetailsButton(current().id)}
                   <Show when={isRemoval() && props.blockedReason}>{closeButton()}</Show>
                 </div>
               </Show>
@@ -966,13 +973,7 @@ export default function InstallExecution(props: Props) {
                   </Button>
                   {discardButton()}
                   <Show when={(props.purpose ?? "install") !== "install"}>
-                  <Button
-                    href={`/runs/${encodeURIComponent(current().id)}`}
-                    variant="ghost"
-                    icon={<ExternalLink size={16} />}
-                  >
-                    {t("installStore.runDetails")}
-                  </Button>
+                    {runDetailsButton(current().id)}
                   </Show>
                 </div>
               </Show>
