@@ -146,6 +146,15 @@ function errorCode(cause: unknown): string | undefined {
   return cause instanceof ControlApiError ? cause.code : undefined;
 }
 
+function reconcileBusyWaitMs(cause: unknown): number | undefined {
+  if (!(cause instanceof ControlApiError) || cause.status !== 409 ||
+    cause.code !== "reconcile_in_progress") return undefined;
+  const hint = (cause.details as { readonly retryAfterMs?: unknown } | undefined)?.retryAfterMs;
+  return typeof hint === "number" && Number.isSafeInteger(hint) && hint > 0
+    ? Math.min(hint, STALL_LIMIT_MS)
+    : RECONCILE_CEILING_MS;
+}
+
 function isAbort(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "AbortError";
 }
@@ -738,34 +747,48 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       let failures = 0;
       let rounds = 0;
       let lastProgressAt = now();
+      let observeUntil: number | undefined;
       try {
         while (!disposed && !stopRequested && expected === epoch) {
           const before = response();
           if (!before || !canAdvance(before)) break;
           if (rounds >= MAX_FOLLOW_ROUNDS || now() - lastProgressAt >= STALL_LIMIT_MS) break;
           rounds += 1;
+          const observing = observeUntil !== undefined;
+          const read = () => getGitInstallPlan(before.installPlan.id, { signal: controller.signal });
           let next: GitInstallPlanResponse | undefined;
           let failed: unknown;
           try {
-            next = await reconcileGitInstallPlan(before.installPlan.id, { signal: controller.signal });
+            next = observing
+              ? await read()
+              : await reconcileGitInstallPlan(before.installPlan.id, { signal: controller.signal });
           } catch (cause) {
             if (controller.signal.aborted || isAbort(cause)) break;
             failed = cause;
-            next = await getGitInstallPlan(before.installPlan.id).catch(() => undefined);
+            if (!observing) next = await read().catch(() => undefined);
           }
           if (disposed || expected !== epoch) break;
           const held = next ? accept(next, expected) : response();
           if (next && !held) break;
           const after = held ?? before;
           const progressed = progressSignature(after) !== progressSignature(before);
+          const busyWait = reconcileBusyWaitMs(failed);
+          const busyObserved = busyWait !== undefined && next === held && next !== undefined;
           if (progressed) {
             stalled = 0;
             lastProgressAt = now();
+            observeUntil = undefined;
           } else {
             stalled += 1;
+            // A busy response proves another reconcile holds the command.
+            // Follow the saved attempt until it moves or the wait hint ends.
+            if (busyObserved) observeUntil = now() + busyWait;
+            else if (observeUntil !== undefined && next === held && next && now() >= observeUntil) {
+              observeUntil = undefined;
+            }
           }
-          const retryable = after.userAction.kind === "retry" && !after.userAction.restart;
-          failures = failed !== undefined || retryable ? failures + 1 : 0;
+          const retryable = !observing && after.userAction.kind === "retry" && !after.userAction.restart;
+          failures = !progressed && !busyObserved && (failed !== undefined || retryable) ? failures + 1 : 0;
           if (failures >= MAX_RECONCILE_FAILURES) {
             if (failed !== undefined) setError(installErrorMessage(failed));
             break;
