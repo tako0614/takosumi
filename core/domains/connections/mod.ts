@@ -48,6 +48,8 @@ import {
   evaluateProviderConnectionCredentialPolicy,
 } from "../deploy-control/provider_policy.ts";
 
+const CONNECTION_NOT_OWNED_BY_APP_OWNER_REASON = "connection_not_owned_by_app_owner";
+
 /** One Provider Connection binding's resolution outcome. */
 export interface ResolvedCapsuleProviderBinding {
   readonly provider: string;
@@ -541,10 +543,15 @@ export class ConnectionsService {
                 return binding.connectionId;
               }
             } catch (error) {
-              if (!(error instanceof OpenTofuControllerError)) throw error;
-              if (isRecord(error.details) && error.details.reason === PROVIDER_CONNECTION_NOT_READY_REASON) {
+              const reason = error instanceof OpenTofuControllerError && isRecord(error.details)
+                ? error.details.reason
+                : undefined;
+              if (reason === PROVIDER_CONNECTION_NOT_READY_REASON ||
+                reason === PROVIDER_CONNECTION_SETUP_REQUIRED_REASON ||
+                reason === CONNECTION_NOT_OWNED_BY_APP_OWNER_REASON) {
                 return binding.connectionId;
               }
+              throw error;
             }
           }),
       );
@@ -993,7 +1000,7 @@ export class ConnectionsService {
       const ownerAccountId = ownership?.ownerAccountId ?? (await this.#store.getWorkspace(capsule.workspaceId))?.ownerUserId;
       if (!ownerAccountId || connection.ownerAccountId !== ownerAccountId) {
         throw new OpenTofuControllerError("permission_denied", "Connection is not owned by the app owner", {
-          reason: "connection_not_owned_by_app_owner",
+          reason: CONNECTION_NOT_OWNED_BY_APP_OWNER_REASON,
         });
       }
     }
