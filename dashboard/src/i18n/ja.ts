@@ -781,6 +781,7 @@ export const ja = {
   "app.uninstall.noReplacement": "選べる確認済みの接続がありません。",
   "app.uninstall.replacementLoadFailed": "クラウド接続を読み込めませんでした。",
   "app.uninstall.replacementReview": "削除内容を確認",
+  "app.uninstall.reviewReplaced": "新しい削除レビューが用意されました。続けるにはそちらを開いてください。",
   "app.uninstall.reviewConnectionUnavailable": "削除の確認に使った接続は現在利用できません。元と同じクラウドアカウントの確認済み接続を選び、削除内容を確認し直してください。",
   "app.uninstall.replacementUnproven": "選んだ接続が元と同じクラウドアカウントと設定を使うことを確認できませんでした。",
   "app.uninstall.replacementVerifyFirst": "選んだ接続のクラウドアカウントを確認できません。クラウド接続で確認し直すか、元と同じアカウントの確認済み接続を選んでください。",
