@@ -913,6 +913,7 @@ export default function InstallExecution(props: Props) {
                   <Show when={isRemoval() && props.blockedReason}>{closeButton()}</Show>
                   <Button
                     href={`/runs/${encodeURIComponent(current().id)}`}
+                    disabled={isRemoval() && Boolean(props.blockedReason)}
                     variant="ghost"
                     icon={<ExternalLink size={16} />}
                   >

@@ -2454,6 +2454,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         try {
           await expect.poll(() => replacementPlanBodies.length).toBe(1);
           await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toHaveAttribute("aria-disabled", "true");
+          await expect(review.getByText("Technical details", { exact: true })).toHaveAttribute("aria-disabled", "true");
+          await expect(review.getByRole("link", { name: "Technical details", exact: true })).toHaveCount(0);
         } finally {
           finishReplacementPlan();
         }
