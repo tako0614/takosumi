@@ -624,6 +624,19 @@ test("CLI app history finds the rollback target and the exact Plan survives a lo
     expect(h.runnerCalls.apply - before.apply).toBe(0);
     expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 2 });
 
+    const observedArgs = ["rollback", h.appId, "--state-version", target, "--rollback-plan", recovered.result.planRunId];
+    requests.length = 0;
+    expect(await invokeCli(otherAppToken, observedArgs)).toMatchObject({ code: 1, result: { status: "refused" } });
+    expect(requests.map(request => request.method)).toEqual(["GET"]);
+    requests.length = 0;
+    const stable = { ...h.runnerCalls };
+    expect(await invokeCli(readToken, observedArgs)).toEqual(recovered);
+    expect(requests.map(request => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      `GET /api/v1/state-versions/${target}`, `GET /api/v1/runs/${lostPlan}`,
+    ]);
+    expect(h.runnerCalls).toEqual(stable);
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 2 });
+
     const restored = await run("apply", h.appId, "--plan", recovered.result.planRunId, "--yes");
     expect(restored.code).toBe(0);
     expect(restored.result).toMatchObject({ status: "succeeded", planRunId: lostPlan });

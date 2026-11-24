@@ -771,6 +771,9 @@ test("new commands reject absent, ambiguous and unknown mutation flags before HT
     ["apps", "update", "cap_owned", "--ref", ref, "--ref", "different", "--idempotency-key", "key"],
     ["apps", "rollback", "cap_owned", "--state-version", rollbackTarget.id],
     [...rollbackArgs, "--yes"],
+    [...rollbackArgs, "--rollback-plan", rollbackPlan.id],
+    ["apps", "rollback", "cap_owned", "--rollback-plan", rollbackPlan.id],
+    ["apps", "rollback", "cap_owned", "--state-version", rollbackTarget.id, "--rollback-plan", ".."],
     ["apps", "apply", "cap_owned", "--plan", plan.id],
     ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes=true"],
     ["apps", "apply", "cap_owned", "--plan", plan.id, "--yes", "extra"],
@@ -821,6 +824,39 @@ test("rollback refuses another app's StateVersion and a mismatched saved rollbac
   expect(wrongTarget.calls.filter(req => req.method === "POST").map(req => new URL(req.url).pathname)).toEqual([
     "/api/v1/state-versions/state_target/rollback-plan",
   ]);
+});
+
+test("rollback points to a read-only recovery after the Plan is acknowledged", async () => {
+  const r = await invoke(rollbackArgs, req => {
+    if (new URL(req.url).pathname === `/api/v1/state-versions/${rollbackTarget.id}`) {
+      return Response.json({ stateVersion: rollbackTarget });
+    }
+    if (req.method === "POST") return Response.json({ run: rollbackPlan }, { status: 201 });
+    throw new TypeError("fixture lost a Run read after the acknowledgement");
+  });
+  expect(r.code).toBe(1);
+  expect(r.calls.map(req => req.method)).toEqual(["GET", "POST", "GET"]);
+  expect(r.result).toMatchObject({ status: "unconfirmed", planRunId: rollbackPlan.id });
+  expect(r.result.recovery).toContain("--rollback-plan");
+});
+
+test("saved rollback review rejects a different Run, app, workspace or target without POST", async () => {
+  const args = rollbackArgs.flatMap(arg => arg.startsWith("--idempotency-key") ? ["--rollback-plan", rollbackPlan.id] : [arg]);
+  for (const run of [
+    { ...rollbackPlan, id: "plan_other" },
+    { ...rollbackPlan, capsuleId: "cap_other" },
+    { ...rollbackPlan, workspaceId: "ws_other" },
+    { ...rollbackPlan, origin: { kind: "rollback", stateVersionId: "state_other" } },
+    { ...rollbackPlan, origin: { kind: "revision", ref } },
+  ]) {
+    const r = await invoke(args, req => new URL(req.url).pathname === `/api/v1/state-versions/${rollbackTarget.id}`
+      ? Response.json({ stateVersion: rollbackTarget })
+      : Response.json({ run }));
+    expect(r.code).toBe(1);
+    expect(r.calls.map(req => req.method)).toEqual(["GET", "GET"]);
+    expect(r.result).toMatchObject({ status: "refused", stateVersionId: rollbackTarget.id });
+    expect(r.result).not.toHaveProperty("plan");
+  }
 });
 
 test("saved rollback Apply keeps the state cursor and destructive guards", async () => {
