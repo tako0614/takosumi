@@ -176,8 +176,12 @@ export default function ConnectionsTab(props: {
   >(null);
   const [lastCreatedVerifiedHint, setLastCreatedVerifiedHint] =
     createSignal(false);
+  const [reverifiedUninstallConnectionIds, setReverifiedUninstallConnectionIds] =
+    createSignal<ReadonlySet<string>>(new Set());
   const location = useLocation();
   const uninstallReturn = props.embedded ? undefined : uninstallReturnHref(location.search);
+  const inUninstallReturnContext = () => uninstallReturn !== undefined &&
+    uninstallReturnHref(location.search) === uninstallReturn;
   const installReturn = props.embedded || uninstallReturn ? undefined : currentInstallReturnContext();
   const [createFormOpen, setCreateFormOpen] = createSignal(
     Boolean(installReturn || uninstallReturn || props.embedded),
@@ -321,6 +325,13 @@ export default function ConnectionsTab(props: {
   };
 
   const runTest = async (id: string) => {
+    const fromUninstall = inUninstallReturnContext();
+    setReverifiedUninstallConnectionIds((ids) => {
+      if (!ids.has(id)) return ids;
+      const next = new Set(ids);
+      next.delete(id);
+      return next;
+    });
     setTestBusy(id, true);
     setTestError(id, null);
     try {
@@ -344,6 +355,9 @@ export default function ConnectionsTab(props: {
         });
       } else if (result?.status === "verified") {
         if (isLastCreated) setLastCreatedVerifiedHint(true);
+        if (!disposed && fromUninstall && inUninstallReturnContext()) {
+          setReverifiedUninstallConnectionIds((ids) => new Set(ids).add(id));
+        }
       }
     } catch (e) {
       // Raw server / exception text (English internals, HTTP status) never
@@ -393,11 +407,14 @@ export default function ConnectionsTab(props: {
   const verifiedUninstallReturn = () => {
     // The router retains this component when only the search changes. Keep
     // the verified result attached to the original app's return context.
-    if (!uninstallReturn || uninstallReturnHref(location.search) !== uninstallReturn ||
-      !lastCreatedConnectionName()) return;
-    // Use the stored connection. The redirect's status hint may be stale.
-    const connection = lastCreatedProviderConnection();
-    if (connection && isUninstallReplacementReady(connection)) return uninstallReturn;
+    if (!inUninstallReturnContext() || providerConnections.state !== "ready") return;
+    const ready = (id: string | null | undefined) => {
+      if (!id || testBusy(id)) return false;
+      const connection = providerConnectionForConnectionId(id);
+      return connection !== undefined && isUninstallReplacementReady(connection);
+    };
+    if ([...reverifiedUninstallConnectionIds()].some(ready) ||
+      (lastCreatedConnectionName() && ready(lastCreatedConnectionId()))) return uninstallReturn;
   };
   const lastCreatedReady = () =>
     lastCreatedProviderConnection()?.status === "verified" ||
