@@ -2944,7 +2944,7 @@ export async function getRunWithOptions(
 
 const RUN_READ_TIMEOUT_MS = 30_000;
 
-export async function getRun(id: string, options: Pick<RequestOpts, "isCurrent"> = {}): Promise<Run> {
+export async function getRun(id: string, options: Pick<RequestOpts, "cache" | "isCurrent"> = {}): Promise<Run> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
@@ -3010,14 +3010,37 @@ export function openRunStream(
 }
 
 export async function approveRun(
-  id: string,
-  input: { readonly reason?: string } = {},
+  plan: Run,
+  input: { readonly reason?: string; readonly isCurrent?: () => boolean } = {},
 ): Promise<Run> {
-  const body = await controlFetch<{ run: Run }>(
-    `${BASE}/runs/${encodeURIComponent(id)}/approve`,
-    { method: "POST", body: input.reason ? { reason: input.reason } : {} },
-  );
-  return body.run;
+  const matchesApprovedPlan = (observed: Run | undefined): observed is Run =>
+    observed?.id === plan.id && observed.type === plan.type &&
+    observed.workspaceId === plan.workspaceId && observed.capsuleId === plan.capsuleId &&
+    observed.planDigest === plan.planDigest &&
+    observed.baseStateGeneration === plan.baseStateGeneration &&
+    observed.status === "succeeded";
+  const scope = { isCurrent: input.isCurrent };
+  try {
+    const body = await controlFetch<{ run: Run }>(
+      `${BASE}/runs/${encodeURIComponent(plan.id)}/approve`,
+      { ...scope, method: "POST", body: input.reason ? { reason: input.reason } : {} },
+    );
+    throwIfReadRetired(scope);
+    if (matchesApprovedPlan(body?.run)) return body.run;
+    throw new ControlApiError(502, "invalid_plan_approval_response", "The approval response did not match this Plan.");
+  } catch (failure) {
+    const outcomeUnknown = failure instanceof ControlApiError
+      ? failure.status >= 500
+      : failure instanceof TypeError;
+    if (!outcomeUnknown) throw failure;
+    // The approval may have committed before the response was lost. Recover
+    // only from this Plan's authoritative readback, without another POST.
+    throwIfReadRetired(scope);
+    const observed = await getRun(plan.id, { ...scope, cache: "no-store" });
+    throwIfReadRetired(scope);
+    if (matchesApprovedPlan(observed)) return observed;
+    throw failure;
+  }
 }
 
 async function getRunLogsWithOptions(

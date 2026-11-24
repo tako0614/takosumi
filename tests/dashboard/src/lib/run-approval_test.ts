@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   awaitsDeployApproval,
@@ -6,7 +6,10 @@ import {
   isDeployApprovalCandidate,
   isReviewRun,
 } from "../../../../dashboard/src/lib/run-approval.ts";
-import type { Run } from "../../../../dashboard/src/lib/control-api.ts";
+import { approveRun, type Run } from "../../../../dashboard/src/lib/control-api.ts";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = originalFetch; });
 
 function planRun(overrides: Partial<Run> = {}): Run {
   return {
@@ -118,5 +121,70 @@ describe("shared deploy-approval predicate (run list ↔ run view)", () => {
         }),
       ]),
     ).toBe(true);
+  });
+});
+
+describe("readback after approving a reviewed Plan", () => {
+  const reviewed = planRun({ status: "waiting_approval", planDigest: "sha256:reviewed", baseStateGeneration: 1 });
+  const approved = { ...reviewed, status: "succeeded" } as const;
+  const approvalPath = "/api/v1/runs/run_plan/approve";
+  const runPath = "/api/v1/runs/run_plan";
+
+  test.each(["matching approval", "bad gateway", "transport error", "mismatched approval"] as const)(
+    "%s only accepts the exact approved Plan",
+    async (scenario) => {
+      const calls: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        calls.push(`${init?.method} ${path}`);
+        if (path === approvalPath) {
+          expect(JSON.parse(String(init?.body))).toEqual({ reason: "review" });
+          if (scenario === "bad gateway") return new Response(null, { status: 502 });
+          if (scenario === "transport error") throw new TypeError("Failed to fetch");
+          return Response.json({ run: scenario === "matching approval" ? approved : { ...approved, id: "other" } });
+        }
+        expect(path).toBe(runPath);
+        expect(init?.cache).toBe("no-store");
+        return Response.json({ run: approved });
+      }) as typeof fetch;
+      await expect(approveRun(reviewed, { reason: "review" })).resolves.toEqual(approved);
+      expect(calls).toEqual([
+        `POST ${approvalPath}`,
+        ...(scenario === "matching approval" ? [] : [`GET ${runPath}`]),
+      ]);
+    },
+  );
+
+  test.each([
+    { status: "waiting_approval" },
+    { id: "other" },
+    { capsuleId: "capsule_2" },
+    { workspaceId: "workspace_2" },
+    { type: "destroy_plan" },
+    { planDigest: "sha256:changed" },
+    { baseStateGeneration: 2 },
+  ] satisfies Partial<Run>[])("an unconfirmed or changed Plan %p leaves the approval unresolved", async (change) => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      calls.push(`${init?.method} ${path}`);
+      if (path === approvalPath) return new Response(null, { status: 502 });
+      return Response.json({ run: { ...approved, ...change } });
+    }) as typeof fetch;
+    await expect(approveRun(reviewed)).rejects.toMatchObject({ status: 502 });
+    expect(calls).toEqual([`POST ${approvalPath}`, `GET ${runPath}`]);
+  });
+
+  test.each(["refused", "retired"] as const)("the %s approval does not start a readback", async (scenario) => {
+    let current = true;
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(`${init?.method} ${input}`);
+      if (scenario === "retired") current = false;
+      return new Response(null, { status: scenario === "refused" ? 403 : 502 });
+    }) as typeof fetch;
+    await expect(approveRun(reviewed, { isCurrent: () => current }))
+      .rejects.toMatchObject(scenario === "refused" ? { status: 403 } : { name: "AbortError" });
+    expect(calls).toEqual([`POST ${approvalPath}`]);
   });
 });
