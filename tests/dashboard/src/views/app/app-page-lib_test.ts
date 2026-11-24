@@ -396,6 +396,24 @@ describe("history", () => {
     expect(events).toEqual([{ key: "run:apply_1", kind: "install", at: "2026-10-01T00:01:00.000Z", runId: "apply_1", version: "main · aaaaaaa" }]);
   });
 
+  test("labels the successful Apply of an explicit rollback separately from version changes", () => {
+    const rollback = run({
+      id: "apply_4", capsuleId: "cap_app", type: "apply", status: "succeeded", planRunId: "plan_rollback",
+      sourceSnapshotId: "snap_1", createdAt: "2026-10-04T00:01:00.000Z",
+    });
+    const plan = run({
+      id: "plan_rollback", capsuleId: "cap_app", type: "plan", status: "succeeded",
+      origin: { kind: "rollback", stateVersionId: "sv_1" }, sourceSnapshotId: "snap_1",
+      createdAt: "2026-10-04T00:00:00.000Z",
+    });
+    const otherRuns = runs.filter((row) => row.id !== rollback.id);
+    const forPlan = (row: Run) => appRunHistory({ runs: [rollback, row, ...otherRuns], stateVersions: versions, snapshots })
+      .find((event) => event.runId === rollback.id);
+    expect(forPlan(plan)).toMatchObject({ kind: "rollback", version: "v1.0.0 · aaaaaaa" });
+    expect(forPlan({ ...plan, capsuleId: "cap_other" })?.kind).toBe("version");
+    expect(forPlan({ ...plan, id: "plan_unrelated" })?.kind).toBe("version");
+  });
+
   test("a removal, a recovery and work under way read as such", () => {
     const events = appRunHistory({
       runs: [

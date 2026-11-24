@@ -682,6 +682,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.history.empty": "Nothing has happened yet.",
   "app.history.install": "Installed",
   "app.history.update": "Updated",
+  "app.history.rollback": "Rolled back to a previous version",
   "app.history.version": "Changed version",
   "app.history.settings": "Changed settings",
   "app.history.change": "Applied a change",
