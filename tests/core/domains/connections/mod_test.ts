@@ -107,6 +107,37 @@ test("a missing saved provider connection is unavailable but a missing selection
   });
 });
 
+test("Destroy recovery reports an invalid effective expiry on the logical binding", async () => {
+  const { store, model, service } = await setup();
+  const original = connection({ id: "conn_original", workspaceId: model.workspace.id });
+  const replacement = connection({ id: "conn_replacement", workspaceId: model.workspace.id });
+  await store.putConnection(original);
+  await transitionProviderBindingSetForFixture(store, {
+    id: "dp_recovery_expiry", workspaceId: model.workspace.id, capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [{ provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: original.id }],
+    createdAt: NOW, updatedAt: NOW,
+  });
+
+  for (const [expiresAt, unavailable] of [
+    [undefined, false],
+    ["2026-06-06T00:00:01.000Z", false],
+    [NOW, true],
+    ["invalid-date", true],
+    ["", true],
+  ] as const) {
+    await store.putConnection({ ...replacement, ...(expiresAt === undefined ? {} : { expiresAt }) });
+    expect(await service.listAppliedDestroyConnectionIds(model.capsule, [requiredBinding()], {
+      appliedReplacements: [{ connectionId: original.id, replacementConnectionId: replacement.id }],
+      now: Date.parse(NOW),
+    })).toEqual({
+      requiredConnectionIds: [original.id],
+      recoveryConnectionIds: [original.id],
+      unavailableRecoveryConnectionIds: unavailable ? [original.id] : [],
+    });
+  }
+});
+
 test("secret ProviderConnection binding resolves to its credential row", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(

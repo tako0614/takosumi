@@ -539,7 +539,7 @@ export class ConnectionsService {
               const { connection } = await this.#resolveBinding(
                 capsule, { ...binding, connectionId: effectiveId }, policy, "stored",
               );
-              if (connection.expiresAt && Date.parse(connection.expiresAt) <= replacementReadiness.now) {
+              if (!verifiedConnectionExpiryAllowsUse(connection, replacementReadiness.now)) {
                 return binding.connectionId;
               }
             } catch (error) {
@@ -677,7 +677,7 @@ export class ConnectionsService {
       const replacementId = replacements.get(bindingId);
       if (replacementId === undefined) continue;
       if (entry.connection.id !== replacementId) refuse();
-      if (!verifiedConnectionExpiryAllowsUse(entry.connection, this.#now())) refuse();
+      if (!verifiedConnectionExpiryAllowsUse(entry.connection, Date.parse(this.#now()))) refuse();
       if (entry.connection.scope === "operator") refuse();
       if (!input.hasVerifiedAccountScope(entry.connection)) refuse("replacement_unverified");
     }
@@ -798,7 +798,7 @@ export class ConnectionsService {
       if (connection) {
         if (await stableJsonDigest(connection) !== fingerprints.get(id)) return false;
         if (selectedReplacements.has(id) &&
-          (!verifiedConnectionExpiryAllowsUse(connection, this.#now()) ||
+          (!verifiedConnectionExpiryAllowsUse(connection, Date.parse(this.#now())) ||
             !input.hasVerifiedAccountScope(connection))) return false;
       } else {
         if (!selectedReplacements.has(id) || unchangedIds.has(id)) return false;
@@ -1328,8 +1328,8 @@ function connectionUsableForProviderBinding(
   return connection.status === "verified";
 }
 
-function verifiedConnectionExpiryAllowsUse(connection: ProviderConnection, now: string): boolean {
-  return connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.parse(now);
+function verifiedConnectionExpiryAllowsUse(connection: ProviderConnection, now: number): boolean {
+  return connection.expiresAt === undefined || Date.parse(connection.expiresAt) > now;
 }
 
 /** Collects the connection ids a run's vault-backed credential mint may draw from. */
