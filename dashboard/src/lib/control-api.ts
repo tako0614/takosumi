@@ -1418,6 +1418,42 @@ export async function reconcileGitRevisionPlan(
   );
 }
 
+/** A lost acknowledgement or concurrent reconciler can leave a settled Plan. */
+async function reconcileGitRevisionPlanForReview(
+  revisionPlanId: string,
+  options: Pick<RequestOpts, "signal" | "isCurrent">,
+  capsuleId?: string,
+): Promise<GitRevisionPlanResponse> {
+  try {
+    return await reconcileGitRevisionPlan(revisionPlanId, options);
+  } catch (failure) {
+    const needsReadback = failure instanceof ControlApiError
+      ? failure.status >= 500 ||
+        (failure.status === 409 &&
+          (failure.code === "reconcile_in_progress" || failure.code === "reconcile_conflict"))
+      : failure instanceof TypeError;
+    if (!needsReadback) throw failure;
+    throwIfAborted(options.signal);
+    throwIfReadRetired(options);
+
+    // A GET is enough if this exact coordinator already settled. Pending
+    // preparation still requires explicit continuation after the failure.
+    const response = await controlFetch<GitRevisionPlanResponse>(
+      `${BASE}/revision-plans/${encodeURIComponent(revisionPlanId)}`,
+      { ...options, cache: "no-store" },
+    );
+    throwIfAborted(options.signal);
+    throwIfReadRetired(options);
+    const plan = response?.revisionPlan;
+    if (plan?.id !== revisionPlanId || plan.operation !== "revision" ||
+      (capsuleId !== undefined && plan.capsuleId !== capsuleId)) throw failure;
+    if (response.nextAction === "review_run" && plan.phase === "reviewable" &&
+      typeof plan.planRunId === "string" && plan.planRunId.length > 0) return response;
+    if (response.nextAction === "none" && plan.phase === "failed") return response;
+    throw failure;
+  }
+}
+
 function gitPlanTimeout(kind: "install" | "revision"): ControlApiError {
   return new ControlApiError(
     504,
@@ -1635,7 +1671,7 @@ export async function createReviewableGitRevisionPlan(
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
       reconcile: (current) =>
-        reconcileGitRevisionPlan(current.revisionPlan.id, requestScope),
+        reconcileGitRevisionPlanForReview(current.revisionPlan.id, requestScope, capsuleId),
     });
     throwIfReadRetired(requestScope);
     options.onSettled?.(response);
@@ -2289,12 +2325,18 @@ export async function advanceGitInstallPlan(
  */
 export async function advanceGitRevisionPlan(
   revisionPlanId: string,
-  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence; readonly isCurrent?: () => boolean } = {},
+  options: {
+    readonly timeoutMs?: number;
+    readonly pollCadence?: GitPlanPollCadence;
+    readonly isCurrent?: () => boolean;
+    readonly expectedCapsuleId?: string;
+  } = {},
 ): Promise<GitRevisionPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("revision", options.timeoutMs, async (signal) => {
     const requestScope = { signal, isCurrent: options.isCurrent };
-    const first = await reconcileGitRevisionPlan(revisionPlanId, requestScope);
+    const reconcile = () => reconcileGitRevisionPlanForReview(revisionPlanId, requestScope, options.expectedCapsuleId);
+    const first = await reconcile();
     throwIfAborted(signal);
     throwIfReadRetired(requestScope);
     const response = await driveGitPlanReconcile<GitRevisionPlanResponse>({
@@ -2305,7 +2347,7 @@ export async function advanceGitRevisionPlan(
       initial: first,
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
-      reconcile: () => reconcileGitRevisionPlan(revisionPlanId, requestScope),
+      reconcile,
     });
     throwIfReadRetired(requestScope);
     return response;

@@ -295,7 +295,7 @@ describe("installed app page", () => {
     const continueRevision = page.slice(page.indexOf("const continueRevision = (revisionPlanId: string) =>"), page.indexOf("const [screenRetryBusy"));
     // A continued revision that settles without a Plan (for example already
     // current) reports its own diagnostic, not a generic "not started".
-    expect(continueRevision).toContain("const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent });");
+    expect(continueRevision).toContain("const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent, expectedCapsuleId: forCapsule });");
     expect(continueRevision).toContain('response.nextAction === "none" && plan.phase === "failed"');
     expect(continueRevision).toContain("return requireReviewableRevisionPlan(response).revisionPlan.planRunId;");
     expect(continueRevision).toContain('"update",');

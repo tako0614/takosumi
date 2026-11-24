@@ -32,6 +32,7 @@ function revisionResponse(
       id: "revision_plan_1",
       capsuleId: "capsule_1",
       operation: "revision",
+      phase: nextAction === "review_run" ? "reviewable" : "syncing_source",
       ...(nextAction === "review_run" ? { planRunId: "plan_run_1" } : {}),
     },
     nextAction,
@@ -131,6 +132,85 @@ test("retiring the creator leaves the accepted revision for explicit continuatio
     "/api/v1/revision-plans/revision_plan_1/reconcile",
   ]);
 });
+
+test.each([
+  { start: "create", status: 502, code: "bad_gateway" },
+  { start: "continue", status: 409, code: "reconcile_in_progress" },
+  { start: "continue", status: 409, code: "reconcile_conflict" },
+  { start: "continue", status: 0, code: "transport_error" },
+] as const)("a $status $code from revision reconcile reads the stored review", async ({ start, status, code }) => {
+  const calls: string[] = [];
+  const createPath = "/api/v1/capsules/capsule_1/revision-plans";
+  const revisionPath = "/api/v1/revision-plans/revision_plan_1";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
+    calls.push(`${method} ${path}`);
+    if (method === "POST" && path === createPath) return json(revisionResponse("reconcile"), 201);
+    if (method === "POST" && path === `${revisionPath}/reconcile`) {
+      if (status === 0) throw new TypeError("Failed to fetch");
+      return json({ error: { code } }, status);
+    }
+    if (method === "GET" && path === revisionPath) {
+      expect(init?.cache).toBe("no-store");
+      return json(revisionResponse("review_run"));
+    }
+    throw new Error(`unexpected request: ${method} ${path}`);
+  }) as typeof fetch;
+
+  const request = start === "create"
+    ? createReviewableGitRevisionPlan("capsule_1", { ref: "release/v2" })
+    : advanceGitRevisionPlan("revision_plan_1");
+  await expect(request).resolves.toMatchObject({
+    nextAction: "review_run",
+    revisionPlan: { id: "revision_plan_1", planRunId: "plan_run_1" },
+  });
+  expect(calls).toEqual([
+    ...(start === "create" ? [`POST ${createPath}`] : []),
+    `POST ${revisionPath}/reconcile`,
+    `GET ${revisionPath}`,
+  ]);
+});
+
+test.each(["unfinished", "wrong revision", "wrong app", "continuing wrong app", "missing Plan", "retired"] as const)(
+  "revision readback stops without another POST when %s",
+  async (result) => {
+    const calls: string[] = [];
+    const continuing = result === "continuing wrong app";
+    let current = true;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${path}`);
+      if (path === "/api/v1/capsules/capsule_1/revision-plans") {
+        return json(revisionResponse("reconcile"), 201);
+      }
+      if (method === "POST") return json({ error: { code: "bad_gateway" } }, 502);
+      if (result === "retired") current = false;
+      if (result === "unfinished") return json(revisionResponse("reconcile"));
+      return json({
+        nextAction: "review_run",
+        revisionPlan: {
+          id: result === "wrong revision" ? "revision_other" : "revision_plan_1",
+          capsuleId: continuing || result === "wrong app" ? "capsule_other" : "capsule_1",
+          phase: "reviewable",
+          operation: "revision",
+          ...(result !== "missing Plan" ? { planRunId: "plan_run_1" } : {}),
+        },
+      });
+    }) as typeof fetch;
+    const isCurrent = () => current;
+    const request = continuing
+      ? advanceGitRevisionPlan("revision_plan_1", { isCurrent, expectedCapsuleId: "capsule_1" })
+      : createReviewableGitRevisionPlan("capsule_1", { ref: "release/v2" }, { isCurrent });
+    await expect(request).rejects.toMatchObject(result === "retired" ? { name: "AbortError" } : { status: 502 });
+    expect(calls).toEqual([
+      ...(continuing ? [] : ["POST /api/v1/capsules/capsule_1/revision-plans"]),
+      "POST /api/v1/revision-plans/revision_plan_1/reconcile",
+      "GET /api/v1/revision-plans/revision_plan_1",
+    ]);
+  },
+);
 
 test("retiring the owner during the reconcile delay prevents the next command", async () => {
   let current = true;
