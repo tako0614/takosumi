@@ -22,7 +22,7 @@ function replacementConnectionLabel(connection: ProviderConnection, original: bo
 
 export default function AppUninstallConnectionRecovery(props: {
   readonly app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "problems" | "latestRun" | "uninstall">;
-  readonly mode: "unavailable" | "failed" | "refused";
+  readonly mode: "unavailable" | "failed" | "refused" | "before_approval";
   readonly disabled: boolean;
   readonly onReview: (replacements: readonly DestroyProviderConnectionReplacement[]) => void;
 }) {
