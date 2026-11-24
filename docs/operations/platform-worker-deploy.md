@@ -317,7 +317,8 @@ digests. `candidateVersionId` is present after parsing the upload
 acknowledgement or verifying the exact resume candidate. A successful
 post-activation authority read also supplies `observedServingVersionId`.
 If the authority comparison fails, `authorityDrift` lists the changed sections
-without disclosure of the compared values.
+without disclosure of the compared values. Container drift also lists the changed
+identity, readiness, or health field names in `containerDriftFields`.
 
 The lane never retries a mutation. Read immutable Version and deployment
 history before recovery. Use the original upload acknowledgement to identify

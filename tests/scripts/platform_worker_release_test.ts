@@ -490,6 +490,7 @@ async function exerciseCodeLane(options: {
   readonly topologyDriftAt?: number;
   readonly routeDrift?: CodeRouteDrift;
   readonly containerDrift?: boolean;
+  readonly containerFailsAfterUpload?: boolean;
   readonly containerFailsAfterActivation?: boolean;
   readonly uploadFails?: boolean;
   readonly scopedGateFails?: boolean;
@@ -707,7 +708,8 @@ async function exerciseCodeLane(options: {
       return { exitCode: 0, stdout: JSON.stringify([container.summary]), stderr: "" };
     }
     if (argv[1] === "containers" && argv[2] === "info") {
-      const detail = activated && options.containerFailsAfterActivation
+      const detail = (activated && options.containerFailsAfterActivation) ||
+          (uploadCount > 0 && options.containerFailsAfterUpload)
         ? statusContainerSource({ failed: 1 }).detail
         : container.detail;
       return { exitCode: 0, stdout: JSON.stringify(detail), stderr: "" };
@@ -1745,6 +1747,7 @@ test("incomplete resume reports observed serving Version and drift sections afte
     candidateVersionId: CODE_DEPLOYED_ID,
     observedServingVersionId: CODE_DEPLOYED_ID,
     authorityDrift: ["container", "topology"],
+    containerDriftFields: ["health.failed"],
   });
   expect(((result.error as Error).cause as Error).message).toBe("platform_worker_code_authority_drift");
   const before = await exerciseCodeLane({ ...options, topologyDriftAt: 2 });
@@ -1754,6 +1757,20 @@ test("incomplete resume reports observed serving Version and drift sections afte
   expect(lost.results).toHaveLength(1);
   expect(lost.results[0]).toMatchObject({ status: "incomplete", candidateVersionId: CODE_DEPLOYED_ID });
   expect(lost.results[0]).not.toHaveProperty("observedServingVersionId");
+});
+
+test("incomplete staging code identifies the Container field that blocked activation", async () => {
+  const result = await exerciseCodeLane({ candidateReadFailures: 1, containerFailsAfterUpload: true });
+  expect(result.uploadCount).toBe(1);
+  expect(result.activationCount).toBe(0);
+  expect(result.results).toHaveLength(1);
+  expect(result.results[0]).toMatchObject({
+    status: "incomplete",
+    mutation: "upload",
+    candidateVersionId: CODE_DEPLOYED_ID,
+    authorityDrift: ["container"],
+    containerDriftFields: ["health.failed"],
+  });
 });
 
 test("platform release owns isolated staging and production targets", () => {
