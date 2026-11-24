@@ -793,9 +793,10 @@ export default function AppManagePage(props: {
             capsuleId={capsuleId()}
             onDone={() => finishReview(active())}
             blockedReason={uninstallReviewBlockedReason()}
+            // Details can change during submission without remounting the connection recovery.
+            onOpenHeldRemovalDetails={active().purpose === "uninstall" ? heldRemovalDetails(active()) : undefined}
             {...(active().purpose === "uninstall" ? {
               uninstallConnectionScope: uninstallScope(),
-              onOpenHeldRemovalDetails: heldRemovalDetails(active()),
               uninstallConnectionRecovery: (runId: string, stage: UninstallConnectionReviewStage, disabled?: () => boolean) =>
                 uninstallReviewRecovery(active(), runId, stage, disabled),
             } : {})}
