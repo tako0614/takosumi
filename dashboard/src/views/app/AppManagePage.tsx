@@ -734,6 +734,13 @@ export default function AppManagePage(props: {
 
   const policyReasonsOnCard = (runId: string) =>
     app()?.problems.some((problem) => problem.code === "policy_blocked" && problem.runId === runId) === true;
+  const uninstallReviewBlockedReason = () => {
+    const active = review();
+    if (active?.purpose !== "uninstall") return;
+    if (starting()?.action === "uninstall_now") return t("app.review.loading");
+    if (switchableUninstallReview(app())) return t("app.uninstall.reviewReplaced");
+    if (unconfirmedUninstallReview() === active) return t("app.review.notStarted");
+  };
   const reviewPanel = (section: ReviewSection) => (
     <Show when={review()?.section === section && (review()?.purpose !== "uninstall" || isOwner()) ? review() : undefined}>
       {(active) => (
@@ -748,11 +755,7 @@ export default function AppManagePage(props: {
             {...(active().initialRunId ? { initialRunId: active().initialRunId! } : {})}
             capsuleId={capsuleId()}
             onDone={() => finishReview(active())}
-            blockedReason={active().purpose === "uninstall"
-              ? starting()?.action === "uninstall_now" ? t("app.review.loading")
-                : switchableUninstallReview(app()) ? t("app.uninstall.reviewReplaced")
-                : unconfirmedUninstallReview() === active() ? t("app.review.notStarted") : undefined
-              : undefined}
+            blockedReason={uninstallReviewBlockedReason()}
             {...(active().purpose === "uninstall" ? {
               uninstallConnectionScope: uninstallScope(),
               uninstallConnectionRecovery: (runId: string, stage: UninstallConnectionReviewStage, disabled?: () => boolean) =>
