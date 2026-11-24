@@ -246,6 +246,18 @@ test("receipt-only capability retains custody across deletion and never falls th
 
 test("ordinary Node startup wires a nonblocking second pass after the unchanged heartbeat window", async () => {
   const f = await fixture();
+  const listRecoverable = f.controller.listRecoverableOpenTofuRuns.bind(f.controller);
+  let firstQueryFinished!: () => void;
+  const firstQuery = new Promise<void>(resolve => { firstQueryFinished = resolve; });
+  let queries = 0;
+  const query = spyOn(f.controller, "listRecoverableOpenTofuRuns").mockImplementation(async (options) => {
+    const rows = await listRecoverable(options);
+    if (++queries === 1) firstQueryFinished();
+    return rows;
+  });
+  let dispatchFinished!: () => void;
+  const dispatched = new Promise<void>(resolve => { dispatchFinished = resolve; });
+  const dispatchQueuedRun = f.input.operations.dispatchQueuedRun;
   let callback: (() => void) | undefined;
   const realSetTimeout = globalThis.setTimeout;
   const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms: number, ...args: unknown[]) => {
@@ -253,29 +265,41 @@ test("ordinary Node startup wires a nonblocking second pass after the unchanged 
     return realSetTimeout(fn, ms, ...args);
   }) as typeof setTimeout);
   const clock = spyOn(Date, "now");
+  let started: ReturnType<typeof startLocalApplyStartupRecovery> | undefined;
+  let signalDeadline: ReturnType<typeof setTimeout> | undefined;
   try {
     await f.stateStore.commit(f.receipt);
     const boot = Date.now();
     await f.store.putApplyRun({ ...f.run, heartbeatAt: boot - 1 });
-    const started = startLocalApplyStartupRecovery({ ...f.input, startedAt: boot, log: () => {} });
-    // Flush the actual first query chain; it must skip the still-fresh owner.
+    started = startLocalApplyStartupRecovery({ ...f.input, startedAt: boot, log: () => {}, operations: {
+      ...f.input.operations,
+      dispatchQueuedRun: async (...args) => {
+        try { await dispatchQueuedRun(...args); }
+        finally { dispatchFinished(); }
+      },
+    } });
+    // Fail within Bun's existing 5 s test budget if either observation never
+    // arrives, so finally can restore the global clock and timer spies.
+    const missingSignal = new Promise<never>((_, reject) => {
+      signalDeadline = realSetTimeout(() => reject(new Error("startup recovery signal did not complete")), 3_000);
+    });
+    // Observe the first real sweep before the event-loop turn that clears its
+    // active guard. The fresh owner must still be untouched at that point.
+    await Promise.race([firstQuery, missingSignal]);
     await new Promise<void>(resolve => realSetTimeout(resolve, 0));
     expect(f.dispatches).toBe(0);
     expect(callback).toBeDefined();
     clock.mockReturnValue(boot + RUN_HEARTBEAT_STALE_MS + 1_001);
     callback!();
-    for (let i = 0; i < 100 && (await f.store.getApplyRun(f.run.id))?.status !== "succeeded"; i++) {
-      await new Promise<void>(resolve => realSetTimeout(resolve, 1));
-    }
+    await Promise.race([dispatched, missingSignal]);
     expect((await f.store.getApplyRun(f.run.id))?.status).toBe("succeeded");
     expect(f.dispatches).toBe(1);
-    started.stop();
     const server = await readFile(new URL("../../../../deploy/node-postgres/src/server.ts", import.meta.url), "utf8");
     expect(server).toContain("startLocalApplyStartupRecovery({");
     expect(server).not.toContain("runnerProfiles: overrides.runnerProfiles");
     expect(server).toContain("opentofuRunnerExecutors: runnerExecutors");
     expect(server.indexOf("startLocalApplyStartupRecovery({")).toBeLessThan(server.indexOf("await serveOnAnyRuntime("));
-  } finally { clock.mockRestore(); timer.mockRestore(); await rm(f.root, { recursive: true, force: true }); }
+  } finally { if (signalDeadline) clearTimeout(signalDeadline); started?.stop(); clock.mockRestore(); timer.mockRestore(); query.mockRestore(); await rm(f.root, { recursive: true, force: true }); }
 });
 
 test("startup advances the existing sweep cursor past non-Apply work without dispatching it", async () => {
