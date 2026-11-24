@@ -200,11 +200,16 @@ function errorCode(error: unknown): string {
   return "request_not_confirmed";
 }
 
-function destroyConnectionRecoveryFailure(error: unknown) {
+function failedPreconditionDetails(error: unknown) {
   if (!(error instanceof DeployControlApiError) || error.status !== 409 ||
     error.code !== "failed_precondition" || !isRecord(error.body) || !isRecord(error.body.error)) return undefined;
   const { details } = error.body.error;
-  if (!isRecord(details) || details.reason !== "destroy_connection_recovery_unproven") return undefined;
+  return isRecord(details) ? details : undefined;
+}
+
+function destroyConnectionRecoveryFailure(error: unknown) {
+  const details = failedPreconditionDetails(error);
+  if (details?.reason !== "destroy_connection_recovery_unproven") return undefined;
   switch (details.connectionRecoveryFailure) {
     case "replacement_unverified":
     case "replacement_auth_mode_mismatch":
@@ -638,6 +643,7 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
   let scope: Scope | undefined; let lastRun: PublicRun | undefined; let lastPlan: PublicRun | undefined; let mutationAttempted = false;
   let expectedPlanIdentity: string | undefined; let locatedApplyId: string | undefined;
   let applyType: ApplyRunType = "apply";
+  let applyAttempted = false;
   try {
     const parsed = argumentsFor(args, "apply");
     if (parsed.help) { io.stdout(applyHelp()); return 0; }
@@ -691,6 +697,7 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
         }
       }
       signal.throwIfAborted(); mutationAttempted = true;
+      applyAttempted = true;
       lastRun = applyIdentity(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}/apply`, "POST", {}), selectedApp), scope);
       return await watch(request, lastRun, scope, signal);
     });
@@ -716,6 +723,17 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       }); readbackConfirmed = true; } catch { /* unavailable readback is not proof of no effect */ }
     }
     if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
+    const reason = failedPreconditionDetails(error)?.reason;
+    if (applyType === "destroy_apply" && applyAttempted && readbackConfirmed && !observedRun &&
+      observedPlan?.status === "succeeded" &&
+      (reason === "provider_connection_setup_required" || reason === "provider_connection_not_ready")) {
+      write(io, options, { status: "refused", appId, planRunId: planId, lastObservedPlanStatus: observedPlan.status,
+        code: "failed_precondition", reason,
+        recovery: isJapaneseCli()
+          ? "同じクラウドアカウントの確認済み接続を選び、apps recover-uninstall --connections で新しい削除Planを準備して確認してください。"
+          : "Select a verified connection for the same cloud account. Use apps recover-uninstall with --connections to prepare and review a new Destroy Plan." });
+      return 1;
+    }
     write(io, options, { status: observedRun && !SETTLED.has(observedRun.status) ? "pending" : mutationAttempted || options.observeOnly === true ? "indeterminate" : "refused",
       appId, planRunId: planId, lastObservedPlanStatus: observedPlan?.status, runId: observedRun?.id ?? observedApplyId, runStatus: observedRun?.status, code: errorCode(error),
       runUrl: observedRun ? runUrl(options, observedRun.id) : undefined,
