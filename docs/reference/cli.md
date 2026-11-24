@@ -69,6 +69,7 @@ takosumi apps update cap_example --ref release/v2 --revision-plan grp_example \
 
 `--revision-plan`を指定すると、最初に同じ接続先でその更新を読み、アプリとrefの一致を確認します。
 続行が必要な場合は現在の更新権限で同じ処理を進めます。Planがすでに準備済みなら読取りだけで内容を確認できます。
+他の処理と進行が競合した場合は、同じ更新を一度読み直します。準備済みのPlanを確認できれば内容を表示し、準備中なら更新IDを保持して `unconfirmed` を返します。
 `--revision-plan`と`--idempotency-key`は排他です。明確な受付拒否は`refused`、受付済み更新の進行や結果を確認できない場合は`unconfirmed`、保存Planが期限切れなどで確認できない状態なら`plan_not_reviewable`で、いずれもexit 1です。
 
 `review_required`は更新完了ではありません。表示されたapp、`planRunId`、ref、source snapshot、Plan digest、変更数、

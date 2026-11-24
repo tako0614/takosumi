@@ -72,6 +72,7 @@ takosumi apps update cap_example --ref release/v2 --revision-plan grp_example \
 The CLI first reads the existing update and checks the app and ref. It
 advances that coordinator when necessary, using current app update
 permission. A prepared Plan can be reviewed with reads alone.
+If another caller is advancing the same update, the CLI reads the coordinator once. It displays a prepared Plan when the evidence matches and returns `unconfirmed` with the update ID if preparation is still in progress.
 `--revision-plan` and `--idempotency-key` are mutually exclusive. A definite
 admission rejection returns `refused`, an uncertain outcome for an accepted
 update returns `unconfirmed`, and a saved Plan that can no longer be reviewed

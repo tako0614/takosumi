@@ -1376,14 +1376,25 @@ test("credential and target selection stay fixed across asynchronous coordinator
   }
 });
 
-test("a post-create reconcile conflict preserves the durable coordinator as unconfirmed", async () => {
-  let count = 0;
-  const r = await invoke(["apps", "update", "cap_owned", "--ref", ref, "--idempotency-key", "fixed", "--url", origin, "--token", "pat", "--json"], () => {
-    count++;
-    return count === 1 ? Response.json({ revisionPlan: revision, nextAction: "reconcile", links: {} })
-      : Response.json({ error: { code: "reconcile_in_progress" } }, { status: 409 });
-  });
-  expect(r.code).toBe(1);
-  expect(r.result).toMatchObject({ status: "unconfirmed", revisionPlanId: revision.id, code: "reconcile_in_progress" });
-  expect(r.calls).toHaveLength(2);
+test.each(["reconcile_in_progress", "reconcile_conflict"] as const)("a post-create %s preserves the durable coordinator as unconfirmed", async conflict => {
+  for (const observation of ["pending", "different-id", "forbidden"] as const) {
+    const r = await invoke(["apps", "update", "cap_owned", "--ref", ref, "--idempotency-key", "fixed", "--url", origin, "--token", "pat", "--json"], req => {
+      const path = new URL(req.url).pathname;
+      if (path === "/api/v1/capsules/cap_owned/revision-plans") {
+        return Response.json({ revisionPlan: revision, nextAction: "reconcile", links: {} });
+      }
+      if (req.method === "POST") return Response.json({ error: { code: conflict } }, { status: 409 });
+      if (observation === "forbidden") return Response.json({ error: { code: "forbidden" } }, { status: 403 });
+      const observed = observation === "different-id" ? { ...revision, id: "rev_wrong" } : revision;
+      return Response.json({ revisionPlan: observed, nextAction: "reconcile", links: {} });
+    });
+    expect(r.code).toBe(1);
+    expect(r.result).toMatchObject({ status: "unconfirmed", revisionPlanId: revision.id,
+      code: observation === "different-id" ? "revision_identity_mismatch" : conflict });
+    expect(r.calls.map(req => `${req.method} ${new URL(req.url).pathname}`)).toEqual([
+      "POST /api/v1/capsules/cap_owned/revision-plans",
+      `POST /api/v1/revision-plans/${revision.id}/reconcile`,
+      `GET /api/v1/revision-plans/${revision.id}`,
+    ]);
+  }
 });
