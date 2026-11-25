@@ -680,7 +680,7 @@ export default function AppManagePage(props: {
         if (hold && (responseUncertain || missingPlanId || savingTimedOut)) {
           // The old Plan can still be the latest while the replacement request is in flight.
           try {
-            await refetchApp({ isCurrent });
+            await readUninstallPreflight(async (scope) => await refetchApp(scope), { isCurrent });
           } catch {
             // Keep the approval held when the readback also fails.
           }
@@ -865,7 +865,7 @@ export default function AppManagePage(props: {
     const epoch = uninstallEpoch;
     const isCurrent = () => !disposed && isOwner() && review() === held &&
       uninstallScope() === scope && uninstallEpoch === epoch;
-    if (isCurrent()) void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
+    void readUninstallPreflight(async (scope) => await refetchApp(scope), { isCurrent }).catch(() => {});
   };
   const reviewPanel = (section: ReviewSection) => (
     <Show when={review()?.section === section && (review()?.purpose !== "uninstall" || isOwner()) ? review() : undefined}>

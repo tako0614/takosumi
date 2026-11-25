@@ -1811,12 +1811,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionReadbackDeadline", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionInventoryUnavailable: "an uninstall review holds old approval until checking replacement connections finishes",
       reviewDifferentConnectionPreflightDeadline: "an uninstall review can retry when prerequisite reads time out",
       reviewDifferentConnectionLostResponse: "a missing uninstall Plan response keeps the previous approval held during readback",
+      reviewDifferentConnectionReadbackDeadline: "an uninstall review can refresh after its replacement readback times out",
       reviewDifferentConnectionSavedLate: "an uninstall connection change keeps the old approval held when its Plan is saved late",
       reviewDifferentConnectionTimedOut: "an uninstall Plan save timeout keeps old approval held and permits an explicit new review",
       reviewDifferentConnectionReserved: "a timed-out removal reads only its reserved Plan before an explicit cancel",
@@ -1849,7 +1850,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       reverifyReplacement: "uninstall recovery can return after rechecking a saved connection",
     }[scenario], async ({ page }) => {
       const lostReplacementOnInstalledApp = scenario === "lostReplacementOnInstalledApp";
-      const savesReplacementLate = scenario === "reviewDifferentConnectionSavedLate";
+      const replacementReadbackDeadline = scenario === "reviewDifferentConnectionReadbackDeadline";
+      const savesReplacementLate = scenario === "reviewDifferentConnectionSavedLate" || replacementReadbackDeadline;
       const replacementReserved = scenario === "reviewDifferentConnectionReserved";
       const replacementSaveTimesOut = scenario === "reviewDifferentConnectionTimedOut" || replacementReserved;
       const approvedElsewhere = scenario === "reviewDifferentConnectionApprovedElsewhere";
@@ -1962,6 +1964,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         ? new Promise<void>((resolve) => { finishReplacementReadback = resolve; })
         : Promise.resolve();
       let replacementReadbackStarted = false;
+      let stallManualReadback = false;
+      let manualReadbackStarted = false;
+      let finishManualReadback = () => {};
+      const manualReadbackPending = replacementReadbackDeadline
+        ? new Promise<void>((resolve) => { finishManualReadback = resolve; })
+        : Promise.resolve();
       let failedUninstallBindingReads = 0;
       let sharedKeyFailedAppReads = 0;
       let sharedKeyFailedRunReads = 0;
@@ -2329,9 +2337,20 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             await route.fulfill({ status: 401, json: { error: "fixture_late_app_response" } }).catch(() => {});
             return;
           }
-          if ((lostResponseBeforeApproval || replacementSaveTimesOut) && replacementPlanBodies.length > 0) {
+          if (stallManualReadback) {
+            manualReadbackStarted = true;
+            await manualReadbackPending;
+            await route.fulfill({ status: 401, json: { error: "fixture_late_readback_response" } }).catch(() => {});
+            return;
+          }
+          if ((lostResponseBeforeApproval || replacementSaveTimesOut) && replacementPlanBodies.length > 0 &&
+            (!replacementReadbackDeadline || !replacementReadbackStarted)) {
             replacementReadbackStarted = true;
             await replacementReadbackPending;
+            if (replacementReadbackDeadline) {
+              await route.fulfill({ status: 401, json: { error: "fixture_late_readback_response" } }).catch(() => {});
+              return;
+            }
           }
           if (firstRemovalAttempts > 0) appReadsAfterFirstRemoval += 1;
           if (sharedKeyConflict && sharedKeyPlanPhase === "failed") sharedKeyFailedAppReads += 1;
@@ -3038,7 +3057,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       }
 
       if (reviewDifferentConnection) {
-        if (replacementPreflightDeadline) await page.clock.install();
+        if (replacementPreflightDeadline || replacementReadbackDeadline) await page.clock.install();
         await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
         await problems.getByRole("button", { name: "Review", exact: true }).click();
         const review = page.getByTestId("app-review");
@@ -3168,6 +3187,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           try {
             await expect.poll(() => replacementReadbackStarted).toBe(true);
             await expect(oldApproval).toHaveAttribute("aria-disabled", "true");
+            if (replacementReadbackDeadline) {
+              await page.clock.fastForward(31_000);
+              await expect(review.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled({ timeout: 2_000 });
+              await expect(oldApproval).toHaveAttribute("aria-disabled", "true");
+            }
           } finally {
             finishReplacementReadback();
           }
@@ -3218,6 +3242,23 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               ]);
             expect(errors).toEqual([]);
             return;
+          } else if (replacementReadbackDeadline) {
+            const refresh = review.getByRole("button", { name: "Refresh", exact: true });
+            stallManualReadback = true;
+            try {
+              await refresh.click();
+              await expect.poll(() => manualReadbackStarted).toBe(true);
+              await page.clock.fastForward(31_000);
+              await expect(refresh).toBeEnabled({ timeout: 2_000 });
+              await expect(oldApproval).toHaveAttribute("aria-disabled", "true");
+            } finally {
+              stallManualReadback = false;
+              finishManualReadback();
+            }
+            await expect(page).toHaveURL(new RegExp(`/apps/${ID}$`));
+            currentUninstallReview = recoveryPlan;
+            await refresh.click();
+            await review.getByRole("button", { name: "Open latest removal review", exact: true }).click();
           } else if (savesReplacementLate) {
             await review.getByRole("button", { name: "Close", exact: true }).click();
             await problems.getByRole("button", { name: "Review", exact: true }).click();
@@ -3250,6 +3291,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             { kind: "requestfailed", path: "/api/v1/apps", detail: "net::ERR_ABORTED" },
             { kind: "requestfailed", path: "/api/v1/connections", detail: "net::ERR_ABORTED" },
             { kind: "requestfailed", path: `/api/v1/capsules/${ID}/app`, detail: "net::ERR_ABORTED" },
+          ]);
+        } else if (replacementReadbackDeadline) {
+          expect(traffic.failures.map(({ kind, url, status, detail }) => ({ kind, path: new URL(url).pathname, status, detail }))).toEqual([
+            { kind: "response", path: `/api/v1/capsules/${ID}/destroy-plan`, status: 502, detail: undefined },
+            ...Array(2).fill({ kind: "requestfailed", path: `/api/v1/capsules/${ID}/app`, status: undefined, detail: "net::ERR_ABORTED" }),
           ]);
         } else if (lostResponseBeforeApproval || replacementSaveTimesOut) {
           expect(traffic.failures.map(({ kind, url, status }) => ({ kind, path: new URL(url).pathname, status })))
