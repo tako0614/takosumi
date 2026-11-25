@@ -980,7 +980,7 @@ export async function listWorkspacePage(
     readonly selectedWorkspaceId?: string;
     readonly includeTotal?: boolean;
   } = {},
-  scope: Pick<RequestOpts, "isCurrent"> = {},
+  scope: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<WorkspaceListPage> {
   return await controlFetch<ContractPublicWorkspaceListPage>(
     `${BASE}/workspaces${query({
@@ -1000,7 +1000,7 @@ export async function listWorkspaces(
     readonly selectedWorkspaceId?: string;
     readonly limit?: number;
   } = {},
-  scope: Pick<RequestOpts, "isCurrent"> = {},
+  scope: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<readonly Workspace[]> {
   return (
     await listWorkspacePage({
@@ -3328,23 +3328,32 @@ export async function listConnectionsWithSignal(
   signal?: AbortSignal,
   options: Pick<RequestOpts, "cache" | "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
-  if (await appOwnershipAvailable(signal)) {
+  return await readConnectionsForOwnership(workspaceId, { signal, ...options }, await appOwnershipAvailable(signal));
+}
+
+async function readConnectionsForOwnership(
+  workspaceId: string | undefined,
+  scope: Pick<RequestOpts, "signal" | "cache" | "isCurrent">,
+  accountOwned: boolean,
+): Promise<readonly ProviderConnection[]> {
+  if (accountOwned) {
     try {
       return await fetchAllPages<ProviderConnection>(
         `${BASE}/connections`,
         (body) => (body.connections as readonly ProviderConnection[]) ?? [],
-        { signal, ...options },
+        scope,
       );
     } catch (error) {
       if (!isMissingControlRoute(error)) throw error;
     }
   }
-  const normalized = await legacyWorkspaceFor404(workspaceId);
+  throwIfReadRetired(scope);
+  const normalized = await legacyWorkspaceFor404(workspaceId, scope);
   if (!normalized) return [];
   return await fetchAllPages<ProviderConnection>(
     `${BASE}/connections${query({ workspaceId: normalized })}`,
     (body) => (body.connections as readonly ProviderConnection[]) ?? [],
-    { signal, ...options },
+    scope,
   );
 }
 
@@ -3359,8 +3368,15 @@ export async function listProviderConnectionsWithSignal(
   signal?: AbortSignal,
   options: Pick<RequestOpts, "cache" | "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
-  if (await appOwnershipAvailable(signal)) return await listConnectionsWithSignal(workspaceId, signal, options);
-  const normalized = await legacyWorkspaceFor404(workspaceId);
+  const scope = { signal, ...options };
+  // A caller-owned preflight must be able to retire its entire read and
+  // retry even if a shared account capability request is still pending.
+  const accountOwned = options.isCurrent
+    ? (await listAccessibleAppsPage(undefined, signal, "", options)) !== undefined
+    : await appOwnershipAvailable(signal);
+  throwIfReadRetired(scope);
+  if (accountOwned) return await readConnectionsForOwnership(workspaceId, scope, true);
+  const normalized = await legacyWorkspaceFor404(workspaceId, scope);
   if (!normalized) return [];
   return await listLegacyProviderConnectionsWithSignal(normalized, signal, options);
 }
@@ -3597,7 +3613,7 @@ export function extractRunId(envelope: unknown): string | undefined {
 
 async function legacyWorkspaceFor404(
   workspaceId?: string,
-  scope: Pick<RequestOpts, "isCurrent"> = {},
+  scope: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<string | undefined> {
   const explicit = normalizedWorkspaceId(workspaceId ?? "");
   if (explicit) return explicit;
@@ -3713,7 +3729,12 @@ export function resetAppOwnershipCache(): void {
 }
 
 /** Read one page of account summaries. Only a missing first-page route means legacy. */
-export async function listAccessibleAppsPage(cursor?: string, signal?: AbortSignal, q = ""): Promise<{
+export async function listAccessibleAppsPage(
+  cursor?: string,
+  signal?: AbortSignal,
+  q = "",
+  owner: Pick<RequestOpts, "cache" | "isCurrent"> = {},
+): Promise<{
   readonly apps: readonly AccessibleApp[];
   readonly nextCursor?: string;
   /** Absent on legacy servers that ignore q. */
@@ -3724,22 +3745,23 @@ export async function listAccessibleAppsPage(cursor?: string, signal?: AbortSign
   const path = `${BASE}/apps${query({ cursor, q: search || undefined })}`;
   let body;
   try {
-    // Typed queries have unbounded cardinality and belong to this view only.
-    // Do not retain them in the shared cache; cancellation reaches the transport.
-    body = search
-      ? await controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { signal })
+    // Keep typed searches and scoped reads out of the account-wide cache.
+    body = search || owner.isCurrent
+      ? await controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { signal, ...owner })
       : await withAppReadSignal(readCachedAppsPage(path), signal);
   } catch (error) {
+    throwIfReadRetired({ signal, ...owner });
     error = normalizeAppsRouteError(path, error);
     if (!isMissingControlRoute(error)) throw error;
     if (cursor === undefined) return undefined;
     throw new ControlApiError(502, "invalid_apps_response", "Apps pagination became unavailable.");
   }
   throwIfAborted(signal);
+  throwIfReadRetired({ signal, ...owner });
   if (!isRecord(body) || !Array.isArray(body.apps) || !body.apps.every(isHomeAppSummary) ||
     (body.nextCursor !== undefined && (typeof body.nextCursor !== "string" || !body.nextCursor)) ||
     (body.appliedQuery !== undefined && body.appliedQuery !== search)) {
-    appsPageCache.delete(path);
+    if (!owner.isCurrent) appsPageCache.delete(path);
     throw new ControlApiError(502, "invalid_apps_response", "Apps returned an invalid response.");
   }
   return { apps: body.apps as readonly AccessibleApp[], nextCursor: body.nextCursor || undefined,

@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { setImmediate as realSetImmediate } from "node:timers";
-import { appUninstallRecoveryConnections, appUninstallRecoveryMode } from "../../../../../dashboard/src/lib/capsule-uninstall.ts";
+import { appUninstallRecoveryConnections, appUninstallRecoveryMode, readUninstallPreflight } from "../../../../../dashboard/src/lib/capsule-uninstall.ts";
 import { ControlApiError, createCapsuleDestroyRecoveryPlan, extractRunId, getCapsuleAppWithSignal, getCapsuleProviderBindingSet, isRevisionAlreadyCurrent, listProviderConnectionsWithSignal, resetAppOwnershipCache } from "../../../../../dashboard/src/lib/control-api.ts";
 import { trackSubmittedUninstallReview } from "../../../../../dashboard/src/lib/uninstall-review-hold.ts";
 
@@ -54,7 +54,7 @@ test("actual replacement transport refuses retired dispatch and suppresses late 
   }
 });
 
-test.each(["bindings", "paged", "legacy"] as const)("retiring the chooser suppresses a late 401 from %s", async (endpoint) => {
+test.each(["bindings", "ownership", "paged", "legacy"] as const)("retiring the chooser suppresses a late 401 from %s", async (endpoint) => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
   const redirects: string[] = [];
   Object.defineProperty(globalThis, "location", { configurable: true, value: {
@@ -65,7 +65,7 @@ test.each(["bindings", "paged", "legacy"] as const)("retiring the chooser suppre
   const staleResponses: string[] = [];
   globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
     const path = String(input);
-    if (path === "/api/v1/apps") {
+    if (path === "/api/v1/apps" && endpoint !== "ownership") {
       return endpoint === "legacy"
         ? Response.json({ error: "route_not_found" }, { status: 404 })
         : Response.json({ apps: [] });
@@ -83,6 +83,7 @@ test.each(["bindings", "paged", "legacy"] as const)("retiring the chooser suppre
     await expect(read).rejects.toMatchObject({ name: "AbortError" });
     expect(staleResponses).toEqual([{
       bindings: "/api/v1/capsules/app/provider-bindings",
+      ownership: "/api/v1/apps",
       paged: "/api/v1/connections?cursor=next",
       legacy: "/api/v1/provider-connections?workspaceId=workspace",
     }[endpoint]]);
@@ -102,11 +103,11 @@ function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
     retire: () => { uninstallEpoch++; },
     dispose: () => { disposed = true; },
   };`;
-  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "appUninstallRecoveryMode", "appUninstallRecoveryConnections", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", "setReservedReviewCheck", "uninstallReviewAppScope", "trackSubmittedUninstallReview", transpile(script))(
+  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "appUninstallRecoveryMode", "appUninstallRecoveryConnections", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", "setReservedReviewCheck", "uninstallReviewAppScope", "trackSubmittedUninstallReview", "readUninstallPreflight", transpile(script))(
     () => state.capsuleId, () => ({ sourceId: "source" }), state, () => Boolean(state.starting), () => state.owner ? "owner" : undefined, () => state.owner,
     () => state.starting, (value: unknown) => { state.starting = value; }, (value: unknown) => { if (value) state.errors.push(value); }, () => {},
     (value: { planRunId: string }) => { state.review = value; }, () => {}, () => undefined, isRevisionAlreadyCurrent, () => ({ message: "fixture error" }), (key: string) => key, () => {}, ControlApiError,
-    async (options?: { isCurrent?: () => boolean }) => { state.reads++; return await getCapsuleAppWithSignal(state.capsuleId, undefined, options); },
+    async (options?: { signal?: AbortSignal; isCurrent?: () => boolean }) => { state.reads++; return await getCapsuleAppWithSignal(state.capsuleId, options?.signal, options); },
     () => ({
       capsuleId: state.capsuleId, workspaceId: state.workspaceId, progress: {},
       uninstall: { mode: uninstallMode, scheduled: { blocked: true } },
@@ -115,7 +116,7 @@ function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
     createCapsuleDestroyRecoveryPlan, extractRunId,
     () => JSON.stringify([state.capsuleId, state.workspaceId, state.accountId, state.principalId]),
     () => {},
-    () => [state.principalId, state.accountId, state.workspaceId, state.capsuleId], trackSubmittedUninstallReview,
+    () => [state.principalId, state.accountId, state.workspaceId, state.capsuleId], trackSubmittedUninstallReview, readUninstallPreflight,
   ) as { send: (answer: typeof pairs) => void; retire: () => void; dispose: () => void };
   return { state, ...actual };
 }
