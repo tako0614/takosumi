@@ -5,6 +5,75 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
   test.describe("App-owned Run details", () => {
     test.skip(mode !== "portable", "isolated app Run fixture only");
 
+    for (const read of ["run", "logs", "cost"] as const) {
+      test(`a retired ${read} read cannot sign the visitor out of another Run`, async ({ page }) => {
+        const first = "plan_retired_read";
+        const next = "plan_replacement_read";
+        const firstPath = `/api/v1/runs/${first}`;
+        const heldPath = read === "run" ? firstPath : `${firstPath}/${read}`;
+        const nextPath = `/api/v1/runs/${next}`;
+        await page.addInitScript((path) => {
+          localStorage.setItem("tg_lang", "en");
+          const fetch = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const response = await fetch(...args);
+            if (response.status === 401 && new URL(response.url).pathname === path) {
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                document.documentElement.dataset.retiredRunReadSettled = "true";
+              }));
+            }
+            return response;
+          };
+        }, heldPath);
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        let requested = false;
+        const writes: string[] = [];
+        await page.route("**/api/v1/**", async (route) => {
+          const { pathname } = new URL(route.request().url());
+          if (route.request().method() !== "GET") writes.push(pathname);
+          if (pathname === heldPath) {
+            requested = true;
+            await held;
+            return route.fulfill({ status: 401, json: { error: "invalid_token" } });
+          }
+          if (pathname === firstPath || pathname === nextPath) {
+            return route.fulfill({ json: { run: {
+              id: pathname === firstPath ? first : next, capsuleId: "cap_run_read_scope", workspaceId: "ws_alpha",
+              type: "plan", status: "failed", errorCode: "plan_failed", createdBy: "portable-e2e",
+              createdAt: "2026-11-25T00:00:00Z",
+            } } });
+          }
+          if (pathname.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+          if (pathname.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          return route.fallback();
+        });
+        try {
+          await page.goto(`/runs/${first}`);
+          await expect.poll(() => requested).toBe(true);
+          if (read === "logs") {
+            await expect(page.getByRole("heading", { name: /^Review changes/ })).toBeVisible();
+          }
+          const replacement = page.waitForResponse((response) => new URL(response.url()).pathname === nextPath);
+          await page.evaluate((id) => {
+            history.pushState(history.state, "", `/runs/${id}`);
+            window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+          }, next);
+          expect((await replacement).status()).toBe(200);
+          const settled = Promise.race([
+            page.waitForRequest((request) => request.isNavigationRequest() && new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+            page.waitForFunction(() => document.documentElement.dataset.retiredRunReadSettled === "true").then(() => "stayed"),
+          ]);
+          release();
+          expect(await settled).toBe("stayed");
+          await expect(page).toHaveURL((url) => url.pathname === `/runs/${next}`);
+          expect(writes).toEqual([]);
+        } finally {
+          release();
+        }
+      });
+    }
+
     for (const kind of ["version", "rollback"] as const) {
       test(`a lost ${kind} retry response returns to the original review from Run details`, async ({ page }) => {
         await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));

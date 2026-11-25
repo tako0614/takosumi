@@ -58,7 +58,7 @@ describe("RunView", () => {
     expect(source).toContain('from "../../lib/run-approval.ts"');
     expect(source).toContain("isDeployApprovalCandidate");
     expect(source).toContain("awaitsDeployApproval(r, siblings)");
-    expect(source).toContain("listPlanApplyRuns({ capsuleId, id, workspaceId, type })");
+    expect(source).toContain("listPlanApplyRuns({ capsuleId, id, workspaceId, type }, readOptions())");
     // A failed or unfinished ledger cannot prove approval is still open.
     expect(source).toContain("if (siblings === undefined) return false;");
     expect(source).toContain("if (siblingRuns.error || siblingRuns.loading) return false;");

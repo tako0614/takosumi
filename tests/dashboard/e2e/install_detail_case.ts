@@ -1318,14 +1318,16 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect.poll(() => f.mutations.filter((m) => m.startsWith("DELETE ")).length).toBe(1);
       expect(errors).toEqual([]);
     });
-    for (const read of ["app", "candidate"] as const) {
+    for (const read of ["app", "candidate", "run", "cost", "logs"] as const) {
       for (const retired of [true, false]) {
         test(`an install review's ${retired ? "retired" : "current"} ${read} read handles 401 in its own view`, async ({ page }) => {
           const fixture = await detailFixture(page, base);
           const appPath = `/api/v1/capsules/${capId}/app`;
           const candidateId = "run_recovering_install";
           const candidatePath = `/api/v1/runs/${candidateId}`;
-          const failedPath = read === "app" ? appPath : candidatePath;
+          const runPath = `/api/v1/runs/${planId}`;
+          const failedPath = { app: appPath, candidate: candidatePath, run: runPath,
+            cost: `${runPath}/cost`, logs: `${runPath}/logs` }[read];
           await page.addInitScript((path) => {
             const fetch = window.fetch.bind(window);
             window.fetch = async (...args) => {
@@ -1357,6 +1359,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
           try {
             await page.goto(sourceUrl);
             await openInstallSheet(page);
+            if (read === "logs") await page.getByText("Progress and logs", { exact: true }).click();
             await expect.poll(() => deniedReads).toBe(1);
             const current = new URL(page.url());
             const next = sourceUrl.replaceAll("cloudflare-service", "other-service");
@@ -1376,6 +1379,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
             expect(await settled).toBe(retired ? "stayed" : "redirected");
             if (retired) {
               await expect(page).toHaveURL(new URL(next, current.origin).href);
+              await expect(page.getByTestId("install-app-header")).toContainText("other-service");
             } else {
               await expect(page).toHaveURL((url) => url.pathname === "/sign-in" &&
                 url.searchParams.get("return") === current.pathname + current.search + current.hash);

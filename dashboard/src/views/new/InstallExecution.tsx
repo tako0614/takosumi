@@ -335,8 +335,14 @@ export default function InstallExecution(props: Props) {
   });
   const copy = () => REVIEW_COPY[props.purpose ?? "install"];
   const [runId, setRunId] = createSignal(props.initialRunId ?? props.planRunId);
+  const executionScope = createMemo(() => JSON.stringify([
+    props.capsuleId, props.planRunId, props.initialRunId ?? props.planRunId, props.uninstallConnectionScope,
+  ]));
+  const readScope = createMemo(() => ({ id: runId(), review: executionScope() }));
+  const ownsRead = (scope: ReturnType<typeof readScope>) => !disposed && readScope() === scope;
   const [run, { mutate, refetch }] = createResource(runId, async (id) => {
-    const value = await getRun(id);
+    const scope = readScope();
+    const value = await getRun(id, { isCurrent: () => ownsRead(scope) });
     if (value.id !== id || value.capsuleId !== props.capsuleId) throw new Error(t("installStore.recoveryUnverified"));
     return value;
   });
@@ -379,9 +385,13 @@ export default function InstallExecution(props: Props) {
   };
   const [logsOpen, setLogsOpen] = createSignal(false);
   const [logs, { refetch: refetchLogs }] = createResource(
-    () => logsOpen() ? runId() : false, async (id) => ({ runId: id, logs: await getRunLogs(id) }),
+    () => logsOpen() ? runId() : false,
+    async (id) => {
+      const scope = readScope();
+      return { scope, logs: await getRunLogs(id, { isCurrent: () => ownsRead(scope) && logsOpen() }) };
+    },
   );
-  const logLatest = createLastGoodValue(logs, (value) => value.runId === runId());
+  const logLatest = createLastGoodValue(logs, (value) => ownsRead(value.scope));
   createEffect(() => {
     if (!logsOpen()) return;
     const timer = setInterval(() => { if (!logs.loading) void refetchLogs(); }, 3_000);
@@ -647,9 +657,6 @@ export default function InstallExecution(props: Props) {
   // Apply starts only from the final "Install" click on the reviewed Plan.
   // Nothing applies automatically, and no consent survives a reload or URL.
   // Unknown POSTs are held.
-  const executionScope = () => JSON.stringify([
-    props.capsuleId, props.planRunId, props.initialRunId ?? props.planRunId, props.uninstallConnectionScope,
-  ]);
   let observedInitialRun = executionScope();
   createEffect(() => {
     const id = props.initialRunId ?? props.planRunId;
@@ -711,9 +718,12 @@ export default function InstallExecution(props: Props) {
     const latest = runLatest();
     return isReviewRun(latest?.type) && latest?.status === "succeeded" ? latest.id : undefined;
   };
-  const [planCost] = createResource(reviewedPlanRunId, (id) =>
-    readRunCost(() => getRunCostInfo(id)),
-  );
+  const [planCost] = createResource(reviewedPlanRunId, (id) => {
+    const scope = readScope();
+    return readRunCost(() => getRunCostInfo(id, {
+      isCurrent: () => ownsRead(scope) && reviewedPlanRunId() === id,
+    }));
+  });
   const costState = (): RunCostDisplayState | undefined => {
     // Never show the previous Plan's cost while the current one loads.
     if (planCost.loading) return undefined;
