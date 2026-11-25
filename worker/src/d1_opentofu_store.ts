@@ -3635,6 +3635,32 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         (input.kind === "plan" || input.kind === "apply")
       ? d1AppClaimAdmissionWhere(this.#orm, input, appOwnershipPhysical)
       : undefined;
+    const currentPlanBase = input.requireCurrentPlanBase !== true
+      ? undefined
+      : !isPlanRunRecord(candidate) || !candidate.capsuleId ||
+          candidate.operation === "destroy" || candidate.driftCheck === true
+      ? sql`false`
+      : and(
+          eq(schema.runs.type, RUN_KIND_PLAN),
+          eq(schema.runs.capsuleId, candidate.capsuleId),
+          sql`json_extract(${schema.runs.runJson}, '$.capsuleId') = ${schema.runs.capsuleId}`,
+          exists(this.#orm.select({ one: sql`1` }).from(schema.capsules).where(and(
+            eq(schema.capsules.id, schema.runs.capsuleId),
+            eq(schema.capsules.workspaceId, schema.runs.workspaceId),
+            sql`${schema.capsules.status} <> 'destroyed'`,
+            sql`${schema.capsules.currentStateVersionId} IS json_extract(${schema.runs.runJson}, '$.capsuleCurrentStateVersionId')`,
+            sql`${schema.capsules.currentStateGeneration} = coalesce(json_extract(${schema.runs.runJson}, '$.baseStateGeneration'), 0)`,
+            sql`${schema.capsules.currentStateVersionId} IS ${candidate.capsuleCurrentStateVersionId ?? null}`,
+            eq(schema.capsules.currentStateGeneration, candidate.baseStateGeneration ?? 0),
+            sql`CASE WHEN json_valid(${schema.capsules.recordJson}) THEN
+              ${schema.capsules.id} IS json_extract(${schema.capsules.recordJson}, '$.id') AND
+              ${schema.capsules.workspaceId} IS json_extract(${schema.capsules.recordJson}, '$.workspaceId') AND
+              ${schema.capsules.status} IS json_extract(${schema.capsules.recordJson}, '$.status') AND
+              ${schema.capsules.currentStateVersionId} IS json_extract(${schema.capsules.recordJson}, '$.currentStateVersionId') AND
+              ${schema.capsules.currentStateGeneration} IS json_extract(${schema.capsules.recordJson}, '$.currentStateGeneration')
+            ELSE 0 END`,
+          ))),
+        );
     const result = await this.#orm
       .update(schema.runs)
       .set({
@@ -3685,6 +3711,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               : sql`json_extract(${schema.runs.runJson}, '$.startedAt') = ${input.expectStartedAt}`,
           activeWorkspace,
           appClaim,
+          currentPlanBase,
           d1RunStoredIdentityWhere(persisted, types),
           drainSettlement !== undefined
             ? d1RunDrainSettlementManagementFence(

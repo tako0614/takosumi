@@ -1,5 +1,14 @@
 import type { Capsule, PlanRun } from "@takosumi/internal/deploy-control-api";
 
+/** A new approval of an ordinary Plan is valid only for its stored app state. */
+export function planApprovalBaseMatches(plan: PlanRun, capsule: Capsule | undefined): boolean {
+  return plan.operation !== "destroy" && plan.driftCheck !== true && capsule !== undefined &&
+    capsule.id === plan.capsuleId && capsule.workspaceId === plan.workspaceId &&
+    capsule.status !== "destroyed" &&
+    (capsule.currentStateVersionId ?? null) === (plan.capsuleCurrentStateVersionId ?? null) &&
+    capsule.currentStateGeneration === (plan.baseStateGeneration ?? 0);
+}
+
 /** The four app authority fields are an indivisible migration unit. */
 export function appRunAuthority(capsule: Capsule | undefined):
   | { readonly kind: "legacy" }
