@@ -329,7 +329,7 @@ async function readAppOverview(
             currentInstallConfigId: capsule.installConfigId,
           },
         ),
-        readConnectionIssues(operations, capsule, inventory),
+        readConnectionIssues(operations, capsule, inventory, now),
         readUninstallAdmission(operations, capsule, applied),
       ]);
   const preparation = coordinatorPreparation(coordinator, ctx.session.subject, now);
@@ -771,6 +771,7 @@ async function readConnectionIssues(
   operations: ControlPlaneOperations,
   capsule: Capsule,
   inventory: AppReadInventory,
+  now: number,
 ): Promise<readonly CapsuleAppConnectionIssue[]> {
   const bindingSet = await operations.capsules.getProviderBindingSetByCapsule(
     capsule.id,
@@ -795,12 +796,12 @@ async function readConnectionIssues(
     if (seen.has(key)) continue;
     seen.add(key);
     const connection = byId.get(binding.connectionId);
-    const status = !connection
-      ? "missing"
-      : connection.status === "revoked" ||
-          connection.status === "expired" ||
-          connection.status === "error"
-        ? connection.status
+    const recorded = connection?.status ?? "missing";
+    // The key can age out before a credential check updates its stored status.
+    const status = recorded === "missing" || recorded === "revoked" || recorded === "expired" || recorded === "error"
+      ? recorded
+      : connection?.expiresAt !== undefined && Date.parse(connection.expiresAt) <= now
+        ? "expired"
         : undefined;
     if (status) {
       issues.push({
