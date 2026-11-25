@@ -1718,7 +1718,7 @@ export interface RunEngineDependencies {
   readonly runEnv: RunEnvResolver;
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
-  readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+  readonly hasVerifiedAccountScope: (connection: ProviderConnection, observedAt?: number) => boolean;
   readonly preserveDestroyCredentialDelivery: PreserveDestroyCredentialDelivery;
   readonly recoverRevokedDestroyCredentialShape: RecoverRevokedDestroyCredentialShape;
   readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
@@ -1776,7 +1776,7 @@ export class RunEngine {
   readonly #runEnv: RunEnvResolver;
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
-  readonly #hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+  readonly #hasVerifiedAccountScope: (connection: ProviderConnection, observedAt?: number) => boolean;
   readonly #preserveDestroyCredentialDelivery: PreserveDestroyCredentialDelivery;
   readonly #recoverRevokedDestroyCredentialShape: RecoverRevokedDestroyCredentialShape;
   readonly #privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
@@ -10812,16 +10812,16 @@ export class RunEngine {
         auditRunId: run.id, mintCredentials: false,
       });
     } catch (error) {
-      if (!(await this.#hasDeletedDestroyReceiptBindingProof(run, plan, profile, inputs))) throw error;
+      if (!(await this.#hasUnavailableDestroyReceiptBindingProof(run, plan, profile, inputs))) throw error;
     }
   }
 
-  async #hasDeletedDestroyReceiptBindingProof(
+  async #hasUnavailableDestroyReceiptBindingProof(
     run: ApplyRun, plan: PlanRun, profile: RunnerProfile, inputs: PlanRunInputs | undefined,
   ): Promise<boolean> {
     const proof = inputs?.destroyReceiptBindingProof;
     const recovery = plan.destroyConnectionRecovery;
-    if (!proof || !recovery || plan.operation !== "destroy" || plan.source.kind !== "git" ||
+    if (!proof || !recovery || run.startedAt === undefined || plan.operation !== "destroy" || plan.source.kind !== "git" ||
       plan.status !== "succeeded" || !plan.approval || plan.origin?.kind === "scheduled_uninstall" ||
       plan.createdBy === "system:scheduled-uninstall" || !plan.requiredProviderRequirements ||
       proof.resolvedBindingsDigest !== plan.resolvedProviderBindingsDigest ||
@@ -10842,11 +10842,13 @@ export class RunEngine {
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections: this.#allowOperatorScopedProviderConnections,
     });
-    return await this.#connectionsService.matchesDeletedDestroyReceiptBindings({
+    return await this.#connectionsService.matchesUnavailableDestroyReceiptBindings({
       capsule,
       requiredProviders: providerBindingResolutionRequirements(plan.requiredProviderRequirements, profile),
       replacements: recovery.replacements,
       hasVerifiedAccountScope: this.#hasVerifiedAccountScope,
+      startedAt: run.startedAt,
+      observedAt: this.#now(),
       proof,
     });
   }

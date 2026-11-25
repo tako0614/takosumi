@@ -267,8 +267,9 @@ export interface CapsuleProviderBindingMintOptions {
 }
 
 export interface ConnectionVault {
-  /** Pure host-driver account predicate; absence refuses destroy reconnection. */
-  hasVerifiedAccountScope?(connection: ProviderConnection): boolean;
+  /** Pure host-driver account predicate. Completed receipt readback can check
+   * eligibility at the original Run start. New executions use the current time. */
+  hasVerifiedAccountScope?(connection: ProviderConnection, observedAt?: number): boolean;
   preserveDestroyCredentialDelivery?: PreserveDestroyCredentialDelivery;
   recoverRevokedDestroyCredentialShape?: RecoverRevokedDestroyCredentialShape;
   register(
@@ -2503,11 +2504,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     };
   }
 
-  hasVerifiedAccountScope(connection: ProviderConnection): boolean {
+  hasVerifiedAccountScope(connection: ProviderConnection, observedAt = this.#now().getTime()): boolean {
     const driver = this.#credentialDriver(connection);
-    if (!driver?.hasVerifiedAccountScope || connection.status !== "verified") return false;
+    if (!driver?.hasVerifiedAccountScope || connection.status !== "verified" || !Number.isFinite(observedAt)) return false;
     if (connection.expiresAt !== undefined &&
-      (!Number.isFinite(Date.parse(connection.expiresAt)) || Date.parse(connection.expiresAt) <= this.#now().getTime())) return false;
+      (!Number.isFinite(Date.parse(connection.expiresAt)) || Date.parse(connection.expiresAt) <= observedAt)) return false;
     try {
       const expected = credentialVerificationForDriver(driver);
       const actual = connection.credentialVerification;

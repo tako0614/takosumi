@@ -1,4 +1,4 @@
-import { expect, mock, spyOn, test } from "bun:test";
+import { expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import type { DispatchStateScope } from "@takosumi/internal/deploy-control-api";
 import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
@@ -59,6 +59,7 @@ async function fixture(options: {
   readonly responseStatus?: number;
   readonly legacy?: boolean;
   readonly replacement?: boolean;
+  readonly replacementExpiryRelation?: "after-start" | "at-start";
   readonly scheduled?: boolean;
   readonly afterWorkerUpdate?: boolean;
   readonly requestInFlight?: boolean;
@@ -74,6 +75,7 @@ async function fixture(options: {
   const profile = createDefaultRunnerProfiles(1)[0]!;
   const artifactReferenceAllocator = new ObjectKeyArtifactReferenceAllocator();
   const currentTime = Date.now();
+  const replacementExpiry = options.replacementExpiryRelation ? currentTime + 60_000 : undefined;
   const claimedAt = currentTime - RUN_HEARTBEAT_STALE_MS - 3_000;
   let now = claimedAt - (options.scheduled ? 7 * 24 * 60 * 60 * 1000 : 0);
   const appOwnership = options.scheduled ? new InMemoryAppOwnershipStore(store) : undefined;
@@ -99,6 +101,9 @@ async function fixture(options: {
         provider: FIXTURE_CLOUDFLARE_PROVIDER,
         credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
         values: { CLOUDFLARE_API_TOKEN: `fixture-key-${label}`, CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID },
+        ...(label === "replacement" && replacementExpiry !== undefined
+          ? { expiresAt: new Date(replacementExpiry).toISOString() }
+          : {}),
       }, undefined, null);
       expect((await vault.test(connection.id, undefined, null)).status).toBe("verified");
       return connection.id;
@@ -179,7 +184,8 @@ async function fixture(options: {
   }
 
   let job!: OpenTofuDestroyJob;
-  const receiptCommittedAt = new Date(claimedAt + 1_500).toISOString();
+  const startAtExpiry = options.replacementExpiryRelation === "at-start" ? replacementExpiry : undefined;
+  const receiptCommittedAt = new Date((startAtExpiry ?? claimedAt) + 1_500).toISOString();
   let phase = options.phase === "queued" || options.phase === "fresh" ? "completed" : options.phase ?? "completed";
   const inspect = mock(async (id: string, action: string) => ({
     kind: "takosumi.runner-mutation-inspection@v1",
@@ -270,8 +276,8 @@ async function fixture(options: {
   expect(applyRun).toMatchObject({ operation: "destroy", status: "queued" });
   let run = applyRun;
   if (options.phase !== "queued") {
-    const startedAt = now + 100;
-    const heartbeatAt = options.phase === "fresh" ? currentTime : now + 1_000;
+    const startedAt = startAtExpiry ?? now + 100;
+    const heartbeatAt = options.phase === "fresh" ? currentTime : (startAtExpiry ?? now) + 1_000;
     run = { ...run, status: "running", startedAt, heartbeatAt, updatedAt: heartbeatAt };
     const claim = await store.transitionRun({
       id: run.id, kind: "apply", expectFrom: ["queued"],
@@ -296,9 +302,9 @@ async function fixture(options: {
   providerFetch.mockClear();
   const makeReceiptAvailable = () => {
     phase = "completed";
-    now += RUN_HEARTBEAT_STALE_MS + 1;
+    now = Math.max(now, run.heartbeatAt ?? now) + RUN_HEARTBEAT_STALE_MS + 1;
   };
-  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, providerFetch, validateUninstallRequester, vault, makeReceiptAvailable };
+  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, replacementExpiry, providerFetch, validateUninstallRequester, vault, makeReceiptAvailable };
 }
 
 for (const persistedFailure of [false, true]) {
@@ -437,6 +443,49 @@ test.each([false, true])("a completed replacement Destroy settles after local re
   }
 });
 
+test("a completed replacement Destroy settles after the same connection expires", async () => {
+  const f = await fixture({ replacement: true, replacementExpiryRelation: "after-start" });
+  const replacement = (await f.store.getConnection(f.replacement!.replacementConnectionId))!;
+  expect(replacement.status).toBe("verified");
+  expect(replacement.expiresAt).toBe(new Date(f.replacementExpiry!).toISOString());
+  expect(f.run.startedAt).toBeLessThan(f.replacementExpiry!);
+  const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+  const destroy = spyOn(f.runner, "destroy");
+  try {
+    setSystemTime(new Date(f.replacementExpiry! + 1));
+    f.makeReceiptAvailable();
+    await f.dispatch();
+    const settled = await f.store.getApplyRun(f.run.id);
+    expect(settled).toMatchObject({ status: "succeeded", startedAt: f.run.startedAt, stateVersionId: f.stateVersionId });
+    expect(await f.store.getCapsule(f.capsule.id)).toMatchObject({ status: "destroyed", currentStateGeneration: 2 });
+    expect(await f.store.getConnection(replacement.id)).toEqual(replacement);
+    await f.dispatch();
+    expect(await f.store.getApplyRun(f.run.id)).toEqual(settled!);
+    expect(f.adopt).toHaveBeenCalledTimes(1);
+    expect(f.providerFetch).not.toHaveBeenCalled();
+    expect(f.fetch).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  } finally {
+    setSystemTime();
+    mint.mockRestore();
+    destroy.mockRestore();
+  }
+});
+
+test("a replacement that had already expired at the original Run start cannot settle a receipt", async () => {
+  const f = await fixture({ replacement: true, replacementExpiryRelation: "at-start" });
+  expect(f.run.startedAt).toBe(f.replacementExpiry);
+  try {
+    setSystemTime(new Date(f.replacementExpiry! + 1));
+    f.makeReceiptAvailable();
+    await expectHeld(f, 0);
+    expect(f.providerFetch).not.toHaveBeenCalled();
+  } finally {
+    setSystemTime();
+  }
+});
+
 test.each(["legacy", "credential policy", "workspace owner"] as const)(
   "a deleted replacement holds when the admitted binding context cannot be proved (%s)",
   async (change) => {
@@ -472,12 +521,16 @@ test("deleting the selected replacement cannot authorize a receipt for another P
   await expectHeld(f, 1);
 });
 
-test("a bound replacement proof cannot dispatch a queued Destroy after revocation", async () => {
-  const f = await fixture({ replacement: true, phase: "queued" });
-  await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null);
+test.each(["revocation", "expiry"] as const)("a bound replacement proof cannot dispatch a queued Destroy after %s", async unavailable => {
+  const f = await fixture({ replacement: true, phase: "queued", ...(unavailable === "expiry" ? { replacementExpiryRelation: "after-start" } : {}) });
+  if (unavailable === "revocation") await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null);
   const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
   const destroy = spyOn(f.runner, "destroy");
   try {
+    if (unavailable === "expiry") {
+      setSystemTime(new Date(f.replacementExpiry! + 1));
+      f.makeReceiptAvailable();
+    }
     await f.dispatch();
     expect(await f.store.getApplyRun(f.run.id)).toMatchObject({ status: "failed" });
     expect(await f.store.getCapsule(f.capsule.id)).toMatchObject({ currentStateGeneration: 1 });
@@ -487,6 +540,7 @@ test("a bound replacement proof cannot dispatch a queued Destroy after revocatio
     expect(mint).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
   } finally {
+    setSystemTime();
     mint.mockRestore();
     destroy.mockRestore();
   }
@@ -537,8 +591,8 @@ test.each([
   expect(f.providerFetch).not.toHaveBeenCalled();
 });
 
-test("a completed replacement Destroy holds if its selected account proof changes", async () => {
-  const f = await fixture({ replacement: true });
+test.each([false, true])("a completed replacement Destroy holds if its selected account proof changes (expired: %s)", async expired => {
+  const f = await fixture({ replacement: true, ...(expired ? { replacementExpiryRelation: "after-start" } : {}) });
   const replacement = (await f.store.getConnection(f.replacement!.replacementConnectionId))!;
   await f.store.putConnection({
     ...replacement,
@@ -547,8 +601,16 @@ test("a completed replacement Destroy holds if its selected account proof change
       providerSettings: { accountId: "fedcba9876543210fedcba9876543210", workersSubdomain: "synthetic-team" },
     },
   });
-  await expectHeld(f, 0);
-  expect(f.providerFetch).not.toHaveBeenCalled();
+  try {
+    if (expired) {
+      setSystemTime(new Date(f.replacementExpiry! + 1));
+      f.makeReceiptAvailable();
+    }
+    await expectHeld(f, 0);
+    expect(f.providerFetch).not.toHaveBeenCalled();
+  } finally {
+    setSystemTime();
+  }
 });
 
 async function expectHeld(f: Awaited<ReturnType<typeof fixture>>, adoptionReads: number) {
