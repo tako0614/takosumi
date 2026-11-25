@@ -373,7 +373,11 @@ async function readAppOverview(
   const finalizerPlan = capsule.status === "uninstalled" && latestRun?.type === "destroy_plan" &&
     latestRun.id === capsule.uninstall?.destroyPlanRunId;
   const review = finalizerPlan ? undefined : reviewablePlan(latestRun);
-  const supersededReview = review?.type === "plan" &&
+  const guard = latestRun?.applyExpected;
+  const changedReviewBase = review?.type === "plan" && guard?.planId === review.id &&
+    guard.capsuleId === capsule.id && guard.currentStateVersionId !== undefined &&
+    guard.currentStateVersionId !== (capsule.currentStateVersionId ?? null);
+  const supersededReview = changedReviewBase || (review?.type === "plan" &&
     installConfig.value?.internal?.reAdoption?.capsuleId === capsule.id &&
     (await optional(async () => {
       const [{ planRun }, epoch] = await Promise.all([
@@ -383,7 +387,7 @@ async function readAppOverview(
       // Core treats a missing epoch on historical Plans as epoch 1.
       return planRun.capsuleId === capsule.id &&
         (planRun.capsuleExecutionAuthorityEpoch ?? 1) < epoch;
-    })).value === true;
+    })).value === true);
   const derived = deriveCapsuleAppStatus({
     capsule,
     ...(latestRun && !supersededReview ? { latestRun } : {}),
@@ -684,7 +688,7 @@ export function coordinatorPreparation(
 async function readLatestLifecycleRun(
   operations: ControlPlaneOperations,
   capsule: Capsule,
-): Promise<(CapsuleAppLatestRun & Pick<Run, "origin">) | undefined> {
+): Promise<(CapsuleAppLatestRun & Pick<Run, "origin" | "applyExpected">) | undefined> {
   if (typeof operations.listCapsuleRunsPage !== "function") {
     throw new Error("the Capsule Run listing is not wired on this host");
   }
@@ -700,6 +704,7 @@ async function readLatestLifecycleRun(
     ...(run.origin ? { origin: run.origin } : {}),
     ...(run.planRunId ? { planRunId: run.planRunId } : {}),
     ...(run.policyStatus ? { policyStatus: run.policyStatus } : {}),
+    ...(run.applyExpected ? { applyExpected: run.applyExpected } : {}),
   };
 }
 
