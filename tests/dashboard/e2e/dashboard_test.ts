@@ -991,9 +991,15 @@ test.describe("Takosumi dashboard browser surface", () => {
   });
   test("Store install waits for apply-linked readiness before opening", async ({ page }) => {
     test.skip(mode !== "portable", "synthetic install lifecycle is portable-only");
+    await page.clock.install();
     const errors = pageErrors(page);
     const requests: string[] = [];
     const applyPosts: string[] = [];
+    const versionsPath = "/api/v1/capsules/cap_provider_destination_e2e/state-versions";
+    const versionsResponse = (status: number) => page.waitForResponse((response) =>
+      routePath(response.url()) === versionsPath && response.request().method() === "GET" &&
+      response.status() === status
+    );
     let readinessReadFailures = 3;
     let activationAction = "release_activation.pending";
     page.on("request", (request) => {
@@ -1086,7 +1092,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       if (path === "/api/v1/runs/run_provider_apply_e2e/stream") {
         return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
       }
-      if (path === "/api/v1/capsules/cap_provider_destination_e2e/state-versions") {
+      if (path === versionsPath) {
         if (readinessReadFailures > 0) {
           readinessReadFailures -= 1;
           return route.fulfill({ status: 503, json: { error: "synthetic_readback_unavailable" } });
@@ -1194,21 +1200,47 @@ test.describe("Takosumi dashboard browser surface", () => {
 
     await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
     await expect(addButton).toBeEnabled();
-    await addButton.click();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
+    // Receiving the response does not guarantee the page has scheduled its retry yet.
+    const readinessTimers = await page.evaluateHandle(() => {
+      const scheduled = { retries: 0, refetches: 0 };
+      const setTimer = globalThis.setTimeout;
+      globalThis.setTimeout = new Proxy(setTimer, {
+        apply(target, receiver, args) {
+          const timer = Reflect.apply(target, receiver, args);
+          if (args[1] === 1_000) scheduled.retries += 1;
+          if (args[1] === 3_000) scheduled.refetches += 1;
+          return timer;
+        },
+      });
+      return { scheduled, restore: () => { globalThis.setTimeout = setTimer; } };
+    });
+    await Promise.all([versionsResponse(503), addButton.click()]);
     await expect.poll(() => applyPosts.length).toBe(1);
     await assertNoPageErrors(errors);
+    for (const retry of [1, 2]) {
+      await expect.poll(() => readinessTimers.evaluate(({ scheduled }) => scheduled.retries)).toBe(retry);
+      await Promise.all([versionsResponse(503), page.clock.runFor(1_000)]);
+    }
     await expect(page.getByRole("alert")).toContainText(/readiness could not be checked/u);
     await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Technical details" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await Promise.all([
+      versionsResponse(200),
+      page.getByRole("button", { name: "Retry", exact: true }).click(),
+    ]);
     await expect(page.getByText("You can open the app when it is ready.")).toBeVisible();
     await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+    await expect.poll(() => readinessTimers.evaluate(({ scheduled }) => scheduled.refetches)).toBe(1);
     activationAction = "release_activation.succeeded";
+    await Promise.all([versionsResponse(200), page.clock.runFor(3_000)]);
     const openService = page.getByRole("link", { name: "Open", exact: true });
     await expect(openService).toBeVisible({ timeout: 15_000 });
     await expect(openService).toHaveAttribute("href", "https://service.example.test/fixture");
+    await readinessTimers.evaluate(({ restore }) => restore());
+    await page.clock.resume();
     expect(requests).toContain(`GET ${mutationOrigin}/api/v1/capsules/cap_provider_destination_e2e/state-versions`);
     expect(requests).toContain(`GET ${mutationOrigin}/api/v1/capsules/cap_provider_destination_e2e/activity?limit=100`);
     expect(requests.filter((entry) => entry === `POST ${mutationOrigin}/api/v1/runs/run_provider_plan_e2e/apply`)).toHaveLength(1);
