@@ -61,6 +61,8 @@ async function fixture(options: {
   readonly replacement?: boolean;
   readonly scheduled?: boolean;
   readonly afterWorkerUpdate?: boolean;
+  readonly requestInFlight?: boolean;
+  readonly storedService?: boolean;
   readonly admittedExecutionAuthority?: typeof FIXTURE_EXECUTION_EVIDENCE_AUTHORITY;
   readonly capsuleCoordination?: CapsuleCoordination;
   readonly changeReceipt?: (receipt: Record<string, unknown>) => void;
@@ -185,6 +187,7 @@ async function fixture(options: {
     authority: {
       status: "valid", action, version: 1, fence: 1, redispatchBlocked: true,
       phase,
+      ...(options.requestInFlight !== undefined ? { requestInFlight: options.requestInFlight } : {}),
       ...(phase === "completed" ? { completion: {} } : {}),
       ...(options.admittedExecutionAuthority ? { admittedExecutionAuthority: options.admittedExecutionAuthority } : {}),
     },
@@ -209,10 +212,13 @@ async function fixture(options: {
     return Response.json(receipt, { status: options.responseStatus ?? (options.persistedFailure ? 500 : 200) });
   });
   const fetch = mock(async (_request: Request) => { throw new Error("runner transport is unavailable in the fixture"); });
-  const runner = new CloudflareContainerOpenTofuRunner({ RUNNER: {
-    idFromName: (id: string) => id,
-    get: () => ({ inspectMutationAuthority: inspect, adoptDeterminedMutation: adopt, fetch }),
-  } } as unknown as CloudflareWorkerEnv);
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (id: string) => id,
+      get: () => ({ inspectMutationAuthority: inspect, adoptDeterminedMutation: adopt, fetch }),
+    },
+    ...(options.storedService ? { TAKOSUMI_STORED_SERVICE_USAGE: {}, TAKOSUMI_STORED_OBJECT_OWNERS: {} } : {}),
+  } as unknown as CloudflareWorkerEnv);
   const controller = new OpenTofuController({
     ...composition,
     executionEvidenceAuthority: options.afterWorkerUpdate ? UPDATED_WORKER_AUTHORITY : composition.executionEvidenceAuthority,
@@ -486,8 +492,8 @@ test("a bound replacement proof cannot dispatch a queued Destroy after revocatio
   }
 });
 
-test("a dispatched replacement Destroy remains recoverable when its selected connection is revoked", async () => {
-  const f = await fixture({ replacement: true, phase: "dispatched" });
+test.each([false, true])("an inactive dispatched replacement Destroy remains recoverable after revocation (Stored Service: %s)", async (storedService) => {
+  const f = await fixture({ replacement: true, phase: "dispatched", storedService, requestInFlight: false });
   expect(await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null)).toBe(true);
   const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
   const destroy = spyOn(f.runner, "destroy");
@@ -516,6 +522,19 @@ test("a dispatched replacement Destroy remains recoverable when its selected con
     mint.mockRestore();
     destroy.mockRestore();
   }
+});
+
+test.each([
+  ["live relay", "dispatched", false, true],
+  ["live Stored Service preparation", "preparing", true, true],
+  ["live Stored Service relay", "dispatched", true, true],
+  ["legacy Stored Service preparation inspection", "preparing", true, undefined],
+  ["legacy Stored Service dispatch inspection", "dispatched", true, undefined],
+] as const)("RunOwner retains the original Destroy lease for %s", async (_name, phase, storedService, requestInFlight) => {
+  const f = await fixture({ phase, replacement: true, storedService, requestInFlight });
+  expect(await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null)).toBe(true);
+  await expectHeld(f, 0);
+  expect(f.providerFetch).not.toHaveBeenCalled();
 });
 
 test("a completed replacement Destroy holds if its selected account proof changes", async () => {
@@ -686,8 +705,8 @@ for (const phase of ["dispatched", "indeterminate", "orphaned"] as const) {
 }
 
 test("fresh and queued Destroy skip observation, and preparing takes ordinary dispatch", async () => {
-  for (const phase of ["fresh", "queued", "preparing"] as const) {
-    const f = await fixture({ phase });
+  for (const [phase, storedService] of [["fresh", false], ["queued", false], ["preparing", false], ["preparing", true]] as const) {
+    const f = await fixture({ phase, storedService, requestInFlight: false });
     const destroy = spyOn(f.runner, "destroy").mockImplementation(async job => ({
       stateDigest: DESTROY_STATE_DIGEST,
       executionEvidence: fixtureExecutionEvidence(job, "destroy"),

@@ -444,6 +444,12 @@ export class CloudflareContainerOpenTofuRunner
           completed = structuredClone(authority);
           return "completed";
         }
+        if ((authority.phase === "preparing" || authority.phase === "dispatched") &&
+          (authority.requestInFlight === true || (authority.requestInFlight !== false && storedServiceCompositionFromEnv(this.env)))) {
+          // The original request may still need its Run lease to persist state.
+          // Older observers cannot establish its absence for Stored Service.
+          return "hold";
+        }
         if (authority.phase === "preparing" || authority.phase === "not_dispatched") return "ordinary";
         // Recovery with prepared inputs still uses the existing DO prepare fence.
         if (authority.phase === "dispatched" || authority.phase === "indeterminate" || authority.phase === "orphaned") {
