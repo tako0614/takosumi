@@ -6085,6 +6085,7 @@ export class RunEngine {
     if (receiptCommand !== undefined && probeCommand !== undefined) throw new Error("only one committed receipt authority may be supplied");
     let receiptOnly = receiptCommand !== undefined || probe?.settlementOnly === true;
     let observedCompletion = false;
+    let observedUncertainDispatch = false;
     let applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun) {
       throw new OpenTofuControllerError(
@@ -6171,6 +6172,7 @@ export class RunEngine {
       const determination = await inspectReceipt();
       if (determination === "hold") return await this.getApplyRun(runId);
       observedCompletion = determination === "completed";
+      observedUncertainDispatch = determination === "dispatch_uncertain";
       receiptOnly ||= observedCompletion;
     }
     if (probe?.settlementOnly && !observedCompletion) return await this.getApplyRun(runId);
@@ -6185,7 +6187,7 @@ export class RunEngine {
         { kind: "apply", id: applyRun.id },
       );
     } catch (error) {
-      if (observedCompletion) return await this.getApplyRun(runId);
+      if (observedCompletion || observedUncertainDispatch) return await this.getApplyRun(runId);
       if (receiptOnly) throw error;
       const result = await this.#failUnclaimedApplyRun(applyRun, error);
       if (!result.run) return await this.getApplyRun(runId);
@@ -6242,7 +6244,7 @@ export class RunEngine {
           inputs,
           handle,
           control.deadlineAt,
-          recovered,
+          recovered ?? (observedUncertainDispatch ? "dispatch_uncertain" : undefined),
         );
       });
     let response: ApplyRunExecutionResponse;
@@ -7578,25 +7580,24 @@ export class RunEngine {
     applyRun: ApplyRun,
     profile: RunnerProfile,
     startedAt: number,
-    mode: "execute" | "adopt_receipt" = "execute",
+    mode: "execute" | "adopt_receipt" | "dispatch_uncertain",
   ): Promise<RunClaimResult<ApplyRun>> {
     const expectedHeartbeatAt = applyRun.heartbeatAt ?? null;
     const running: ApplyRun = {
       ...applyRun,
       status: "running",
-      startedAt: mode === "adopt_receipt" ? applyRun.startedAt ?? startedAt : startedAt,
       heartbeatAt: startedAt,
-      stateLock: stateLockEvidence(
-        profile.stateBackend,
-        startedAt,
-        startedAt,
-        "pending",
-      ),
-      auditEvents: [
-        ...applyRun.auditEvents,
-        auditEvent(applyRun.id, mode === "adopt_receipt" ? "apply.receipt_recovery_started" : "apply.started", startedAt),
-      ],
       updatedAt: startedAt,
+      // A takeover of an unsettled dispatch refreshes ownership while keeping
+      // the original attempt's timestamps and audit trail for a later receipt.
+      ...(mode === "dispatch_uncertain" ? {} : {
+        startedAt: mode === "adopt_receipt" ? applyRun.startedAt ?? startedAt : startedAt,
+        stateLock: stateLockEvidence(profile.stateBackend, startedAt, startedAt, "pending"),
+        auditEvents: [
+          ...applyRun.auditEvents,
+          auditEvent(applyRun.id, mode === "adopt_receipt" ? "apply.receipt_recovery_started" : "apply.started", startedAt),
+        ],
+      }),
     };
     return await this.#claimRunRunning(
       "apply",
@@ -10017,13 +10018,17 @@ export class RunEngine {
     inputs: PlanRunInputs | undefined,
     lease?: LeaseHandle,
     deadlineAt?: number,
-    recovered?: RecoveredApplyReceipt,
+    recovery?: RecoveredApplyReceipt | "dispatch_uncertain",
   ): Promise<ApplyRunExecutionResponse> {
+    const uncertainDispatch = recovery === "dispatch_uncertain" ? { destroyRunnerInvoked: false } : undefined;
+    const recovered = recovery === "dispatch_uncertain" ? undefined : recovery;
     const claimAt = this.#now();
     // Keep this consumer's existing accounting clock; the claimed Run retains
     // its original startedAt below, without counting restart wait as execution.
     const startedAt = claimAt;
-    const claim = await this.#markApplyRunning(applyRun, profile, claimAt, recovered ? "adopt_receipt" : "execute");
+    const claim = await this.#markApplyRunning(
+      applyRun, profile, claimAt, uncertainDispatch ? "dispatch_uncertain" : recovered ? "adopt_receipt" : "execute",
+    );
     if (!claim.won) {
       // A sibling consumer already claimed this apply (or a cancel won the row).
       // Do NOT dispatch the runner; return the row the winner persisted.
@@ -10092,6 +10097,7 @@ export class RunEngine {
           lease,
           deadlineAt,
           recovered,
+          uncertainDispatch,
         );
       }
       // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
@@ -10352,6 +10358,11 @@ export class RunEngine {
       if (recovered) {
         // No observation failure is a new provider outcome. An ACK-lost commit
         // returns its durable winner; otherwise retain the current claimed Run.
+        return await this.getApplyRun(applyRun.id);
+      }
+      if (uncertainDispatch && !runnerDispatched && !uncertainDispatch.destroyRunnerInvoked) {
+        // This attempt failed before reaching the Runner. The earlier
+        // dispatch can still produce a receipt for the original Run.
         return await this.getApplyRun(applyRun.id);
       }
       if (error instanceof ArtifactLedgerTailAmbiguousError) {
@@ -12372,6 +12383,7 @@ export class RunEngine {
     lease?: LeaseHandle,
     deadlineAt?: number,
     recovered?: RecoveredApplyReceipt,
+    uncertainDispatch?: { destroyRunnerInvoked: boolean },
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -12544,6 +12556,7 @@ export class RunEngine {
             async (credentialSignal) => {
               await this.#requireLiveScheduledUninstallAuthorization(planRun, effectiveRunning);
               runnerDispatched = true;
+              if (uncertainDispatch) uncertainDispatch.destroyRunnerInvoked = true;
               return destroyFn.call(
             runner,
             {
@@ -12815,7 +12828,7 @@ export class RunEngine {
           capsule: publicCapsule(currentCapsule ?? capsule),
         };
       }
-      if (recovered) {
+      if (recovered || (uncertainDispatch && !runnerDispatched)) {
         // Lost commit acknowledgements converge on the durable winner. An
         // observation failure cannot trigger provider retries or fail a Run.
         return { applyRun: (await this.getApplyRun(running.id)).applyRun };
