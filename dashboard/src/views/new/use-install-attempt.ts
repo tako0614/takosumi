@@ -696,18 +696,24 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       legacyWorkspaceSelection = workspaceId;
       attemptBaseVersion = untrack(editVersion);
       const expected = epoch;
+      const controller = new AbortController();
+      const isCurrent = () => !disposed && expected === epoch;
+      onCleanup(() => controller.abort());
       setLoading(true);
-      Promise.all([getGitInstallPlan(attemptId), appOwnershipAvailable()])
+      Promise.all([
+        getGitInstallPlan(attemptId, { signal: controller.signal, isCurrent }),
+        appOwnershipAvailable(controller.signal),
+      ])
         .then(([next, personal]) => {
-          if (disposed || expected !== epoch) return;
+          if (!isCurrent()) return;
           legacyWorkspaceContext = personal ? undefined : workspaceId || undefined;
           if (!accept(next, expected)) setLoadFailed(true);
         })
         .catch(() => {
-          if (!disposed && expected === epoch) setLoadFailed(true);
+          if (isCurrent()) setLoadFailed(true);
         })
         .finally(() => {
-          if (!disposed && expected === epoch) setLoading(false);
+          if (isCurrent()) setLoading(false);
         });
     }),
   );
@@ -740,6 +746,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const expected = epoch;
     const controller = new AbortController();
     driveAbort = controller;
+    const scope = {
+      signal: controller.signal,
+      isCurrent: () => !disposed && !stopRequested && expected === epoch,
+    };
     setDriving(true);
     setError(undefined);
     driveRun = (async () => {
@@ -755,19 +765,19 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
           if (rounds >= MAX_FOLLOW_ROUNDS || now() - lastProgressAt >= STALL_LIMIT_MS) break;
           rounds += 1;
           const observing = observeUntil !== undefined;
-          const read = () => getGitInstallPlan(before.installPlan.id, { signal: controller.signal });
+          const read = () => getGitInstallPlan(before.installPlan.id, scope);
           let next: GitInstallPlanResponse | undefined;
           let failed: unknown;
           try {
             next = observing
               ? await read()
-              : await reconcileGitInstallPlan(before.installPlan.id, { signal: controller.signal });
+              : await reconcileGitInstallPlan(before.installPlan.id, scope);
           } catch (cause) {
             if (controller.signal.aborted || isAbort(cause)) break;
             failed = cause;
             if (!observing) next = await read().catch(() => undefined);
           }
-          if (disposed || expected !== epoch) break;
+          if (!scope.isCurrent()) break;
           const held = next ? accept(next, expected) : response();
           if (next && !held) break;
           const after = held ?? before;
@@ -822,7 +832,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const current = response();
     if (!current) return undefined;
     try {
-      return accept(await getGitInstallPlan(current.installPlan.id), expected);
+      return accept(await getGitInstallPlan(current.installPlan.id, {
+        isCurrent: () => !disposed && expected === epoch,
+      }), expected);
     } catch {
       return undefined;
     }
@@ -1594,15 +1606,16 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const attemptId = options.attemptId();
     if (!attemptId || mutating()) return;
     const expected = epoch;
+    const isCurrent = () => !disposed && expected === epoch;
     setError(undefined);
     setLoading(true);
     try {
-      const next = await getGitInstallPlan(attemptId);
-      if (!disposed && expected === epoch && !accept(next, expected)) setLoadFailed(true);
+      const next = await getGitInstallPlan(attemptId, { isCurrent });
+      if (isCurrent() && !accept(next, expected)) setLoadFailed(true);
     } catch {
-      if (!disposed && expected === epoch) setLoadFailed(true);
+      if (isCurrent()) setLoadFailed(true);
     } finally {
-      if (!disposed && expected === epoch) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 

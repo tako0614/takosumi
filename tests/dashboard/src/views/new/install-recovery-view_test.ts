@@ -11,8 +11,8 @@ test("reopening an attempt from its URL is a read-only GET", () => {
     controller.indexOf("// The URL names the attempt; reading it never advances or answers it."),
     controller.indexOf("/** A pause between reconcile commands"),
   );
-  expect(load).toContain("getGitInstallPlan(attemptId)");
-  expect(load).toContain("expected !== epoch");
+  expect(load).toContain("getGitInstallPlan(attemptId, { signal: controller.signal, isCurrent })");
+  expect(load).toContain("expected === epoch");
   expect(load).not.toContain("reconcileGitInstallPlan(");
   expect(load).not.toContain("answerGitInstallAttempt(");
   expect(load).not.toContain("discardGitInstallAttempt(");

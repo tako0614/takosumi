@@ -1401,6 +1401,79 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect.poll(() => f.mutations.filter((m) => m.startsWith("DELETE ")).length).toBe(1);
       expect(errors).toEqual([]);
     });
+    for (const destination of ["another install", "another saved attempt", "current attempt"] as const) {
+      test(`a saved attempt read handles 401 when opening ${destination}`, async ({ page }) => {
+        const fixture = await detailFixture(page, base);
+        const makeAttempt = (key: string) => {
+          expect(fixture.attempts.handle({
+            method: "POST", path: "/api/v1/install-plans", idempotencyKey: key,
+            body: {
+              mode: "attempt",
+              source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit, path: "." },
+              options: { modulePath: "." },
+            },
+          })?.status).toBe(201);
+          return fixture.attempts.latest()!.id;
+        };
+        const old = makeAttempt("saved-401-old-fixture");
+        const current = `${sourceUrl}&installPlan=${old}`;
+        const other = destination === "another saved attempt"
+          ? `${sourceUrl}&installPlan=${makeAttempt("saved-401-next-fixture")}`
+          : sourceUrl.replaceAll("cloudflare-service", "other-service");
+        const path = `/api/v1/install-plans/${old}`;
+        await page.addInitScript((heldPath) => {
+          const original = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const input = args[0];
+            const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
+            if (url.pathname !== heldPath) return original(...args);
+            try {
+              return await original(...args);
+            } finally {
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                document.documentElement.dataset.savedAttemptReadSettled = "true";
+              }));
+            }
+          };
+        }, path);
+        const read = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        await page.route(`**${path}`, async (route) => {
+          read.resolve();
+          await release.promise;
+          await route.fulfill({ status: 401, json: { error: "invalid_token" } });
+        });
+        try {
+          await page.goto(current, { waitUntil: "domcontentloaded" });
+          await expect(page.getByTestId("install-loading")).toBeVisible();
+          await read.promise;
+          if (destination !== "current attempt") {
+            await page.evaluate((url) => {
+              history.pushState(history.state, "", url);
+              window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+            }, other);
+            await expect(page).toHaveURL((url) => url.pathname + url.search === other);
+          }
+          if (destination === "current attempt") {
+            release.resolve();
+            await expect(page).toHaveURL((url) =>
+              url.pathname === "/sign-in" && url.searchParams.get("return") === current);
+          } else {
+            const outcome = Promise.race([
+              page.waitForFunction(() => document.documentElement.dataset.savedAttemptReadSettled === "true").then(() => "settled"),
+              page.waitForRequest((request) =>
+                request.isNavigationRequest() && new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+            ]);
+            release.resolve();
+            expect(await outcome).toBe("settled");
+            await expect(page).toHaveURL((url) => url.pathname + url.search === other);
+          }
+          expect(fixture.mutations).toEqual([]);
+        } finally {
+          release.resolve();
+        }
+      });
+    }
     for (const read of ["app", "candidate", "run", "cost", "logs"] as const) {
       for (const retired of [true, false]) {
         test(`an install review's ${retired ? "retired" : "current"} ${read} read handles 401 in its own view`, async ({ page }) => {
