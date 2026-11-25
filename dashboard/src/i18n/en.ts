@@ -769,6 +769,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.replacementPlaceholder": "Choose a connection",
   "app.uninstall.keepConnection": "Keep this connection",
   "app.uninstall.noReplacement": "No verified connection is available to select.",
+  "app.uninstall.refreshConnections": "Refresh connection list",
   "app.uninstall.replacementLoadFailed": "Cloud connections couldn't be loaded.",
   "app.uninstall.replacementSelectionChanged": "Cloud connections changed. Choose the connections for this removal again.",
   "app.uninstall.replacementReview": "Review removal",
