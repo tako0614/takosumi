@@ -491,7 +491,7 @@ test("uninstall recovery targets come from current state, and all connection iss
   expect(legacyView.uninstall).not.toHaveProperty("unavailableRecoveryConnectionIds");
 });
 
-test("app connection issues include the canonical owner's personal connections", async () => {
+test.each(["account reader", "in-memory owner inventory"] as const)("app issues find the canonical owner's personal connections via %s", async (inventory) => {
   const connectionId = "personal_cf_owner_connection";
   const personal = {
     id: connectionId,
@@ -504,7 +504,7 @@ test("app connection issues include the canonical owner's personal connections",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-10-27T00:00:00.000Z",
     updatedAt: "2026-10-27T00:00:00.000Z",
-  };
+  } as const;
   const h = await fixture({
     requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
     overrides: {
@@ -527,11 +527,11 @@ test("app connection issues include the canonical owner's personal connections",
             : undefined,
         listAccessibleApps: async () => ({ apps: [] }),
       },
-      accountResources: {
+      ...(inventory === "account reader" ? { accountResources: {
         listConnections: async (accountId: string) => ({
           items: accountId === "canonical_owner" ? [personal] : [],
         }),
-      } as NonNullable<ControlPlaneOperations["accountResources"]>,
+      } as NonNullable<ControlPlaneOperations["accountResources"]> } : {}),
     },
   });
   const environment = h.seeded.capsule.environment;
@@ -542,6 +542,13 @@ test("app connection issues include the canonical owner's personal connections",
     bindings: [{ provider: FIXTURE_CLOUDFLARE_PROVIDER, connectionId }],
     updatedAt: new Date().toISOString(),
   } satisfies ProviderBindingSet);
+  if (inventory === "in-memory owner inventory") {
+    await h.ledger.putConnection({ ...personal, ownerAccountId: OWNER });
+    expect((await h.app()).problems).toContainEqual(expect.objectContaining({
+      code: "connection_unavailable", connectionId, connectionStatus: "missing",
+    }));
+    await h.ledger.putConnection(personal);
+  }
   const app = await h.app();
   expect(app.problems).not.toContainEqual(expect.objectContaining({ code: "connection_unavailable" }));
 });

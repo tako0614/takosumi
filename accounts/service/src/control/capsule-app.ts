@@ -201,6 +201,8 @@ function appReadInventory(operations: ControlPlaneOperations) {
           if (cursor) seen.add(cursor);
         } while (cursor);
       } else {
+        // Personal connections have no Workspace and require the owner index.
+        result.push(...(await operations.connections.listOwnedConnections?.(owner) ?? []));
         for (const workspace of await operations.workspaces.listWorkspacesByOwner(owner)) {
           if (workspace.ownerUserId !== owner || workspace.archivedAt) continue;
           result.push(...await connections(workspace.id));
