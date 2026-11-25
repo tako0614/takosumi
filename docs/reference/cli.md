@@ -180,8 +180,8 @@ takosumi apps apply cap_example --destroy-plan destroy_plan_example --yes \
   --url https://takosumi.example.com --json
 ```
 
-`--destroy-plan` は破棄用の保存Planを指定します。接続の準備状態、資格ポリシー、または代替接続の照合を理由に適用が拒否され、
-同じPlanの読み戻しで紐付く削除Runが見つからなければ、`refused` と理由を返します。代替接続の照合は上記の `connectionRecoveryFailure` で確認できます。
+`--destroy-plan` は破棄用の保存Planを指定します。接続の準備状態、資格ポリシー、または上記の代替接続の照合を理由に適用が拒否され、
+同じ承認済みPlanの読み戻しで紐付く削除Runが見つからなければ、`refused` と理由を返します。代替接続の照合は `connectionRecoveryFailure` で確認できます。
 接続に関する理由なら、同じクラウドアカウントの確認済み接続を選び、`apps recover-uninstall --connections` で新しい削除Planを準備して確認してください。
 応答が不明なら、同じPlan IDで `--yes` を `--observe-only` に替えると、
 紐付いた削除Runを読み取れます。通常の削除予約は `apps uninstall <app-id> --yes` から行います。
