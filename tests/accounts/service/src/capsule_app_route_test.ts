@@ -386,6 +386,43 @@ async function putAppliedCloudflarePlan(h: Awaited<ReturnType<typeof fixture>>, 
   return { applied, requirement, now };
 }
 
+test("a scheduled uninstall exposes an expired bound connection before any Destroy Run", async () => {
+  const provider = FIXTURE_CLOUDFLARE_PROVIDER;
+  const stateVersionId = "sv_expired_uninstall_connection";
+  const h = await fixture({ requiredProviders: [provider], currentStateVersionId: stateVersionId });
+  const { now } = await putAppliedCloudflarePlan(h, stateVersionId);
+  const bindings = await h.ledger.getProviderBindingSetByCapsule(CAPSULE, h.seeded.capsule.environment);
+  const connectionId = bindings!.bindings[0]!.connectionId;
+  const verified = {
+    id: connectionId,
+    workspaceId: WORKSPACE,
+    scope: "workspace",
+    provider,
+    providerSource: provider,
+    status: "verified",
+    materialization: "secret",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: new Date(now - 120_000).toISOString(),
+    updatedAt: new Date(now - 90_000).toISOString(),
+  } as const;
+  await h.ledger.putConnection({ ...verified, expiresAt: new Date(now + 60_000).toISOString() });
+  expect((await h.request("", h.owner, "DELETE")).status).toBe(202);
+  expect((await h.app()).problems).toMatchObject([{ code: "uninstall_scheduled" }]);
+
+  await h.ledger.putConnection({ ...verified, expiresAt: new Date(now - 60_000).toISOString() });
+  const expired = await h.app();
+  expect(expired).toMatchObject({
+    state: "uninstall_scheduled",
+    latestRun: { type: "apply", status: "succeeded" },
+    problems: [
+      { code: "connection_unavailable", connectionId, provider, connectionStatus: "expired" },
+      { code: "uninstall_scheduled" },
+    ],
+    uninstall: { recoveryConnectionIds: [connectionId] },
+  });
+  expect(await h.ledger.getConnection(connectionId)).toMatchObject({ status: "verified" });
+});
+
 test("uninstall recovery targets come from current state, and all connection issues remain visible", async () => {
   const provider = FIXTURE_CLOUDFLARE_PROVIDER;
   const stateVersionId = "sv_applied_connections";
