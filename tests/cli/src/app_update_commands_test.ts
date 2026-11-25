@@ -825,6 +825,37 @@ test("revision and Destroy Plan selectors are reciprocal and stale Destroy state
   expect(stale.calls.filter(c => c.method === "POST")).toHaveLength(0);
 });
 
+test("a typed revision state conflict still requires matching Plan evidence and no linked Apply", async () => {
+  const applyPath = `/api/v1/runs/${plan.id}/apply`;
+  for (const mode of ["same-plan", "changed-plan", "linked-apply"] as const) {
+    let submitted = false;
+    const result = await invoke(applyArgs, req => {
+      if (req.method === "POST" && new URL(req.url).pathname === applyPath) {
+        submitted = true;
+        return Response.json({ error: { code: "failed_precondition", message: "private-state-diagnostic",
+          details: { reason: "state_generation_mismatch" } } }, { status: 409 });
+      }
+      return normal(req, {
+        plan: submitted && mode === "changed-plan" ? { ...plan, sourceSnapshotId: "snapshot_changed" } : plan,
+        history: { runs: submitted && mode === "linked-apply" ? [apply] : [] },
+      });
+    });
+    expect(result.calls.filter(req => req.method === "POST")).toHaveLength(1);
+    expect(JSON.stringify(result.result)).not.toContain("private-state-diagnostic");
+    if (mode === "same-plan") {
+      expect(result.code).toBe(1);
+      expect(result.result).toMatchObject({ status: "refused", reason: "state_generation_mismatch", planRunId: plan.id });
+    } else if (mode === "changed-plan") {
+      expect(result.code).toBe(1);
+      expect(result.result).toMatchObject({ status: "indeterminate", planRunId: plan.id });
+      expect(result.result.reason).toBeUndefined();
+    } else {
+      expect(result.code).toBe(0);
+      expect(result.result).toMatchObject({ status: "succeeded", runId: apply.id });
+    }
+  }
+});
+
 test("apps apply executes only the exact saved revision Plan after emitting value-free review", async () => {
   let sawReview = false; const out: string[] = []; const before = globalThis.fetch; const calls: Request[] = [];
   globalThis.fetch = (async (input, init) => {

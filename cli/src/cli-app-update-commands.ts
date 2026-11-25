@@ -773,8 +773,18 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
     if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
     const reason = failedPreconditionDetails(error)?.reason;
     const connectionRecoveryFailure = destroyConnectionRecoveryFailure(error);
-    if (applyType === "destroy_apply" && applyAttempted && readbackConfirmed && !observedRun &&
-      observedPlan?.status === "succeeded" &&
+    const refusedPlan = applyAttempted && readbackConfirmed && !observedRun &&
+        observedPlan?.status === "succeeded" ? observedPlan : undefined;
+    if (applyType === "apply" && refusedPlan &&
+      (reason === "state_version_mismatch" || reason === "state_generation_mismatch")) {
+      const recovery = isJapaneseCli()
+        ? "アプリの現在の状態と apps history の履歴を確認し、新しいPlanを準備してレビューしてください。"
+        : "Check the app's current state and its history with apps history. Prepare and review a new Plan against the current state.";
+      write(io, options, { status: "refused", appId, planRunId: planId, lastObservedPlanStatus: refusedPlan.status,
+        code: "failed_precondition", reason, recovery });
+      return 1;
+    }
+    if (applyType === "destroy_apply" && refusedPlan &&
       (reason === "provider_connection_setup_required" || reason === "provider_connection_not_ready" ||
         connectionRecoveryFailure !== undefined)) {
       const missingEvidence = connectionRecoveryFailure === "applied_evidence_unavailable";
@@ -785,7 +795,7 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
         : missingEvidence
           ? "Check the app's applied state and previous Runs before preparing a new Destroy Plan."
           : "Select a verified connection for the same cloud account. Use apps recover-uninstall with --connections to prepare and review a new Destroy Plan.";
-      write(io, options, { status: "refused", appId, planRunId: planId, lastObservedPlanStatus: observedPlan.status,
+      write(io, options, { status: "refused", appId, planRunId: planId, lastObservedPlanStatus: refusedPlan.status,
         code: "failed_precondition", reason, connectionRecoveryFailure, recovery });
       return 1;
     }

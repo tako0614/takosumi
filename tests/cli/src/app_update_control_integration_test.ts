@@ -647,6 +647,61 @@ test("CLI app history finds the rollback target and the exact Plan survives a lo
   }
 });
 
+test("CLI explains a stale rollback when another Apply advances the app before submission", async () => {
+  const h = await fixture();
+  const target = (await h.ledger.getCapsule(h.appId))!.currentStateVersionId!;
+  const request = (method: string, path: string, headers?: Record<string, string>) => h.dispatch(new Request(`${ORIGIN}${path}`, {
+    method, headers: { authorization: `Bearer ${TOKEN}`, ...headers },
+  }));
+  const plans = [];
+  for (const key of ["stale-rollback", "concurrent-rollback"]) {
+    const response = await request("POST", `/api/v1/state-versions/${target}/rollback-plan`, { "idempotency-key": key });
+    expect(response.status).toBe(201);
+    plans.push((await response.json()).run.id as string);
+  }
+  const [staleId, concurrentId] = plans;
+  expect(staleId).not.toBe(concurrentId);
+  const staleApplyPath = `/api/v1/runs/${staleId}/apply`;
+  const before = { ...h.runnerCalls };
+  const calls: string[] = [];
+  const output: string[] = [];
+  let refusal: Response | undefined;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const req = new Request(input, init);
+    const path = new URL(req.url).pathname;
+    calls.push(`${req.method} ${path}`);
+    if (req.method === "POST" && path === staleApplyPath) {
+      const concurrent = await request("POST", `/api/v1/runs/${concurrentId}/apply`);
+      expect(concurrent.status).toBe(201);
+      expect((await concurrent.json()).run.status).toBe("succeeded");
+      const response = await h.dispatch(req);
+      refusal = response.clone();
+      return response;
+    }
+    return await h.dispatch(req);
+  }) as typeof fetch;
+  try {
+    expect(await main(["apps", "apply", h.appId, "--plan", staleId!, "--yes", "--token", TOKEN, "--url", ORIGIN, "--json"], {
+      stdout: line => output.push(line), stderr() {},
+    })).toBe(1);
+    expect(refusal?.status).toBe(409);
+    expect(await refusal?.json()).toMatchObject({ error: { code: "failed_precondition", details: { reason: "state_version_mismatch" } } });
+    expect(calls).toEqual([
+      `GET /api/v1/runs/${staleId}`, `GET /api/v1/capsules/${h.appId}/runs`, `GET /api/v1/capsules/${h.appId}`,
+      `POST ${staleApplyPath}`, `GET /api/v1/runs/${staleId}`, `GET /api/v1/capsules/${h.appId}/runs`,
+    ]);
+    expect(h.runnerCalls).toEqual({ ...before, apply: before.apply + 1 });
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 2 });
+    expect(await h.ledger.getPlanRun(staleId!)).not.toHaveProperty("appliedApplyRunId");
+    const result = JSON.parse(output[0]!);
+    expect(result).toMatchObject({ status: "refused", reason: "state_version_mismatch", planRunId: staleId });
+    expect(result.recovery).toContain("apps history");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("CLI rollback reports a save timeout as unconfirmed and the same key recovers the Plan", async () => {
   const h = await fixture();
   const target = (await h.ledger.getCapsule(h.appId))!.currentStateVersionId!;
