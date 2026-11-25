@@ -896,6 +896,7 @@ export const ja = {
   "policy.layer.billing": "料金",
   "policy.layer.unclassified": "その他",
   "installStore.recoveryUnverified": "インストールの状況を確認できません",
+  "installStore.existingNeedsAttention": "このアプリには確認が必要です。",
   "installStore.recoveryUnverifiedHint": "元のインストールがまだ進行中の可能性があります。もう一度インストールする前に状況を再取得するか、履歴を確認してください。",
 
   // --- run view --------------------------------------------------------------

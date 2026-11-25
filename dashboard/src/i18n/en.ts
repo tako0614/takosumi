@@ -884,6 +884,7 @@ export const en: Record<keyof typeof ja, string> = {
   "policy.layer.billing": "billing",
   "policy.layer.unclassified": "other",
   "installStore.recoveryUnverified": "Couldn't check how the install is going",
+  "installStore.existingNeedsAttention": "This app needs attention.",
   "installStore.recoveryUnverifiedHint": "The original install may still be running. Check again or look at the history before installing it again.",
 
   // --- run view --------------------------------------------------------------
