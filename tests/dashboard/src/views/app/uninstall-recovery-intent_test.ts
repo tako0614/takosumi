@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { setImmediate as realSetImmediate } from "node:timers";
 import { appUninstallRecoveryMode } from "../../../../../dashboard/src/lib/capsule-uninstall.ts";
 import { ControlApiError, createCapsuleDestroyRecoveryPlan, extractRunId, getCapsuleAppWithSignal, getCapsuleProviderBindingSet, isRevisionAlreadyCurrent, listProviderConnectionsWithSignal, resetAppOwnershipCache } from "../../../../../dashboard/src/lib/control-api.ts";
+import { trackSubmittedUninstallReview } from "../../../../../dashboard/src/lib/uninstall-review-hold.ts";
 
 const source = readFileSync(new URL("../../../../../dashboard/src/views/app/AppManagePage.tsx", import.meta.url), "utf8");
 function between(start: string, end: string): string {
@@ -100,7 +101,7 @@ function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
     retire: () => { uninstallEpoch++; },
     dispose: () => { disposed = true; },
   };`;
-  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "appUninstallRecoveryMode", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", "setReservedReviewCheck", transpile(script))(
+  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "appUninstallRecoveryMode", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", "setReservedReviewCheck", "uninstallReviewAppScope", "trackSubmittedUninstallReview", transpile(script))(
     () => state.capsuleId, () => ({ sourceId: "source" }), state, () => Boolean(state.starting), () => state.owner ? "owner" : undefined, () => state.owner,
     () => state.starting, (value: unknown) => { state.starting = value; }, (value: unknown) => { if (value) state.errors.push(value); }, () => {},
     (value: { planRunId: string }) => { state.review = value; }, () => {}, () => undefined, isRevisionAlreadyCurrent, () => ({ message: "fixture error" }), (key: string) => key, () => {}, ControlApiError,
@@ -113,6 +114,7 @@ function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
     createCapsuleDestroyRecoveryPlan, extractRunId,
     () => JSON.stringify([state.capsuleId, state.workspaceId, state.accountId, state.principalId]),
     () => {},
+    () => [state.principalId, state.accountId, state.workspaceId, state.capsuleId], trackSubmittedUninstallReview,
   ) as { send: (answer: typeof pairs) => void; retire: () => void; dispose: () => void };
   return { state, ...actual };
 }

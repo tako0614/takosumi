@@ -1,15 +1,19 @@
 import { randomUuid } from "./random-uuid.ts";
 
-type Scope = readonly [
+type AppScope = readonly [
   principalId: string | undefined,
   accountId: string | undefined,
   workspaceId: string | undefined,
   capsuleId: string | undefined,
-  planRunId: string,
 ];
+type Scope = readonly [...AppScope, planRunId: string];
+type Reservation = { readonly token: string; readonly planRunId: string };
+type ReceiptOutcome = { readonly saved: true } | { readonly reservedPlanRunId: unknown };
 
 // The in-memory copy still protects navigation when the browser denies storage.
 const holds = new Map<string, string>();
+const pendingReceipts = new Map<string, symbol>();
+const receiptFallbacks = new Map<string, { readonly stored: string | null; readonly marker: string | undefined }>();
 
 type Hold = {
   readonly release: () => void;
@@ -20,6 +24,10 @@ const noHold: Hold = { release: () => {}, recordReservation: () => {} };
 
 function holdKey(scope: Scope): string | undefined {
   return scope.every(Boolean) ? `takosumi.uninstall-review-hold:${JSON.stringify(scope)}` : undefined;
+}
+
+function receiptKey(scope: AppScope): string | undefined {
+  return scope.every(Boolean) ? `takosumi.uninstall-review-receipt:${JSON.stringify(scope)}` : undefined;
 }
 
 function storedHold(key: string): string | null {
@@ -54,19 +62,64 @@ function writeMarker(key: string, marker: string): void {
   }
 }
 
-function validReservation(id: unknown, oldPlanId: string): id is string {
+function validReservation(id: unknown, oldPlanId?: string): id is string {
   return typeof id === "string" && id !== oldPlanId && id.length <= 256 &&
     /^plan_[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(id);
 }
 
-export function reservedUninstallReview(scope: Scope): { token: string; planRunId: string } | undefined {
-  const key = holdKey(scope);
-  if (!key) return;
-  const marker = currentMarker(key);
+function reservationFromMarker(marker: string | undefined, oldPlanId?: string): Reservation | undefined {
   if (!marker) return;
   // A legacy marker is just the token. The reservation suffix shares its owner.
   const [token, planRunId] = marker.split(":");
-  if (token && validReservation(planRunId, scope[4]) && marker === `${token}:${planRunId}`) return { token, planRunId };
+  if (token && validReservation(planRunId, oldPlanId) && marker === `${token}:${planRunId}`) return { token, planRunId };
+}
+
+export function reservedUninstallReview(scope: Scope): Reservation | undefined {
+  const key = holdKey(scope);
+  return key ? reservationFromMarker(currentMarker(key), scope[4]) : undefined;
+}
+
+function submittedMarker(key: string, stored = storedHold(key)): string | undefined {
+  const fallback = receiptFallbacks.get(key);
+  return fallback?.stored === stored ? fallback.marker : stored ?? undefined;
+}
+
+function writeSubmittedMarker(key: string, stored: string | null, marker: string | undefined): void {
+  try {
+    if (marker === undefined) window.sessionStorage.removeItem(key);
+    else window.sessionStorage.setItem(key, marker);
+    receiptFallbacks.delete(key);
+  } catch {
+    // Preserve the document's value while storage still has the same preimage.
+    receiptFallbacks.set(key, { stored, marker });
+  }
+}
+
+export function submittedUninstallReview(scope: AppScope): Reservation | undefined {
+  const key = receiptKey(scope);
+  return key ? reservationFromMarker(submittedMarker(key)) : undefined;
+}
+
+/** A submitted review without a prior Plan has a receipt and never an approval hold. */
+export function trackSubmittedUninstallReview(scope: AppScope): (outcome?: ReceiptOutcome) => void {
+  const key = receiptKey(scope);
+  if (!key) return () => {};
+  const attempt = Symbol();
+  const stored = storedHold(key);
+  const previous = submittedMarker(key, stored);
+  pendingReceipts.set(key, attempt);
+  return (outcome) => {
+    if (pendingReceipts.get(key) !== attempt) return;
+    pendingReceipts.delete(key);
+    const currentStored = storedHold(key);
+    if (!outcome || currentStored !== stored || submittedMarker(key, currentStored) !== previous) return;
+    if ("reservedPlanRunId" in outcome) {
+      const id = outcome.reservedPlanRunId;
+      if (validReservation(id)) writeSubmittedMarker(key, stored, `${randomUuid()}:${id}`);
+    } else if (previous !== undefined || stored !== null) {
+      writeSubmittedMarker(key, stored, undefined);
+    }
+  };
 }
 
 /** Only the request that created a marker can release the value it wrote. */
