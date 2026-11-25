@@ -1786,6 +1786,8 @@ test.describe("Takosumi dashboard browser surface", () => {
   }) => {
     test.skip(mode !== "portable", "synthetic poll failures are portable-only");
     const errors = pageErrors(page);
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
     const runPath = "/api/v1/runs/run_poll_e2e";
     let runReads = 0;
     // A non-200 stream fails EventSource for good (no auto-reconnect), so the
@@ -1815,11 +1817,21 @@ test.describe("Takosumi dashboard browser surface", () => {
     const refreshFailed =
       /Couldn't fetch the latest status|最新の状態を取得できませんでした/u;
 
-    await gotoDashboardDocument(page, "/runs/run_poll_e2e");
+    await Promise.all([
+      page.waitForResponse((response) =>
+        routePath(response.url()) === `${runPath}/stream` && response.status() === 503
+      ),
+      gotoDashboardDocument(page, "/runs/run_poll_e2e"),
+    ]);
+    const lastGoodRun = page.getByRole("heading", { name: /Review changes|変更の確認/u });
+    await expect(lastGoodRun).toBeVisible();
+    expect(runReads).toBe(1);
     // The 3s fallback poll hits the synthetic failure: the run stays on
     // screen with a quiet notice instead of the whole app going away.
+    await page.clock.runFor(3_000);
     await expect(page.getByText(refreshFailed)).toBeVisible({ timeout: 10_000 });
     expect(runReads).toBe(2);
+    await expect(lastGoodRun).toBeVisible();
     await expect(
       page.getByRole("heading", {
         name: /Couldn't load this run|実行を読み込めませんでした/u,
@@ -1829,6 +1841,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(homeLink(page)).toBeVisible();
 
     // Polling continues after the failure and the next good read clears it.
+    await page.clock.runFor(3_000);
     await expect(page.getByText(refreshFailed)).toHaveCount(0, {
       timeout: 10_000,
     });
