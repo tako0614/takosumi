@@ -1454,15 +1454,18 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
             }, other);
             await expect(page).toHaveURL((url) => url.pathname + url.search === other);
           }
-          release.resolve();
           if (destination === "current attempt") {
+            release.resolve();
             await expect(page).toHaveURL((url) =>
               url.pathname === "/sign-in" && url.searchParams.get("return") === current);
           } else {
-            await Promise.race([
-              page.waitForFunction(() => document.documentElement.dataset.savedAttemptReadSettled === "true"),
-              page.waitForURL(/\/sign-in\?/u),
+            const outcome = Promise.race([
+              page.waitForFunction(() => document.documentElement.dataset.savedAttemptReadSettled === "true").then(() => "settled"),
+              page.waitForRequest((request) =>
+                request.isNavigationRequest() && new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
             ]);
+            release.resolve();
+            expect(await outcome).toBe("settled");
             await expect(page).toHaveURL((url) => url.pathname + url.search === other);
           }
           expect(fixture.mutations).toEqual([]);
