@@ -7063,6 +7063,104 @@ function deferredGate(): {
 // so the runner DO seals/opens plan binaries + state with real AES-GCM in tests.
 const TEST_PASSPHRASE = "takosumi-runner-container-test-passphrase-0123456789";
 
+test("OpenTofu runner reports the original mutation request from preparation through its state relay", async () => {
+  const planRunId = "plan_live_mutation_relay";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new HookedR2Bucket();
+  const stateScope = capsuleStateScope();
+  const restorePlan = deferredGate();
+  const stateWrite = deferredGate();
+  state.beforePut = async (key) => {
+    if (key !== stateScope.stateRef) return;
+    stateWrite.enter();
+    await stateWrite.wait;
+  };
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const successful = mutationSuccessContainer(planRunId, () => { providerCalls += 1; });
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (request.method === "PUT" && new URL(request.url).pathname === `/runs/${planRunId}/artifacts/tfplan`) {
+        restorePlan.enter();
+        await restorePlan.wait;
+      }
+      return await successful.containerFetch(request);
+    },
+  };
+  const options = {
+    storage,
+    stateBucket: state,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+  };
+  const runner = runnerWithContainer(artifacts, container, options);
+  const token = await signedMutationToken(planRunId, { jti: "live-mutation-relay" });
+  const rawOutputRef = rawOutputRefFor(planRunId);
+  const pending = runner.fetch(signedMutationRequest(planRunId, token, { stateScope, rawOutputRef }));
+  const reloaded = runnerWithContainer(artifacts, container, options);
+  try {
+    const finishBeforeGate = pending.then(() => { assert.fail("mutation returned before the expected gate"); });
+    await Promise.race([
+      restorePlan.entered,
+      finishBeforeGate,
+    ]);
+    for (const phase of ["preparing", "dispatched"]) {
+      const { authority } = await runner.inspectMutationAuthority(applyRunId, "apply");
+      assert.ok(authority.status === "valid" && authority.phase === phase);
+      assert.equal(authority.requestInFlight, true);
+      assert.equal(authority.completion, undefined);
+      // Durable authority also survives isolate eviction without an active request.
+      const { authority: durable } = await reloaded.inspectMutationAuthority(applyRunId, "apply");
+      assert.ok(durable.status === "valid" && durable.phase === phase);
+      assert.equal(durable.requestInFlight, false);
+      if (phase === "preparing") {
+        restorePlan.release();
+        await Promise.race([stateWrite.entered, finishBeforeGate]);
+      }
+    }
+  } finally {
+    restorePlan.release();
+    stateWrite.release();
+    assert.equal((await pending).status, 200);
+  }
+  const { authority } = await runner.inspectMutationAuthority(applyRunId, "apply");
+  assert.ok(authority.status === "valid" && authority.phase === "completed");
+  assert.ok(authority.completion);
+  assert.equal(providerCalls, 1);
+});
+
+test("OpenTofu runner releases its live preparation indication if the state target read fails", async () => {
+  const planRunId = "plan_failed_state_target_read";
+  const applyRunId = `apply_${planRunId}`;
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new HookedR2Bucket();
+  const stateScope = capsuleStateScope();
+  state.afterHead = async (key) => {
+    if (key === stateScope.stateRef) throw new Error("fixture state target is temporarily unavailable");
+  };
+  let providerCalls = 0;
+  const runner = runnerWithContainer(artifacts, mutationSuccessContainer(planRunId, () => { providerCalls += 1; }), {
+    storage: new FakeDoStorage(),
+    stateBucket: state,
+    env: { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET },
+  });
+  const request = async (jti: string) => signedMutationRequest(planRunId, await signedMutationToken(planRunId, { jti }), {
+    stateScope,
+    rawOutputRef: rawOutputRefFor(planRunId),
+  });
+  assert.equal((await runner.fetch(await request("state-read-failed"))).status, 500);
+  const { authority } = await runner.inspectMutationAuthority(applyRunId, "apply");
+  assert.ok(authority.status === "valid" && authority.phase === "preparing");
+  assert.equal(authority.requestInFlight, false);
+  assert.equal(providerCalls, 0);
+
+  state.afterHead = undefined;
+  assert.equal((await runner.fetch(await request("state-read-restored"))).status, 200);
+  assert.equal(providerCalls, 1);
+});
+
 test("OpenTofu runner records a value-free completion receipt a lost caller can adopt", async () => {
   const planRunId = "plan_completion_receipt";
   const applyRunId = `apply_${planRunId}`;

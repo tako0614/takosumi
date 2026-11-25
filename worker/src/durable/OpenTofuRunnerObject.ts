@@ -530,6 +530,8 @@ export type RunnerMutationAuthorityInspection = {
         readonly version: number;
         readonly fence: number;
         readonly redispatchBlocked: true;
+        /** For a preparing or dispatched record, whether its original request is active here. */
+        readonly requestInFlight?: boolean;
         readonly completion?: RunnerMutationCompletionReceipt;
         readonly admittedExecutionAuthority?: AdmittedExecutionAuthority;
       };
@@ -732,7 +734,8 @@ const createOpenTofuRunnerObjectClass = (
 
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
-  readonly #activeMutationPreparations = new Set<string>();
+  readonly #activeMutationPreparations = new Map<string, Request>();
+  #activeMutationRelay?: { readonly request: Request; readonly semanticDigest: string };
   readonly #activeCredentialRefreshClaims = new Map<string, ActiveCredentialRefreshClaim>();
   readonly #activePrivateRunFileRefreshClaims = new Map<string, ActivePrivateRunFileRefreshClaim>();
   readonly #activeReleasePreparations = new Set<string>();
@@ -1162,6 +1165,10 @@ const createOpenTofuRunnerObjectClass = (
         { status: 500 },
       );
     } finally {
+      if (this.#activeMutationRelay?.request === request) this.#activeMutationRelay = undefined;
+      for (const [digest, owner] of this.#activeMutationPreparations) {
+        if (owner === request) this.#activeMutationPreparations.delete(digest);
+      }
       if (runDispatch) {
         const dispatchRunId = new URL(request.url).pathname.match(/^\/runs\/([^/]+)$/)?.[1];
         if (dispatchRunId) {
@@ -1226,6 +1233,10 @@ const createOpenTofuRunnerObjectClass = (
         version: record.version,
         fence: record.fence,
         redispatchBlocked: true,
+        ...(record.phase === "preparing" || record.phase === "dispatched"
+          ? { requestInFlight: this.#activeMutationPreparations.has(record.semanticDigest) ||
+              this.#activeMutationRelay?.semanticDigest === record.semanticDigest }
+          : {}),
         ...(record.completion ? { completion: record.completion } : {}),
         ...(record.completion && record.admittedExecutionAuthority
           ? { admittedExecutionAuthority: record.admittedExecutionAuthority }
@@ -1714,6 +1725,7 @@ const createOpenTofuRunnerObjectClass = (
     runId: string,
     action: RunnerMutationAction,
     requestPayload: unknown,
+    request: Request,
   ): Promise<RunnerMutationAuthorityClaim> {
     let semanticDigest: string;
     try {
@@ -1736,11 +1748,11 @@ const createOpenTofuRunnerObjectClass = (
     }
     // A Durable Object has one live isolate for this ID, so acquiring this
     // in-isolate owner before the first storage await closes concurrent claim
-    // races. Durable storage below, not this Set, is the restart authority.
+    // races. Durable storage below is the restart authority.
     if (this.#activeMutationPreparations.size > 0) {
       return { kind: "blocked" };
     }
-    this.#activeMutationPreparations.add(semanticDigest);
+    this.#activeMutationPreparations.set(semanticDigest, request);
     try {
       const existing = await this.ctx.storage.get<unknown>(
         RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
@@ -1859,6 +1871,7 @@ const createOpenTofuRunnerObjectClass = (
   async #markMutationDispatched(
     preparation: RunnerMutationDispatchRecord,
     admittedExecutionAuthority: AdmittedExecutionAuthority | undefined,
+    request: Request,
   ): Promise<RunnerMutationDispatchRecord | undefined> {
     const current = parseRunnerMutationDispatchRecord(
       await this.ctx.storage.get<unknown>(
@@ -1879,6 +1892,8 @@ const createOpenTofuRunnerObjectClass = (
       ...(admittedExecutionAuthority ? { admittedExecutionAuthority } : {}),
       phase: "dispatched",
     };
+    // Let observers defer takeover before the durable dispatch becomes visible.
+    this.#activeMutationRelay = { request, semanticDigest: dispatched.semanticDigest };
     await this.#writeMutationDispatchRecord(dispatched);
     // The container may receive the mutation only after this redispatch
     // fence is durable, not merely buffered in the isolate.
@@ -2591,6 +2606,7 @@ const createOpenTofuRunnerObjectClass = (
         runId,
         envelope.action,
         envelope.request,
+        request,
       );
       if (claim.kind === "blocked") {
         return runnerMutationIndeterminateResponse(envelope.action);
@@ -2782,6 +2798,7 @@ const createOpenTofuRunnerObjectClass = (
         mutationDispatch = await this.#markMutationDispatched(
           mutationPreparation,
           admittedExecutionAuthority,
+          request,
         );
         if (!mutationDispatch) {
           return runnerMutationIndeterminateResponse(
