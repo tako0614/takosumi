@@ -731,9 +731,12 @@ test("apps apply identifies a confirmed Destroy connection refusal without resub
 
 test("apps apply preserves unknown or observed Destroy outcomes after a connection refusal", async () => {
   for (const mode of ["unrelated", "approval", "readback-denied", "changed-plan", "linked-apply"]) {
+    const replacementRefusal = mode === "changed-plan" || mode === "linked-apply";
     const receipt = Response.json({ error: {
       code: "failed_precondition", details: {
-        reason: mode === "unrelated" ? "some_other_conflict" : "provider_connection_setup_required",
+        reason: replacementRefusal ? "destroy_connection_recovery_unproven"
+          : mode === "unrelated" ? "some_other_conflict" : "provider_connection_setup_required",
+        ...(replacementRefusal ? { connectionRecoveryFailure: "bindings_mismatch" } : {}),
       },
     } }, { status: 409 });
     let sent = false;
@@ -753,6 +756,7 @@ test("apps apply preserves unknown or observed Destroy outcomes after a connecti
     });
     expect(result.calls.filter(req => req.method === "POST")).toHaveLength(1);
     expect(result.result.reason).toBeUndefined();
+    expect(result.result.connectionRecoveryFailure).toBeUndefined();
     if (mode === "linked-apply") {
       expect(result.code).toBe(0);
       expect(result.result).toMatchObject({ status: "succeeded", runId: destroyApply.id });
@@ -760,6 +764,48 @@ test("apps apply preserves unknown or observed Destroy outcomes after a connecti
       expect(result.code).toBe(1);
       expect(result.result).toMatchObject({ status: "indeterminate", planRunId: destroyPlan.id });
       expect(result.result.recovery).toContain("--observe-only");
+    }
+  }
+});
+
+test("apps apply explains a refused Destroy when the replacement no longer matches the reviewed app", async () => {
+  const reason = "destroy_connection_recovery_unproven";
+  const applyPath = `/api/v1/runs/${destroyPlan.id}/apply`;
+  for (const failure of ["bindings_mismatch", "replacement_unverified", "replacement_auth_mode_mismatch",
+    "applied_evidence_unavailable", "private-diagnostic", undefined] as const) {
+    const result = await invoke(destroyApplyArgs, request => {
+      if (new URL(request.url).pathname === applyPath && request.method === "POST") {
+        return Response.json({ error: {
+          code: "failed_precondition",
+          message: "prevent-secret-diagnostic-leak",
+          details: { reason, connectionRecoveryFailure: failure },
+        } }, { status: 409 });
+      }
+      return normalDestroy(request, { plan: { ...destroyPlan, status: "succeeded" } });
+    });
+    expect(result.code).toBe(1);
+    expect(result.calls.map(request => `${request.method} ${new URL(request.url).pathname}`)).toEqual([
+      `GET /api/v1/runs/${destroyPlan.id}`, "GET /api/v1/capsules/cap_owned/runs",
+      "GET /api/v1/capsules/cap_owned", `POST ${applyPath}`,
+      `GET /api/v1/runs/${destroyPlan.id}`, "GET /api/v1/capsules/cap_owned/runs",
+    ]);
+    const diagnostic = JSON.stringify(result.result);
+    expect(diagnostic).not.toContain("prevent-secret-diagnostic-leak");
+    expect(diagnostic).not.toContain("private-diagnostic");
+    if (failure === undefined || failure === "private-diagnostic") {
+      expect(result.result.status).toBe("indeterminate");
+      expect(result.result.connectionRecoveryFailure).toBeUndefined();
+      expect(result.result.recovery).toContain("--observe-only");
+    } else {
+      expect(result.result).toMatchObject({ status: "refused", lastObservedPlanStatus: "succeeded",
+        code: "failed_precondition", reason, connectionRecoveryFailure: failure });
+      if (failure === "applied_evidence_unavailable") {
+        expect(result.result.recovery).toContain("applied state");
+        expect(result.result.recovery).not.toContain("--connections");
+      } else {
+        expect(result.result.recovery).toContain("same cloud account");
+        expect(result.result.recovery).toContain("apps recover-uninstall with --connections");
+      }
     }
   }
 });

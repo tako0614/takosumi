@@ -153,7 +153,8 @@ takosumi apps recover-uninstall cap_example \
 現在のアプリ所有者が選んだ確認済み接続を、サーバーが保存済みの部分削除の記録と照合します。
 `refused` に `connectionRecoveryFailure` がある場合、`replacement_unverified` なら代替接続を確認し、
 `bindings_mismatch` ならアカウントと適用済みの接続設定を確認してください。
-`applied_evidence_unavailable` は、照合に必要な適用記録をサーバーが確認できなかったことを示します。
+`replacement_auth_mode_mismatch` なら、導入時と同じ認証方式の接続を選んでください。
+`applied_evidence_unavailable` の場合は、アプリの適用済み状態と直前のRunを確認してください。
 `review_required` になったPlanでは、削除内容と `providerConnections` の有効な接続を確認できます。前回の削除から引き継いだ接続も表示します。
 `plan_pending` なら返された `planRunId` を指定して、同じPlanを読み直せます。`unconfirmed` に `reservedPlanRunId` がある場合は、そのIDを `--destroy-plan` に指定します。読取りが404でも保存結果は未確定です。予約IDがない場合は、`--current-review` で準備中・レビュー可能・失敗のいずれかにある最新の手動削除Planを確認できます。
 `failed` ではPlanのIDと、取得できた場合は失敗コードを返します。前の要求が受理されたかは未確認のままです。
@@ -179,9 +180,9 @@ takosumi apps apply cap_example --destroy-plan destroy_plan_example --yes \
   --url https://takosumi.example.com --json
 ```
 
-`--destroy-plan` は破棄用の保存Planを指定します。接続の準備状態や資格ポリシーを理由に適用が拒否され、
-同じPlanの読み戻しで紐付く削除Runが見つからなければ、`refused` と理由を返します。
-同じクラウドアカウントの確認済み接続を選び、`apps recover-uninstall --connections` で新しい削除Planを準備して確認してください。
+`--destroy-plan` は破棄用の保存Planを指定します。接続の準備状態、資格ポリシー、または代替接続の照合を理由に適用が拒否され、
+同じPlanの読み戻しで紐付く削除Runが見つからなければ、`refused` と理由を返します。代替接続の照合は上記の `connectionRecoveryFailure` で確認できます。
+接続に関する理由なら、同じクラウドアカウントの確認済み接続を選び、`apps recover-uninstall --connections` で新しい削除Planを準備して確認してください。
 応答が不明なら、同じPlan IDで `--yes` を `--observe-only` に替えると、
 紐付いた削除Runを読み取れます。通常の削除予約は `apps uninstall <app-id> --yes` から行います。
 
