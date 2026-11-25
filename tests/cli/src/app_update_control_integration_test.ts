@@ -647,6 +647,76 @@ test("CLI app history finds the rollback target and the exact Plan survives a lo
   }
 });
 
+test("CLI rollback reports a save timeout as unconfirmed and the same key recovers the Plan", async () => {
+  const h = await fixture();
+  const target = (await h.ledger.getCapsule(h.appId))!.currentStateVersionId!;
+  const args = ["apps", "rollback", h.appId, "--state-version", target,
+    "--idempotency-key", "save-timeout-key", "--token", TOKEN, "--url", ORIGIN, "--json"];
+  const originalFetch = globalThis.fetch;
+  const realSetTimeout = globalThis.setTimeout;
+  const prepare = h.ledger.preparePlanRun.bind(h.ledger);
+  const entered = Promise.withResolvers<string>();
+  const release = Promise.withResolvers<void>();
+  const saved = Promise.withResolvers<void>();
+  const receipts: { method: string; status: number; body: unknown }[] = [];
+  const output: string[] = [];
+  const io = { stdout: (line: string) => output.push(line), stderr: () => {} };
+  const before = { ...h.runnerCalls };
+  let deadline: (() => void) | undefined;
+  globalThis.setTimeout = ((callback: TimerHandler, milliseconds?: number, ...params: unknown[]) => {
+    if (milliseconds !== 25_000 || typeof callback !== "function") return realSetTimeout(callback, milliseconds, ...params);
+    deadline = () => callback(...params);
+    return realSetTimeout(() => undefined, 60_000);
+  }) as typeof globalThis.setTimeout;
+  h.ledger.preparePlanRun = async (input) => {
+    entered.resolve(input.run.id);
+    await release.promise;
+    try { return await prepare(input); }
+    finally { saved.resolve(); }
+  };
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    const response = await h.dispatch(request);
+    receipts.push({ method: request.method, status: response.status, body: await response.clone().json() });
+    return response;
+  }) as typeof fetch;
+  let planId: string | undefined;
+  try {
+    const pending = main(args, io);
+    planId = await Promise.race([
+      entered.promise, pending.then(() => { throw new Error("rollback returned before saving the Plan"); }),
+    ]);
+    expect(await h.ledger.getPlanRun(planId)).toBeUndefined();
+    expect(deadline).toBeFunction();
+    deadline!();
+    expect(await pending).toBe(1);
+    expect(receipts.map(({ method, status }) => [method, status])).toEqual([["GET", 200], ["POST", 409]]);
+    expect(receipts[1]?.body).toMatchObject({ error: { code: "failed_precondition", details: {
+      reason: "capsule_plan_creation_timeout", stage: "plan_run_create",
+    } } });
+    expect(output).toHaveLength(1);
+    const unconfirmed = JSON.parse(output.pop()!);
+    expect(unconfirmed).toMatchObject({ status: "unconfirmed", stateVersionId: target });
+    expect(unconfirmed.planRunId).toBeUndefined();
+    expect(unconfirmed.recovery).toContain("idempotency key");
+    expect(h.runnerCalls).toEqual(before);
+
+    release.resolve();
+    await saved.promise;
+    expect((await h.ledger.getPlanRun(planId))?.status).toBe("queued");
+    expect(await main(args, io)).toBe(0);
+    expect(JSON.parse(output[0]!)).toMatchObject({ status: "review_required", planRunId: planId });
+    expect(h.runnerCalls).toEqual({ ...before, plan: before.plan + 1 });
+    expect((await h.ledger.getCapsule(h.appId))?.currentStateVersionId).toBe(target);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = realSetTimeout;
+    h.ledger.preparePlanRun = prepare;
+    release.resolve();
+    if (planId) await saved.promise;
+  }
+});
+
 test("a competing CLI update reads the Plan completed by another reconciler without advancing it again", async () => {
   const planning = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
