@@ -688,10 +688,12 @@ type ApplyRunExecutionResponse = ApplyRunResponse & {
 async function planCreationStage<T>(
   stage: string,
   promise: Promise<T>,
+  readReservedPlanRunId?: () => string | undefined,
 ): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
+      const reservedPlanRunId = readReservedPlanRunId?.();
       reject(
         new OpenTofuControllerError(
           "failed_precondition",
@@ -700,6 +702,7 @@ async function planCreationStage<T>(
             reason: "capsule_plan_creation_timeout",
             stage,
             timeoutMs: PLAN_CREATION_STAGE_TIMEOUT_MS,
+            ...(reservedPlanRunId === undefined ? {} : { reservedPlanRunId }),
           },
         ),
       );
@@ -2233,6 +2236,7 @@ export class RunEngine {
     request: InternalCreatePlanRunRequest,
     context: DeployControlActorContext,
     internal: RunEnginePlanRunInternalContext,
+    onPlanSaveStarted?: (planRunId: string) => void,
   ): Promise<PreparedPlanRun> {
     const workspaceId = request.workspaceId;
     requireNonEmptyString(workspaceId, "workspaceId");
@@ -2677,6 +2681,7 @@ export class RunEngine {
     }
     let prepared;
     try {
+      onPlanSaveStarted?.(planRun.id);
       prepared = await this.#store.preparePlanRun({
         run: planRun,
         inputs: storedPlanRunInputs,
@@ -3384,6 +3389,11 @@ export class RunEngine {
           ),
         )
       : undefined;
+    // Record only a new manual recovery attempt's own ID at the save boundary.
+    const trackRecoverySave = destroy &&
+      internal.destroyProviderConnectionReplacements !== undefined &&
+      internal.planRunId === undefined && internal.origin === undefined;
+    let reservedPlanRunId: string | undefined;
     const prepared = await planCreationStage(
       "plan_run_create",
       this.#preparePlanRun(injectedRequest, context, {
@@ -3417,7 +3427,8 @@ export class RunEngine {
         ...(internal.autoApplyRequested
           ? { autoApplyRequested: true as const }
           : {}),
-      }),
+      }, trackRecoverySave ? (id) => { reservedPlanRunId = id; } : undefined),
+      trackRecoverySave ? () => reservedPlanRunId : undefined,
     );
     return await this.#dispatchPreparedPlanRun(prepared);
   }
