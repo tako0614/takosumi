@@ -1777,7 +1777,7 @@ export class OpenTofuController {
       runEnv: this.#runEnv,
       verification: this.#verification,
       planResolution: this.#planResolution,
-      hasVerifiedAccountScope: (connection) => this.#vault?.hasVerifiedAccountScope?.(connection) === true,
+      hasVerifiedAccountScope: (connection, observedAt) => this.#vault?.hasVerifiedAccountScope?.(connection, observedAt) === true,
       preserveDestroyCredentialDelivery: (applied, replacement, names) =>
         this.#vault?.preserveDestroyCredentialDelivery?.(applied, replacement, names),
       recoverRevokedDestroyCredentialShape: (evidence, replacement) =>

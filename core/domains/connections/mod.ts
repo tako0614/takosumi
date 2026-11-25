@@ -765,17 +765,20 @@ export class ConnectionsService {
   }
 
   /**
-   * Observe a completed mutation after its selected Connection was deleted.
-   * A present row still has to match the admitted row. An absent row is allowed
-   * only for an explicitly selected replacement, and supplies no executable binding.
+   * Observe a completed mutation after an explicit replacement was deleted or
+   * after its exact admitted row expired. This proof supplies no executable binding.
    */
-  async matchesDeletedDestroyReceiptBindings(input: {
+  async matchesUnavailableDestroyReceiptBindings(input: {
     readonly capsule: Capsule;
     readonly requiredProviders: readonly RequiredProviderBindingIdentity[];
     readonly replacements: readonly DestroyProviderConnectionReplacement[];
-    readonly hasVerifiedAccountScope: (connection: ProviderConnection) => boolean;
+    readonly hasVerifiedAccountScope: (connection: ProviderConnection, observedAt?: number) => boolean;
+    readonly startedAt: number;
+    readonly observedAt: number;
     readonly proof: DestroyReceiptBindingProof;
   }): Promise<boolean> {
+    if (!Number.isFinite(input.startedAt) || !Number.isFinite(input.observedAt) ||
+      input.startedAt > input.observedAt) return false;
     const replacements = new Map(input.replacements.map(row => [row.connectionId, row.replacementConnectionId]));
     const bindings = await this.#selectStoredProviderBindingsForDestroy(input.capsule, input.requiredProviders);
     const policy = await this.#policyForCapsule(input.capsule);
@@ -793,19 +796,25 @@ export class ConnectionsService {
       id,
       connection: this.#operatorProviderConnections.get(id) ?? await this.#store.getConnection(id),
     })));
-    let deletedReplacement = false;
+    let unavailable: "deleted" | "expired" | undefined;
     for (const { id, connection } of rows) {
       if (connection) {
         if (await stableJsonDigest(connection) !== fingerprints.get(id)) return false;
-        if (selectedReplacements.has(id) &&
-          (!verifiedConnectionExpiryAllowsUse(connection, Date.parse(this.#now())) ||
-            !input.hasVerifiedAccountScope(connection))) return false;
+        if (!selectedReplacements.has(id)) continue;
+        if (verifiedConnectionExpiryAllowsUse(connection, input.observedAt)) {
+          if (!input.hasVerifiedAccountScope(connection)) return false;
+          continue;
+        }
+        if (unavailable === "deleted" || unchangedIds.has(id) ||
+          !verifiedConnectionExpiryAllowsUse(connection, input.startedAt) ||
+          !input.hasVerifiedAccountScope(connection, input.startedAt)) return false;
+        unavailable = "expired";
       } else {
-        if (!selectedReplacements.has(id) || unchangedIds.has(id)) return false;
-        deletedReplacement = true;
+        if (unavailable === "expired" || !selectedReplacements.has(id) || unchangedIds.has(id)) return false;
+        unavailable = "deleted";
       }
     }
-    return deletedReplacement;
+    return unavailable !== undefined;
   }
 
   async #destroyReceiptBindingContextDigest(

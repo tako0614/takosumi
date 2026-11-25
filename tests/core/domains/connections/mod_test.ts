@@ -964,7 +964,9 @@ test.each(["unchanged binding", "expired remaining replacement", "changed remain
     });
     expect(proof).toBeDefined();
     expect(await store.deleteConnection("replacement_a")).toBe(true);
-    const matches = () => service.matchesDeletedDestroyReceiptBindings({ ...composition, proof: proof! });
+    const matches = () => service.matchesUnavailableDestroyReceiptBindings({
+      ...composition, proof: proof!, startedAt: Date.parse(NOW), observedAt: Date.parse(time),
+    });
     if (change === "unchanged binding") {
       expect(await matches()).toBe(false);
     } else {
