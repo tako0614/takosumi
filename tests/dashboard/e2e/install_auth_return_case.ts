@@ -69,6 +69,29 @@ export function registerInstallAuthReturnCase(mode: DashboardE2EMode): void {
     await expect(page).toHaveTitle("Login boundary reached");
     expect(new URL(page.url()).searchParams.get("return")).toBe(destination);
   });
+  for (const { description, root, fragment, returnFragment } of [
+    { description: "preserves an installed app section", root: "/apps", fragment: "#phone", returnFragment: "#phone" },
+    { description: "preserves a section on a mixed-case app route", root: "/Apps", fragment: "#history", returnFragment: "#history" },
+    { description: "omits an unrecognized app fragment", root: "/apps", fragment: "#fixture-extra", returnFragment: "" },
+  ]) {
+    test(`sign-in ${description} in the return URL`, async ({ page, context }) => {
+      test.skip(mode !== "portable", "This test supplies only local portable authentication responses.");
+      const path = `${root}/cap_abc123?open=notes`;
+      await context.clearCookies();
+      await page.route("**/api/v1/dashboard/bootstrap**", (route) => route.fulfill({
+        status: 401, json: { error: "unauthenticated" },
+      }));
+      await page.route("**/api/v1/account/session/me", (route) => route.fulfill({
+        status: 200, json: { session: null },
+      }));
+      await page.route("**/sign-in?**", (route) => route.fulfill({
+        status: 200, contentType: "text/html", body: "<!doctype html><title>Login boundary reached</title>",
+      }));
+      await page.goto(path + fragment, { waitUntil: "commit" });
+      await expect(page).toHaveTitle("Login boundary reached");
+      expect(new URL(page.url()).searchParams.get("return")).toBe(path + returnFragment);
+    });
+  }
   if (mode === "portable") registerInstallReturnInputCases();
 }
 

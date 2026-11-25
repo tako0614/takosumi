@@ -22,6 +22,7 @@ import {
 import { t } from "../../../../i18n/index.ts";
 import Button from "../../../../components/ui/Button.tsx";
 import { isHostedSessionUnavailable } from "../../../../lib/shared-auth-session-preflight.ts";
+import { appPathForSignIn } from "../../../../lib/app-links.ts";
 
 interface Props {
   children: (session: Accessor<SessionRecord>) => JSX.Element;
@@ -70,7 +71,7 @@ export default function AuthGuard(props: Props) {
 
   const redirectToSignIn = (preserveReturn: boolean): void => {
     const target = preserveReturn
-      ? "/sign-in?return=" + encodeURIComponent(loc.pathname + loc.search)
+      ? "/sign-in?return=" + encodeURIComponent(appPathForSignIn(loc))
       : "/sign-in";
     // A pending install must reach the owning server's login route; SPA
     // navigation would render the legacy sign-in screen instead. Keep the
