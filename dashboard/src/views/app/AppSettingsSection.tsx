@@ -192,10 +192,11 @@ export default function AppSettingsSection(props: {
   readonly reviewBusy: boolean;
   /** Another change is under way or waiting for review, so settings wait. */
   readonly changeWaits?: boolean;
+  readonly retryUnconfirmed?: boolean;
   readonly starting: boolean;
   readonly error?: string;
   readonly notice?: string;
-  readonly onReview: (create: () => Promise<string | undefined>) => void;
+  readonly onReview: (create: (isCurrent: () => boolean) => Promise<string | undefined>) => void;
   readonly review: JSX.Element;
 }): JSX.Element {
   const { confirm } = useConfirmDialog();
@@ -217,7 +218,14 @@ export default function AppSettingsSection(props: {
   // instead of minting a second authority. Once the Plan id comes back the
   // key is released: the server would replay that Plan for it.
   let configurationAttempt:
-    | { readonly requestJson: string; readonly idempotencyKey: string }
+    | {
+        readonly requestJson: string;
+        readonly idempotencyKey: string;
+        readonly guard: string;
+        readonly baseConfigId: string;
+        readonly ownsDraft: () => boolean;
+        readonly create: (isCurrent: () => boolean) => Promise<string | undefined>;
+      }
     | undefined;
   const review = props.review;
 
@@ -400,19 +408,39 @@ export default function AppSettingsSection(props: {
       configurationAttempt?.requestJson === requestJson
         ? configurationAttempt.idempotencyKey
         : randomUuid();
-    configurationAttempt = { requestJson, idempotencyKey };
-    props.onReview(async () => {
-      const result = await createCapsuleConfigurationPlan(props.capsuleId, request, idempotencyKey);
+    const capsuleId = props.capsuleId;
+    const submittedVariables = variableRows();
+    const submittedBindings = rows();
+    const ownsDraft = () => props.capsuleId === capsuleId && props.accessKnown !== false &&
+      variableRows() === submittedVariables && rows() === submittedBindings;
+    const create = async (isCurrent: () => boolean) => {
+      const result = await createCapsuleConfigurationPlan(capsuleId, request, idempotencyKey, { isCurrent });
+      if (!isCurrent()) return undefined;
       // The reviewed successor and its Plan exist now: release the key and
       // mark the form clean, so leaving is not blocked and the next change
       // is a new request rather than a replay of this one.
       if (configurationAttempt?.idempotencyKey === idempotencyKey) configurationAttempt = undefined;
-      setBindingsDirty(false);
-      setVariableRows((current) =>
-        current.map((row) => ({ ...row, dirty: false, deleted: false, resetToDefault: false })),
-      );
+      if (ownsDraft()) {
+        setBindingsDirty(false);
+        setVariableRows((current) =>
+          current.map((row) => ({ ...row, dirty: false, deleted: false, resetToDefault: false })),
+        );
+      }
       return result.configurationPlan.planRunId;
-    });
+    };
+    configurationAttempt = { requestJson, idempotencyKey, guard, baseConfigId: config.id, ownsDraft, create };
+    props.onReview(create);
+  };
+  const canRetryUnconfirmedReview = () => {
+    const attempt = configurationAttempt;
+    const current = currentRead();
+    // Rebinding to another InstallConfig advances the authority epoch. The
+    // old guard can only recover a request the server already recorded.
+    return props.retryUnconfirmed && attempt?.ownsDraft() && current &&
+      current.config.id !== attempt.baseConfigId && current.guard !== attempt.guard;
+  };
+  const retryUnconfirmedReview = () => {
+    if (canRetryUnconfirmedReview() && configurationAttempt) props.onReview(configurationAttempt.create);
   };
 
   const connectionPane = () => props.pane === "connections";
@@ -591,6 +619,11 @@ export default function AppSettingsSection(props: {
           </div>
         </Show>
         <div class="ap-row-actions">
+          <Show when={canRetryUnconfirmedReview()}>
+            <Button type="button" variant="secondary" onClick={retryUnconfirmedReview}>
+              {t("app.review.retry")}
+            </Button>
+          </Show>
           <Button
             variant="primary"
             type="submit"

@@ -276,7 +276,7 @@ describe("installed app page", () => {
 
   test("a returned settings Plan releases its key and marks the form clean", () => {
     // Settings: the key is released and the form is clean once the Plan exists.
-    const create = settings.slice(settings.indexOf("props.onReview(async () => {"), settings.indexOf("return result.configurationPlan.planRunId;"));
+    const create = settings.slice(settings.indexOf("const create = async (isCurrent"), settings.indexOf("return result.configurationPlan.planRunId;"));
     expect(create).toContain("configurationAttempt = undefined");
     expect(create).toContain("setBindingsDirty(false)");
     expect(create).toContain("dirty: false, deleted: false, resetToDefault: false");

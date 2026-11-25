@@ -253,9 +253,11 @@ export default function AppManagePage(props: {
   };
 
   // --- the app and the server's view of it -----------------------------------
-  const [context, { refetch: refetchContext }] = createResource<Awaited<ReturnType<typeof getCapsuleConfigurationContext>>, string, AbortSignal>(
+  const [context, { refetch: refetchContext }] = createResource<Awaited<ReturnType<typeof getCapsuleConfigurationContext>>, string, AbortSignal | { readonly isCurrent: () => boolean }>(
     capsuleId,
-    (id, info) => getCapsuleConfigurationContext(id, { signal: info.refetching instanceof AbortSignal ? info.refetching : undefined }),
+    (id, { refetching }) => getCapsuleConfigurationContext(id, refetching instanceof AbortSignal
+      ? { signal: refetching }
+      : typeof refetching === "object" && refetching !== null ? refetching : undefined),
   );
   // Never `context()`/`.latest` directly: both throw once a read failed. A
   // failed refetch keeps the last good app on screen with a quiet notice.
@@ -531,7 +533,7 @@ export default function AppManagePage(props: {
     { readonly section: ReviewSection; readonly action?: CapsuleAppAction | "continue_revision" }
   >();
   const [sectionError, setSectionError] = createSignal<
-    { readonly section: ReviewSection; readonly message: string }
+    { readonly section: ReviewSection; readonly message: string; readonly configurationUnconfirmed?: true }
   >();
   const [notice, setNotice] = createSignal<
     { readonly section: ReviewSection; readonly message: string }
@@ -641,6 +643,7 @@ export default function AppManagePage(props: {
           cause.status === 409 && cause.code === "failed_precondition" && cause.reason === "provider_connection_not_ready";
         // A rollback from version history uses the ordinary "apply" review.
         const isRollback = section === "version" && purpose === "apply";
+        const isConfigurationChange = section === "settings" && purpose === "apply";
         const hold = purpose === "uninstall" ? options.replaceReview?.hold() : undefined;
         const removalSubmitted = Boolean(hold || options.submittedRemoval?.());
         const details = (isRollback || removalSubmitted) && cause instanceof ControlApiError ? cause.details : undefined;
@@ -652,18 +655,18 @@ export default function AppManagePage(props: {
           const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
           if (target) setReAdoptionRevisionId(target);
         }
+        const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback || isConfigurationChange) &&
+          (rollbackSaveTimedOut || (cause instanceof ControlApiError
+            ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
+            : cause instanceof TypeError));
         // Finding no newer version is an answer, not a failure.
         if (isRevisionAlreadyCurrent(cause)) {
           setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
         } else {
           const message = uninstallConnectionRefused ? t("app.uninstall.connectionUnavailable")
             : rollbackSaveTimedOut ? t("app.review.notStarted") : friendlyError(cause, t).message;
-          setSectionError({ section, message });
+          setSectionError({ section, message, ...(isConfigurationChange && responseUncertain ? { configurationUnconfirmed: true } : {}) });
         }
-        const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback) &&
-          (rollbackSaveTimedOut || (cause instanceof ControlApiError
-            ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
-            : cause instanceof TypeError));
         const replacementRefused = hold && cause instanceof ControlApiError &&
           cause.status === 409 && cause.code === "failed_precondition" &&
           (uninstallConnectionRefused || cause.reason === "destroy_connection_recovery_unproven");
@@ -684,8 +687,9 @@ export default function AppManagePage(props: {
           // before a lost response; this fetch never repeats the mutation.
           try {
             void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
+            if (isConfigurationChange) void Promise.resolve(refetchContext({ isCurrent })).catch(() => {});
           } catch {
-            // Keep the original update error when its readback also fails.
+            // Keep the original error when the readback also fails.
           }
         }
       }
@@ -1529,10 +1533,10 @@ export default function AppManagePage(props: {
     if (id === "app-gone") return true;
     if (id === "attention") {
       const view = app();
-      const pendingVersionReview = selected === "version" && !review() &&
+      const pendingChangeReview = (selected === "version" || selected === "settings" || selected === "connections") && !review() &&
         view?.state === "installed" && view.progress.review?.runType === "plan";
       return !selected || selected === id || review()?.section === "attention" ||
-        starting()?.section === "attention" || Boolean(errorFor("attention")) || selected === "danger" || pendingVersionReview;
+        starting()?.section === "attention" || Boolean(errorFor("attention")) || selected === "danger" || pendingChangeReview;
     }
     return selected === id;
   };
@@ -1898,6 +1902,8 @@ export default function AppManagePage(props: {
                   // change would make that change fail when it is applied.
                   reviewBusy={reviewBusy() || versionChangeBusy(view())}
                   changeWaits={!reviewBusy() && versionChangeBusy(view())}
+                  retryUnconfirmed={!reviewBusy() && versionChangeBusy(view()) &&
+                    sectionError()?.section === "settings" && sectionError()?.configurationUnconfirmed === true}
                   starting={startingIn("settings")}
                   error={errorFor("settings")}
                   notice={noticeFor("settings")}

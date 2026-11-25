@@ -1205,14 +1205,17 @@ export async function getCapsule(id: string, options: Pick<RequestOpts, "isCurre
  * snapshot. Settings must echo this guard into the single Configuration Plan
  * request; separate GETs could accidentally combine different authorities.
  */
-export async function getCapsuleConfigurationContext(id: string, options: { readonly signal?: AbortSignal } = {}): Promise<{
+export async function getCapsuleConfigurationContext(
+  id: string,
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
+): Promise<{
   readonly capsule: Capsule;
   readonly authorityGuard: string;
 }> {
   const body = await controlFetch<{
     capsule: Capsule;
     installConfigReAdoption: { readonly authorityGuard: string };
-  }>(`${BASE}/capsules/${encodeURIComponent(id)}`, { signal: options.signal });
+  }>(`${BASE}/capsules/${encodeURIComponent(id)}`, options);
   if (
     !isCapsuleResponse(body.capsule) ||
     typeof body.installConfigReAdoption?.authorityGuard !== "string" ||
@@ -1235,15 +1238,22 @@ export async function createCapsuleConfigurationPlan(
   capsuleId: string,
   request: CapsuleConfigurationPlanRequest,
   idempotencyKey: string = randomUuid(),
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<CapsuleConfigurationPlanResponse> {
-  return await controlFetch<CapsuleConfigurationPlanResponse>(
+  const result = await controlFetch<CapsuleConfigurationPlanResponse>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/configuration-plans`,
     {
       method: "POST",
       headers: { "idempotency-key": idempotencyKey },
       body: request,
+      ...options,
     },
   );
+  const planRunId = result?.configurationPlan?.planRunId;
+  if (typeof planRunId !== "string" || !planRunId.trim()) {
+    throw new ControlApiError(502, "invalid_configuration_plan_response", "Configuration planning returned no Plan identifier.");
+  }
+  return result;
 }
 
 /** Explicit immutable configuration re-adoption; never plans or applies. */
