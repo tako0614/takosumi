@@ -7063,13 +7063,14 @@ function deferredGate(): {
 // so the runner DO seals/opens plan binaries + state with real AES-GCM in tests.
 const TEST_PASSPHRASE = "takosumi-runner-container-test-passphrase-0123456789";
 
-test("OpenTofu runner reports the original mutation relay until state is durable", async () => {
+test("OpenTofu runner reports the original mutation request from preparation through its state relay", async () => {
   const planRunId = "plan_live_mutation_relay";
   const applyRunId = `apply_${planRunId}`;
   const artifacts = new FakeR2Bucket();
   await seedEncryptedPlan(artifacts, planRunId);
   const state = new HookedR2Bucket();
   const stateScope = capsuleStateScope();
+  const restorePlan = deferredGate();
   const stateWrite = deferredGate();
   state.beforePut = async (key) => {
     if (key !== stateScope.stateRef) return;
@@ -7078,7 +7079,16 @@ test("OpenTofu runner reports the original mutation relay until state is durable
   };
   const storage = new FakeDoStorage();
   let providerCalls = 0;
-  const container = mutationSuccessContainer(planRunId, () => { providerCalls += 1; });
+  const successful = mutationSuccessContainer(planRunId, () => { providerCalls += 1; });
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (request.method === "PUT" && new URL(request.url).pathname === `/runs/${planRunId}/artifacts/tfplan`) {
+        restorePlan.enter();
+        await restorePlan.wait;
+      }
+      return await successful.containerFetch(request);
+    },
+  };
   const options = {
     storage,
     stateBucket: state,
@@ -7088,21 +7098,29 @@ test("OpenTofu runner reports the original mutation relay until state is durable
   const token = await signedMutationToken(planRunId, { jti: "live-mutation-relay" });
   const rawOutputRef = rawOutputRefFor(planRunId);
   const pending = runner.fetch(signedMutationRequest(planRunId, token, { stateScope, rawOutputRef }));
+  const reloaded = runnerWithContainer(artifacts, container, options);
   try {
+    const finishBeforeGate = pending.then(() => { assert.fail("mutation returned before the expected gate"); });
     await Promise.race([
-      stateWrite.entered,
-      pending.then(() => { assert.fail("mutation returned before the state write began"); }),
+      restorePlan.entered,
+      finishBeforeGate,
     ]);
-    const { authority } = await runner.inspectMutationAuthority(applyRunId, "apply");
-    assert.ok(authority.status === "valid" && authority.phase === "dispatched");
-    assert.equal(authority.relayInFlight, true);
-    assert.equal(authority.completion, undefined);
-    // Durable authority can survive isolate eviction without a live relay.
-    const reloaded = runnerWithContainer(artifacts, container, options);
-    const { authority: durable } = await reloaded.inspectMutationAuthority(applyRunId, "apply");
-    assert.ok(durable.status === "valid" && durable.phase === "dispatched");
-    assert.equal(durable.relayInFlight, false);
+    for (const phase of ["preparing", "dispatched"]) {
+      const { authority } = await runner.inspectMutationAuthority(applyRunId, "apply");
+      assert.ok(authority.status === "valid" && authority.phase === phase);
+      assert.equal(authority.requestInFlight, true);
+      assert.equal(authority.completion, undefined);
+      // Durable authority also survives isolate eviction without an active request.
+      const { authority: durable } = await reloaded.inspectMutationAuthority(applyRunId, "apply");
+      assert.ok(durable.status === "valid" && durable.phase === phase);
+      assert.equal(durable.requestInFlight, false);
+      if (phase === "preparing") {
+        restorePlan.release();
+        await Promise.race([stateWrite.entered, finishBeforeGate]);
+      }
+    }
   } finally {
+    restorePlan.release();
     stateWrite.release();
     assert.equal((await pending).status, 200);
   }

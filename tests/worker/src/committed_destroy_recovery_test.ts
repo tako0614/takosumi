@@ -61,7 +61,7 @@ async function fixture(options: {
   readonly replacement?: boolean;
   readonly scheduled?: boolean;
   readonly afterWorkerUpdate?: boolean;
-  readonly relayInFlight?: boolean;
+  readonly requestInFlight?: boolean;
   readonly storedService?: boolean;
   readonly admittedExecutionAuthority?: typeof FIXTURE_EXECUTION_EVIDENCE_AUTHORITY;
   readonly capsuleCoordination?: CapsuleCoordination;
@@ -187,7 +187,7 @@ async function fixture(options: {
     authority: {
       status: "valid", action, version: 1, fence: 1, redispatchBlocked: true,
       phase,
-      ...(phase === "dispatched" && options.relayInFlight !== undefined ? { relayInFlight: options.relayInFlight } : {}),
+      ...(options.requestInFlight !== undefined ? { requestInFlight: options.requestInFlight } : {}),
       ...(phase === "completed" ? { completion: {} } : {}),
       ...(options.admittedExecutionAuthority ? { admittedExecutionAuthority: options.admittedExecutionAuthority } : {}),
     },
@@ -492,8 +492,8 @@ test("a bound replacement proof cannot dispatch a queued Destroy after revocatio
   }
 });
 
-test("a dispatched replacement Destroy remains recoverable when its selected connection is revoked", async () => {
-  const f = await fixture({ replacement: true, phase: "dispatched" });
+test.each([false, true])("an inactive dispatched replacement Destroy remains recoverable after revocation (Stored Service: %s)", async (storedService) => {
+  const f = await fixture({ replacement: true, phase: "dispatched", storedService, requestInFlight: false });
   expect(await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null)).toBe(true);
   const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
   const destroy = spyOn(f.runner, "destroy");
@@ -525,11 +525,13 @@ test("a dispatched replacement Destroy remains recoverable when its selected con
 });
 
 test.each([
-  ["live relay", false, true],
-  ["live Stored Service relay", true, true],
-  ["legacy inspection with Stored Service", true, undefined],
-] as const)("RunOwner retains the original Destroy lease for %s", async (_name, storedService, relayInFlight) => {
-  const f = await fixture({ phase: "dispatched", replacement: true, storedService, relayInFlight });
+  ["live relay", "dispatched", false, true],
+  ["live Stored Service preparation", "preparing", true, true],
+  ["live Stored Service relay", "dispatched", true, true],
+  ["legacy Stored Service preparation inspection", "preparing", true, undefined],
+  ["legacy Stored Service dispatch inspection", "dispatched", true, undefined],
+] as const)("RunOwner retains the original Destroy lease for %s", async (_name, phase, storedService, requestInFlight) => {
+  const f = await fixture({ phase, replacement: true, storedService, requestInFlight });
   expect(await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null)).toBe(true);
   await expectHeld(f, 0);
   expect(f.providerFetch).not.toHaveBeenCalled();
@@ -703,8 +705,8 @@ for (const phase of ["dispatched", "indeterminate", "orphaned"] as const) {
 }
 
 test("fresh and queued Destroy skip observation, and preparing takes ordinary dispatch", async () => {
-  for (const phase of ["fresh", "queued", "preparing"] as const) {
-    const f = await fixture({ phase });
+  for (const [phase, storedService] of [["fresh", false], ["queued", false], ["preparing", false], ["preparing", true]] as const) {
+    const f = await fixture({ phase, storedService, requestInFlight: false });
     const destroy = spyOn(f.runner, "destroy").mockImplementation(async job => ({
       stateDigest: DESTROY_STATE_DIGEST,
       executionEvidence: fixtureExecutionEvidence(job, "destroy"),

@@ -530,8 +530,8 @@ export type RunnerMutationAuthorityInspection = {
         readonly version: number;
         readonly fence: number;
         readonly redispatchBlocked: true;
-        /** For a dispatched record, whether this isolate still owns its response relay. */
-        readonly relayInFlight?: boolean;
+        /** For a preparing or dispatched record, whether its original request is active here. */
+        readonly requestInFlight?: boolean;
         readonly completion?: RunnerMutationCompletionReceipt;
         readonly admittedExecutionAuthority?: AdmittedExecutionAuthority;
       };
@@ -1230,8 +1230,9 @@ const createOpenTofuRunnerObjectClass = (
         version: record.version,
         fence: record.fence,
         redispatchBlocked: true,
-        ...(record.phase === "dispatched"
-          ? { relayInFlight: this.#activeMutationRelay?.semanticDigest === record.semanticDigest }
+        ...(record.phase === "preparing" || record.phase === "dispatched"
+          ? { requestInFlight: this.#activeMutationPreparations.has(record.semanticDigest) ||
+              this.#activeMutationRelay?.semanticDigest === record.semanticDigest }
           : {}),
         ...(record.completion ? { completion: record.completion } : {}),
         ...(record.completion && record.admittedExecutionAuthority
