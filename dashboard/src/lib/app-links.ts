@@ -67,6 +67,12 @@ export function appPageSectionFromHash(hash: string): AppPageSection | undefined
 
 type AppPaneLocation = Readonly<{ pathname: string; search: string; hash: string }>;
 
+/** Known app sections may follow the app URL through the server-owned sign-in. */
+export function appPathForSignIn({ pathname, search, hash }: AppPaneLocation): string {
+  const section = /^\/apps\/[^/]+\/?$/u.test(pathname.toLowerCase()) ? appPageSectionFromHash(hash) : undefined;
+  return pathname + search + (section === undefined ? "" : `#${section}`);
+}
+
 /** Moving between these views keeps the same app page and its form mounted. */
 export function isSameAppPaneNavigation(
   capsuleId: string,
