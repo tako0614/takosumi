@@ -1149,6 +1149,77 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.filter((m) => m.startsWith("DELETE /api/v1/install-plans/"))).toHaveLength(1);
       expect(f.mutations.some((m) => m.endsWith("/apply") || m.startsWith("DELETE /api/v1/capsules/") || m.includes("/abandon"))).toBe(false);
     });
+    for (const lateResponse of ["conflict read", "discard success"] as const) {
+      test(`Stop installing leaves the replacement attempt visible after a late ${lateResponse}`, async ({ page }) => {
+        const fixture = await detailFixture(page, base, true);
+        await page.goto(sourceUrl);
+        await openInstallSheet(page);
+        await expect(installSheet(page)).toHaveAttribute("data-install-state", "connections");
+        const original = fixture.attempts.latest()!;
+        const path = `/api/v1/install-plans/${original.id}`;
+        const parked = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let requested = 0;
+        await page.route(`**${path}`, async (route) => {
+          const method = route.request().method();
+          if (method === "DELETE") {
+            requested += 1;
+            if (lateResponse === "conflict read") {
+              return route.fulfill({ status: 409, json: { error: { code: "install_plan_generation_conflict" } } });
+            }
+          }
+          if (method !== (lateResponse === "conflict read" ? "GET" : "DELETE")) return route.fallback();
+          parked.resolve();
+          await release.promise;
+          return lateResponse === "conflict read"
+            ? route.fulfill({ status: 401, json: { error: "invalid_token" } })
+            : route.fallback();
+        });
+        await page.evaluate(({ ownedPath, watchedMethod }) => {
+          const originalFetch = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const input = args[0];
+            const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
+            if (url.pathname !== ownedPath || args[1]?.method !== watchedMethod) return originalFetch(...args);
+            try {
+              return await originalFetch(...args);
+            } finally {
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                document.documentElement.dataset.oldDiscardSettled = "true";
+              }));
+            }
+          };
+        }, { ownedPath: path, watchedMethod: lateResponse === "conflict read" ? "GET" : "DELETE" });
+        try {
+          await planPreview(page).getByRole("button", {name: "Stop installing", exact: true}).click();
+          await parked.promise;
+          expect(fixture.attempts.handle({
+            method: "POST", path: "/api/v1/install-plans", idempotencyKey: "discard-other-attempt",
+            body: { mode: "attempt", source: original.source, capsule: { name: "another-install" } },
+          })?.status).toBe(201);
+          const replacement = fixture.attempts.latest()!.id;
+          expect(replacement).not.toBe(original.id);
+          const next = `${sourceUrl}&installPlan=${replacement}`;
+          await page.evaluate((url) => {
+            history.pushState(history.state, "", url);
+            window.dispatchEvent(new PopStateEvent("popstate", {state: history.state}));
+          }, next);
+          await expect(page).toHaveURL((url) => url.pathname + url.search === next);
+          const outcome = Promise.race([
+            page.waitForFunction(() => document.documentElement.dataset.oldDiscardSettled === "true").then(() => "settled"),
+            page.waitForRequest((request) =>
+              request.isNavigationRequest() && new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+          ]);
+          release.resolve();
+          expect(await outcome).toBe("settled");
+          await expect(page).toHaveURL((url) => url.pathname + url.search === next);
+          expect(requested).toBe(1);
+          expect(fixture.mutations.some((mutation) => mutation.endsWith("/apply") || mutation === `DELETE /api/v1/install-plans/${replacement}`)).toBe(false);
+        } finally {
+          release.resolve();
+        }
+      });
+    }
     test("Stop installing while reading waits for the coordinator and then discards", async ({ page }) => {
       await page.clock.install();
       const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 1_000 });

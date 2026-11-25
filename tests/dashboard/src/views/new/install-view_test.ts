@@ -40,7 +40,7 @@ describe("attempt-driven install page", () => {
     // The only POST that creates an attempt…
     expect(controller.match(/createGitInstallAttempt\(/gu)).toHaveLength(1);
     const post = between(controller, "const postAttempt = async", "const adoptNewAttempt =");
-    expect(post).toContain("createGitInstallAttempt(workspaceId, request, key)");
+    expect(post).toContain("createGitInstallAttempt(workspaceId, request, key, { isCurrent })");
     // …is reached from the Install action, from starting over and from
     // preparing again after a change, nowhere else.
     const callers = controller.match(/await postAttempt\(/gu) ?? [];
@@ -64,7 +64,7 @@ describe("attempt-driven install page", () => {
     // Starting an install never creates a Workspace as a side effect.
     expect(controller).not.toContain("createWorkspace");
     expect(controller).not.toContain("ensureWorkspace");
-    expect(post).toContain("createGitInstallAttempt(workspaceId, request, key)");
+    expect(post).toContain("createGitInstallAttempt(workspaceId, request, key, { isCurrent })");
   });
 
   test("nothing applies from the page: the review's explicit click is the only apply", () => {

@@ -980,6 +980,7 @@ export async function listWorkspacePage(
     readonly selectedWorkspaceId?: string;
     readonly includeTotal?: boolean;
   } = {},
+  scope: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<WorkspaceListPage> {
   return await controlFetch<ContractPublicWorkspaceListPage>(
     `${BASE}/workspaces${query({
@@ -990,6 +991,7 @@ export async function listWorkspacePage(
       selectedWorkspaceId: options.selectedWorkspaceId,
       includeTotal: options.includeTotal,
     })}`,
+    scope,
   );
 }
 
@@ -998,13 +1000,14 @@ export async function listWorkspaces(
     readonly selectedWorkspaceId?: string;
     readonly limit?: number;
   } = {},
+  scope: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<readonly Workspace[]> {
   return (
     await listWorkspacePage({
       limit: options.limit,
       order: "updated_desc",
       selectedWorkspaceId: options.selectedWorkspaceId,
-    })
+    }, scope)
   ).workspaces;
 }
 
@@ -1012,8 +1015,9 @@ export async function createWorkspace(input: {
   readonly handle: string;
   readonly displayName?: string;
   readonly type?: WorkspaceType;
-}): Promise<Workspace> {
+}, options: Pick<RequestOpts, "beforeDispatch"> = {}): Promise<Workspace> {
   const body = await controlFetch<WorkspaceEnvelope>(`${BASE}/workspaces`, {
+    ...options,
     method: "POST",
     body: {
       handle: input.handle,
@@ -1347,14 +1351,17 @@ export async function createGitInstallAttempt(
   workspaceId: string | undefined,
   request: CreateGitInstallAttemptRequest,
   idempotencyKey: string,
+  scope: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
   const options = {
+    ...scope,
     method: "POST",
     headers: { "idempotency-key": idempotencyKey },
     body: request,
   } as const;
+  throwIfReadRetired(scope);
   if (!await appOwnershipAvailable()) {
-    const legacyId = await legacyInstallWorkspaceId(workspaceId);
+    const legacyId = await legacyInstallWorkspaceId(workspaceId, scope);
     if (!legacyId) throw new ControlApiError(404, "feature_unavailable", "Legacy installation is unavailable on this server.");
     return await controlFetch<GitInstallPlanResponse>(
       `${BASE}/workspaces/${encodeURIComponent(legacyId)}/install-plans`, options,
@@ -1378,11 +1385,12 @@ export async function answerGitInstallAttempt(
 export async function discardGitInstallAttempt(
   installPlanId: string,
   expectedGeneration: number,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
   const body: DiscardGitInstallPlanRequest = { expectedGeneration };
   return await controlFetch<GitInstallPlanResponse>(
     `${BASE}/install-plans/${encodeURIComponent(installPlanId)}`,
-    { method: "DELETE", body },
+    { ...options, method: "DELETE", body },
   );
 }
 
@@ -3587,11 +3595,14 @@ export function extractRunId(envelope: unknown): string | undefined {
   return typeof obj.id === "string" ? obj.id : undefined;
 }
 
-async function legacyWorkspaceFor404(workspaceId?: string): Promise<string | undefined> {
+async function legacyWorkspaceFor404(
+  workspaceId?: string,
+  scope: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<string | undefined> {
   const explicit = normalizedWorkspaceId(workspaceId ?? "");
   if (explicit) return explicit;
   try {
-    return (await listWorkspaces()).find((workspace) => !workspace.archivedAt)?.id;
+    return (await listWorkspaces({}, scope)).find((workspace) => !workspace.archivedAt)?.id;
   } catch (error) {
     if (isMissingControlRoute(error)) return undefined;
     throw error;
@@ -3792,20 +3803,31 @@ export async function appOwnershipAvailable(signal?: AbortSignal): Promise<boole
 let legacyInstallWorkspace: Promise<string> | undefined;
 
 /** Only a legacy server may create the Workspace needed by its install route. */
-export async function legacyInstallWorkspaceId(workspaceId?: string): Promise<string | undefined> {
+export async function legacyInstallWorkspaceId(
+  workspaceId?: string,
+  scope: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<string | undefined> {
+  throwIfReadRetired(scope);
   if (await appOwnershipAvailable()) return undefined;
-  const existing = await legacyWorkspaceFor404(workspaceId);
+  throwIfReadRetired(scope);
+  const existing = await legacyWorkspaceFor404(workspaceId, scope);
+  throwIfReadRetired(scope);
   if (existing) return existing;
   if (!legacyInstallWorkspace) {
-    legacyInstallWorkspace = createWorkspace({
+    // The current page may begin the shared bootstrap. Its acknowledgement
+    // remains available to other current callers after the page leaves.
+    const request = createWorkspace({
       handle: `personal-${randomUuid().replaceAll("-", "").slice(0, 16)}`,
       type: "personal",
-    }).then((workspace) => workspace.id).catch((error: unknown) => {
-      legacyInstallWorkspace = undefined;
+    }, { beforeDispatch: () => throwIfReadRetired(scope) }).then((workspace) => workspace.id).catch((error: unknown) => {
+      if (legacyInstallWorkspace === request) legacyInstallWorkspace = undefined;
       throw error;
     });
+    legacyInstallWorkspace = request;
   }
-  return await legacyInstallWorkspace;
+  const id = await legacyInstallWorkspace;
+  throwIfReadRetired(scope);
+  return id;
 }
 export interface AppMember {
   readonly accountId: string;

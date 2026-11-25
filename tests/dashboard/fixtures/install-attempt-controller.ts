@@ -444,7 +444,7 @@ describe("install attempt controller", () => {
       const starts = calls.filter(({ name }) => name === "createGitInstallAttempt");
       expect(starts).toHaveLength(2);
       expect(starts[0]!.args[0]).toBeUndefined();
-      expect(starts[1]!.args).toEqual(starts[0]!.args);
+      expect(starts[1]!.args.slice(0, 3)).toEqual(starts[0]!.args.slice(0, 3));
     } finally {
       page.dispose();
       setCurrentWorkspaceId("ws_alpha");
@@ -578,7 +578,7 @@ describe("install attempt controller", () => {
       await until(() => page.attemptId() === second, "the replacement");
       const starts = calls.filter(({ name }) => name === "createGitInstallAttempt");
       expect(starts).toHaveLength(2);
-      expect(starts[1]!.args).toEqual(starts[0]!.args);
+      expect(starts[1]!.args.slice(0, 3)).toEqual(starts[0]!.args.slice(0, 3));
       expect(starts[0]!.args[0]).toBeUndefined();
       expect(starts[0]!.args[1]).toMatchObject({ source: { ref: "v2.0.0" } });
       expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toHaveLength(1);
@@ -775,7 +775,7 @@ describe("install attempt controller", () => {
     expect(signals[0]!.aborted).toBe(true);
     // The aborted command may have moved the attempt on: the stale
     // generation is read again before the discard that succeeds.
-    expect(calls.filter(({ name }) => name === "discardGitInstallAttempt").map(({ args }) => args)).toEqual([[ID, 0], [ID, 2]]);
+    expect(calls.filter(({ name }) => name === "discardGitInstallAttempt").map(({ args }) => args.slice(0, 2))).toEqual([[ID, 0], [ID, 2]]);
     expect(maxInFlight).toBe(1);
     expect(page.left).toEqual([ID]);
     expect(page.attempt.view().stage).toBe("candidate");
@@ -817,6 +817,62 @@ describe("install attempt controller", () => {
     expect(page.pauses).toEqual([1_000, 2_000]);
     expect(page.left).toEqual([ID]);
     page.dispose();
+  });
+
+  test("a retired discard does not read or retry after a busy response", async () => {
+    const replacement = "gip_00000000000000b2";
+    const rejected = deferred<void>();
+    reset({
+      getGitInstallPlan: async (id: never) => respond(inputs(), 1, "awaiting_input", id),
+      discardGitInstallAttempt: async () => {
+        await rejected.promise;
+        throw new api.ControlApiError(409, "reconcile_in_progress", "busy");
+      },
+    });
+    const page = mount(ID);
+    await until(() => page.attempt.response()?.installPlan.id === ID, "the original attempt");
+    const discard = page.attempt.discard();
+    try {
+      await until(() => calls.some(({ name }) => name === "discardGitInstallAttempt"), "the first discard");
+      page.setAttemptId(replacement);
+      await until(() => page.attempt.response()?.installPlan.id === replacement, "the replacement attempt");
+      rejected.resolve();
+      expect(await discard).toBe(false);
+      expect(calls.filter(({ name }) => name === "getGitInstallPlan").map(({ args }) => args[0])).toEqual([ID, replacement]);
+      expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toHaveLength(1);
+      expect(page.pauses).toEqual([]);
+      expect(page.left).toEqual([]);
+      expect(page.attempt.error()).toBeUndefined();
+    } finally {
+      rejected.resolve();
+      page.dispose();
+    }
+  });
+
+  test("a retired start cannot publish its error over a replacement attempt", async () => {
+    const replacement = "gip_00000000000000b2";
+    const late = deferred<void>();
+    reset({
+      getGitInstallPlan: async (id: never) => respond(inputs(), 1, "awaiting_input", id),
+      createGitInstallAttempt: async () => {
+        await late.promise;
+        throw new DOMException("retired after dispatch", "AbortError");
+      },
+    });
+    const page = mount();
+    const start = page.attempt.start(candidate, { fromStore: false });
+    try {
+      await until(() => calls.some(({ name }) => name === "createGitInstallAttempt"), "the initial request");
+      page.setAttemptId(replacement);
+      await until(() => page.attempt.response()?.installPlan.id === replacement, "the replacement attempt");
+      late.resolve();
+      await start;
+      expect(page.attempt.error()).toBeUndefined();
+      expect(page.attemptId()).toBe(replacement);
+    } finally {
+      late.resolve();
+      page.dispose();
+    }
   });
 
   test("Try again on a retryable step sends reconcile and keeps following", async () => {
@@ -1576,7 +1632,7 @@ describe("install attempt controller", () => {
       await page.attempt.start(candidate, { fromStore: true });
       const starts = named("createGitInstallAttempt");
       expect(starts).toHaveLength(2);
-      expect(starts[1]!.args).toEqual(starts[0]!.args);
+      expect(starts[1]!.args.slice(0, 3)).toEqual(starts[0]!.args.slice(0, 3));
       expect(named("resolveStableSourceTag")).toHaveLength(1);
       expect(accepted.size).toBe(1);
       expect(page.attemptId()).toBe(ID);
@@ -1659,7 +1715,7 @@ describe("install attempt controller", () => {
       const starts = named("createGitInstallAttempt");
       expect(starts).toHaveLength(3);
       expect(starts[1]!.args[1]).toMatchObject({ source: { ref: commit } });
-      expect(starts[2]!.args).toEqual(starts[1]!.args);
+      expect(starts[2]!.args.slice(0, 3)).toEqual(starts[1]!.args.slice(0, 3));
       expect(named("resolveStableSourceTag")).toHaveLength(1);
       expect(named("discardGitInstallAttempt")).toHaveLength(1);
       expect(page.attempt.latestSelected()).toBe(true);
@@ -1747,7 +1803,7 @@ describe("install attempt controller", () => {
     expect(starts).toHaveLength(3);
     // The same request and key as the start whose outcome was unknown; no
     // second discard.
-    expect(starts[2]!.args).toEqual(starts[1]!.args);
+    expect(starts[2]!.args.slice(0, 3)).toEqual(starts[1]!.args.slice(0, 3));
     expect(named("discardGitInstallAttempt")).toHaveLength(1);
     page.dispose();
   });
@@ -1883,7 +1939,7 @@ describe("install attempt controller", () => {
     await until(() => page.attempt.response()?.installPlan.id === second && page.attempt.view().stage === "review", "the new Plan");
     const starts = named("createGitInstallAttempt");
     // The start is sent again exactly as it was (same key)…
-    expect(starts[2]!.args).toEqual(starts[1]!.args);
+    expect(starts[2]!.args.slice(0, 3)).toEqual(starts[1]!.args.slice(0, 3));
     // …and the new sheet first receives the connection chosen meanwhile.
     const toSecond = named("answerGitInstallAttempt").filter(({ args }) => args[0] === second).map(({ args }) => args[1]);
     expect(toSecond).toEqual([
@@ -2051,7 +2107,7 @@ describe("install attempt controller", () => {
     page.attempt.resume();
     const second = "gip_00000000000000b2";
     await until(() => page.attempt.response()?.installPlan.id === second && page.attempt.view().stage === "review", "the replacement Plan");
-    expect(named("createGitInstallAttempt")[2]!.args).toEqual(named("createGitInstallAttempt")[1]!.args);
+    expect(named("createGitInstallAttempt")[2]!.args.slice(0, 3)).toEqual(named("createGitInstallAttempt")[1]!.args.slice(0, 3));
     expect(named("answerGitInstallAttempt").filter(({ args }) => args[0] === second).map(({ args }) => args[1])).toEqual([
       { expectedGeneration: 1, interfaceLinks: [{ requirementKey: "chat", choice: { kind: "later" } }] },
       { expectedGeneration: 2, continue: true },

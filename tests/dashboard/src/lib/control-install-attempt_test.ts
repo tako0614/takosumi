@@ -9,6 +9,7 @@ import {
   createGitInstallAttempt,
   discardGitInstallAttempt,
   getGitInstallPlan,
+  legacyInstallWorkspaceId,
   listOpenGitInstallAttempts,
   reconcileGitInstallPlan,
   resetAppOwnershipCache,
@@ -53,6 +54,63 @@ test("starting sends the value-free attempt body with the caller's key", async (
     key: "key_one",
     body: { mode: "attempt", source: { url: "https://github.com/example/office.git" } },
   }]);
+});
+
+test("a retired install cannot dispatch its create after account discovery", async () => {
+  resetAppOwnershipCache();
+  const requested = Promise.withResolvers<void>();
+  const discovery = Promise.withResolvers<Response>();
+  const calls: string[] = [];
+  let current = true;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${String(input)}`);
+    if (String(input) !== "/api/v1/apps") throw new Error("unexpected create");
+    requested.resolve();
+    return await discovery.promise;
+  }) as typeof fetch;
+  const result = createGitInstallAttempt(
+    undefined,
+    { mode: "attempt", source: { url: "https://github.com/example/office.git" } },
+    "key_one",
+    { isCurrent: () => current },
+  );
+  await requested.promise;
+  current = false;
+  discovery.resolve(Response.json({ apps: [] }));
+  await expect(result).rejects.toMatchObject({ name: "AbortError" });
+  expect(calls).toEqual(["GET /api/v1/apps"]);
+});
+
+test("a current legacy install can use a workspace created before its first caller left", async () => {
+  resetAppOwnershipCache();
+  const dispatched = Promise.withResolvers<void>();
+  const secondList = Promise.withResolvers<void>();
+  const reply = Promise.withResolvers<Response>();
+  let firstCurrent = true;
+  let listings = 0;
+  let creates = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/v1/apps") return Response.json({ error: { code: "route_not_found" } }, { status: 404 });
+    if (path.startsWith("/api/v1/workspaces?")) {
+      listings += 1;
+      if (listings === 2) secondList.resolve();
+      return Response.json({ workspaces: [] });
+    }
+    expect([path, init?.method]).toEqual(["/api/v1/workspaces", "POST"]);
+    creates += 1;
+    dispatched.resolve();
+    return await reply.promise;
+  }) as typeof fetch;
+  const first = legacyInstallWorkspaceId(undefined, { isCurrent: () => firstCurrent });
+  await dispatched.promise;
+  firstCurrent = false;
+  const second = legacyInstallWorkspaceId(undefined, { isCurrent: () => true });
+  await secondList.promise;
+  reply.resolve(Response.json({ workspace: { id: "ws_shared" } }, { status: 201 }));
+  await expect(first).rejects.toMatchObject({ name: "AbortError" });
+  expect(await second).toBe("ws_shared");
+  expect(creates).toBe(1);
 });
 
 test("reading is one GET; advancing is the explicit reconcile command", async () => {
