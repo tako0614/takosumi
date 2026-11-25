@@ -88,10 +88,12 @@ test("waiting approval exposes technical run details before approval", () => {
   )?.[1];
 
   expect(waitingApproval).toBeDefined();
-  expect(waitingApproval).toContain(
-    "href={`/runs/${encodeURIComponent(current().id)}`}",
+  expect(waitingApproval).toContain("{runDetailsButton(current().id)}");
+  const details = source.match(/const runDetailsButton = [\s\S]*?<\/Button>/u)?.[0];
+  expect(details).toContain(
+    "href={props.onOpenHeldRemovalDetails ? undefined : `/runs/${encodeURIComponent(runId)}`}",
   );
-  expect(waitingApproval).toContain('t("installStore.runDetails")');
+  expect(details).toContain('t("installStore.runDetails")');
   expect(waitingApproval).toContain('t("installStore.approve")');
 });
 
@@ -304,9 +306,9 @@ test("only the first install retries by re-planning the app as it stands", () =>
   // planCapsule (no snapshot) is reachable only for the install purpose; any
   // other review retries through the request that created it.
   expect(source).toContain("const canRetryApply = () => isInstall();");
-  expect(source).toContain("<Show when={isInstall() && isApplyRun(current().type) && canRetryApply()}>");
-  expect(source).toContain("<Show when={isInstall() && isReviewRun(current().type)}>");
-  expect(source).toContain("<Show when={!isInstall() && canRestart()}>");
+  expect(source).toContain("<Show when={!mutationOutcomeUnknown() && isInstall() && isApplyRun(current().type) && canRetryApply()}>");
+  expect(source).toContain("<Show when={!mutationOutcomeUnknown() && isInstall() && isReviewRun(current().type)}>");
+  expect(source).toContain("<Show when={!mutationOutcomeUnknown() && !isInstall() && canRestart()}>");
   expect(source).toContain("const canRestart = () => Boolean(props.onRestart) && (!isInstall() || !hasSeenApply());");
 });
 
@@ -315,6 +317,6 @@ test("a review that cannot continue can always close", () => {
   const firstRead = source.slice(source.indexOf("<Show when={run.error && !runLatest()}>"), source.indexOf("<Show when={runLatest()}>"));
   expect(firstRead).toContain("{closeButton()}");
   // An unknown Apply outcome is held (no retry) but closable.
-  expect(source).toContain("<Show when={applyUnconfirmed()}>{closeButton()}</Show>");
+  expect(source).toContain("<Show when={applyUnconfirmed() || stalePlan()}>{closeButton()}</Show>");
   expect(source).toContain('setError(t("installStore.applyUnconfirmed"));');
 });

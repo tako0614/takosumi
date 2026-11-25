@@ -180,11 +180,13 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
     });
 
-    for (const recoveryCase of ["transport", "read-refused", "server-error"] as const) {
+    for (const recoveryCase of ["transport", "read-refused", "server-error", "stale"] as const) {
     test(recoveryCase === "read-refused"
       ? "an individual Run refusal keeps a lost Apply unconfirmed without another mutation"
       : recoveryCase === "server-error"
       ? "an Apply gateway error recovers the exact existing Run with one POST"
+      : recoveryCase === "stale"
+      ? "a stale Run review leaves the app link and retires Apply"
       : "lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors: string[] = [];
@@ -219,6 +221,9 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           if (path === `/api/v1/runs/${planId}/apply` && request.method() === "POST") {
             attempts += 1;
             if (outcome === "rejected") return route.fulfill({ status: 409, json: { error: "conflict" } });
+            if (outcome === "stale") return route.fulfill({ status: 409, json: { error: {
+              code: "failed_precondition", details: { reason: "state_generation_mismatch" },
+            } } });
             if (outcome !== "absent" && acceptedEffects === 0) acceptedEffects += 1;
             if (outcome === "normal") return route.fulfill({ status: 201, json: { run: apply } });
             if (outcome === "server-error") return route.fulfill({ status: 503, json: { error: "gateway_unavailable" } });
@@ -290,6 +295,15 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const allow = page.getByRole("button", { name: "Allow and apply", exact: true });
         await expect(allow).toBeEnabled();
         await allow.click();
+        if (outcome === "stale") {
+          await expect(page.getByRole("alert").filter({ hasText: "Another change was applied first. Review again before applying." })).toBeVisible();
+          await expect(allow).toHaveCount(0);
+          await expect(page.getByRole("link", { name: "Back to the app", exact: true })).toHaveAttribute("href", `/apps/${capsuleId}`);
+          expect(historyAfterApply).toEqual([]);
+          expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
+          await page.unroute("**/api/v1/**");
+          continue;
+        }
         const expectedPosts = outcome === "normal" || outcome === "rejected" || outcome === "server-error" ? 1 : 2;
         if (outcome === "normal" || outcome === "rejected") {
           await expect.poll(() => attempts).toBe(1);

@@ -866,7 +866,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       ]);
     });
 
-    test("an embedded Update recovers its accepted Apply after lost responses without another mutation", async ({ page }) => {
+    for (const stale of [false, true]) test(stale
+      ? "an embedded stale Update closes and creates a fresh review on request"
+      : "an embedded Update recovers its accepted Apply after lost responses without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const now = "2026-11-17T00:00:00.000Z";
@@ -874,25 +876,35 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const applyId = "apply_embedded_update";
       const plan = {
         ...lifecycleRun(planId, "plan", "succeeded", now),
-        capsuleId: CAPSULE_ID, summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass",
+        capsuleId: CAPSULE_ID, baseStateGeneration: 1, summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass",
         planResources: [{ address: "fixture_resource.embedded", type: "fixture_resource", actions: ["update"] }],
       };
       const apply = { ...lifecycleRun(applyId, "apply", "failed", now), capsuleId: CAPSULE_ID, planRunId: planId };
+      const freshPlan = { ...plan, id: "plan_embedded_update_fresh", baseStateGeneration: 2 };
       let attempts = 0, effects = 0, historyReads = 0, applyReads = 0;
+      let afterRefusalReads = 0;
+      const revisionKeys: (string | undefined)[] = [];
       const held: { release?: () => Promise<void> } = {};
       const mutations: string[] = [];
       await page.route("**/api/v1/**", async (route) => {
         const request = route.request(), url = new URL(request.url()), path = url.pathname;
         if (request.method() !== "GET") mutations.push(`${request.method()} ${path}`);
+        if (stale && attempts > 0 && path === `/api/v1/capsules/${CAPSULE_ID}/app`) afterRefusalReads += 1;
         if (path === `/api/v1/capsules/${CAPSULE_ID}/app`) return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
           primaryAction: "view_resources",
           version: { current: { sourceSnapshotId: "snap_embedded", ref: "main", path: ".", commit: PORTABLE_SOURCE_COMMIT }, updateAvailable: false, stale: false, autoUpdate: false },
         }) } });
         if (path === `/api/v1/capsules/${CAPSULE_ID}/revision-plans` && request.method() === "POST") {
-          return route.fulfill({ status: 201, json: { revisionPlan: { id: "revision_embedded", phase: "review_ready", generation: 1, planRunId: planId }, nextAction: "review_run", links: { self: "/api/v1/revision-plans/revision_embedded" } } });
+          const current = stale && attempts > 0 ? freshPlan : plan;
+          const revisionId = current === freshPlan ? "revision_embedded_fresh" : "revision_embedded";
+          revisionKeys.push(request.headers()["idempotency-key"]);
+          return route.fulfill({ status: 201, json: { revisionPlan: { id: revisionId, phase: "review_ready", generation: 1, planRunId: current.id }, nextAction: "review_run", links: { self: `/api/v1/revision-plans/${revisionId}` } } });
         }
         if (path === `/api/v1/runs/${planId}/apply` && request.method() === "POST") {
           attempts += 1;
+          if (stale) return route.fulfill({ status: 409, json: { error: {
+            code: "failed_precondition", details: { reason: "state_version_mismatch" },
+          } } });
           if (effects === 0) effects += 1;
           return route.abort("failed");
         }
@@ -904,6 +916,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           return route.fulfill({ json: { runs: [] } });
         }
         if (path === `/api/v1/runs/${planId}`) return route.fulfill({ json: { run: plan } });
+        if (stale && path === `/api/v1/runs/${freshPlan.id}`) return route.fulfill({ json: { run: freshPlan } });
         if (path === `/api/v1/runs/${applyId}`) {
           applyReads += 1;
           // The recovery authorizes the exact Run first; hold the separate
@@ -925,6 +938,32 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await version.getByRole("button", { name: "Check for updates", exact: true }).click();
       const review = version.getByTestId("app-review");
       await review.getByRole("button", { name: "Allow and update", exact: true }).click();
+      if (stale) {
+        const alert = review.getByRole("alert").filter({ hasText: "Another change was applied first. Review again before applying." });
+        await expect(alert).toBeVisible();
+        await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toHaveCount(0);
+        const readsBeforeClose = afterRefusalReads;
+        await alert.getByRole("button", { name: "Close", exact: true }).click();
+        await expect(review).toHaveCount(0);
+        await expect.poll(() => afterRefusalReads).toBeGreaterThan(readsBeforeClose);
+        expect(mutations).toEqual([
+          `POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`,
+          `POST /api/v1/runs/${planId}/apply`,
+        ]);
+        await version.getByRole("button", { name: "Check for updates", exact: true }).click();
+        await expect(review.locator(`a[href="/runs/${freshPlan.id}"]`).first()).toBeVisible();
+        await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeEnabled();
+        expect(revisionKeys).toHaveLength(2);
+        expect(revisionKeys.every(Boolean)).toBe(true);
+        expect(revisionKeys[1]).not.toBe(revisionKeys[0]);
+        expect(mutations).toEqual([
+          `POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`,
+          `POST /api/v1/runs/${planId}/apply`,
+          `POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`,
+        ]);
+        expect(errors).toEqual([]);
+        return;
+      }
       await expect.poll(() => attempts).toBe(2);
       await expect.poll(() => historyReads).toBe(1);
       await expect.poll(() => applyReads).toBe(2);
