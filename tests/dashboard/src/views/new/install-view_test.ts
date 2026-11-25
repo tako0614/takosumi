@@ -133,7 +133,8 @@ describe("attempt-driven install page", () => {
 
   test("a reopened review asks the app where it stands before offering the apply", () => {
     const review = between(sheet, "function PlanReview(", "export function InstallScreen(");
-    expect(review).toContain("getCapsuleApp(capsuleId)");
+    expect(review).toContain("getCapsuleAppWithSignal(capsuleId, undefined, { isCurrent: current })");
+    expect(review).toContain("getRun(candidateId, { isCurrent: current })");
     expect(review.indexOf("<Show\n        when={!entry.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
     expect(review).toContain("if (value.app.applied) props.onDone(props.action.capsuleId);");
     expect(review).toContain("app.progress.run ?? app.latestRun");
