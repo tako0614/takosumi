@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { setImmediate as realSetImmediate } from "node:timers";
-import { appUninstallRecoveryMode } from "../../../../../dashboard/src/lib/capsule-uninstall.ts";
+import { appUninstallRecoveryConnections, appUninstallRecoveryMode } from "../../../../../dashboard/src/lib/capsule-uninstall.ts";
 import { ControlApiError, createCapsuleDestroyRecoveryPlan, extractRunId, getCapsuleAppWithSignal, getCapsuleProviderBindingSet, isRevisionAlreadyCurrent, listProviderConnectionsWithSignal, resetAppOwnershipCache } from "../../../../../dashboard/src/lib/control-api.ts";
 import { trackSubmittedUninstallReview } from "../../../../../dashboard/src/lib/uninstall-review-hold.ts";
 
@@ -12,6 +12,7 @@ function between(start: string, end: string): string {
   return source.slice(from, to);
 }
 const start = between("  const startReview = async (", "\n  // After a review ends");
+const replacementRows = between("  const matchesUninstallReplacementRows = (", "\n  const uninstallReviewRecovery = (");
 const replacement = between("  const reviewUninstallWithConnection = (", "\n\n  // --- the one primary action");
 const transpile = (body: string) => new Bun.Transpiler({ loader: "ts", target: "bun" }).transformSync(body);
 const realFetch = globalThis.fetch;
@@ -96,12 +97,12 @@ test.each(["bindings", "paged", "legacy"] as const)("retiring the chooser suppre
 function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
   const state = { capsuleId: "app", workspaceId: "workspace", accountId: "account", principalId: "person", owner: true,
     starting: undefined as unknown, review: undefined as { planRunId: string } | undefined, errors: [] as unknown[], reads: 0 };
-  const script = `let disposed = false; let uninstallEpoch = 0; let reviewScopeEpoch = 0;\n${start}\n${replacement}\nreturn {
+  const script = `let disposed = false; let uninstallEpoch = 0; let reviewScopeEpoch = 0;\n${start}\n${replacementRows}\n${replacement}\nreturn {
     send: reviewUninstallWithConnection,
     retire: () => { uninstallEpoch++; },
     dispose: () => { disposed = true; },
   };`;
-  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "appUninstallRecoveryMode", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", "setReservedReviewCheck", "uninstallReviewAppScope", "trackSubmittedUninstallReview", transpile(script))(
+  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "appUninstallRecoveryMode", "appUninstallRecoveryConnections", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", "setReservedReviewCheck", "uninstallReviewAppScope", "trackSubmittedUninstallReview", transpile(script))(
     () => state.capsuleId, () => ({ sourceId: "source" }), state, () => Boolean(state.starting), () => state.owner ? "owner" : undefined, () => state.owner,
     () => state.starting, (value: unknown) => { state.starting = value; }, (value: unknown) => { if (value) state.errors.push(value); }, () => {},
     (value: { planRunId: string }) => { state.review = value; }, () => {}, () => undefined, isRevisionAlreadyCurrent, () => ({ message: "fixture error" }), (key: string) => key, () => {}, ControlApiError,
@@ -110,7 +111,7 @@ function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
       capsuleId: state.capsuleId, workspaceId: state.workspaceId, progress: {},
       uninstall: { mode: uninstallMode, scheduled: { blocked: true } },
       problems: [{ code: "connection_unavailable", connectionId: "old", provider: "registry.opentofu.org/cloudflare/cloudflare", connectionStatus: "revoked" }],
-    }), () => state.review, appUninstallRecoveryMode,
+    }), () => state.review, appUninstallRecoveryMode, appUninstallRecoveryConnections,
     createCapsuleDestroyRecoveryPlan, extractRunId,
     () => JSON.stringify([state.capsuleId, state.workspaceId, state.accountId, state.principalId]),
     () => {},
