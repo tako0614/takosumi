@@ -7,7 +7,7 @@ import { uninstallConnectionsHref } from "../../lib/app-links.ts";
 import { providerName } from "../../lib/app-page.ts";
 import { getCapsuleProviderBindingSet, listProviderConnectionsWithSignal, type CapsuleAppView } from "../../lib/control-api.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
-import { appUninstallRecoveryConnections, isUninstallReplacementReady } from "../../lib/capsule-uninstall.ts";
+import { appUninstallRecoveryConnections, isUninstallReplacementReady, readUninstallPreflight } from "../../lib/capsule-uninstall.ts";
 import { verifiedCloudflareAccountId } from "../../../../providers/cloudflare/settings.ts";
 
 function replacementConnectionLabel(connection: ProviderConnection, original: boolean, now?: number): string {
@@ -50,12 +50,14 @@ export default function AppUninstallConnectionRecovery(props: {
   onCleanup(() => reads.abort());
   const [inventory, { refetch, mutate }] = createResource(request, async (target) => {
     const isCurrent = () => !reads.signal.aborted && request() === target;
-    const [connections, bindingSet] = await Promise.all([
-      listProviderConnectionsWithSignal(target.workspaceId, reads.signal, { cache: "no-store", isCurrent }),
+    const inventory = await readUninstallPreflight((scope) => Promise.all([
+      listProviderConnectionsWithSignal(target.workspaceId, scope.signal, { cache: "no-store", isCurrent: scope.isCurrent }),
       target.bindingRunId
-        ? getCapsuleProviderBindingSet(target.capsuleId, { signal: reads.signal, isCurrent })
+        ? getCapsuleProviderBindingSet(target.capsuleId, scope)
         : undefined,
-    ]);
+    ]), { signal: reads.signal, isCurrent });
+    if (!inventory) throw new Error("Uninstall connection inventory is unavailable.");
+    const [connections, bindingSet] = inventory;
     if (bindingSet && (bindingSet.capsuleId !== target.capsuleId || bindingSet.workspaceId !== target.workspaceId)) {
       throw new Error("Provider bindings do not match this app.");
     }
@@ -155,9 +157,13 @@ export default function AppUninstallConnectionRecovery(props: {
       props.app.latestRun?.status === run?.status && available() === initial && selection() === chosen;
     setChecking(true);
     props.onCheckingChange?.(true);
-    let connections: readonly ProviderConnection[];
+    let connections: readonly ProviderConnection[] | undefined;
     try {
-      connections = await listProviderConnectionsWithSignal(target.workspaceId, reads.signal, { cache: "no-store", isCurrent });
+      connections = await readUninstallPreflight(
+        (scope) => listProviderConnectionsWithSignal(target.workspaceId, scope.signal, { cache: "no-store", isCurrent: scope.isCurrent }),
+        { signal: reads.signal, isCurrent },
+      );
+      if (!connections && isCurrent()) setReviewNotice("app.uninstall.replacementLoadFailed");
     } catch {
       if (isCurrent()) setReviewNotice("app.uninstall.replacementLoadFailed");
       return;
@@ -167,7 +173,7 @@ export default function AppUninstallConnectionRecovery(props: {
         props.onCheckingChange?.(false);
       }
     }
-    if (!isCurrent()) return;
+    if (!connections || !isCurrent()) return;
 
     // Keep the logical bindings and recheck the selected keys against the current inventory.
     const checked = Date.now();

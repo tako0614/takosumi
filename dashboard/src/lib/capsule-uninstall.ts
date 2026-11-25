@@ -5,6 +5,33 @@ import { isAppRemovalRun } from "./app-access.ts";
 import { runMutationOutcomeUnknown } from "./run-errors.ts";
 import { formatDateTime, t, type MessageKey } from "../i18n/index.ts";
 
+const UNINSTALL_PREFLIGHT_TIMEOUT_MS = 30_000;
+
+/** Bound the reads before a removal Plan is sent, including non-cooperative bodies. */
+export async function readUninstallPreflight<T>(
+  read: (scope: { readonly signal: AbortSignal; readonly isCurrent: () => boolean }) => Promise<T>,
+  owner: { readonly signal?: AbortSignal; readonly isCurrent: () => boolean },
+): Promise<T | undefined> {
+  const controller = new AbortController();
+  const isCurrent = () => !controller.signal.aborted && !owner.signal?.aborted && owner.isCurrent();
+  if (!isCurrent()) return;
+
+  let stop!: () => void;
+  const stopped = new Promise<undefined>((resolve) => {
+    stop = () => { resolve(undefined); controller.abort(); };
+  });
+  owner.signal?.addEventListener("abort", stop, { once: true });
+  const timeout = setTimeout(stop, UNINSTALL_PREFLIGHT_TIMEOUT_MS);
+  try {
+    const value = await Promise.race([stopped, read({ signal: controller.signal, isCurrent })]);
+    return isCurrent() ? value : undefined;
+  } finally {
+    clearTimeout(timeout);
+    owner.signal?.removeEventListener("abort", stop);
+    controller.abort();
+  }
+}
+
 /** An offer is advisory. The server compares the selection to the applied Plan. */
 export function isUninstallReplacementReady(connection: ProviderConnection, now = Date.now()): boolean {
   return connection.scope !== "operator" && connection.status === "verified" &&
