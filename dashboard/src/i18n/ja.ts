@@ -669,6 +669,7 @@ export const ja = {
   "app.settings.closeConnect": "閉じる",
   "app.settings.connectionMissing": "{provider} の接続を選んでください。",
   "app.settings.review": "内容を確認",
+  "app.settings.resumeReview": "内容の確認を再開",
   "app.settings.changeWaits": "ほかの変更が進んでいるか確認を待っています。それが終わってから設定を変更できます。",
   "app.created.title": "作られたもの",
   "app.created.subtitle": "最後に適用した変更で、あなたのクラウドに作られたリソースです。",

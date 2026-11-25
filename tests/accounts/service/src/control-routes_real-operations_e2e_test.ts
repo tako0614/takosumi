@@ -3032,6 +3032,137 @@ test("configuration Plan recovers after the atomic rebind acknowledgement is los
   ).toHaveLength(1);
 });
 
+test("a fresh session resumes the committed settings review without the original key or patch", async () => {
+  const { fixture: { fixture, path, body: firstBody } } = await d1ConfigurationPlanRouteFixture(
+    "configuration-plan-resume-from-current-target",
+  );
+  const original = fixture.operations.capsules.rebindInstallConfig.bind(fixture.operations.capsules);
+  const capsulePath = path.slice(0, -"/configuration-plans".length);
+  const session = {
+    operations: fixture.operations,
+    store: fixture.accountStore,
+    cookie: fixture.cookie,
+  };
+  const prior = await controlJson<CapsuleConfigurationPlanResponse>({
+    ...session, method: "POST", path,
+    headers: { "idempotency-key": "configuration-plan-prior-review" },
+    body: firstBody,
+  }, 201);
+  const body = { ...firstBody, expected: { authorityGuard: await readReAdoptionGuard(fixture) } };
+  const readApp = () => controlJson<{
+    readonly app: {
+      readonly latestRun?: { readonly id: string };
+      readonly progress: { readonly review?: { readonly runId: string } };
+    };
+  }>({ ...session, method: "GET", path: capsulePath + "/app" }, 200);
+  expect((await readApp()).app.progress.review?.runId).toBe(prior.configurationPlan.planRunId);
+  fixture.operations.capsules.rebindInstallConfig = async (...args) => {
+    await original(...args);
+    throw new OpenTofuControllerError("failed_precondition", "configuration request stopped after commit");
+  };
+  try {
+    await controlJson({
+      ...session,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-resume-from-current-target-v1" },
+      body,
+    }, 409);
+  } finally {
+    fixture.operations.capsules.rebindInstallConfig = original;
+  }
+  const rebound = await configurationAuthoritySnapshot(fixture);
+  const planCount = async () => (await fixture.operations.listRuns(fixture.seeded.workspace.id))
+    .filter((run) => run.type === "plan").length;
+  expect(await planCount()).toBe(1);
+  const { app } = await readApp();
+  expect(app.latestRun?.id).toBe(prior.configurationPlan.planRunId);
+  expect(app.progress.review).toBeUndefined();
+  const getPlanRun = fixture.operations.getPlanRun;
+  fixture.operations.getPlanRun = async (id) => {
+    const response = await getPlanRun(id);
+    if (id !== prior.configurationPlan.planRunId) return response;
+    const { capsuleExecutionAuthorityEpoch: _legacyMissing, ...planRun } = response.planRun;
+    return { ...response, planRun };
+  };
+  try {
+    expect((await readApp()).app.progress.review).toBeUndefined();
+  } finally {
+    fixture.operations.getPlanRun = getPlanRun;
+  }
+
+  const now = Date.now();
+  fixture.accountStore.saveAccountSession({
+    sessionId: "settings-resume-new-session", subject: "user_test", createdAt: now, expiresAt: now + 60_000,
+  });
+  const freshSession = { ...session, cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=settings-resume-new-session` };
+  const context = await controlJson<{
+    readonly capsule: { readonly installConfigId: string };
+    readonly installConfigReAdoption: {
+      readonly authorityGuard: string;
+      readonly configurationPlanResumable?: true;
+    };
+  }>({ ...freshSession, method: "GET", path: capsulePath }, 200);
+  const intent = {
+    installConfigId: context.capsule.installConfigId,
+    authorityGuard: context.installConfigReAdoption.authorityGuard,
+  };
+  expect(context.installConfigReAdoption.configurationPlanResumable).toBe(true);
+  fixture.operations.getPlanRun = async () => { throw new Error("fixture Plan read unavailable"); };
+  try {
+    const withoutHint = await controlJson<typeof context>({ ...freshSession, method: "GET", path: capsulePath }, 200);
+    expect(withoutHint.installConfigReAdoption).toEqual({ authorityGuard: intent.authorityGuard });
+  } finally {
+    fixture.operations.getPlanRun = getPlanRun;
+  }
+  const otherSubject = "settings-resume-other-admin";
+  const otherSession = { ...session, cookie: seedSession(fixture.accountStore, otherSubject) };
+  await fixture.deployStore.putWorkspaceMember({
+    id: "settings-resume-other-member", workspaceId: fixture.seeded.workspace.id,
+    accountId: otherSubject, roles: ["admin"], status: "active",
+    createdAt: "2026-09-10T00:00:00.000Z", updatedAt: "2026-09-10T00:00:00.000Z",
+  });
+  const otherContext = await controlJson<typeof context>({ ...otherSession, method: "GET", path: capsulePath }, 200);
+  expect(otherContext.installConfigReAdoption.configurationPlanResumable).toBeUndefined();
+  await controlJson({ ...otherSession, method: "POST", path, body: { resume: intent } }, 409);
+  await controlJson({
+    ...freshSession, method: "POST", path,
+    body: { resume: { ...intent, authorityGuard: body.expected.authorityGuard } },
+  }, 409);
+  await controlJson({
+    ...freshSession, method: "POST", path, body: { resume: intent, variablePatch: body.variablePatch },
+  }, 400);
+  expect(await planCount()).toBe(1);
+
+  const resumed = await controlJson<CapsuleConfigurationPlanResponse>({
+    ...freshSession, method: "POST", path, body: { resume: intent },
+  }, 201);
+  expect(resumed.configurationPlan).toMatchObject({
+    targetInstallConfigId: rebound.installConfigId, replayed: false,
+  });
+  const repeated = await controlJson<CapsuleConfigurationPlanResponse>({
+    ...freshSession, method: "POST", path, body: { resume: intent },
+  }, 200);
+  expect(repeated.configurationPlan).toEqual({ ...resumed.configurationPlan, replayed: true });
+  const originalRetry = await controlJson<CapsuleConfigurationPlanResponse>({
+    ...session, method: "POST", path,
+    headers: { "idempotency-key": "configuration-plan-resume-from-current-target-v1" },
+    body,
+  }, 200);
+  expect(originalRetry.configurationPlan).toEqual(repeated.configurationPlan);
+  expect(await configurationAuthoritySnapshot(fixture)).toMatchObject({
+    executionAuthorityEpoch: rebound.executionAuthorityEpoch,
+    installConfigId: rebound.installConfigId,
+    providerBindingSetDigest: rebound.providerBindingSetDigest,
+  });
+  expect(await planCount()).toBe(2);
+  expect((await fixture.operations.listRuns(fixture.seeded.workspace.id))
+    .filter((run) => run.type === "apply")).toHaveLength(0);
+  expect(fixture.runner.planJobs).toHaveLength(2);
+  const closed = await controlJson<typeof context>({ ...session, method: "GET", path: capsulePath }, 200);
+  expect(closed.installConfigReAdoption.configurationPlanResumable).toBeUndefined();
+});
+
 test("configuration Plan does not create a missing Plan after rebind ACK loss across a resumed Workspace epoch", async () => {
   const { database, fixture: routeFixture } = await d1ConfigurationPlanRouteFixture(
     "configuration-plan-lost-rebind-management-epoch",

@@ -366,9 +366,21 @@ async function readAppOverview(
 
   const screenList = screens.value ?? [];
   const failure = screenFailure.value?.failure;
+  const review = reviewablePlan(latestRun);
+  const supersededReview = review?.type === "plan" &&
+    installConfig.value?.internal?.reAdoption?.capsuleId === capsule.id &&
+    (await optional(async () => {
+      const [{ planRun }, epoch] = await Promise.all([
+        operations.getPlanRun(review.id),
+        operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id),
+      ]);
+      // Core treats a missing epoch on historical Plans as epoch 1.
+      return planRun.capsuleId === capsule.id &&
+        (planRun.capsuleExecutionAuthorityEpoch ?? 1) < epoch;
+    })).value === true;
   const derived = deriveCapsuleAppStatus({
     capsule,
-    ...(latestRun ? { latestRun } : {}),
+    ...(latestRun && !supersededReview ? { latestRun } : {}),
     revisionPreparing,
     connectionIssues,
     ...(links.failed ? {} : {
@@ -384,7 +396,6 @@ async function readAppOverview(
       (latestRun.status === "queued" || latestRun.status === "running")
     ? latestRun
     : undefined;
-  const review = reviewablePlan(latestRun);
   const display = installConfig.value?.store;
   const iconUrl = safeImageUrl(display?.iconUrl);
   const displayName = installDisplayName(capsule.name, installConfig.value);
@@ -413,7 +424,7 @@ async function readAppOverview(
         : {}),
       ...(preparation.revisionPlanId ? { revisionPlanId: preparation.revisionPlanId } : {}),
       ...(inFlightRun ? { run: runSummary(inFlightRun) } : {}),
-      ...(review ? { review: { runId: review.id, runType: review.type } } : {}),
+      ...(review && !supersededReview ? { review: { runId: review.id, runType: review.type } } : {}),
     },
     ...(latestRun ? { latestRun: { ...runSummary(latestRun), ...(revisionHint.value ? { revisionPlanId: revisionHint.value } : {}) } } : {}),
     uninstall: uninstallTerms(operations, capsule, {

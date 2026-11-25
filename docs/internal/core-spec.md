@@ -730,6 +730,18 @@ lost Plan acknowledgement) observes that operation and returns `200` with
 `replayed:true` and the same durable `planRunId`; it never creates a second Plan
 row. A different request conflicts with `409`.
 
+When the worker stops after the authority CAS and before the Plan is saved,
+the submitting account can resume the current review from a new session.
+`GET /api/v1/capsules/{id}` sets
+`installConfigReAdoption.configurationPlanResumable` for that account when
+the current sealed successor still matches the execution authority and the
+canonical Plan is absent. The same `configuration-plans` POST accepts the
+closed body `{resume:{installConfigId,authorityGuard}}`. This operation requires
+a current account session and the ordinary app connection-choice authority.
+It uses the sealed receipt's identity, verifies current state and original
+Workspace management authority, and creates or reads the same review-only
+Plan. The resume request needs no original patch or idempotency key.
+
 Lost acknowledgements after successor insertion, CAS, Plan persistence, or
 queue dispatch converge on those same identities. At the in-flight-work fence,
 only `queued`/`running` Plan or Apply rows block. An already-computed reviewable
