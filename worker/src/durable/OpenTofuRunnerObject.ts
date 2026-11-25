@@ -734,7 +734,7 @@ const createOpenTofuRunnerObjectClass = (
 
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
-  readonly #activeMutationPreparations = new Set<string>();
+  readonly #activeMutationPreparations = new Map<string, Request>();
   #activeMutationRelay?: { readonly request: Request; readonly semanticDigest: string };
   readonly #activeCredentialRefreshClaims = new Map<string, ActiveCredentialRefreshClaim>();
   readonly #activePrivateRunFileRefreshClaims = new Map<string, ActivePrivateRunFileRefreshClaim>();
@@ -1166,6 +1166,9 @@ const createOpenTofuRunnerObjectClass = (
       );
     } finally {
       if (this.#activeMutationRelay?.request === request) this.#activeMutationRelay = undefined;
+      for (const [digest, owner] of this.#activeMutationPreparations) {
+        if (owner === request) this.#activeMutationPreparations.delete(digest);
+      }
       if (runDispatch) {
         const dispatchRunId = new URL(request.url).pathname.match(/^\/runs\/([^/]+)$/)?.[1];
         if (dispatchRunId) {
@@ -1722,6 +1725,7 @@ const createOpenTofuRunnerObjectClass = (
     runId: string,
     action: RunnerMutationAction,
     requestPayload: unknown,
+    request: Request,
   ): Promise<RunnerMutationAuthorityClaim> {
     let semanticDigest: string;
     try {
@@ -1744,11 +1748,11 @@ const createOpenTofuRunnerObjectClass = (
     }
     // A Durable Object has one live isolate for this ID, so acquiring this
     // in-isolate owner before the first storage await closes concurrent claim
-    // races. Durable storage below, not this Set, is the restart authority.
+    // races. Durable storage below is the restart authority.
     if (this.#activeMutationPreparations.size > 0) {
       return { kind: "blocked" };
     }
-    this.#activeMutationPreparations.add(semanticDigest);
+    this.#activeMutationPreparations.set(semanticDigest, request);
     try {
       const existing = await this.ctx.storage.get<unknown>(
         RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
@@ -2602,6 +2606,7 @@ const createOpenTofuRunnerObjectClass = (
         runId,
         envelope.action,
         envelope.request,
+        request,
       );
       if (claim.kind === "blocked") {
         return runnerMutationIndeterminateResponse(envelope.action);
