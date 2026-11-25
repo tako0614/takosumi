@@ -969,6 +969,47 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         release.resolve();
       }
     });
+    test("a stalled screen lookup ends without offering to open an unverified app", async ({ page }) => {
+      await page.clock.install();
+      const f = await detailFixture(page, base);
+      const isScreenRead = (url: URL) =>
+        url.pathname === "/api/v1/ui-surfaces" && url.searchParams.get("capsuleId") === capId;
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let reads = 0;
+      await page.route(isScreenRead, async (route) => {
+        reads += 1;
+        started.resolve();
+        await release.promise;
+        await route.fallback();
+      });
+      try {
+        await page.goto(sourceUrl);
+        await openInstallSheet(page);
+        const review = await waitForPlan(page);
+        await review.getByRole("button", { name: "Install", exact: true }).click();
+        await expect.poll(() => f.mutations.filter((mutation) => mutation === applyMutation).length).toBe(1);
+        f.finish();
+        const complete = page.getByTestId("install-complete");
+        const spinner = complete.getByRole("status", { name: "Loading…" });
+        await expect(spinner).toBeVisible();
+        await started.promise;
+        const mutations = [...f.mutations];
+        const cancelled = page.waitForEvent("requestfailed", (request) => isScreenRead(new URL(request.url())));
+        await page.clock.fastForward(30_000);
+        await expect(spinner).toHaveCount(0);
+        await cancelled;
+        await expect(complete.getByRole("link", { name: "Manage app", exact: true })).toHaveAttribute("href", `/apps/${capId}`);
+        await expect(complete.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+        release.resolve();
+        await page.clock.fastForward(10_000);
+        await expect(complete.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+        expect(reads).toBe(1);
+        expect(f.mutations).toEqual(mutations);
+      } finally {
+        release.resolve();
+      }
+    });
     test("a change after the Plan marks it out of date and prepares the install again with the same answers", async ({ page }) => {
       await page.clock.install();
       const mutationDispatches = await observeInstallMutationDispatches(page);

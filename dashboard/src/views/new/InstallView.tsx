@@ -119,6 +119,7 @@ async function readListing(handoff: StoreHandoff, expectedGit?: string): Promise
 
 const SCREEN_READ_ATTEMPTS = 10;
 const SCREEN_READ_DELAY_MS = 3_000;
+const SCREEN_READ_BUDGET_MS = SCREEN_READ_ATTEMPTS * SCREEN_READ_DELAY_MS;
 
 export default function InstallView() {
   return (
@@ -436,25 +437,33 @@ function AppInstallPage(props: { readonly principalId: string }) {
     const controller = new AbortController();
     completionRead = controller;
     const isCurrent = () => !disposed && completionRead === controller && attemptId() === id;
+    const isReading = () => isCurrent() && !controller.signal.aborted;
+    // Bound the entire lookup, including a single stalled request or response body.
+    const deadline = setTimeout(() => {
+      if (isCurrent()) setCompleted({ capsuleId, settled: true });
+      controller.abort();
+    }, SCREEN_READ_BUDGET_MS);
+    controller.signal.addEventListener("abort", () => clearTimeout(deadline), { once: true });
     try {
       for (let index = 0; index < SCREEN_READ_ATTEMPTS; index += 1) {
         try {
           const screens = await listAuthorizedUiSurfaces(workspaceId, { capsuleId, signal: controller.signal });
-          if (!isCurrent()) return;
+          if (!isReading()) return;
           const url = screens[0]?.url;
           if (url) {
             setCompleted({ capsuleId, url, settled: true });
             return;
           }
         } catch {
-          if (!isCurrent()) return;
+          if (!isReading()) return;
           // Retried within the bounded read; never shown as a launchable screen.
         }
         await new Promise((resolve) => setTimeout(resolve, SCREEN_READ_DELAY_MS));
-        if (!isCurrent()) return;
+        if (!isReading()) return;
       }
       setCompleted({ capsuleId, settled: true });
     } finally {
+      clearTimeout(deadline);
       if (completionRead === controller) completionRead = undefined;
     }
   };
