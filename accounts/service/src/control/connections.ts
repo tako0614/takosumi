@@ -590,6 +590,10 @@ async function createControlConnection(
     }
   }
   const scopeHints = connectionScopeHints(body.scopeHints);
+  const expiresAt = body.expiresAt;
+  if (expiresAt !== undefined && typeof expiresAt !== "string") {
+    return errorJson("invalid_request", "expiresAt must be an ISO timestamp when provided", 400);
+  }
   const createRequest: CreateConnectionRequest = {
     ...(workspaceId ? { workspaceId } : {}),
     provider,
@@ -611,6 +615,7 @@ async function createControlConnection(
       ? { displayName: stringValue(body.displayName) }
       : {}),
     ...(scopeHints ? { scopeHints } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
     values: values ?? {},
     ...(files.length > 0 ? { files } : {}),
   };

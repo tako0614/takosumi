@@ -133,6 +133,29 @@ const GIT_CONNECTION = (workspaceId: string) => ({
 });
 
 for (const backend of BACKENDS) {
+  test(`[${backend}] a personal connection persists its declared expiry and rejects invalid limits`, async () => {
+    const fixture = await compose(backend);
+    const personal = {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      credentialRecipe: { id: "cloudflare", authMode: "api_token", secretPartition: "provider-credentials" },
+      scopeHints: { providerSettings: { accountId: "0123456789abcdef0123456789abcdef" } },
+      values: { CLOUDFLARE_API_TOKEN: "a".repeat(40) },
+    };
+    const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    const created = await fixture.route(OWNER, "POST", "/api/v1/connections", { ...personal, expiresAt });
+    expect(created).toMatchObject({ status: 201, json: { connection: { expiresAt, scope: "personal", ownerAccountId: OWNER } } });
+    expect(created.json.connection.values).toBeUndefined();
+    expect(await fixture.deployStore.getConnection(created.json.connection.id)).toMatchObject({ expiresAt });
+
+    for (const invalid of [null, "invalid-time", new Date(Date.now() - 60_000).toISOString()]) {
+      expect(await fixture.route(OWNER, "POST", "/api/v1/connections", { ...personal, expiresAt: invalid }))
+        .toMatchObject({ status: 400 });
+    }
+    const withoutExpiry = await fixture.route(OWNER, "POST", "/api/v1/connections", personal);
+    expect(withoutExpiry.status).toBe(201);
+    expect(withoutExpiry.json.connection.expiresAt).toBeUndefined();
+  });
+
   test(`[${backend}] a Workspace connection is its owner's: a Workspace admin cannot list, test, revoke or create one`, async () => {
     const fixture = await compose(backend);
     const created = await fixture.route(OWNER, "POST", "/api/v1/connections", PROVIDER_CONNECTION(fixture.workspaceId));
