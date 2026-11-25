@@ -207,6 +207,11 @@ function failedPreconditionDetails(error: unknown) {
   return isRecord(details) ? details : undefined;
 }
 
+function planSaveTimeoutDetails(error: unknown) {
+  const details = failedPreconditionDetails(error);
+  return details?.reason === "capsule_plan_creation_timeout" && details.stage === "plan_run_create" ? details : undefined;
+}
+
 function destroyConnectionRecoveryFailure(error: unknown) {
   const details = failedPreconditionDetails(error);
   if (details?.reason !== "destroy_connection_recovery_unproven") return undefined;
@@ -422,7 +427,9 @@ export async function runAppRollback(args: string[], io: CliIo): Promise<number>
       plan: review(savedChangePlan(plan, "rollback_plan_mismatch")) });
     return 0;
   } catch (error) {
-    const refused = !submitted || (!planRunId && error instanceof DeployControlApiError && error.status >= 400 && error.status < 500);
+    // A save deadline may expire before the store durably accepts this Plan.
+    const refused = !submitted || (!planRunId && !planSaveTimeoutDetails(error) &&
+      error instanceof DeployControlApiError && error.status >= 400 && error.status < 500);
     let recovery: string | undefined;
     if (submitted && !refused) {
       if (planRunId) {
@@ -604,13 +611,12 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
     write(io, options, { status: "review_required", ...link, plan: review(savedApplyPlan(plan, "destroy_apply")) });
     return 0;
   } catch (error) {
-    const details = failedPreconditionDetails(error);
     // The store may commit the Plan after the server's save deadline expires.
-    const saveTimedOut = details?.reason === "capsule_plan_creation_timeout" && details.stage === "plan_run_create";
-    const refused = !submitted || !saveTimedOut &&
+    const saveTimeout = planSaveTimeoutDetails(error);
+    const refused = !submitted || !saveTimeout &&
       error instanceof DeployControlApiError && error.status >= 400 && error.status < 500;
-    const candidateId = details?.reservedPlanRunId;
-    const reservedPlanRunId = submitted && saveTimedOut && bounded(candidateId, 256) &&
+    const candidateId = saveTimeout?.reservedPlanRunId;
+    const reservedPlanRunId = submitted && bounded(candidateId, 256) &&
       /^plan_[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(candidateId) ? candidateId : undefined;
     const recovery = reservedPlanRunId
       ? `Use apps recover-uninstall with the same app and --destroy-plan ${reservedPlanRunId} to read it. If the Plan is not found, the save is still unconfirmed.`
