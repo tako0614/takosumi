@@ -338,6 +338,6 @@ test("a review that cannot continue can always close", () => {
   const firstRead = source.slice(source.indexOf("<Show when={run.error && !runLatest()}>"), source.indexOf("<Show when={runLatest()}>"));
   expect(firstRead).toContain("{closeButton()}");
   // An unknown Apply outcome is held (no retry) but closable.
-  expect(source).toContain("<Show when={applyUnconfirmed()}>{closeButton()}</Show>");
+  expect(source).toContain("<Show when={applyUnconfirmed() || stalePlan()}>{closeButton()}</Show>");
   expect(source).toContain('setError(t("installStore.applyUnconfirmed"));');
 });
