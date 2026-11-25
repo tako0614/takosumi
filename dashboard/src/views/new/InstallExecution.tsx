@@ -352,6 +352,8 @@ export default function InstallExecution(props: Props) {
   const runLatest = createLastGoodValue(run, (r) => r.id === runId() && r.capsuleId === props.capsuleId);
   const mutationOutcomeUnknown = () => runMutationOutcomeUnknown(runLatest());
   const [applying, setApplying] = createSignal(false);
+  const [stalePlanId, setStalePlanId] = createSignal<string>();
+  const stalePlan = () => runId() === stalePlanId();
   const [refusedConnectionPlanId, setRefusedConnectionPlanId] = createSignal<string>();
   const refusedConnectionPlan = () => {
     const current = runLatest();
@@ -612,7 +614,7 @@ export default function InstallExecution(props: Props) {
     if (attempt && !applying() && !checkingApply()) await recoverApply(attempt);
   };
   const install = async () => {
-    if (props.blockedReason || refusedConnectionPlan() || applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
+    if (props.blockedReason || stalePlan() || refusedConnectionPlan() || applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
     const plan = runLatest();
     if (!plan || plan.id !== runId() || plan.capsuleId !== props.capsuleId || !plan.workspaceId) return;
     const attempt = applyAttempt(plan);
@@ -648,6 +650,10 @@ export default function InstallExecution(props: Props) {
           setConfirmed(false);
           setRefusedConnectionPlanId(plan.id);
         }
+        if (props.onClose && plan.type === "plan" && cause.isApplyStateConflict) {
+          setConfirmed(false);
+          setStalePlanId(plan.id);
+        }
       }
     } finally {
       if (sameOwner(attempt)) setApplying(false);
@@ -668,6 +674,7 @@ export default function InstallExecution(props: Props) {
     setRecoverableApply(undefined); setCheckingApply(false); setApplying(false); setApproving(false);
     setRestarting(false);
     setConfirmed(false); setApplyUnconfirmed(false); setError(null); setRefusedConnectionPlanId(undefined);
+    setStalePlanId(undefined);
     mutate(undefined); setRunId(id);
   });
   const retryFailedApply = async () => {
@@ -946,7 +953,7 @@ export default function InstallExecution(props: Props) {
                 {(runId) => props.uninstallConnectionRecovery?.(runId, "before_approval", approving)}
               </Show>
 
-              <Show when={planReady() && !refusedConnectionPlan()}>
+              <Show when={planReady() && !refusedConnectionPlan() && !stalePlan()}>
                 <Show when={destructive()}>
                   <div class="iv-review-warning">
                     <ShieldAlert size={20} aria-hidden="true" />
@@ -1158,7 +1165,7 @@ export default function InstallExecution(props: Props) {
             {/* An Apply whose outcome is unknown is held — never retried from
                 here — but the review can close; the run detail and the app's
                 history show what happened. */}
-            <Show when={applyUnconfirmed()}>{closeButton()}</Show>
+            <Show when={applyUnconfirmed() || stalePlan()}>{closeButton()}</Show>
             <Show when={applyUnconfirmed() && recoverableApply()}>
               <Button type="button" variant="secondary" busy={checkingApply()} disabled={applying() || checkingApply()} onClick={() => void recheckApply()}>
                 {t("common.retry")}

@@ -113,6 +113,13 @@ export class ControlApiError extends Error {
     return this.status === 409 && this.reason === "source_sync_required";
   }
 
+  /** Definite Apply refusal because the reviewed base state has changed. */
+  get isApplyStateConflict(): boolean {
+    const reason = this.reason;
+    return this.status === 409 && this.code === "failed_precondition" &&
+      (reason === "state_version_mismatch" || reason === "state_generation_mismatch");
+  }
+
   /** Typed detail payload from deploy-control error envelopes, when present. */
   get details(): unknown {
     return controlErrorDetails(this.body);
