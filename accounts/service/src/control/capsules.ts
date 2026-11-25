@@ -139,11 +139,8 @@ import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { handleCapsuleRevisionPlans } from "./revision-plans.ts";
-import {
-  capsuleInstallConfigReAdoptionGuard,
-  handleCapsuleInstallConfigReAdoption,
-} from "./install-config-re-adoptions.ts";
-import { handleCapsuleConfigurationPlans } from "./configuration-plans.ts";
+import { handleCapsuleInstallConfigReAdoption } from "./install-config-re-adoptions.ts";
+import { handleCapsuleConfigurationPlans, readCapsuleConfigurationPlanContext } from "./configuration-plans.ts";
 import { handleCapsuleInterfaceLinks } from "./interface-links.ts";
 import { handleCapsuleApp, handleCapsuleRuns } from "./capsule-app.ts";
 import { handleCapsuleActivity } from "./app-activity.ts";
@@ -235,12 +232,7 @@ export async function handleCapsules(
             operations,
             capsule,
           ),
-          installConfigReAdoption: {
-            authorityGuard: await capsuleInstallConfigReAdoptionGuard(
-              operations,
-              capsule,
-            ),
-          },
+          installConfigReAdoption: await readCapsuleConfigurationPlanContext(ctx, capsule),
         });
       }
       if (method === "PATCH") {
@@ -529,7 +521,8 @@ async function capsuleRouteAppAction(
     // A configuration plan that selects provider connections is the
     // connection choice; the handler re-reads and validates the body.
     const body = await readJsonObject(request.clone()).catch(() => null);
-    return Array.isArray(body?.providerBindings) && body.providerBindings.length > 0
+    return (body && Object.hasOwn(body, "resume")) ||
+      (Array.isArray(body?.providerBindings) && body.providerBindings.length > 0)
       ? "choose_connection"
       : "change_settings";
   }

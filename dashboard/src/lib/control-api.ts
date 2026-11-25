@@ -1211,10 +1211,14 @@ export async function getCapsuleConfigurationContext(
 ): Promise<{
   readonly capsule: Capsule;
   readonly authorityGuard: string;
+  readonly configurationPlanResumable?: true;
 }> {
   const body = await controlFetch<{
     capsule: Capsule;
-    installConfigReAdoption: { readonly authorityGuard: string };
+    installConfigReAdoption: {
+      readonly authorityGuard: string;
+      readonly configurationPlanResumable?: true;
+    };
   }>(`${BASE}/capsules/${encodeURIComponent(id)}`, options);
   if (
     !isCapsuleResponse(body.capsule) ||
@@ -1230,6 +1234,9 @@ export async function getCapsuleConfigurationContext(
   return {
     capsule: body.capsule,
     authorityGuard: body.installConfigReAdoption.authorityGuard,
+    ...(body.installConfigReAdoption.configurationPlanResumable === true
+      ? { configurationPlanResumable: true }
+      : {}),
   };
 }
 
@@ -1240,11 +1247,32 @@ export async function createCapsuleConfigurationPlan(
   idempotencyKey: string = randomUuid(),
   options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<CapsuleConfigurationPlanResponse> {
+  return await submitCapsuleConfigurationPlan(capsuleId, request, {
+    headers: { "idempotency-key": idempotencyKey },
+    ...options,
+  });
+}
+
+/** Prepares the review of the server's already-saved settings. */
+export async function resumeCapsuleConfigurationPlan(
+  capsuleId: string,
+  resume: { readonly installConfigId: string; readonly authorityGuard: string },
+  options: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<CapsuleConfigurationPlanResponse> {
+  return await submitCapsuleConfigurationPlan(capsuleId, { resume }, options);
+}
+
+async function submitCapsuleConfigurationPlan(
+  capsuleId: string,
+  request: CapsuleConfigurationPlanRequest | {
+    readonly resume: { readonly installConfigId: string; readonly authorityGuard: string };
+  },
+  options: Pick<RequestOpts, "headers" | "isCurrent">,
+): Promise<CapsuleConfigurationPlanResponse> {
   const result = await controlFetch<CapsuleConfigurationPlanResponse>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/configuration-plans`,
     {
       method: "POST",
-      headers: { "idempotency-key": idempotencyKey },
       body: request,
       ...options,
     },

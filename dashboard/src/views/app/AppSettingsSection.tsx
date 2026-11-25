@@ -193,6 +193,7 @@ export default function AppSettingsSection(props: {
   /** Another change is under way or waiting for review, so settings wait. */
   readonly changeWaits?: boolean;
   readonly retryUnconfirmed?: boolean;
+  readonly onResumeReview?: () => void;
   readonly starting: boolean;
   readonly error?: string;
   readonly notice?: string;
@@ -619,6 +620,11 @@ export default function AppSettingsSection(props: {
           </div>
         </Show>
         <div class="ap-row-actions">
+          <Show when={props.onResumeReview && currentRead()?.bindings && !dirty() && !props.reviewBusy}>
+            <Button type="button" variant="secondary" onClick={props.onResumeReview}>
+              {t("app.settings.resumeReview")}
+            </Button>
+          </Show>
           <Show when={canRetryUnconfirmedReview()}>
             <Button type="button" variant="secondary" onClick={retryUnconfirmedReview}>
               {t("app.review.retry")}

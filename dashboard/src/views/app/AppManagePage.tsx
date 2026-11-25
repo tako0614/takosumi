@@ -73,6 +73,7 @@ import {
   listStateVersions,
   planCapsule,
   requireReviewableRevisionPlan,
+  resumeCapsuleConfigurationPlan,
   retryInterfaceMaterializationFailure,
   type Run,
   type RunType,
@@ -714,6 +715,19 @@ export default function AppManagePage(props: {
     dismissedRuns.add(active.initialRunId ?? active.planRunId);
     setNotice({ section: active.section, message: t(DONE_MESSAGE[active.purpose]) });
     refreshAfterReview();
+  };
+
+  const resumeConfigurationReview = () => {
+    const saved = contextLatest();
+    if (!saved?.configurationPlanResumable || context.loading || context.error) return;
+    const id = saved.capsule.id;
+    void startReview("settings", "apply", async (isCurrent) => {
+      const result = await resumeCapsuleConfigurationPlan(id, {
+        installConfigId: saved.capsule.installConfigId,
+        authorityGuard: saved.authorityGuard,
+      }, { isCurrent });
+      return result.configurationPlan.planRunId;
+    }, { restartable: false });
   };
 
   const switchableUninstallReview = (view: CapsuleAppView | undefined) => {
@@ -1904,6 +1918,7 @@ export default function AppManagePage(props: {
                   changeWaits={!reviewBusy() && versionChangeBusy(view())}
                   retryUnconfirmed={!reviewBusy() && versionChangeBusy(view()) &&
                     sectionError()?.section === "settings" && sectionError()?.configurationUnconfirmed === true}
+                  onResumeReview={contextLatest()?.configurationPlanResumable ? resumeConfigurationReview : undefined}
                   starting={startingIn("settings")}
                   error={errorFor("settings")}
                   notice={noticeFor("settings")}
