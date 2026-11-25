@@ -775,12 +775,15 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
     const connectionRecoveryFailure = destroyConnectionRecoveryFailure(error);
     const refusedPlan = applyAttempted && readbackConfirmed && !observedRun &&
         observedPlan?.status === "succeeded" ? observedPlan : undefined;
-    if (applyType === "apply" && refusedPlan &&
+    const refusedApprovalPlan = mutationAttempted && !applyAttempted && readbackConfirmed && !observedRun &&
+        observedPlan?.status === "waiting_approval" ? observedPlan : undefined;
+    const stateRefusedPlan = refusedPlan ?? refusedApprovalPlan;
+    if (applyType === "apply" && stateRefusedPlan &&
       (reason === "state_version_mismatch" || reason === "state_generation_mismatch")) {
       const recovery = isJapaneseCli()
         ? "アプリの現在の状態と apps history の履歴を確認し、新しいPlanを準備してレビューしてください。"
         : "Check the app's current state and its history with apps history. Prepare and review a new Plan against the current state.";
-      write(io, options, { status: "refused", appId, planRunId: planId, lastObservedPlanStatus: refusedPlan.status,
+      write(io, options, { status: "refused", appId, planRunId: planId, lastObservedPlanStatus: stateRefusedPlan.status,
         code: "failed_precondition", reason, recovery });
       return 1;
     }

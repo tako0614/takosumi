@@ -28,7 +28,7 @@ import type {
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import type { SqlClient, SqlParameters, SqlValue } from "../../adapters/storage/sql.ts";
-import { appApplyAdmission, appClaimAdmission, appPlanAdmission } from "./app_run_admission.ts";
+import { appApplyAdmission, appClaimAdmission, appPlanAdmission, planApprovalBaseMatches } from "./app_run_admission.ts";
 import {
   APP_OWNERSHIP_HISTORY_MAX_TRANSFERS,
   appOwnershipHistoryFromRows,
@@ -2648,6 +2648,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         : {};
     const requireStoredManagementAuthority =
       input.requireStoredManagementAuthority === true;
+    const requireCurrentPlanBase = input.requireCurrentPlanBase === true;
     const update = async (
       db: PgRemoteDatabase<typeof pgSchema>,
       expectedWorkspaceId?: string,
@@ -2994,6 +2995,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       input.setLeaseToken !== undefined ||
       input.expectedWorkspaceManagementAuthority !== undefined ||
       requireStoredManagementAuthority ||
+      requireCurrentPlanBase ||
       drainSettlement !== undefined
     ) {
       // The replacement payload is not authority: read the Workspace id from
@@ -3036,6 +3038,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         if (
           input.setLeaseToken !== undefined ||
           requireStoredManagementAuthority ||
+          requireCurrentPlanBase ||
           drainSettlement !== undefined
         ) {
           const currentRows = await transaction.query<{
@@ -3070,16 +3073,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             // CAS miss.
             return undefined;
           }
-          if (input.setLeaseToken !== undefined && current !== undefined &&
+          if (requireCurrentPlanBase &&
+            (input.kind !== "plan" || !current || !isPlanRunRecord(current) || !current.capsuleId)) {
+            return undefined;
+          }
+          if ((input.setLeaseToken !== undefined || requireCurrentPlanBase) && current !== undefined &&
             (isPlanRunRecord(current) || isApplyRunRecord(current)) && current.capsuleId !== undefined &&
             (input.kind === "plan" || input.kind === "apply")) {
             const observedCapsuleId = current.capsuleId;
-            const capsuleRows = await transaction.query<PgCapsuleAdmissionOwnershipRow & { readonly capsuleJson: unknown }>(
+            const capsuleRows = await transaction.query<PgCapsuleAdmissionOwnershipRow & {
+              readonly capsuleJson: unknown;
+              readonly workspaceId: string;
+              readonly status: string;
+              readonly currentStateVersionId: string | null;
+            }>(
               `select ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson",
                       owner_account_id as "ownerAccountId",
                       ownership_epoch as "ownershipEpoch",
                       management_state as "managementState",
-                      management_epoch as "managementEpoch"
+                      management_epoch as "managementEpoch",
+                      space_id as "workspaceId",
+                      status,
+                      current_state_version_id as "currentStateVersionId"
                  from takosumi_capsules where id = $1 for update`,
               [observedCapsuleId],
             );
@@ -3112,6 +3127,16 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                 : undefined;
             } catch {
               capsule = undefined;
+            }
+            if (requireCurrentPlanBase) {
+              const row = capsuleRows.rows[0];
+              if (!isPlanRunRecord(current) || !isPlanRunRecord(candidate) || !capsule ||
+                !planApprovalBaseMatches(current, capsule) || !planApprovalBaseMatches(candidate, capsule) ||
+                row?.workspaceId !== capsule.workspaceId || row.status !== capsule.status ||
+                row.currentStateVersionId !== (capsule.currentStateVersionId ?? null)) return undefined;
+              if (input.setLeaseToken === undefined) {
+                return await update(this.#drizzleForClient(transaction), management.workspaceId, current);
+              }
             }
             let plan: PlanRun | undefined;
             if (isPlanRunRecord(current)) {

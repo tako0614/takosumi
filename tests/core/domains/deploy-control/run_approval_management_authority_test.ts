@@ -1,4 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { Miniflare } from "miniflare";
 
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { Run } from "takosumi-contract/runs";
@@ -12,9 +13,12 @@ import {
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
+import { OpenTofuController } from "../../../../core/domains/deploy-control/mod.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { workerdD1Database, workerdD1Module } from "../../../helpers/deploy-control/workerd_d1.ts";
 
 const NOW = "2026-09-10T00:00:00.000Z";
 const pgClients: PGliteSqlClient[] = [];
@@ -218,6 +222,77 @@ function currentTransition(
     run: { ...row, status } as StoredRunRecord,
   };
 }
+
+test("ordinary Plan approval requires its current state version and generation at the write", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [workerdD1Module("plan-approval-base.mjs")],
+    d1Databases: { CONTROL: "plan-approval-base" },
+  });
+  try {
+    const database = workerdD1Database(runtime);
+    const workerd = {
+      label: "workerd",
+      store: new CloudflareD1OpenTofuControlStore(database),
+      reopen: () => new CloudflareD1OpenTofuControlStore(database),
+    };
+    for (const { label, store, reopen } of [...await adapters(), workerd]) {
+      const workspaceId = `approval-base-${label}`;
+      const { capsule } = await seedCapsuleModel(store, { workspaceId });
+      const current = { ...capsule, status: "active" as const, currentStateVersionId: "sv_base", currentStateGeneration: 1 };
+      await store.putCapsule(current);
+      const authority = await activeAuthority(store, workspaceId);
+      const base = { ...planRun(`plan_approved_${label}`, workspaceId), capsuleId: capsule.id,
+        capsuleCurrentStateVersionId: current.currentStateVersionId, baseStateGeneration: current.currentStateGeneration };
+      await admit(store, "plan", base, authority);
+      const controller = new OpenTofuController({ store });
+      expect((await controller.approveRun(base.id, { approvedBy: "first-reviewer" })).status, label).toBe("succeeded");
+      const approved = await reopen().getPlanRun(base.id);
+      expect(approved?.auditEvents.map(event => event.type), label).toEqual(["plan.approved"]);
+
+      const otherCapsuleId = `cap_other_${label}`;
+      await store.putCapsule({ ...current, id: otherCapsuleId, name: "Other app", slug: `other-${label}` });
+      const distinct = { ...base, id: `plan_distinct_${label}` };
+      await admit(store, "plan", distinct, authority);
+      const distinctBefore = await reopen().getPlanRun(distinct.id);
+      expect((await store.transitionRun({
+        ...currentTransition("plan", distinct, "succeeded", authority),
+        run: { ...distinct, status: "succeeded", capsuleId: otherCapsuleId },
+        requireCurrentPlanBase: true,
+      })).won, label).toBe(false);
+      expect(await reopen().getPlanRun(distinct.id), label).toEqual(distinctBefore);
+
+      for (const reason of ["state_version_mismatch", "state_generation_mismatch"] as const) {
+        await store.putCapsule(current);
+        const plan = { ...base, id: `plan_${label}_${reason}` };
+        await admit(store, "plan", plan, authority);
+        const before = await reopen().getPlanRun(plan.id);
+        const transition = store.transitionRun.bind(store);
+        let observedTransition = false;
+        store.transitionRun = async (input) => {
+          observedTransition = true;
+          await store.putCapsule({
+            ...current, currentStateGeneration: 2,
+            currentStateVersionId: reason === "state_version_mismatch" ? "sv_newer" : current.currentStateVersionId,
+          });
+          return await transition(input);
+        };
+        try {
+          await expect(controller.approveRun(plan.id, { approvedBy: "stale-reviewer" }), label)
+            .rejects.toMatchObject({ code: "failed_precondition", details: { reason } });
+        } finally {
+          store.transitionRun = transition;
+        }
+        expect(observedTransition, label).toBe(true);
+        expect(await reopen().getPlanRun(plan.id), label).toEqual(before);
+        expect((await controller.approveRun(base.id, { approvedBy: "other-reviewer" })).status, label).toBe("succeeded");
+        expect(await reopen().getPlanRun(base.id), label).toEqual(approved);
+      }
+    }
+  } finally {
+    await runtime.dispose();
+  }
+}, 30_000);
 
 test("approval transitions require the stored original Workspace authority", async () => {
   for (const adapter of await adapters()) {
