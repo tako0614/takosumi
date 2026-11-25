@@ -772,14 +772,21 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
     }
     if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
     const reason = failedPreconditionDetails(error)?.reason;
+    const connectionRecoveryFailure = destroyConnectionRecoveryFailure(error);
     if (applyType === "destroy_apply" && applyAttempted && readbackConfirmed && !observedRun &&
       observedPlan?.status === "succeeded" &&
-      (reason === "provider_connection_setup_required" || reason === "provider_connection_not_ready")) {
+      (reason === "provider_connection_setup_required" || reason === "provider_connection_not_ready" ||
+        connectionRecoveryFailure !== undefined)) {
+      const missingEvidence = connectionRecoveryFailure === "applied_evidence_unavailable";
+      const recovery = isJapaneseCli()
+        ? missingEvidence
+          ? "アプリの適用済み状態と直前のRunを確認してから、新しい削除Planを準備してください。"
+          : "同じクラウドアカウントの確認済み接続を選び、apps recover-uninstall --connections で新しい削除Planを準備して確認してください。"
+        : missingEvidence
+          ? "Check the app's applied state and previous Runs before preparing a new Destroy Plan."
+          : "Select a verified connection for the same cloud account. Use apps recover-uninstall with --connections to prepare and review a new Destroy Plan.";
       write(io, options, { status: "refused", appId, planRunId: planId, lastObservedPlanStatus: observedPlan.status,
-        code: "failed_precondition", reason,
-        recovery: isJapaneseCli()
-          ? "同じクラウドアカウントの確認済み接続を選び、apps recover-uninstall --connections で新しい削除Planを準備して確認してください。"
-          : "Select a verified connection for the same cloud account. Use apps recover-uninstall with --connections to prepare and review a new Destroy Plan." });
+        code: "failed_precondition", reason, connectionRecoveryFailure, recovery });
       return 1;
     }
     write(io, options, { status: observedRun && !SETTLED.has(observedRun.status) ? "pending" : mutationAttempted || options.observeOnly === true ? "indeterminate" : "refused",

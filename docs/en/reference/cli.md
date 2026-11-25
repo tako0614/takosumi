@@ -156,8 +156,8 @@ The server checks current ownership, the cloud account, and the applied connecti
 To restore the original Connection for a binding that used a replacement during a partial Destroy, pass the original ID in both `connectionId` and `replacementConnectionId`.
 The server checks the current app owner's verified selection against the saved partial Destroy record.
 When a `refused` result includes `connectionRecoveryFailure`, verify the replacement connection for `replacement_unverified`,
-or check the account and applied connection settings for `bindings_mismatch`.
-`applied_evidence_unavailable` means the server could not confirm the applied record needed for the comparison.
+check the account and applied connection settings for `bindings_mismatch`, or choose the original authentication method for
+`replacement_auth_mode_mismatch`. For `applied_evidence_unavailable`, check the app's applied state and previous Runs.
 When the result is `review_required`, inspect what the Plan will remove and its effective `providerConnections`, including replacements carried forward from a previous attempt.
 For `plan_pending`, use the returned `planRunId` to read the same Plan again. If `unconfirmed` includes a `reservedPlanRunId`, pass that ID to `--destroy-plan`. A 404 still leaves the save unconfirmed. If no reserved ID is returned, `--current-review` finds the latest manual Destroy Plan if it is pending, reviewable, or failed.
 A `failed` result includes the Plan ID and the failure code when available. Whether the earlier request was accepted is still unconfirmed.
@@ -183,8 +183,10 @@ takosumi apps apply cap_example --destroy-plan destroy_plan_example --yes \
   --url https://takosumi.example.com --json
 ```
 
-`--destroy-plan` selects a saved Destroy Plan. When Apply is rejected for connection readiness or credential policy and a fresh read of the same Plan finds no linked Destroy Run, the CLI returns `refused` with the reason.
-Select a verified connection for the same cloud account and use `apps recover-uninstall --connections` to prepare and review a new Destroy Plan.
+`--destroy-plan` selects a saved Destroy Plan. When Apply is rejected for connection readiness, credential policy, or one of the replacement checks above,
+the CLI returns `refused` with the reason after reading back the same approved Plan and finding no linked Destroy Run.
+Replacement checks are reported in `connectionRecoveryFailure`. For a connection issue, select a verified connection for the same cloud account
+and use `apps recover-uninstall --connections` to prepare and review a new Destroy Plan.
 If the result is uncertain, replace `--yes` with `--observe-only` for the same Plan ID to read its linked Destroy Run.
 Use `apps uninstall <app-id> --yes` to schedule a normal uninstall.
 
