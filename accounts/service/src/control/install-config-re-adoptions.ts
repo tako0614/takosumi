@@ -100,24 +100,6 @@ export interface ReAdoptionCasExpected {
     InstallConfigCommittedPostApplyRecoveryProof;
 }
 
-/** Opaque value-free guard issued only after the Capsule route authorizes access. */
-export async function capsuleInstallConfigReAdoptionGuard(
-  operations: ControlPlaneOperations,
-  capsule: Capsule,
-): Promise<string> {
-  const snapshot = await capsuleInstallConfigReAdoptionAuthoritySnapshot(
-    operations,
-    capsule.id,
-  );
-  if (snapshot.capsule.workspaceId !== capsule.workspaceId) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "Capsule Workspace authority changed while issuing the re-adoption guard.",
-    );
-  }
-  return snapshot.authorityGuard;
-}
-
 export async function handleCapsuleInstallConfigReAdoption(
   ctx: ControlDispatchContext,
   capsule: Capsule,

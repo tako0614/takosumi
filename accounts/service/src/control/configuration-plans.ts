@@ -89,6 +89,40 @@ interface ConfigurationEvidenceIdentity {
   readonly planCreatedBy: string;
 }
 
+/** Value-free recovery hint for the actor who committed the current settings. */
+export async function readCapsuleConfigurationPlanContext(
+  ctx: ControlDispatchContext,
+  capsule: Capsule,
+): Promise<{ readonly authorityGuard: string; readonly configurationPlanResumable?: true }> {
+  const authority = await capsuleInstallConfigReAdoptionAuthoritySnapshot(
+    ctx.operations,
+    capsule.id,
+  );
+  if (authority.capsule.workspaceId !== capsule.workspaceId) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "Capsule Workspace authority changed while issuing the configuration guard.",
+    );
+  }
+  let resumable = false;
+  if (capsule.installConfigId === authority.installConfig.id) {
+    try {
+      const prepared = await currentConfigurationPreparation(ctx, authority);
+      if (prepared && !(await planRunIfPresent(ctx, prepared.evidence.planRunId))) {
+        await ctx.operations.capsules.requireInstallConfigManagementAuthority(authority.installConfig.id);
+        resumable = true;
+      }
+    } catch {
+      // A failed recovery-hint read must leave the ordinary settings read usable.
+      // The resume POST independently requires every authority check.
+    }
+  }
+  return {
+    authorityGuard: authority.authorityGuard,
+    ...(resumable ? { configurationPlanResumable: true } : {}),
+  };
+}
+
 /** POST /api/v1/capsules/:capsuleId/configuration-plans. */
 export async function handleCapsuleConfigurationPlans(
   ctx: ControlDispatchContext,
@@ -96,6 +130,10 @@ export async function handleCapsuleConfigurationPlans(
   method: string,
 ): Promise<Response> {
   if (method !== "POST") return methodNotAllowed("POST");
+  const body = await readJsonObject(ctx.request);
+  if (body && Object.hasOwn(body, "resume")) {
+    return await resumeConfigurationPlan(ctx, capsule, body);
+  }
   const key = idempotencyKey(ctx.request.headers.get("idempotency-key"));
   if (!key) {
     return errorJson(
@@ -105,7 +143,6 @@ export async function handleCapsuleConfigurationPlans(
       ctx.request,
     );
   }
-  const body = await readJsonObject(ctx.request);
   const request = body ? parseRequest(body) : undefined;
   if (!request) {
     return errorJson(
@@ -430,12 +467,98 @@ export async function handleCapsuleConfigurationPlans(
   });
 }
 
+async function currentConfigurationPreparation(
+  ctx: ControlDispatchContext,
+  authority: ReAdoptionAuthoritySnapshot,
+): Promise<{ receipt: ReAdoptionReceipt; evidence: ConfigurationEvidenceIdentity } | undefined> {
+  const { capsule, installConfig: target } = authority;
+  const receipt = target.internal?.reAdoption;
+  if (
+    ctx.session.credential !== "session" ||
+    !receipt ||
+    receipt.reason !== CONFIGURATION_REASON ||
+    receipt.actorSubject !== ctx.session.subject ||
+    receipt.capsuleId !== capsule.id ||
+    target.workspaceId !== capsule.workspaceId ||
+    target.modulePath === undefined ||
+    capsule.status === "uninstalled" ||
+    capsule.status === "destroyed" ||
+    capsule.status === "disabled" ||
+    receipt.previousCapsuleStatus !== capsule.status ||
+    receipt.previousExecutionAuthorityEpoch + 1 !== authority.executionAuthorityEpoch ||
+    receipt.previousStateGeneration !== capsule.currentStateGeneration ||
+    receipt.previousStateVersionId !== capsule.currentStateVersionId ||
+    !receipt.previousProviderBindingSetAuthorityDigest ||
+    !receipt.baseInstallConfigDigest ||
+    !receipt.targetProviderBindingSet ||
+    !receipt.targetProviderBindingSetDigest
+  ) return undefined;
+  const targetId = await configurationTargetInstallConfigId({
+    scopeRef: capsuleScopeRef(capsule),
+    capsuleId: capsule.id,
+    actorSubject: receipt.actorSubject,
+    idempotencyKeyHash: receipt.idempotencyKeyHash,
+  });
+  if (
+    targetId !== target.id ||
+    !(await hasValidDerivedTargetSeal(target)) ||
+    (await providerBindingSetAuthorityDigest(receipt.targetProviderBindingSet)) !== authority.providerBindingSetAuthorityDigest
+  ) return undefined;
+
+  const evidence = await configurationEvidenceIdentity({
+    requestDigest: receipt.requestDigest,
+    targetInstallConfigId: target.id,
+    targetProviderBindingSetDigest: receipt.targetProviderBindingSetDigest,
+    baseInstallConfigDigest: receipt.baseInstallConfigDigest,
+    sourceSnapshotId: receipt.sourceSnapshotId,
+    modulePath: target.modulePath,
+  });
+  return { receipt, evidence };
+}
+
+async function resumeConfigurationPlan(
+  ctx: ControlDispatchContext,
+  capsule: Capsule,
+  body: Readonly<Record<string, unknown>>,
+): Promise<Response> {
+  const resume = body.resume;
+  if (
+    !hasOnlyKeys(body, ["resume"]) ||
+    !isPlainJsonObject(resume) ||
+    !hasOnlyKeys(resume, ["installConfigId", "authorityGuard"]) ||
+    !boundedExactIdentifier(resume.installConfigId) ||
+    typeof resume.authorityGuard !== "string" ||
+    !DIGEST.test(resume.authorityGuard)
+  ) {
+    return errorJson("invalid_request", "Configuration review recovery requires the current InstallConfig and authority guard.", 400, ctx.request);
+  }
+  if (ctx.session.credential !== "session") {
+    return errorJson("forbidden", "Configuration review recovery requires an account session.", 403, ctx.request);
+  }
+  const authority = await capsuleInstallConfigReAdoptionAuthoritySnapshot(ctx.operations, capsule.id);
+  if (
+    authority.capsule.workspaceId !== capsule.workspaceId ||
+    authority.installConfig.id !== resume.installConfigId ||
+    authority.authorityGuard !== resume.authorityGuard
+  ) return authorityConflict(ctx.request);
+  const prepared = await currentConfigurationPreparation(ctx, authority);
+  if (!prepared) return authorityConflict(ctx.request);
+  return await finishConfigurationPlan({
+    ctx,
+    target: authority.installConfig,
+    requestDigest: prepared.receipt.requestDigest,
+    receipt: prepared.receipt,
+    resumeAuthorityGuard: resume.authorityGuard,
+  });
+}
+
 async function finishConfigurationPlan(input: {
   readonly ctx: ControlDispatchContext;
   readonly requestDigest: string;
   readonly target: InstallConfig;
   readonly receipt: ReAdoptionReceipt;
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+  readonly resumeAuthorityGuard?: string;
 }): Promise<Response> {
   const previousBindingAuthorityDigest =
     input.receipt.previousProviderBindingSetAuthorityDigest;
@@ -565,6 +688,11 @@ async function finishConfigurationPlan(input: {
     input.ctx.operations,
     input.receipt.capsuleId,
   );
+  if (
+    input.resumeAuthorityGuard !== undefined &&
+    (authority.authorityGuard !== input.resumeAuthorityGuard ||
+      authority.capsule.installConfigId !== input.target.id)
+  ) return authorityConflict(input.ctx.request);
   if (
     authority.capsule.workspaceId !== current.workspaceId ||
     authority.capsule.id !== current.id
