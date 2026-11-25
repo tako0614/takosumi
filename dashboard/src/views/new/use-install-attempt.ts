@@ -918,15 +918,16 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     // An attempt the URL already names (even one still loading) is the one
     // this page follows; Install never starts a second beside it.
     if (mutating() || response() || untrack(options.attemptId)) return;
+    let expected = epoch;
+    const stillOpening = () => !disposed && expected === epoch && !untrack(options.attemptId);
     setMutating("start");
     setError(undefined);
     try {
       // The mount's initial URL effect runs after the first microtask. Let it
       // establish this page's epoch before a fast POST can resolve.
       await Promise.resolve();
-      const expected = epoch;
+      expected = epoch;
       const selectedWorkspace = currentWorkspaceId();
-      const stillOpening = () => !disposed && expected === epoch && !untrack(options.attemptId);
       const workspaceId = await legacyInstallWorkspaceId(selectedWorkspace || undefined, { isCurrent: stillOpening });
       const stillStartingHere = () => stillOpening() &&
         (!workspaceId || currentWorkspaceId() === selectedWorkspace);
@@ -950,7 +951,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const created = await postAttempt(workspaceId, request, stillStartingHere, latest);
       adoptNewAttempt(created, expected, { latest });
     } catch (cause) {
-      if (!disposed) setError(installErrorMessage(cause));
+      if (stillOpening()) setError(installErrorMessage(cause));
     } finally {
       if (!disposed) setMutating(undefined);
     }

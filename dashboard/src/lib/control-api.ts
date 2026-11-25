@@ -980,6 +980,7 @@ export async function listWorkspacePage(
     readonly selectedWorkspaceId?: string;
     readonly includeTotal?: boolean;
   } = {},
+  scope: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<WorkspaceListPage> {
   return await controlFetch<ContractPublicWorkspaceListPage>(
     `${BASE}/workspaces${query({
@@ -990,6 +991,7 @@ export async function listWorkspacePage(
       selectedWorkspaceId: options.selectedWorkspaceId,
       includeTotal: options.includeTotal,
     })}`,
+    scope,
   );
 }
 
@@ -998,13 +1000,14 @@ export async function listWorkspaces(
     readonly selectedWorkspaceId?: string;
     readonly limit?: number;
   } = {},
+  scope: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<readonly Workspace[]> {
   return (
     await listWorkspacePage({
       limit: options.limit,
       order: "updated_desc",
       selectedWorkspaceId: options.selectedWorkspaceId,
-    })
+    }, scope)
   ).workspaces;
 }
 
@@ -1012,9 +1015,9 @@ export async function createWorkspace(input: {
   readonly handle: string;
   readonly displayName?: string;
   readonly type?: WorkspaceType;
-}, scope: Pick<RequestOpts, "isCurrent"> = {}): Promise<Workspace> {
+}, options: Pick<RequestOpts, "beforeDispatch"> = {}): Promise<Workspace> {
   const body = await controlFetch<WorkspaceEnvelope>(`${BASE}/workspaces`, {
-    ...scope,
+    ...options,
     method: "POST",
     body: {
       handle: input.handle,
@@ -3592,11 +3595,14 @@ export function extractRunId(envelope: unknown): string | undefined {
   return typeof obj.id === "string" ? obj.id : undefined;
 }
 
-async function legacyWorkspaceFor404(workspaceId?: string): Promise<string | undefined> {
+async function legacyWorkspaceFor404(
+  workspaceId?: string,
+  scope: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<string | undefined> {
   const explicit = normalizedWorkspaceId(workspaceId ?? "");
   if (explicit) return explicit;
   try {
-    return (await listWorkspaces()).find((workspace) => !workspace.archivedAt)?.id;
+    return (await listWorkspaces({}, scope)).find((workspace) => !workspace.archivedAt)?.id;
   } catch (error) {
     if (isMissingControlRoute(error)) return undefined;
     throw error;
@@ -3804,19 +3810,24 @@ export async function legacyInstallWorkspaceId(
   throwIfReadRetired(scope);
   if (await appOwnershipAvailable()) return undefined;
   throwIfReadRetired(scope);
-  const existing = await legacyWorkspaceFor404(workspaceId);
+  const existing = await legacyWorkspaceFor404(workspaceId, scope);
   throwIfReadRetired(scope);
   if (existing) return existing;
   if (!legacyInstallWorkspace) {
-    legacyInstallWorkspace = createWorkspace({
+    // The current page may begin the shared bootstrap. Its acknowledgement
+    // remains available to other current callers after the page leaves.
+    const request = createWorkspace({
       handle: `personal-${randomUuid().replaceAll("-", "").slice(0, 16)}`,
       type: "personal",
-    }, scope).then((workspace) => workspace.id).catch((error: unknown) => {
-      legacyInstallWorkspace = undefined;
+    }, { beforeDispatch: () => throwIfReadRetired(scope) }).then((workspace) => workspace.id).catch((error: unknown) => {
+      if (legacyInstallWorkspace === request) legacyInstallWorkspace = undefined;
       throw error;
     });
+    legacyInstallWorkspace = request;
   }
-  return await legacyInstallWorkspace;
+  const id = await legacyInstallWorkspace;
+  throwIfReadRetired(scope);
+  return id;
 }
 export interface AppMember {
   readonly accountId: string;
