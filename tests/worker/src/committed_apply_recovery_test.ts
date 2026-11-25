@@ -189,7 +189,7 @@ test("prepared lifecycle and private-file work do not select the receipt observe
 
 
 test("unreadable prepared inputs inspect once and preserve completed/unknown Runs", async () => {
-  for (const phase of ["completed", "malformed", "preparing"] as const) {
+  for (const phase of ["completed", "malformed", "preparing", "not_dispatched", "dispatched", "indeterminate", "orphaned"]) {
     const f = await fixture();
     if (phase === "malformed") f.setStatus("malformed"); else f.setPhase(phase);
     const saved = JSON.stringify(await f.store.getApplyRun(f.run.id));
@@ -198,8 +198,12 @@ test("unreadable prepared inputs inspect once and preserve completed/unknown Run
     try {
       await f.dispatch();
       expect(f.counts()).toEqual({ calls: 0, reads: 0, inspections: 1 });
-      if (phase !== "preparing") { expect(JSON.stringify(await f.store.getApplyRun(f.run.id))).toBe(saved); expect(claim).not.toHaveBeenCalled(); }
-      else expect((await f.store.getApplyRun(f.run.id))?.status).toBe("failed");
+      if (phase === "preparing" || phase === "not_dispatched") {
+        expect((await f.store.getApplyRun(f.run.id))?.status).toBe("failed");
+      } else {
+        expect(JSON.stringify(await f.store.getApplyRun(f.run.id))).toBe(saved);
+        expect(claim).not.toHaveBeenCalled();
+      }
       expect(apply).not.toHaveBeenCalled();
     } finally { read.mockRestore(); claim.mockRestore(); apply.mockRestore(); }
   }

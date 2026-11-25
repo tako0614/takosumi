@@ -444,9 +444,12 @@ export class CloudflareContainerOpenTofuRunner
           completed = structuredClone(authority);
           return "completed";
         }
-        // No observation grants dispatch. The existing DO prepare fence still
-        // owns preparing/new work, typed pre-dispatch refusal and legacy R2 replay.
-        return ["preparing", "not_dispatched", "dispatched", "indeterminate", "orphaned"].includes(authority.phase) ? "ordinary" : "hold";
+        if (authority.phase === "preparing" || authority.phase === "not_dispatched") return "ordinary";
+        // Recovery with prepared inputs still uses the existing DO prepare fence.
+        if (authority.phase === "dispatched" || authority.phase === "indeterminate" || authority.phase === "orphaned") {
+          return "dispatch_uncertain";
+        }
+        return "hold";
       },
       read: async (allocation) => {
         if (!completed) return undefined;
