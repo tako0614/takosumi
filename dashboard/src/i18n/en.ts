@@ -771,6 +771,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.replacementLoadFailed": "Cloud connections couldn't be loaded.",
   "app.uninstall.replacementReview": "Review removal",
   "app.uninstall.replacementReviewUnconfirmed": "Couldn't confirm the removal review for the new connection. Refresh to check its status.",
+  "app.uninstall.checkSubmittedReview": "Check submitted removal review",
+  "app.uninstall.submittedReviewUnconfirmed": "Couldn't confirm the submitted removal review yet.",
   "app.uninstall.reviewReplaced": "A newer removal review is ready. Open it to continue.",
   "app.uninstall.openLatestReview": "Open latest removal review",
   "app.uninstall.reviewConnectionUnavailable": "The connection used for this review is no longer available. Choose a verified connection for the same cloud account to review removal again.",

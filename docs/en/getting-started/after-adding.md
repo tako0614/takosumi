@@ -105,3 +105,8 @@ Then return to the app.
 
 The selected connection is used only for this uninstall. If you are unsure what an earlier attempt removed,
 check **History** before trying again.
+
+If saving cannot be confirmed after switching connections in an open removal review, you may see
+**Check submitted removal review**. This opens the Run page when the Plan you submitted has been saved.
+If it cannot yet be confirmed, wait a moment and use the same button again. If the Run has not started
+and shows **Cancel this run**, cancel it before returning to the app to create a new removal review.

@@ -88,7 +88,7 @@ import {
   type RevisionPlanAttemptStore,
 } from "../../lib/revision-plan-attempt.ts";
 import { appUninstallConnectionNotice, appUninstallRecoveryMode, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
-import { holdUninstallReview, isUninstallReviewHeld } from "../../lib/uninstall-review-hold.ts";
+import { holdUninstallReview, isUninstallReviewHeld, reservedUninstallReview } from "../../lib/uninstall-review-hold.ts";
 import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
 import {
   APP_HISTORY_RUN_TYPES,
@@ -508,6 +508,11 @@ export default function AppManagePage(props: {
 
   // --- in-page reviews ---------------------------------------------------------
   const [review, setReview] = createSignal<ActiveReview>();
+  const [reservedReviewCheck, setReservedReviewCheck] = createSignal<{
+    readonly review: ActiveReview;
+    readonly token: string;
+    readonly state: "checking" | "unconfirmed";
+  }>();
   const revisionAttempts: RevisionPlanAttemptStore = new Map();
   const rollbackAttemptKeys = new Map<string, string>();
   let reviewScopeEpoch = 0;
@@ -537,6 +542,7 @@ export default function AppManagePage(props: {
   const dismissedRuns = new Set<string>();
   const closeReview = (active: ActiveReview) => {
     setReview(undefined);
+    setReservedReviewCheck(undefined);
     dismissedRuns.add(active.initialRunId ?? active.planRunId);
     if (active.section === "settings") setSettingsSeed((value) => value + 1);
   };
@@ -550,6 +556,7 @@ export default function AppManagePage(props: {
         revisionAttempts.clear();
         rollbackAttemptKeys.clear();
         setReview(undefined);
+        setReservedReviewCheck(undefined);
         setReAdoptionRevisionId(undefined);
         setStarting(undefined);
         setSectionError(undefined);
@@ -579,7 +586,7 @@ export default function AppManagePage(props: {
       readonly restartable?: boolean;
       readonly action?: CapsuleAppAction | "continue_revision";
       readonly isCurrent?: () => boolean;
-      readonly replaceReview?: { readonly previous: ActiveReview; readonly releaseOnRefusal: () => (() => void) | undefined };
+      readonly replaceReview?: { readonly previous: ActiveReview; readonly hold: () => ReturnType<typeof holdUninstallReview> | undefined };
     } = {},
   ) => {
     const busy = options.replaceReview ? starting() !== undefined || review() !== options.replaceReview.previous : reviewBusy();
@@ -590,6 +597,7 @@ export default function AppManagePage(props: {
     const forPrincipal = props.principalId;
     const forEpoch = reviewScopeEpoch;
     const heldStarting = { section, ...(options.action ? { action: options.action } : {}) };
+    setReservedReviewCheck(undefined);
     setStarting(heldStarting);
     const isCurrent = () => !disposed && reviewScopeEpoch === forEpoch && capsuleId() === forCapsule &&
       props.accountId === forAccount && props.principalId === forPrincipal &&
@@ -639,15 +647,16 @@ export default function AppManagePage(props: {
           (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
             : cause instanceof TypeError);
-        const release = purpose === "uninstall" ? options.replaceReview?.releaseOnRefusal() : undefined;
-        const details = release && cause instanceof ControlApiError ? cause.details : undefined;
-        const replacementRefused = release && cause instanceof ControlApiError &&
+        const hold = purpose === "uninstall" ? options.replaceReview?.hold() : undefined;
+        const details = hold && cause instanceof ControlApiError ? cause.details : undefined;
+        const replacementRefused = hold && cause instanceof ControlApiError &&
           cause.status === 409 && cause.code === "failed_precondition" &&
           (uninstallConnectionRefused || cause.reason === "destroy_connection_recovery_unproven");
         const savingTimedOut = cause instanceof ControlApiError && cause.status === 409 &&
           cause.code === "failed_precondition" && cause.reason === "capsule_plan_creation_timeout" &&
           typeof details === "object" && details !== null && "stage" in details && details.stage === "plan_run_create";
-        if (release && (responseUncertain || missingPlanId || savingTimedOut)) {
+        if (hold && (responseUncertain || missingPlanId || savingTimedOut)) {
+          if (savingTimedOut && "reservedPlanRunId" in details) hold.recordReservation(details.reservedPlanRunId);
           // The old Plan can still be the latest while the replacement request is in flight.
           try {
             await refetchApp({ isCurrent });
@@ -655,7 +664,7 @@ export default function AppManagePage(props: {
             // Keep the approval held when the readback also fails.
           }
         } else if (uninstallConnectionRefused || replacementRefused || responseUncertain) {
-          if (replacementRefused) release();
+          if (replacementRefused) hold.release();
           // The app view can report unavailable connections or work accepted
           // before a lost response; this fetch never repeats the mutation.
           try {
@@ -757,6 +766,41 @@ export default function AppManagePage(props: {
       if (canOpen()) navigate(`/runs/${encodeURIComponent(held.planRunId)}`);
     } : undefined;
   };
+  const reservedReviewState = (held: ActiveReview, token: string) => {
+    const check = reservedReviewCheck();
+    return check?.review === held && check.token === token ? check.state : undefined;
+  };
+  const checkReservedRemovalReview = async (held: ActiveReview, receipt: NonNullable<ReturnType<typeof reservedUninstallReview>>) => {
+    const scope = uninstallReviewScope(held.planRunId);
+    if (reservedReviewState(held, receipt.token) === "checking") return;
+    const epoch = uninstallEpoch;
+    const ownsRead = () => {
+      const current = uninstallReviewScope(held.planRunId);
+      const reserved = reservedUninstallReview(current);
+      return !disposed && isOwner() && review() === held && !starting() && !uninstallBusy() &&
+        uninstallEpoch === epoch && scope.every((part, index) => part === current[index]) &&
+        reserved?.token === receipt.token && reserved.planRunId === receipt.planRunId;
+    };
+    if (!ownsRead()) return;
+    const check = { review: held, token: receipt.token, state: "checking" as const };
+    setReservedReviewCheck(check);
+    const isCurrent = () => reservedReviewCheck() === check && ownsRead();
+    try {
+      const run = await getRun(receipt.planRunId, { cache: "no-store", isCurrent });
+      if (!isCurrent()) return;
+      if (run?.id === receipt.planRunId && run.type === "destroy_plan" &&
+        run.workspaceId === scope[2] && run.capsuleId === scope[3]) {
+        navigate(`/runs/${encodeURIComponent(run.id)}`);
+      } else {
+        setReservedReviewCheck({ ...check, state: "unconfirmed" });
+      }
+    } catch {
+      // The reservation may still be uncommitted. Keep the old review held.
+      if (isCurrent()) setReservedReviewCheck({ ...check, state: "unconfirmed" });
+    } finally {
+      if (reservedReviewCheck() === check) setReservedReviewCheck(undefined);
+    }
+  };
   const refreshUnconfirmedUninstallReview = (held: ActiveReview) => {
     const scope = uninstallScope();
     const epoch = uninstallEpoch;
@@ -769,6 +813,19 @@ export default function AppManagePage(props: {
       {(active) => (
         <div class="ap-review" id="app-review" data-testid="app-review" data-review-purpose={active().purpose}>
           <Show when={!starting() && active().purpose === "uninstall" && isUninstallReviewHeld(uninstallReviewScope(active().planRunId))}>
+            <Show when={reservedUninstallReview(uninstallReviewScope(active().planRunId))}>
+              {(receipt) => (
+                <>
+                  <Button type="button" variant="secondary" busy={reservedReviewState(active(), receipt().token) === "checking"}
+                    onClick={() => void checkReservedRemovalReview(active(), receipt())}>
+                    {t("app.uninstall.checkSubmittedReview")}
+                  </Button>
+                  <Show when={reservedReviewState(active(), receipt().token) === "unconfirmed"}>
+                    <p role="status">{t("app.uninstall.submittedReviewUnconfirmed")}</p>
+                  </Show>
+                </>
+              )}
+            </Show>
             <Show when={switchableUninstallReview(app())} fallback={
               <Button type="button" variant="secondary" busy={appView.loading}
                 onClick={() => refreshUnconfirmedUninstallReview(active())}>
@@ -1250,7 +1307,7 @@ export default function AppManagePage(props: {
             disabled={starting() !== undefined || uninstallBusy() || disabled?.() === true}
             onReview={(replacements) => {
               if (disabled?.() || !isCurrent() || !reviewedApp(app())) return;
-              let releaseHold: (() => void) | undefined;
+              let reviewHold: ReturnType<typeof holdUninstallReview> | undefined;
               void startReview("attention", "uninstall", async () => {
                 const fresh = reviewedApp(await refetchApp({ isCurrent }));
                 const allowed = fresh?.uninstall.recoveryConnectionIds;
@@ -1260,12 +1317,12 @@ export default function AppManagePage(props: {
                 }
                 return extractRunId(await createCapsuleDestroyRecoveryPlan(fresh.capsuleId, replacements, {
                   isCurrent,
-                  beforeDispatch: () => { releaseHold = holdUninstallReview(uninstallReviewScope(heldReview.planRunId)); },
+                  beforeDispatch: () => { reviewHold = holdUninstallReview(uninstallReviewScope(heldReview.planRunId)); },
                 }));
               }, {
                 restartable: false,
                 action: "uninstall_now",
-                replaceReview: { previous: heldReview, releaseOnRefusal: () => releaseHold },
+                replaceReview: { previous: heldReview, hold: () => reviewHold },
                 isCurrent,
               });
             }}

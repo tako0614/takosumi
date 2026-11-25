@@ -122,7 +122,10 @@ describe("installed app page", () => {
     const heldRemovalDetails = page.match(/  const heldRemovalDetails = [\s\S]*?\n  \};/u)?.[0];
     expect(heldRemovalDetails).toContain("isUninstallReviewHeld(");
     expect(heldRemovalDetails).toContain('if (canOpen()) navigate(`/runs/${encodeURIComponent(held.planRunId)}`)');
-    expect(page.replace(heldRemovalDetails!, "")).not.toMatch(/navigate\(`\/runs\//u);
+    const checkReservedReview = page.match(/  const checkReservedRemovalReview = [\s\S]*?\n  \};/u)?.[0];
+    expect(checkReservedReview).toContain('getRun(receipt.planRunId, { cache: "no-store", isCurrent })');
+    expect(checkReservedReview).toContain('navigate(`/runs/${encodeURIComponent(run.id)}`)');
+    expect(page.replace(heldRemovalDetails!, "").replace(checkReservedReview!, "")).not.toMatch(/navigate\(`\/runs\//u);
     expect(allAppSources).not.toContain("auto=update");
     expect(allAppSources).not.toContain("autoApply");
     expect(allAppSources).not.toContain("sessionStorage");

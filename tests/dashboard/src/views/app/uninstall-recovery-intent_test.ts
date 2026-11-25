@@ -100,7 +100,7 @@ function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
     retire: () => { uninstallEpoch++; },
     dispose: () => { disposed = true; },
   };`;
-  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "appUninstallRecoveryMode", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", transpile(script))(
+  const actual = new Function("capsuleId", "capsule", "props", "reviewBusy", "appRole", "isOwner", "starting", "setStarting", "setSectionError", "setNotice", "setReview", "setReAdoptionRevisionId", "reAdoptionRevisionFromError", "isRevisionAlreadyCurrent", "friendlyError", "t", "queueMicrotask", "ControlApiError", "refetchApp", "app", "review", "appUninstallRecoveryMode", "createCapsuleDestroyRecoveryPlan", "extractRunId", "uninstallScope", "setReservedReviewCheck", transpile(script))(
     () => state.capsuleId, () => ({ sourceId: "source" }), state, () => Boolean(state.starting), () => state.owner ? "owner" : undefined, () => state.owner,
     () => state.starting, (value: unknown) => { state.starting = value; }, (value: unknown) => { if (value) state.errors.push(value); }, () => {},
     (value: { planRunId: string }) => { state.review = value; }, () => {}, () => undefined, isRevisionAlreadyCurrent, () => ({ message: "fixture error" }), (key: string) => key, () => {}, ControlApiError,
@@ -112,6 +112,7 @@ function controller(uninstallMode: "scheduled" | "none" = "scheduled") {
     }), () => state.review, appUninstallRecoveryMode,
     createCapsuleDestroyRecoveryPlan, extractRunId,
     () => JSON.stringify([state.capsuleId, state.workspaceId, state.accountId, state.principalId]),
+    () => {},
   ) as { send: (answer: typeof pairs) => void; retire: () => void; dispose: () => void };
   return { state, ...actual };
 }
