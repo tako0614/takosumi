@@ -1318,6 +1318,76 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect.poll(() => f.mutations.filter((m) => m.startsWith("DELETE ")).length).toBe(1);
       expect(errors).toEqual([]);
     });
+    for (const read of ["app", "candidate"] as const) {
+      for (const retired of [true, false]) {
+        test(`an install review's ${retired ? "retired" : "current"} ${read} read handles 401 in its own view`, async ({ page }) => {
+          const fixture = await detailFixture(page, base);
+          const appPath = `/api/v1/capsules/${capId}/app`;
+          const candidateId = "run_recovering_install";
+          const candidatePath = `/api/v1/runs/${candidateId}`;
+          const failedPath = read === "app" ? appPath : candidatePath;
+          await page.addInitScript((path) => {
+            const fetch = window.fetch.bind(window);
+            window.fetch = async (...args) => {
+              const response = await fetch(...args);
+              if (response.status === 401 && new URL(response.url).pathname === path) {
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                  document.documentElement.dataset.installReviewReadSettled = "true";
+                }));
+              }
+              return response;
+            };
+          }, failedPath);
+          let release!: () => void;
+          const held = new Promise<void>((resolve) => { release = resolve; });
+          let deniedReads = 0;
+          if (read === "candidate") {
+            await page.route(`**${appPath}`, (route) => route.fulfill({
+              json: { app: { ...fixture.appView(), progress: {
+                revisionPreparing: false,
+                run: { id: candidateId, type: "apply", status: "running", createdAt: now },
+              } } },
+            }));
+          }
+          await page.route(`**${failedPath}`, async (route) => {
+            deniedReads += 1;
+            await held;
+            return route.fulfill({ status: 401, json: { error: "invalid_token" } });
+          });
+          try {
+            await page.goto(sourceUrl);
+            await openInstallSheet(page);
+            await expect.poll(() => deniedReads).toBe(1);
+            const current = new URL(page.url());
+            const next = sourceUrl.replaceAll("cloudflare-service", "other-service");
+            if (retired) {
+              await page.evaluate((url) => {
+                history.pushState(history.state, "", url);
+                window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+              }, next);
+              await expect(page.getByTestId("install-app-header")).toContainText("other-service");
+              await expect(page.getByTestId("install-review")).toHaveCount(0);
+            }
+            const settled = Promise.race([
+              page.waitForRequest((request) => request.isNavigationRequest() && new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+              page.waitForFunction(() => document.documentElement.dataset.installReviewReadSettled === "true").then(() => "stayed"),
+            ]);
+            release();
+            expect(await settled).toBe(retired ? "stayed" : "redirected");
+            if (retired) {
+              await expect(page).toHaveURL(new URL(next, current.origin).href);
+            } else {
+              await expect(page).toHaveURL((url) => url.pathname === "/sign-in" &&
+                url.searchParams.get("return") === current.pathname + current.search + current.hash);
+            }
+            expect(deniedReads).toBe(1);
+            expect(fixture.mutations).not.toContain(applyMutation);
+          } finally {
+            release();
+          }
+        });
+      }
+    }
     test("review blocks Install while the app's current state cannot be read and retries the read", async ({ page }) => {
       const f = await detailFixture(page, base);
       let unavailable = true;
