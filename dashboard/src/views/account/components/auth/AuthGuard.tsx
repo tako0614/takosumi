@@ -128,14 +128,11 @@ export default function AuthGuard(props: Props) {
   });
 
   const off = onSessionStateChange((next) => {
-    // Lost-session redirect: do NOT preserve the return path because this is
-    // typically a sign-out, and bouncing the user back after sign-out is
-    // surprising. Maintenance/errors never redirect.
-    // The first probe applies its resolved state in the onMount promise below;
-    // let that path own the initial unauthenticated redirect so it happens
-    // once (and keeps the intended return path).
+    // The mount/retry promise owns the redirect when a foreground probe runs.
+    // A background probe can reject a cached session while a route is open.
+    // Sign-out and local clears leave sign-in to the explicit login action.
     if (next.kind === "unauthenticated" && state() === "loading") return;
-    applyState(next, state() === "loading");
+    applyState(next, next.kind === "unauthenticated" && next.preserveReturn !== false);
   });
   onCleanup(() => off());
 
