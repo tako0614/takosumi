@@ -113,6 +113,52 @@ export function registerSharedSignInCases(mode: DashboardE2EMode): void {
       }
     });
 
+    test("concurrent rejected account reads recover once to the account page", async ({ page }) => {
+      const destination = "/account/cli?from=keys";
+      const startReplies = Promise.withResolvers<void>();
+      const repliesFinished = Promise.withResolvers<void>();
+      const reads = new Set<string>();
+      let replies = 0;
+      let clears = 0;
+      const signIns: string[] = [];
+      page.on("request", (request) => {
+        const { pathname } = new URL(request.url());
+        if (pathname === "/api/v1/account/session/me" && request.method() === "DELETE") clears++;
+        if (pathname === "/sign-in" && request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+          signIns.push(request.url());
+        }
+      });
+      await page.route(/\/api\/v1\/account\/tokens(?:\/scopes)?(?:\?.*)?$/u, async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        reads.add(path);
+        if (reads.size === 2) startReplies.resolve();
+        await startReplies.promise;
+        await route.fulfill({ status: 401, json: { error: "unauthenticated" } });
+        if (++replies === 2) repliesFinished.resolve();
+      });
+      await page.route("**/api/v1/account/session/me", (route) => {
+        if (route.request().method() !== "DELETE") return route.fallback();
+        return route.fulfill({ status: 204 });
+      });
+      await page.route("**/sign-in?**", async (route) => {
+        await repliesFinished.promise;
+        return route.fulfill({
+          contentType: "text/html", body: "<!doctype html><title>Login boundary reached</title>",
+        });
+      });
+      try {
+        await page.goto(destination, { waitUntil: "commit" });
+        await expect(page).toHaveTitle("Login boundary reached");
+        expect([...reads].sort()).toEqual(["/api/v1/account/tokens", "/api/v1/account/tokens/scopes"]);
+        expect(signIns).toEqual([page.url()]);
+        expect(new URL(page.url()).searchParams.get("return")).toBe(destination);
+        expect(clears).toBe(1);
+      } finally {
+        startReplies.resolve();
+        repliesFinished.resolve();
+      }
+    });
+
     for (const key of ["return", "return_to"]) {
       test(`the explicit RP action preserves the complete ${key} install destination`, async ({ page }) => {
         await signedOut(page);

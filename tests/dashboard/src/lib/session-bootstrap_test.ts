@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { apiFetch } from "../../../../dashboard/src/views/account/lib/http.ts";
 import {
   clearSession,
   initialSessionOptions,
@@ -748,6 +749,57 @@ describe("dashboard session bootstrap", () => {
     expect(await signOut).toBe(true);
     expect(readSessionState()).toEqual({ kind: "unauthenticated" });
     expect(deletes).toBe(1);
+  });
+
+  test("an old account rejection cannot clear a same-document re-login", async () => {
+    const requestStarted = Promise.withResolvers<void>();
+    const oldReply = Promise.withResolvers<Response>();
+    const previousLocation = globalThis.location;
+    const signIns: string[] = [];
+    let revocations = 0;
+    globalThis.location = {
+      pathname: "/account/cli", search: "?from=keys", hash: "",
+      assign: (url: string) => signIns.push(url),
+    } as unknown as Location;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === hostedSessionPath) return Response.json({ authenticated: true });
+      if (path.startsWith("/api/v1/dashboard/bootstrap?")) {
+        return Response.json({ session: { subject: "tsub_returning_owner" } });
+      }
+      if (path === "/api/v1/account/session/me" && init?.method === "DELETE") {
+        revocations++;
+        return new Response(null, { status: 204 });
+      }
+      if (path === "/api/v1/account/tokens/scopes") {
+        requestStarted.resolve();
+        return await oldReply.promise;
+      }
+      if (path === "/api/v1/account/tokens") return new Response(null, { status: 401 });
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as typeof fetch;
+    try {
+      await refreshSession(initialSessionOptions);
+      const retired = apiFetch("/api/v1/account/tokens/scopes").catch((error) => error);
+      await requestStarted.promise;
+      await expect(apiFetch("/api/v1/account/tokens")).rejects.toMatchObject({ status: 401 });
+      expect(revocations).toBe(1);
+      expect(signIns).toEqual(["/sign-in?return=%2Faccount%2Fcli%3Ffrom%3Dkeys"]);
+
+      await refreshSession(initialSessionOptions);
+      oldReply.resolve(new Response(null, { status: 401 }));
+      expect(await retired).toMatchObject({ status: 401 });
+      expect(readSession()?.subject).toBe("tsub_returning_owner");
+      expect(revocations).toBe(1);
+      expect(signIns).toHaveLength(1);
+
+      await expect(apiFetch("/api/v1/account/tokens")).rejects.toMatchObject({ status: 401 });
+      expect(revocations).toBe(2);
+      expect(signIns).toHaveLength(2);
+    } finally {
+      oldReply.resolve(new Response(null, { status: 401 }));
+      globalThis.location = previousLocation;
+    }
   });
 
   test("a failed sign-out keeps the active session for an explicit retry", async () => {
