@@ -2017,7 +2017,7 @@ export async function listActivity(
 export async function listCapsuleActivity(
   capsuleId: string,
   limit = 100,
-  opts: { readonly signal?: AbortSignal } = {},
+  opts: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<readonly ActivityEvent[]> {
   const events: ActivityEvent[] = [];
   const cursors = new Set<string>();
@@ -2029,7 +2029,7 @@ export async function listCapsuleActivity(
       events?: readonly ActivityEvent[];
       nextCursor?: unknown;
       incomplete?: boolean;
-    }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/activity${query({ limit, cursor })}`, { signal: opts.signal });
+    }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/activity${query({ limit, cursor })}`, opts);
     if (!body || !Array.isArray(body.events) || body.incomplete === true) break;
     events.push(...body.events.slice(0, limit - events.length));
     if (events.length === limit || body.nextCursor === undefined) return events;
@@ -2817,7 +2817,7 @@ async function sourceSyncFailureMessage(
     ? `Source sync ${run.status}: ${run.errorCode}`
     : `Source sync ${run.status}.`;
   try {
-    const logs = await getRunLogsWithOptions(run.id, { signal });
+    const logs = await getRunLogs(run.id, { signal });
     const diagnostic =
       logs.diagnostics.find((entry) => entry.severity === "error") ??
       logs.diagnostics[0];
@@ -3083,18 +3083,11 @@ export async function approveRun(
   }
 }
 
-async function getRunLogsWithOptions(
+export async function getRunLogs(
   id: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<RunLogs> {
-  return await controlFetch<RunLogs>(
-    `${BASE}/runs/${encodeURIComponent(id)}/logs`,
-    { signal: options.signal },
-  );
-}
-
-export async function getRunLogs(id: string): Promise<RunLogs> {
-  return await getRunLogsWithOptions(id);
+  return await controlFetch<RunLogs>(`${BASE}/runs/${encodeURIComponent(id)}/logs`, options);
 }
 
 /**
@@ -3104,9 +3097,12 @@ export async function getRunLogs(id: string): Promise<RunLogs> {
  * apply. The values are the ones the controller already computed
  * at plan time; this never computes cost and returns no secret material.
  */
-export async function getRunCostInfo(id: string): Promise<RunCostInfo> {
+export async function getRunCostInfo(
+  id: string,
+  options: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<RunCostInfo> {
   const body = await controlFetch<{ cost: RunCostInfo }>(
-    `${BASE}/runs/${encodeURIComponent(id)}/cost`,
+    `${BASE}/runs/${encodeURIComponent(id)}/cost`, options,
   );
   return body.cost;
 }
@@ -3227,7 +3223,7 @@ export async function cancelRun(runId: string): Promise<{ readonly run: Run }> {
  * Lists a Capsule's StateVersion history for the dashboard session. Rows are
  * browser-safe metadata and arrive newest-first.
  */
-type ListStateVersionsOptions = { readonly signal?: AbortSignal };
+type ListStateVersionsOptions = Pick<RequestOpts, "signal" | "isCurrent">;
 // Existing dashboard resources pass Solid's fetcher info as argument two.
 type ResourceFetcherInfoCompatibility = {
   readonly value: unknown;
@@ -3246,12 +3242,11 @@ export async function listStateVersions(
   capsuleId: string,
   optsOrInfo?: ListStateVersionsOptions | ResourceFetcherInfoCompatibility,
 ): Promise<readonly PublicStateVersion[]> {
-  const opts =
-    optsOrInfo && "signal" in optsOrInfo ? optsOrInfo : undefined;
+  const opts = optsOrInfo && "refetching" in optsOrInfo ? undefined : optsOrInfo;
   return await fetchAllPages<PublicStateVersion>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/state-versions`,
     (body) => (body.stateVersions as readonly PublicStateVersion[]) ?? [],
-    { signal: opts?.signal },
+    opts,
   );
 }
 

@@ -482,7 +482,7 @@ function ProviderResolutionTable(props: {
 function Inner(props: { readonly session: SessionRecord }) {
   const params = useParams();
   const navigate = useNavigate();
-  const runId = () => {
+  const runId = createMemo(() => {
     const segment = params.id ?? "";
     try {
       return decodeURIComponent(segment);
@@ -490,7 +490,7 @@ function Inner(props: { readonly session: SessionRecord }) {
       // Preserve malformed segments for the existing not-found read path.
       return segment;
     }
-  };
+  });
   let disposed = false;
   let runEpoch = 0;
   const revisionRetryAttempts: RevisionPlanAttemptStore = new Map();
@@ -508,34 +508,40 @@ function Inner(props: { readonly session: SessionRecord }) {
   const appHandoff = appHandoffFromSearch(
     typeof location === "undefined" ? "" : location.search,
   );
+  const readScope = createMemo(() => ({ id: runId() }));
+  const readOptions = (scope = readScope()) => ({
+    isCurrent: () => !disposed && readScope() === scope,
+  });
   const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
-    runId,
-    (id) => getRun(id),
+    readScope,
+    (scope) => getRun(scope.id, readOptions(scope)),
   );
-  // Read the run through this, never `run()` / `run.latest`: both THROW once
-  // a load has failed, which took the whole app (nav included) down to the
-  // root reload card instead of the not-found / retry branches below. A failed
-  // refetch keeps the last good run of THIS id on screen with a quiet notice.
+  // A failed refetch keeps the last good Run for this id, without displaying
+  // it under another Run while navigation's next read is pending.
   const runLatest = createLastGoodValue(run, (r) => r.id === runId());
-  const [logs, { refetch: refetchLogs }] = createResource(runId, getRunLogs);
-  // Last-good logs snapshot. The resource accessor `logs()` THROWS when the
-  // resource is errored, and the SSE stream refetches logs on every run event
-  // (plus the 3s fallback poll) — so one transient 5xx mid-deploy would throw
-  // out of a derived memo and blank/freeze the whole console. Read `logData()`
-  // (never `logs()`) for derived values; a failed refetch keeps the last-good
-  // logs on screen instead of clearing them.
-  const [logsSnapshot, setLogsSnapshot] = createSignal<RunLogs | undefined>();
+  const [logs, { refetch: refetchLogs }] = createResource(
+    readScope,
+    async (scope) => ({ scope, logs: await getRunLogs(scope.id, readOptions(scope)) }),
+  );
+  // Logs are supporting detail. Read .latest in an effect so a slow initial
+  // log request never suspends the Run screen itself.
+  const [logsSnapshot, setLogsSnapshot] = createSignal<{
+    scope: ReturnType<typeof readScope>;
+    logs: RunLogs;
+  }>();
   createEffect(() => {
     if (logs.error) return;
-    const latest = logs.latest;
-    if (latest) setLogsSnapshot(latest);
+    const value = logs.latest;
+    if (value?.scope === readScope()) setLogsSnapshot(value);
   });
-  const logData = (): RunLogs | undefined => logsSnapshot();
-  // Best-effort: a failed cost read never breaks the deploy UI, but it is kept
-  // as `unavailable` (shown as an unknown cost), never as "no cost".
-  const [cost] = createResource(runId, (id) =>
-    readRunCost(() => getRunCostInfo(id)),
-  );
+  const logData = () => {
+    const value = logsSnapshot();
+    return value?.scope === readScope() ? value.logs : undefined;
+  };
+  // A failed cost read is unavailable and is never treated as free.
+  const [cost] = createResource(readScope, async (scope) => ({
+    scope, read: await readRunCost(() => getRunCostInfo(scope.id, readOptions(scope))),
+  }));
   const providerConnectionRequest = createMemo(() => {
     const current = runLatest();
     const referencedConnectionIds = providerConnectionIdsFromResolutions(
@@ -586,11 +592,11 @@ function Inner(props: { readonly session: SessionRecord }) {
         r.status === "succeeded";
       return isCompletedApply ? r.capsuleId : null;
     },
-    (id) => listCapsuleActivity(id, 100),
+    (id) => listCapsuleActivity(id, 100, readOptions()),
   );
   // The owning app, for the plain-language summary sentence + back link.
   const capsuleId = () => runLatest()?.capsuleId ?? null;
-  const [capsule] = createResource(capsuleId, (id) => getCapsule(id));
+  const [capsule] = createResource(capsuleId, (id) => getCapsule(id, readOptions()));
   const capsuleLatest = () => latestOrUndefined(capsule);
   const appName = () => capsuleLatest()?.name;
   const canRestartFailedInitialPlan = createMemo(() => {
@@ -642,7 +648,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     appliedRunStateVersionKey,
     async (key) => {
       const [id] = key.split(":");
-      return await listStateVersions(id);
+      return await listStateVersions(id, readOptions());
     },
   );
   const completedRunStateVersion = createMemo(() => {
@@ -970,7 +976,7 @@ function Inner(props: { readonly session: SessionRecord }) {
       // Key by run id so navigating plan → apply → back re-reads the ledger.
       return [r.capsuleId, r.id, r.workspaceId, r.type] as const;
     },
-    ([capsuleId, id, workspaceId, type]) => listPlanApplyRuns({ capsuleId, id, workspaceId, type }),
+    ([capsuleId, id, workspaceId, type]) => listPlanApplyRuns({ capsuleId, id, workspaceId, type }, readOptions()),
   );
   const isDeployableRun = (r: Run): boolean => {
     if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply() || heldUninstallApp(r)) return false;
@@ -1290,7 +1296,10 @@ function Inner(props: { readonly session: SessionRecord }) {
   };
 
   // `readRunCost` never rejects, so reading `.latest` cannot throw.
-  const costRead = () => cost.latest;
+  const costRead = () => {
+    const value = cost.latest;
+    return value?.scope === readScope() ? value.read : undefined;
+  };
   const costBlocked = () => {
     const read = costRead();
     return read?.status === "loaded" && read.cost.blocked;
@@ -2189,7 +2198,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                           fetch-failed line on the INITIAL load (no snapshot) —
                           a transient refetch error must keep the diagnostics on
                           screen, not swap them for an error line. */}
-                      <Match when={logs.loading && !logsSnapshot()}>
+                      <Match when={logs.loading && !logData()}>
                         <Skeleton variant="row" count={2} />
                       </Match>
                       <Match when={diagnosticRows().length > 0}>
@@ -2215,7 +2224,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                           </ul>
                         </details>
                       </Match>
-                      <Match when={logs.error && !logsSnapshot()}>
+                      <Match when={logs.error && !logData()}>
                         <p class="wa-error">
                           {fetchFailedMessage(logs.error, t)}
                         </p>

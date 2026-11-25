@@ -180,7 +180,7 @@ describe("Run review ProviderConnection evidence", () => {
   test("shows a failed cost read as an unknown cost instead of hiding it", () => {
     // The read keeps failure as its own state (never `undefined` = "no cost")
     // and the summary renders an explicit unavailable line for it.
-    expect(runViewSource).toContain("readRunCost(() => getRunCostInfo(id))");
+    expect(runViewSource).toContain("readRunCost(() => getRunCostInfo(scope.id, readOptions(scope)))");
     expect(runViewSource).toContain("runCostDisplayState(read)");
     expect(runViewSource).toContain("<CostSummary state={state()} />");
     expect(runViewSource).not.toContain("hasCostToShow");
