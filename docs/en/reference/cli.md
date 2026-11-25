@@ -162,6 +162,8 @@ When the result is `review_required`, inspect what the Plan will remove and its 
 For `plan_pending`, use the returned `planRunId` to read the same Plan again. If the result is `unconfirmed`, `--current-review` finds the latest manual Destroy Plan if it is pending, reviewable, or failed.
 A `failed` result includes the Plan ID and the failure code when available. Whether the earlier request was accepted is still unconfirmed.
 
+After a save timeout, if you can confirm which Plan the timed-out request created and it stays `queued` without starting, the app owner can open its `reviewUrl`. If the Run page offers cancellation, verify the Plan and cancel it. Confirm the cancellation before requesting a new Destroy Plan with `--connections` and reviewing its connections and proposed deletions.
+
 ```bash
 takosumi apps recover-uninstall cap_example --current-review \
   --url https://takosumi.example.com --json

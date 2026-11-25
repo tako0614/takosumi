@@ -158,6 +158,8 @@ takosumi apps recover-uninstall cap_example \
 `plan_pending` なら返された `planRunId` を指定して、同じPlanを読み直せます。作成結果が `unconfirmed` なら、`--current-review` で準備中・レビュー可能・失敗のいずれかにある最新の手動削除Planを確認できます。
 `failed` ではPlanのIDと、取得できた場合は失敗コードを返します。前の要求が受理されたかは未確認のままです。
 
+保存の時間切れ後、読み戻したPlanがその要求で作られたと確認でき、まだ実行を開始せず `queued` のままなら、アプリ所有者は `reviewUrl` で対象Planを開けます。画面に取り消し操作が表示されたら対象を確認して取り消し、完了後に `--connections` で新しい削除Planを作成して接続と削除内容を確認してください。
+
 ```bash
 takosumi apps recover-uninstall cap_example --current-review \
   --url https://takosumi.example.com --json
