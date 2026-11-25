@@ -77,7 +77,8 @@ describe("installed app page", () => {
   });
 
   test("state, problems, screens and history come from the server's per-app reads", () => {
-    expect(page).toContain("getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined,");
+    expect(page).toContain("getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching");
+    expect(page).toContain("info.refetching.signal : undefined,");
     expect(page).toContain('!(info.refetching instanceof AbortSignal) ? info.refetching : {}');
     expect(page).toContain("listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES })");
     expect(page).toContain("data-app-state={view().state}");
