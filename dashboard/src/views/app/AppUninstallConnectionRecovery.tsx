@@ -1,4 +1,4 @@
-import { createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
+import { batch, createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
 import type { DestroyProviderConnectionReplacement, ProviderConnection } from "takosumi-contract";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { Button, FormField, Select } from "../../components/ui/index.ts";
@@ -10,10 +10,10 @@ import { providerConnectionDisplayName } from "../../lib/provider-connections.ts
 import { appUninstallRecoveryConnections, isUninstallReplacementReady } from "../../lib/capsule-uninstall.ts";
 import { verifiedCloudflareAccountId } from "../../../../providers/cloudflare/settings.ts";
 
-function replacementConnectionLabel(connection: ProviderConnection, original: boolean): string {
+function replacementConnectionLabel(connection: ProviderConnection, original: boolean, now?: number): string {
   const displayName = providerConnectionDisplayName(connection);
   const name = original ? t("app.uninstall.replacementOriginalConnection", { name: displayName }) : displayName;
-  if (!isUninstallReplacementReady(connection)) {
+  if (!isUninstallReplacementReady(connection, now)) {
     return t("app.uninstall.replacementNeedsVerification", { name });
   }
   const accountId = verifiedCloudflareAccountId(connection);
@@ -90,18 +90,44 @@ export default function AppUninstallConnectionRecovery(props: {
     return [...rows.values()];
   });
   const [selection, setSelection] = createSignal<ReadonlyMap<string, string>>(new Map());
+  createEffect(() => {
+    const visible = rows();
+    // A fresh app view can withdraw an entire row. Its hidden selection must
+    // not block another review or leave only part of the old selection.
+    setSelection((chosen) => [...chosen].some(([id, key]) =>
+      key && !visible.some(({ connectionId }) => connectionId === id)) ? new Map() : chosen);
+  });
+  const [checkedAt, setCheckedAt] = createSignal<number>();
   const replacements = createMemo(() => {
+    const chosen = selection();
+    const selectedCount = [...chosen.values()].filter(Boolean).length;
     const selected = rows().flatMap(({ connectionId, provider }) => {
-      const replacementConnectionId = selection().get(connectionId);
-      return replacementConnectionId && options(provider, connectionId).some((connection) =>
-        connection.id === replacementConnectionId && isUninstallReplacementReady(connection))
-        ? [{ connectionId, replacementConnectionId }] : [];
+      const replacement = options(provider, connectionId).find((connection) =>
+        connection.id === chosen.get(connectionId) && isUninstallReplacementReady(connection, checkedAt()));
+      return replacement ? [{ connectionId, replacement }] : [];
     });
-    return selected.length > 0 &&
+    return selected.length > 0 && selected.length === selectedCount &&
       (props.mode !== "unavailable" || selected.length === rows().length) &&
       [...unavailableIds()].every((connectionId) => selected.some((row) => row.connectionId === connectionId))
       ? selected : undefined;
   });
+  const review = () => {
+    const selected = replacements();
+    if (!selected || props.disabled) return;
+    const now = Date.now();
+    if (selected.some(({ replacement }) => !isUninstallReplacementReady(replacement, now))) {
+      // The picker may have stayed open past expiry. Require a fresh selection
+      // of the whole review instead of submitting only the remaining keys.
+      batch(() => {
+        setCheckedAt(now);
+        setSelection(new Map());
+      });
+      return;
+    }
+    props.onReview(selected.map(({ connectionId, replacement }) => ({
+      connectionId, replacementConnectionId: replacement.id,
+    })));
+  };
 
   return (
     <Show when={open()} fallback={
@@ -136,18 +162,15 @@ export default function AppUninstallConnectionRecovery(props: {
                       ? "app.uninstall.keepConnection"
                       : "app.uninstall.replacementPlaceholder")}</option>
                     <For each={options(provider, connectionId)}>{(connection) => (
-                      <option value={connection.id} disabled={!isUninstallReplacementReady(connection)}>
-                        {replacementConnectionLabel(connection, connection.id === connectionId)}
+                      <option value={connection.id} disabled={!isUninstallReplacementReady(connection, checkedAt())}>
+                        {replacementConnectionLabel(connection, connection.id === connectionId, checkedAt())}
                       </option>
                     )}</For>
                   </Select>
                 </FormField>
               </Show>
             )}</For>
-            <Button variant="primary" type="button" disabled={props.disabled || !replacements()} onClick={() => {
-              const selected = replacements();
-              if (selected && !props.disabled) props.onReview(selected);
-            }}>
+            <Button variant="primary" type="button" disabled={props.disabled || !replacements()} onClick={review}>
               {t("app.uninstall.replacementReview")}
             </Button>
           </Match>

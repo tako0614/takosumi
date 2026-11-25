@@ -1658,7 +1658,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionLostResponse: "a missing uninstall Plan response keeps the previous approval held during readback",
@@ -1673,6 +1673,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       lostReplacementResponse: "a lost replacement Plan response leaves its saved uninstall review reachable",
       lostReplacementOnInstalledApp: "a lost replacement Plan response leaves its saved uninstall review reachable on an installed app",
       partialRecovery: "a partial uninstall can replace more than the unavailable original connection",
+      replacementExpiresBeforeReview: "an expired selected uninstall key does not submit a partial selection",
+      replacementRowDisappears: "an uninstall with a withdrawn binding allows a fresh selection",
       firstRemovalReserved: "an uninstall without an open review can read its reserved Plan and cancel it",
       sharedKeyConflict: "a shared-key Destroy Plan failure explains how to review both provider rows with one verified connection",
       effectiveRequiredNoOption: "a failed uninstall cannot review another replacement while its effective key has no alternative",
@@ -1703,7 +1705,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const lostReplacementResponse = scenario === "lostReplacementResponse" || lostReplacementOnInstalledApp;
       const staleUninstallReview = scenario === "staleReview" || staleReviewSetupRequired || lostReplacementResponse;
       const firstRemovalReserved = scenario === "firstRemovalReserved";
-      const partialRecovery = scenario === "partialRecovery" || firstRemovalReserved;
+      const replacementExpiresBeforeReview = scenario === "replacementExpiresBeforeReview";
+      const replacementRowDisappears = scenario === "replacementRowDisappears";
+      const partialRecovery = scenario === "partialRecovery" || firstRemovalReserved ||
+        replacementExpiresBeforeReview || replacementRowDisappears;
+      let omitSecondRecoveryRow = false;
+      const replacementExpiry = "2026-11-25T12:01:00.000Z";
       const sharedKeyConflict = scenario === "sharedKeyConflict";
       const effectiveRequiredNoOption = scenario === "effectiveRequiredNoOption";
       const effectiveRequiredWithOption = scenario === "effectiveRequiredWithOption";
@@ -1735,6 +1742,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const noReplacement = scenario === "noReplacement" || reverifyReplacement;
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       if (scenario === "states") await page.clock.install();
+      if (replacementExpiresBeforeReview) {
+        await page.clock.setFixedTime(new Date("2026-11-25T12:00:00.000Z"));
+      }
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
       const origin = resolvePortableOrigin();
@@ -1896,6 +1906,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
                   ? ["conn_aws_required"] : restoreOriginal ? ["conn_removed", "conn_second"]
                     : effectiveRequiredWithOption ? ["conn_removed"] : [] } : {}),
                 ...(restoreOriginal ? { restorableOriginalConnectionIds: ["conn_removed", "conn_second"] } : {}),
+                ...(replacementRowDisappears ? {
+                  recoveryConnectionIds: omitSecondRecoveryRow ? ["conn_removed"] : ["conn_removed", "conn_second"],
+                } : {}),
               },
             });
           case "uninstall_stale_review":
@@ -2030,6 +2043,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           },
           ...(replacementAvailable ? [{ id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: replacementVerified ? "verified" : "pending",
             ...(replacementVerified ? cloudflareAccount(replacementAccountId, "fixture-team") : {}),
+            ...(replacementExpiresBeforeReview ? { expiresAt: replacementExpiry } : {}),
+          }] : []),
+          ...(replacementExpiresBeforeReview || replacementRowDisappears ? [{
+            id: "conn_later", displayName: "Other verified key", providerSource: connectionProblem.provider,
+            scope: "personal", status: "verified", ...cloudflareAccount(replacementAccountId, "fixture-team"),
           }] : []),
           ...(reverifyReplacement ? [{ id: "conn_incomplete", displayName: "Second Cloudflare connection", providerSource: connectionProblem.provider,
             scope: "personal", status: incompleteReplacementTested ? "verified" : "pending",
@@ -2444,6 +2462,42 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         // have been used for the failed removal of the secondary binding.
         await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
         const failed = problems.locator('[data-problem="uninstall"]');
+        if (replacementExpiresBeforeReview || replacementRowDisappears) {
+          await failed.getByRole("button", { name: "Choose connection for uninstall" }).click();
+          const original = failed.getByRole("combobox", { name: /Original Cloudflare connection/ });
+          const secondary = failed.getByRole("combobox", { name: /Secondary Cloudflare connection/ });
+          const reviewRemoval = failed.getByRole("button", { name: "Review removal" });
+          await original.selectOption("conn_later");
+          await secondary.selectOption("conn_saved");
+          await expect(reviewRemoval).toBeEnabled();
+          if (replacementExpiresBeforeReview) await page.clock.setFixedTime(new Date(replacementExpiry));
+          else omitSecondRecoveryRow = true;
+          await reviewRemoval.click();
+          if (replacementExpiresBeforeReview) {
+            await expect(secondary.locator('option[value="conn_saved"]')).toHaveJSProperty("disabled", true);
+          } else {
+            await expect(secondary).toHaveCount(0);
+          }
+          await expect(original).toHaveValue("");
+          await expect(reviewRemoval).toBeDisabled();
+          expect(replacementPlanBodies).toEqual([]);
+          expect(seenMutations).toEqual([]);
+          await original.selectOption("conn_later");
+          if (replacementExpiresBeforeReview) await secondary.selectOption("conn_later");
+          await expect(reviewRemoval).toBeEnabled();
+          await reviewRemoval.click();
+          await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+          expect(replacementPlanBodies).toEqual([{
+            destroyProviderConnectionReplacements: [
+              { connectionId: "conn_removed", replacementConnectionId: "conn_later" },
+              ...(replacementExpiresBeforeReview ? [{ connectionId: "conn_second", replacementConnectionId: "conn_later" }] : []),
+            ],
+          }]);
+          expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+          expect(errors).toEqual([]);
+          traffic.assertNoFailures();
+          return;
+        }
         const submit = async () => {
           await failed.getByRole("button", { name: "Choose connection for uninstall" }).click();
           const original = failed.getByRole("combobox", { name: /Original Cloudflare connection/ });
