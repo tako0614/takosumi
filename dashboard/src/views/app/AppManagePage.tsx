@@ -88,7 +88,7 @@ import {
   type RevisionPlanAttemptScope,
   type RevisionPlanAttemptStore,
 } from "../../lib/revision-plan-attempt.ts";
-import { appUninstallConnectionNotice, appUninstallRecoveryConnections, appUninstallRecoveryMode, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
+import { appUninstallConnectionNotice, appUninstallRecoveryConnections, appUninstallRecoveryMode, observeUninstallReadback, readUninstallPreflight } from "../../lib/capsule-uninstall.ts";
 import {
   holdUninstallReview,
   isUninstallReviewHeld,
@@ -283,8 +283,9 @@ export default function AppManagePage(props: {
 
 
 
-  const [appView, { refetch: refetchApp }] = createResource<CapsuleAppView, string, AbortSignal | { readonly isCurrent: () => boolean }>(capsuleId, (id, info) =>
-    getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching : undefined,
+  const [appView, { refetch: refetchApp }] = createResource<CapsuleAppView, string, AbortSignal | { readonly signal?: AbortSignal; readonly isCurrent: () => boolean }>(capsuleId, (id, info) =>
+    getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching
+      : info.refetching && typeof info.refetching === "object" ? info.refetching.signal : undefined,
       typeof info.refetching === "object" && info.refetching !== null && !(info.refetching instanceof AbortSignal) ? info.refetching : {}));
   const app = createLastGoodValue(appView, (value) => value.capsuleId === capsuleId());
   const destroyed = () => app()?.state === "uninstalled";
@@ -1372,7 +1373,7 @@ export default function AppManagePage(props: {
               if (disabled?.() || !isCurrent() || !reviewedApp(app())) return;
               let reviewHold: ReturnType<typeof holdUninstallReview> | undefined;
               void startReview("attention", "uninstall", async () => {
-                const fresh = reviewedApp(await refetchApp({ isCurrent }));
+                const fresh = reviewedApp(await readUninstallPreflight(async (scope) => await refetchApp(scope), { isCurrent }));
                 if (!isCurrent() || !fresh || !matchesUninstallReplacementRows(fresh, replacements)) {
                   throw new Error(t("app.uninstall.replacementAppliedEvidenceUnavailable"));
                 }
@@ -1406,7 +1407,7 @@ export default function AppManagePage(props: {
       "attention",
       "uninstall",
       async (isCurrent) => {
-        const fresh = await refetchApp({ isCurrent });
+        const fresh = await readUninstallPreflight(async (scope) => await refetchApp(scope), { isCurrent });
         if (!isCurrent() || !fresh || fresh.capsuleId !== view.capsuleId || fresh.workspaceId !== view.workspaceId ||
           fresh.workspaceId !== receiptScope[2] || fresh.capsuleId !== receiptScope[3] ||
           !fresh.applied || appUninstallRecoveryMode(fresh) !== mode ||

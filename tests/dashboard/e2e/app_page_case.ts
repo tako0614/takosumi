@@ -1811,10 +1811,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionInventoryUnavailable: "an uninstall review holds old approval until checking replacement connections finishes",
+      reviewDifferentConnectionPreflightDeadline: "an uninstall review can retry when prerequisite reads time out",
       reviewDifferentConnectionLostResponse: "a missing uninstall Plan response keeps the previous approval held during readback",
       reviewDifferentConnectionSavedLate: "an uninstall connection change keeps the old approval held when its Plan is saved late",
       reviewDifferentConnectionTimedOut: "an uninstall Plan save timeout keeps old approval held and permits an explicit new review",
@@ -1853,7 +1854,20 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const replacementSaveTimesOut = scenario === "reviewDifferentConnectionTimedOut" || replacementReserved;
       const approvedElsewhere = scenario === "reviewDifferentConnectionApprovedElsewhere";
       const reloadsBeforeReplacementResponse = scenario === "reviewDifferentConnectionReloaded" || approvedElsewhere;
-      const replacementInventoryUnavailable = scenario === "reviewDifferentConnectionInventoryUnavailable";
+      const replacementPreflightDeadline = scenario === "reviewDifferentConnectionPreflightDeadline";
+      const replacementInventoryUnavailable = scenario === "reviewDifferentConnectionInventoryUnavailable" || replacementPreflightDeadline;
+      let stallOwnershipPreflight = false;
+      let ownershipPreflightStarted = false;
+      let finishOwnershipPreflight = () => {};
+      const ownershipPreflightPending = replacementPreflightDeadline
+        ? new Promise<void>((resolve) => { finishOwnershipPreflight = resolve; })
+        : Promise.resolve();
+      let stallAppPreflight = false;
+      let appPreflightStarted = false;
+      let finishAppPreflight = () => {};
+      const appPreflightPending = replacementPreflightDeadline
+        ? new Promise<void>((resolve) => { finishAppPreflight = resolve; })
+        : Promise.resolve();
       let checkInventory = false;
       let inventoryCheckStarted = false;
       let finishInventoryCheck = () => {};
@@ -2177,6 +2191,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           seenMutations.push(`${request.method()} ${path}`);
         }
         if (path === "/api/v1/apps") {
+          if (stallOwnershipPreflight) {
+            ownershipPreflightStarted = true;
+            await ownershipPreflightPending;
+            await route.fulfill({ status: 401, json: { error: "fixture_late_ownership_response" } }).catch(() => {});
+            return;
+          }
           return route.fulfill({ json: { apps: [{
             capsuleId: ID,
             name: NAME,
@@ -2216,6 +2236,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === "/api/v1/connections" && checkInventory) {
           inventoryCheckStarted = true;
           await inventoryCheckPending;
+          if (replacementPreflightDeadline) {
+            await route.fulfill({ status: 401, json: { error: "fixture_late_connection_response" } }).catch(() => {});
+            return;
+          }
           return route.fulfill({ status: 503, json: { error: "connections_unavailable" } });
         }
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
@@ -2299,6 +2323,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === base) return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
         if (path === `${base}/app`) {
+          if (stallAppPreflight) {
+            appPreflightStarted = true;
+            await appPreflightPending;
+            await route.fulfill({ status: 401, json: { error: "fixture_late_app_response" } }).catch(() => {});
+            return;
+          }
           if ((lostResponseBeforeApproval || replacementSaveTimesOut) && replacementPlanBodies.length > 0) {
             replacementReadbackStarted = true;
             await replacementReadbackPending;
@@ -3008,6 +3038,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       }
 
       if (reviewDifferentConnection) {
+        if (replacementPreflightDeadline) await page.clock.install();
         await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
         await problems.getByRole("button", { name: "Review", exact: true }).click();
         const review = page.getByTestId("app-review");
@@ -3016,9 +3047,55 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (reloadsBeforeReplacementResponse || replacementIsRejected) await choose.press("Enter");
         else await choose.click();
         await review.getByRole("combobox", { name: /Cloudflare/ }).selectOption("conn_saved");
-        checkInventory = replacementInventoryUnavailable;
+        checkInventory = replacementInventoryUnavailable && !replacementPreflightDeadline;
+        stallOwnershipPreflight = replacementPreflightDeadline;
         await review.getByRole("button", { name: "Review removal" }).click();
-        if (replacementInventoryUnavailable) {
+        if (replacementPreflightDeadline) {
+          const approve = review.getByRole("button", { name: "Approve this change", exact: true });
+          const reviewRemoval = review.getByRole("button", { name: "Review removal", exact: true });
+          try {
+            await expect.poll(() => ownershipPreflightStarted).toBe(true);
+            await expect(approve).toHaveAttribute("aria-disabled", "true");
+            await page.clock.runFor(31_000);
+            await expect(review.getByText("Cloud connections couldn't be loaded.", { exact: true })).toBeVisible({ timeout: 2_000 });
+            await expect(approve).not.toHaveAttribute("aria-disabled", "true");
+            expect(seenMutations).toEqual([]);
+          } finally {
+            stallOwnershipPreflight = false;
+            finishOwnershipPreflight();
+          }
+          await expect(page).toHaveURL(new RegExp(`/apps/${ID}$`));
+          checkInventory = true;
+          await reviewRemoval.click();
+          try {
+            await expect.poll(() => inventoryCheckStarted).toBe(true);
+            await expect(approve).toHaveAttribute("aria-disabled", "true");
+            await page.clock.runFor(31_000);
+            await expect(review.getByText("Cloud connections couldn't be loaded.", { exact: true })).toBeVisible({ timeout: 2_000 });
+            await expect(approve).not.toHaveAttribute("aria-disabled", "true");
+            expect(seenMutations).toEqual([]);
+          } finally {
+            checkInventory = false;
+            finishInventoryCheck();
+          }
+          await expect(page).toHaveURL(new RegExp(`/apps/${ID}$`));
+          stallAppPreflight = true;
+          try {
+            await reviewRemoval.click();
+            await expect.poll(() => appPreflightStarted).toBe(true);
+            await expect(approve).toHaveAttribute("aria-disabled", "true");
+            await page.clock.runFor(31_000);
+            await expect(app.getByRole("alert").filter({ hasText: "The app's applied connection record is unavailable." })).toBeVisible({ timeout: 2_000 });
+            await expect(approve).not.toHaveAttribute("aria-disabled", "true");
+            expect(seenMutations).toEqual([]);
+          } finally {
+            stallAppPreflight = false;
+            finishAppPreflight();
+          }
+          await expect(page).toHaveURL(new RegExp(`/apps/${ID}$`));
+          await review.getByRole("combobox", { name: /Cloudflare/ }).selectOption("conn_saved");
+          await reviewRemoval.click();
+        } else if (replacementInventoryUnavailable) {
           const approve = review.getByRole("button", { name: "Approve this change", exact: true });
           try {
             await expect.poll(() => inventoryCheckStarted).toBe(true);
@@ -3168,7 +3245,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
         }));
         expect(errors).toEqual([]);
-        if (lostResponseBeforeApproval || replacementSaveTimesOut) {
+        if (replacementPreflightDeadline) {
+          expect(traffic.failures.map(({ kind, url, detail }) => ({ kind, path: new URL(url).pathname, detail }))).toEqual([
+            { kind: "requestfailed", path: "/api/v1/apps", detail: "net::ERR_ABORTED" },
+            { kind: "requestfailed", path: "/api/v1/connections", detail: "net::ERR_ABORTED" },
+            { kind: "requestfailed", path: `/api/v1/capsules/${ID}/app`, detail: "net::ERR_ABORTED" },
+          ]);
+        } else if (lostResponseBeforeApproval || replacementSaveTimesOut) {
           expect(traffic.failures.map(({ kind, url, status }) => ({ kind, path: new URL(url).pathname, status })))
             .toEqual([{ kind: "response", path: `/api/v1/capsules/${ID}/destroy-plan`, status: replacementSaveTimesOut ? 409 : 502 }]);
         } else if (reloadsBeforeReplacementResponse) {
