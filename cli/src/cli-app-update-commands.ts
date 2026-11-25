@@ -604,7 +604,11 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
     write(io, options, { status: "review_required", ...link, plan: review(savedApplyPlan(plan, "destroy_apply")) });
     return 0;
   } catch (error) {
-    const refused = !submitted || error instanceof DeployControlApiError && error.status >= 400 && error.status < 500;
+    const details = failedPreconditionDetails(error);
+    // The store may commit the Plan after the server's save deadline expires.
+    const saveTimedOut = details?.reason === "capsule_plan_creation_timeout" && details.stage === "plan_run_create";
+    const refused = !submitted || !saveTimedOut &&
+      error instanceof DeployControlApiError && error.status >= 400 && error.status < 500;
     write(io, options, { status: refused ? "refused" : "unconfirmed", appId, planRunId, code: errorCode(error),
       connectionRecoveryFailure: submitted ? destroyConnectionRecoveryFailure(error) : undefined,
       recovery: refused ? undefined : "Use apps recover-uninstall with the same app and --current-review to inspect its current Destroy Plan, or check the app's Run history before requesting another." });

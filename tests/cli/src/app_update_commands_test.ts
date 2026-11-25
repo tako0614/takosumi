@@ -517,6 +517,26 @@ test("recovery Plan submission with a lost response sends only the original requ
     .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
 });
 
+test("a Destroy Plan save timeout leaves the replacement unconfirmed without resubmitting", async () => {
+  const respond = (stage: string) => Response.json({ error: {
+    code: "failed_precondition",
+    details: { reason: "capsule_plan_creation_timeout", stage, timeoutMs: 25_000 },
+  } }, { status: 409 });
+
+  const saving = await invoke(recoverArgs, () => respond("plan_run_create"));
+  expect(saving.code).toBe(1);
+  expect(saving.result).toMatchObject({ status: "unconfirmed", appId: "cap_owned", code: "failed_precondition" });
+  expect(saving.result.planRunId).toBeUndefined();
+  expect(saving.result.recovery).toContain("--current-review");
+  expect(saving.calls.map(c => [c.method, new URL(c.url).pathname]))
+    .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
+
+  const beforeSaving = await invoke(recoverArgs, () => respond("capsule_load"));
+  expect(beforeSaving.code).toBe(1);
+  expect(beforeSaving.result.status).toBe("refused");
+  expect(beforeSaving.calls.map(c => c.method)).toEqual(["POST"]);
+});
+
 test("recover-uninstall distinguishes confirmed replacement connection refusals", async () => {
   for (const connectionRecoveryFailure of [
     "replacement_unverified", "replacement_auth_mode_mismatch", "bindings_mismatch", "applied_evidence_unavailable",
