@@ -538,14 +538,19 @@ async function withSessionDeadline<T>(
   }
 }
 
+/** Keep asynchronous responses scoped to the session active at dispatch. */
+export function currentSessionCheck(): () => boolean {
+  const epoch = sessionEpoch;
+  const session = cachedSession;
+  return () => epoch === sessionEpoch &&
+    cachedSession?.subject === session?.subject &&
+    cachedSession?.primaryAccountId === session?.primaryAccountId;
+}
+
 /** Confirm explicit sign-out before the browser leaves the authenticated view. */
 export function signOutSession(): Promise<boolean> {
   if (signOutInFlight) return signOutInFlight.request;
-  const epoch = sessionEpoch;
-  const session = cachedSession;
-  const stillCurrent = () => epoch === sessionEpoch &&
-    cachedSession?.subject === session?.subject &&
-    cachedSession?.primaryAccountId === session?.primaryAccountId;
+  const stillCurrent = currentSessionCheck();
   const request = (async () => {
     let confirmed = false;
     try {
