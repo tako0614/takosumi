@@ -1416,12 +1416,12 @@ export async function reconcileGitInstallPlan(
 /** Read one acknowledged coordinator without advancing or claiming it. */
 export async function getGitInstallPlan(
   installPlanId: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
   throwIfAborted(options.signal);
   return await controlFetch<GitInstallPlanResponse>(
     `${BASE}/install-plans/${encodeURIComponent(installPlanId)}`,
-    { signal: options.signal },
+    options,
   );
 }
 

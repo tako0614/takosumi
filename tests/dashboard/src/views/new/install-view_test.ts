@@ -189,7 +189,7 @@ describe("attempt-driven install page", () => {
     expect(discard.indexOf("await stopDriving()")).toBeLessThan(discard.indexOf("discardInstallAttempt("));
     // Stopping aborts the reconcile in flight instead of waiting it out.
     expect(between(controller, "const halt = () =>", "onCleanup(")).toContain("driveAbort?.abort();");
-    expect(controller).toContain("reconcileGitInstallPlan(before.installPlan.id, { signal: controller.signal })");
+    expect(controller).toContain("reconcileGitInstallPlan(before.installPlan.id, scope)");
   });
 
   test("the legacy client orchestration is gone", () => {
