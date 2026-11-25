@@ -647,6 +647,67 @@ test("CLI app history finds the rollback target and the exact Plan survives a lo
   }
 });
 
+test("a competing CLI update reads the Plan completed by another reconciler without advancing it again", async () => {
+  const planning = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const h = await fixture({ async beforePlan(job) {
+    if (job.planRun.origin?.kind !== "revision") return;
+    planning.resolve();
+    await release.promise;
+  } });
+  const observerToken = "synthetic-competing-cli-update";
+  h.accounts.savePersonalAccessToken(observerToken, { ...h.pat, tokenId: "pat_cli_competing_update" });
+  const before = { ...h.runnerCalls };
+  const originalFetch = globalThis.fetch;
+  const priorOutput: string[] = [];
+  const observedOutput: string[] = [];
+  const observedCalls: string[] = [];
+  let coordinatorId: string | undefined;
+  let conflictingPosts = 0;
+  let prior: Promise<number> | undefined;
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    const path = new URL(request.url).pathname;
+    const response = await h.dispatch(request);
+    if (request.headers.get("authorization") === `Bearer ${observerToken}`) {
+      observedCalls.push(`${request.method} ${path}`);
+      if (request.method === "POST" && path.endsWith("/reconcile")) {
+        expect(response.status).toBe(409);
+        expect(await response.clone().json()).toMatchObject({ error: { code: "reconcile_in_progress" } });
+        conflictingPosts++;
+        release.resolve();
+        expect(await prior).toBe(0);
+      }
+    } else if (request.method === "POST" && path.endsWith("/revision-plans")) {
+      coordinatorId = (await response.clone().json()).revisionPlan.id;
+    }
+    return response;
+  }) as typeof fetch;
+  const args = ["apps", "update", h.appId, "--ref", "release/v2", "--url", ORIGIN, "--json"];
+  try {
+    prior = main([...args, "--idempotency-key", "cli-competing-update-create", "--token", TOKEN], {
+      stdout: line => priorOutput.push(line), stderr: () => {},
+    });
+    expect(await Promise.race([planning.promise.then(() => "entered"), prior.then(() => "finished")])).toBe("entered");
+    expect(coordinatorId).toMatch(/^grp_/u);
+    const status = await main([...args, "--revision-plan", coordinatorId!, "--token", observerToken], {
+      stdout: line => observedOutput.push(line), stderr: () => {},
+    });
+    expect(status).toBe(0);
+    expect(observedOutput).toEqual(priorOutput);
+    const result = JSON.parse(observedOutput[0]!);
+    expect(result).toMatchObject({ status: "review_required", revisionPlanId: coordinatorId });
+    const self = `/api/v1/revision-plans/${coordinatorId}`;
+    expect(observedCalls).toEqual([`GET ${self}`, `POST ${self}/reconcile`, `GET ${self}`, `GET /api/v1/runs/${result.planRunId}`]);
+    expect(conflictingPosts).toBe(1);
+    expect(h.runnerCalls).toEqual({ ...before, sync: before.sync + 1, plan: before.plan + 1 });
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 1 });
+  } finally {
+    release.resolve();
+    try { await prior; } finally { globalThis.fetch = originalFetch; }
+  }
+});
+
 test("apps update resumes only the exact saved revision coordinator after a lost reconcile ACK", async () => {
   const h = await fixture();
   const originalFetch = globalThis.fetch;
