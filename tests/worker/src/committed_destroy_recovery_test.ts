@@ -61,6 +61,8 @@ async function fixture(options: {
   readonly replacement?: boolean;
   readonly scheduled?: boolean;
   readonly afterWorkerUpdate?: boolean;
+  readonly relayInFlight?: boolean;
+  readonly storedService?: boolean;
   readonly admittedExecutionAuthority?: typeof FIXTURE_EXECUTION_EVIDENCE_AUTHORITY;
   readonly capsuleCoordination?: CapsuleCoordination;
   readonly changeReceipt?: (receipt: Record<string, unknown>) => void;
@@ -185,6 +187,7 @@ async function fixture(options: {
     authority: {
       status: "valid", action, version: 1, fence: 1, redispatchBlocked: true,
       phase,
+      ...(phase === "dispatched" && options.relayInFlight !== undefined ? { relayInFlight: options.relayInFlight } : {}),
       ...(phase === "completed" ? { completion: {} } : {}),
       ...(options.admittedExecutionAuthority ? { admittedExecutionAuthority: options.admittedExecutionAuthority } : {}),
     },
@@ -209,10 +212,13 @@ async function fixture(options: {
     return Response.json(receipt, { status: options.responseStatus ?? (options.persistedFailure ? 500 : 200) });
   });
   const fetch = mock(async (_request: Request) => { throw new Error("runner transport is unavailable in the fixture"); });
-  const runner = new CloudflareContainerOpenTofuRunner({ RUNNER: {
-    idFromName: (id: string) => id,
-    get: () => ({ inspectMutationAuthority: inspect, adoptDeterminedMutation: adopt, fetch }),
-  } } as unknown as CloudflareWorkerEnv);
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (id: string) => id,
+      get: () => ({ inspectMutationAuthority: inspect, adoptDeterminedMutation: adopt, fetch }),
+    },
+    ...(options.storedService ? { TAKOSUMI_STORED_SERVICE_USAGE: {}, TAKOSUMI_STORED_OBJECT_OWNERS: {} } : {}),
+  } as unknown as CloudflareWorkerEnv);
   const controller = new OpenTofuController({
     ...composition,
     executionEvidenceAuthority: options.afterWorkerUpdate ? UPDATED_WORKER_AUTHORITY : composition.executionEvidenceAuthority,
@@ -516,6 +522,17 @@ test("a dispatched replacement Destroy remains recoverable when its selected con
     mint.mockRestore();
     destroy.mockRestore();
   }
+});
+
+test.each([
+  ["live relay", false, true],
+  ["live Stored Service relay", true, true],
+  ["legacy inspection with Stored Service", true, undefined],
+] as const)("RunOwner retains the original Destroy lease for %s", async (_name, storedService, relayInFlight) => {
+  const f = await fixture({ phase: "dispatched", replacement: true, storedService, relayInFlight });
+  expect(await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null)).toBe(true);
+  await expectHeld(f, 0);
+  expect(f.providerFetch).not.toHaveBeenCalled();
 });
 
 test("a completed replacement Destroy holds if its selected account proof changes", async () => {
