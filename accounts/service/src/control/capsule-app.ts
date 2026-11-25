@@ -366,7 +366,11 @@ async function readAppOverview(
 
   const screenList = screens.value ?? [];
   const failure = screenFailure.value?.failure;
-  const review = reviewablePlan(latestRun);
+  // The scheduled finalizer owns this Plan. Keep it in Run history without
+  // presenting it as an owner review that would hide uninstall recovery.
+  const finalizerPlan = capsule.status === "uninstalled" && latestRun?.type === "destroy_plan" &&
+    latestRun.id === capsule.uninstall?.destroyPlanRunId;
+  const review = finalizerPlan ? undefined : reviewablePlan(latestRun);
   const supersededReview = review?.type === "plan" &&
     installConfig.value?.internal?.reAdoption?.capsuleId === capsule.id &&
     (await optional(async () => {
