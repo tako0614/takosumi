@@ -639,6 +639,15 @@ export default function AppManagePage(props: {
       if (isCurrent()) {
         const uninstallConnectionRefused = purpose === "uninstall" && cause instanceof ControlApiError &&
           cause.status === 409 && cause.code === "failed_precondition" && cause.reason === "provider_connection_not_ready";
+        // A rollback from version history uses the ordinary "apply" review.
+        const isRollback = section === "version" && purpose === "apply";
+        const hold = purpose === "uninstall" ? options.replaceReview?.hold() : undefined;
+        const removalSubmitted = Boolean(hold || options.submittedRemoval?.());
+        const details = (isRollback || removalSubmitted) && cause instanceof ControlApiError ? cause.details : undefined;
+        const savingTimedOut = cause instanceof ControlApiError && cause.status === 409 &&
+          cause.code === "failed_precondition" && cause.reason === "capsule_plan_creation_timeout" &&
+          typeof details === "object" && details !== null && "stage" in details && details.stage === "plan_run_create";
+        const rollbackSaveTimedOut = isRollback && savingTimedOut;
         if (purpose === "update") {
           const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
           if (target) setReAdoptionRevisionId(target);
@@ -647,25 +656,18 @@ export default function AppManagePage(props: {
         if (isRevisionAlreadyCurrent(cause)) {
           setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
         } else {
-          setSectionError({ section, message: uninstallConnectionRefused
-            ? t("app.uninstall.connectionUnavailable")
-            : friendlyError(cause, t).message });
+          const message = uninstallConnectionRefused ? t("app.uninstall.connectionUnavailable")
+            : rollbackSaveTimedOut ? t("app.review.notStarted") : friendlyError(cause, t).message;
+          setSectionError({ section, message });
         }
-        // A rollback from version history has the ordinary "apply" review.
-        const isRollback = section === "version" && purpose === "apply";
         const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback) &&
-          (cause instanceof ControlApiError
+          (rollbackSaveTimedOut || (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
-            : cause instanceof TypeError);
-        const hold = purpose === "uninstall" ? options.replaceReview?.hold() : undefined;
-        const details = (hold || options.submittedRemoval?.()) && cause instanceof ControlApiError ? cause.details : undefined;
+            : cause instanceof TypeError));
         const replacementRefused = hold && cause instanceof ControlApiError &&
           cause.status === 409 && cause.code === "failed_precondition" &&
           (uninstallConnectionRefused || cause.reason === "destroy_connection_recovery_unproven");
-        const savingTimedOut = cause instanceof ControlApiError && cause.status === 409 &&
-          cause.code === "failed_precondition" && cause.reason === "capsule_plan_creation_timeout" &&
-          typeof details === "object" && details !== null && "stage" in details && details.stage === "plan_run_create";
-        if (savingTimedOut && "reservedPlanRunId" in details) {
+        if (removalSubmitted && savingTimedOut && "reservedPlanRunId" in details) {
           hold?.recordReservation(details.reservedPlanRunId);
           submittedOutcome = { reservedPlanRunId: details.reservedPlanRunId };
         }

@@ -979,6 +979,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       };
       let acceptUpdate = true;
       let definiteRejection = false;
+      let rollbackSaveTimeout = false;
       let holdReadback = false;
       let releaseReadback: (() => Promise<void>) | undefined;
       let committed = false;
@@ -1072,6 +1073,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               };
             });
           }
+          if (rollback && (rollbackSaveTimeout || definiteRejection)) {
+            return route.fulfill({ status: 409, json: { error: {
+              code: "failed_precondition",
+              details: { reason: "capsule_plan_creation_timeout", stage: rollbackSaveTimeout ? "plan_run_create" : "capsule_load" },
+            } } });
+          }
           if (definiteRejection) {
             return route.fulfill({ status: 409, json: { error: { code: "fixture_update_refused", message: "The update was refused." } } });
           }
@@ -1149,8 +1156,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         return;
       }
 
-      for (const scene of ["accepted", "not-accepted", "definite-rejection", "readback-pending"] as const) {
-        const accepted = scene === "accepted";
+      for (const scene of ["accepted", "not-accepted", "definite-rejection", "readback-pending", "rollback-save-timeout"] as const) {
+        rollbackSaveTimeout = scene === "rollback-save-timeout";
+        if (rollbackSaveTimeout && !rollback) continue;
+        const accepted = scene === "accepted" || rollbackSaveTimeout;
         acceptUpdate = accepted || (rollback && scene === "readback-pending");
         definiteRejection = scene === "definite-rejection";
         holdReadback = scene === "readback-pending";
