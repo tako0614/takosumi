@@ -140,10 +140,11 @@ import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { recoverApplyRun } from "../../lib/apply-run-recovery.ts";
 import {
   createLastGoodValue,
-  latestOrUndefined,
+  readyOrUndefined,
 } from "../../lib/resource-read.ts";
 
 const APPLY_REQUEST_TIMEOUT_MS = 45_000;
+const REVIEW_STATE_READ_TIMEOUT_MS = 5_000;
 const RELEASE_ACTIVATION_POLL_MS = 3_000;
 /** Newest-slice size of the Workspace Run ledger fetched to decide whether a
  * succeeded review run's deploy approval was already consumed by a later
@@ -601,10 +602,15 @@ function Inner(props: { readonly session: SessionRecord }) {
       const id = capsuleId();
       return id ? { id, scope: readScope() } : null;
     },
-    async ({ id, scope }) => ({ scope, value: await getCapsule(id, readOptions(scope)) }),
+    async ({ id, scope }) => ({
+      scope,
+      value: await getCapsule(id, {
+        ...readOptions(scope), cache: "no-store", signal: AbortSignal.timeout(REVIEW_STATE_READ_TIMEOUT_MS),
+      }),
+    }),
   );
   const capsuleLatest = () => {
-    const current = latestOrUndefined(capsule);
+    const current = readyOrUndefined(capsule);
     return current?.scope === readScope() && current.value.id === capsuleId() ? current.value : undefined;
   };
   const reviewedStateVersion = (r: Run): string | null | undefined => {

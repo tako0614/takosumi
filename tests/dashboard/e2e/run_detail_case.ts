@@ -511,14 +511,15 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             } } });
           }
           if (path === `/api/v1/capsules/${capsuleId}`) {
-            if (holdCurrentState) {
+            const delayed = holdCurrentState;
+            if (delayed) {
               await new Promise<void>((resolve) => { releaseCurrentState = resolve; });
             }
             return route.fulfill({ json: { capsule: {
               id: capsuleId, workspaceId: "ws_alpha", name: "Apply recovery app", environment: "production",
               status: "active", currentStateGeneration: 1, createdAt: plan.createdAt, updatedAt: plan.createdAt,
               ...(outcome === "stale" ? { slug: "apply-recovery", installConfigId: "cfg_apply_recovery", currentStateVersionId } : {}),
-            } } });
+            } } }).catch((error: unknown) => { if (!delayed) throw error; });
           }
           if (path === `/api/v1/capsules/${capsuleId}/runs`) {
             if (outcome === "stale") {
@@ -597,6 +598,20 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           currentStateVersionId = reviewedState;
           await page.reload({ waitUntil: "domcontentloaded" });
           await expect(approve).toBeEnabled();
+          expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
+          planStatus = "succeeded";
+          holdCurrentState = true;
+          releaseCurrentState = undefined;
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await expect.poll(() => typeof releaseCurrentState).toBe("function");
+          try {
+            await expect(allow).toHaveCount(0);
+            // A stuck app state read cannot strand a current Plan. Core still checks it on submission.
+            await expect(allow).toBeEnabled();
+          } finally {
+            holdCurrentState = false;
+            releaseCurrentState?.();
+          }
           expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
           await page.unroute("**/api/v1/**");
           continue;

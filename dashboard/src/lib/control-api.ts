@@ -1196,10 +1196,10 @@ export async function listCapsules(
   );
 }
 
-export async function getCapsule(id: string, options: Pick<RequestOpts, "isCurrent"> = {}): Promise<Capsule> {
+export async function getCapsule(id: string, options: Pick<RequestOpts, "isCurrent" | "signal" | "cache"> = {}): Promise<Capsule> {
   const body = await controlFetch<{ capsule: Capsule }>(
     `${BASE}/capsules/${encodeURIComponent(id)}`,
-    { isCurrent: options.isCurrent },
+    { isCurrent: options.isCurrent, signal: options.signal, cache: options.cache },
   );
   if (!isCapsuleResponse(body.capsule)) {
     throw new ControlApiError(
