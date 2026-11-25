@@ -24,7 +24,6 @@ import {
 import { useBeforeLeave } from "@solidjs/router";
 import { PlugZap } from "lucide-solid";
 import {
-  type CapsuleConfigurationPlanRequest,
   installExperienceArtifact,
   installExperienceInitialSecret,
   installExperienceOidcClient,
@@ -32,7 +31,6 @@ import {
   installExperienceServiceNameVariable,
 } from "takosumi-contract";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
-import { REDACTED_VALUE } from "takosumi-contract/redaction";
 import {
   Badge,
   Button,
@@ -92,17 +90,6 @@ interface SettingsRead {
   readonly guard: string;
   readonly bindings: ProviderBindings | undefined;
   readonly bindingFingerprint: string | undefined;
-}
-
-function matchesReviewedSettings(read: SettingsRead, request: CapsuleConfigurationPlanRequest): boolean {
-  if (read.bindingFingerprint !== bindingFingerprint(request.providerBindings)) return false;
-  const { variableMapping } = read.config;
-  return request.variablePatch.remove.every((name) => !Object.hasOwn(variableMapping, name)) &&
-    Object.entries(request.variablePatch.set).every(([name, value]) => {
-      if (!Object.hasOwn(variableMapping, name)) return false;
-      const saved = JSON.stringify(variableMapping[name]);
-      return saved !== undefined && !saved.includes(JSON.stringify(REDACTED_VALUE)) && saved === JSON.stringify(value);
-    });
 }
 
 function draftConflicts(base: SettingsRead, current: SettingsRead): boolean {
@@ -193,7 +180,6 @@ export default function AppSettingsSection(props: {
   readonly capsuleInstallConfigId: string;
   /** Changes when a settings review closes unapplied: the form re-reads what the app runs. */
   readonly seed: number;
-  readonly completedApplies: number;
   readonly authorityGuard: string | undefined;
   readonly authorityLoading: boolean;
   readonly authorityFailed: boolean;
@@ -206,10 +192,11 @@ export default function AppSettingsSection(props: {
   readonly reviewBusy: boolean;
   /** Another change is under way or waiting for review, so settings wait. */
   readonly changeWaits?: boolean;
+  readonly retryUnconfirmed?: boolean;
   readonly starting: boolean;
   readonly error?: string;
   readonly notice?: string;
-  readonly onReview: (create: () => Promise<string | undefined>) => void;
+  readonly onReview: (create: (isCurrent: () => boolean) => Promise<string | undefined>) => void;
   readonly review: JSX.Element;
 }): JSX.Element {
   const { confirm } = useConfirmDialog();
@@ -234,12 +221,10 @@ export default function AppSettingsSection(props: {
     | {
         readonly requestJson: string;
         readonly idempotencyKey: string;
-        readonly request: CapsuleConfigurationPlanRequest;
-        readonly capsuleId: string;
+        readonly guard: string;
         readonly baseConfigId: string;
-        readonly completedApplies: number;
-        readonly variables: readonly ConfigVariableRow[];
-        readonly bindings: readonly ProviderBinding[];
+        readonly ownsDraft: () => boolean;
+        readonly create: (isCurrent: () => boolean) => Promise<string | undefined>;
       }
     | undefined;
   const review = props.review;
@@ -278,20 +263,9 @@ export default function AppSettingsSection(props: {
   };
   // Seed only on the first read, explicit reset, or newly saved configuration.
   // A same-head refetch can produce new objects while a pane is hidden.
-  createEffect(on([currentRead, () => props.seed, () => props.completedApplies], ([read, seed, completedApplies]) => {
+  createEffect(on([currentRead, () => props.seed], ([read, seed]) => {
     if (!read) return;
     const base = draftBase();
-    const attempt = configurationAttempt;
-    // Recovery may only confirm settings that a completed Apply left visible
-    // in the authorized readback. Retain redacted values and later edits.
-    if (attempt && completedApplies > attempt.completedApplies && attempt.capsuleId === props.capsuleId &&
-      base?.read.config.id === attempt.baseConfigId && read.config.id !== attempt.baseConfigId &&
-      attempt.variables === variableRows() && attempt.bindings === rows() &&
-      matchesReviewedSettings(read, attempt.request)) {
-      configurationAttempt = undefined;
-      loadDraft(read, seed);
-      return;
-    }
     if (!base || base.seed !== seed || (!dirty() && draftConflicts(base.read, read))) {
       loadDraft(read, seed);
     } else if (base.read.bindingFingerprint === undefined && read.bindings !== undefined &&
@@ -434,22 +408,39 @@ export default function AppSettingsSection(props: {
       configurationAttempt?.requestJson === requestJson
         ? configurationAttempt.idempotencyKey
         : randomUuid();
-    configurationAttempt = {
-      requestJson, idempotencyKey, request, capsuleId: props.capsuleId, baseConfigId: config.id,
-      completedApplies: props.completedApplies, variables: variableRows(), bindings: rows(),
-    };
-    props.onReview(async () => {
-      const result = await createCapsuleConfigurationPlan(props.capsuleId, request, idempotencyKey);
+    const capsuleId = props.capsuleId;
+    const submittedVariables = variableRows();
+    const submittedBindings = rows();
+    const ownsDraft = () => props.capsuleId === capsuleId && props.accessKnown !== false &&
+      variableRows() === submittedVariables && rows() === submittedBindings;
+    const create = async (isCurrent: () => boolean) => {
+      const result = await createCapsuleConfigurationPlan(capsuleId, request, idempotencyKey, { isCurrent });
+      if (!isCurrent()) return undefined;
       // The reviewed successor and its Plan exist now: release the key and
       // mark the form clean, so leaving is not blocked and the next change
       // is a new request rather than a replay of this one.
       if (configurationAttempt?.idempotencyKey === idempotencyKey) configurationAttempt = undefined;
-      setBindingsDirty(false);
-      setVariableRows((current) =>
-        current.map((row) => ({ ...row, dirty: false, deleted: false, resetToDefault: false })),
-      );
+      if (ownsDraft()) {
+        setBindingsDirty(false);
+        setVariableRows((current) =>
+          current.map((row) => ({ ...row, dirty: false, deleted: false, resetToDefault: false })),
+        );
+      }
       return result.configurationPlan.planRunId;
-    });
+    };
+    configurationAttempt = { requestJson, idempotencyKey, guard, baseConfigId: config.id, ownsDraft, create };
+    props.onReview(create);
+  };
+  const canRetryUnconfirmedReview = () => {
+    const attempt = configurationAttempt;
+    const current = currentRead();
+    // Rebinding to another InstallConfig advances the authority epoch. The
+    // old guard can only recover a request the server already recorded.
+    return props.retryUnconfirmed && attempt?.ownsDraft() && current &&
+      current.config.id !== attempt.baseConfigId && current.guard !== attempt.guard;
+  };
+  const retryUnconfirmedReview = () => {
+    if (canRetryUnconfirmedReview() && configurationAttempt) props.onReview(configurationAttempt.create);
   };
 
   const connectionPane = () => props.pane === "connections";
@@ -628,6 +619,11 @@ export default function AppSettingsSection(props: {
           </div>
         </Show>
         <div class="ap-row-actions">
+          <Show when={canRetryUnconfirmedReview()}>
+            <Button type="button" variant="secondary" onClick={retryUnconfirmedReview}>
+              {t("app.review.retry")}
+            </Button>
+          </Show>
           <Button
             variant="primary"
             type="submit"

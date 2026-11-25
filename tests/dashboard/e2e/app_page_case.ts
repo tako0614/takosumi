@@ -1241,13 +1241,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
     });
 
     for (const [outcome, title] of [
-      ["matching", "reveals the saved review and clears the matching draft after Apply"],
+      ["matching", "recovers its exact settings review with the same key when retried explicitly"],
       ["missing", "leaves nothing to approve without a saved Plan"],
-      ["different", "keeps the draft after applying a different saved configuration"],
+      ["competing", "does not offer a replay when another Plan is pending and only the guard changed"],
+      ["unrelated", "keeps the draft after applying a different Plan with the same values"],
     ] as const) test(
       `a lost settings response ${title}`,
       async ({ page }) => {
         const saved = outcome !== "missing";
+        const rebound = saved && outcome !== "competing";
         await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
         const errors = pageErrors(page);
         const now = "2026-10-01T00:00:00.000Z";
@@ -1269,6 +1271,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         let submitted = false;
         let applied = false;
         let appReadsAfterSubmit = 0;
+        let originalRequest: { readonly body: unknown; readonly key: string } | undefined;
         await page.route("**/api/v1/**", async (route) => {
           const request = route.request();
           const path = new URL(request.url()).pathname;
@@ -1278,7 +1281,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           if (path === appPath) return route.fulfill({ json: {
             capsule: {
               ...PORTABLE_CAPSULES.ws_alpha[0],
-              ...(submitted && saved ? { installConfigId: successor } : {}),
+              ...(submitted && rebound ? { installConfigId: successor } : {}),
               ...(applied ? { currentStateGeneration: 2, currentStateVersionId: "sv_recovered_settings" } : {}),
             },
             installConfigReAdoption: { authorityGuard: submitted && saved ? `sha256:${"b".repeat(64)}` : AUTHORITY_GUARD },
@@ -1294,13 +1297,24 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           if (path.startsWith("/api/v1/capsule-configs/") && (configId === INSTALL_CONFIG_ID || configId === successor)) {
             return route.fulfill({ json: { installConfig: {
               id: configId, workspaceId: "ws_alpha", name: "Repository Office", policy: {},
-              variableMapping: { region: configId === INSTALL_CONFIG_ID ? "initial" : outcome === "matching" ? "changed" : "different" },
+              variableMapping: { region: configId === INSTALL_CONFIG_ID ? "initial" : "changed" },
               outputAllowlist: {}, interfaceBlueprints: [], variablePresentation: [{ name: "region", type: "string", required: true }],
               createdAt: now, updatedAt: now,
             } } });
           }
           if (path === planPath && request.method() === "POST") {
-            expect(request.postDataJSON().variablePatch).toEqual({ set: { region: "changed" }, remove: [] });
+            const body = request.postDataJSON();
+            const key = request.headers()["idempotency-key"]!;
+            expect(key).toBeTruthy();
+            expect(body.variablePatch).toEqual({ set: { region: "changed" }, remove: [] });
+            if (originalRequest) {
+              expect(outcome).toBe("matching");
+              expect({ body, key }).toEqual(originalRequest);
+              return route.fulfill({ status: 200, json: {
+                configurationPlan: { replayed: true, targetInstallConfigId: successor, planRunId: plan.id },
+              } });
+            }
+            originalRequest = { body, key };
             submitted = true;
             return route.fulfill({ status: 502, json: { error: { code: "unavailable", message: "The response was lost." } } });
           }
@@ -1328,20 +1342,35 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         const start = settings.getByRole("button", { name: "Review", exact: true });
         await region.fill("changed");
         const lost = page.waitForResponse((response) => response.url().endsWith(planPath) && response.status() === 502);
+        const contextReadback = page.waitForResponse((response) =>
+          submitted && new URL(response.url()).pathname === appPath && response.status() === 200);
         await start.click();
         await lost;
+        await contextReadback;
         await expect.poll(() => appReadsAfterSubmit).toBe(1);
         const waiting = page.locator('[data-problem="review-waiting"]');
         if (saved) {
-          await waiting.getByRole("button", { name: "Review", exact: true }).click();
+          await expect(waiting).toBeVisible();
+          expect(mutations).toEqual([`POST ${planPath}`]);
+          const retry = settings.getByRole("button", { name: "Review again", exact: true });
+          if (outcome === "competing") {
+            await expect(retry).toHaveCount(0);
+            await expect(start).toBeDisabled();
+            expect(errors).toEqual([]);
+            return;
+          }
+          if (outcome === "matching") {
+            await retry.click();
+          } else {
+            await waiting.getByRole("button", { name: "Review", exact: true }).click();
+          }
           const review = page.getByTestId("app-review");
           const authorize = review.getByRole("button", { name: "Allow and apply", exact: true });
           await expect(authorize).toBeVisible();
           await expect(review).toContainText("settings_change");
-          expect(mutations).toEqual([`POST ${planPath}`]);
-          const refreshedConfig = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/capsule-configs/${successor}` && response.status() === 200);
+          const expectedSubmissions = outcome === "matching" ? [`POST ${planPath}`, `POST ${planPath}`] : [`POST ${planPath}`];
+          expect(mutations).toEqual(expectedSubmissions);
           await authorize.click();
-          await refreshedConfig;
           await expect(review).toHaveCount(0);
           const conflict = settings.getByTestId("app-settings-draft-conflict");
           if (outcome === "matching") {
@@ -1352,7 +1381,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             await expect(conflict).toBeVisible();
             await expect(region).toHaveValue("changed");
           }
-          expect(mutations).toEqual([`POST ${planPath}`, `POST /api/v1/runs/${planId}/apply`]);
+          expect(mutations).toEqual([...expectedSubmissions, `POST /api/v1/runs/${planId}/apply`]);
         } else {
           await expect(waiting).toHaveCount(0);
           await expect(page.getByTestId("app-review")).toHaveCount(0);

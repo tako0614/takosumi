@@ -253,9 +253,11 @@ export default function AppManagePage(props: {
   };
 
   // --- the app and the server's view of it -----------------------------------
-  const [context, { refetch: refetchContext }] = createResource<Awaited<ReturnType<typeof getCapsuleConfigurationContext>>, string, AbortSignal>(
+  const [context, { refetch: refetchContext }] = createResource<Awaited<ReturnType<typeof getCapsuleConfigurationContext>>, string, AbortSignal | { readonly isCurrent: () => boolean }>(
     capsuleId,
-    (id, info) => getCapsuleConfigurationContext(id, { signal: info.refetching instanceof AbortSignal ? info.refetching : undefined }),
+    (id, { refetching }) => getCapsuleConfigurationContext(id, refetching instanceof AbortSignal
+      ? { signal: refetching }
+      : typeof refetching === "object" && refetching !== null ? refetching : undefined),
   );
   // Never `context()`/`.latest` directly: both throw once a read failed. A
   // failed refetch keeps the last good app on screen with a quiet notice.
@@ -531,7 +533,7 @@ export default function AppManagePage(props: {
     { readonly section: ReviewSection; readonly action?: CapsuleAppAction | "continue_revision" }
   >();
   const [sectionError, setSectionError] = createSignal<
-    { readonly section: ReviewSection; readonly message: string }
+    { readonly section: ReviewSection; readonly message: string; readonly configurationUnconfirmed?: true }
   >();
   const [notice, setNotice] = createSignal<
     { readonly section: ReviewSection; readonly message: string }
@@ -545,7 +547,6 @@ export default function AppManagePage(props: {
   // Bumped when a settings review closes unapplied, so the form shows what
   // the app actually runs rather than edits that were never applied.
   const [settingsSeed, setSettingsSeed] = createSignal(0);
-  const [settingsApplyCount, setSettingsApplyCount] = createSignal(0);
   // Reviews of in-progress work the person closed are not reopened for them.
   const dismissedRuns = new Set<string>();
   const closeReview = (active: ActiveReview) => {
@@ -654,18 +655,18 @@ export default function AppManagePage(props: {
           const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
           if (target) setReAdoptionRevisionId(target);
         }
+        const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback || isConfigurationChange) &&
+          (rollbackSaveTimedOut || (cause instanceof ControlApiError
+            ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
+            : cause instanceof TypeError));
         // Finding no newer version is an answer, not a failure.
         if (isRevisionAlreadyCurrent(cause)) {
           setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
         } else {
           const message = uninstallConnectionRefused ? t("app.uninstall.connectionUnavailable")
             : rollbackSaveTimedOut ? t("app.review.notStarted") : friendlyError(cause, t).message;
-          setSectionError({ section, message });
+          setSectionError({ section, message, ...(isConfigurationChange && responseUncertain ? { configurationUnconfirmed: true } : {}) });
         }
-        const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback || isConfigurationChange) &&
-          (rollbackSaveTimedOut || (cause instanceof ControlApiError
-            ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
-            : cause instanceof TypeError));
         const replacementRefused = hold && cause instanceof ControlApiError &&
           cause.status === 409 && cause.code === "failed_precondition" &&
           (uninstallConnectionRefused || cause.reason === "destroy_connection_recovery_unproven");
@@ -686,6 +687,7 @@ export default function AppManagePage(props: {
           // before a lost response; this fetch never repeats the mutation.
           try {
             void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
+            if (isConfigurationChange) void Promise.resolve(refetchContext({ isCurrent })).catch(() => {});
           } catch {
             // Keep the original error when the readback also fails.
           }
@@ -711,7 +713,6 @@ export default function AppManagePage(props: {
     setReview(undefined);
     dismissedRuns.add(active.initialRunId ?? active.planRunId);
     setNotice({ section: active.section, message: t(DONE_MESSAGE[active.purpose]) });
-    if (active.purpose === "apply") setSettingsApplyCount((count) => count + 1);
     refreshAfterReview();
   };
 
@@ -1888,7 +1889,6 @@ export default function AppManagePage(props: {
                   bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}
                   capsuleInstallConfigId={inst().installConfigId}
                   seed={settingsSeed()}
-                  completedApplies={settingsApplyCount()}
                   bindingsLoading={bindingSet.loading}
                   bindingsFailed={Boolean(bindingSet.error)}
                   onRetryReads={() => {
@@ -1902,6 +1902,8 @@ export default function AppManagePage(props: {
                   // change would make that change fail when it is applied.
                   reviewBusy={reviewBusy() || versionChangeBusy(view())}
                   changeWaits={!reviewBusy() && versionChangeBusy(view())}
+                  retryUnconfirmed={!reviewBusy() && versionChangeBusy(view()) &&
+                    sectionError()?.section === "settings" && sectionError()?.configurationUnconfirmed === true}
                   starting={startingIn("settings")}
                   error={errorFor("settings")}
                   notice={noticeFor("settings")}

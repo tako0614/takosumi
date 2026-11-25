@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createCapsuleConfigurationPlan } from "../../../../dashboard/src/lib/control-api.ts";
+import { createCapsuleConfigurationPlan, getCapsuleConfigurationContext } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -95,5 +95,38 @@ describe("Capsule Configuration Plan client", () => {
       code: "invalid_request",
       message: "blueprint.key is required",
     });
+  });
+
+  test("requires a Plan identifier and fences a retired configuration request", async () => {
+    let posts = 0;
+    globalThis.fetch = (async () => {
+      posts++;
+      return Response.json({ configurationPlan: {} });
+    }) as typeof fetch;
+    const request = {
+      variablePatch: { set: {}, remove: [] }, providerBindings: [], interfaceBlueprints: [],
+      expected: { authorityGuard: `sha256:${"a".repeat(64)}` },
+    };
+    await expect(createCapsuleConfigurationPlan("cap_1", request, "same", { isCurrent: () => false }))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(posts).toBe(0);
+    await expect(createCapsuleConfigurationPlan("cap_1", request, "same"))
+      .rejects.toMatchObject({ code: "invalid_configuration_plan_response" });
+    expect(posts).toBe(1);
+  });
+
+  test("ignores a 401 from a configuration context read whose view retired", async () => {
+    const reply = Promise.withResolvers<Response>();
+    const dispatched = Promise.withResolvers<void>();
+    globalThis.fetch = (async () => {
+      dispatched.resolve();
+      return await reply.promise;
+    }) as typeof fetch;
+    let current = true;
+    const read = getCapsuleConfigurationContext("cap_1", { isCurrent: () => current });
+    await dispatched.promise;
+    current = false;
+    reply.resolve(new Response(null, { status: 401 }));
+    await expect(read).rejects.toMatchObject({ name: "AbortError" });
   });
 });
