@@ -393,7 +393,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       : recoveryCase === "pending"
       ? "a pending Apply recovery enables Retry at its deadline"
       : recoveryCase === "stale"
-      ? "a stale Run review leaves the app link and retires Apply"
+      ? "a stale Run review retires Apply after refusal and after reload"
       : "lost Apply responses recover only the exact existing app Run without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       if (recoveryCase === "pending") await page.clock.install();
@@ -422,12 +422,23 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const applyPathId = encodeURIComponent(applyId);
         const replacementId = `replacement_${outcome}`;
         const unrelatedId = `unrelated_${outcome}`;
+        const reviewedState = "state_before_concurrent_apply";
+        let currentStateVersionId = reviewedState;
+        let planStatus: "succeeded" | "waiting_approval" = "succeeded";
+        let linkedApply = false;
+        let holdCurrentState = false;
+        let releaseCurrentState: (() => void) | undefined;
         const plan = {
           id: planId, workspaceId: "ws_alpha", capsuleId,
           type: "plan", status: "succeeded", policyStatus: "pass",
           summary: { add: 1, change: 0, destroy: 0 },
           createdBy: "portable-e2e", createdAt: "2026-11-17T00:00:00Z",
           planDigest: `sha256:${"a".repeat(64)}`, baseStateGeneration: 1,
+          ...(outcome === "stale" ? { applyExpected: {
+            planId, capsuleId, currentStateVersionId: reviewedState, runnerId: "opentofu-default",
+            sourceDigest: "sha256:source", variablesDigest: "sha256:variables", policyDecisionDigest: "sha256:policy",
+            planDigest: `sha256:${"a".repeat(64)}`, planArtifactDigest: "sha256:artifact",
+          } } : {}),
         };
         const apply = { ...plan, id: applyId, type: "apply", status: "running", planRunId: planId };
         const mutations: string[] = [];
@@ -484,7 +495,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
               applyReads += 1;
               if (outcome === "read-refused") return route.fulfill({ status: 403, json: { error: "forbidden" } });
             }
-            return route.fulfill({ json: { run: path.endsWith(`/${planId}`) ? plan : apply } });
+            return route.fulfill({ json: { run: path.endsWith(`/${planId}`) ? { ...plan, status: planStatus } : apply } });
           }
           if (path === `/api/v1/runs/${planId}/stream` || path === `/api/v1/runs/${applyPathId}/stream` || path === `/api/v1/runs/${replacementId}/stream`) {
             return route.fulfill({ contentType: "text/event-stream", body: "" });
@@ -499,11 +510,22 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
               ratingStatus: "not_applicable", blocked: false, reasons: [],
             } } });
           }
-          if (path === `/api/v1/capsules/${capsuleId}`) return route.fulfill({ json: { capsule: {
-            id: capsuleId, workspaceId: "ws_alpha", name: "Apply recovery app", environment: "production",
-            status: "active", currentStateGeneration: 1, createdAt: plan.createdAt, updatedAt: plan.createdAt,
-          } } });
+          if (path === `/api/v1/capsules/${capsuleId}`) {
+            const delayed = holdCurrentState;
+            if (delayed) {
+              await new Promise<void>((resolve) => { releaseCurrentState = resolve; });
+            }
+            return route.fulfill({ json: { capsule: {
+              id: capsuleId, workspaceId: "ws_alpha", name: "Apply recovery app", environment: "production",
+              status: "active", currentStateGeneration: 1, createdAt: plan.createdAt, updatedAt: plan.createdAt,
+              ...(outcome === "stale" ? { slug: "apply-recovery", installConfigId: "cfg_apply_recovery", currentStateVersionId } : {}),
+            } } }).catch((error: unknown) => { if (!delayed) throw error; });
+          }
           if (path === `/api/v1/capsules/${capsuleId}/runs`) {
+            if (outcome === "stale") {
+              if (attempts > 0 && currentStateVersionId === reviewedState) historyAfterApply.push(url.search);
+              return route.fulfill({ json: { runs: linkedApply ? [apply] : [] } });
+            }
             const reviewId = url.searchParams.get("planRunId");
             if (reviewId === replacementId) {
               replacementHistoryReads += 1;
@@ -546,6 +568,50 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           await expect(allow).toHaveCount(0);
           await expect(page.getByRole("link", { name: "Back to the app", exact: true })).toHaveAttribute("href", `/apps/${capsuleId}`);
           expect(historyAfterApply).toEqual([]);
+          expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
+          currentStateVersionId = "state_after_concurrent_apply";
+          holdCurrentState = true;
+          await page.reload({ waitUntil: "domcontentloaded" });
+          const summary = page.locator(".av-run-summary");
+          await expect.poll(() => typeof releaseCurrentState).toBe("function");
+          try {
+            await expect(allow).toHaveCount(0);
+          } finally {
+            holdCurrentState = false;
+            releaseCurrentState?.();
+          }
+          await expect(summary).toContainText("Another change was applied first. Review again before applying.");
+          await expect(allow).toHaveCount(0);
+          expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
+          // An explicitly linked Apply stays the historical result even after the app moves on.
+          linkedApply = true;
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await expect(summary).toContainText("This review has already been used.");
+          await expect(allow).toHaveCount(0);
+
+          linkedApply = false;
+          planStatus = "waiting_approval";
+          const approve = page.getByRole("button", { name: "Approve this change", exact: true });
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await expect(summary).toContainText("Another change was applied first. Review again before applying.");
+          await expect(approve).toHaveCount(0);
+          currentStateVersionId = reviewedState;
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await expect(approve).toBeEnabled();
+          expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
+          planStatus = "succeeded";
+          holdCurrentState = true;
+          releaseCurrentState = undefined;
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await expect.poll(() => typeof releaseCurrentState).toBe("function");
+          try {
+            await expect(allow).toHaveCount(0);
+            // A stuck app state read cannot strand a current Plan. Core still checks it on submission.
+            await expect(allow).toBeEnabled();
+          } finally {
+            holdCurrentState = false;
+            releaseCurrentState?.();
+          }
           expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
           await page.unroute("**/api/v1/**");
           continue;

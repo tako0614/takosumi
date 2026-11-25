@@ -1689,6 +1689,26 @@ test("an install attempt that stopped moving offers continue_install through tha
   });
 });
 
+test("an outdated Plan stays in the app's history without holding the current app review", async () => {
+  const h = await fixture({ currentStateVersionId: "sv_reviewed" });
+  const id = "plan_superseded_state";
+  await h.ledger.putPlanRun(planRun(id, Date.now(), {
+    capsuleCurrentStateVersionId: "sv_reviewed",
+    planDigest: "sha256:plan",
+    planArtifact: { ref: "fixture-plan", digest: "sha256:artifact" },
+  }));
+  expect((await h.app()).progress.review).toEqual({ runId: id, runType: "plan" });
+  const capsule = (await h.ledger.getCapsule(CAPSULE))!;
+  await h.ledger.putCapsule({ ...capsule, currentStateVersionId: "sv_newer", currentStateGeneration: 2 });
+
+  const view = await h.app();
+  expect(view.state).toBe("installed");
+  expect(view.progress.review).toBeUndefined();
+  expect(view.latestRun?.id).toBe(id);
+  const history = await (await h.request("/runs")).json() as ListRunsResponse;
+  expect(history.runs.map(run => run.id)).toContain(id);
+});
+
 test("an install attempt left in planning after its Plan Run exists does not hold the app", async () => {
   const h = await fixture();
   await makeUnapplied(h, 2 * 60 * 60 * 1000);

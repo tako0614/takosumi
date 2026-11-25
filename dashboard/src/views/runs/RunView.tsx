@@ -140,10 +140,11 @@ import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { recoverApplyRun } from "../../lib/apply-run-recovery.ts";
 import {
   createLastGoodValue,
-  latestOrUndefined,
+  readyOrUndefined,
 } from "../../lib/resource-read.ts";
 
 const APPLY_REQUEST_TIMEOUT_MS = 45_000;
+const REVIEW_STATE_READ_TIMEOUT_MS = 5_000;
 const RELEASE_ACTIVATION_POLL_MS = 3_000;
 /** Newest-slice size of the Workspace Run ledger fetched to decide whether a
  * succeeded review run's deploy approval was already consumed by a later
@@ -595,9 +596,37 @@ function Inner(props: { readonly session: SessionRecord }) {
     (id) => listCapsuleActivity(id, 100, readOptions()),
   );
   // The owning app, for the plain-language summary sentence + back link.
-  const capsuleId = () => runLatest()?.capsuleId ?? null;
-  const [capsule] = createResource(capsuleId, (id) => getCapsule(id, readOptions()));
-  const capsuleLatest = () => latestOrUndefined(capsule);
+  const capsuleId = createMemo(() => runLatest()?.capsuleId ?? null);
+  const [capsule] = createResource(
+    () => {
+      const id = capsuleId();
+      return id ? { id, scope: readScope() } : null;
+    },
+    async ({ id, scope }) => ({
+      scope,
+      value: await getCapsule(id, {
+        ...readOptions(scope), cache: "no-store", signal: AbortSignal.timeout(REVIEW_STATE_READ_TIMEOUT_MS),
+      }),
+    }),
+  );
+  const capsuleLatest = () => {
+    const current = readyOrUndefined(capsule);
+    return current?.scope === readScope() && current.value.id === capsuleId() ? current.value : undefined;
+  };
+  const reviewedStateVersion = (r: Run): string | null | undefined => {
+    const guard = r.applyExpected;
+    if (r.type !== "plan" || !r.capsuleId || guard?.planId !== r.id || guard.capsuleId !== r.capsuleId) return undefined;
+    return guard.currentStateVersionId;
+  };
+  const reviewStatePending = (r: Run): boolean => reviewedStateVersion(r) !== undefined && capsule.loading;
+  const reviewStateChanged = (r: Run): boolean => {
+    const expected = reviewedStateVersion(r);
+    const current = capsuleLatest();
+    return expected !== undefined && current?.id === r.capsuleId && current?.workspaceId === r.workspaceId &&
+      (current.currentStateVersionId ?? null) !== expected;
+  };
+  const canApproveCurrentRun = (r: Run | undefined): boolean =>
+    r !== undefined && canApproveRun(r) && !reviewStatePending(r) && !reviewStateChanged(r);
   const appName = () => capsuleLatest()?.name;
   const canRestartFailedInitialPlan = createMemo(() => {
     const r = runLatest();
@@ -943,7 +972,7 @@ function Inner(props: { readonly session: SessionRecord }) {
 
   const approve = createAction(async (attempt: ApplyAttempt) => {
     const current = runLatest();
-    if (!ownsApply(attempt) || !canApproveRun(current) || heldUninstallApp(current)) return;
+    if (!ownsApply(attempt) || !canApproveCurrentRun(current) || heldUninstallApp(current)) return;
     try {
       const approved = await approveRun(attempt.plan, { isCurrent: () => ownsApply(attempt) });
       if (!ownsApply(attempt)) return;
@@ -982,6 +1011,7 @@ function Inner(props: { readonly session: SessionRecord }) {
   );
   const isDeployableRun = (r: Run): boolean => {
     if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply() || stalePlan() || heldUninstallApp(r)) return false;
+    if (reviewStatePending(r) || reviewStateChanged(r)) return false;
     // A failed or unfinished history read cannot prove approval is still open.
     if (siblingRuns.error || siblingRuns.loading) return false;
     const siblings = siblingRuns.latest;
@@ -1001,7 +1031,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     if (siblings === undefined) return false;
     return !awaitsDeployApproval(r, siblings);
   };
-  // The sibling ledger is still loading for a plan that COULD await deploy:
+  // The sibling ledger or the reviewed base state is still being checked:
   // isDeployableRun stays conservatively false until it resolves, so the deploy
   // button is withheld — don't show a "ready to deploy" line during this
   // window (a settled 確認中 progress line instead of ready-copy-with-no-button).
@@ -1009,7 +1039,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     isDeployApprovalCandidate(r) &&
     !applied() &&
     !siblingRuns.error &&
-    (siblingRuns.loading || siblingRuns.latest === undefined);
+    (siblingRuns.loading || siblingRuns.latest === undefined || reviewStatePending(r));
   // A succeeded review run whose policy did NOT pass: it never becomes
   // deployable, so it must still offer a way forward (re-plan) instead of
   // dead-ending on the "blocked" line.
@@ -1083,6 +1113,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     const currentRun = runLatest();
     if (!currentRun || currentRun.id !== runId() || !currentRun.capsuleId ||
       !currentRun.workspaceId || !isReviewRun(currentRun) || unconfirmedApply() || stalePlan() || heldUninstallApp(currentRun)) return;
+    if (reviewStatePending(currentRun) || reviewStateChanged(currentRun)) return;
     const attempt = { plan: currentRun, epoch: runEpoch };
     if (
       currentRun &&
@@ -1253,7 +1284,7 @@ function Inner(props: { readonly session: SessionRecord }) {
 
   const confirmApprove = async (): Promise<void> => {
     const r = runLatest();
-    if (!r || !canApproveRun(r) || approve.busy() || heldUninstallApp(r)) return;
+    if (!r || !canApproveCurrentRun(r) || approve.busy() || heldUninstallApp(r)) return;
     const attempt = { plan: r, epoch: runEpoch };
     if (!ownsApply(attempt)) return;
     if (r.type !== "destroy_plan") {
@@ -1270,7 +1301,7 @@ function Inner(props: { readonly session: SessionRecord }) {
       cancelText: t("common.cancel"),
       danger: true,
     });
-    if (!ok || !ownsApply(attempt) || !canApproveRun(runLatest()) || approve.busy() || heldUninstallApp(r)) return;
+    if (!ok || !ownsApply(attempt) || !canApproveCurrentRun(runLatest()) || approve.busy() || heldUninstallApp(r)) return;
     await approve.run(attempt);
   };
   const confirmCancel = async (): Promise<void> => {
@@ -1428,6 +1459,8 @@ function Inner(props: { readonly session: SessionRecord }) {
         case "running":
           return { kind: "progress", text: t("run.summary.planning") };
         case "waiting_approval":
+          if (reviewStatePending(r)) return { kind: "progress", text: t("run.summary.checkingDeploy") };
+          if (reviewStateChanged(r)) return { kind: "action", text: t("controlError.stateGenerationMismatch") };
           return { kind: "action", text: t("run.summary.waitingApproval") };
         case "succeeded": {
           if (r.policyStatus !== "pass") {
@@ -1452,6 +1485,9 @@ function Inner(props: { readonly session: SessionRecord }) {
           // neutral 確認中 line instead of "ready to deploy" copy with no button.
           if (deployApprovalResolving(r)) {
             return { kind: "progress", text: t("run.summary.checkingDeploy") };
+          }
+          if (reviewStateChanged(r)) {
+            return { kind: "action", text: t("controlError.stateGenerationMismatch") };
           }
           // Only show the create/update/delete sub when the counts are a
           // recorded fact — a destroy reporting 削除0 (or a plan with no
@@ -1804,7 +1840,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                         </>
                       )}
                     </Show>
-                    <Show when={canApproveRun(r()) && !heldUninstallApp(r())}>
+                    <Show when={canApproveCurrentRun(r()) && !heldUninstallApp(r())}>
                       <Button
                         variant={
                           r().type === "destroy_plan" ? "danger" : "primary"
