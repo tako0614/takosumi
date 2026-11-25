@@ -88,7 +88,7 @@ import {
   type RevisionPlanAttemptScope,
   type RevisionPlanAttemptStore,
 } from "../../lib/revision-plan-attempt.ts";
-import { appUninstallConnectionNotice, appUninstallRecoveryMode, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
+import { appUninstallConnectionNotice, appUninstallRecoveryConnections, appUninstallRecoveryMode, observeUninstallReadback } from "../../lib/capsule-uninstall.ts";
 import {
   holdUninstallReview,
   isUninstallReviewHeld,
@@ -519,6 +519,7 @@ export default function AppManagePage(props: {
 
   // --- in-page reviews ---------------------------------------------------------
   const [review, setReview] = createSignal<ActiveReview>();
+  const [checkingUninstallReview, setCheckingUninstallReview] = createSignal<{ readonly review: ActiveReview }>();
   const [reservedReviewCheck, setReservedReviewCheck] = createSignal<{
     readonly receipt: RemovalReceipt;
     readonly state: "checking" | "unconfirmed";
@@ -737,7 +738,7 @@ export default function AppManagePage(props: {
     // A lost answer can leave the old removal review open after the server
     // saved another Plan. Only let the owner explicitly open the current one.
     return active?.section === "attention" && active.purpose === "uninstall" &&
-      !starting() && !uninstallBusy() && isOwner() && view?.applied &&
+      checkingUninstallReview()?.review !== active && !starting() && !uninstallBusy() && isOwner() && view?.applied &&
       view.capsuleId === capsuleId() && view.workspaceId === workspaceId() &&
       !view.progress.run && !view.progress.revisionPreparing &&
       pending?.runType === "destroy_plan" && latest?.type === "destroy_plan" &&
@@ -789,12 +790,13 @@ export default function AppManagePage(props: {
   const uninstallReviewBlockedReason = () => {
     const active = review();
     if (active?.purpose !== "uninstall") return;
-    if (starting()?.action === "uninstall_now") return t("app.review.loading");
+    if (checkingUninstallReview()?.review === active || starting()?.action === "uninstall_now") return t("app.review.loading");
     if (switchableUninstallReview(app())) return t("app.uninstall.reviewReplaced");
     if (isUninstallReviewHeld(uninstallReviewScope(active.planRunId))) return t("app.uninstall.replacementReviewUnconfirmed");
   };
   const heldRemovalDetails = (held: ActiveReview) => {
-    const canOpen = () => review() === held && isOwner() && !starting() && !uninstallBusy() &&
+    const canOpen = () => review() === held && checkingUninstallReview()?.review !== held &&
+      isOwner() && !starting() && !uninstallBusy() &&
       !switchableUninstallReview(app()) && isUninstallReviewHeld(uninstallReviewScope(held.planRunId));
     return canOpen() ? () => {
       if (canOpen()) navigate(`/runs/${encodeURIComponent(held.planRunId)}`);
@@ -1313,6 +1315,18 @@ export default function AppManagePage(props: {
       { restartable: false, action: "uninstall_now" },
     );
   };
+  const matchesUninstallReplacementRows = (
+    view: CapsuleAppView,
+    replacements: readonly DestroyProviderConnectionReplacement[],
+  ) => {
+    const allowed = view.uninstall.recoveryConnectionIds;
+    const required = appUninstallRecoveryMode(view) === "unavailable"
+      ? appUninstallRecoveryConnections(view).map(({ connectionId }) => connectionId)
+      : view.uninstall.unavailableRecoveryConnectionIds ?? [];
+    const chosen = new Set(replacements.map(({ connectionId }) => connectionId));
+    return (allowed === undefined || replacements.every(({ connectionId }) => allowed.includes(connectionId))) &&
+      required.every((connectionId) => chosen.has(connectionId));
+  };
   const uninstallReviewRecovery = (
     heldReview: ActiveReview,
     runId: string,
@@ -1321,6 +1335,7 @@ export default function AppManagePage(props: {
   ) => {
     const scope = uninstallScope();
     const epoch = uninstallEpoch;
+    const preflight = { review: heldReview };
     let active = true;
     onCleanup(() => { active = false; });
     const isCurrent = () => active && !disposed && isOwner() && uninstallScope() === scope &&
@@ -1349,14 +1364,16 @@ export default function AppManagePage(props: {
             app={view()}
             mode={mode}
             disabled={starting() !== undefined || uninstallBusy() || disabled?.() === true}
+            onCheckingChange={(checking) => {
+              if (checking && isCurrent()) setCheckingUninstallReview(preflight);
+              else if (checkingUninstallReview() === preflight) setCheckingUninstallReview(undefined);
+            }}
             onReview={(replacements) => {
               if (disabled?.() || !isCurrent() || !reviewedApp(app())) return;
               let reviewHold: ReturnType<typeof holdUninstallReview> | undefined;
               void startReview("attention", "uninstall", async () => {
                 const fresh = reviewedApp(await refetchApp({ isCurrent }));
-                const allowed = fresh?.uninstall.recoveryConnectionIds;
-                if (!isCurrent() || !fresh ||
-                  (allowed !== undefined && replacements.some(({ connectionId }) => !allowed.includes(connectionId)))) {
+                if (!isCurrent() || !fresh || !matchesUninstallReplacementRows(fresh, replacements)) {
                   throw new Error(t("app.uninstall.replacementAppliedEvidenceUnavailable"));
                 }
                 return extractRunId(await createCapsuleDestroyRecoveryPlan(fresh.capsuleId, replacements, {
@@ -1378,7 +1395,8 @@ export default function AppManagePage(props: {
 
   const reviewUninstallWithConnection = (replacements: readonly DestroyProviderConnectionReplacement[]) => {
     const view = app();
-    if (!view || !isOwner() || !appUninstallRecoveryMode(view) || review()) return;
+    const mode = view && appUninstallRecoveryMode(view);
+    if (!view || !isOwner() || !mode || review()) return;
     const receiptScope = uninstallReviewAppScope();
     const heldScope = uninstallScope();
     const heldEpoch = uninstallEpoch;
@@ -1389,11 +1407,11 @@ export default function AppManagePage(props: {
       "uninstall",
       async (isCurrent) => {
         const fresh = await refetchApp({ isCurrent });
-        const allowed = fresh?.uninstall.recoveryConnectionIds;
         if (!isCurrent() || !fresh || fresh.capsuleId !== view.capsuleId || fresh.workspaceId !== view.workspaceId ||
           fresh.workspaceId !== receiptScope[2] || fresh.capsuleId !== receiptScope[3] ||
-          !fresh.applied || !appUninstallRecoveryMode(fresh) ||
-          (allowed !== undefined && replacements.some(({ connectionId }) => !allowed.includes(connectionId)))) {
+          !fresh.applied || appUninstallRecoveryMode(fresh) !== mode ||
+          fresh.latestRun?.id !== view.latestRun?.id || fresh.latestRun?.status !== view.latestRun?.status ||
+          !matchesUninstallReplacementRows(fresh, replacements)) {
           throw new Error(t("app.uninstall.replacementAppliedEvidenceUnavailable"));
         }
         return extractRunId(await createCapsuleDestroyRecoveryPlan(fresh.capsuleId, replacements, {

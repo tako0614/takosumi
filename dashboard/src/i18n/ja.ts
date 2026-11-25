@@ -782,6 +782,7 @@ export const ja = {
   "app.uninstall.keepConnection": "この接続を使う",
   "app.uninstall.noReplacement": "選べる確認済みの接続がありません。",
   "app.uninstall.replacementLoadFailed": "クラウド接続を読み込めませんでした。",
+  "app.uninstall.replacementSelectionChanged": "クラウド接続が変わりました。このアンインストールに使う接続を選び直してください。",
   "app.uninstall.replacementReview": "削除内容を確認",
   "app.uninstall.replacementReviewUnconfirmed": "変更先の接続で削除レビューが作られたか確認できません。再読み込みして状況を確認してください。",
   "app.uninstall.checkSubmittedReview": "送信した削除レビューを確認",

@@ -770,6 +770,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.keepConnection": "Keep this connection",
   "app.uninstall.noReplacement": "No verified connection is available to select.",
   "app.uninstall.replacementLoadFailed": "Cloud connections couldn't be loaded.",
+  "app.uninstall.replacementSelectionChanged": "Cloud connections changed. Choose the connections for this removal again.",
   "app.uninstall.replacementReview": "Review removal",
   "app.uninstall.replacementReviewUnconfirmed": "Couldn't confirm the removal review for the new connection. Refresh to check its status.",
   "app.uninstall.checkSubmittedReview": "Check submitted removal review",
