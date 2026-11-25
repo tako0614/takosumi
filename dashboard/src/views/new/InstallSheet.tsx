@@ -34,7 +34,7 @@ import {
   Textarea,
 } from "../../components/ui/index.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
-import { getCapsuleApp, getRun, testConnection } from "../../lib/control-api.ts";
+import { getCapsuleAppWithSignal, getRun, testConnection } from "../../lib/control-api.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { interfaceLabel } from "../../lib/interface-labels.ts";
 import { providerConnectionStatusLabel } from "../../lib/labels.ts";
@@ -324,13 +324,13 @@ function PlanReview(props: {
       const epoch = ++readEpoch;
       const current = () => !disposed && epoch === readEpoch &&
         props.action.capsuleId === capsuleId && props.action.planRunId === planRunId;
-      const app = await getCapsuleApp(capsuleId);
+      const app = await getCapsuleAppWithSignal(capsuleId, undefined, { isCurrent: current });
       if (!current()) throw new Error(t("installStore.recoveryUnverified"));
       if (app.applied) return { app, verified: true };
       const latest = app.progress.run ?? app.latestRun;
       const candidateId = latest?.id ?? app.progress.review?.runId;
       if (!candidateId || candidateId === planRunId) return { app, verified: !app.progress.revisionPreparing };
-      const candidate = await getRun(candidateId);
+      const candidate = await getRun(candidateId, { isCurrent: current });
       if (!current() || candidate.id !== candidateId || candidate.capsuleId !== capsuleId ||
         candidate.workspaceId !== app.workspaceId) {
         throw new Error(t("installStore.recoveryUnverified"));
