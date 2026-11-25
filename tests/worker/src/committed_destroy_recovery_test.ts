@@ -54,7 +54,7 @@ const UPDATED_WORKER_AUTHORITY = {
 } as const;
 
 async function fixture(options: {
-  readonly phase?: "queued" | "fresh" | "preparing";
+  readonly phase?: "queued" | "fresh" | "preparing" | "dispatched" | "indeterminate" | "orphaned";
   readonly persistedFailure?: boolean;
   readonly responseStatus?: number;
   readonly legacy?: boolean;
@@ -178,12 +178,14 @@ async function fixture(options: {
 
   let job!: OpenTofuDestroyJob;
   const receiptCommittedAt = new Date(claimedAt + 1_500).toISOString();
+  const phase = options.phase === "queued" || options.phase === "fresh" ? "completed" : options.phase ?? "completed";
   const inspect = mock(async (id: string, action: string) => ({
     kind: "takosumi.runner-mutation-inspection@v1",
     runId: id,
     authority: {
       status: "valid", action, version: 1, fence: 1, redispatchBlocked: true,
-      ...(options.phase === "preparing" ? { phase: "preparing" } : { phase: "completed", completion: {} }),
+      phase,
+      ...(phase === "completed" ? { completion: {} } : {}),
       ...(options.admittedExecutionAuthority ? { admittedExecutionAuthority: options.admittedExecutionAuthority } : {}),
     },
   }));
@@ -635,6 +637,17 @@ test("completed ordinary Destroy holds when prepared inputs cannot be read", asy
   await f.store.deletePlanRunInputs(f.planRun.id);
   await expectHeld(f, 0);
 });
+
+for (const phase of ["dispatched", "indeterminate", "orphaned"] as const) {
+  test(`Destroy with a same-account replacement preserves the ${phase} Run when prepared inputs cannot be read`, async () => {
+    const f = await fixture({ phase, replacement: true });
+    await f.store.deletePlanRunInputs(f.planRun.id);
+    await expectHeld(f, 0);
+    expect(f.providerFetch).not.toHaveBeenCalled();
+    expect(await f.store.getStateVersion(f.priorState.id)).toEqual(f.priorState);
+    expect(await f.store.listOutputs(f.capsule.id)).toEqual(f.priorOutputs);
+  });
+}
 
 test("fresh and queued Destroy skip observation, and preparing takes ordinary dispatch", async () => {
   for (const phase of ["fresh", "queued", "preparing"] as const) {

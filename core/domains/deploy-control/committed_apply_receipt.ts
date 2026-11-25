@@ -40,8 +40,8 @@ type ExecutionArtifacts = Pick<RunExecutionAuthority, "controllerArtifact" | "ru
 interface ReceiptProbe {
   readonly runner: OpenTofuRunner;
   readonly runId: string;
-  /** Ordinary still relies on the original runner preparation/dispatch fence. */
-  readonly inspect: (action: "apply" | "destroy") => Promise<"ordinary" | "completed" | "hold">;
+  /** An uncertain dispatch preserves the Run when its prepared inputs cannot be read. Both ordinary and uncertain dispatch still rely on the runner's preparation fence. */
+  readonly inspect: (action: "apply" | "destroy") => Promise<"ordinary" | "dispatch_uncertain" | "completed" | "hold">;
   /** Core allocates the immutable state coordinate and any Apply output. */
   readonly read: (allocation: { readonly stateScope: DispatchStateScope; readonly rawOutputRef?: string }) => Promise<{
     readonly result: OpenTofuApplyResult;
