@@ -130,9 +130,9 @@ export default function AuthGuard(props: Props) {
   const off = onSessionStateChange((next) => {
     // The mount/retry promise owns the redirect when a foreground probe runs.
     // A background probe can reject a cached session while a route is open.
-    // Local clears retain the sign-out path and its explicit login action.
+    // Sign-out and local clears leave sign-in to the explicit login action.
     if (next.kind === "unauthenticated" && state() === "loading") return;
-    applyState(next, next.kind === "unauthenticated" && !next.locallyCleared);
+    applyState(next, next.kind === "unauthenticated" && next.preserveReturn !== false);
   });
   onCleanup(() => off());
 

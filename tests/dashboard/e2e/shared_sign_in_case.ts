@@ -68,6 +68,51 @@ export function registerSharedSignInCases(mode: DashboardE2EMode): void {
       expect(navigations).toEqual([new URL("/auth/oidc/login", page.url()).href]);
     });
 
+    test("a session refresh during confirmed logout leaves sign-in explicit", async ({ page }) => {
+      const releaseRefresh = Promise.withResolvers<void>();
+      const releaseLogout = Promise.withResolvers<void>();
+      let refreshPending = false;
+      await page.route("**/api/v1/dashboard/bootstrap?**", async (route) => {
+        if (!refreshPending) return route.fallback();
+        await releaseRefresh.promise;
+        return route.fulfill({ status: 401, json: { error: "unauthenticated" } });
+      });
+      await page.route("**/api/v1/account/session/me", async (route) => {
+        if (route.request().method() === "DELETE") {
+          await releaseLogout.promise;
+          return route.fulfill({ status: 204 });
+        }
+        return route.fulfill({ json: { session: null } });
+      });
+      await page.route("**/sign-in?**", (route) => route.fulfill({
+        contentType: "text/html", body: "<!doctype html><title>Login boundary reached</title>",
+      }));
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      await page.goto("/");
+      const appSettings = page.locator('a[href="/apps/cap_repository_office#settings"]');
+      await expect(appSettings).toBeVisible();
+      await page.clock.setFixedTime(new Date(Date.now() + 31_000));
+      refreshPending = true;
+      const refreshStarted = page.waitForRequest((request) =>
+        new URL(request.url()).pathname === "/api/v1/dashboard/bootstrap");
+      try {
+        await appSettings.click();
+        await refreshStarted;
+        await page.locator("button.topbar-user").click();
+        const logoutStarted = page.waitForRequest((request) => request.method() === "DELETE" &&
+          new URL(request.url()).pathname === "/api/v1/account/session/me");
+        await page.getByRole("button", { name: "Sign out", exact: true }).click();
+        await logoutStarted;
+        // Observe the revoked session before the DELETE response reaches the browser.
+        releaseRefresh.resolve();
+        await page.waitForURL((url) => url.pathname === "/sign-in");
+        expect(new URL(page.url()).search).toBe("");
+      } finally {
+        releaseRefresh.resolve();
+        releaseLogout.resolve();
+      }
+    });
+
     for (const key of ["return", "return_to"]) {
       test(`the explicit RP action preserves the complete ${key} install destination`, async ({ page }) => {
         await signedOut(page);
