@@ -77,7 +77,7 @@ export class SessionError extends Error {
 export type SessionState =
   | { readonly kind: "loading" }
   | { readonly kind: "authenticated"; readonly session: SessionRecord }
-  | { readonly kind: "unauthenticated" }
+  | { readonly kind: "unauthenticated"; readonly locallyCleared?: true }
   | { readonly kind: "maintenance"; readonly error: SessionError }
   | { readonly kind: "error"; readonly error: SessionError };
 
@@ -500,7 +500,7 @@ function clearLocalSession(): void {
   cachedAt = Date.now();
   initialized = true;
   notify(null);
-  notifyState({ kind: "unauthenticated" });
+  notifyState({ kind: "unauthenticated", locallyCleared: true });
 }
 
 /** Clear an expired session and request best-effort server cleanup. */
