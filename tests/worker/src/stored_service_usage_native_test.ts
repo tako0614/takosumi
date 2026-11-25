@@ -394,6 +394,26 @@ test("committed then lost confirm ACK permits one read without replaying an effe
   } finally { await f.dispose(); }
 });
 
+test.each([["before", 503], ["after", 200]] as const)("an immutable PUT handles a confirmation response lost %s commit", async (fault, status) => {
+  const f = await fixture();
+  try {
+    const key = "immutable/confirmed";
+    const bucket = await f.seed("state", key);
+    await f.control("confirm_ack", fault);
+    const response = await f.request({ action: "put", key, value: "exact-state", options: { onlyIf: { etagDoesNotMatch: "*" } } });
+    expect(response.status).toBe(status);
+    const object = await bucket.head(key);
+    expect(object?.size).toBe(11);
+    expect(await f.snapshot()).toMatchObject(fault === "after"
+      ? { revision: 1, bytes: "11", version_digest: await storedNativeVersion(object!), pending_ref: null }
+      : { revision: 0, bytes: "0", version_digest: null, pending_ref: expect.any(String) });
+    expect(await f.count("fixture_effects", "put")).toBe(1);
+    expect(await f.count("fixture_audit", "prepareStoredObject")).toBe(1);
+    expect(await f.count("fixture_audit", "confirmStoredObject")).toBe(1);
+    expect(await f.count("fixture_audit", "cancelStoredObject")).toBe(0);
+  } finally { await f.dispose(); }
+});
+
 test("native conditional refusal cancels only the original owned intent with no balance change", async () => {
   const f = await fixture();
   try {

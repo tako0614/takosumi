@@ -260,7 +260,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
     return { sourceRef: source.sourceRef, bucketRole, writerId, ...owner, objectRef: await storedObjectReference(bucketRole, key, source.sourceRef) };
   };
   const observe = async (key: string) => await storedServiceCall(() => bucket.head(key));
-  const reconcile = async (ctx: StoredObjectContext, key: string, intent: StoredObjectIntent, dispatchToken: string, originalVersionDigest: string | null): Promise<R2ObjectBody | null> => {
+  const reconcile = async (ctx: StoredObjectContext, key: string, intent: StoredObjectIntent, dispatchToken: string, originalVersionDigest: string | null, immutableCreate = false): Promise<R2ObjectBody | null> => {
     const object = await storedServiceCall(() => bucket.get(key));
     if (intent.kind === "delete") {
       if (object) throw new StoredServiceUsageError();
@@ -274,7 +274,16 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
     if (String(bytes.byteLength) !== intent.bytes || await contentDigest(bytes, object) !== intent.contentDigest) throw new StoredServiceUsageError();
     const newVersionDigest = await storedNativeVersion(object);
     if (newVersionDigest === originalVersionDigest) throw new StoredServiceUsageError();
-    await storedServiceCall(() => composition.usage.confirmStoredObject({ ...ctx, operationRef: intent.operationRef, dispatchToken, acknowledgementDigest: newVersionDigest, newVersionDigest }));
+    try {
+      await storedServiceCall(() => composition.usage.confirmStoredObject({ ...ctx, operationRef: intent.operationRef, dispatchToken, acknowledgementDigest: newVersionDigest, newVersionDigest }));
+    } catch (error) {
+      if (!immutableCreate) throw error;
+      // The original writer already authenticated the native bytes. Read
+      // back the exact confirmed revision without issuing a second mutation.
+      const confirmed = validSnapshot(await storedServiceCall(() => composition.usage.readStoredObject(ctx)), storedObjectOwner(ctx));
+      if (confirmed.pending || confirmed.revision !== intent.expectedRevision + 1 ||
+        confirmed.bytes !== intent.bytes || confirmed.versionDigest !== newVersionDigest) throw error;
+    }
     const replay: R2ObjectBody & { readonly body: ReadableStream<Uint8Array> } = {
       ...object, body: new ReadableStream({ start(controller) { controller.enqueue(bytes.slice()); controller.close(); } }),
       arrayBuffer: async () => bytes.slice().buffer as ArrayBuffer,
@@ -295,6 +304,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
     list: options => bucket.list(options),
     async put(key, value, options = {}) {
       const putOptions = { ...metadata(options), ...(options.onlyIf ? { onlyIf: { ...options.onlyIf } } : {}) };
+      const immutableCreate = putOptions.onlyIf?.etagDoesNotMatch === "*";
       const bytes = await storedServiceCall(() => bytesFor(value, maximum));
       const ctx = await context(key);
       const desiredDigest = await contentDigest(bytes, putOptions);
@@ -319,7 +329,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
       if (input.beforeDispatch) await storedServiceCall(() => input.beforeDispatch!(key, "put"));
       try {
         result = await storedServiceCall(() => bucket.put(key, bytes, { ...putOptions, onlyIf: prior ? { etagMatches: prior.etag } : { etagDoesNotMatch: "*" } }));
-      } catch { return await reconcile(ctx, key, intent, dispatchToken, snapshot.versionDigest); }
+      } catch { return await reconcile(ctx, key, intent, dispatchToken, snapshot.versionDigest, immutableCreate); }
       if (result === null) {
         const original = await observe(key);
         const observedVersionDigest = original ? await storedNativeVersion(original) : null;
@@ -328,7 +338,7 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
         await storedServiceCall(() => composition.usage.cancelStoredObject({ ...ctx, operationRef, dispatchToken, refusalAcknowledgementDigest, observedVersionDigest }));
         return null;
       }
-      return await reconcile(ctx, key, intent, dispatchToken, snapshot.versionDigest);
+      return await reconcile(ctx, key, intent, dispatchToken, snapshot.versionDigest, immutableCreate);
     },
     async delete(key) {
       const ctx = await context(key);
