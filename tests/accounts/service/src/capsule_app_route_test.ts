@@ -356,22 +356,9 @@ test("a binding without a usable connection asks the person to fix it", async ()
   });
 });
 
-test("uninstall recovery targets come from current state, and all connection issues remain visible", async () => {
+async function putAppliedCloudflarePlan(h: Awaited<ReturnType<typeof fixture>>, stateVersionId: string) {
   const provider = FIXTURE_CLOUDFLARE_PROVIDER;
-  const stateVersionId = "sv_applied_connections";
-  const h = await fixture({ requiredProviders: [provider], currentStateVersionId: stateVersionId });
   const { environment } = h.seeded.capsule;
-  const saved = (await h.ledger.getProviderBindingSetByCapsule(CAPSULE, environment))!;
-  const appliedId = "conn_saved_default";
-  const unusedId = "conn_saved_unused_alias";
-  await transitionProviderBindingSetForFixture(h.ledger, {
-    ...saved,
-    bindings: [
-      { provider, connectionId: appliedId, moduleLocalName: "cloudflare" },
-      { provider, connectionId: unusedId, moduleLocalName: "cloudflare", childAlias: "unused", rootAlias: "unused" },
-    ],
-  });
-
   const now = Date.now();
   const requirement = { source: provider, moduleLocalName: "cloudflare", allowed: true, credentialRequired: true };
   const applied = planRun("plan_applied_connections", now - 4_000, {
@@ -396,6 +383,26 @@ test("uninstall recovery targets come from current state, and all connection iss
     createdByRunId: apply.id,
     createdAt: new Date(now - 3_000).toISOString(),
   });
+  return { applied, requirement, now };
+}
+
+test("uninstall recovery targets come from current state, and all connection issues remain visible", async () => {
+  const provider = FIXTURE_CLOUDFLARE_PROVIDER;
+  const stateVersionId = "sv_applied_connections";
+  const h = await fixture({ requiredProviders: [provider], currentStateVersionId: stateVersionId });
+  const { environment } = h.seeded.capsule;
+  const saved = (await h.ledger.getProviderBindingSetByCapsule(CAPSULE, environment))!;
+  const appliedId = "conn_saved_default";
+  const unusedId = "conn_saved_unused_alias";
+  await transitionProviderBindingSetForFixture(h.ledger, {
+    ...saved,
+    bindings: [
+      { provider, connectionId: appliedId, moduleLocalName: "cloudflare" },
+      { provider, connectionId: unusedId, moduleLocalName: "cloudflare", childAlias: "unused", rootAlias: "unused" },
+    ],
+  });
+
+  const { applied, requirement, now } = await putAppliedCloudflarePlan(h, stateVersionId);
   await h.ledger.putPlanRun(planRun("destroy_later", now - 2_000, {
     operation: "destroy",
     status: "failed",
@@ -1356,6 +1363,51 @@ test("a teardown blocked after the runtime became unsafe offers uninstall now, a
   const cancel = await h.request("/cancel-uninstall", h.owner, "POST");
   expect(cancel.status).toBe(409);
   expect(JSON.stringify(await cancel.json())).toContain("capsule_uninstall_destroy_started");
+});
+
+test("a blocked scheduled Destroy keeps its finalizer Plan in history and only offers review for a new manual Plan", async () => {
+  const stateVersionId = "sv_scheduled_uninstall";
+  const h = await fixture({ requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER], currentStateVersionId: stateVersionId });
+  await putAppliedCloudflarePlan(h, stateVersionId);
+  const bindings = await h.ledger.getProviderBindingSetByCapsule(CAPSULE, h.seeded.capsule.environment);
+  const originalConnectionId = bindings!.bindings[0]!.connectionId;
+  expect((await h.request("", h.owner, "DELETE")).status).toBe(202);
+  const scheduled = (await h.ledger.getCapsule(CAPSULE))!.uninstall!;
+  const createdAt = Date.parse(scheduled.requestedAt) + 1;
+  const finalizerPlan = planRun("plan_finalizer_connection", createdAt, {
+    operation: "destroy",
+    origin: { kind: "scheduled_uninstall", uninstallId: scheduled.id },
+    status: "waiting_approval",
+    requiresApproval: true,
+  });
+  await advanceUninstall(h, { phase: "destroying", destroyPlanRunId: finalizerPlan.id });
+  await h.ledger.putPlanRun(finalizerPlan);
+  await advanceUninstall(h, { blockedReason: SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused });
+
+  const blocked = await h.app();
+  expect(blocked).toMatchObject({
+    state: "needs_attention",
+    primaryAction: "cancel_uninstall",
+    problems: [
+      { code: "connection_unavailable", provider: FIXTURE_CLOUDFLARE_PROVIDER, connectionId: originalConnectionId },
+      { code: "uninstall_blocked", runId: finalizerPlan.id },
+    ],
+    latestRun: { id: finalizerPlan.id, type: "destroy_plan", status: "waiting_approval" },
+    uninstall: { recoveryConnectionIds: [originalConnectionId], scheduled: { blocked: true } },
+  });
+  expect(blocked.progress).not.toHaveProperty("review");
+
+  const manualPlan = planRun("plan_manual_connection", createdAt + 1, {
+    operation: "destroy",
+    status: "waiting_approval",
+    requiresApproval: true,
+  });
+  await h.ledger.putPlanRun(manualPlan);
+  expect(await h.app()).toMatchObject({
+    state: "uninstalling",
+    primaryAction: "review",
+    progress: { review: { runId: manualPlan.id, runType: "destroy_plan" } },
+  });
 });
 
 test("a failed provider teardown follows its retries and stops counting once a normal change happens", async () => {
