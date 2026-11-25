@@ -178,7 +178,7 @@ async function fixture(options: {
 
   let job!: OpenTofuDestroyJob;
   const receiptCommittedAt = new Date(claimedAt + 1_500).toISOString();
-  const phase = options.phase === "queued" || options.phase === "fresh" ? "completed" : options.phase ?? "completed";
+  let phase = options.phase === "queued" || options.phase === "fresh" ? "completed" : options.phase ?? "completed";
   const inspect = mock(async (id: string, action: string) => ({
     kind: "takosumi.runner-mutation-inspection@v1",
     runId: id,
@@ -288,7 +288,11 @@ async function fixture(options: {
     operations, { action: "apply", runId: run.id, workspaceId: run.workspaceId }, { deadlineAt: Date.now() + 5_000 },
   );
   providerFetch.mockClear();
-  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, providerFetch, validateUninstallRequester, vault };
+  const makeReceiptAvailable = () => {
+    phase = "completed";
+    now += RUN_HEARTBEAT_STALE_MS + 1;
+  };
+  return { store, run, planRun, capsule, priorState, priorOutputs, inspect, adopt, fetch, runner, dispatch, stateVersionId, replacement, providerFetch, validateUninstallRequester, vault, makeReceiptAvailable };
 }
 
 for (const persistedFailure of [false, true]) {
@@ -474,6 +478,38 @@ test("a bound replacement proof cannot dispatch a queued Destroy after revocatio
     expect(f.inspect).not.toHaveBeenCalled();
     expect(f.adopt).not.toHaveBeenCalled();
     expect(f.providerFetch).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  } finally {
+    mint.mockRestore();
+    destroy.mockRestore();
+  }
+});
+
+test("a dispatched replacement Destroy remains recoverable when its selected connection is revoked", async () => {
+  const f = await fixture({ replacement: true, phase: "dispatched" });
+  expect(await f.vault!.revoke(f.replacement!.replacementConnectionId, undefined, null)).toBe(true);
+  const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+  const destroy = spyOn(f.runner, "destroy");
+  try {
+    const capsuleBefore = await f.store.getCapsule(f.capsule.id);
+    await f.dispatch();
+    const held = await f.store.getApplyRun(f.run.id);
+    expect(held).toMatchObject({ id: f.run.id, status: "running", startedAt: f.run.startedAt });
+    expect(held?.auditEvents).toEqual(f.run.auditEvents);
+    expect(await f.store.getCapsule(f.capsule.id)).toEqual(capsuleBefore);
+    expect(await f.store.getStateVersion(f.stateVersionId)).toBeUndefined();
+    expect(f.adopt).not.toHaveBeenCalled();
+
+    f.makeReceiptAvailable();
+    await f.dispatch();
+    expect(await f.store.getApplyRun(f.run.id)).toMatchObject({
+      id: f.run.id, status: "succeeded", startedAt: f.run.startedAt, stateVersionId: f.stateVersionId,
+    });
+    expect(await f.store.getCapsule(f.capsule.id)).toMatchObject({ status: "destroyed", currentStateGeneration: 2 });
+    expect(f.adopt).toHaveBeenCalledTimes(1);
+    expect(f.providerFetch).not.toHaveBeenCalled();
+    expect(f.fetch).not.toHaveBeenCalled();
     expect(mint).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
   } finally {
