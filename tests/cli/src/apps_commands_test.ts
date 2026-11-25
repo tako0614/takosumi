@@ -178,6 +178,44 @@ test("apps list follows nextCursor on the apps route and combines both pages", a
   }
 });
 
+test("apps list uses the localized app name and keeps the app ID and state visible", async () => {
+  const response = { apps: [
+    { capsuleId: "cap_managed", name: "app-4826183c-2ac8-43ef-9dc2-b37e08b1659b",
+      displayName: { ja: "チームの掲示板", en: "Team board" }, state: "uninstalling" },
+    { capsuleId: "cap_legacy", name: "legacy-deploy", displayName: "Existing app", state: "installed" },
+    { capsuleId: "cap_plain", name: "plain-app", state: "installed" },
+    { capsuleId: "cap_multiline", name: "multiline-app",
+      displayName: { ja: "名前\n2行目", en: "Name\nsecond line" }, state: "installed" },
+  ] };
+  const originalLanguage = process.env.TAKOSUMI_LANG;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    expect(new URL(String(input)).pathname).toBe("/api/v1/apps");
+    return Response.json(response);
+  }) as typeof fetch;
+  const args = ["apps", "list", "--url", "https://takosumi.example.test", "--token", "account-pat"];
+  const stdout: string[] = [];
+  const io = { ...quietIo, stdout: (line: string) => stdout.push(line) };
+  try {
+    for (const [language, label] of [["ja", "チームの掲示板"], ["en", "Team board"]] as const) {
+      process.env.TAKOSUMI_LANG = language;
+      expect(await main(args, io)).toBe(0);
+      expect(stdout.pop()).toBe([
+        `${label} (cap_managed) — uninstalling`,
+        "Existing app (cap_legacy) — installed",
+        "plain-app (cap_plain) — installed",
+        "multiline-app (cap_multiline) — installed",
+      ].join("\n"));
+    }
+    expect(await main([...args, "--json"], io)).toBe(0);
+    expect(JSON.parse(stdout.pop()!)).toEqual(response);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLanguage === undefined) delete process.env.TAKOSUMI_LANG;
+    else process.env.TAKOSUMI_LANG = originalLanguage;
+  }
+});
+
 test("apps list paginates the legacy installed-apps route after a 404", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Request[] = [];
