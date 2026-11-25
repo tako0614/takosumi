@@ -333,7 +333,7 @@ async function fetchAllPages<T>(
   extract: (
     body: { nextCursor?: string } & Record<string, unknown>,
   ) => readonly T[],
-  opts: Pick<RequestOpts, "signal" | "isCurrent"> & {
+  opts: Pick<RequestOpts, "signal" | "cache" | "isCurrent"> & {
     readonly readPage?: (path: string) => Promise<{ nextCursor?: string } & Record<string, unknown>>;
   } = {},
 ): Promise<readonly T[]> {
@@ -3323,7 +3323,7 @@ export async function listConnections(
 export async function listConnectionsWithSignal(
   workspaceId?: string,
   signal?: AbortSignal,
-  options: Pick<RequestOpts, "isCurrent"> = {},
+  options: Pick<RequestOpts, "cache" | "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
   if (await appOwnershipAvailable(signal)) {
     try {
@@ -3354,7 +3354,7 @@ export async function listProviderConnections(
 export async function listProviderConnectionsWithSignal(
   workspaceId?: string,
   signal?: AbortSignal,
-  options: Pick<RequestOpts, "isCurrent"> = {},
+  options: Pick<RequestOpts, "cache" | "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
   if (await appOwnershipAvailable(signal)) return await listConnectionsWithSignal(workspaceId, signal, options);
   const normalized = await legacyWorkspaceFor404(workspaceId);
@@ -3366,7 +3366,7 @@ export async function listProviderConnectionsWithSignal(
 export async function listLegacyProviderConnectionsWithSignal(
   workspaceId: string,
   signal?: AbortSignal,
-  options: Pick<RequestOpts, "isCurrent"> = {},
+  options: Pick<RequestOpts, "cache" | "isCurrent"> = {},
 ): Promise<readonly ProviderConnection[]> {
   const normalized = normalizedWorkspaceId(workspaceId);
   if (!normalized) return [];

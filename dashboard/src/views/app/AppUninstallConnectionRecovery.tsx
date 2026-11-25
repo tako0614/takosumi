@@ -20,10 +20,17 @@ function replacementConnectionLabel(connection: ProviderConnection, original: bo
   return accountId ? t("app.uninstall.replacementCloudflareAccount", { name, accountId }) : name;
 }
 
+function verifiedReplacementConnections(connections: readonly ProviderConnection[], now = Date.now()) {
+  return connections.filter((connection) =>
+    connection.scope !== "operator" && connection.status === "verified" &&
+    (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > now));
+}
+
 export default function AppUninstallConnectionRecovery(props: {
   readonly app: Pick<CapsuleAppView, "capsuleId" | "workspaceId" | "problems" | "latestRun" | "uninstall">;
   readonly mode: "unavailable" | "failed" | "refused" | "before_approval";
   readonly disabled: boolean;
+  readonly onCheckingChange?: (checking: boolean) => void;
   readonly onReview: (replacements: readonly DestroyProviderConnectionReplacement[]) => void;
 }) {
   const [open, setOpen] = createSignal(false);
@@ -41,7 +48,7 @@ export default function AppUninstallConnectionRecovery(props: {
   } : false);
   const reads = new AbortController();
   onCleanup(() => reads.abort());
-  const [inventory, { refetch }] = createResource(request, async (target) => {
+  const [inventory, { refetch, mutate }] = createResource(request, async (target) => {
     const isCurrent = () => !reads.signal.aborted && request() === target;
     const [connections, bindingSet] = await Promise.all([
       listProviderConnectionsWithSignal(target.workspaceId, reads.signal, { isCurrent }),
@@ -52,10 +59,7 @@ export default function AppUninstallConnectionRecovery(props: {
     if (bindingSet && (bindingSet.capsuleId !== target.capsuleId || bindingSet.workspaceId !== target.workspaceId)) {
       throw new Error("Provider bindings do not match this app.");
     }
-    const verified = connections.filter((connection) =>
-      connection.scope !== "operator" && connection.status === "verified" &&
-      (connection.expiresAt === undefined || Date.parse(connection.expiresAt) > Date.now()));
-    return { verified, connections, bindings: bindingSet?.bindings ?? [] };
+    return { verified: verifiedReplacementConnections(connections), connections, bindings: bindingSet?.bindings ?? [] };
   });
   const available = () => inventory.state === "ready" ? inventory() : undefined;
   const unavailableIds = createMemo(() => new Set(props.mode === "unavailable"
@@ -111,9 +115,19 @@ export default function AppUninstallConnectionRecovery(props: {
       [...unavailableIds()].every((connectionId) => selected.some((row) => row.connectionId === connectionId))
       ? selected : undefined;
   });
-  const review = () => {
+  const [checking, setChecking] = createSignal(false);
+  onCleanup(() => {
+    if (checking()) props.onCheckingChange?.(false);
+  });
+  const [reviewNotice, setReviewNotice] = createSignal<
+    "app.uninstall.replacementLoadFailed" | "app.uninstall.replacementSelectionChanged"
+  >();
+  const review = async () => {
     const selected = replacements();
-    if (!selected || props.disabled) return;
+    const initial = available();
+    const target = request();
+    if (!selected || !initial || !target || props.disabled || checking()) return;
+    setReviewNotice(undefined);
     const now = Date.now();
     if (selected.some(({ replacement }) => !isUninstallReplacementReady(replacement, now))) {
       // The picker may have stayed open past expiry. Require a fresh selection
@@ -124,9 +138,47 @@ export default function AppUninstallConnectionRecovery(props: {
       });
       return;
     }
-    props.onReview(selected.map(({ connectionId, replacement }) => ({
-      connectionId, replacementConnectionId: replacement.id,
-    })));
+    const chosen = selection();
+    const mode = props.mode;
+    const run = props.app.latestRun;
+    const isCurrent = () => !reads.signal.aborted && !props.disabled && request() === target &&
+      props.mode === mode && props.app.latestRun?.id === run?.id &&
+      props.app.latestRun?.status === run?.status && available() === initial && selection() === chosen;
+    setChecking(true);
+    props.onCheckingChange?.(true);
+    let connections: readonly ProviderConnection[];
+    try {
+      connections = await listProviderConnectionsWithSignal(target.workspaceId, reads.signal, { cache: "no-store", isCurrent });
+    } catch {
+      if (isCurrent()) setReviewNotice("app.uninstall.replacementLoadFailed");
+      return;
+    } finally {
+      if (!reads.signal.aborted) {
+        setChecking(false);
+        props.onCheckingChange?.(false);
+      }
+    }
+    if (!isCurrent()) return;
+
+    // Keep the logical bindings and recheck the selected keys against the current inventory.
+    const checked = Date.now();
+    batch(() => {
+      mutate({ ...initial, connections, verified: verifiedReplacementConnections(connections, checked) });
+      setCheckedAt(checked);
+      const current = replacements();
+      const unchanged = current?.length === selected.length && current.every(({ connectionId, replacement }) =>
+        selected.some((previous) => previous.connectionId === connectionId &&
+          previous.replacement.id === replacement.id &&
+          verifiedCloudflareAccountId(previous.replacement) === verifiedCloudflareAccountId(replacement)));
+      if (!unchanged) {
+        setSelection(new Map());
+        setReviewNotice("app.uninstall.replacementSelectionChanged");
+        return;
+      }
+      props.onReview(current.map(({ connectionId, replacement }) => ({
+        connectionId, replacementConnectionId: replacement.id,
+      })));
+    });
   };
 
   return (
@@ -139,6 +191,7 @@ export default function AppUninstallConnectionRecovery(props: {
       </>
     }>
       <div class="wa-stack">
+        <Show when={reviewNotice()}>{(message) => <p role="alert">{t(message())}</p>}</Show>
         <Switch>
           <Match when={inventory.loading}><p role="status">{t("common.loading")}</p></Match>
           <Match when={inventory.error}>
@@ -156,7 +209,7 @@ export default function AppUninstallConnectionRecovery(props: {
                 <FormField label={label} as="group"><p>{t("app.uninstall.noReplacement")}</p></FormField>
               }>
                 <FormField label={label}>
-                  <Select value={selection().get(connectionId) ?? ""} disabled={props.disabled} onChange={(event) =>
+                  <Select value={selection().get(connectionId) ?? ""} disabled={props.disabled || checking()} onChange={(event) =>
                     setSelection(new Map(selection()).set(connectionId, event.currentTarget.value))}>
                     <option value="">{t(props.mode !== "unavailable" && !unavailableIds().has(connectionId) && rows().length > 1
                       ? "app.uninstall.keepConnection"
@@ -170,7 +223,7 @@ export default function AppUninstallConnectionRecovery(props: {
                 </FormField>
               </Show>
             )}</For>
-            <Button variant="primary" type="button" disabled={props.disabled || !replacements()} onClick={review}>
+            <Button variant="primary" type="button" busy={checking()} disabled={props.disabled || !replacements()} onClick={review}>
               {t("app.uninstall.replacementReview")}
             </Button>
           </Match>
