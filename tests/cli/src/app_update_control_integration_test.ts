@@ -647,7 +647,7 @@ test("CLI app history finds the rollback target and the exact Plan survives a lo
   }
 });
 
-test("CLI explains a stale rollback when another Apply advances the app before submission", async () => {
+for (const stage of ["apply", "approve"] as const) test(`CLI explains a stale rollback when another Apply advances the app before ${stage}`, async () => {
   const h = await fixture();
   const target = (await h.ledger.getCapsule(h.appId))!.currentStateVersionId!;
   const request = (method: string, path: string, headers?: Record<string, string>) => h.dispatch(new Request(`${ORIGIN}${path}`, {
@@ -661,7 +661,12 @@ test("CLI explains a stale rollback when another Apply advances the app before s
   }
   const [staleId, concurrentId] = plans;
   expect(staleId).not.toBe(concurrentId);
-  const staleApplyPath = `/api/v1/runs/${staleId}/apply`;
+  if (stage === "approve") {
+    const saved = (await h.ledger.getPlanRun(staleId!))!;
+    expect((await h.ledger.transitionRun({ id: saved.id, kind: "plan", expectFrom: ["succeeded"],
+      run: { ...saved, status: "waiting_approval", requiresApproval: true } })).won).toBe(true);
+  }
+  const stalePostPath = `/api/v1/runs/${staleId}/${stage}`;
   const before = { ...h.runnerCalls };
   const calls: string[] = [];
   const output: string[] = [];
@@ -671,7 +676,7 @@ test("CLI explains a stale rollback when another Apply advances the app before s
     const req = new Request(input, init);
     const path = new URL(req.url).pathname;
     calls.push(`${req.method} ${path}`);
-    if (req.method === "POST" && path === staleApplyPath) {
+    if (req.method === "POST" && path === stalePostPath) {
       const concurrent = await request("POST", `/api/v1/runs/${concurrentId}/apply`);
       expect(concurrent.status).toBe(201);
       expect((await concurrent.json()).run.status).toBe("succeeded");
@@ -689,13 +694,16 @@ test("CLI explains a stale rollback when another Apply advances the app before s
     expect(await refusal?.json()).toMatchObject({ error: { code: "failed_precondition", details: { reason: "state_version_mismatch" } } });
     expect(calls).toEqual([
       `GET /api/v1/runs/${staleId}`, `GET /api/v1/capsules/${h.appId}/runs`, `GET /api/v1/capsules/${h.appId}`,
-      `POST ${staleApplyPath}`, `GET /api/v1/runs/${staleId}`, `GET /api/v1/capsules/${h.appId}/runs`,
+      `POST ${stalePostPath}`, `GET /api/v1/runs/${staleId}`, `GET /api/v1/capsules/${h.appId}/runs`,
     ]);
     expect(h.runnerCalls).toEqual({ ...before, apply: before.apply + 1 });
     expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ currentStateGeneration: 2 });
-    expect(await h.ledger.getPlanRun(staleId!)).not.toHaveProperty("appliedApplyRunId");
+    const stale = await h.ledger.getPlanRun(staleId!);
+    expect(stale).not.toHaveProperty("appliedApplyRunId");
+    expect(stale).not.toHaveProperty("approval");
     const result = JSON.parse(output[0]!);
-    expect(result).toMatchObject({ status: "refused", reason: "state_version_mismatch", planRunId: staleId });
+    expect(result).toMatchObject({ status: "refused", reason: "state_version_mismatch", planRunId: staleId,
+      lastObservedPlanStatus: stage === "approve" ? "waiting_approval" : "succeeded" });
     expect(result.recovery).toContain("apps history");
   } finally {
     globalThis.fetch = originalFetch;

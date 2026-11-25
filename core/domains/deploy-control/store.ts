@@ -42,7 +42,7 @@ import {
   workspaceBillingBindingMatches, workspaceBillingIntentMatches,
 } from "takosumi-contract";
 import { planRunAwaitsApproval } from "./projection_run.ts";
-import { appApplyAdmission, appClaimAdmission, appPlanAdmission } from "./app_run_admission.ts";
+import { appApplyAdmission, appClaimAdmission, appPlanAdmission, planApprovalBaseMatches } from "./app_run_admission.ts";
 import {
   assertRecoveryCommitCandidate,
   exactRecoveryReplay,
@@ -2865,6 +2865,8 @@ export interface TransitionRunInput {
    * private metadata on the stored row remains authoritative.
    */
   readonly requireStoredManagementAuthority?: boolean;
+  /** Atomically compare the stored ordinary Plan's base with the current Capsule on approval. */
+  readonly requireCurrentPlanBase?: boolean;
 }
 
 /** Append-only audit write accepted only from the current running Run owner. */
@@ -5231,6 +5233,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         management?.managementState !== "active" ||
         management.managementEpoch !== authority.managementEpoch
       ) {
+        return Promise.resolve({ won: false, run: publicStoredRun(current) });
+      }
+    }
+    if (input.requireCurrentPlanBase === true) {
+      const capsule = isPlanRunRecord(current) && current.capsuleId
+        ? this.#capsules.get(current.capsuleId) : undefined;
+      if (!isPlanRunRecord(current) || !isPlanRunRecord(input.run) ||
+        !planApprovalBaseMatches(current, capsule) || !planApprovalBaseMatches(input.run, capsule)) {
         return Promise.resolve({ won: false, run: publicStoredRun(current) });
       }
     }

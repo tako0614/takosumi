@@ -7435,6 +7435,8 @@ export class RunEngine {
     // left untouched (a parked/terminal plan carries no lease fence). A lost
     // CAS means the row moved between read and write, so the approval is
     // dropped rather than clobbering the new state.
+    const requireCurrentPlanBase = planRun.operation !== "destroy" && planRun.driftCheck !== true &&
+      planRun.capsuleId !== undefined;
     const approveResult = await this.#store.transitionRun({
       id,
       kind: "plan",
@@ -7442,9 +7444,18 @@ export class RunEngine {
         planRun.status === "succeeded" ? ["succeeded"] : ["waiting_approval"],
       run: approved,
       requireStoredManagementAuthority: true,
+      ...(requireCurrentPlanBase ? { requireCurrentPlanBase: true } : {}),
     });
     if (!approveResult.won) {
       const current = (approveResult.run as PlanRun | undefined) ?? approved;
+      if (requireCurrentPlanBase && current.status === planRun.status && !current.approval &&
+        current.capsuleId && current.capsuleId === planRun.capsuleId) {
+        const capsule = await this.#store.getCapsule(current.capsuleId);
+        if (capsule) {
+          validatePlannedCapsuleCurrent({ planRun: current, capsule });
+          assertStateGenerationMatches(current, capsule);
+        }
+      }
       if (current.status === "waiting_approval") {
         throw workspaceManagementAdmissionConflictError();
       }

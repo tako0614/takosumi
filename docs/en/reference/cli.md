@@ -126,7 +126,7 @@ A local Plan ID or `--yes` does not grant authority.
 A created Apply Run is not completion. Observation lasts up to 120 seconds by default; exit 0 requires that Run to succeed.
 `--timeout-ms <1..120000>` selects the observation budget and does not cancel the server Run.
 After an uncertain approval or Apply response, separately bounded reads take at most five seconds to inspect the same Plan and linked Apply; no POST is automatically repeated.
-A reported state conflict returns `refused` when readback confirms the same Plan and finds no linked Apply.
+A state conflict reported by approval or Apply returns `refused` when readback confirms the same Plan, its pre-operation status, and no linked Apply.
 Check the app's current state and its history with `apps history` before preparing and reviewing a new Plan.
 Ordinary failed, cancelled, and expired Runs exit 1 with `status: failed`.
 A saved failed Run with `code: runner_mutation_indeterminate` exits 1 with `status: indeterminate` and `runStatus: failed`.

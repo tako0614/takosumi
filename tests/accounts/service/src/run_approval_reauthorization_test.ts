@@ -129,6 +129,23 @@ for (const credential of ["pat", "session", "shared"] as const) {
   });
 }
 
+test("Run approval refuses an outdated Plan after the app state changes during the request", async () => {
+  const h = await fixture("session");
+  await h.reading;
+  const capsule = (await h.ledger.getCapsule(CAPSULE))!;
+  await h.ledger.putCapsule({ ...capsule, currentStateVersionId: "sv_after_review", currentStateGeneration: 1 });
+  h.finishBody();
+  const response = await h.pending;
+  expect(response?.status).toBe(409);
+  expect(await response?.json()).toMatchObject({
+    error: { code: "failed_precondition", details: { reason: "state_version_mismatch" } },
+  });
+  const stored = (await h.ledger.getPlanRun(PLAN))!;
+  expect(stored.status).toBe("waiting_approval");
+  expect(stored.approval).toBeUndefined();
+  expect(stored.auditEvents).toEqual([]);
+});
+
 for (const change of ["member removed", "PAT revoked", "PAT expired", "PAT write scope removed", "PAT app restriction changed"] as const) {
   test(`Run approval refuses ${change} while its request body is pending`, async () => {
     const h = await fixture();

@@ -79,6 +79,11 @@ capacity is not an OSS Core responsibility.
 
 ### App management and Workspace compatibility
 
+When recording a new approval for an ordinary app-bound Plan, Core compares
+the Plan's saved StateVersion and state generation with the current Capsule
+inside the approval write. A changed base requires a new Plan and review.
+Previously recorded approvals remain readable as historical records.
+
 The normal management unit is an app (a Capsule). An app's owner may add
 members who can view it, change settings, update, roll back, select eligible
 Connections, and manage Interface links. Uninstall, ownership transfer, and
