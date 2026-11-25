@@ -51,7 +51,7 @@ export default function AppUninstallConnectionRecovery(props: {
   const [inventory, { refetch, mutate }] = createResource(request, async (target) => {
     const isCurrent = () => !reads.signal.aborted && request() === target;
     const [connections, bindingSet] = await Promise.all([
-      listProviderConnectionsWithSignal(target.workspaceId, reads.signal, { isCurrent }),
+      listProviderConnectionsWithSignal(target.workspaceId, reads.signal, { cache: "no-store", isCurrent }),
       target.bindingRunId
         ? getCapsuleProviderBindingSet(target.capsuleId, { signal: reads.signal, isCurrent })
         : undefined,
@@ -122,6 +122,15 @@ export default function AppUninstallConnectionRecovery(props: {
   const [reviewNotice, setReviewNotice] = createSignal<
     "app.uninstall.replacementLoadFailed" | "app.uninstall.replacementSelectionChanged"
   >();
+  const refreshConnections = () => {
+    if (props.disabled || checking() || inventory.loading) return;
+    batch(() => {
+      setSelection(new Map());
+      setCheckedAt(undefined);
+      setReviewNotice(undefined);
+    });
+    void refetch();
+  };
   const review = async () => {
     const selected = replacements();
     const initial = available();
@@ -229,6 +238,9 @@ export default function AppUninstallConnectionRecovery(props: {
           </Match>
         </Switch>
         <Show when={available()}>
+          <Button variant="secondary" type="button" disabled={props.disabled || checking()} onClick={refreshConnections}>
+            {t("app.uninstall.refreshConnections")}
+          </Button>
           <Button variant="secondary" href={uninstallConnectionsHref(capsuleId())} disabled={props.disabled}>
             {t("app.uninstall.viewConnections")}
           </Button>

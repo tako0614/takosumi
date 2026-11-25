@@ -1811,7 +1811,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionInventoryUnavailable: "an uninstall review holds old approval until checking replacement connections finishes",
@@ -1844,6 +1844,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       failedOpenReview: "a failed uninstall offers another connection inside its open review",
       indeterminateOpenReview: "an indeterminate uninstall offers no new removal from its open review",
       noReplacement: "uninstall recovery opens connections when no verified replacement is available",
+      refreshInitialReplacement: "uninstall recovery refreshes an empty connection chooser without leaving the app",
       reverifyReplacement: "uninstall recovery can return after rechecking a saved connection",
     }[scenario], async ({ page }) => {
       const lostReplacementOnInstalledApp = scenario === "lostReplacementOnInstalledApp";
@@ -1910,7 +1911,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const indeterminateOpenReview = scenario === "indeterminateOpenReview";
       const openReviewFailure = scenario === "failedOpenReview" || indeterminateOpenReview;
       const reverifyReplacement = scenario === "reverifyReplacement";
-      const noReplacement = scenario === "noReplacement" || reverifyReplacement;
+      const refreshInitialReplacement = scenario === "refreshInitialReplacement";
+      const noReplacement = scenario === "noReplacement" || refreshInitialReplacement || reverifyReplacement;
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       if (scenario === "states") await page.clock.install();
       if (replacementExpiresBeforeReview) {
@@ -2454,6 +2456,34 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await choose.click();
         await expect(danger.getByText("No verified connection is available to select.")).toBeVisible();
         await expect(reviewRemoval).toHaveCount(0);
+        if (refreshInitialReplacement) {
+          const refreshConnections = danger.getByRole("button", { name: "Refresh connection list", exact: true });
+          await expect(refreshConnections).toBeVisible({ timeout: 3_000 });
+
+          // The owner added and verified a key in another tab.
+          replacementAvailable = true;
+          replacementVerified = true;
+          const refreshed = page.waitForResponse((response) =>
+            new URL(response.url()).pathname === "/api/v1/connections");
+          const currentUrl = page.url();
+          await refreshConnections.click();
+          expect((await refreshed).status()).toBe(200);
+          await expect(page).toHaveURL(currentUrl);
+          const choices = danger.getByRole("combobox", { name: "Cloudflare" });
+          await expect(choices).toHaveValue("");
+          await expect(reviewRemoval).toBeDisabled();
+          expect(seenMutations).toEqual([]);
+          await choices.selectOption("conn_saved");
+          await reviewRemoval.click();
+          await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+          expect(replacementPlanBodies).toEqual([{
+            destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
+          }]);
+          expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
+          expect(errors).toEqual([]);
+          traffic.assertNoFailures();
+          return;
+        }
         const viewConnections = danger.getByRole("link", { name: "View cloud connections" });
         await expect(viewConnections).toHaveAttribute("href", `/connections?uninstallApp=${ID}`);
         await viewConnections.click();
