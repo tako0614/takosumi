@@ -77,7 +77,7 @@ export class SessionError extends Error {
 export type SessionState =
   | { readonly kind: "loading" }
   | { readonly kind: "authenticated"; readonly session: SessionRecord }
-  | { readonly kind: "unauthenticated" }
+  | { readonly kind: "unauthenticated"; readonly preserveReturn?: boolean }
   | { readonly kind: "maintenance"; readonly error: SessionError }
   | { readonly kind: "error"; readonly error: SessionError };
 
@@ -91,7 +91,10 @@ let cachedError: SessionError | null = null;
 let cachedAt = 0;
 let initialized = false;
 let inflight: Promise<SessionRecord | null> | null = null;
-let signOutInFlight: Promise<boolean> | null = null;
+let signOutInFlight: {
+  readonly request: Promise<boolean>;
+  readonly stillCurrent: () => boolean;
+} | null = null;
 let sessionEpoch = 0;
 
 function notify(s: SessionRecord | null): void {
@@ -367,6 +370,8 @@ export function refreshSession(
   const request = fetchSessionMe(options)
     .then(({ session: s, workspaces }) => {
       if (epoch !== sessionEpoch) return null;
+      // A refresh can observe revocation before the sign-out response arrives.
+      const preserveReturn = !signOutInFlight?.stillCurrent();
       if (!s || cachedSession?.subject !== s.subject || cachedSession?.primaryAccountId !== s.primaryAccountId) {
         clearSessionProjections();
       }
@@ -379,7 +384,7 @@ export function refreshSession(
       if (s && workspaces) primeWorkspaceListCache(workspaces);
       notify(s);
       notifyState(
-        s ? { kind: "authenticated", session: s } : { kind: "unauthenticated" },
+        s ? { kind: "authenticated", session: s } : { kind: "unauthenticated", preserveReturn },
       );
       return s;
     })
@@ -500,7 +505,7 @@ function clearLocalSession(): void {
   cachedAt = Date.now();
   initialized = true;
   notify(null);
-  notifyState({ kind: "unauthenticated" });
+  notifyState({ kind: "unauthenticated", preserveReturn: false });
 }
 
 /** Clear an expired session and request best-effort server cleanup. */
@@ -535,7 +540,7 @@ async function withSessionDeadline<T>(
 
 /** Confirm explicit sign-out before the browser leaves the authenticated view. */
 export function signOutSession(): Promise<boolean> {
-  if (signOutInFlight) return signOutInFlight;
+  if (signOutInFlight) return signOutInFlight.request;
   const epoch = sessionEpoch;
   const session = cachedSession;
   const stillCurrent = () => epoch === sessionEpoch &&
@@ -569,7 +574,7 @@ export function signOutSession(): Promise<boolean> {
   })().finally(() => {
     signOutInFlight = null;
   });
-  signOutInFlight = request;
+  signOutInFlight = { request, stillCurrent };
   return request;
 }
 

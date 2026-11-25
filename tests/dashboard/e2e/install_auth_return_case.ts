@@ -46,6 +46,37 @@ export function registerInstallAuthReturnCase(mode: DashboardE2EMode): void {
     expect(page.url()).toBe(signInUrl);
     expect(writes, "login must not install an app or issue a payment").toEqual([]);
   });
+  test("a rejected cached session preserves the app settings route at sign-in", async ({ page }) => {
+    test.skip(mode !== "portable", "This test expires only the local fixture session.");
+    const destination = "/apps/cap_repository_office#settings";
+    let sessionExpired = false;
+    const signInRequests: string[] = [];
+    await page.route("**/api/v1/dashboard/bootstrap?**", (route) => sessionExpired
+      ? route.fulfill({ status: 401, json: { error: "unauthenticated" } })
+      : route.fallback());
+    await page.route("**/api/v1/account/session/me", (route) => sessionExpired
+      ? route.fulfill({ json: { session: null } })
+      : route.fallback());
+    await page.route("**/sign-in?**", (route) => {
+      if (route.request().isNavigationRequest() && route.request().frame() === page.mainFrame()) {
+        signInRequests.push(route.request().url());
+      }
+      return route.fulfill({
+        status: 200, contentType: "text/html", body: "<!doctype html><title>Login boundary reached</title>",
+      });
+    });
+    await page.goto("/");
+    const appSettings = page.locator(`a[href="${destination}"]`);
+    await expect(appSettings).toBeVisible();
+    // Expire the 30-second cache while keeping the cached record's expiry in the future.
+    await page.clock.setFixedTime(new Date(Date.now() + 31_000));
+    sessionExpired = true;
+    await appSettings.click();
+    await page.waitForURL((url) => url.pathname === "/sign-in");
+    expect(new URL(page.url()).searchParams.get("return")).toBe(destination);
+    await expect(page).toHaveTitle("Login boundary reached");
+    expect(signInRequests).toEqual([page.url()]);
+  });
   test("persistent Hosted session failure offers a fresh sign-in with the install destination intact", async ({ page }) => {
     test.skip(mode !== "portable", "This test supplies a local Hosted session failure.");
     const destination = "/new?tcsBase=https%3A%2F%2Fstore.example.test&tcsListing=tako%2Fyurucommu";
