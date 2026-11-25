@@ -1012,8 +1012,9 @@ export async function createWorkspace(input: {
   readonly handle: string;
   readonly displayName?: string;
   readonly type?: WorkspaceType;
-}): Promise<Workspace> {
+}, scope: Pick<RequestOpts, "isCurrent"> = {}): Promise<Workspace> {
   const body = await controlFetch<WorkspaceEnvelope>(`${BASE}/workspaces`, {
+    ...scope,
     method: "POST",
     body: {
       handle: input.handle,
@@ -1347,14 +1348,17 @@ export async function createGitInstallAttempt(
   workspaceId: string | undefined,
   request: CreateGitInstallAttemptRequest,
   idempotencyKey: string,
+  scope: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
   const options = {
+    ...scope,
     method: "POST",
     headers: { "idempotency-key": idempotencyKey },
     body: request,
   } as const;
+  throwIfReadRetired(scope);
   if (!await appOwnershipAvailable()) {
-    const legacyId = await legacyInstallWorkspaceId(workspaceId);
+    const legacyId = await legacyInstallWorkspaceId(workspaceId, scope);
     if (!legacyId) throw new ControlApiError(404, "feature_unavailable", "Legacy installation is unavailable on this server.");
     return await controlFetch<GitInstallPlanResponse>(
       `${BASE}/workspaces/${encodeURIComponent(legacyId)}/install-plans`, options,
@@ -1378,11 +1382,12 @@ export async function answerGitInstallAttempt(
 export async function discardGitInstallAttempt(
   installPlanId: string,
   expectedGeneration: number,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
   const body: DiscardGitInstallPlanRequest = { expectedGeneration };
   return await controlFetch<GitInstallPlanResponse>(
     `${BASE}/install-plans/${encodeURIComponent(installPlanId)}`,
-    { method: "DELETE", body },
+    { ...options, method: "DELETE", body },
   );
 }
 
@@ -3792,15 +3797,21 @@ export async function appOwnershipAvailable(signal?: AbortSignal): Promise<boole
 let legacyInstallWorkspace: Promise<string> | undefined;
 
 /** Only a legacy server may create the Workspace needed by its install route. */
-export async function legacyInstallWorkspaceId(workspaceId?: string): Promise<string | undefined> {
+export async function legacyInstallWorkspaceId(
+  workspaceId?: string,
+  scope: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<string | undefined> {
+  throwIfReadRetired(scope);
   if (await appOwnershipAvailable()) return undefined;
+  throwIfReadRetired(scope);
   const existing = await legacyWorkspaceFor404(workspaceId);
+  throwIfReadRetired(scope);
   if (existing) return existing;
   if (!legacyInstallWorkspace) {
     legacyInstallWorkspace = createWorkspace({
       handle: `personal-${randomUuid().replaceAll("-", "").slice(0, 16)}`,
       type: "personal",
-    }).then((workspace) => workspace.id).catch((error: unknown) => {
+    }, scope).then((workspace) => workspace.id).catch((error: unknown) => {
       legacyInstallWorkspace = undefined;
       throw error;
     });

@@ -205,14 +205,17 @@ export async function discardInstallAttempt(
   generation: number,
   pause: (milliseconds: number) => Promise<void> = (milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds)),
-): Promise<GitInstallPlanResponse> {
+  isCurrent: () => boolean = () => true,
+): Promise<GitInstallPlanResponse | undefined> {
+  const scope = { isCurrent };
   let expected = generation;
   let leaseWaits = 0;
   let conflicts = 0;
-  for (;;) {
+  while (isCurrent()) {
     try {
-      return await discardGitInstallAttempt(planId, expected);
+      return await discardGitInstallAttempt(planId, expected, scope);
     } catch (cause) {
+      if (!isCurrent()) return undefined;
       const code = errorCode(cause);
       if (code === "reconcile_in_progress") {
         const waitMs = DISCARD_LEASE_WAITS_MS[leaseWaits];
@@ -222,9 +225,11 @@ export async function discardInstallAttempt(
       } else if (code !== "install_plan_generation_conflict" || ++conflicts > DISCARD_LEASE_WAITS_MS.length) {
         throw cause;
       }
-      expected = (await getGitInstallPlan(planId)).installPlan.generation;
+      if (!isCurrent()) return undefined;
+      expected = (await getGitInstallPlan(planId, scope)).installPlan.generation;
     }
   }
+  return undefined;
 }
 
 /** Localized words for a failed install request. */
@@ -844,6 +849,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const postAttempt = async (
     workspaceId: string | undefined,
     request: CreateGitInstallAttemptRequest,
+    isCurrent: () => boolean,
     latest?: ResolvedStoreVersion,
   ): Promise<GitInstallPlanResponse> => {
     const body = JSON.stringify(request);
@@ -852,7 +858,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       : randomUuid();
     pendingStart = { workspaceId, body, key, latest };
     try {
-      const created = await createGitInstallAttempt(workspaceId, request, key);
+      const created = await createGitInstallAttempt(workspaceId, request, key, { isCurrent });
       pendingStart = undefined;
       return created;
     } catch (cause) {
@@ -920,8 +926,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       await Promise.resolve();
       const expected = epoch;
       const selectedWorkspace = currentWorkspaceId();
-      const workspaceId = await legacyInstallWorkspaceId(selectedWorkspace || undefined);
-      const stillStartingHere = () => !disposed && expected === epoch && !untrack(options.attemptId) &&
+      const stillOpening = () => !disposed && expected === epoch && !untrack(options.attemptId);
+      const workspaceId = await legacyInstallWorkspaceId(selectedWorkspace || undefined, { isCurrent: stillOpening });
+      const stillStartingHere = () => stillOpening() &&
         (!workspaceId || currentWorkspaceId() === selectedWorkspace);
       if (!stillStartingHere()) return;
       legacyWorkspaceContext = workspaceId;
@@ -940,7 +947,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       }
       if (!stillStartingHere()) return;
       const request = attemptCreateRequest({ ...candidate, ref: latest?.commit ?? ref });
-      const created = await postAttempt(workspaceId, request, latest);
+      const created = await postAttempt(workspaceId, request, stillStartingHere, latest);
       adoptNewAttempt(created, expected, { latest });
     } catch (cause) {
       if (!disposed) setError(installErrorMessage(cause));
@@ -1325,6 +1332,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const replan = async (): Promise<boolean> => {
     const current = response();
     if (!current || mutating() || locked()) return false;
+    let expected = epoch;
+    const isCurrent = () => !disposed && expected === epoch;
     replannedVersion = untrack(editVersion);
     setMutating("replan");
     setReplanning(true);
@@ -1332,7 +1341,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setError(undefined);
     try {
       await stopDriving();
-      if (disposed) return false;
+      if (!isCurrent()) return false;
       const latest = response() ?? current;
       const plan = latest.installPlan;
       const planWorkspaceId = legacyWorkspaceContext;
@@ -1348,7 +1357,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         const selectedLatest = refText === "" && options.fromStore?.()
           ? await resolveStoreVersion(planWorkspaceId, plan.source.url)
           : refText === undefined ? resolvedVersion() : undefined;
-        if (disposed) return false;
+        if (!isCurrent()) return false;
         const request = replanRequest(plan, {
           name,
           ref: selectedLatest?.commit ?? refText ?? plan.source.ref,
@@ -1361,17 +1370,17 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
             : {}),
         });
         if (plan.phase !== "discarded" && replanDiscarded !== plan.id) {
-          await discardInstallAttempt(plan.id, plan.generation, wait);
-          if (disposed) return false;
+          const discarded = await discardInstallAttempt(plan.id, plan.generation, wait, isCurrent);
+          if (!discarded || !isCurrent()) return false;
           replanDiscarded = plan.id;
         }
         replacement = { workspaceId: planWorkspaceId, request, name, refText, latest: selectedLatest };
       }
       if (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceSelection) return false;
       clearCaches(replacement.workspaceId);
-      const expected = ++epoch;
+      expected = ++epoch;
       pendingReplan = replacement;
-      const created = await postAttempt(replacement.workspaceId, replacement.request);
+      const created = await postAttempt(replacement.workspaceId, replacement.request, isCurrent);
       const latestLinkedRows = retained ? withInterfaceOverrides(retained.interfaces, interfaceOverrides()) : [];
       if (!adoptNewAttempt(created, expected, { keepAnswers: true, latest: replacement.latest })) return false;
       pendingReplan = undefined;
@@ -1414,17 +1423,16 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       if (refDraft() === replacement.refText) setRefDraft(undefined);
       return true;
     } catch (cause) {
+      if (!isCurrent()) return false;
       // Only a start whose outcome is unknown is sent again as it was; a
       // refused one is built again from the answers on the screen.
       if (pendingReplan && !outcomeUnknown(cause)) pendingReplan = undefined;
-      if (!disposed) {
-        setError(installErrorMessage(cause));
-        setReplanning(false);
-        setReplanStalled(true);
-        // While the attempt still exists, show it as it is now; once it is
-        // discarded, the screen keeps the person's answers for Continue.
-        if (!replanDiscarded) await refresh();
-      }
+      setError(installErrorMessage(cause));
+      setReplanning(false);
+      setReplanStalled(true);
+      // While the attempt still exists, show it as it is now; once it is
+      // discarded, the screen keeps the person's answers for Continue.
+      if (!replanDiscarded) await refresh(expected);
       return false;
     } finally {
       if (!disposed) setMutating(undefined);
@@ -1541,17 +1549,20 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const discard = async (): Promise<boolean> => {
     const current = response();
     if (!current || mutating() || reviewHeld()) return false;
+    const expected = epoch;
+    const isCurrent = () => !disposed && expected === epoch;
     setMutating("discard");
     setError(undefined);
     try {
       // A reconcile in flight is aborted rather than awaited; the discard then
       // reads the generation it left behind (and waits out its lease).
       await stopDriving();
+      if (!isCurrent()) return false;
       const latest = response() ?? current;
       const discarded = latest.installPlan.phase === "discarded"
         ? latest
-        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation, wait);
-      if (disposed) return false;
+        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation, wait, isCurrent);
+      if (!discarded || !isCurrent()) return false;
       clearCaches(latest.installPlan.workspaceId);
       epoch += 1;
       setResponse(undefined);
@@ -1560,9 +1571,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       options.onLeft(discarded.installPlan);
       return true;
     } catch (cause) {
-      if (!disposed) {
+      if (isCurrent()) {
         setError(installErrorMessage(cause));
-        await refresh();
+        await refresh(expected);
       }
       return false;
     } finally {
@@ -1579,23 +1590,26 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const current = response();
     if (!current || mutating() || reviewHeld()) return false;
     if (sheet()) return await replan();
+    let expected = epoch;
+    const isCurrent = () => !disposed && expected === epoch;
     setMutating("restart");
     setError(undefined);
     try {
       await stopDriving();
+      if (!isCurrent()) return false;
       const latest = response() ?? current;
       const discarded = latest.installPlan.phase === "discarded"
         ? latest
-        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation, wait);
+        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation, wait, isCurrent);
       const workspaceId = legacyWorkspaceContext;
-      if (disposed || (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceSelection)) return false;
+      if (!discarded || !isCurrent() || (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceSelection)) return false;
       clearCaches(workspaceId);
       const latestVersion = resolvedVersion();
-      const expected = ++epoch;
-      const created = await postAttempt(workspaceId, restartRequest(discarded.installPlan));
+      expected = ++epoch;
+      const created = await postAttempt(workspaceId, restartRequest(discarded.installPlan), isCurrent);
       return adoptNewAttempt(created, expected, { latest: latestVersion });
     } catch (cause) {
-      if (!disposed) setError(installErrorMessage(cause));
+      if (isCurrent()) setError(installErrorMessage(cause));
       return false;
     } finally {
       if (!disposed) setMutating(undefined);
