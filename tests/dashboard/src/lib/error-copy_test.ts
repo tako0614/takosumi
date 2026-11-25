@@ -3,6 +3,18 @@ import { en } from "../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../dashboard/src/i18n/ja.ts";
 import { ControlApiError } from "../../../../dashboard/src/lib/control-api.ts";
 import { friendlyError } from "../../../../dashboard/src/lib/error-copy.ts";
+import { runFailureHint } from "../../../../dashboard/src/lib/run-errors.ts";
+
+test("both stale state guards explain that another change was applied first", () => {
+  for (const reason of ["state_version_mismatch", "state_generation_mismatch"]) {
+    const error = new ControlApiError(409, "failed_precondition", "Internal StateVersion validation detail", {
+      error: { details: { reason } },
+    });
+    expect(friendlyError(error, key => en[key]).message).toBe(en["controlError.stateGenerationMismatch"]);
+    expect(friendlyError(error, key => ja[key]).message).toBe(ja["controlError.stateGenerationMismatch"]);
+    expect(runFailureHint(reason)).toBe(runFailureHint("state_generation_mismatch"));
+  }
+});
 
 test("uninstall connection recovery explains the proven reason without showing server prose", () => {
   for (const [connectionRecoveryFailure, key] of [

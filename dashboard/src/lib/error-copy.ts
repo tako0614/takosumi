@@ -129,6 +129,7 @@ const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
   app_ownership_mutations_frozen: "controlError.appOwnershipMutationsFrozen",
   destroy_connection_recovery_unproven: "app.uninstall.replacementUnproven",
   state_generation_mismatch: "controlError.stateGenerationMismatch",
+  state_version_mismatch: "controlError.stateGenerationMismatch",
   dependency_retired: "controlError.dependencyRetired",
   source_ref_changed: "controlError.sourceChanged",
   source_revision_mismatch: "controlError.sourceRevisionMismatch",
