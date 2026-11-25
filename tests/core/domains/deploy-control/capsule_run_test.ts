@@ -1813,6 +1813,7 @@ test("a timed-out Plan preparation cannot dispatch after its late durable comple
         timeoutMs: 25_000,
       },
     });
+    await expect(attempt).rejects.not.toHaveProperty("details.reservedPlanRunId");
 
     // Promise.race cannot cancel the store call. When it eventually commits,
     // its discarded preparation result must not cross the dispatch boundary.
@@ -13986,6 +13987,42 @@ test.each([
     await noDispatch(() => controller.createCapsuleDestroyPlan(seeded.capsule.id, {}, {
       destroyProviderConnectionReplacements: [...selection, { connectionId: unused.id, replacementConnectionId: laterReplacement.id }],
     }));
+  }
+  if (originalStatus === "verified") {
+    const prepare = store.preparePlanRun.bind(store);
+    const entered = deferredSignal();
+    const release = deferredSignal();
+    const stored = deferredSignal();
+    let reservedPlanRunId: string | undefined;
+    store.preparePlanRun = async (input) => {
+      reservedPlanRunId = input.run.id;
+      entered.resolve();
+      await release.promise;
+      try { return await prepare(input); }
+      finally { stored.resolve(); }
+    };
+    const deadlines = capturedPlanCreationDeadlines();
+    const before = runner.planJobs.length;
+    try {
+      const pending = attempt();
+      await Promise.race([entered.promise, pending.then(() => { throw Error("Plan returned before save"); })]);
+      expect(reservedPlanRunId).toBeString();
+      expect(await store.getPlanRun(reservedPlanRunId!)).toBeUndefined();
+      deadlines.fireLatest();
+      await expect(pending).rejects.toMatchObject({
+        code: "failed_precondition",
+        details: { reason: "capsule_plan_creation_timeout", stage: "plan_run_create", reservedPlanRunId },
+      });
+      release.resolve();
+      await stored.promise;
+      expect((await store.getPlanRun(reservedPlanRunId!))?.status).toBe("queued");
+      expect(runner.planJobs).toHaveLength(before);
+      await controller.cancelRun(reservedPlanRunId!);
+    } finally {
+      store.preparePlanRun = prepare;
+      deadlines.restore();
+      release.resolve();
+    }
   }
   const routed = await request({ destroyProviderConnectionReplacements: selection });
   expect(routed!.status).toBe(201);

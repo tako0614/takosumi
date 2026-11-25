@@ -609,9 +609,15 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
     const saveTimedOut = details?.reason === "capsule_plan_creation_timeout" && details.stage === "plan_run_create";
     const refused = !submitted || !saveTimedOut &&
       error instanceof DeployControlApiError && error.status >= 400 && error.status < 500;
-    write(io, options, { status: refused ? "refused" : "unconfirmed", appId, planRunId, code: errorCode(error),
+    const candidateId = details?.reservedPlanRunId;
+    const reservedPlanRunId = submitted && saveTimedOut && bounded(candidateId, 256) &&
+      /^plan_[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(candidateId) ? candidateId : undefined;
+    const recovery = reservedPlanRunId
+      ? `Use apps recover-uninstall with the same app and --destroy-plan ${reservedPlanRunId} to read it. If the Plan is not found, the save is still unconfirmed.`
+      : "Use apps recover-uninstall with the same app and --current-review to inspect its current Destroy Plan, or check the app's Run history before requesting another.";
+    write(io, options, { status: refused ? "refused" : "unconfirmed", appId, planRunId, reservedPlanRunId, code: errorCode(error),
       connectionRecoveryFailure: submitted ? destroyConnectionRecoveryFailure(error) : undefined,
-      recovery: refused ? undefined : "Use apps recover-uninstall with the same app and --current-review to inspect its current Destroy Plan, or check the app's Run history before requesting another." });
+      recovery: refused ? undefined : recovery });
     return error instanceof Refusal && ARGUMENT_REFUSALS.has(error.code) ? 2 : 1;
   }
 }

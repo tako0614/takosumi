@@ -518,22 +518,36 @@ test("recovery Plan submission with a lost response sends only the original requ
 });
 
 test("a Destroy Plan save timeout leaves the replacement unconfirmed without resubmitting", async () => {
-  const respond = (stage: string) => Response.json({ error: {
+  const respond = (stage: string, reservedPlanRunId?: unknown) => Response.json({ error: {
     code: "failed_precondition",
-    details: { reason: "capsule_plan_creation_timeout", stage, timeoutMs: 25_000 },
+    details: { reason: "capsule_plan_creation_timeout", stage, timeoutMs: 25_000, reservedPlanRunId },
   } }, { status: 409 });
 
-  const saving = await invoke(recoverArgs, () => respond("plan_run_create"));
+  const reservedPlanRunId = "plan_0123456789abcdef";
+  const saving = await invoke(recoverArgs, () => respond("plan_run_create", reservedPlanRunId));
   expect(saving.code).toBe(1);
-  expect(saving.result).toMatchObject({ status: "unconfirmed", appId: "cap_owned", code: "failed_precondition" });
+  expect(saving.result).toMatchObject({
+    status: "unconfirmed", appId: "cap_owned", code: "failed_precondition", reservedPlanRunId,
+  });
   expect(saving.result.planRunId).toBeUndefined();
-  expect(saving.result.recovery).toContain("--current-review");
+  expect(saving.result.recovery).toContain(`--destroy-plan ${reservedPlanRunId}`);
+  expect(saving.result.recovery).toContain("the save is still unconfirmed");
   expect(saving.calls.map(c => [c.method, new URL(c.url).pathname]))
     .toEqual([["POST", "/api/v1/capsules/cap_owned/destroy-plan"]]);
 
-  const beforeSaving = await invoke(recoverArgs, () => respond("capsule_load"));
+  for (const id of [undefined, "plan_$(not-an-id)", "apply_0123456789abcdef", 7]) {
+    const fallback = await invoke(recoverArgs, () => respond("plan_run_create", id));
+    expect(fallback.code).toBe(1);
+    expect(fallback.result.status).toBe("unconfirmed");
+    expect(fallback.result.reservedPlanRunId).toBeUndefined();
+    expect(fallback.result.recovery).toContain("--current-review");
+    expect(fallback.calls.map(c => c.method)).toEqual(["POST"]);
+  }
+
+  const beforeSaving = await invoke(recoverArgs, () => respond("capsule_load", reservedPlanRunId));
   expect(beforeSaving.code).toBe(1);
   expect(beforeSaving.result.status).toBe("refused");
+  expect(beforeSaving.result.reservedPlanRunId).toBeUndefined();
   expect(beforeSaving.calls.map(c => c.method)).toEqual(["POST"]);
 });
 
