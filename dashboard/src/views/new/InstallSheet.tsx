@@ -34,6 +34,8 @@ import {
   Textarea,
 } from "../../components/ui/index.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
+import { appPageHref } from "../../lib/app-links.ts";
+import { appStateSentence } from "../../lib/app-page.ts";
 import { getCapsuleAppWithSignal, getRun, testConnection } from "../../lib/control-api.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { interfaceLabel } from "../../lib/interface-labels.ts";
@@ -300,7 +302,8 @@ function PlanPreview(props: { readonly attempt: InstallAttempt }) {
  * The Plan is ready: what the app creates, its cost, policy reasons and the
  * one apply click. A reopened review first asks the app where it stands
  * (GET /capsules/:id/app): an apply already running is followed instead of
- * offering the click again, and an app already installed is done.
+ * offering the click again. A saved state can also belong to a failed or
+ * removed app, which must be opened in its own management page.
  */
 function PlanReview(props: {
   readonly attempt: InstallAttempt;
@@ -326,7 +329,10 @@ function PlanReview(props: {
         props.action.capsuleId === capsuleId && props.action.planRunId === planRunId;
       const app = await getCapsuleAppWithSignal(capsuleId, undefined, { isCurrent: current });
       if (!current()) throw new Error(t("installStore.recoveryUnverified"));
-      if (app.applied) return { app, verified: true };
+      if (app.applied || app.status === "destroyed") {
+        const existing = app.applied && app.state === "installed" ? "complete" : "manage";
+        return { app, verified: true, existing };
+      }
       const latest = app.progress.run ?? app.latestRun;
       const candidateId = latest?.id ?? app.progress.review?.runId;
       if (!candidateId || candidateId === planRunId) return { app, verified: !app.progress.revisionPreparing };
@@ -349,10 +355,10 @@ function PlanReview(props: {
       releaseHold ??= props.attempt.holdReview();
     } else {
       // Keep answers locked across releasing the temporary resolution hold.
-      if (value.initialRunId) props.attempt.lockAnswers();
+      if (value.initialRunId || value.existing) props.attempt.lockAnswers();
       releaseHold?.();
       releaseHold = undefined;
-      if (value.app.applied) props.onDone(props.action.capsuleId);
+      if (value.existing === "complete") props.onDone(props.action.capsuleId);
     }
   });
   const block = () => props.attempt.view().applyBlock;
@@ -369,7 +375,20 @@ function PlanReview(props: {
         when={!entry.loading}
         fallback={<div class="iv-status" role="status"><Spinner size={18} /><span>{t("common.loading")}</span></div>}
       >
-        <Show when={!resolved()?.app.applied}>
+        <Show when={!resolved()?.existing} fallback={
+          <Show when={resolved()?.existing === "manage" ? resolved()?.app : undefined}>
+            {(app) => (
+              <div class="iv-status" role="status" data-testid="install-existing-app">
+                <p>{t(app().state === "needs_attention"
+                  ? "installStore.existingNeedsAttention"
+                  : appStateSentence(app()))}</p>
+                <Button variant="primary" href={appPageHref(app().capsuleId)}>
+                  {t("installStore.manageApp")}
+                </Button>
+              </div>
+            )}
+          </Show>
+        }>
           <Show when={resolved()?.verified} fallback={
             <div class="iv-error" role="alert" data-testid="install-review-unverified">
               <p>{t("installStore.recoveryUnverifiedHint")}</p>

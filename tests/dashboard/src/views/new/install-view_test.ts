@@ -136,7 +136,8 @@ describe("attempt-driven install page", () => {
     expect(review).toContain("getCapsuleAppWithSignal(capsuleId, undefined, { isCurrent: current })");
     expect(review).toContain("getRun(candidateId, { isCurrent: current })");
     expect(review.indexOf("<Show\n        when={!entry.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
-    expect(review).toContain("if (value.app.applied) props.onDone(props.action.capsuleId);");
+    expect(review).toContain('app.applied && app.state === "installed" ? "complete" : "manage"');
+    expect(review).toContain('if (value.existing === "complete") props.onDone(props.action.capsuleId);');
     expect(review).toContain("app.progress.run ?? app.latestRun");
     expect(review).toContain("showPolicyReasons");
     expect(review).not.toContain("getCapsuleApp(capsuleId).catch");

@@ -866,6 +866,48 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
       expect(errors).toEqual([]);
     });
+    for (const outcome of ["needs attention", "uninstalled", "installed"] as const) {
+      test(`a saved install shows the app's current ${outcome} state after reload`, async ({ page }) => {
+        const fixture = await detailFixture(page, base);
+        await page.goto(sourceUrl);
+        await openInstallSheet(page);
+        const review = await waitForPlan(page);
+        await review.getByRole("button", { name: "Install", exact: true }).click();
+        await expect.poll(() => fixture.mutations.filter((mutation) => mutation === applyMutation).length).toBe(1);
+        if (outcome === "needs attention") fixture.fail(true);
+        else fixture.finish();
+        if (outcome === "uninstalled") fixture.destroy();
+
+        // Current server app views keep applied=true when a failed Apply or
+        // completed Destroy saved a StateVersion. It is not launch readiness.
+        await page.route(`**/api/v1/capsules/${capId}/app`, (route) => route.fulfill({
+          json: { app: { ...fixture.appView(), applied: true } },
+        }));
+        let screenReads = 0;
+        await page.route("**/api/v1/ui-surfaces?**", (route) => {
+          if (new URL(route.request().url()).searchParams.get("capsuleId") === capId) screenReads += 1;
+          return route.fallback();
+        });
+
+        const mutations = [...fixture.mutations];
+        await page.reload({ waitUntil: "domcontentloaded" });
+        const complete = page.getByTestId("install-complete");
+        if (outcome === "installed") {
+          await expect(complete.getByRole("heading", { name: "Installed", exact: true })).toBeVisible();
+          await expect(complete.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "https://apps.example.test/inline-app");
+          expect(screenReads).toBeGreaterThan(0);
+        } else {
+          const existing = page.getByTestId("install-existing-app");
+          await expect(existing).toContainText(outcome === "uninstalled" ? "Uninstalled." : "This app needs attention.");
+          await expect(existing.getByRole("link", { name: "Manage app", exact: true })).toHaveAttribute("href", `/apps/${capId}`);
+          await expect(complete).toHaveCount(0);
+          await expect(installSheet(page).getByRole("button", { name: "Install", exact: true })).toHaveCount(0);
+          await expect(installSheet(page).getByRole("button", { name: "Stop installing", exact: true })).toHaveCount(0);
+          expect(screenReads).toBe(0);
+        }
+        expect(fixture.mutations).toEqual(mutations);
+      });
+    }
     test("a saved install attempt replaces an older completion for the same repository", async ({ page }) => {
       const f = await detailFixture(page, base);
       const matchesScreenRead = (url: URL) =>
