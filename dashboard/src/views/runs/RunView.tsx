@@ -921,6 +921,8 @@ function Inner(props: { readonly session: SessionRecord }) {
 
   const [applied, setApplied] = createSignal(false);
   const [needsConfirm, setNeedsConfirm] = createSignal(false);
+  const [stalePlanId, setStalePlanId] = createSignal<string>();
+  const stalePlan = () => runId() === stalePlanId();
   type ApplyAttempt = { readonly plan: Run; readonly epoch: number };
   const [unconfirmedApply, setUnconfirmedApply] = createSignal<ApplyAttempt>();
   const [checkingApply, setCheckingApply] = createSignal(false);
@@ -979,7 +981,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     ([capsuleId, id, workspaceId, type]) => listPlanApplyRuns({ capsuleId, id, workspaceId, type }, readOptions()),
   );
   const isDeployableRun = (r: Run): boolean => {
-    if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply() || heldUninstallApp(r)) return false;
+    if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply() || stalePlan() || heldUninstallApp(r)) return false;
     // A failed or unfinished history read cannot prove approval is still open.
     if (siblingRuns.error || siblingRuns.loading) return false;
     const siblings = siblingRuns.latest;
@@ -1080,7 +1082,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     let envelope: unknown;
     const currentRun = runLatest();
     if (!currentRun || currentRun.id !== runId() || !currentRun.capsuleId ||
-      !currentRun.workspaceId || !isReviewRun(currentRun) || unconfirmedApply() || heldUninstallApp(currentRun)) return;
+      !currentRun.workspaceId || !isReviewRun(currentRun) || unconfirmedApply() || stalePlan() || heldUninstallApp(currentRun)) return;
     const attempt = { plan: currentRun, epoch: runEpoch };
     if (
       currentRun &&
@@ -1097,6 +1099,10 @@ function Inner(props: { readonly session: SessionRecord }) {
       });
     } catch (error) {
       if (!ownsApply(attempt)) return;
+      if (currentRun.type === "plan" && error instanceof ControlApiError && error.isApplyStateConflict) {
+        setNeedsConfirm(false);
+        setStalePlanId(currentRun.id);
+      }
       if (!(error instanceof ControlApiIndeterminateError) || error.operation !== "apply") throw error;
       setUnconfirmedApply(attempt);
       const recovered = await recoverApply(attempt);
@@ -1242,6 +1248,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     cancel.clearError();
     setApplied(false);
     setNeedsConfirm(false);
+    setStalePlanId(undefined);
   });
 
   const confirmApprove = async (): Promise<void> => {
@@ -1407,6 +1414,8 @@ function Inner(props: { readonly session: SessionRecord }) {
       };
     }
     if (isReviewRun(r)) {
+      // The Apply alert replaces the ready-to-deploy summary for this review.
+      if (stalePlan()) return null;
       if (unconfirmedApply()) {
         return { kind: "progress", text: t("run.applyUnconfirmed") };
       }
