@@ -247,6 +247,7 @@ function GitInstallPage() {
 function AppInstallPage(props: { readonly principalId: string }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const attemptId = createMemo(() => installAttemptId(location.search));
   const handoff = createMemo(() => appHandoffFromSearch(location.search));
   const prefill = createMemo(() => parseInstallPrefill(withoutInstallContext(location.search)));
   const store = createMemo(() => storeHandoff(location.search), undefined, {
@@ -274,7 +275,17 @@ function AppInstallPage(props: { readonly principalId: string }) {
     readonly settled?: boolean;
   }>();
   let disposed = false;
-  onCleanup(() => { disposed = true; });
+  let completionRead: AbortController | undefined;
+  const clearCompletion = () => {
+    completionRead?.abort();
+    completionRead = undefined;
+    setCompleted(undefined);
+  };
+  createEffect(on(attemptId, clearCompletion, { defer: true }));
+  onCleanup(() => {
+    disposed = true;
+    completionRead?.abort();
+  });
 
   /** Where to land once the attempt is gone: the same app, never a new start. */
   const leaveSearch = (plan: GitInstallPlan): string => {
@@ -292,7 +303,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
 
   const attempt = useInstallAttempt({
     principalId: props.principalId,
-    attemptId: () => installAttemptId(location.search),
+    attemptId,
     onStarted: (attemptId) =>
       navigate(`${location.pathname}${withInstallAttempt(location.search, attemptId)}`, { replace: true }),
     onLeft: (plan) => navigate(`${location.pathname}${leaveSearch(plan)}`, { replace: true }),
@@ -330,7 +341,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   createEffect(on(sourceMismatch, (mismatch) => {
     if (mismatch) {
       attempt.finish();
-      setCompleted(undefined);
+      clearCompletion();
     }
   }));
   const gitUrl = () => (sourceMismatch() ? selectedGitUrl() : plan()?.source.url ?? selectedGitUrl()) ?? "";
@@ -409,8 +420,11 @@ function AppInstallPage(props: { readonly principalId: string }) {
    * the app's own page.
    */
   const finish = async (capsuleId: string) => {
-    if (completed()?.capsuleId === capsuleId) return;
-    const workspaceId = plan()?.workspaceId || currentWorkspaceId() || undefined;
+    const id = attemptId();
+    const current = attempt.response();
+    if (!id || current?.installPlan.id !== id || current.userAction.kind !== "review_run" ||
+        current.userAction.capsuleId !== capsuleId || sourceMismatch() || completed()?.capsuleId === capsuleId) return;
+    const workspaceId = current.installPlan.workspaceId || currentWorkspaceId() || undefined;
     clearCapsuleListCache(workspaceId);
     attempt.finish();
     setCompleted({ capsuleId });
@@ -418,22 +432,31 @@ function AppInstallPage(props: { readonly principalId: string }) {
       setCompleted({ capsuleId, settled: true });
       return;
     }
-    for (let index = 0; index < SCREEN_READ_ATTEMPTS; index += 1) {
-      try {
-        const screens = await listAuthorizedUiSurfaces(workspaceId, { capsuleId });
-        if (disposed) return;
-        const url = screens[0]?.url;
-        if (url) {
-          setCompleted({ capsuleId, url, settled: true });
-          return;
+    completionRead?.abort();
+    const controller = new AbortController();
+    completionRead = controller;
+    const isCurrent = () => !disposed && completionRead === controller && attemptId() === id;
+    try {
+      for (let index = 0; index < SCREEN_READ_ATTEMPTS; index += 1) {
+        try {
+          const screens = await listAuthorizedUiSurfaces(workspaceId, { capsuleId, signal: controller.signal });
+          if (!isCurrent()) return;
+          const url = screens[0]?.url;
+          if (url) {
+            setCompleted({ capsuleId, url, settled: true });
+            return;
+          }
+        } catch {
+          if (!isCurrent()) return;
+          // Retried within the bounded read; never shown as a launchable screen.
         }
-      } catch {
-        // Retried within the bounded read; never shown as a launchable screen.
+        await new Promise((resolve) => setTimeout(resolve, SCREEN_READ_DELAY_MS));
+        if (!isCurrent()) return;
       }
-      await new Promise((resolve) => setTimeout(resolve, SCREEN_READ_DELAY_MS));
-      if (disposed || completed()?.capsuleId !== capsuleId) return;
+      setCompleted({ capsuleId, settled: true });
+    } finally {
+      if (completionRead === controller) completionRead = undefined;
     }
-    setCompleted({ capsuleId, settled: true });
   };
 
   const stage = () => attempt.view().stage;

@@ -866,6 +866,67 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
       expect(errors).toEqual([]);
     });
+    test("a saved install attempt replaces an older completion for the same repository", async ({ page }) => {
+      const f = await detailFixture(page, base);
+      const matchesScreenRead = (url: URL) =>
+        url.pathname === "/api/v1/ui-surfaces" && url.searchParams.get("capsuleId") === capId;
+      const oldRead = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const retiredRead = Promise.withResolvers<void>();
+      await page.route(matchesScreenRead, async (route) => {
+        oldRead.resolve();
+        await release.promise;
+        await route.fallback();
+      }, { times: 1 });
+      const settleRead = (request: { url: () => string }) => {
+        if (matchesScreenRead(new URL(request.url()))) retiredRead.resolve();
+      };
+      page.on("requestfinished", settleRead);
+      page.on("requestfailed", settleRead);
+      try {
+        await page.goto(sourceUrl);
+        await openInstallSheet(page);
+        const review = await waitForPlan(page);
+        await review.getByRole("button", { name: "Install", exact: true }).click();
+        await expect.poll(() => f.mutations.filter((mutation) => mutation === applyMutation).length).toBe(1);
+        f.finish();
+        const complete = page.getByTestId("install-complete");
+        await expect(complete.getByRole("heading", { name: "Installed", exact: true })).toBeVisible();
+        await oldRead.promise;
+
+        // Another tab already created this draft. Same repository and release,
+        // different coordinator ID, so the router retains the install page.
+        const previous = f.attempts.latest()!;
+        expect(f.attempts.handle({
+          method: "POST", path: "/api/v1/install-plans", idempotencyKey: "another-tab-fixture",
+          body: { mode: "attempt", source: previous.source, capsule: { name: "second-instance" } },
+        })?.status).toBe(201);
+        const second = f.attempts.latest()!.id;
+        expect(second).not.toBe(previous.id);
+        const mutationFloor = f.mutations.length;
+        const secondRead = page.waitForResponse((response) =>
+          response.request().method() === "GET" &&
+          new URL(response.url()).pathname === `/api/v1/install-plans/${second}` && response.ok());
+        await page.evaluate((id) => {
+          const url = new URL(location.href);
+          url.searchParams.set("installPlan", id);
+          history.pushState(history.state, "", url);
+          window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+        }, second);
+        await secondRead;
+        await expect(page).toHaveURL((url) => url.searchParams.get("installPlan") === second);
+        await expect(complete).toHaveCount(0);
+        const progress = installSheet(page).getByTestId("install-progress");
+        await expect(progress).toHaveAttribute("data-progress", "paused");
+        release.resolve();
+        await retiredRead.promise;
+        await expect(complete).toHaveCount(0);
+        await expect(progress).toHaveAttribute("data-progress", "paused");
+        expect(f.mutations.slice(mutationFloor)).toEqual([]);
+      } finally {
+        release.resolve();
+      }
+    });
     test("a change after the Plan marks it out of date and prepares the install again with the same answers", async ({ page }) => {
       await page.clock.install();
       const mutationDispatches = await observeInstallMutationDispatches(page);
