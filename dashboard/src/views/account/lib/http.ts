@@ -16,7 +16,8 @@
  * account-plane client; it is deliberately separate from the takos product
  * `lib/rpc.ts` Hono client (different base + auth).
  */
-import { clearSession } from "./session.ts";
+import { clearSession, currentSessionCheck } from "./session.ts";
+import { appPathForSignIn } from "../../../lib/app-links.ts";
 import {
   preflightSharedAuthSession,
   throwIfSharedAuthCallerAborted,
@@ -73,6 +74,7 @@ export async function apiFetch<T>(
     if (preflight) await preflight;
   }
   throwIfSharedAuthCallerAborted(opts.signal);
+  const sessionIsCurrent = auth ? currentSessionCheck() : undefined;
   const res = await fetch(path, {
     method: opts.method ?? "GET",
     headers,
@@ -81,11 +83,12 @@ export async function apiFetch<T>(
     signal: opts.signal,
   });
 
-  if (res.status === 401 && auth) {
-    clearSession();
-    if (typeof location !== "undefined") {
-      const intended = location.pathname + location.search;
-      location.assign("/sign-in?return=" + encodeURIComponent(intended));
+  if (res.status === 401 && sessionIsCurrent) {
+    if (sessionIsCurrent()) {
+      // Keep the URL before clearing the session can move the local router.
+      const intended = typeof location === "undefined" ? undefined : appPathForSignIn(location);
+      clearSession();
+      if (intended !== undefined) location.assign("/sign-in?return=" + encodeURIComponent(intended));
     }
     throw new ApiError(401, "unauthorized", "session expired");
   }
