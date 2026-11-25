@@ -18,6 +18,7 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   source_sync_failed: "runError.sourceSyncFailed",
   source_ref_not_found: "runError.sourceRefNotFound",
   state_generation_mismatch: "runError.stateGenerationMismatch",
+  state_version_mismatch: "runError.stateGenerationMismatch",
   provider_credential_env_conflict: "runError.providerCredentialEnvConflict",
   runner_mutation_indeterminate: "runError.mutationIndeterminate",
   opentofu_resource_precondition_failed: "runError.resourcePreconditionFailed",

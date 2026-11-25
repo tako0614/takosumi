@@ -63,6 +63,7 @@ export function validatePlannedCapsuleCurrent(input: {
     throw new OpenTofuControllerError(
       "failed_precondition",
       `capsule ${input.capsule.id} current StateVersion changed since PlanRun ${input.planRun.id}`,
+      { reason: "state_version_mismatch" },
     );
   }
 }
