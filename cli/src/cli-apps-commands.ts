@@ -210,11 +210,15 @@ function formatAppsList(value: unknown, json: boolean): string {
     : Array.isArray(value.installedApps)
       ? value.installedApps
       : [];
-  if (apps.length === 0) return isJapaneseCli() ? "アプリはありません" : "No apps";
+  const language = isJapaneseCli() ? "ja" : "en";
+  if (apps.length === 0) return language === "ja" ? "アプリはありません" : "No apps";
   return apps.map((entry) => {
     if (!isRecord(entry)) return JSON.stringify(entry);
     const id = stringValue(entry.capsuleId) ?? stringValue(entry.id) ?? "?";
-    const name = stringValue(entry.displayName) ?? stringValue(entry.name) ?? id;
+    const label = entry.displayName;
+    const localized = isRecord(label) ? stringValue(label[language]) : undefined;
+    const displayName = localized && !/\p{Cc}/u.test(localized) ? localized : stringValue(label);
+    const name = displayName ?? stringValue(entry.name) ?? id;
     const state = stringValue(entry.state) ?? "unknown";
     return `${name} (${id}) — ${state}`;
   }).join("\n");
