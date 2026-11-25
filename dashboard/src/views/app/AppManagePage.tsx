@@ -545,6 +545,7 @@ export default function AppManagePage(props: {
   // Bumped when a settings review closes unapplied, so the form shows what
   // the app actually runs rather than edits that were never applied.
   const [settingsSeed, setSettingsSeed] = createSignal(0);
+  const [settingsApplyCount, setSettingsApplyCount] = createSignal(0);
   // Reviews of in-progress work the person closed are not reopened for them.
   const dismissedRuns = new Set<string>();
   const closeReview = (active: ActiveReview) => {
@@ -641,6 +642,7 @@ export default function AppManagePage(props: {
           cause.status === 409 && cause.code === "failed_precondition" && cause.reason === "provider_connection_not_ready";
         // A rollback from version history uses the ordinary "apply" review.
         const isRollback = section === "version" && purpose === "apply";
+        const isConfigurationChange = section === "settings" && purpose === "apply";
         const hold = purpose === "uninstall" ? options.replaceReview?.hold() : undefined;
         const removalSubmitted = Boolean(hold || options.submittedRemoval?.());
         const details = (isRollback || removalSubmitted) && cause instanceof ControlApiError ? cause.details : undefined;
@@ -660,7 +662,7 @@ export default function AppManagePage(props: {
             : rollbackSaveTimedOut ? t("app.review.notStarted") : friendlyError(cause, t).message;
           setSectionError({ section, message });
         }
-        const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback) &&
+        const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback || isConfigurationChange) &&
           (rollbackSaveTimedOut || (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
             : cause instanceof TypeError));
@@ -685,7 +687,7 @@ export default function AppManagePage(props: {
           try {
             void Promise.resolve(refetchApp({ isCurrent })).catch(() => {});
           } catch {
-            // Keep the original update error when its readback also fails.
+            // Keep the original error when the readback also fails.
           }
         }
       }
@@ -709,6 +711,7 @@ export default function AppManagePage(props: {
     setReview(undefined);
     dismissedRuns.add(active.initialRunId ?? active.planRunId);
     setNotice({ section: active.section, message: t(DONE_MESSAGE[active.purpose]) });
+    if (active.purpose === "apply") setSettingsApplyCount((count) => count + 1);
     refreshAfterReview();
   };
 
@@ -1529,10 +1532,10 @@ export default function AppManagePage(props: {
     if (id === "app-gone") return true;
     if (id === "attention") {
       const view = app();
-      const pendingVersionReview = selected === "version" && !review() &&
+      const pendingChangeReview = (selected === "version" || selected === "settings" || selected === "connections") && !review() &&
         view?.state === "installed" && view.progress.review?.runType === "plan";
       return !selected || selected === id || review()?.section === "attention" ||
-        starting()?.section === "attention" || Boolean(errorFor("attention")) || selected === "danger" || pendingVersionReview;
+        starting()?.section === "attention" || Boolean(errorFor("attention")) || selected === "danger" || pendingChangeReview;
     }
     return selected === id;
   };
@@ -1885,6 +1888,7 @@ export default function AppManagePage(props: {
                   bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}
                   capsuleInstallConfigId={inst().installConfigId}
                   seed={settingsSeed()}
+                  completedApplies={settingsApplyCount()}
                   bindingsLoading={bindingSet.loading}
                   bindingsFailed={Boolean(bindingSet.error)}
                   onRetryReads={() => {

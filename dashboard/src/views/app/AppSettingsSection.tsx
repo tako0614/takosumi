@@ -24,6 +24,7 @@ import {
 import { useBeforeLeave } from "@solidjs/router";
 import { PlugZap } from "lucide-solid";
 import {
+  type CapsuleConfigurationPlanRequest,
   installExperienceArtifact,
   installExperienceInitialSecret,
   installExperienceOidcClient,
@@ -31,6 +32,7 @@ import {
   installExperienceServiceNameVariable,
 } from "takosumi-contract";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
+import { REDACTED_VALUE } from "takosumi-contract/redaction";
 import {
   Badge,
   Button,
@@ -90,6 +92,17 @@ interface SettingsRead {
   readonly guard: string;
   readonly bindings: ProviderBindings | undefined;
   readonly bindingFingerprint: string | undefined;
+}
+
+function matchesReviewedSettings(read: SettingsRead, request: CapsuleConfigurationPlanRequest): boolean {
+  if (read.bindingFingerprint !== bindingFingerprint(request.providerBindings)) return false;
+  const { variableMapping } = read.config;
+  return request.variablePatch.remove.every((name) => !Object.hasOwn(variableMapping, name)) &&
+    Object.entries(request.variablePatch.set).every(([name, value]) => {
+      if (!Object.hasOwn(variableMapping, name)) return false;
+      const saved = JSON.stringify(variableMapping[name]);
+      return saved !== undefined && !saved.includes(JSON.stringify(REDACTED_VALUE)) && saved === JSON.stringify(value);
+    });
 }
 
 function draftConflicts(base: SettingsRead, current: SettingsRead): boolean {
@@ -180,6 +193,7 @@ export default function AppSettingsSection(props: {
   readonly capsuleInstallConfigId: string;
   /** Changes when a settings review closes unapplied: the form re-reads what the app runs. */
   readonly seed: number;
+  readonly completedApplies: number;
   readonly authorityGuard: string | undefined;
   readonly authorityLoading: boolean;
   readonly authorityFailed: boolean;
@@ -217,7 +231,16 @@ export default function AppSettingsSection(props: {
   // instead of minting a second authority. Once the Plan id comes back the
   // key is released: the server would replay that Plan for it.
   let configurationAttempt:
-    | { readonly requestJson: string; readonly idempotencyKey: string }
+    | {
+        readonly requestJson: string;
+        readonly idempotencyKey: string;
+        readonly request: CapsuleConfigurationPlanRequest;
+        readonly capsuleId: string;
+        readonly baseConfigId: string;
+        readonly completedApplies: number;
+        readonly variables: readonly ConfigVariableRow[];
+        readonly bindings: readonly ProviderBinding[];
+      }
     | undefined;
   const review = props.review;
 
@@ -255,9 +278,20 @@ export default function AppSettingsSection(props: {
   };
   // Seed only on the first read, explicit reset, or newly saved configuration.
   // A same-head refetch can produce new objects while a pane is hidden.
-  createEffect(on([currentRead, () => props.seed], ([read, seed]) => {
+  createEffect(on([currentRead, () => props.seed, () => props.completedApplies], ([read, seed, completedApplies]) => {
     if (!read) return;
     const base = draftBase();
+    const attempt = configurationAttempt;
+    // Recovery may only confirm settings that a completed Apply left visible
+    // in the authorized readback. Retain redacted values and later edits.
+    if (attempt && completedApplies > attempt.completedApplies && attempt.capsuleId === props.capsuleId &&
+      base?.read.config.id === attempt.baseConfigId && read.config.id !== attempt.baseConfigId &&
+      attempt.variables === variableRows() && attempt.bindings === rows() &&
+      matchesReviewedSettings(read, attempt.request)) {
+      configurationAttempt = undefined;
+      loadDraft(read, seed);
+      return;
+    }
     if (!base || base.seed !== seed || (!dirty() && draftConflicts(base.read, read))) {
       loadDraft(read, seed);
     } else if (base.read.bindingFingerprint === undefined && read.bindings !== undefined &&
@@ -400,7 +434,10 @@ export default function AppSettingsSection(props: {
       configurationAttempt?.requestJson === requestJson
         ? configurationAttempt.idempotencyKey
         : randomUuid();
-    configurationAttempt = { requestJson, idempotencyKey };
+    configurationAttempt = {
+      requestJson, idempotencyKey, request, capsuleId: props.capsuleId, baseConfigId: config.id,
+      completedApplies: props.completedApplies, variables: variableRows(), bindings: rows(),
+    };
     props.onReview(async () => {
       const result = await createCapsuleConfigurationPlan(props.capsuleId, request, idempotencyKey);
       // The reviewed successor and its Plan exist now: release the key and

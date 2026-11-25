@@ -1240,6 +1240,130 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
+    for (const [outcome, title] of [
+      ["matching", "reveals the saved review and clears the matching draft after Apply"],
+      ["missing", "leaves nothing to approve without a saved Plan"],
+      ["different", "keeps the draft after applying a different saved configuration"],
+    ] as const) test(
+      `a lost settings response ${title}`,
+      async ({ page }) => {
+        const saved = outcome !== "missing";
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+        const errors = pageErrors(page);
+        const now = "2026-10-01T00:00:00.000Z";
+        const planId = "run_saved_settings_review";
+        const appPath = `/api/v1/capsules/${CAPSULE_ID}`;
+        const planPath = `${appPath}/configuration-plans`;
+        const plan = {
+          ...lifecycleRun(planId, "plan", "succeeded", now),
+          origin: { kind: "configuration" },
+          baseStateGeneration: 1,
+          summary: { add: 0, change: 1, destroy: 0 },
+          policyStatus: "pass",
+          planResources: [{ address: "terraform_data.settings_change", type: "terraform_data", actions: ["update"] }],
+        };
+        const apply = lifecycleRun("run_recovered_settings_apply", "apply", "succeeded", now, { planRunId: plan.id });
+        const successor = "cfg_recovered_settings";
+        const mutations: string[] = [];
+        const origin = resolvePortableOrigin();
+        let submitted = false;
+        let applied = false;
+        let appReadsAfterSubmit = 0;
+        await page.route("**/api/v1/**", async (route) => {
+          const request = route.request();
+          const path = new URL(request.url()).pathname;
+          if (shouldRecordControlPlaneMutation(mode, origin, request.url(), request.method())) {
+            mutations.push(`${request.method()} ${path}`);
+          }
+          if (path === appPath) return route.fulfill({ json: {
+            capsule: {
+              ...PORTABLE_CAPSULES.ws_alpha[0],
+              ...(submitted && saved ? { installConfigId: successor } : {}),
+              ...(applied ? { currentStateGeneration: 2, currentStateVersionId: "sv_recovered_settings" } : {}),
+            },
+            installConfigReAdoption: { authorityGuard: submitted && saved ? `sha256:${"b".repeat(64)}` : AUTHORITY_GUARD },
+          } });
+          if (path === `${appPath}/app`) {
+            if (submitted) appReadsAfterSubmit += 1;
+            return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
+              progress: { revisionPreparing: false, ...(submitted && saved && !applied ? { review: { runId: planId, runType: "plan" } } : {}) },
+            }) } });
+          }
+          if (path === `${appPath}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: null } });
+          const configId = path.split("/").at(-1);
+          if (path.startsWith("/api/v1/capsule-configs/") && (configId === INSTALL_CONFIG_ID || configId === successor)) {
+            return route.fulfill({ json: { installConfig: {
+              id: configId, workspaceId: "ws_alpha", name: "Repository Office", policy: {},
+              variableMapping: { region: configId === INSTALL_CONFIG_ID ? "initial" : outcome === "matching" ? "changed" : "different" },
+              outputAllowlist: {}, interfaceBlueprints: [], variablePresentation: [{ name: "region", type: "string", required: true }],
+              createdAt: now, updatedAt: now,
+            } } });
+          }
+          if (path === planPath && request.method() === "POST") {
+            expect(request.postDataJSON().variablePatch).toEqual({ set: { region: "changed" }, remove: [] });
+            submitted = true;
+            return route.fulfill({ status: 502, json: { error: { code: "unavailable", message: "The response was lost." } } });
+          }
+          if (path === `/api/v1/runs/${planId}/apply` && request.method() === "POST") {
+            applied = true;
+            return route.fulfill({ status: 201, json: { run: apply } });
+          }
+          if (path === `${appPath}/state-versions`) return route.fulfill({ json: {
+            stateVersions: applied ? [{
+              id: "sv_recovered_settings", workspaceId: "ws_alpha", capsuleId: CAPSULE_ID, environment: "production",
+              generation: 2, createdByRunId: apply.id, createdAt: now,
+            }] : [],
+          } });
+          if (path === `${appPath}/activity`) return route.fulfill({ json: { events: [] } });
+          if (path === `/api/v1/runs/${planId}` && saved) return route.fulfill({ json: { run: plan } });
+          if (path === `/api/v1/runs/${apply.id}` && applied) return route.fulfill({ json: { run: apply } });
+          if (path === `/api/v1/runs/${planId}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (path === `/api/v1/runs/${planId}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
+          return route.fallback();
+        });
+
+        await page.goto(`/apps/${CAPSULE_ID}#settings`, { waitUntil: "domcontentloaded" });
+        const settings = page.getByTestId("app-settings");
+        const region = settings.getByRole("textbox", { name: /^region/iu });
+        const start = settings.getByRole("button", { name: "Review", exact: true });
+        await region.fill("changed");
+        const lost = page.waitForResponse((response) => response.url().endsWith(planPath) && response.status() === 502);
+        await start.click();
+        await lost;
+        await expect.poll(() => appReadsAfterSubmit).toBe(1);
+        const waiting = page.locator('[data-problem="review-waiting"]');
+        if (saved) {
+          await waiting.getByRole("button", { name: "Review", exact: true }).click();
+          const review = page.getByTestId("app-review");
+          const authorize = review.getByRole("button", { name: "Allow and apply", exact: true });
+          await expect(authorize).toBeVisible();
+          await expect(review).toContainText("settings_change");
+          expect(mutations).toEqual([`POST ${planPath}`]);
+          const refreshedConfig = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/capsule-configs/${successor}` && response.status() === 200);
+          await authorize.click();
+          await refreshedConfig;
+          await expect(review).toHaveCount(0);
+          const conflict = settings.getByTestId("app-settings-draft-conflict");
+          if (outcome === "matching") {
+            await expect(conflict).toHaveCount(0);
+            await page.locator(".sidebar").getByRole("link", { name: "Home", exact: true }).click();
+            await expect(page).toHaveURL(/\/$/u);
+          } else {
+            await expect(conflict).toBeVisible();
+            await expect(region).toHaveValue("changed");
+          }
+          expect(mutations).toEqual([`POST ${planPath}`, `POST /api/v1/runs/${planId}/apply`]);
+        } else {
+          await expect(waiting).toHaveCount(0);
+          await expect(page.getByTestId("app-review")).toHaveCount(0);
+          await expect(region).toHaveValue("changed");
+          await expect(start).toBeEnabled();
+          expect(mutations).toEqual([`POST ${planPath}`]);
+        }
+        expect(errors).toEqual([]);
+      },
+    );
+
     test("reviews never replay a returned plan, retry through their own request, and never leak to another app", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
