@@ -27,6 +27,7 @@ import {
   fetchDashboardWorkspaceBootstrap,
 } from "../../../../dashboard/src/lib/dashboard-bootstrap.ts";
 import {
+  canReuseRecentSharedAuthProbe,
   clearSharedAuthSessionPreflight,
   probeInitialSharedAuthSession,
   SharedAuthSessionPreflightError,
@@ -552,6 +553,7 @@ test("reused availability rejects an unmarked legacy success after a Worker roll
     listIncomingOwnershipTransfers,
     () => getCapsuleProviderBindingSet("cap_test", { reuseRecentSharedAuthProbe: true }),
     () => getRun("run_test", { reuseRecentSharedAuthProbe: true }),
+    () => listAuthorizedUiSurfaces("ws_current", { capsuleId: "cap_test", reuseRecentSharedAuthProbe: true }),
   ]) {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -564,6 +566,43 @@ test("reused availability rejects an unmarked legacy success after a Worker roll
     await probeInitialSharedAuthSession();
     await expect(read()).rejects.toMatchObject({ status: 503 });
     expect(calls).toHaveLength(2);
+  }
+});
+
+test("an unproved app launcher 404 never enters the legacy Workspace route", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const path = String(input);
+    calls.push(path);
+    if (path === healthPath) return Response.json({ authenticated: true });
+    expect(new Headers(init?.headers).get("x-takosumi-shared-auth-read")).toBe("1");
+    expect(init?.cache).toBe("no-store");
+    return Response.json({ error: "not_found" }, { status: 404 });
+  }) as typeof fetch;
+  await probeInitialSharedAuthSession();
+  await expect(listAuthorizedUiSurfaces("ws_current", {
+    capsuleId: "cap_test", reuseRecentSharedAuthProbe: true,
+  })).rejects.toMatchObject({ status: 503 });
+  expect(calls).toEqual([healthPath, "/api/v1/ui-surfaces?capsuleId=cap_test"]);
+  expect(canReuseRecentSharedAuthProbe()).toBe(false);
+});
+
+test("an app launcher 401 retires the current shared observation only for its active screen", async () => {
+  for (const retire of [false, true]) {
+    const pending = Promise.withResolvers<Response>();
+    let isCurrent = true;
+    globalThis.fetch = (async (input) => String(input) === healthPath
+      ? Response.json({ authenticated: true })
+      : pending.promise) as typeof fetch;
+    await probeInitialSharedAuthSession();
+    const read = listAuthorizedUiSurfaces("ws_current", {
+      capsuleId: "cap_test", reuseRecentSharedAuthProbe: true, isCurrent: () => isCurrent,
+    });
+    isCurrent = !retire;
+    pending.resolve(Response.json({ error: "unauthenticated" }, { status: 401 }));
+    if (retire) await expect(read).rejects.toMatchObject({ name: "AbortError" });
+    else await expect(read).rejects.toMatchObject({ status: 401 });
+    expect(canReuseRecentSharedAuthProbe()).toBe(retire);
   }
 });
 

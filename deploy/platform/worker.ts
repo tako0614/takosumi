@@ -711,7 +711,9 @@ function requiresSharedAuthRead(request: Request, url: URL): boolean {
   return path === "/api/v1/apps" || path === "/api/v1/dashboard/bootstrap" ||
     (path === "/api/v1/connections" && !url.searchParams.has("workspaceId")) ||
     (path === "/api/v1/ownership-transfers" && url.searchParams.get("state") === "pending") ||
-    /^\/api\/v1\/(?:capsules\/[^/]+(?:\/provider-bindings)?|capsule-configs\/[^/]+|runs\/[^/]+(?:\/(?:logs|cost))?)$/u.test(path);
+    (path === "/api/v1/ui-surfaces" &&
+      url.searchParams.getAll("capsuleId").length === 1 && Boolean(url.searchParams.get("capsuleId")?.trim())) ||
+    /^\/api\/v1\/(?:capsules\/[^/]+(?:\/(?:provider-bindings|state-versions|activity))?|capsule-configs\/[^/]+|runs\/[^/]+(?:\/(?:logs|cost))?)$/u.test(path);
 }
 
 const platformWorker = {

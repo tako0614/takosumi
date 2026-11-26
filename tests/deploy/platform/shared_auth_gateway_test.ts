@@ -24,6 +24,10 @@ import {
   TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER as dashboardProof,
 } from "../../../contract/capabilities.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
+import { createTakosumiService } from "../../../core/bootstrap.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import { createInMemoryInterfaceStores } from "../../../core/domains/interfaces/mod.ts";
 
 const origin = "https://hosted.staging.example.test";
 const cookie = "__Host-takosumi_hosted_session=opaque-rp-session";
@@ -131,6 +135,76 @@ test("guarded GET confirms the shared-profile response only after RP authenticat
   const signedOut = await handlePlatformSharedAuthControlRequest(request(path, { headers }), revoked, deps);
   expect(signedOut?.status).toBe(401);
   expect(signedOut?.headers.get("x-takosumi-shared-auth-read")).toBeNull();
+});
+
+test("guarded completed Run reads retain current app access and the launcher Principal Binding", async () => {
+  const ledger = new InMemoryOpenTofuControlStore();
+  const { capsule, workspace } = await seedCapsuleModel(ledger);
+  const subject = "tsub_canonical";
+  await ledger.putWorkspace({ ...workspace, ownerUserId: subject });
+  const member = {
+    id: "member_fixture", workspaceId: workspace.id, accountId: subject,
+    roles: ["owner"], status: "active", createdAt: workspace.createdAt, updatedAt: workspace.updatedAt,
+  } as const;
+  await ledger.putWorkspaceMember(member);
+  await ledger.putCapsule({ ...capsule, status: "active", currentStateGeneration: 1 });
+  const { operations } = await createTakosumiService({
+    authorizeInterfaceBearer: () => undefined,
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: ledger,
+    interfaceStores: createInMemoryInterfaceStores({ workspaceManagementAuthority: ledger }),
+  });
+  expect(await operations.appOwnership.initializeOwnershipIfMissing({
+    capsuleId: capsule.id, ownerAccountId: subject, ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsule.id}`,
+  })).toBe(true);
+  const launcher = await operations.interfaces.create({
+    workspaceId: capsule.workspaceId,
+    name: "shared-run-launcher",
+    ownerRef: { kind: "Capsule", id: capsule.id },
+    spec: { type: "interface.ui.surface", version: "1", document: { launcher: true },
+      inputs: { url: { source: "literal", value: "https://fixture-app.example.test" } },
+      access: { visibility: "workspace" } },
+  });
+  const binding = await operations.interfaces.createBinding(launcher.metadata.id, {
+    subjectRef: { kind: "Principal", id: subject }, permissions: ["ui.open"], delivery: { type: "none" },
+  });
+  let identity: Awaited<ReturnType<SharedAuthRpc["authenticateSharedAuth"]>> = { kind: "authenticated", accountId: subject };
+  const authenticate = jest.fn(async () => identity);
+  const env = configured({ ...rpc, authenticateSharedAuth: authenticate }) as CloudflareWorkerEnv;
+  const store = new InMemoryAccountsStore();
+  const deps = { store, resolveOperations: async () => operations as unknown as ControlPlaneOperations };
+  const marker = "x-takosumi-shared-auth-read";
+  const get = (path: string) => handlePlatformSharedAuthControlRequest(
+    request(path, { headers: { cookie, [marker]: "1" } }), env, deps,
+  );
+  const capsulePath = `/api/v1/capsules/${capsule.id}`;
+  const screensPath = `/api/v1/ui-surfaces?capsuleId=${capsule.id}`;
+  const reads = [capsulePath, capsulePath + "/state-versions", capsulePath + "/activity?limit=100", screensPath];
+  for (const path of reads) {
+    const response = await get(path);
+    expect(response?.status, path).toBe(200);
+    expect(response?.headers.get(marker), path).toBe("1");
+    expect(response?.headers.get("cache-control"), path).toBe("no-store");
+    if (path === screensPath) expect((await response?.json()).interfaces).toHaveLength(1);
+  }
+  expect(authenticate).toHaveBeenCalledTimes(reads.length);
+  expect((await get("/api/v1/ui-surfaces"))?.headers.get(marker)).toBeNull();
+
+  await ledger.putWorkspaceMember({ ...member, status: "suspended" });
+  for (const path of reads.slice(0, -1)) expect((await get(path))?.ok, path).toBe(false);
+  expect(await (await get(screensPath))?.json()).toMatchObject({ interfaces: [] });
+  await ledger.putWorkspaceMember(member);
+  await operations.interfaces.revokeBinding(launcher.metadata.id, binding.metadata.id);
+  expect(await (await get(screensPath))?.json()).toMatchObject({ interfaces: [] });
+
+  identity = { kind: "unauthenticated" };
+  for (const path of reads) {
+    const response = await get(path);
+    expect(response?.status, path).toBe(401);
+    expect(response?.headers.get(marker), path).toBeNull();
+  }
 });
 
 test("cold dashboard bootstrap authenticates the RP once and only reads the session", async () => {

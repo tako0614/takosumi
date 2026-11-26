@@ -13,7 +13,11 @@ import {
   UI_SURFACE_OPEN_PERMISSION,
 } from "takosumi-contract";
 import {
+  canReuseRecentSharedAuthProbe,
+  invalidateRecentSharedAuthProbe,
   preflightSharedAuthSession,
+  requireSharedAuthReadResponse,
+  SHARED_AUTH_READ_HEADER,
   throwIfSharedAuthCallerAborted,
 } from "./shared-auth-session-preflight.ts";
 
@@ -90,6 +94,9 @@ interface UiSurfaceCandidate extends AuthorizedUiSurface {
 
 export interface UiSurfaceReadOptions {
   readonly signal?: AbortSignal;
+  readonly isCurrent?: () => boolean;
+  /** Reuse recent availability only for the canonical app-scoped read. */
+  readonly reuseRecentSharedAuthProbe?: boolean;
   readonly fetch?: typeof fetch;
   /** Limit the read to one installed Capsule (for post-Run handoff). */
   readonly capsuleId?: string;
@@ -321,20 +328,37 @@ async function fetchJson(
   path: string,
   options: UiSurfaceReadOptions,
 ): Promise<unknown> {
+  const assertCurrent = () => {
+    throwIfSharedAuthCallerAborted(options.signal);
+    if (options.isCurrent?.() === false) throw new DOMException("Read owner was retired.", "AbortError");
+  };
+  assertCurrent();
   const transport = options.fetch ?? fetch;
-  const preflight = preflightSharedAuthSession(options.signal);
-  if (preflight) await preflight;
-  throwIfSharedAuthCallerAborted(options.signal);
+  const reusedProbe = options.reuseRecentSharedAuthProbe &&
+    path.startsWith("/api/v1/ui-surfaces?") && canReuseRecentSharedAuthProbe();
+  if (!reusedProbe) {
+    const preflight = preflightSharedAuthSession(options.signal);
+    if (preflight) await preflight;
+  }
+  assertCurrent();
   const response = await transport(path, {
     method: "GET",
-    headers: { accept: "application/json" },
+    headers: { accept: "application/json", ...(reusedProbe ? { [SHARED_AUTH_READ_HEADER]: "1" } : {}) },
+    ...(reusedProbe ? { cache: "no-store" } : {}),
     credentials: "include",
     signal: options.signal,
   });
+  assertCurrent();
+  if (reusedProbe) {
+    requireSharedAuthReadResponse(response);
+    if (response.status === 401) invalidateRecentSharedAuthProbe();
+  }
   if (!response.ok) {
     throw new UiSurfaceResponseError(response.status);
   }
-  return await response.json();
+  const result: unknown = await response.json();
+  assertCurrent();
+  return result;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

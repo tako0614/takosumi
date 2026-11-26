@@ -244,6 +244,7 @@ export async function controlFetch<T>(
   path: string,
   opts: RequestOpts = {},
 ): Promise<T> {
+  throwIfReadRetired(opts);
   const headers: Record<string, string> = {
     accept: "application/json",
     // Value-free self-identification read only by the server's legacy
@@ -1251,10 +1252,13 @@ export async function listCapsules(
   );
 }
 
-export async function getCapsule(id: string, options: Pick<RequestOpts, "isCurrent" | "signal" | "cache"> = {}): Promise<Capsule> {
+export async function getCapsule(id: string, options: Pick<RequestOpts, "isCurrent" | "signal" | "cache" | "reuseRecentSharedAuthProbe"> = {}): Promise<Capsule> {
   const body = await controlFetch<{ capsule: Capsule }>(
     `${BASE}/capsules/${encodeURIComponent(id)}`,
-    { isCurrent: options.isCurrent, signal: options.signal, cache: options.cache },
+    {
+      isCurrent: options.isCurrent, signal: options.signal, cache: options.cache,
+      reuseRecentSharedAuthProbe: options.reuseRecentSharedAuthProbe,
+    },
   );
   if (!isCapsuleResponse(body.capsule)) {
     throw new ControlApiError(
@@ -2099,7 +2103,7 @@ export async function listActivity(
 export async function listCapsuleActivity(
   capsuleId: string,
   limit = 100,
-  opts: Pick<RequestOpts, "signal" | "isCurrent"> = {},
+  opts: Pick<RequestOpts, "signal" | "isCurrent" | "reuseRecentSharedAuthProbe"> = {},
 ): Promise<readonly ActivityEvent[]> {
   const events: ActivityEvent[] = [];
   const cursors = new Set<string>();
@@ -3363,7 +3367,7 @@ export async function cancelRun(runId: string): Promise<{ readonly run: Run }> {
  * Lists a Capsule's StateVersion history for the dashboard session. Rows are
  * browser-safe metadata and arrive newest-first.
  */
-type ListStateVersionsOptions = Pick<RequestOpts, "signal" | "isCurrent">;
+type ListStateVersionsOptions = Pick<RequestOpts, "signal" | "isCurrent" | "reuseRecentSharedAuthProbe">;
 // Existing dashboard resources pass Solid's fetcher info as argument two.
 type ResourceFetcherInfoCompatibility = {
   readonly value: unknown;

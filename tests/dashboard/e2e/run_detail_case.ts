@@ -1,4 +1,11 @@
 import { expect, test } from "@playwright/test";
+import {
+  createTakosumiProductCapabilities,
+  createTakosumiWellKnownDocument,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER,
+} from "takosumi-contract";
 import type { DashboardE2EMode } from "./traffic-policy.ts";
 
 export function registerRunDetailCases(mode: DashboardE2EMode) {
@@ -831,78 +838,189 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
     });
     }
 
-    test("a completed app Run keeps authorized Open and retries a partial screen read", async ({ page }) => {
-      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
-      const errors: string[] = [];
-      page.on("pageerror", (error) => errors.push(error.message));
-      const capsuleId = "cap_partial_run";
-      const runId = "apply_partial_run";
-      const stateId = "sv_partial_run";
-      const now = "2026-11-14T00:00:00Z";
-      const launchUrl = "https://screens.example.test/authorized";
-      const launcherReads: string[] = [];
-      const legacyReads: string[] = [];
-      const mutations: string[] = [];
-      let partial = true;
-      await page.route("**/api/v1/**", async (route) => {
-        const request = route.request();
-        const url = new URL(request.url());
-        const path = url.pathname;
-        if (request.method() !== "GET") mutations.push(`${request.method()} ${path}`);
-        if (path === `/api/v1/runs/${runId}`) return route.fulfill({ json: { run: {
-          id: runId, workspaceId: "ws_alpha", capsuleId, type: "apply", status: "succeeded",
-          createdBy: "portable-e2e", createdAt: now,
-        } } });
-        if (path === `/api/v1/runs/${runId}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
-        if (path === `/api/v1/runs/${runId}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
-        if (path === `/api/v1/runs/${runId}/cost`) return route.fulfill({ json: { cost: {
-          runId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [],
-        } } });
-        if (path === `/api/v1/capsules/${capsuleId}`) return route.fulfill({ json: { capsule: {
-          id: capsuleId, workspaceId: "ws_alpha", name: "Partial Run App", environment: "production", status: "active",
-          currentStateGeneration: 1, currentStateVersionId: stateId, createdAt: now, updatedAt: now,
-        } } });
-        if (path === `/api/v1/capsules/${capsuleId}/state-versions`) return route.fulfill({ json: { stateVersions: [{
-          id: stateId, workspaceId: "ws_alpha", capsuleId, environment: "production", generation: 1,
-          createdByRunId: runId, createdAt: now,
-        }] } });
-        if (path === `/api/v1/capsules/${capsuleId}/activity`) return route.fulfill({ json: { events: [{
-          id: "act_partial_run", workspaceId: "ws_alpha", action: "release_activation.succeeded", targetType: "Capsule",
-          targetId: capsuleId, runId, metadata: { applyRunId: runId, stateVersionId: stateId, capsuleId }, createdAt: now,
-        }] } });
-        if (path === "/api/v1/ui-surfaces") {
-          launcherReads.push(url.search);
-          expect(url.searchParams.get("capsuleId")).toBe(capsuleId);
-          return route.fulfill({ json: { interfaces: [{
-            apiVersion: "takosumi.dev/v1alpha1", kind: "Interface",
-            metadata: { id: "if_partial_run", workspaceId: "ws_alpha", name: "app.launcher", ownerRef: { kind: "Capsule", id: capsuleId }, generation: 1 },
-            spec: {
-              type: "interface.ui.surface", version: "1", document: { launcher: true },
-              inputs: { url: { source: "capsule_output", capsuleId, outputName: "url" } }, access: { visibility: "workspace" },
-            },
-            status: { phase: "Resolved", observedGeneration: 1, resolvedRevision: 1, resolvedInputs: { url: launchUrl } },
-          }], ...(partial ? { incomplete: true } : {}) } });
+    for (const [scenario, title] of [
+      ["apply", "a completed shared Apply keeps authorized Open without redundant session reads"],
+      ["plan", "a completed shared Plan retains a fresh approval history read"],
+      ["waiting_approval", "a shared Plan awaiting approval retries current state before withholding stale approval"],
+    ] as const) {
+      test(title, async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        const capsuleId = "cap_partial_run";
+        const runType = scenario === "apply" ? "apply" : "plan";
+        const waiting = scenario === "waiting_approval";
+        const runId = `${scenario}_partial_run`;
+        const stateId = "sv_partial_run";
+        const now = "2026-11-14T00:00:00Z";
+        const launchUrl = "https://screens.example.test/authorized";
+        const launcherReads: string[] = [];
+        const legacyReads: string[] = [];
+        const mutations: string[] = [];
+        const health = "/auth/oidc/session";
+        const marker = "x-takosumi-shared-auth-read";
+        const finishHealth = Promise.withResolvers<void>();
+        let healthReads = 0;
+        let guardedCapsule = false;
+        const requests: { path: string; guarded: boolean }[] = [];
+        page.on("request", (request) => {
+          const path = new URL(request.url()).pathname;
+          if (path === health || path === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH || path.startsWith("/api/v1/")) {
+            requests.push({ path, guarded: request.headers()[marker] === "1" });
+          }
+        });
+        const capability = { extensions: [TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY] };
+        await page.route("**/.well-known/takosumi", (route) => route.fulfill({
+          json: createTakosumiWellKnownDocument({ ...capability, origin: new URL(route.request().url()).origin }),
+        }));
+        await page.route(`**${TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH}`, (route) => route.fulfill({
+          headers: { [TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER]: "1" },
+          json: { session: { subject: "portable-e2e" } },
+        }));
+        await page.route(`**${health}`, async (route) => {
+          healthReads++;
+          if (waiting && healthReads === 1) {
+            return route.fulfill({ status: 503, json: { error: { code: "oidc_unavailable" } } });
+          }
+          if (waiting) await finishHealth.promise;
+          return route.fulfill({ json: { authenticated: true } });
+        });
+        let partial = true;
+        await page.route("**/api/v1/**", async (route) => {
+          const request = route.request();
+          const url = new URL(request.url());
+          const path = url.pathname;
+          const headers = request.headers()[marker] === "1" ? { [marker]: "1" } : {};
+          if (request.method() !== "GET") mutations.push(`${request.method()} ${path}`);
+          if (path === "/api/v1/capabilities") return route.fulfill({
+            json: createTakosumiProductCapabilities({ ...capability, origin: url.origin }),
+          });
+          if (path === "/api/v1/apps") return route.fulfill({ headers, json: { apps: [] } });
+          if (path === "/api/v1/ownership-transfers") return route.fulfill({ headers, json: { ownershipTransfers: [] } });
+          if (path === "/api/v1/dashboard/bootstrap") return route.fulfill({
+            headers, json: { session: { subject: "portable-e2e" }, notifications: [], workspaces: [] },
+          });
+          if (path === `/api/v1/runs/${runId}`) return route.fulfill({ headers, json: { run: {
+            id: runId, workspaceId: "ws_alpha", capsuleId, type: runType, status: waiting ? "waiting_approval" : "succeeded",
+            ...(runType === "plan" ? { policyStatus: "pass", summary: { add: 1, change: 0, destroy: 0 } } : {}),
+            ...(waiting ? { applyExpected: {
+              planId: runId, capsuleId, currentStateVersionId: "sv_before_another_apply",
+              runnerId: "opentofu-default", sourceDigest: "sha256:source", variablesDigest: "sha256:variables",
+              policyDecisionDigest: "sha256:policy", planDigest: "sha256:plan", planArtifactDigest: "sha256:artifact",
+            } } : {}),
+            createdBy: "portable-e2e", createdAt: now,
+          } } });
+          if (path === `/api/v1/runs/${runId}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
+          if (path === `/api/v1/runs/${runId}/logs`) return route.fulfill({ headers, json: { diagnostics: [], auditEvents: [] } });
+          if (path === `/api/v1/runs/${runId}/cost`) return route.fulfill({ headers, json: { cost: {
+            runId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [],
+          } } });
+          if (path === `/api/v1/capsules/${capsuleId}`) {
+            if (waiting && request.headers()[marker] === "1") {
+              guardedCapsule = true;
+              return route.fulfill({ status: 503, json: { error: "authentication_unavailable" } });
+            }
+            return route.fulfill({ headers, json: { capsule: {
+              id: capsuleId, workspaceId: "ws_alpha", name: "Partial Run App", slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production", status: "active",
+              currentStateGeneration: waiting ? 2 : 1, currentStateVersionId: stateId, createdAt: now, updatedAt: now,
+            } } });
+          }
+          if (path === `/api/v1/capsules/${capsuleId}/state-versions`) return route.fulfill({ headers, json: { stateVersions: [{
+            id: stateId, workspaceId: "ws_alpha", capsuleId, environment: "production", generation: 1,
+            createdByRunId: runId, createdAt: now,
+          }] } });
+          if (path === `/api/v1/capsules/${capsuleId}/activity`) return route.fulfill({ headers, json: { events: [{
+            id: "act_partial_run", workspaceId: "ws_alpha", action: "release_activation.succeeded", targetType: "Capsule",
+            targetId: capsuleId, runId, metadata: { applyRunId: runId, stateVersionId: stateId, capsuleId }, createdAt: now,
+          }] } });
+          if (path === `/api/v1/capsules/${capsuleId}/runs`) {
+            expect(runType).toBe("plan");
+            expect(url.searchParams.get("planRunId")).toBe(runId);
+            expect(url.searchParams.getAll("type")).toEqual(["apply"]);
+            return route.fulfill({ headers, json: { runs: [] } });
+          }
+          if (path === "/api/v1/ui-surfaces") {
+            launcherReads.push(url.search);
+            expect(url.searchParams.get("capsuleId")).toBe(capsuleId);
+            return route.fulfill({ headers, json: { interfaces: [{
+              apiVersion: "takosumi.dev/v1alpha1", kind: "Interface",
+              metadata: { id: "if_partial_run", workspaceId: "ws_alpha", name: "app.launcher", ownerRef: { kind: "Capsule", id: capsuleId }, generation: 1 },
+              spec: {
+                type: "interface.ui.surface", version: "1", document: { launcher: true },
+                inputs: { url: { source: "capsule_output", capsuleId, outputName: "url" } }, access: { visibility: "workspace" },
+              },
+              status: { phase: "Resolved", observedGeneration: 1, resolvedRevision: 1, resolvedInputs: { url: launchUrl } },
+            }], ...(partial ? { incomplete: true } : {}) } });
+          }
+          if (path.includes("/workspaces/") && path.endsWith("/ui-surfaces")) {
+            legacyReads.push(path);
+            return route.fulfill({ status: 403, json: { error: "forbidden" } });
+          }
+          return route.continue();
+        });
+        await page.goto(`/runs/${runId}`, { waitUntil: "domcontentloaded" });
+        if (waiting) {
+          const approval = page.getByRole("button", { name: "Approve this change", exact: true });
+          const capsulePath = `/api/v1/capsules/${capsuleId}`;
+          try {
+            await expect.poll(() => healthReads > 0 || guardedCapsule).toBe(true);
+            expect(guardedCapsule).toBe(false);
+            await expect.poll(() => healthReads).toBe(2);
+            await expect(page.getByText("Checking it is ready to apply…", { exact: true })).toBeVisible();
+            await expect(approval).toHaveCount(0);
+            expect(requests.filter(({ path }) => path === capsulePath)).toEqual([]);
+            finishHealth.resolve();
+            await expect(page.getByText("Another change was applied first. Review again before applying.", { exact: true })).toBeVisible();
+            await expect(approval).toHaveCount(0);
+            expect(requests.filter(({ path }) => path === capsulePath)).toEqual([{ path: capsulePath, guarded: false }]);
+            expect(healthReads).toBe(2);
+            expect(mutations).toEqual([]);
+            expect(errors).toEqual([]);
+          } finally {
+            finishHealth.resolve();
+          }
+          return;
         }
-        if (path.includes("/workspaces/") && path.endsWith("/ui-surfaces")) {
-          legacyReads.push(path);
-          return route.fulfill({ status: 403, json: { error: "forbidden" } });
+        if (runType === "plan") {
+          await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+          expect(requests.filter(({ path }) => path === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH)).toHaveLength(1);
+          expect(requests.filter(({ path }) => path === health)).toHaveLength(1);
+          expect(requests.filter(({ path }) => path === `/api/v1/capsules/${capsuleId}/runs`)).toEqual([
+            { path: `/api/v1/capsules/${capsuleId}/runs`, guarded: false },
+          ]);
+          expect(requests.filter(({ path }) => path === `/api/v1/runs/${runId}/logs`)).toHaveLength(1);
+          expect(requests.filter(({ path }) => path === `/api/v1/runs/${runId}/stream` || path === "/api/v1/ui-surfaces")).toEqual([]);
+          expect(mutations).toEqual([]);
+          expect(errors).toEqual([]);
+          return;
         }
-        return route.continue();
+        const open = page.getByRole("link", { name: "Open app", exact: true });
+        const warning = page.getByRole("alert").filter({ hasText: "Couldn't read its screens." });
+        await expect(open).toHaveAttribute("href", launchUrl);
+        await expect(warning).toBeVisible();
+        expect(requests.filter(({ path }) => path === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH)).toHaveLength(1);
+        expect(requests.filter(({ path }) => path === health), JSON.stringify(requests)).toHaveLength(0);
+        const normalRunReads = [
+          `/api/v1/runs/${runId}`, `/api/v1/runs/${runId}/logs`, `/api/v1/runs/${runId}/cost`,
+          `/api/v1/capsules/${capsuleId}`, `/api/v1/capsules/${capsuleId}/state-versions`,
+          `/api/v1/capsules/${capsuleId}/activity`, "/api/v1/ui-surfaces",
+        ];
+        for (const path of normalRunReads) {
+          expect(requests.filter((read) => read.path === path)).toEqual([{ path, guarded: true }]);
+        }
+        expect(requests.filter(({ path }) => path === `/api/v1/runs/${runId}/stream`)).toEqual([]);
+        partial = false;
+        await page.getByRole("button", { name: "Reload screens", exact: true }).click();
+        await expect.poll(() => launcherReads.length).toBe(2);
+        await expect(warning).toHaveCount(0);
+        await expect(open).toHaveAttribute("href", launchUrl);
+        expect(requests.filter(({ path }) => path === health)).toHaveLength(1);
+        expect(requests.filter(({ path }) => path === "/api/v1/ui-surfaces").map((read) => read.guarded)).toEqual([true, false]);
+        expect(launcherReads).toEqual([`?capsuleId=${capsuleId}`, `?capsuleId=${capsuleId}`]);
+        expect(legacyReads).toEqual([]);
+        expect(mutations).toEqual([]);
+        expect(errors).toEqual([]);
       });
-      await page.goto(`/runs/${runId}`, { waitUntil: "domcontentloaded" });
-      const open = page.getByRole("link", { name: "Open app", exact: true });
-      const warning = page.getByRole("alert").filter({ hasText: "Couldn't read its screens." });
-      await expect(open).toHaveAttribute("href", launchUrl);
-      await expect(warning).toBeVisible();
-      partial = false;
-      await page.getByRole("button", { name: "Reload screens", exact: true }).click();
-      await expect.poll(() => launcherReads.length).toBe(2);
-      await expect(warning).toHaveCount(0);
-      await expect(open).toHaveAttribute("href", launchUrl);
-      expect(launcherReads).toEqual([`?capsuleId=${capsuleId}`, `?capsuleId=${capsuleId}`]);
-      expect(legacyReads).toEqual([]);
-      expect(mutations).toEqual([]);
-      expect(errors).toEqual([]);
-    });
+    }
   });
 }
