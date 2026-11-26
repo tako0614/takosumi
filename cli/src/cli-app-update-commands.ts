@@ -36,7 +36,7 @@ function argumentsFor(args: readonly string[], kind: "update" | "rollback" | "hi
   const booleans = new Set([
     "json",
     ...(kind === "apply" ? ["yes", "allowDestroy", "observeOnly"] : []),
-    ...(kind === "recover-uninstall" ? ["currentReview"] : []),
+    ...(kind === "recover-uninstall" ? ["currentReview", "prepare"] : []),
   ]);
   const options: CliOptions = {};
   for (let i = 0; i < rest.length; i++) {
@@ -572,15 +572,14 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
     const selectedApp = appId;
     const existingPlanId = options.destroyPlan;
     const useCurrentReview = options.currentReview === true;
-    if (useCurrentReview && (existingPlanId !== undefined || options.connections !== undefined)) {
-      throw new Refusal("conflicting_modes");
-    }
+    const prepare = options.prepare === true;
+    const modes = [prepare, useCurrentReview, existingPlanId !== undefined, options.connections !== undefined];
+    if (modes.filter(Boolean).length > 1) throw new Refusal("conflicting_modes");
     if (existingPlanId !== undefined) {
-      if (options.connections !== undefined) throw new Refusal("conflicting_modes");
       if (!bounded(existingPlanId, 256)) throw new Refusal("destroy_plan_id_required");
       planRunId = existingPlanId;
     }
-    const replacements = existingPlanId === undefined && !useCurrentReview
+    const replacements = !prepare && existingPlanId === undefined && !useCurrentReview
       ? connectionReplacements(options.connections)
       : undefined;
     options = selectTarget(options);
@@ -594,7 +593,7 @@ export async function runAppRecoverUninstall(args: string[], io: CliIo): Promise
       submitted = true;
       return runFrom(await request(
         `/api/v1/capsules/${encodeURIComponent(selectedApp)}/destroy-plan`, "POST",
-        { destroyProviderConnectionReplacements: replacements },
+        replacements === undefined ? {} : { destroyProviderConnectionReplacements: replacements },
       ), selectedApp);
     });
     if (plan.type !== "destroy_plan") throw new Refusal("destroy_plan_mismatch");
@@ -673,12 +672,21 @@ async function watch(request: Client, run: PublicRun, scope: Scope, signal: Abor
 function writeTerminalApply(io: CliIo, options: CliOptions, appId: string | undefined, planId: string | undefined, run: PublicRun): number {
   const succeeded = run.status === "succeeded";
   const outcomeUnknown = run.status === "failed" && run.errorCode === "runner_mutation_indeterminate";
+  const outputProjectionFailed = run.type === "apply" && run.status === "failed" && run.errorCode === "apply_output_projection_failed";
+  let note: string | undefined;
+  if (outcomeUnknown) {
+    note = "The Runner did not confirm the outcome. Ask an operator to reconcile the saved Run and actual state before running it again.";
+  } else if (outputProjectionFailed) {
+    note = isJapaneseCli()
+      ? "適用済みの状態は保存されています。削除する場合は apps recover-uninstall <app-id> --prepare で削除内容を確認してください。"
+      : "The applied state was saved. To remove the app, use apps recover-uninstall <app-id> --prepare to review the removal.";
+  } else if (!succeeded) {
+    note = "A failed or stopped Apply may have effects. Do not repeat it as a new Plan.";
+  }
   write(io, options, { status: outcomeUnknown ? "indeterminate" : succeeded ? "succeeded" : "failed", appId, planRunId: planId,
     runId: run.id, runStatus: run.status, runUrl: runUrl(options, run.id),
     code: run.errorCode && TOKEN.test(run.errorCode) ? run.errorCode : undefined,
-    note: outcomeUnknown
-      ? "The Runner did not confirm the outcome. Ask an operator to reconcile the saved Run and actual state before running it again."
-      : succeeded ? undefined : "A failed or stopped Apply may have effects. Do not repeat it as a new Plan." });
+    note });
   return succeeded ? 0 : 1;
 }
 
@@ -843,11 +851,14 @@ export function applyHelp(): string {
 }
 
 export function recoverUninstallHelp(): string {
-  return ["takosumi apps recover-uninstall <app-id> --connections '<JSON array of replacement pairs>'",
+  return ["takosumi apps recover-uninstall <app-id> --prepare",
+    "takosumi apps recover-uninstall <app-id> --connections '<JSON array of replacement pairs>'",
     '[{"connectionId":"old-id","replacementConnectionId":"new-id"}]',
     "takosumi apps recover-uninstall <app-id> --destroy-plan <saved-destroy-plan-run-id>",
     "takosumi apps recover-uninstall <app-id> --current-review",
-    isJapaneseCli() ? "--connections は削除Planを準備します。--destroy-plan は保存済みの同じPlanを読み取ります。--current-review はアプリの最新の手動削除Planが準備中、レビュー可能、または失敗した場合に、その状態を読み取ります。実行は別コマンドです。" : "Use --connections to prepare a Destroy Plan or --destroy-plan to read a specific saved Plan. Use --current-review to read the app’s latest manual Destroy Plan if it is pending, reviewable, or failed. Execution is a separate command.",
+    isJapaneseCli()
+      ? "--prepare は既存の接続で、--connections は代替接続を指定して削除Planを準備します。--destroy-plan は保存済みのPlan、--current-review は最新の手動削除Planを読み取ります。実行は別コマンドです。"
+      : "Use --prepare to plan removal with existing connections or --connections to specify replacements. Use --destroy-plan to read a saved Plan or --current-review to find the latest manual review. Execution is a separate command.",
     "--url <origin> --token <Accounts PAT> --json --timeout-ms <1..120000>",
     "Scopes: read,write to prepare; read to review.",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN"].join("\n");
