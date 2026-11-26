@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { InstalledAppSummary } from "../../../contract/installed-apps.ts";
+import { INSTALLED_APP_PROJECTION, installedAppSourceUrl, type InstalledAppSummary } from "../../../contract/installed-apps.ts";
+import { normalizeInstallConfigSourcePath } from "../../../contract/install-configs.ts";
 import { createInstallAttemptFixture, PORTABLE_SOURCE_COMMIT } from "./fixture-data.ts";
 import type { DashboardE2EMode } from "./traffic-policy.ts";
 
@@ -17,6 +18,10 @@ function app(capsuleId: string, name: string): InstalledAppSummary {
 }
 
 type FixtureOptions = { readonly legacy?: boolean; readonly updateAvailableFor?: string };
+
+function isInstalledProjection(url: URL): boolean {
+  return url.pathname === "/api/v1/apps" && url.searchParams.get("projection") === INSTALLED_APP_PROJECTION;
+}
 
 async function fixture(page: Page, apps: readonly InstalledAppSummary[], complete = true, options: FixtureOptions = {}) {
   await page.addInitScript(() => {
@@ -50,7 +55,8 @@ async function fixture(page: Page, apps: readonly InstalledAppSummary[], complet
     json: new URL(route.request().url()).pathname === "/tcs/v2/listings" ? { items: [listing] } : listing,
   }));
   if (options.legacy) {
-    await page.route("**/api/v1/apps", (route) => route.fulfill({ status: 404, json: { error: "route_not_found" } }));
+    await page.route((url) => url.pathname === "/api/v1/apps", (route) =>
+      route.fulfill({ status: 404, json: { error: "route_not_found" } }));
     await page.route("**/api/v1/workspaces/*/installed-apps", (route) => route.fulfill({ json: { installedApps: apps, complete } }));
   } else {
     const appRows = apps.map((row) => ({
@@ -61,20 +67,24 @@ async function fixture(page: Page, apps: readonly InstalledAppSummary[], complet
       state: row.capsuleId === options.updateAvailableFor ? "update_available" : row.state,
       primaryAction: "open",
     }));
-    // Model a bounded list whose one incomplete per-app detail makes the
-    // overall discovery partial while keeping every known row authoritative.
-    if (!complete) appRows.push({
-      capsuleId: "cap_incomplete_store_fixture",
-      name: "incomplete-detail",
-      role: "owner",
-      ownerDisplayName: "Portable E2E",
-      state: "installed",
-      primaryAction: "open",
-    });
     await page.route("**/api/v1/apps", (route) => route.fulfill({ json: { apps: appRows } }));
+    await page.route(isInstalledProjection, (route) => route.fulfill({
+      json: {
+        projection: INSTALLED_APP_PROJECTION,
+        complete,
+        installedApps: apps.map((row) => ({
+          ...row,
+          ...(row.capsuleId === options.updateAvailableFor ? { updateAvailable: true } : {}),
+          installedFrom: {
+            ...row.installedFrom,
+            url: installedAppSourceUrl(row.installedFrom.url),
+            path: normalizeInstallConfigSourcePath(row.installedFrom.path),
+          },
+        })),
+      },
+    }));
     await page.route("**/api/v1/capsules/*", (route) => {
       const capsuleId = new URL(route.request().url()).pathname.split("/").at(-1)!;
-      if (capsuleId === "cap_incomplete_store_fixture") return route.fulfill({ status: 404, json: { error: "not_found" } });
       const row = apps.find((candidate) => candidate.capsuleId === capsuleId);
       if (!row) return route.fulfill({ status: 404, json: { error: "not_found" } });
       return route.fulfill({ json: { capsule: {
@@ -212,6 +222,8 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
       const installed = page.getByTestId("install-existing-apps");
       await expect(installed.getByText("インストール済み", { exact: true })).toBeVisible();
+      expect(h.reads).not.toContain("/api/v1/capsules/cap_repository_office");
+      expect(h.reads.some((path) => path.startsWith("/api/v1/capsule-configs/"))).toBe(false);
       await expect(page.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeEnabled();
       await expect(page.getByText(hint, { exact: true })).toBeVisible();
       expect(h.mutations).toEqual([]);
@@ -290,13 +302,13 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       let releaseRead!: () => void;
       const read = new Promise<void>((resolve) => { releaseRead = resolve; });
       let failed = false;
-      await page.route("**/api/v1/apps", async (route) => {
+      await page.route(isInstalledProjection, async (route) => {
         await read;
         if (!failed) {
           failed = true;
-          return route.fulfill({ status: 503, json: { error: { code: "unavailable" } } });
+          return route.fulfill({ status: 503, json: { error: { code: "feature_unavailable" } } });
         }
-        return route.fulfill({ json: { apps: [{ capsuleId: "cap_repository_office", name: "office-personal", role: "owner", ownerDisplayName: "Portable E2E", state: "installed", primaryAction: "open" }] } });
+        return route.fallback();
       });
       const query = new URLSearchParams({ git: `${repository}.git`, path: modulePath, ref: "main" });
       await page.goto(`/new?${query}`);
@@ -305,6 +317,8 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       releaseRead();
       await expect(page.getByText("インストール済みのアプリを確認できませんでした。", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeDisabled();
+      expect(h.reads.some((path) => path.endsWith("/installed-apps"))).toBe(false);
+      expect(h.mutations).toEqual([]);
       await page.getByRole("button", { name: "再試行", exact: true }).click();
       await expect(page.getByTestId("install-existing-apps")).toBeVisible();
       await expect(page.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeEnabled();
@@ -316,9 +330,9 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       const h = await fixture(page, []);
       let releaseRead!: () => void;
       const read = new Promise<void>((resolve) => { releaseRead = resolve; });
-      await page.route("**/api/v1/apps", async (route) => {
+      await page.route(isInstalledProjection, async (route) => {
         await read;
-        return route.fulfill({ json: { apps: [] } });
+        return route.fallback();
       });
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');

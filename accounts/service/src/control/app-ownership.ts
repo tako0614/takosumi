@@ -2,6 +2,7 @@
 import { installDisplayName } from "./install-names.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AppAccess, AppAccessResolver } from "../../../../contract/app-access.ts";
+import { INSTALLED_APP_PROJECTION, type InstalledAppPage } from "takosumi-contract";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import { errorJson, json, methodNotAllowed, readJsonObject } from "../http-helpers.ts";
 import { appOwnershipMutationsFrozenResponse } from "../app-ownership-mutations-freeze.ts";
@@ -9,7 +10,9 @@ import { bearerAppAllows } from "../account-session.ts";
 import type { ControlDispatchContext } from "./shared.ts";
 import { canAccessWorkspace, controlPlaneUnavailable } from "./shared.ts";
 import { readCapsuleAppSummaries, readCapsuleAppView } from "./capsule-app.ts";
+import { requireAppAccess } from "./app-authorization.ts";
 import { accountAppAllowed } from "./app-scope.ts";
+import { readAccountInstalledApps } from "./installed-apps.ts";
 import { AppAuthorizationError } from "../../../../core/domains/app-authorization/errors.ts";
 
 export interface AppMemberRecord {
@@ -185,9 +188,11 @@ async function profile(
   };
 }
 
-async function appCursorBinding(ctx: ControlDispatchContext, q: string): Promise<string> {
+async function appCursorBinding(ctx: ControlDispatchContext, q: string, installed: boolean): Promise<string> {
   const scope = JSON.stringify([q, ctx.session.subject, ctx.session.credential,
-    ctx.session.workspaceId ?? null, ctx.session.appIds ? [...new Set(ctx.session.appIds)].sort() : null]);
+    ctx.session.workspaceId ?? null, ctx.session.appIds ? [...new Set(ctx.session.appIds)].sort() : null,
+    ...(installed ? [INSTALLED_APP_PROJECTION, ctx.session.requireCurrentMembership === true,
+      ctx.session.uninstallRequester?.grant ?? null] : [])]);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(scope));
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
@@ -213,12 +218,16 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
     return errorJson("invalid_request", "limit must be a positive integer", 400, ctx.request);
   }
   const limit = rawLimit === null ? 50 : Math.min(Number(rawLimit), 100);
+  const installed = ctx.url.searchParams.get("projection") === INSTALLED_APP_PROJECTION;
   const rawQuery = ctx.url.searchParams.get("q");
   if (rawQuery !== null && (rawQuery.length > 200 || /[\x00-\x1f\x7f]/u.test(rawQuery))) {
     return errorJson("invalid_request", "q must be at most 200 characters without control characters", 400, ctx.request);
   }
+  if (installed && rawQuery !== null) {
+    return errorJson("invalid_request", "The installed app projection does not accept q.", 400, ctx.request);
+  }
   const q = rawQuery?.trim().toLowerCase() ?? "";
-  const binding = await appCursorBinding(ctx, q);
+  const binding = await appCursorBinding(ctx, q, installed);
   const rawCursor = ctx.url.searchParams.get("cursor");
   const cursor = rawCursor === null ? undefined : readAppCursor(rawCursor, binding);
   if (rawCursor !== null && cursor === undefined) {
@@ -230,8 +239,11 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
   });
   if (page.apps.length > limit || (page.nextCursor !== undefined &&
     (!/^[A-Za-z0-9_-]{1,2048}$/u.test(page.nextCursor) || page.nextCursor === cursor))) return controlPlaneUnavailable();
-  const authorized = await Promise.all(page.apps.map(async (entry) => {
-    if (!bearerAppAllows(ctx.session, entry.capsuleId)) return undefined;
+  if (installed && new Set(page.apps.map((entry) => entry.capsuleId)).size !== page.apps.length) {
+    return controlPlaneUnavailable();
+  }
+  const candidates = page.apps.filter((entry) => bearerAppAllows(ctx.session, entry.capsuleId));
+  const authorized = installed ? candidates : await Promise.all(candidates.map(async (entry) => {
     // A stale page may outlive revocation. Recheck before reading any app facts.
     const live = await port.resolveAppAccess(ctx.session.subject, entry.capsuleId);
     if (!live || live.ownerAccountId !== entry.ownerAccountId || live.ownershipEpoch !== entry.ownershipEpoch) return undefined;
@@ -243,6 +255,37 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
     : [];
   const inCredentialScope = capsules.filter((capsule) => capsule.status !== "destroyed" &&
     (!ctx.session.workspaceId || capsule.workspaceId === ctx.session.workspaceId));
+  if (installed) {
+    const capsulesById = new Map(capsules.map((capsule) => [capsule.id, capsule]));
+    const inScope = new Set(inCredentialScope.map((capsule) => capsule.id));
+    const checked = await Promise.all(liveAccesses.map(async (entry) => {
+      const capsule = capsulesById.get(entry.capsuleId);
+      if (!capsule) return { complete: false };
+      if (!inScope.has(capsule.id)) return { complete: true };
+      const access = await requireAppAccess({
+        operations: ctx.operations, store: ctx.store, session: ctx.session,
+        workspaceId: capsule.workspaceId, capsuleId: capsule.id, capsule,
+        action: "view",
+        ...(ctx.session.requireCurrentMembership ? { allowWorkspaceFallback: false } : {}),
+        ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+      });
+      if (!access.ok) return { complete: access.response.status === 403 || access.response.status === 404 };
+      if (access.authority === "app" &&
+        (access.access.ownerAccountId !== entry.ownerAccountId ||
+          access.access.ownershipEpoch !== entry.ownershipEpoch)) return { complete: false };
+      return { capsule, complete: true };
+    }));
+    const projected = await readAccountInstalledApps(
+      ctx, checked.flatMap(({ capsule }) => capsule ? [capsule] : []),
+    );
+    if (!projected) return controlPlaneUnavailable();
+    return json({
+      ...projected,
+      projection: INSTALLED_APP_PROJECTION,
+      complete: projected.complete && checked.every(({ complete }) => complete),
+      ...(page.nextCursor ? { nextCursor: writeAppCursor(page.nextCursor, binding) } : {}),
+    } satisfies InstalledAppPage, 200, { "cache-control": "no-store" });
+  }
   const visible = requiresSharedPatMembership(ctx)
     ? (await Promise.all(inCredentialScope.map(async (capsule) =>
       await accountAppAllowed(ctx, capsule) ? capsule : undefined))).filter((capsule) => capsule !== undefined)

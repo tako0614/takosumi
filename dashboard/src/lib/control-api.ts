@@ -21,6 +21,7 @@ import { randomUuid } from "./random-uuid.ts";
 import {
   canReuseRecentSharedAuthProbe,
   invalidateRecentSharedAuthProbe,
+  isKnownSharedAuthRouteAbsent,
   preflightSharedAuthSession,
   requireSharedAuthReadResponse,
   SHARED_AUTH_READ_HEADER,
@@ -75,6 +76,7 @@ import type {
 } from "takosumi-contract";
 import {
   hasCredentialQueryParams,
+  INSTALLED_APP_PROJECTION,
   installedAppSourceIsMatchable,
   installedAppSourceUrl,
   isCanonicalRepositoryDirectoryPath,
@@ -2154,6 +2156,7 @@ export type RunPolicyReason = ContractRunPolicyReason;
 export type RunPlanOrigin = ContractRunPlanOrigin;
 
 const INSTALLED_APP_LIST_LIMIT = 200;
+const INSTALLED_APP_PAGE_LIMIT = 50;
 const INSTALLED_APP_READ_CONCURRENCY = 4;
 const INSTALLED_APP_STATES = new Set([
   "installing", "installed", "updating", "needs_attention", "stopped",
@@ -2173,8 +2176,76 @@ function safeInstalledAppIcon(value: unknown): string | undefined {
 
 type StoreInstalledApp = InstalledAppSummary & { readonly updateAvailable?: true };
 
+function invalidInstalledAppResponse(): ControlApiError {
+  return new ControlApiError(502, "invalid_installed_apps_response", "Installed apps returned an invalid response.");
+}
+
+function isStoreInstalledApp(app: unknown): app is StoreInstalledApp {
+  if (!isRecord(app) || typeof app.capsuleId !== "string" || !app.capsuleId ||
+    typeof app.name !== "string" || !INSTALLED_APP_STATES.has(app.state as string) ||
+    app.state === "update_available" || (app.updateAvailable !== undefined && app.updateAvailable !== true) ||
+    (app.displayName !== undefined && (!isRecord(app.displayName) ||
+      typeof app.displayName.ja !== "string" || typeof app.displayName.en !== "string")) ||
+    (app.iconUrl !== undefined && !safeInstalledAppIcon(app.iconUrl)) ||
+    !isRecord(app.installedFrom)) return false;
+  const source = app.installedFrom;
+  return typeof source.url === "string" && source.url !== "" &&
+    installedAppSourceUrl(source.url) === source.url &&
+    isCanonicalRepositoryDirectoryPath(source.path) &&
+    (source.matchable === undefined || source.matchable === false);
+}
+
 /** Reads value-free installed app identities for matching Store listings. */
 export async function listInstalledApps(workspaceId?: string): Promise<{
+  readonly installedApps: readonly StoreInstalledApp[];
+  readonly complete: boolean;
+}> {
+  const installedApps: StoreInstalledApp[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  let complete = true;
+  for (let page = 0; page < INSTALLED_APP_LIST_LIMIT / INSTALLED_APP_PAGE_LIMIT; page++) {
+    const path = `${BASE}/apps${query({ projection: INSTALLED_APP_PROJECTION, limit: INSTALLED_APP_PAGE_LIMIT, cursor })}`;
+    try {
+      const body = await withControlReadDeadline("Installed apps", {}, (scope) =>
+        controlFetch<unknown>(path, { ...scope, cache: "no-store", reuseRecentSharedAuthProbe: true }),
+      );
+      if (page === 0 && isKnownSharedAuthRouteAbsent() && isRecord(body) &&
+        body.projection === undefined && Array.isArray(body.apps)) {
+        // Older stock OSS understands /apps but ignores the projection.
+        return listLegacyInstalledApps(workspaceId, body);
+      }
+      if (!isRecord(body) || body.projection !== INSTALLED_APP_PROJECTION ||
+        typeof body.complete !== "boolean" || !Array.isArray(body.installedApps) ||
+        body.installedApps.length > INSTALLED_APP_PAGE_LIMIT ||
+        !body.installedApps.every(isStoreInstalledApp) ||
+        new Set(body.installedApps.map((app) => app.capsuleId)).size !== body.installedApps.length ||
+        body.installedApps.some((app) => seenIds.has(app.capsuleId)) ||
+        (body.nextCursor !== undefined && (typeof body.nextCursor !== "string" ||
+          !body.nextCursor || body.nextCursor.length > 4096 || seenCursors.has(body.nextCursor)))) {
+        throw invalidInstalledAppResponse();
+      }
+      for (const app of body.installedApps) {
+        seenIds.add(app.capsuleId);
+        installedApps.push(app);
+      }
+      complete &&= body.complete;
+      cursor = body.nextCursor;
+      if (cursor === undefined) return { installedApps, complete };
+      seenCursors.add(cursor);
+    } catch (error) {
+      if (page === 0 && isKnownSharedAuthRouteAbsent() &&
+        isMissingControlRoute(normalizeAppsRouteError(path, error))) return listLegacyInstalledApps(workspaceId);
+      if (installedApps.length === 0 ||
+        (error instanceof ControlApiError && (error.status === 401 || error.status === 403))) throw error;
+      return { installedApps, complete: false };
+    }
+  }
+  return { installedApps, complete: false };
+}
+
+async function listLegacyInstalledApps(workspaceId?: string, firstPage?: Record<string, unknown>): Promise<{
   readonly installedApps: readonly StoreInstalledApp[];
   readonly complete: boolean;
 }> {
@@ -2190,7 +2261,9 @@ export async function listInstalledApps(workspaceId?: string): Promise<{
   for (;;) {
     let body: unknown;
     try {
-      body = await readCachedAppsPage(`${BASE}/apps${cursor ? query({ cursor }) : ""}`);
+      body = cursor === undefined && firstPage
+        ? firstPage
+        : await readCachedAppsPage(`${BASE}/apps${cursor ? query({ cursor }) : ""}`);
     } catch (error) {
       if (isMissingControlRoute(error) && cursor === undefined) {
         const legacyId = await legacyWorkspaceFor404(workspaceId);

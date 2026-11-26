@@ -212,7 +212,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function knownAppRead(url: URL): boolean {
   const p = url.searchParams;
   if (["/.well-known/takosumi", "/api/v1/capabilities", "/__takosumi/platform/contributions", "/api/v1/account/session/me"].includes(url.pathname)) return url.search === "";
-  if (url.pathname === "/api/v1/apps") return exactKeys(p, ["cursor", "limit"]) && (p.get("limit") === null || /^\d+$/u.test(p.get("limit")!)) && (p.get("cursor")?.length ?? 0) <= 2048;
+  if (url.pathname === "/api/v1/apps") return exactKeys(p, ["cursor", "limit", "projection"]) &&
+    (p.get("projection") === null || p.get("projection") === "installed") &&
+    (p.get("limit") === null || /^\d+$/u.test(p.get("limit")!)) && (p.get("cursor")?.length ?? 0) <= 2048;
   if (url.pathname === "/api/v1/dashboard/bootstrap") {
     return exactKeys(p, ["includeWorkspaces", "workspaceLimit", "workspaceId", "includeNotifications"]) &&
       ["true", "false"].includes(p.get("includeWorkspaces") ?? "") &&

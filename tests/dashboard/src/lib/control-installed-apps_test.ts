@@ -1,15 +1,30 @@
-import { afterEach, expect, test } from "bun:test";
-import { matchingInstalledApps } from "takosumi-contract";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { INSTALLED_APP_PROJECTION, matchingInstalledApps } from "takosumi-contract";
 import {
   listInstalledApps,
   listOpenGitInstallAttempts,
   resetAppOwnershipCache,
 } from "../../../../dashboard/src/lib/control-api.ts";
+import {
+  clearSharedAuthSessionPreflight,
+  probeInitialSharedAuthSession,
+} from "../../../../dashboard/src/lib/shared-auth-session-preflight.ts";
 
 const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; });
+beforeEach(async () => {
+  globalThis.fetch = (async () => Response.json({ error: "not_found" }, {
+    status: 404,
+    headers: { "cache-control": "no-store", "x-takosumi-shared-auth-absent": "1" },
+  })) as typeof fetch;
+  await probeInitialSharedAuthSession();
+});
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  clearSharedAuthSessionPreflight();
+});
 
 const repository = "https://github.com/example/office.git";
+const projectionPath = "/api/v1/apps?projection=installed&limit=50";
 const now = "2026-10-28T00:00:00.000Z";
 const app = (id: string, state = "installed") => ({
   capsuleId: id, name: id, role: "owner", ownerDisplayName: "Owner",
@@ -26,18 +41,95 @@ const config = (id: string, overrides: Record<string, unknown> = {}) => ({
   modulePath: "./deploy/app/", ...overrides,
 });
 
-function stub(reply: (path: string) => Response | Promise<Response>) {
+function stub(reply: (path: string) => Response | Promise<Response>, supportsProjection = false) {
   resetAppOwnershipCache();
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const path = String(input);
     calls.push(path);
-    return await reply(path);
+    return await reply(!supportsProjection && path === projectionPath ? "/api/v1/apps" : path);
   }) as typeof fetch;
   return calls;
 }
 
-test("Store identity uses authorized app details and exact config coordinates without a Workspace", async () => {
+test("the Store uses only one canonical request per projected page", async () => {
+  const projected = (id: string, path: string) => ({
+    capsuleId: id, name: id, state: "installed", installedFrom: { url: repository, path },
+  });
+  const calls = stub((path) => {
+    if (path === projectionPath) return Response.json({
+      projection: INSTALLED_APP_PROJECTION,
+      complete: true,
+      installedApps: [{ ...projected("cap_a", "src/deploy/app"), updateAvailable: true }],
+      nextCursor: "next",
+    });
+    if (path === `${projectionPath}&cursor=next`) return Response.json({
+      projection: INSTALLED_APP_PROJECTION,
+      complete: true,
+      installedApps: [projected("cap_b", "src/deploy/other")],
+    });
+    throw new Error(`unexpected ${path}`);
+  }, true);
+  const result = await listInstalledApps("ws_legacy");
+  expect(result.complete).toBe(true);
+  expect(matchingInstalledApps(result.installedApps, { url: repository, path: "src/deploy/app" }))
+    .toMatchObject([{ capsuleId: "cap_a", updateAvailable: true }]);
+  expect(calls).toEqual([projectionPath, `${projectionPath}&cursor=next`]);
+});
+
+test("a failed later projection page preserves known rows without Workspace or app-detail fallback", async () => {
+  const known = {
+    capsuleId: "known", name: "known", state: "installed", installedFrom: { url: repository, path: "deploy/app" },
+  };
+  for (const later of [
+    Response.json({ apps: [] }),
+    Response.json({ error: "route_not_found" }, { status: 404 }),
+    Response.json({ error: "unavailable" }, { status: 503 }),
+  ]) {
+    const calls = stub((path) => {
+      if (path === projectionPath) return Response.json({
+        projection: "installed", complete: true, installedApps: [known], nextCursor: "next",
+      });
+      if (path === `${projectionPath}&cursor=next`) return later;
+      throw new Error(`unexpected ${path}`);
+    }, true);
+    expect(await listInstalledApps()).toEqual({ installedApps: [known], complete: false });
+    expect(calls).toEqual([projectionPath, `${projectionPath}&cursor=next`]);
+  }
+});
+
+test("a failed later projection page with no known rows rejects discovery", async () => {
+  const calls = stub((path) => {
+    if (path === projectionPath) return Response.json({
+      projection: INSTALLED_APP_PROJECTION, complete: true, installedApps: [], nextCursor: "next",
+    });
+    if (path === `${projectionPath}&cursor=next`) {
+      return Response.json({ error: { code: "feature_unavailable" } }, { status: 503 });
+    }
+    throw new Error(`unexpected ${path}`);
+  }, true);
+  await expect(listInstalledApps("ws_legacy")).rejects.toMatchObject({ status: 503, code: "feature_unavailable" });
+  expect(calls).toEqual([projectionPath, `${projectionPath}&cursor=next`]);
+});
+
+test("shared installs reject a legacy or malformed first result before reading any Workspace", async () => {
+  for (const legacy of [
+    Response.json({ apps: [] }, { headers: { "x-takosumi-shared-auth-read": "1" } }),
+    Response.json({ error: { code: "route_not_found" } }, { status: 404, headers: { "x-takosumi-shared-auth-read": "1" } }),
+  ]) {
+    const calls = stub((path) => {
+      if (path === "/auth/oidc/session") return Response.json({ authenticated: true });
+      if (path === projectionPath) return legacy;
+      throw new Error(`unexpected ${path}`);
+    }, true);
+    await probeInitialSharedAuthSession();
+    await expect(listInstalledApps("ws_legacy")).rejects.toBeDefined();
+    expect(calls).toEqual(["/auth/oidc/session", projectionPath]);
+    clearSharedAuthSessionPreflight();
+  }
+});
+
+test("older stock OSS app lists retain the previous Store detail compatibility", async () => {
   const calls = stub((path) => {
     if (path === "/api/v1/apps") return Response.json({ apps: [app("cap_a", "update_available")] });
     if (path === "/api/v1/capsules/cap_a") return Response.json({ capsule: capsule("cap_a") });
@@ -60,7 +152,7 @@ test("Store identity uses authorized app details and exact config coordinates wi
   expect(matchingInstalledApps(result.installedApps, { url: `${repository}/`, path: "src/deploy/app" })).toHaveLength(1);
   expect(matchingInstalledApps(result.installedApps, { url: repository, path: "src/deploy/other" })).toHaveLength(0);
   expect(calls).toEqual([
-    "/api/v1/apps", "/api/v1/capsules/cap_a", "/api/v1/capsule-configs/cfg_cap_a",
+    projectionPath, "/api/v1/capsules/cap_a", "/api/v1/capsule-configs/cfg_cap_a",
   ]);
 });
 
@@ -183,9 +275,9 @@ test("first-page failures go to Retry and never fall back", async () => {
   for (const status of [401, 403, 503]) {
     const calls = stub(() => Response.json({}, { status }));
     await expect(listInstalledApps()).rejects.toMatchObject({ status });
-    expect(calls).toEqual(["/api/v1/apps"]);
+    expect(calls).toEqual([projectionPath]);
   }
   const calls = stub(() => Response.json({ unexpected: [] }));
   await expect(listInstalledApps()).rejects.toMatchObject({ status: 502, code: "invalid_installed_apps_response" });
-  expect(calls).toEqual(["/api/v1/apps"]);
+  expect(calls).toEqual([projectionPath]);
 });

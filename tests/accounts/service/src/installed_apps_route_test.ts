@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
-import { matchingInstalledApps, type ListInstalledAppsResponse } from "takosumi-contract";
+import { expect, spyOn, test } from "bun:test";
+import { matchingInstalledApps, type InstalledAppPage, type ListInstalledAppsResponse } from "takosumi-contract";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
-import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
+import { handleAuthenticatedControlRoute, handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
+import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { handleWorkspaceInstalledApps } from "../../../../accounts/service/src/control/installed-apps.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
@@ -51,8 +52,130 @@ async function fixture(withSelector = true, sourceUrl = "https://reader:private-
     expect(response).toBeDefined();
     return response!;
   }
-  return { request };
+  return { request, ledger, operations, accounts };
 }
+
+test("the account projection batches current app identities behind app role, membership and PAT scope", async () => {
+  const h = await fixture(true, "https://git.example.test/team/app.git");
+  const now = "2026-11-26T00:00:00Z";
+  const owner = "user_test";
+  const workspaceId = "ws_installed";
+  const membership = { id: "wsm_installed_owner", workspaceId, accountId: owner, roles: ["owner"], createdAt: now, updatedAt: now } as const;
+  await h.ledger.putWorkspaceMember({ ...membership, status: "active" });
+  for (const [id, account] of [["cap_first", owner], ["cap_second", "stranger"], ["cap_other_module", "stranger"]] as const) {
+    expect(await h.operations.appOwnership.initializeOwnershipIfMissing({
+      capsuleId: id, ownerAccountId: account, ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: `apps/${id}`,
+    })).toBe(true);
+  }
+  expect(await h.operations.appOwnership.putMember({
+    capsuleId: "cap_second", accountId: owner, status: "active", createdAt: now, updatedAt: now,
+  })).toBe(true);
+  const cap = (await h.ledger.getCapsule("cap_second"))!;
+  await h.ledger.putCapsule({ ...cap, currentStateVersionId: "sv_adopted" });
+  await h.ledger.putCapsule({ ...cap, id: "cap_unbackfilled", name: "legacy", slug: "legacy", status: "active" });
+  const base = (await h.ledger.getSourceSnapshot("snap_cap_second"))!;
+  await h.ledger.putSourceSnapshot({ ...base, id: "snap_changed", resolvedCommit: "1".repeat(40), fetchedAt: now });
+  const getConfigs = spyOn(h.operations.capsules, "getInstallConfigsByIds");
+  const getConfig = spyOn(h.operations.capsules, "getInstallConfig");
+  const operations = {
+    ...h.operations,
+    getCapsuleAdoptedSourceRevision: async (id: string) => id === cap.id ? {
+      sourceSnapshotId: base.id, resolvedCommit: base.resolvedCommit, ref: base.ref, path: base.path,
+    } : undefined,
+  } as unknown as ControlPlaneOperations;
+  const url = new URL("https://app.example.test/api/v1/apps?projection=installed");
+  const control = (target = url) => handleAuthenticatedControlRoute({
+    request: new Request(target), url: target, store: h.accounts, operations,
+    subject: owner, credential: "session", requireCurrentMembership: true,
+  });
+  try {
+    const response = await control();
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    const body = await response!.json() as InstalledAppPage;
+    expect(body).toMatchObject({ projection: "installed", complete: true, installedApps: [
+      { capsuleId: "cap_first", installedFrom: { url: "https://git.example.test/team/app.git", path: "subtree/deploy/app" } },
+      { capsuleId: "cap_second", updateAvailable: true },
+    ] });
+    expect(body.installedApps).toHaveLength(2);
+    expect(getConfigs).toHaveBeenCalledTimes(1);
+    expect(getConfigs.mock.calls[0]![0].toSorted()).toEqual(["cfg_cap_first", "cfg_cap_second"]);
+    expect(getConfig).not.toHaveBeenCalled();
+    expect(JSON.stringify(body)).not.toMatch(/stateVersion|sourceSnapshot|cfg_|screens|ownerDisplayName|variableMapping|policy/u);
+
+    const first = await control(new URL(`${url.href}&limit=1`));
+    const { nextCursor } = await first!.json() as InstalledAppPage;
+    expect(nextCursor).toBeString();
+    const ordinary = new URL(url);
+    ordinary.search = new URLSearchParams({ cursor: nextCursor! }).toString();
+    expect((await control(ordinary))?.status).toBe(400);
+
+    for (const target of [url, new URL(`${url.href}&cursor=${nextCursor}`)]) {
+      getConfigs.mockRejectedValueOnce(new Error("fixture install config batch outage"));
+      const unavailable = await control(target);
+      expect(unavailable?.status).toBe(503);
+      expect(await unavailable?.json()).toMatchObject({ error: { code: "feature_unavailable" } });
+    }
+
+    const old = (await h.ledger.getCapsule("cap_first"))!;
+    await h.ledger.putCapsule({ ...old, installConfigId: "cfg_missing" });
+    expect(await (await control())?.json()).toMatchObject({
+      complete: false, installedApps: [{ capsuleId: "cap_second" }],
+    });
+    await h.ledger.putWorkspaceMember({ ...membership, status: "suspended" });
+    expect(await (await control())?.json()).toMatchObject({ complete: true, installedApps: [] });
+
+    // Dedicated PATs are bound to their own app and cannot reuse another key's cursor.
+    for (const token of ["first", "second"]) {
+      await h.accounts.savePersonalAccessToken(token, {
+        tokenId: `pat_${token}`, tokenPrefix: "test", subject: owner, name: token,
+        createdAt: Date.now(), scopes: ["read"], appIds: ["cap_second"],
+      });
+    }
+    const patCall = (value: string, target: URL) => handleControlRoute({
+      request: new Request(target, { headers: { authorization: `Bearer ${value}` } }),
+      url: target, store: h.accounts, operations,
+    });
+    const patPage = await patCall("first", new URL(`${url.href}&limit=1`));
+    const pat = await patPage!.json() as InstalledAppPage;
+    expect(pat.nextCursor).toBeString();
+    expect((await patCall("second", new URL(`${url.href}&cursor=${pat.nextCursor}`)))?.status).toBe(400);
+    const scoped = await (await patCall("first", url))!.json() as InstalledAppPage;
+    expect(scoped.installedApps.map(({ capsuleId }) => capsuleId)).toEqual(["cap_second"]);
+  } finally {
+    getConfigs.mockRestore();
+    getConfig.mockRestore();
+  }
+});
+
+test("the account projection refuses legacy Sources owned by another app and strips private coordinates", async () => {
+  const h = await fixture(false);
+  const call = async (mismatchedSourceOwner: boolean) => {
+    const url = new URL("https://app.example.test/api/v1/apps?projection=installed");
+    return await handleControlRoute({
+      request: new Request(url, { headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_user_test` } }),
+      url, store: h.accounts,
+      operations: {
+        ...h.operations,
+        getSource: async (id: string) => {
+          const result = await h.operations.getSource(id);
+          return mismatchedSourceOwner && id === "src_cap_first"
+            ? { ...result, source: { ...result.source, ownerCapsuleId: "cap_other_module" } }
+            : result;
+        },
+      } as unknown as ControlPlaneOperations,
+    });
+  };
+  const body = await (await call(false))!.json() as InstalledAppPage;
+  expect(body).toMatchObject({ complete: true });
+  expect(body.installedApps.find((row) => row.capsuleId === "cap_first")?.installedFrom).toEqual({
+    url: "https://git.example.test/team/app.git", path: "deploy/app", matchable: false,
+  });
+  expect(JSON.stringify(body)).not.toMatch(/private-token|private-password|private-fragment/u);
+  const mismatch = await (await call(true))!.json() as InstalledAppPage;
+  expect(mismatch.complete).toBe(false);
+  expect(mismatch.installedApps.map((row) => row.capsuleId)).not.toContain("cap_first");
+});
 
 test("installed-apps summarizes each live install by executable module without values", async () => {
   const h = await fixture();

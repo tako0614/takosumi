@@ -74,6 +74,10 @@ export function isKnownSharedAuthRoutePresent(): boolean {
   return knownRoute === "present";
 }
 
+export function isKnownSharedAuthRouteAbsent(): boolean {
+  return knownRoute === "absent";
+}
+
 function readBody(response: Response): Promise<unknown> {
   return response.text().then((text) => {
     if (!text) return undefined;
