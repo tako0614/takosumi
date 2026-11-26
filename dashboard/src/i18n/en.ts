@@ -967,7 +967,7 @@ export const en: Record<keyof typeof ja, string> = {
   "runError.mutationIndeterminate":
     "The operation's outcome is unknown. Ask an operator to check it before running it again.",
   "runError.outputProjectionFailed":
-    "The changes were applied and their state was saved. The app's outputs could not be published. Review the uninstall or ask an operator about recovery.",
+    "The changes were applied and their state was saved. The app's outputs are unavailable. Review the uninstall or ask an operator about recovery.",
   "runError.resourcePreconditionFailed":
     "A requirement declared by this app was not met. Check the app's setup instructions, settings and connections before reviewing the change again.",
   "runError.planFailed":
