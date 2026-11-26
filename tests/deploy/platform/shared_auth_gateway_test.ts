@@ -157,8 +157,17 @@ test("cold dashboard bootstrap authenticates the RP once and only reads the sess
     const denied = await call();
     expect(denied.status).toBe(status);
     expect(denied.headers.get(dashboardProof)).toBe("1");
-    expect(await denied.json()).not.toHaveProperty("session");
+    expect(await denied.json()).toEqual(next === "unauthenticated"
+      ? { error: "unauthenticated" }
+      : { error: { code: "oidc_unavailable" } });
   }
+  const brokenBinding = configured({
+    ...rpc,
+    authenticateSharedAuth: async () => { throw new Error("fixture RPC transport failure"); },
+  }) as CloudflareWorkerEnv;
+  const failure = await handlePlatformSharedDashboardSessionRequest(request(dashboardSessionPath), brokenBinding, deps);
+  expect(failure.status).toBe(503);
+  expect(await failure.json()).toEqual({ error: "authentication_unavailable" });
   expect((await call(dashboardSessionPath, { method: "POST" })).status).toBe(405);
   expect((await call(dashboardSessionPath + "?includeNotifications=true")).status).toBe(400);
   expect((await call(dashboardSessionPath, { headers: { authorization: "Bearer fixture" } })).status).toBe(401);

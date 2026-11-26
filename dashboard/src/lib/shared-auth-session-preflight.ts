@@ -134,6 +134,33 @@ function parseHealth(response: Response, body: unknown): RoutePresence {
   );
 }
 
+async function retryHostedSessionRead<T>(
+  signal: AbortSignal,
+  read: () => Promise<T>,
+  isAbsent: (result: T) => boolean,
+): Promise<T> {
+  let unavailable: SharedAuthSessionPreflightError | undefined;
+  for (const delay of [0, ...HOSTED_SESSION_RETRY_MS]) {
+    if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    throwIfSharedAuthCallerAborted(signal);
+    let result: T;
+    try {
+      result = await read();
+    } catch (error) {
+      // A concurrent Hosted grant check can briefly occupy the session. Only
+      // repeat the RP probe; an explicit Retry-After takes precedence.
+      if (!isHostedSessionUnavailable(error) || error.headers.has("retry-after")) throw error;
+      unavailable = error;
+      continue;
+    }
+    // A later absence cannot select an ordinary session after explicit
+    // Hosted unavailability during the same probe.
+    if (unavailable && isAbsent(result)) throw unavailable;
+    return result;
+  }
+  throw unavailable;
+}
+
 async function readHealth(): Promise<RoutePresence> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -149,40 +176,16 @@ async function readHealth(): Promise<RoutePresence> {
       controller.abort();
     }, HEALTH_DEADLINE_MS);
   });
-  const work = (async () => {
-    let unavailable: SharedAuthSessionPreflightError | undefined;
-    for (const delay of [0, ...HOSTED_SESSION_RETRY_MS]) {
-      if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
-      throwIfSharedAuthCallerAborted(controller.signal);
-      const response = await fetch(HEALTH_PATH, {
-        method: "GET",
-        headers: { accept: "application/json" },
-        credentials: "include",
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      const body = await readBody(response);
-      let route: RoutePresence;
-      try {
-        route = parseHealth(response, body);
-      } catch (error) {
-        // A concurrent Hosted grant check can briefly occupy the session.
-        // Only retry its health GET, never the caller's protected operation.
-        // An explicit server retry interval is outside the short contention
-        // retry. Surface it to the caller instead of retrying sooner.
-        if (!isHostedSessionUnavailable(error) || error.headers.has("retry-after")) {
-          throw error;
-        }
-        unavailable = error;
-        continue;
-      }
-      // A later absence cannot open the ordinary OSS fallback after Hosted
-      // has responded as unavailable during the same probe.
-      if (unavailable && route === "absent") throw unavailable;
-      return route;
-    }
-    throw unavailable;
-  })();
+  const work = retryHostedSessionRead(controller.signal, async () => {
+    const response = await fetch(HEALTH_PATH, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    return parseHealth(response, await readBody(response));
+  }, (route) => route === "absent");
   try {
     return await Promise.race([work, deadline]);
   } catch (error) {
@@ -222,7 +225,7 @@ function startHealth(initial: boolean): Promise<RoutePresence> {
 
 /** The initial guarded read records only genuine route presence. */
 export async function probeInitialSharedAuthSession<T extends { readonly authenticated: boolean } = never>(
-  readBootstrap?: () => Promise<T | undefined>,
+  readBootstrap?: (signal: AbortSignal) => Promise<T | undefined>,
 ): Promise<{
   readonly route: RoutePresence;
   readonly ticket: InitialSharedAuthHealthTicket;
@@ -240,8 +243,11 @@ export async function probeInitialSharedAuthSession<T extends { readonly authent
   };
   const request = initialInflight ?? (readBootstrap && !healthInflight
     ? Promise.resolve().then(async (): Promise<RoutePresence> => {
-      assertCurrent();
-      bootstrap = await readBootstrap();
+      const signal = AbortSignal.timeout(HEALTH_DEADLINE_MS);
+      bootstrap = await retryHostedSessionRead(signal, () => {
+        assertCurrent();
+        return readBootstrap(signal);
+      }, (result) => result === undefined);
       assertCurrent();
       if (!bootstrap) return await startHealth(false);
       if (capturedAvailability === availabilityGeneration) {

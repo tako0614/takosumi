@@ -8,6 +8,7 @@ import {
   invalidateRecentSharedAuthProbe,
   preflightSharedAuthSession,
   requireSharedAuthReadResponse,
+  SharedAuthSessionPreflightError,
   SHARED_AUTH_READ_HEADER,
   type InitialSharedAuthHealthTicket,
 } from "./shared-auth-session-preflight.ts";
@@ -74,7 +75,7 @@ export class DashboardBootstrapError extends Error {
 }
 
 /** Return undefined only for the reserved route's older-Worker 404. */
-export async function fetchInitialSharedDashboardBootstrap(): Promise<
+export async function fetchInitialSharedDashboardBootstrap(signal: AbortSignal): Promise<
   { readonly authenticated: true; readonly subject: string } | { readonly authenticated: false } | undefined
 > {
   const response = await fetch(TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH, {
@@ -83,11 +84,17 @@ export async function fetchInitialSharedDashboardBootstrap(): Promise<
     credentials: "include",
     cache: "no-store",
     redirect: "error",
-    signal: AbortSignal.timeout(40_000),
+    signal,
   });
   const marked = response.headers.get(TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER) === "1";
   const json = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
   const body = await readResponseBody(response);
+  if (marked && json && response.status === 503 &&
+    (body as { error?: { code?: unknown } } | undefined)?.error?.code === "oidc_unavailable") {
+    throw new SharedAuthSessionPreflightError(
+      response.status, response.statusText, response.headers, body, "Hosted session probe failed (503).",
+    );
+  }
   if (!marked && response.status === 404 && json && body &&
     typeof body === "object" && Object.keys(body).length === 1 &&
     "error" in body && body.error === "not found") return undefined;

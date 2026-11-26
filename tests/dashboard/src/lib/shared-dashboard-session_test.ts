@@ -9,7 +9,10 @@ import {
 import { initializeTakosumiRuntimeCapabilities } from "../../../../dashboard/src/lib/runtime-capabilities.ts";
 import { fetchDashboardBootstrap } from "../../../../dashboard/src/lib/dashboard-bootstrap.ts";
 import { controlFetch } from "../../../../dashboard/src/lib/control-api.ts";
-import { canReuseRecentSharedAuthProbe } from "../../../../dashboard/src/lib/shared-auth-session-preflight.ts";
+import {
+  canReuseRecentSharedAuthProbe,
+  isHostedSessionUnavailable,
+} from "../../../../dashboard/src/lib/shared-auth-session-preflight.ts";
 import {
   clearSession,
   initialSessionOptions,
@@ -24,6 +27,7 @@ const ordinary = "/api/v1/dashboard/bootstrap?includeWorkspaces=false";
 const notifications = ordinary + "&includeNotifications=true";
 const marked = { [proof]: "1" };
 const session = { session: { subject: "tsub_fixture" } };
+const unavailable = { error: { code: "oidc_unavailable" } };
 const absent = {
   "cache-control": "no-store",
   "x-takosumi-shared-auth-absent": "1",
@@ -100,11 +104,55 @@ test("a proved 401 retires the cold availability and does not read the ordinary 
   expect(canReuseRecentSharedAuthProbe()).toBe(false);
 });
 
+test("cold bootstrap retries an explicit Hosted unavailable result before the successful read", async () => {
+  let attempts = 0;
+  const calls = stub(() => ++attempts === 1
+    ? Response.json(unavailable, { status: 503, headers: marked })
+    : Response.json(session, { headers: marked }));
+  expect(await refreshSessionState(initialSessionOptions)).toMatchObject({ kind: "authenticated", ...session });
+  expect(calls).toEqual([coldPath, coldPath]);
+});
+
+test.each([undefined, "7"])("explicit Hosted unavailable retains recovery and honors Retry-After %s", async (retryAfter) => {
+  const calls = stub(() => Response.json(unavailable, {
+    status: 503, headers: retryAfter ? { ...marked, "retry-after": retryAfter } : marked,
+  }));
+  const state = await refreshSessionState(initialSessionOptions);
+  expect(state.kind).toBe("error");
+  if (state.kind !== "error") return;
+  expect(isHostedSessionUnavailable(state.error.cause)).toBe(true);
+  expect(state.error.headers.get("retry-after")).toBe(retryAfter ?? null);
+  expect(calls).toEqual(Array.from({ length: retryAfter ? 1 : 4 }, () => coldPath));
+});
+
+test("a cold contention retry may not use a later reserved-path absence to fall back", async () => {
+  let attempts = 0;
+  const calls = stub(() => ++attempts === 1
+    ? Response.json(unavailable, { status: 503, headers: marked })
+    : Response.json({ error: "not found" }, { status: 404 }));
+  expect(await refreshSessionState(initialSessionOptions)).toMatchObject({ kind: "error", error: { status: 503, body: unavailable } });
+  expect(calls).toEqual([coldPath, coldPath]);
+});
+
+test("logout prevents a scheduled cold contention retry", async () => {
+  const started = Promise.withResolvers<void>();
+  const calls = stub(() => {
+    started.resolve();
+    return Response.json(unavailable, { status: 503, headers: marked });
+  });
+  const pending = refreshSessionState(initialSessionOptions);
+  await started.promise;
+  expect(await signOutSession()).toBe(true);
+  expect(await pending).toEqual({ kind: "unauthenticated" });
+  expect(calls).toEqual([coldPath]);
+});
+
 test.each([
   ["controlled maintenance", 503, { error: { code: "schema_maintenance" } }, marked, "maintenance"],
   ["unmarked success", 200, session, undefined, "error"],
   ["unmarked 401", 401, { error: "unauthenticated" }, undefined, "error"],
   ["unmarked 503", 503, { error: "unavailable" }, undefined, "error"],
+  ["unmarked Hosted code", 503, unavailable, undefined, "error"],
   ["marked 404", 404, { error: "not found" }, marked, "error"],
   ["redirect", 302, { error: "redirect" }, { location: ordinary }, "error"],
 ] as const)("cold %s neither grants a session nor starts a fallback read", async (_name, status, body, headers, kind) => {

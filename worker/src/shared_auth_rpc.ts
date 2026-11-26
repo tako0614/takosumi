@@ -446,7 +446,7 @@ export async function authenticateSharedAuthRequest(
   request: Request,
   env: SharedAuthEnvironment,
   billingTrace?: string,
-): Promise<SharedAuthIdentity | undefined> {
+): Promise<SharedAuthIdentity | { readonly kind: "unavailable"; readonly reportedByRp: true } | undefined> {
   if (!sharedAuthConfigured(env)) return undefined;
   // Explicit credentials have their own verifier; a failed bearer, forged
   // issuer-session header or raw account assertion cannot fall back to cookies.
@@ -467,6 +467,7 @@ export async function authenticateSharedAuthRequest(
     if (identity?.kind === "authenticated" && safeId(identity.accountId)) {
       return { kind: "authenticated", accountId: identity.accountId };
     }
+    if (identity?.kind === "unavailable") return { kind: "unavailable", reportedByRp: true };
     return { kind: "unavailable" };
   } catch {
     return { kind: "unavailable" };
