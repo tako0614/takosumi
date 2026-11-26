@@ -1,3 +1,4 @@
+import { isKnownSharedAuthRoutePresent } from "../../../lib/shared-auth-session-preflight.ts";
 import type { MessageKey } from "../../../i18n/index.ts";
 import { apiFetch, ApiError } from "./http.ts";
 
@@ -28,6 +29,9 @@ export function authenticateWithPassword(username: string, password: string, sig
 }
 
 export async function readSignInMethods(): Promise<SignInMethods | undefined> {
+  // The product host delegates sign-in to the shared issuer. Its local
+  // password management route is deliberately unavailable in that profile.
+  if (isKnownSharedAuthRoutePresent()) return undefined;
   try {
     const result = await apiFetch<SignInMethods>("/api/v1/account/sign-in-methods");
     if (!result || typeof result.passwordEnabled !== "boolean" || typeof result.hasPassword !== "boolean" ||
