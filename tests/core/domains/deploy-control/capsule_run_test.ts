@@ -12731,7 +12731,7 @@ test("Output projection fails closed on required output type mismatch", async ()
   );
 });
 
-test("initial Apply with an unprojectable output can recover only verified state", async () => {
+test("initial Apply with an unprojectable output retains state for explicitly reviewed Destroy", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner({ requiredProviders: [] }, {});
   await seedRunnableCapsuleModel(store, {
@@ -12751,18 +12751,25 @@ test("initial Apply with an unprojectable output can recover only verified state
   expect(applyRun.status).toBe("failed");
   expect(await store.getCapsule("cap_fixture1")).toMatchObject({
     status: "error",
-    currentStateGeneration: 0,
+    currentStateGeneration: 1,
+    currentStateVersionId: applyRun.stateVersionId,
   });
   expect(applyRun.diagnostics).toContainEqual(
     expect.objectContaining({ code: "apply_output_projection_failed" }),
   );
   expect(applyRun.auditEvents).toContainEqual(
     expect.objectContaining({
-      type: "apply.failed",
-      data: expect.objectContaining({ providerDispatched: true, providerApplySucceeded: true }),
+      type: "apply.output_projection_failed",
+      data: expect.objectContaining({ stateVersionId: applyRun.stateVersionId, stateDigest: STATE_DIGEST }),
     }),
   );
-  expect(applyRun.stateVersionId).toBeUndefined();
+  expect(applyRun.stateVersionId).toBeDefined();
+  expect(await store.getStateVersion(applyRun.stateVersionId!)).toMatchObject({
+    createdByRunId: applyRun.id,
+    digest: STATE_DIGEST,
+    generation: 1,
+  });
+  expect(applyRun.executionEvidence?.outcome).toBe("committed");
   expect(applyRun.outputId).toBeUndefined();
   expect(await store.getCapsuleRuntimeSafety("cap_fixture1")).toMatchObject({
     phase: "unknown",
@@ -12771,40 +12778,17 @@ test("initial Apply with an unprojectable output can recover only verified state
   expect((await controller.createApplyRun(input)).applyRun.id).toBe(applyRun.id);
   expect(runner.applyJobs).toHaveLength(1);
 
-  const recoveryRunId = "run_output_projection_recovery";
-  const verifiedArtifact = {
-    format: VERIFIED_RECOVERY_ARTIFACT_FORMAT,
-    immutable: true as const,
-    adapterAllocated: true as const,
-    readbackVerified: true as const,
-    workspaceId: "ws_test001",
-    capsuleId: "cap_fixture1",
-    environment: "preview",
-    generation: 1 as const,
-    recoveryRunId,
-    stateRef: "workspaces/ws_test001/state-versions/00000001.tfstate.enc",
-    encryptedDigest: `sha256:${"b".repeat(64)}` as const,
-    plaintextSha256: STATE_DIGEST as `sha256:${string}`,
-    evidenceDigest: `sha256:${"c".repeat(64)}` as const,
-  };
-  const recovered = await recoverFailedInitialCreateState({
-    store,
-    verifier: { verify: async () => verifiedArtifact },
-    artifactHandle: "opaque-recovery-handle",
-    failedApplyRunId: applyRun.id,
-    recoveryRunId,
-    createdBy: "operator_test",
-    now: "2026-09-30T00:00:00.000Z",
-  });
-  expect(recovered).toMatchObject({
-    status: "committed",
-    stateVersion: { createdByRunId: recoveryRunId, generation: 1 },
-  });
   expect((await store.getCapsule("cap_fixture1"))?.currentOutputId).toBeUndefined();
   expect((await store.getApplyRun(applyRun.id))?.status).toBe("failed");
   expect(runner.destroyJobs).toHaveLength(0);
 
   const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  await expect(controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  })).rejects.toMatchObject({ code: "failed_precondition" });
+  expect(runner.destroyJobs).toHaveLength(0);
   await controller.approveRun(destroy.planRun.id);
   const removed = await controller.createApplyRun({
     planRunId: destroy.planRun.id,
@@ -12850,6 +12834,44 @@ test.each(["executionEvidence", "stateDigest"] as const)(
       .not.toHaveProperty("providerApplySucceeded");
   },
 );
+
+test("an update with an unprojectable output retains new state and retires the old output from the app view", async () => {
+  const { store, runner, controller } = await seededController({
+    installConfig: {
+      outputAllowlist: {
+        endpoint: { from: "public_url", type: "url", required: true },
+      },
+    },
+  });
+  const initial = await controller.createCapsulePlan("cap_fixture1");
+  const installed = await controller.createApplyRun({
+    planRunId: initial.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(initial.planRun),
+  });
+  expect(installed.applyRun.status).toBe("succeeded");
+  const previousOutputId = installed.applyRun.outputId!;
+  const apply = runner.apply;
+  runner.apply = async (job) => ({ ...(await apply(job)), outputs: {} });
+
+  const update = await controller.createCapsulePlan("cap_fixture1");
+  expect(update.planRun.operation).toBe("update");
+  const failed = await controller.createApplyRun({
+    planRunId: update.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(update.planRun),
+  });
+  expect(failed.applyRun.status).toBe("failed");
+  expect(await store.getCapsule("cap_fixture1")).toMatchObject({
+    status: "error",
+    currentStateGeneration: 2,
+    currentStateVersionId: failed.applyRun.stateVersionId,
+  });
+  expect((await store.getCapsule("cap_fixture1"))?.currentOutputId).toBeUndefined();
+  expect(await store.getOutput(previousOutputId)).toBeDefined();
+  expect(await store.getCapsuleRuntimeSafety("cap_fixture1")).toMatchObject({
+    phase: "unknown",
+    runId: failed.applyRun.id,
+  });
+});
 
 test("a sensitive-flagged runner output leaks into NO projection (invariants 11/12)", async () => {
   const { store, controller } = await seededController();

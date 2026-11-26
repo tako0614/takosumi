@@ -30,12 +30,16 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   backup_failed: "runError.backupFailed",
 };
 
-/** The ledger lacks a verified state from which to start another mutation. */
 export function runMutationOutcomeUnknown(
   run: { readonly errorCode?: string } | undefined,
-): run is {
-  readonly errorCode: "runner_mutation_indeterminate" | "apply_output_projection_failed";
-} {
+): boolean {
+  return run?.errorCode === "runner_mutation_indeterminate";
+}
+
+/** Neither an unconfirmed mutation nor a failed projection may retry Apply. */
+export function runApplyRequiresRecovery(
+  run: { readonly errorCode?: string } | undefined,
+): run is { readonly errorCode: "runner_mutation_indeterminate" | "apply_output_projection_failed" } {
   return run?.errorCode === "runner_mutation_indeterminate" ||
     run?.errorCode === "apply_output_projection_failed";
 }

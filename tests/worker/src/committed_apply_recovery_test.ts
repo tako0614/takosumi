@@ -148,17 +148,17 @@ test("RunOwner records output projection failure from a confirmed Apply receipt 
       committedAt: finishedAt,
     };
   });
-  const observedAtRelease: Array<{
+  const observedAtCapture: Array<{
     status: string | undefined;
     appliedApplyRunId: string | undefined;
   }> = [];
-  const release = spyOn(BillingService.prototype, "releaseApplyBilling")
+  const capture = spyOn(BillingService.prototype, "captureApplyBillingUsage")
     .mockImplementation(async () => {
-      observedAtRelease.push({
+      observedAtCapture.push({
         status: (await f.store.getApplyRun(f.run.id))?.status,
         appliedApplyRunId: (await f.store.getPlanRun(f.run.planRunId))?.appliedApplyRunId,
       });
-      throw new Error("fixture billing reservation release unavailable");
+      throw new Error("fixture billing capture unavailable");
     });
   const rating = spyOn(BillingService.prototype, "rateUsageMeasurement");
   try {
@@ -168,19 +168,19 @@ test("RunOwner records output projection failure from a confirmed Apply receipt 
     expect(failed?.diagnostics).toContainEqual(
       expect.objectContaining({ code: "apply_output_projection_failed" }),
     );
-    expect(failed?.auditEvents.find(({ type }) => type === "apply.failed")?.data)
-      .toMatchObject({ providerDispatched: true, providerApplySucceeded: true });
+        expect(failed?.auditEvents.find(({ type }) => type === "apply.output_projection_failed")?.data)
+      .toMatchObject({ stateVersionId: failed?.stateVersionId, stateDigest: DIGEST });
     expect(await f.store.getCapsule(f.run.capsuleId!)).toMatchObject({
       status: "error",
-      currentStateGeneration: 0,
+      currentStateGeneration: 1,
+      currentStateVersionId: failed?.stateVersionId,
     });
     expect((await f.store.getPlanRun(f.run.planRunId))?.appliedApplyRunId).toBe(f.run.id);
-    expect(failed?.stateVersionId).toBeUndefined();
+    expect(failed?.stateVersionId).toBeDefined();
     expect(failed?.outputId).toBeUndefined();
     expect(f.counts()).toEqual({ calls: 0, reads: 1, inspections: 1 });
-    await f.dispatch();
-    expect(release).toHaveBeenCalledTimes(1);
-    expect(observedAtRelease).toEqual([{ status: "failed", appliedApplyRunId: f.run.id }]);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(observedAtCapture).toEqual([{ status: "failed", appliedApplyRunId: f.run.id }]);
     expect(rating).toHaveBeenCalledTimes(1);
     expect(rating).toHaveBeenCalledWith(expect.objectContaining({
       runId: f.run.id,
@@ -193,7 +193,7 @@ test("RunOwner records output projection failure from a confirmed Apply receipt 
   } finally {
     mint.mockRestore();
     apply.mockRestore();
-    release.mockRestore();
+    capture.mockRestore();
     rating.mockRestore();
   }
 });

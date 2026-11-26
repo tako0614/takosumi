@@ -1,6 +1,6 @@
 /** Temporary legacy ownership adapter; remove with the workspace compat API. */
 import { ControlApiError, getWorkspace, listAccessibleApps, listMembers, type AppRole } from "./control-api.ts";
-import { runMutationOutcomeUnknown } from "./run-errors.ts";
+import { runApplyRequiresRecovery, runMutationOutcomeUnknown } from "./run-errors.ts";
 
 export async function resolveAppRole(input: {
   readonly capsuleId: string;
@@ -33,7 +33,9 @@ export function isAppRemovalRun(type: string | undefined): boolean {
 /** A removal retry/review is still an uninstall, even with a generic label. */
 export function appPrimaryAllowed(role: AppRole | undefined, app: import("./control-api.ts").CapsuleAppView): boolean {
   const problem = app.problems.find((entry) => entry.severity === "error");
-  if ((app.primaryAction === "retry" || app.primaryAction === "uninstall_now") &&
+  if (app.primaryAction === "retry" &&
+    (runApplyRequiresRecovery(app.latestRun) || runApplyRequiresRecovery(problem))) return false;
+  if (app.primaryAction === "uninstall_now" &&
     (runMutationOutcomeUnknown(app.latestRun) || runMutationOutcomeUnknown(problem))) return false;
   if (role === "owner") return true;
   if (role === undefined) return ["none", "open", "view_resources", "reinstall"].includes(app.primaryAction);

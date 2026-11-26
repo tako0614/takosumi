@@ -188,6 +188,7 @@ import {
 } from "../plan_resolution.ts";
 import { evaluatePolicy } from "../policy.ts";
 import {
+  APPLY_OUTPUT_PROJECTION_FAILED_REASON,
   ApplyOutputProjectionError,
   errorDiagnostic,
   errorMessage,
@@ -8642,7 +8643,6 @@ export class RunEngine {
     providerDispatched = false,
     lifecycleActionDispatched = false,
     lifecycleOutcome?: LifecycleActionOutcome,
-    providerApplySucceeded = false,
   ): ApplyRun {
     const now = this.#now();
     const refusal = scheduledUninstallRefusal(error);
@@ -8681,7 +8681,6 @@ export class RunEngine {
         auditEvent(running.id, eventType, now, {
           message: errorMessage(error),
           providerDispatched,
-          ...(providerApplySucceeded ? { providerApplySucceeded: true } : {}),
           ...(lifecycleActionDispatched
             ? { lifecycleActionDispatched: true }
             : {}),
@@ -8745,19 +8744,14 @@ export class RunEngine {
     providerDispatched = false,
     lifecycleActionDispatched = false,
     lifecycleOutcome?: LifecycleActionOutcome,
-    applyContext?: {
-      readonly planRun: PlanRun;
-      readonly plannedCapsule: Capsule | undefined;
-      readonly verifiedOutputProjectionFailure?: RunExecutionEvidence;
-    },
+    initialCreate?: { readonly planRun: PlanRun; readonly plannedCapsule: Capsule | undefined },
   ): Promise<ApplyRun> {
     const failed = this.#failedApplyRunCandidate(
       running, profile.stateBackend, startedAt, eventType, error,
       providerDispatched, lifecycleActionDispatched, lifecycleOutcome,
-      Boolean(applyContext?.verifiedOutputProjectionFailure),
     );
-    const initialFailure = await this.#persistInitialCreateRecoveryFailure({
-      failed, leaseToken, error, providerDispatched, applyContext,
+    const initialFailure = await this.#persistIndeterminateInitialCreateFailure({
+      failed, leaseToken, error, providerDispatched, initialCreate,
     });
     const persisted = initialFailure ?? await this.#persistTerminalRun(
       "apply", failed, leaseToken,
@@ -8765,54 +8759,22 @@ export class RunEngine {
     if (initialFailure?.won) await this.#afterTerminalRunWon("apply", failed);
     if (!persisted.won) return persisted.run;
     await this.#recordApplyFailure(failed, startedAt, eventType, error);
-    const receipt = applyContext?.verifiedOutputProjectionFailure;
-    if (receipt) {
-      // The Run-lease winner owns the reservation and original execution time.
-      await this.#billing.releaseApplyBilling(applyContext.planRun).catch((error: unknown) => {
-        log.warn("deploy_control.output_projection_billing_release_failed", {
-          applyRunId: failed.id,
-          message: errorMessage(error),
-        });
-      });
-      const finishedAt = Date.parse(receipt.committedAt);
-      if (running.startedAt !== undefined && finishedAt > running.startedAt &&
-        finishedAt <= failed.finishedAt!) {
-        await this.#recordRunnerMinuteUsage({
-          workspaceId: failed.workspaceId,
-          runId: failed.id,
-          capsuleId: failed.capsuleId,
-          startedAt: running.startedAt,
-          finishedAt,
-        }).catch((error: unknown) => {
-          log.warn("deploy_control.output_projection_runner_usage_failed", {
-            applyRunId: failed.id,
-            message: errorMessage(error),
-          });
-        });
-      }
-    }
     return failed;
   }
 
-  /** Keep a failed initial mutation eligible for verified state-only recovery. */
-  async #persistInitialCreateRecoveryFailure(input: {
+  /** Keep an initial unknown mutation recoverable without asserting an outcome. */
+  async #persistIndeterminateInitialCreateFailure(input: {
     readonly failed: ApplyRun;
     readonly leaseToken: string;
     readonly error: unknown;
     readonly providerDispatched: boolean;
-    readonly applyContext: {
-      readonly planRun: PlanRun;
-      readonly plannedCapsule: Capsule | undefined;
-      readonly verifiedOutputProjectionFailure?: RunExecutionEvidence;
-    } | undefined;
+    readonly initialCreate: { readonly planRun: PlanRun; readonly plannedCapsule: Capsule | undefined } | undefined;
   }): Promise<TerminalRunPersistResult<ApplyRun> | undefined> {
-    const { failed, error, applyContext } = input;
-    const plan = applyContext?.planRun;
-    const planned = applyContext?.plannedCapsule;
-    const indeterminate = error instanceof OpenTofuRunnerExecutionError &&
-      error.reason === "runner_mutation_indeterminate";
-    if (!input.providerDispatched ||
-      (!indeterminate && !applyContext?.verifiedOutputProjectionFailure) ||
+    const { failed, error, initialCreate } = input;
+    const plan = initialCreate?.planRun;
+    const planned = initialCreate?.plannedCapsule;
+    if (!input.providerDispatched || !(error instanceof OpenTofuRunnerExecutionError) ||
+      error.reason !== "runner_mutation_indeterminate" ||
       !plan || !planned || plan.operation !== "create" || failed.operation !== "create" ||
       plan.baseStateGeneration !== 0 || plan.capsuleCurrentStateVersionId != null ||
       planned.status !== "pending" || planned.currentStateGeneration !== 0 ||
@@ -10086,7 +10048,6 @@ export class RunEngine {
     const leaseToken = claim.leaseToken;
     let runningForFailure = running;
     let runnerDispatched = false;
-    let providerCommit: RunExecutionEvidence | undefined;
     let ledgerCommitted = false;
     let plannedCapsule: Capsule | undefined;
 
@@ -10279,8 +10240,7 @@ export class RunEngine {
           "apply completed without a durable Capsule state scope",
         );
       }
-      providerCommit = executionEvidence;
-      const projected = await this.#projectAndRecordApplyOutputs({
+      const projection = await this.#projectAndRecordApplyOutputs({
         planRun,
         applyRun,
         plannedCapsule,
@@ -10289,79 +10249,103 @@ export class RunEngine {
         dispatch,
         now,
         executionEvidenceCommit,
+      }).catch((error: unknown) => {
+        if (error instanceof ApplyOutputProjectionError) return error;
+        throw error;
       });
-      // Build the terminal ApplyRun + apply-once PlanRun marker before the
-      // atomic Run + StateVersion + Output commit.
-      const providerApplied = this.#buildCompletedApplyRun({
-        running: runningWithEnv,
-        applyRun,
-        profile,
-        capsule: projected.capsule,
-        stateVersionId: stateVersion.id,
-        outputId: projected.output.id,
-        outputCount: Object.keys(projected.output.publicOutputs).length,
-        result,
-        executionEvidence,
-        providerInstallationPolicy,
-        startedAt,
-        now,
-      });
-      // Required post-apply actions are part of the reviewed Run boundary, not
-      // a best-effort notification after readiness. Execute the Plan-pinned
-      // commands after provider state/output persistence has completed in the
-      // runner, but before the atomic ledger makes the Capsule active.
-      const lifecycleOutcome = await this.#withRunRenewal(
-        "apply",
-        runningWithEnv,
-        leaseToken,
-        lease,
-        (signal) =>
-          this.#activateReleaseAfterApply({
-            planRun,
-            applyRun: providerApplied,
-            runLease: Object.freeze({ runId: runningWithEnv.id, leaseToken }),
-            capsule: projected.capsule,
+      const projected = projection instanceof ApplyOutputProjectionError ? undefined : projection;
+      const capsule = projected?.capsule ??
+        plannedCapsule ?? await this.#requireCurrentPlannedCapsule(planRun);
+      const nextStateGeneration = projected?.nextStateGeneration ?? stateVersion.generation;
+      const output = projected?.output;
+      const outputCount = output ? Object.keys(output.publicOutputs).length : 0;
+      let completed: ApplyRun;
+      if (projection instanceof ApplyOutputProjectionError) {
+        // The exact provider receipt is committed. Retain its original state
+        // coordinate without publishing an Output or starting post_apply.
+        const failed = this.#failedApplyRunCandidate(
+          runningWithEnv,
+          profile.stateBackend,
+          startedAt,
+          "apply.failed",
+          projection,
+          true,
+        );
+        completed = this.#withPendingApplyBillingCapture({
+          ...failed,
+          stateVersionId: stateVersion.id,
+          executionEvidence,
+          auditEvents: [
+            ...failed.auditEvents,
+            auditEvent(applyRun.id, "apply.output_projection_failed", now, {
+              stateVersionId: stateVersion.id,
+              stateDigest: stateVersion.digest,
+            }),
+          ],
+        }, now);
+      } else {
+        const providerApplied = this.#buildCompletedApplyRun({
+          running: runningWithEnv,
+          applyRun,
+          profile,
+          capsule,
+          stateVersionId: stateVersion.id,
+          outputId: projection.output.id,
+          outputCount,
+          result,
+          executionEvidence,
+          providerInstallationPolicy,
+          startedAt,
+          now,
+        });
+        // Required post-apply actions precede the atomic visibility commit.
+        const lifecycleOutcome = await this.#withRunRenewal(
+          "apply",
+          runningWithEnv,
+          leaseToken,
+          lease,
+          (signal) =>
+            this.#activateReleaseAfterApply({
+              planRun,
+              applyRun: providerApplied,
+              runLease: Object.freeze({ runId: runningWithEnv.id, leaseToken }),
+              capsule,
+              stateVersion,
+              output: projection.output,
+              result,
+              lifecycleActions: dispatch.lifecycleActions,
+              sourceBuild: dispatch.sourceBuild,
+              signal,
+              deadlineAt,
+            }),
+        );
+        completed = this.#applyPostApplyLifecycleOutcome({
+          providerApplied,
+          lifecycleOutcome,
+          now,
+        });
+        if (lifecycleOutcome) {
+          await this.#recordLifecycleActionOutcome({
+            applyRun: completed,
+            capsule,
             stateVersion,
-            output: projected.output,
-            result,
-            lifecycleActions: dispatch.lifecycleActions,
-            sourceBuild: dispatch.sourceBuild,
-            signal,
-            deadlineAt,
-          }),
-      );
-      const completed = this.#applyPostApplyLifecycleOutcome({
-        providerApplied,
-        lifecycleOutcome,
-        now,
-      });
+            outcome: lifecycleOutcome,
+          });
+        }
+      }
       const appliedPlan: PlanRun = {
         ...planRun,
         appliedApplyRunId: applyRun.id,
         updatedAt: now,
       };
-      // Close the observable lifecycle Activity before attempting the guarded
-      // ledger commit. The action has already reached a concrete adapter
-      // outcome; if the commit loses its lease or conflicts, leaving only the
-      // earlier `pending` Activity would falsely imply resumable background
-      // work. This Activity describes the action outcome, not ledger success.
-      if (lifecycleOutcome) {
-        await this.#recordLifecycleActionOutcome({
-          applyRun: completed,
-          capsule: projected.capsule,
-          stateVersion,
-          outcome: lifecycleOutcome,
-        });
-      }
-      // Atomic authority: terminal Run + StateVersion + Output + Capsule cursors.
       const patched = await this.#commitApplyLedger({
         planRun,
         plannedCapsule,
-        capsule: projected.capsule,
+        capsule,
         stateVersion,
-        output: projected.output,
-        previousOutput: projected.previousOutput,
-        nextStateGeneration: projected.nextStateGeneration,
+        output,
+        previousOutput: projected?.previousOutput,
+        nextStateGeneration,
         applyRunTerminal: completed,
         planRunApplied: appliedPlan,
         applyRunLeaseToken: leaseToken,
@@ -10376,15 +10360,22 @@ export class RunEngine {
         };
       }
       ledgerCommitted = true;
+      const receiptFinishedAt = Date.parse(executionEvidence.committedAt);
       return await this.#completeApplyRun({
         completed,
         planRun,
-        capsule: projected.capsule,
+        capsule,
         patched,
-        outputCount: Object.keys(projected.output.publicOutputs).length,
-        nextStateGeneration: projected.nextStateGeneration,
+        outputCount,
+        nextStateGeneration,
         startedAt,
         now,
+        ...(projection instanceof ApplyOutputProjectionError ? {
+          runnerTiming: running.startedAt !== undefined &&
+              receiptFinishedAt > running.startedAt && receiptFinishedAt <= now
+            ? { startedAt: running.startedAt, finishedAt: receiptFinishedAt }
+            : { finishedAt: now },
+        } : {}),
       });
     } catch (error) {
       // A busy Capsule lease is a queue contention signal, not an Apply
@@ -10413,10 +10404,7 @@ export class RunEngine {
           ...(currentCapsule ? { capsule: currentCapsule } : {}),
         };
       }
-      const verifiedOutputProjectionFailure = error instanceof ApplyOutputProjectionError
-        ? providerCommit
-        : undefined;
-      if (recovered && !verifiedOutputProjectionFailure) {
+      if (recovered) {
         // No observation failure is a new provider outcome. An ACK-lost commit
         // returns its durable winner; otherwise retain the current claimed Run.
         return await this.getApplyRun(applyRun.id);
@@ -10543,7 +10531,7 @@ export class RunEngine {
           throw retryError;
         }
       }
-      if (!verifiedOutputProjectionFailure) await this.#billing.releaseApplyBilling(planRun);
+      await this.#billing.releaseApplyBilling(planRun);
       const failed = await this.#failApplyRun(
         runEnvironmentFailedRun(runningForFailure, error),
         leaseToken,
@@ -10551,14 +10539,13 @@ export class RunEngine {
         startedAt,
         "apply.failed",
         error,
-        runnerDispatched || verifiedOutputProjectionFailure !== undefined,
+        runnerDispatched,
         false,
         undefined,
-        { planRun, plannedCapsule, ...(verifiedOutputProjectionFailure ? { verifiedOutputProjectionFailure } : {}) },
+        { planRun, plannedCapsule },
       );
       if (
         runnerDispatched &&
-        !verifiedOutputProjectionFailure &&
         !isPreProviderRunnerRefusal(error) &&
         failed.finishedAt !== undefined
       ) {
@@ -11115,7 +11102,7 @@ export class RunEngine {
     readonly plannedCapsule: Capsule | undefined;
     readonly capsule: Capsule;
     readonly stateVersion: StateVersion;
-    readonly output: Output;
+    readonly output: Output | undefined;
     readonly previousOutput: Output | undefined;
     readonly nextStateGeneration: number;
     readonly applyRunTerminal: ApplyRun;
@@ -11132,7 +11119,7 @@ export class RunEngine {
     try {
       committed = await this.#store.commitRunState({
         stateVersion,
-        output,
+        ...(output ? { output } : {}),
         capsulePatch: {
           id: capsule.id,
           patch: {
@@ -11140,7 +11127,7 @@ export class RunEngine {
             status: input.capsuleStatus,
             updatedAt: new Date(now).toISOString(),
             currentStateGeneration: input.nextStateGeneration,
-            currentOutputId: output.id,
+            currentOutputId: output?.id,
           },
           guard: {
             currentStateVersionId:
@@ -11152,7 +11139,7 @@ export class RunEngine {
         applyRunTerminal: input.applyRunTerminal,
         planRunApplied: input.planRunApplied,
         applyRunLeaseToken: input.applyRunLeaseToken,
-        ...(input.applyRunTerminal.status === "succeeded" &&
+        ...(output && input.applyRunTerminal.status === "succeeded" &&
         input.inputs?.interfaceMaterialization
           ? {
               interfaceMaterializationIntent:
@@ -12358,6 +12345,7 @@ export class RunEngine {
     readonly nextStateGeneration: number;
     readonly startedAt: number;
     readonly now: number;
+    readonly runnerTiming?: { readonly startedAt?: number; readonly finishedAt: number };
   }): Promise<ApplyRunResponse> {
     const { completed, planRun, capsule, outputCount, startedAt, now } = input;
     const finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
@@ -12369,8 +12357,7 @@ export class RunEngine {
         workspaceId: completed.workspaceId,
         runId: completed.id,
         capsuleId: completed.capsuleId,
-        startedAt,
-        finishedAt: now,
+        ...(input.runnerTiming ?? { startedAt, finishedAt: now }),
       });
       await this.#recordDeployOperationMetric({
         run: completed,
@@ -12388,15 +12375,15 @@ export class RunEngine {
         message: errorMessage(error),
       });
     }
-    const lifecycleFailed = completed.status === "failed";
-    const lifecycleErrorCode = lifecycleFailed
-      ? CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE
-      : undefined;
+    const failed = completed.status === "failed";
+    const errorCode = completed.diagnostics?.some(({ code }) => code === APPLY_OUTPUT_PROJECTION_FAILED_REASON)
+      ? APPLY_OUTPUT_PROJECTION_FAILED_REASON
+      : CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE;
     // A failed lifecycle action is still explicit that the provider-applied
     // StateVersion/Output were retained; callers must not retry the same Plan.
     await this.#recordActivity({
       workspaceId: completed.workspaceId,
-      action: lifecycleFailed ? "run.failed" : "run.applied",
+      action: failed ? "run.failed" : "run.applied",
       targetType: "run",
       targetId: completed.id,
       runId: completed.id,
@@ -12408,9 +12395,9 @@ export class RunEngine {
         stateGeneration: input.nextStateGeneration,
         outputId: completed.outputId,
         outputCount,
-        ...(lifecycleFailed
+        ...(failed
           ? {
-              errorCode: lifecycleErrorCode!,
+              errorCode,
               providerApplySucceeded: true,
               appliedStateRetained: true,
             }

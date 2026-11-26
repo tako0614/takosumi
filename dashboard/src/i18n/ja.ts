@@ -980,7 +980,7 @@ export const ja = {
   "runError.mutationIndeterminate":
     "操作が完了したか確認できません。実行を繰り返す前に、管理者に結果の確認を依頼してください。",
   "runError.outputProjectionFailed":
-    "変更は適用されましたが、アプリの出力を利用できる形で保存できませんでした。再実行する前に、管理者に状態の確認と復旧を依頼してください。",
+    "変更は適用され、状態も保存されました。アプリの出力を公開できなかったため、削除内容を確認するか、管理者に復旧を相談してください。",
   "runError.resourcePreconditionFailed":
     "アプリが定める条件を満たしていません。アプリの導入手順と設定・接続を確認してから、もう一度変更内容を確認してください。",
   "runError.planFailed":

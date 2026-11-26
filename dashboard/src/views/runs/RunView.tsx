@@ -108,7 +108,7 @@ import {
 } from "../../lib/labels.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
-import { runFailureHint, runMutationOutcomeUnknown } from "../../lib/run-errors.ts";
+import { runFailureHint, runApplyRequiresRecovery } from "../../lib/run-errors.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
@@ -645,7 +645,7 @@ function Inner(props: { readonly session: SessionRecord }) {
   });
   const ordinaryRetryAllowed = createMemo(() => {
     const r = runLatest();
-    if (runMutationOutcomeUnknown(r)) return false;
+    if (runApplyRequiresRecovery(r)) return false;
     if (
       !r ||
       r.type !== "plan" ||

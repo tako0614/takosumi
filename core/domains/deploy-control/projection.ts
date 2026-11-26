@@ -45,9 +45,11 @@ export const WORKSPACE_OUTPUT_PROJECTION_LIMITS = {
   maxTotalBytes: 256 * 1024,
 } as const;
 
+export const APPLY_OUTPUT_PROJECTION_FAILED_REASON = "apply_output_projection_failed";
+
 export class ApplyOutputProjectionError extends OpenTofuControllerError {
   constructor(message: string) {
-    super("failed_precondition", message, { reason: "apply_output_projection_failed" });
+    super("failed_precondition", message, { reason: APPLY_OUTPUT_PROJECTION_FAILED_REASON });
   }
 }
 
