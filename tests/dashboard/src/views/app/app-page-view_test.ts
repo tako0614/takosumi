@@ -129,7 +129,10 @@ describe("installed app page", () => {
     expect(page.replace(heldRemovalDetails!, "").replace(checkReservedReview!, "")).not.toMatch(/navigate\(`\/runs\//u);
     expect(allAppSources).not.toContain("auto=update");
     expect(allAppSources).not.toContain("autoApply");
-    expect(allAppSources).not.toContain("sessionStorage");
+    const uninstallReceipt = page.match(/  let immediateUninstallAttempt: [\s\S]*?\n  \};/u)?.[0];
+    expect(uninstallReceipt).toContain("readonly scope: string; readonly key: string");
+    expect(uninstallReceipt).toContain("sessionStorage.setItem(storageKey, JSON.stringify(immediateUninstallAttempt))");
+    expect(allAppSources.replace(uninstallReceipt!, "")).not.toContain("sessionStorage");
     expect(allAppSources).not.toContain("createApplyRun");
     expect(allAppSources).not.toContain("approveRun");
     // The shared review applies only from its one Allow button.
@@ -241,7 +244,6 @@ describe("installed app page", () => {
   test("uninstall is one implementation: grace period stated first and cancellable", () => {
     expect(page).toContain("await deleteCapsule(inst.id);");
     expect(page).toContain("await cancelCapsuleUninstall(inst.id);");
-    expect(page).toContain("deleteCapsule(capsuleId(), { immediate: true })");
     expect(page).not.toContain("dependencyWarning");
     expect(page).not.toContain("dependencyCheck");
     expect(page).not.toContain("usedByApps");
@@ -252,8 +254,11 @@ describe("installed app page", () => {
     // teardown is a reviewed removal plan, never one click.
     expect(page.match(/await confirm\(/gu)).toHaveLength(1);
     expect(page).toContain("danger: true,");
-    const now = page.slice(page.indexOf("const uninstallNow = () =>"), page.indexOf("// --- the one primary action"));
+    const now = page.slice(page.indexOf("const uninstallNow = () =>"), page.indexOf("const matchesUninstallReplacementRows"));
     expect(now).toContain('"uninstall",');
+    expect(now).toMatch(/if \(pending\) \{\s*openRunReview\(pending.runId, pending.runType\);\s*return;\s*\}/u);
+    expect(now).toMatch(/deleteCapsule\(inst.id, \{\s*immediate: true,\s*idempotencyKey: immediateUninstallKey/u);
+    expect(now).toContain("isCurrent,");
     expect(now).toContain("restartable: false");
     expect(execution).toContain("// Approving a removal starts removing live resources: never one click.");
   });
