@@ -63,12 +63,16 @@ and limits.
 Hosted-service code consumes OSS contracts. The OSS software does not depend on
 private hosted-service code or on Stripe's SDK or API.
 
-## Where Takoform and external Hosts fit
+## Where Takoform, Takoserver, and external Hosts fit
 
-Takoform is an independent specification, provider, and package project. From
+[Takoform](https://takoform.com/) is an independent specification, provider, and package project. From
 Takosumi's perspective it is an ordinary OpenTofu provider. A Form Host or
-hosted instance is owned by Takoform's host implementation, the Takosumi hosted service, or
+hosted instance is owned by a Host implementation, the Takosumi hosted service, or
 another external operator—not by the OSS control plane.
+
+[Takoserver](https://takoserver.com/) is an independent, self-hostable cloud control plane and Takoform Host
+that owns Host-owned supply and managed resource lifecycles. Takosumi OSS does not
+depend on Takoserver internals and runs without Takoserver.
 
 Cloudflare, AWS, and other Terraform or OpenTofu providers remain ordinary
 providers from the runner's perspective. The authority after provider

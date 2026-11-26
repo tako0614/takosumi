@@ -109,6 +109,11 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "Takoform provider との境界", link: "/reference/takoform-host" },
       ],
     },
+    {
+      text: "リリースノート",
+      collapsed: true,
+      items: [{ text: "v2.0.0", link: "/releases/v2.0.0" }],
+    },
   ],
 };
 
@@ -191,6 +196,11 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           link: "/en/reference/takoform-host",
         },
       ],
+    },
+    {
+      text: "Release notes",
+      collapsed: true,
+      items: [{ text: "v2.0.0", link: "/releases/v2.0.0" }],
     },
   ],
 };

@@ -1,11 +1,11 @@
 # Quickstart
 
-Start a local Takosumi installation on a Linux machine, add a sample from the
-dashboard, and take it from reviewing the changes (plan) to deploying them
-(apply). The sample creates no external resources, so you need no cloud
-credentials. The first run builds containers and the dashboard, so it takes a
-while. You are done when the **Updates** tab of the service you added lists the
-deployed version as **Current**.
+Allow about 15–20 minutes on the first run (building the containers and dashboard
+takes most of the time). Start a local Takosumi installation on a Linux machine,
+add a sample from the dashboard, and take it from reviewing the changes (plan) to
+applying them (apply). The sample creates no external resources, so you need no
+cloud credentials. You are done when the app's page lists the installed version
+under **Version** and the completed run under **History**.
 
 To check only the API, without the dashboard or runner, follow
 [Run only the API](./api-only.md).
@@ -142,26 +142,24 @@ A change that deletes, replaces, or imports a resource first needs
 billing check stops shows **Service setup did not finish**, and
 **Technical details** opens its Run.
 
-When it finishes, **Service added** appears. The sample has no app screen of
-its own, so **Open service** opens this service's page under **Workloads**.
-Normal updates and new Git commits are not applied unless you turn on
-auto-update; detected drift is never applied automatically.
+When it finishes, **Installed** appears. The sample has no app screen of
+its own, so **Manage app** opens this app's page (some labels in the reference
+screenshots above reflect an earlier dashboard layout). Normal updates and new
+Git commits are not applied unless you turn on auto-update; detected drift is
+never applied automatically.
 
 ## 7. Inspect the result
 
-On the service page that **Open service** opened, expand **Update history** on
-the **Updates** tab. It lists each deploy with its time and marks the version in
-use as **Current**. After a later deploy, **Restore a previous version** →
-**Restore this state** on an older entry creates the changes (a plan) that take
-the workload back to that version's source; as in step 6, review them before
-they are applied.
+On the app page opened by **Manage app**, **Version** shows the installed
+version and **Go back to a previous version**, and **History** lists each
+install and update with its timestamp. After a later apply, **Go back to this
+version** on an older entry creates a plan that takes the app back to that
+version's source; as in step 6, review it before allowing it.
 
-[![The Updates tab. Under the tracked version main and the Review changes button, Update history lists the Current version and Version 1 with their times; Restore a previous version on Version 1 is open and shows the Restore this state button (an example after a second apply)](/getting-started/quickstart-updates-en.png){.screenshot width=1704 height=1050}](/getting-started/quickstart-updates-en.png){.light-only}
-[![The Updates tab. Under the tracked version main and the Review changes button, Update history lists the Current version and Version 1 with their times; Restore a previous version on Version 1 is open and shows the Restore this state button (an example after a second apply)](/getting-started/quickstart-updates-en-dark.png){.screenshot width=1704 height=1050}](/getting-started/quickstart-updates-en-dark.png){.dark-only}
+[![Example of version and update history showing the current version, an earlier version with its time, and a restore control (captured on an earlier dashboard layout)](/getting-started/quickstart-updates-en.png){.screenshot width=1704 height=1050}](/getting-started/quickstart-updates-en.png){.light-only}
+[![Example of version and update history showing the current version, an earlier version with its time, and a restore control (captured on an earlier dashboard layout)](/getting-started/quickstart-updates-en-dark.png){.screenshot width=1704 height=1050}](/getting-started/quickstart-updates-en-dark.png){.dark-only}
 
-The plan and apply Runs are listed newest first, as **Review** (plan) and
-**Deploy** (apply), under **Deploy history** in the user menu, which opens from your
-initial at the top right (`https://app.takosumi.test/runs`).
+Open **Details** on any entry under **History** to inspect the Run and its logs.
 
 To also test the whole environment:
 

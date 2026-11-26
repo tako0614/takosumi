@@ -238,14 +238,14 @@ The CLI and the API examples on other pages read their bearer from the
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` environment variable. Normally you put an API
 key created in the dashboard in it.
 
-1. In the dashboard, open **Settings**, then **Account**.
-2. Under **Takosumi API keys**, choose a name and an expiry (the key stops
+1. In the dashboard, open **Account**, then **CLI & API**.
+2. Press **Create key**, choose a name and an expiry (the key stops
    working after it), select both **Read** and **Write** under **Permissions**,
-   and press **Create API key**. The examples on other pages both read and
+   and press **Create**. The examples on other pages both read and
    change things, and `read` and `write` do not include each other, so with
-   **Write** alone the reading examples return `403`. **Restrict this key to the
-   current Workspace** starts ticked, and such a key works only inside that
-   Workspace; untick it for examples that list Workspaces or touch other ones.
+   **Write** alone the reading examples return `403`. If your environment shows
+   a workspace restriction option, leave it unticked for examples that list
+   Workspaces or touch other ones.
 3. The secret is shown once, when the key is created. Copy it into
    `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
 

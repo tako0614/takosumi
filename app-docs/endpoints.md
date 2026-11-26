@@ -1,10 +1,10 @@
-# Data endpoints
+# データエンドポイント
 
 Takosumi hosted service は既存の service instance に標準 protocol で接続する data endpoint を提供
 できます。endpoint は object の lifecycle API ではありません。作成、更新、削除は Git
 repository の OpenTofu provider graph で行います。
 
-## Endpoint discovery
+## エンドポイントの確認
 
 endpoint URL、audience、必要な permission は Run の Output または authorized Interface
 から取得します。base URL や tenant hostname を推測しないでください。
@@ -17,7 +17,7 @@ hosted service owner が定義する外部 surface です。Takosumi OSS platfor
 通常の Takosumi API key、S3 access key、runtime Interface credential は別の authority です。
 相互に使い回しません。
 
-## S3-compatible object access
+## S3 互換オブジェクトアクセス
 
 Base path: `/compat/s3/v1`
 
@@ -33,7 +33,7 @@ authentication: AWS SigV4
 や provider state の変更は行いません。bucket lifecycle は repository の provider graph が
 所有します。
 
-## OpenAI-compatible AI access
+## OpenAI 互換 AI アクセス
 
 Base path: `/api/v1/ai`
 
@@ -48,16 +48,16 @@ authentication: Bearer
 model availability、limits、price は Takosumi catalog と [Pricing](./pricing.md) を確認して
 ください。この endpoint は model resource や provider configuration を作成しません。
 
-## Takosumi API keys
+## Takosumi API キー
 
-Account settings で Takosumi API key を作成し、表示された secret を一度だけ保存します。
+ダッシュボードの **アカウント** → **CLI・APIから使う** で Takosumi API キーを作成し、表示された secret を一度だけ保存します。
 automation では最小 scope と一つの Workspace を選びます。secret は repository、OpenTofu
 state、Output、Interface document に書きません。
 
 data endpoint 固有の credential は、対応する service の Interface / credential flow から
 取得します。Takosumi API key を data-plane credential へ変換しません。
 
-## Billing and failure behavior
+## 課金とエラー時の挙動
 
 有料 request は backend call 前に Workspace、permission、availability、credit、quota を確認
 します。未構成、権限不足、残高不足は fail closed し、別 service へ自動 fallback しません。

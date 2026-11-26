@@ -172,7 +172,7 @@ The scope catalog marks only core `read` / `write` and allowlisted extension
 scopes explicitly declared by the same owning route through
 `selfServicePatScopes` as self-service. Takosumi hosted AI `ai.models.read`, `ai.chat`,
 and `ai.embeddings`, plus `resources:read`, no longer need a Workspace binding
-(TASK-0118 9.1; the catalog reports `workspaceBinding: "optional"` for every
+(the catalog reports `workspaceBinding: "optional"` for every
 scope). Such a token is either limited to apps with `appIds` (each must be an
 app the caller owns or is a member of when the token is created, and every
 app-scoped request re-checks the live role) or acts with the account's own
@@ -370,7 +370,7 @@ owner.
   ActivityService, such as app ownership rows) and sends due rows.
 - The ledger read bounds `created_at >= cursor` explicitly. `audit_events` has
   no `(created_at, id)` index yet, so the read is a scan bounded by `LIMIT`; the
-  index comes with a Control schema migration (TASK-0118 9.6).
+  index comes with a future Control schema migration.
 - State lives in the Accounts store: PostgreSQL migration `048`
   (`notification_dispatch_cursors`, `notification_deliveries`); D1 uses the
   existing document table and needs no D1 migration.
@@ -486,7 +486,7 @@ Activity is attributed to apps by its Capsule target, Capsule ids in metadata (e
 
 ### App reads without a Workspace
 
-These routes (TASK-0118 Phase 9.1) replace the Workspace-addressed reads. They never read Workspace membership: an app-addressed route uses the per-app decision above (`view` for reads, `update` for a retry), and an account route covers exactly the apps the caller owns or is a member of. Credential limits still apply first: a PAT's `appIds` narrows the apps, an installed app's own OAuth token covers only its own app (and keeps the per-app decision's other limits), and a legacy Workspace-scoped PAT without `appIds` cannot use an account route (`403 app_access_denied`). The Workspace-addressed routes remain as compatibility surfaces.
+These routes replace the Workspace-addressed reads. They never read Workspace membership: an app-addressed route uses the per-app decision above (`view` for reads, `update` for a retry), and an account route covers exactly the apps the caller owns or is a member of. Credential limits still apply first: a PAT's `appIds` narrows the apps, an installed app's own OAuth token covers only its own app (and keeps the per-app decision's other limits), and a legacy Workspace-scoped PAT without `appIds` cannot use an account route (`403 app_access_denied`). The Workspace-addressed routes remain as compatibility surfaces.
 
 | Method | Path | Permission and result |
 | --- | --- | --- |
@@ -511,9 +511,9 @@ The Interface API (`/api/v1/interfaces…`) also works without a Workspace:
 - On the bundled Accounts host (self-host), a Capsule-owned Interface addressed by id is decided per app for an account caller without a Workspace restriction once the app has an ownership row (`view` to read, `change_settings` to change Interfaces and Bindings); an app without an ownership row keeps the Workspace decision, and Workspace-owned Interfaces keep it as well. A PAT with `appIds` reaches only its apps' Interfaces and never holds Workspace authority there.
 - On both the self-host and the platform Worker, every change to a Capsule-owned Interface by an account caller is decided per app once the app has an ownership row, also with a Workspace-bound credential (which must still name the Interface's own partition): `POST /api/v1/interfaces` with a Capsule `ownerRef`, `PATCH`, `DELETE` and `/status` need `change_settings`; Binding create and revoke need `change_interface_link`. The Interface link routes served by Core (`GET …/interface-links/{key}/candidates`, `PUT` and `DELETE …/interface-links/{key}`, which the self-host answers before Accounts) decide like the Accounts link routes: `view` / `change_interface_link` on the consumer app for every account caller, the provider app may revoke a link that points at it, and a new link is approved at creation only when the caller also has `change_interface_link` on the provider app (otherwise `pending_approval`); that provider check is repeated inside the pre-write fence, so a caller who loses the provider app in between creates a `pending_approval` link (a re-point keeps the current link). Workspace membership alone no longer changes another person's app, so a co-tenant of a shared legacy partition cannot create, repoint, retire, bind or link an app's Interface. A PAT with `appIds` never holds Workspace authority and reaches only its apps (on the platform Worker from the introspected `app_ids`), also when it issues an Interface token: only for a Capsule-owned Interface of one of its apps. Reads with a Workspace-bound credential, Workspace-owned Interfaces, apps without an ownership row and service principals keep the Workspace decision.
 - Each Capsule-owned Interface and each Binding on one records `metadata.createdUnder`, the authority it was written under: `app` (an owner or member), `operator` (the host's deploy-control authority, including a host service token, and the legacy Output migration) or `workspace` (Workspace membership only, for an app that had no ownership row then). It names a kind of authority, never an account. Only materialized records and records written under `app` or `operator` are the app's own: an app-bound runtime token's Workspace-free evidence on an Interface the app owns needs both the Interface and the Binding to be its own, so an Interface or Binding a co-tenant wrote before the app had an ownership row, or a manual record from before writes were recorded, is never its evidence. `GET /api/v1/interfaces?capsuleId=…&needsReview=true` (`view`) lists the app's Interfaces that wait for the owner's review because the Interface or one of its current Bindings is not the app's own; the owner deletes them or recreates them as the app.
-- On the platform Worker, a shared-account (Hosted) session's `capsuleId` listing is decided through the same shared-auth control dispatch the dashboard uses. Account callers still need a Workspace for id-addressed Interface routes until the platform extension authorization moves to apps (Phase 9.1-e).
+- On the platform Worker, a shared-account (Hosted) session's `capsuleId` listing is decided through the same shared-auth control dispatch the dashboard uses. Account callers still need a Workspace for id-addressed Interface routes until platform extension authorization moves to apps.
 
-Platform extension routes are decided by account and app as well (TASK-0118 Phase 9.1-e):
+Platform extension routes are decided by account and app as well:
 
 - A route that declares `appContext` (`query-required` or `query-optional`) may be called with `?capsuleId=` naming one app. The platform checks the caller's live role on that app (owner or member) and the handler receives `x-takosumi-platform-capsule-id` and `x-takosumi-platform-app-role` (`capsuleId` and `appRole` on the typed context). Only account sessions and personal access tokens get a role. A PAT with `appIds` may name only those apps, and a Workspace-bound credential reaches only apps in its Workspace. A credential bound to one app (an installed app's own token, a delegate app's token, an Interface OAuth token, a Run credential) may name only its own app and gets no role. A PAT gets a role only with the core scope Accounts' per-app decision requires: `read` to read, `write` for any method other than GET, HEAD and OPTIONS (`admin` covers both); extension-only scopes never confer one. Operator service tokens and OAuth tokens not bound to an app cannot name an app. A shared-account (Hosted) session must also pass the same shared-auth app view the dashboard uses.
 - For account sessions and unrestricted personal access tokens the authenticated account is forwarded as `x-takosumi-platform-account-id` (`accountId` on the typed context). PATs with `appIds`, Workspace-bound PATs, OAuth tokens (whose subject may be pairwise), Interface, Run and operator credentials carry none.
@@ -529,7 +529,7 @@ Platform extension routes are decided by account and app as well (TASK-0118 Phas
 
 ### Legacy Workspace routes {#legacy-workspace-routes}
 
-Workspace is being replaced by per-app ownership and removed in stages (TASK-0118 Phase 9). These uses are deprecated:
+Workspace is being replaced by per-app ownership and removed in stages. These uses are deprecated:
 
 - `/api/v1/workspaces/*`, `/api/v1/projects/*`, `/api/v1/views/workspaces.v1`
 - connections, sources, capsule-configs, provider-connections and dashboard selected by `?workspaceId=`, and connection create, connection OAuth start and Source create selected by a `workspaceId` body field
@@ -838,7 +838,7 @@ creates the Capsule. `userAction` names the single next step (`wait`,
 `choose_module`, `provide_inputs`, `review_run`, `retry` or `none`); a
 requirement with exactly one eligible connection is selected automatically.
 Only the member who started the attempt may `PATCH` or `DELETE` it. The new
-app's first owner is the person who started the install (TASK-0118 P9.1-c), also
+app's first owner is the person who started the install, also
 when a Workspace admin who is not the Workspace's owner uses a Workspace route;
 provider bindings and the Source `authConnectionId` accept only that person's
 connections, and install candidates list only rows that record that person as
@@ -1234,7 +1234,7 @@ Workspaces included and an exact `total` counted before cursor filtering. The
 default and hard maximum `limit` are 100; the only accepted query keys are
 `limit` and `cursor`. A Workspace-scoped session, PAT, or OAuth credential is
 rejected with 403, and the route performs no personal-Workspace bootstrap or
-other writes. Since TASK-0118 P9.1-c `GET /api/v1/workspaces` does not create or
+other writes. `GET /api/v1/workspaces` does not create or
 repair a personal Workspace either; the internal personal namespace is created
 only by writes that need it, such as a Workspace-less install. The response `kind` is
 `takosumi.account-workspace-inventory@v1` and contains `workspaces`, `total`,

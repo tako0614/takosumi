@@ -12,7 +12,7 @@ cd deploy/node-postgres
 [ -e .env ] || cp .env.example .env
 ```
 
-`.env` を編集します。Compose はこのファイルを変数展開に使い、`docker-compose.yml` に
+`.env` を編集します。Docker Compose はこのファイルを変数展開に使い、`docker-compose.yml` に
 明示したサービス設定だけを `accounts` に渡します。最低限、次を埋めます。各値の生成
 コマンドは `.env.example` の該当箇所に書いてあります。`https` issuer を使う場合は安定した
 ES256 private JWK が必要です。ローカル smoke test は `http://localhost:26401` issuer を使えます。
@@ -62,14 +62,14 @@ secret) でサインインして作ります。passkey (`TAKOSUMI_ACCOUNTS_PASSK
 `.env` は秘密を含むので commit しません。このリポジトリは `deploy/node-postgres/.env` を
 `.gitignore` で除外しています。
 
-公開運用で既定 Compose を使うと Caddy が port 80/443 に bind して ACME 証明書を取得します。
+公開運用で既定の Docker Compose を使うと Caddy が port 80/443 に bind して ACME 証明書を取得します。
 これは公開 HTTPS deployment 用です。Caddy を含めず loopback だけで確認する手順は次の
 「ローカルで安全に起動して確認する」を使います。
 
 ## ローカルで安全に起動して確認する
 
 次の一時 override は checkout 外に作成し、host port を loopback の `26401` にだけ bind します。
-専用の一意な Compose project を使います。Compose の既定 `caddy` service は明示して起動せず、
+専用の一意な Docker Compose project を使います。Docker Compose の既定 `caddy` service は明示して起動せず、
 ローカル確認で ACME/TLS 用 Caddy を使いません。前の `.env` 設定後、同じ shell で実行します。
 
 ```bash
@@ -119,7 +119,7 @@ curl -fsS https://app.example.com/healthz # 設定した公開 hostname に置�
 初回はイメージのビルドに数分かかります。`migrations` コンテナが control plane と accounts の
 2 つのスキーマを同じデータベースに適用し、成功してからサービス本体と Caddy が起動します。
 
-マイグレーションを compose の外から適用する場合は、リポジトリのルートで実行します。同梱の
+マイグレーションを Docker Compose の外から適用する場合は、リポジトリのルートで実行します。同梱の
 Docker Compose 定義は PostgreSQL を内部ネットワークにしか出さないので、先に 5432 を公開するか、
 同じネットワークから届くホストで実行します。
 
@@ -151,7 +151,7 @@ apply を実行するには、runner を組み込んだ構成を使います。C
 ## `/readyz` を通す
 
 この構成の `/readyz` は、`TAKOSUMI_INTERNAL_API_SECRET` が無いと `503` を返し、理由に
-`internalApiSecret` を挙げます。同梱の Compose はこの値を渡さず、今はこの確認のほかに使われて
+`internalApiSecret` を挙げます。同梱の Docker Compose はこの値を渡さず、今はこの確認のほかに使われて
 いません。`/readyz` も通したい場合は、`openssl rand -hex 32` で作った値を
 **先に** `.env` に入れてから、`docker-compose.override.yml` で渡します。値が `.env` に無いと、
 この override のせいで `down` や `logs` を含むすべての `docker compose` が失敗します。

@@ -58,11 +58,15 @@ Takosumi hosted service は、Takosumi OSS を運用した公式サービスで�
 hosted service 側の実装は OSS の contract を利用しますが、OSS から hosted service の private code や
 Stripe の SDK・API へ依存することはありません。
 
-## Takoform と外部 Host の位置づけ
+## Takoform・Takoserver と外部 Host の位置づけ
 
-Takoform は Form の仕様、provider、package、conformance を所有する独立したプロジェクト
+[Takoform](https://takoform.com/) は Form の仕様、provider、package、conformance を所有する独立したプロジェクト
 です。Takosumi からはほかの OpenTofu provider と同じように利用します。Form を保存して
 実行する Host や hosted instance を Takosumi OSS が自動で提供するわけではありません。
+
+[Takoserver](https://takoserver.com/) は、Host が所有する供給基盤と管理対象リソースの lifecycle を
+実装する、独立したセルフホスト可能なクラウド制御基盤・Takoform Host です。Takosumi OSS は
+Takoserver の内部実装や管理画面に依存せず、Takoserver がなくても単独で動きます。
 
 同様に、Cloudflare、AWS などの Terraform / OpenTofu provider は runner から見て通常の
 provider です。ただし、実行後の authority は同じではありません。
@@ -74,6 +78,9 @@ provider です。ただし、実行後の authority は同じではありませ
   lifecycle と実装の authority は外部 Host 側にあります。
 - Takosumi OSS の runner が hosted service 専用の provider や TargetPool を暗黙に選ぶ仕組みは
   ありません。
+
+Takos は別の製品です。self-host した Takos の product worker は Accounts、deploy-control、
+dashboard、runner を組み込まず、外部 client として Takosumi の endpoint に接続します。
 
 ## self-host する場合
 

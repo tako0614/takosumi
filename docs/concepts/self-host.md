@@ -96,7 +96,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://takosumi.example.com/readyz
 ```
 
 Bun と PostgreSQL の構成の `/readyz` は、`TAKOSUMI_INTERNAL_API_SECRET` が無いと `503` を返し、
-理由に `internalApiSecret` を挙げます。同梱の Compose はこの値を渡さず、今はこの確認のほかに
+理由に `internalApiSecret` を挙げます。同梱の Docker Compose はこの値を渡さず、今はこの確認のほかに
 使われていません。`/healthz` が `200` なら、起動時の検査（封印鍵、署名鍵、上流の ID プロバイダの
 設定）を通ってプロセスが立ち上がり、PostgreSQL も応答しています。上流の ID プロバイダや
 dashboard までは確かめません。`/readyz` も通す方法は

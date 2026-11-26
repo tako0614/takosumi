@@ -28,8 +28,8 @@ configuration language.
 Pick the entry point that matches what you want to do.
 
 - **Use the hosted service** — sign in at [app.takosumi.com](https://app.takosumi.com/)
-  and add a service from the **Store**, or enter a Git URL under
-  **Add from a Git repository**. The Takosumi hosted service is Pre-GA (not
+  and choose an app in the **Store**, or enter a Git URL under
+  **Install from Git**. The Takosumi hosted service is Pre-GA (not
   yet generally available). Steps, pricing, availability, and support are in
   the [hosted service documentation](https://app.takosumi.com/docs/en/).
 - **Try adding and deploying locally** — follow the
@@ -49,14 +49,15 @@ Pick the entry point that matches what you want to do.
 
 ## How it works
 
-In the dashboard, what you pick in the Store and add is a **service**, and the
-services you add are listed under **Workloads**. A service's own screen, opened
-from Home, is an **app**. The docs and the API call an added service a
-**Capsule**: one unit of deployment that bundles a Git URL, ref, and module path
-with its variables and connections ([Glossary](./reference/glossary.md)). Each
-change to a Capsule is recorded as two Runs: a plan (shown as Review) and an
-apply (shown as Deploy). The apply Run is pinned to the reviewed plan Run
-(`planRunId`), so the changes you read are the changes that are deployed.
+In the dashboard, both what you pick in the Store and what you have installed on
+Home are called **apps**. Apps with a UI open directly from Home, and selecting
+an app opens its management page (**Version**, **Settings**, **History**, and
+**Uninstall**). The docs and the API call this unit a **Capsule**: one unit of
+deployment that bundles a Git URL, ref, and module path with its variables and
+connections ([Glossary](./reference/glossary.md)). Each change to a Capsule is
+recorded as two Runs: a plan (shown as Review) and an apply (shown as Apply).
+The apply Run is pinned to the reviewed plan Run (`planRunId`), so the changes
+you read are the changes that are applied.
 
 Adding or updating something goes through these steps:
 
@@ -70,6 +71,15 @@ Adding or updating something goes through these steps:
 
 Takosumi does not ship a first-party Terraform/OpenTofu provider. Cloudflare,
 AWS, and others are operated by their existing providers.
+
+## Related products
+
+- **Takosumi** (these docs) — the open-source server for installing, updating, and managing Git-hosted OpenTofu modules like apps.
+- **Takosumi hosted service** ([hosted service docs](https://app.takosumi.com/docs/en/)) — the official hosted service at `app.takosumi.com`.
+- **[Takoserver](https://takoserver.com/)** — an independent, self-hostable cloud control plane and Takoform Host. You can connect to it from Takosumi as an external provider, though Takosumi OSS does not require it.
+- **[Takoform](https://takoform.com/)** — the independent portable Host API, Form specification, and OpenTofu provider.
+
+See [Product boundaries](./concepts/boundaries.md) for the full ownership split.
 
 ## Where to go next
 

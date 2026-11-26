@@ -11,18 +11,18 @@ docs use a different name, read it back through this table.
 
 | Word on screen         | Internal term                        | What it refers to                                                      |
 | ---------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
-| Service                | Store listing; Capsule once added    | What you pick in the Store and add; it keeps the name once added.      |
-| Workloads              | The list of Capsules                 | The page that lists the services you added.                            |
-| App                    | A Capsule for management; an Interface with a launcher for its screen | Managed by its owner and members; its screen opens from Home ([Show your app on the home screen](../getting-started/home-launcher.md)). |
-| Connected accounts     | ProviderConnection / ProviderBinding | Stored credentials, and where they are assigned.                       |
-| Changes                | plan                                 | The list of changes you review before anything is deployed.            |
+| App                    | A Capsule for management; an Interface with a launcher for its screen | What you pick in the Store and see on Home. Managed by its owner and members; its screen opens from Home ([Show your app on the home screen](../getting-started/home-launcher.md)). |
+| Store                  | Store listings                       | The screen for browsing and installing apps.                           |
+| Connections            | ProviderConnection / ProviderBinding | Stored credentials, and where they are assigned.                       |
+| Review                 | plan                                 | The list of changes you review before anything is applied.             |
 | Change verification ID | planDigest                           | The value that proves the plan you reviewed is the plan being applied. |
-| Deploy history         | The list of Runs                     | Reviews, approvals, and deploys, newest first.                         |
-| Update history         | The list of StateVersions            | On a service's Updates tab: the versions you deployed.                 |
-| Resources              | OpenTofu resources recorded in the applied plan | The record of what a service created. Deployed resources on the Updates tab lists them for the current version. It is a record, not live health. |
-| Hosted resources       | A read-only list the host provides   | The page for checking the resources a workspace manages. Available only where the host environment supports it. |
-| History                | Activity / AuditEvent                | Who did what, and when.                                                |
-| Restore this state     | Restoring from a StateVersion        | Choosing an earlier state again.                                       |
+| Apply                  | apply                                | Applying the reviewed plan to your cloud.                              |
+| History                | Runs / Activity / AuditEvent         | On an app's page: past runs, reasons, and logs, newest first.          |
+| Version / Go back to a previous version | StateVersions and restore | Under **Version** on an app's page: applied versions, with **Go back to this version**. |
+| What it created        | OpenTofu resources recorded in the applied plan | The record of resources the last applied change created in your cloud. It is a record, not live health. |
+| Linked apps            | InterfaceLink / InterfaceBinding     | Linking apps so one can use another's features with approval.          |
+| Sharing                | AppAccess (`owner` / `member`)       | Managing who can administer an app and transferring ownership.         |
+| Hosted resources       | A read-only list the host provides   | The page for checking resources managed by the host. Available only where the host environment supports it. |
 
 ## The overall frame
 

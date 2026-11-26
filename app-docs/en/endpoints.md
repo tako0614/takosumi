@@ -53,7 +53,7 @@ configuration.
 
 ## Takosumi API keys
 
-Create a Takosumi API key in Account settings and save the secret when it is shown
+Create a Takosumi API key in the dashboard under **Account** → **CLI & API** and save the secret when it is shown
 once. Choose the smallest scope and one Workspace for automation. Never write
 the secret to a repository, OpenTofu state, output, or Interface document.
 

@@ -11,7 +11,7 @@
 ## Bun と PostgreSQL
 
 [配布構成の README](https://github.com/tako0614/takosumi/blob/main/deploy/node-postgres/README.md)に従って、変更対象の migration と
-互換性を確認し、直前に backup を取得します。default Compose project で運用している場合は、
+互換性を確認し、直前に backup を取得します。default Docker Compose project で運用している場合は、
 `deploy/node-postgres` で実行し、起動時と同じ default project と自動読込 override を維持します。
 独自の `-p` / `-f` を使って起動した環境では、同じ引数をすべての operation に渡してください。
 適用済みの migration は、control plane は `storage_migrations`、Accounts は

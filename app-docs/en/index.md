@@ -10,43 +10,33 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 
 ## Your first install
 
-1. Sign in to the [dashboard](https://app.takosumi.com/) and select a workspace.
+1. Sign in to the [dashboard](https://app.takosumi.com/) (switch workspaces only if needed).
 2. Choose an app in the **Store**. Git URLs and app install links open the same app page.
 3. Check the description and source, then press **Install**. Nothing is created in your cloud yet.
-   Stay on this app page throughout. **About this app** shows its repository and pinned version.
-   An unspecified Store version displays **Latest** and resolves the latest stable release when you start.
-   Open **Version** to choose a tag, branch or commit. Reopening a saved attempt shows its saved version;
-   it does not automatically switch to a newer release.
-   Open **Configuration** to change connections, the app name or optional settings.
+   Stay on this app page throughout. **About this app** shows its repository and pinned version;
+   open **Version** to choose a tag, branch or commit, and **Configuration** to change connections, the app name or optional settings.
    Missing required inputs, missing connections and invalid answers open their fields automatically.
-4. If a connection is missing, use **Connect** on that connection's row to create and verify it on
-   the same screen. A connection with only one candidate is chosen for you; declared setting defaults
-   are filled in. The configuration named by the Store, or the only available configuration, is chosen
-   automatically. Choose a configuration only when the repository has no unambiguous selection.
-   Typed settings, the name and the version count once you
-   leave the field (or press Enter); while you type, checking and allowing wait.
-5. Once nothing is missing, Takosumi says **Checking what will be created** and shows a cost estimate.
-   Open **Resource details** to see what will be created. Details open automatically for changes to
-   existing resources or deletions. This check creates nothing in your cloud. When the cost can't be estimated, it says so.
-   **Allow and install** is shown from the start; until it can be pressed, the reason is shown beside
-   it (for example "Choose a connection to check it", "Fill in the required settings", "Checking…").
-   Nothing is applied until you press **Allow and install**; changes that delete or replace something
-   need an extra confirmation. Nothing applies automatically, and reloading or opening a URL never
-   grants consent. Changing the name, version, a connection or a setting after the check marks the
-   shown result out of date (it can no longer be allowed) and checks again with your change,
-   saying **Preparing the install again with your change**.
-   **Stop installing** throws the whole install attempt away, including the unapplied app it created.
-   An install you leave without stopping is listed under **Unfinished installs** in the Store, where
-   you can continue or stop it; reopening it moves nothing forward until you press **Continue**.
-   An install started without this screen that stopped before creating its app is listed there as
-   **Can't be continued here**, and can only be stopped.
-   Secret settings are never saved: they are sent only to check what will be created.
+4. If a connection is missing, use **Connect** on that connection's row to create and verify it on the same screen.
+   A connection with only one candidate, declared setting defaults, and the configuration named by the Store (or the only available configuration) are chosen automatically.
+   Choose a configuration only when the repository has no unambiguous selection.
+5. Once nothing is missing, Takosumi says **Checking what will be created** and shows a cost estimate (or says when the cost can't be estimated).
+   This check creates nothing in your cloud. Open **Resource details** to see what will be created; details open automatically for changes to existing resources or deletions.
+   **Install** is shown from the start; until it can be pressed, the reason is shown beside it (for example "Choose a connection to check it", "Fill in the required settings", "Checking…").
+   Nothing is applied until you press **Install** (changes that delete or replace something need an extra confirmation). Nothing applies automatically, and reloading or opening a URL never grants consent.
 6. When the install finishes, the same screen offers **Open** (when the app has an authorized screen)
    and **Manage app** (the app's own page). Failures show the reason and the next step, and can be
    retried with a new review without discarding partially created state.
 7. **Uninstall** asks for confirmation before scheduling it. The app and its data remain during the
    grace period, and **Cancel uninstall** brings it back. The confirmation names the other apps that
-   use this one. Provider secrets and install inputs are not saved to browser storage.
+   use this one.
+
+### Changing inputs, resuming, or canceling
+
+- **Versions and input timing**: An unspecified Store version displays **Latest** and resolves the latest stable release when you start. Reopening a saved attempt shows its saved version; it does not automatically switch to a newer release. Typed settings, the name and the version count once you leave the field (or press Enter); while you type, checking and allowing wait.
+- **Re-planning after edits**: Changing the name, version, a connection or a setting after the check marks the shown result out of date (it can no longer be allowed) and checks again with your change, saying **Preparing the install again with your change**.
+- **Stopping an install**: **Stop installing** throws the whole install attempt away, including the unapplied app it created.
+- **Resuming later**: An install you leave without stopping is listed under **Unfinished installs** in the Store, where you can continue or stop it; reopening it moves nothing forward until you press **Continue**. An install started without this screen that stopped before creating its app is listed there as **Can't be continued here**, and can only be stopped.
+- **Secret handling**: Secret settings are never saved: they are sent only to check what will be created. Provider secrets and install inputs are not saved to browser storage.
 
 ## Keeping an installed app
 
@@ -93,9 +83,11 @@ Hosted-service availability, price, capacity, billing, and support are separate 
 Takoform Form maturity. Publishing a provider or schema alone does not enable
 a hosted service.
 
-## Takoform
+## Takoform and Takoserver
 
-The Takosumi hosted service intends to be the official Takoform Host, but the current Host
+[Takoform](https://takoform.com/) owns the portable Form specification, Host API, and OpenTofu provider.
+[Takoserver](https://takoserver.com/) is an independent, self-hostable cloud control plane and Takoform Host.
+The Takosumi hosted service intends to provide official Takoform Host integration, but the current Host
 candidate is unpublished and unmounted. Pre-release FormRefs, schema digests,
 and Host routes are not advertised as production capabilities.
 
