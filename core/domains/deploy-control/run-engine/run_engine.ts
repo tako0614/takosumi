@@ -8768,23 +8768,26 @@ export class RunEngine {
     const receipt = applyContext?.verifiedOutputProjectionFailure;
     if (receipt) {
       // The Run-lease winner owns the reservation and original execution time.
-      try {
-        await this.#billing.releaseApplyBilling(applyContext.planRun);
-        const finishedAt = Date.parse(receipt.committedAt);
-        if (running.startedAt !== undefined && finishedAt > running.startedAt &&
-          finishedAt <= failed.finishedAt!) {
-          await this.#recordRunnerMinuteUsage({
-            workspaceId: failed.workspaceId,
-            runId: failed.id,
-            capsuleId: failed.capsuleId,
-            startedAt: running.startedAt,
-            finishedAt,
-          });
-        }
-      } catch (error) {
-        log.warn("deploy_control.output_projection_failure_finalization_failed", {
+      await this.#billing.releaseApplyBilling(applyContext.planRun).catch((error: unknown) => {
+        log.warn("deploy_control.output_projection_billing_release_failed", {
           applyRunId: failed.id,
           message: errorMessage(error),
+        });
+      });
+      const finishedAt = Date.parse(receipt.committedAt);
+      if (running.startedAt !== undefined && finishedAt > running.startedAt &&
+        finishedAt <= failed.finishedAt!) {
+        await this.#recordRunnerMinuteUsage({
+          workspaceId: failed.workspaceId,
+          runId: failed.id,
+          capsuleId: failed.capsuleId,
+          startedAt: running.startedAt,
+          finishedAt,
+        }).catch((error: unknown) => {
+          log.warn("deploy_control.output_projection_runner_usage_failed", {
+            applyRunId: failed.id,
+            message: errorMessage(error),
+          });
         });
       }
     }

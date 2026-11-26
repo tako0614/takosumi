@@ -152,6 +152,7 @@ test("RunOwner records output projection failure from a confirmed Apply receipt 
     .mockImplementation(async () => {
       expect((await f.store.getApplyRun(f.run.id))?.status).toBe("failed");
       expect((await f.store.getPlanRun(f.run.planRunId))?.appliedApplyRunId).toBe(f.run.id);
+      throw new Error("fixture billing reservation release unavailable");
     });
   const rating = spyOn(BillingService.prototype, "rateUsageMeasurement");
   try {
