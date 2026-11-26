@@ -278,6 +278,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
 
     test("a cancel confirmation stays with its displayed Run", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      await page.clock.install();
+      await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
       const a = "run_confirm_a", b = "run_confirm_b";
       const model = (id: string) => ({ id, workspaceId: "ws_alpha", capsuleId: `cap_${id}`,
         type: "apply", status: "queued", createdBy: "portable-e2e", createdAt: "2026-11-18T00:00:00Z" });
@@ -287,12 +289,14 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       await page.route("**/api/v1/**", (route) => {
         const request = route.request(); const path = new URL(request.url()).pathname;
         const id = path.split("/")[4] ?? ""; const row = rows[id];
+        if (request.method() !== "GET") mutations.push(`${request.method()} ${path}`);
         if (row && path.endsWith("/cancel") && request.method() === "POST") {
-          mutations.push(`POST /api/v1/runs/${id}/cancel`); row.status = "cancelled";
+          row.status = "cancelled";
           return route.fulfill({ json: { run: row } });
         }
-        if (row && path === `/api/v1/runs/${id}`) { reads[id] = (reads[id] ?? 0) + 1; return route.fulfill({ json: { run: row } }); }
-        if (row && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
+        if (row && path === `/api/v1/runs/${id}` && request.method() === "GET") { reads[id] = (reads[id] ?? 0) + 1; return route.fulfill({ json: { run: row } }); }
+        // A non-200 SSE response leaves the fallback poll in charge.
+        if (row && path.endsWith("/stream")) return route.fulfill({ status: 503, json: { error: "stream_unavailable" } });
         if (row && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
         if (row && path.endsWith("/cost")) return route.fulfill({ json: { cost: { runId: id, billingMode: "disabled", ratingStatus: "not_applicable", estimatedUsdMicros: 0, blocked: false, reasons: [] } } });
         if (path.startsWith("/api/v1/capsules/cap_run_confirm_")) {
@@ -313,10 +317,22 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       };
       await navigateTo(b);
       const target = b;
+      // The target Run has settled before the old confirmation is accepted.
+      await expect(page.getByRole("link", { name: "Back to the app", exact: true }))
+        .toHaveAttribute("href", `/apps/cap_${target}`);
       const beforeConfirm = reads[target] ?? 0;
       await dialog.getByRole("button", { name: "Cancel run", exact: true }).click();
+      expect(reads[target]).toBe(beforeConfirm);
       // Use the current Run's existing fallback read as the settled UI witness.
-      await expect.poll(() => reads[target] ?? 0).toBeGreaterThan(beforeConfirm);
+      await Promise.all([
+        page.waitForResponse(
+          (response) => response.status() === 200 && response.request().method() === "GET" &&
+            new URL(response.url()).pathname === `/api/v1/runs/${target}`,
+          { timeout: 10_000 },
+        ),
+        page.clock.runFor(3_000),
+      ]);
+      expect(reads[target]).toBe(beforeConfirm + 1);
       expect(mutations).toEqual([]);
       // A fresh confirmation on this exact target remains a normal one-call action.
       await page.getByRole("button", { name: "Cancel this run", exact: true }).click();
