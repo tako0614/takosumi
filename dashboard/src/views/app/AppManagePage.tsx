@@ -259,7 +259,8 @@ export default function AppManagePage(props: {
     capsuleId,
     (id, { refetching }) => getCapsuleConfigurationContext(id, refetching instanceof AbortSignal
       ? { signal: refetching }
-      : typeof refetching === "object" && refetching !== null ? refetching : undefined),
+      : typeof refetching === "object" && refetching !== null ? refetching
+      : { reuseRecentSharedAuthProbe: !refetching }),
   );
   // Never `context()`/`.latest` directly: both throw once a read failed. A
   // failed refetch keeps the last good app on screen with a quiet notice.
@@ -308,7 +309,7 @@ export default function AppManagePage(props: {
         ? capsule()?.installConfigId ?? null
         : null;
     },
-    getInstallConfig,
+    (id) => getInstallConfig(id, { reuseRecentSharedAuthProbe: true }),
   );
   const installConfigValue = () => {
     const value = settledValue(installConfig);
@@ -342,12 +343,12 @@ export default function AppManagePage(props: {
 
   const [bindingSet, { refetch: refetchBindings }] = createResource(
     () => (managed() && (settingsVisited() || resourcesVisited()) ? capsuleId() : null),
-    (id) => getCapsuleProviderBindingSet(id),
+    (id) => getCapsuleProviderBindingSet(id, { reuseRecentSharedAuthProbe: true }),
   );
   const [connections, { refetch: refetchConnections }] = createResource(
     () => (managed() && isOwner() && (settingsVisited() || resourcesVisited() || sectionVisited("sharing"))
       ? { workspaceId: workspaceId() } : null),
-    (key) => listProviderConnections(key.workspaceId),
+    (key) => listProviderConnections(key.workspaceId, { reuseRecentSharedAuthProbe: true }),
   );
   const [inventory, { refetch: refetchInventory }] = createResource(
     () => (managed() && resourcesVisited() ? capsuleId() : null),

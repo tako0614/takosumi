@@ -393,7 +393,7 @@ async function fetchAllPages<T>(
   extract: (
     body: { nextCursor?: string } & Record<string, unknown>,
   ) => readonly T[],
-  opts: Pick<RequestOpts, "signal" | "cache" | "isCurrent"> & {
+  opts: Pick<RequestOpts, "signal" | "cache" | "isCurrent" | "reuseRecentSharedAuthProbe"> & {
     readonly readPage?: (path: string) => Promise<{ nextCursor?: string } & Record<string, unknown>>;
   } = {},
 ): Promise<readonly T[]> {
@@ -1271,7 +1271,7 @@ export async function getCapsule(id: string, options: Pick<RequestOpts, "isCurre
  */
 export async function getCapsuleConfigurationContext(
   id: string,
-  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent" | "reuseRecentSharedAuthProbe"> = {},
 ): Promise<{
   readonly capsule: Capsule;
   readonly authorityGuard: string;
@@ -1283,7 +1283,9 @@ export async function getCapsuleConfigurationContext(
       readonly authorityGuard: string;
       readonly configurationPlanResumable?: true;
     };
-  }>(`${BASE}/capsules/${encodeURIComponent(id)}`, scope));
+  }>(`${BASE}/capsules/${encodeURIComponent(id)}`, {
+    ...scope, reuseRecentSharedAuthProbe: options.reuseRecentSharedAuthProbe,
+  }));
   if (
     !isCapsuleResponse(body.capsule) ||
     typeof body.installConfigReAdoption?.authorityGuard !== "string" ||
@@ -1997,7 +1999,7 @@ export async function deleteCapsule(
 
 export async function getCapsuleProviderBindingSet(
   capsuleId: string,
-  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent" | "reuseRecentSharedAuthProbe"> = {},
 ): Promise<ProviderBindingSet | null> {
   const body = await controlFetch<{
     providerBindingSet: ProviderBindingSet | null;
@@ -2039,6 +2041,7 @@ export async function listInstallConfigs(
 export type GetInstallConfigOptions = {
   readonly signal?: AbortSignal;
   readonly isCurrent?: () => boolean;
+  readonly reuseRecentSharedAuthProbe?: boolean;
 };
 
 export function getInstallConfig(
@@ -2061,7 +2064,7 @@ export async function getInstallConfig(
     : undefined;
   const body = await controlFetch<{ installConfig: InstallConfig }>(
     `${BASE}/capsule-configs/${encodeURIComponent(id)}`,
-    { signal, isCurrent },
+    { signal, isCurrent, reuseRecentSharedAuthProbe: isRecord(options) && options.reuseRecentSharedAuthProbe === true },
   );
   return body.installConfig;
 }
@@ -3048,19 +3051,33 @@ export async function destroyPlanCapsule(capsuleId: string): Promise<unknown> {
   );
 }
 
-export async function getRunWithOptions(
+async function readRun(
   id: string,
-  options: { readonly signal?: AbortSignal; readonly cache?: "no-store"; readonly isCurrent?: () => boolean } = {},
+  options: ControlReadScope,
+  reuseRecentSharedAuthProbe = false,
 ): Promise<Run> {
   const body = await controlFetch<{ run: Run }>(
     `${BASE}/runs/${encodeURIComponent(id)}`,
-    { signal: options.signal, ...(options.cache ? { cache: options.cache } : {}), ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}) },
+    {
+      signal: options.signal,
+      cache: options.cache,
+      isCurrent: options.isCurrent,
+      reuseRecentSharedAuthProbe,
+    },
   );
   return body.run;
 }
 
-export async function getRun(id: string, options: Pick<RequestOpts, "cache" | "isCurrent"> = {}): Promise<Run> {
-  return await withControlReadDeadline("Run", options, (scope) => getRunWithOptions(id, scope));
+export async function getRunWithOptions(
+  id: string,
+  options: ControlReadScope = {},
+): Promise<Run> {
+  return await readRun(id, options);
+}
+
+export async function getRun(id: string, options: Pick<RequestOpts, "cache" | "isCurrent" | "reuseRecentSharedAuthProbe"> = {}): Promise<Run> {
+  return await withControlReadDeadline("Run", options, (scope) =>
+    readRun(id, scope, options.reuseRecentSharedAuthProbe));
 }
 
 /**
@@ -3135,7 +3152,7 @@ export async function approveRun(
 
 export async function getRunLogs(
   id: string,
-  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent" | "reuseRecentSharedAuthProbe"> = {},
 ): Promise<RunLogs> {
   return await controlFetch<RunLogs>(`${BASE}/runs/${encodeURIComponent(id)}/logs`, options);
 }
@@ -3152,7 +3169,7 @@ export async function getRunCostInfo(
   options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<RunCostInfo> {
   const body = await controlFetch<{ cost: RunCostInfo }>(
-    `${BASE}/runs/${encodeURIComponent(id)}/cost`, options,
+    `${BASE}/runs/${encodeURIComponent(id)}/cost`, { ...options, reuseRecentSharedAuthProbe: true },
   );
   return body.cost;
 }
@@ -3375,7 +3392,7 @@ export async function listConnectionsWithSignal(
 
 async function readConnectionsForOwnership(
   workspaceId: string | undefined,
-  scope: Pick<RequestOpts, "signal" | "cache" | "isCurrent">,
+  scope: Pick<RequestOpts, "signal" | "cache" | "isCurrent" | "reuseRecentSharedAuthProbe">,
   accountOwned: boolean,
 ): Promise<readonly ProviderConnection[]> {
   if (accountOwned) {
@@ -3395,20 +3412,21 @@ async function readConnectionsForOwnership(
   return await fetchAllPages<ProviderConnection>(
     `${BASE}/connections${query({ workspaceId: normalized })}`,
     (body) => (body.connections as readonly ProviderConnection[]) ?? [],
-    scope,
+    { signal: scope.signal, cache: scope.cache, isCurrent: scope.isCurrent },
   );
 }
 
 export async function listProviderConnections(
   workspaceId?: string,
+  options: Pick<RequestOpts, "reuseRecentSharedAuthProbe"> = {},
 ): Promise<readonly ProviderConnection[]> {
-  return await listProviderConnectionsWithSignal(workspaceId);
+  return await listProviderConnectionsWithSignal(workspaceId, undefined, options);
 }
 
 export async function listProviderConnectionsWithSignal(
   workspaceId?: string,
   signal?: AbortSignal,
-  options: Pick<RequestOpts, "cache" | "isCurrent"> = {},
+  options: Pick<RequestOpts, "cache" | "isCurrent" | "reuseRecentSharedAuthProbe"> = {},
 ): Promise<readonly ProviderConnection[]> {
   const scope = { signal, ...options };
   // A caller-owned preflight must be able to retire its entire read and
@@ -3420,7 +3438,9 @@ export async function listProviderConnectionsWithSignal(
   if (accountOwned) return await readConnectionsForOwnership(workspaceId, scope, true);
   const normalized = await legacyWorkspaceFor404(workspaceId, scope);
   if (!normalized) return [];
-  return await listLegacyProviderConnectionsWithSignal(normalized, signal, options);
+  return await listLegacyProviderConnectionsWithSignal(normalized, signal, {
+    cache: options.cache, isCurrent: options.isCurrent,
+  });
 }
 
 /** Only for a legacy OAuth start that explicitly returned this client context. */
@@ -3949,7 +3969,10 @@ export interface AppOwnershipTransfer {
   readonly expiresAt?: string;
 }
 
-async function listOwnershipTransfers(path: string, signal?: AbortSignal): Promise<readonly AppOwnershipTransfer[] | undefined> {
+async function listOwnershipTransfers(
+  path: string,
+  options: Pick<RequestOpts, "signal" | "reuseRecentSharedAuthProbe">,
+): Promise<readonly AppOwnershipTransfer[] | undefined> {
   try {
     return await fetchAllPages<AppOwnershipTransfer>(path, (body) => {
       if (!Array.isArray(body.ownershipTransfers)) {
@@ -3957,7 +3980,7 @@ async function listOwnershipTransfers(path: string, signal?: AbortSignal): Promi
       }
       return body.ownershipTransfers.filter((row): row is AppOwnershipTransfer => isRecord(row) && row.state === "pending" &&
         [row.transferId, row.capsuleId, row.fromAccountId, row.toAccountId].every((value) => typeof value === "string" && value.length > 0));
-    }, { signal });
+    }, options);
   } catch (error) {
     if (isMissingControlRoute(error)) return undefined;
     throw error;
@@ -3965,11 +3988,13 @@ async function listOwnershipTransfers(path: string, signal?: AbortSignal): Promi
 }
 
 export async function listAppOwnershipTransfers(capsuleId: string, signal?: AbortSignal): Promise<readonly AppOwnershipTransfer[] | undefined> {
-  return await listOwnershipTransfers(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/ownership-transfers?state=pending`, signal);
+  return await listOwnershipTransfers(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/ownership-transfers?state=pending`, { signal });
 }
 
 export async function listIncomingOwnershipTransfers(signal?: AbortSignal): Promise<readonly AppOwnershipTransfer[] | undefined> {
-  return await listOwnershipTransfers(`${BASE}/ownership-transfers?state=pending`, signal);
+  return await listOwnershipTransfers(`${BASE}/ownership-transfers?state=pending`, {
+    signal, reuseRecentSharedAuthProbe: true,
+  });
 }
 
 export async function listPersonalUsagePage(workspaceId?: string, options: { readonly cursor?: string; readonly limit?: number; readonly signal?: AbortSignal } = {}): Promise<UsageEventsPage> {

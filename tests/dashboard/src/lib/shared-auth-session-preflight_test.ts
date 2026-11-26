@@ -1,5 +1,18 @@
 import { afterEach, expect, jest, test } from "bun:test";
-import { controlFetch, createApplyRun, listAccessibleAppsPage } from "../../../../dashboard/src/lib/control-api.ts";
+import {
+  controlFetch,
+  createApplyRun,
+  getCapsuleConfigurationContext,
+  getCapsuleProviderBindingSet,
+  getInstallConfig,
+  getRun,
+  getRunCostInfo,
+  getRunLogs,
+  getRunWithOptions,
+  listAccessibleAppsPage,
+  listIncomingOwnershipTransfers,
+  listProviderConnectionsWithSignal,
+} from "../../../../dashboard/src/lib/control-api.ts";
 import { apiFetch } from "../../../../dashboard/src/views/account/lib/http.ts";
 import { loadCommercialBillingTransactions } from "../../../../dashboard/src/lib/commercial-billing.ts";
 import { listWorkspacesCached, clearWorkspaceListCache } from "../../../../dashboard/src/lib/workspace-list.ts";
@@ -533,7 +546,13 @@ test("session bootstrap and app list reads share a recent availability observati
 });
 
 test("reused availability rejects an unmarked legacy success after a Worker rollback", async () => {
-  for (const read of [fetchDashboardBootstrap, () => listAccessibleAppsPage(undefined, undefined, "office")]) {
+  for (const read of [
+    fetchDashboardBootstrap,
+    () => listAccessibleAppsPage(undefined, undefined, "office"),
+    listIncomingOwnershipTransfers,
+    () => getCapsuleProviderBindingSet("cap_test", { reuseRecentSharedAuthProbe: true }),
+    () => getRun("run_test", { reuseRecentSharedAuthProbe: true }),
+  ]) {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -545,6 +564,64 @@ test("reused availability rejects an unmarked legacy success after a Worker roll
     await probeInitialSharedAuthSession();
     await expect(read()).rejects.toMatchObject({ status: 503 });
     expect(calls).toHaveLength(2);
+  }
+});
+
+test("settings, Run detail and transfers use one availability read and each protected GET", async () => {
+  const capsule = {
+    id: "cap_test", name: "Office", slug: "office", installConfigId: "conf_test",
+    environment: "test", currentStateGeneration: 1, status: "active",
+    createdAt: "2026-11-26T00:00:00Z", updatedAt: "2026-11-26T00:00:00Z",
+  };
+  const run = { id: "run_test", status: "succeeded" };
+  const protectedReads = new Map<string, object>([
+    ["/api/v1/capsules/cap_test", { capsule, installConfigReAdoption: { authorityGuard: "guard_test" } }],
+    ["/api/v1/capsules/cap_test/provider-bindings", { providerBindingSet: null }],
+    ["/api/v1/capsule-configs/conf_test", { installConfig: { id: "conf_test" } }],
+    ["/api/v1/apps", { apps: [] }],
+    ["/api/v1/connections", { connections: [] }],
+    ["/api/v1/runs/run_test", { run }],
+    ["/api/v1/runs/run_test/logs", { lines: [] }],
+    ["/api/v1/runs/run_test/cost", { cost: { estimate: null } }],
+    ["/api/v1/ownership-transfers?state=pending", { ownershipTransfers: [] }],
+  ]);
+  const calls: Array<{ path: string; marked: boolean }> = [];
+  const time = jest.spyOn(Date, "now").mockReturnValue(20_000);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const marked = new Headers(init?.headers).get("x-takosumi-shared-auth-read") === "1";
+    expect(init?.method).toBe("GET");
+    calls.push({ path, marked });
+    if (path === healthPath) return Response.json({ authenticated: true });
+    const body = protectedReads.get(path);
+    if (!body) throw new Error(`Unexpected read ${path}`);
+    const headers = marked ? { "x-takosumi-shared-auth-read": "1" } : undefined;
+    return Response.json(body, { headers });
+  }) as typeof fetch;
+  try {
+    await probeInitialSharedAuthSession();
+    const display = { reuseRecentSharedAuthProbe: true };
+    expect(await getCapsuleConfigurationContext("cap_test", display)).toMatchObject({ capsule });
+    expect(await getCapsuleProviderBindingSet("cap_test", display)).toBeNull();
+    expect(await getInstallConfig("conf_test", display)).toMatchObject({ id: "conf_test" });
+    expect(await listProviderConnectionsWithSignal(undefined, undefined, {
+      ...display, isCurrent: () => true,
+    })).toEqual([]);
+    expect(await getRun("run_test", display)).toMatchObject(run);
+    expect(await getRunLogs("run_test", display)).toMatchObject({ lines: [] });
+    expect(await getRunCostInfo("run_test")).toMatchObject({ estimate: null });
+    expect(await listIncomingOwnershipTransfers()).toEqual([]);
+    expect(calls).toEqual([
+      { path: healthPath, marked: false },
+      ...[...protectedReads.keys()].map((path) => ({ path, marked: true })),
+    ]);
+    await getRunWithOptions("run_test", { cache: "no-store" });
+    expect(calls.slice(-2)).toEqual([
+      { path: healthPath, marked: false },
+      { path: "/api/v1/runs/run_test", marked: false },
+    ]);
+  } finally {
+    time.mockRestore();
   }
 });
 

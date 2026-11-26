@@ -330,12 +330,17 @@ test("shared Run GET reports its read and current Workspace/member phases", asyn
   try {
     const response = await handlePlatformSharedAuthControlRequest(
       request("/api/v1/runs/run_shared", {
-        headers: { cookie, "x-takosumi-request-probe-id": "a444000000000013" },
+        headers: {
+          cookie,
+          "x-takosumi-request-probe-id": "a444000000000013",
+          "x-takosumi-shared-auth-read": "1",
+        },
       }),
       { ...configured(rpc), TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS: "true" } as CloudflareWorkerEnv,
       { store: new InMemoryAccountsStore(), resolveOperations: async () => operations },
     );
     expect(response?.status).toBe(200);
+    expect(response?.headers.get("x-takosumi-shared-auth-read")).toBe("1");
     expect((await response?.json()).run.id).toBe("run_shared");
     const phases = phaseRows.filter((row) => row.probeId === "a444000000000013");
     for (const phase of ["run_get_read", "run_get_access", "run_get_workspace", "run_get_member"]) {
@@ -546,10 +551,24 @@ test("trusted shared-auth cookies retain first-party authority for app members a
     capsules: { getCapsulesByIds: async () => [] } } as unknown as ControlPlaneOperations;
   const env = configured(rpc) as CloudflareWorkerEnv;
   const dependencies = { store: accounts, resolveOperations: async () => operations };
-  for (const path of ["/api/v1/capsules/cap_shared/members", "/api/v1/ownership-transfers"]) {
-    const response = await handlePlatformSharedAuthControlRequest(request(path), env, dependencies);
+  const sharedRead = "x-takosumi-shared-auth-read";
+  const pending = "/api/v1/ownership-transfers?state=pending";
+  for (const path of ["/api/v1/capsules/cap_shared/members", "/api/v1/ownership-transfers", pending]) {
+    const response = await handlePlatformSharedAuthControlRequest(
+      request(path, { headers: { cookie, [sharedRead]: "1" } }), env, dependencies,
+    );
     expect(response?.status).toBe(200);
+    expect(response?.headers.get(sharedRead)).toBe(path === pending ? "1" : null);
   }
+  const signedOut = configured({
+    ...rpc,
+    authenticateSharedAuth: async () => ({ kind: "unauthenticated" }),
+  }) as CloudflareWorkerEnv;
+  const denied = await handlePlatformSharedAuthControlRequest(
+    request(pending, { headers: { cookie, [sharedRead]: "1" } }), signedOut, dependencies,
+  );
+  expect(denied?.status).toBe(401);
+  expect(denied?.headers.get(sharedRead)).toBeNull();
   const transfer = await handlePlatformSharedAuthControlRequest(request("/api/v1/capsules/cap_shared/ownership-transfers", {
     method: "POST", headers: { cookie, origin, "content-type": "application/json" },
     body: JSON.stringify({ toAccountId: "recipient" }),

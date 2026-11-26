@@ -7,9 +7,16 @@ import {
   isReviewRun,
 } from "../../../../dashboard/src/lib/run-approval.ts";
 import { approveRun, type Run } from "../../../../dashboard/src/lib/control-api.ts";
+import {
+  clearSharedAuthSessionPreflight,
+  probeInitialSharedAuthSession,
+} from "../../../../dashboard/src/lib/shared-auth-session-preflight.ts";
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  clearSharedAuthSessionPreflight();
+});
 
 function planRun(overrides: Partial<Run> = {}): Run {
   return {
@@ -154,6 +161,28 @@ describe("readback after approving a reviewed Plan", () => {
       ]);
     },
   );
+
+  test("lost approval response can still read back the exact Plan on an older shared Worker", async () => {
+    const calls: string[] = [];
+    const healthPath = "/auth/oidc/session";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${path}`);
+      expect(new Headers(init?.headers).has("x-takosumi-shared-auth-read")).toBe(false);
+      if (path === healthPath) return Response.json({ authenticated: true });
+      if (path === approvalPath) throw new TypeError("Approval response lost");
+      expect(path).toBe(runPath);
+      expect(init?.cache).toBe("no-store");
+      return Response.json({ run: approved });
+    }) as typeof fetch;
+    await probeInitialSharedAuthSession();
+    await expect(approveRun(reviewed)).resolves.toEqual(approved);
+    expect(calls).toEqual([
+      `GET ${healthPath}`, `GET ${healthPath}`, `POST ${approvalPath}`,
+      `GET ${healthPath}`, `GET ${runPath}`,
+    ]);
+  });
 
   test.each([
     { status: "waiting_approval" },
