@@ -75,7 +75,8 @@ test("search abort reaches fetch and malformed Home pages are never retained", a
   }) as typeof fetch;
   const controller = new AbortController();
   const pending = listAccessibleAppsPage(undefined, controller.signal, "mail");
-  expect(transport).toBe(controller.signal);
+  expect(transport).toBeInstanceOf(AbortSignal);
+  expect(transport?.aborted).toBe(false);
   controller.abort();
   await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   expect(transport?.aborted).toBe(true);

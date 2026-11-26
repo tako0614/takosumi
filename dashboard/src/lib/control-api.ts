@@ -3735,7 +3735,11 @@ function readCachedAppsPage(path: string): Promise<{ nextCursor?: string } & Rec
   expireAccessibleAppsData();
   const cached = appsPageCache.get(path);
   if (cached) return cached;
-  const request = controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path).then((body) => {
+  // Bound the shared transport, so every waiter sees the same result and an
+  // expired request is evicted. Each view still cancels only its own wait.
+  const request = withControlReadDeadline("Apps", {}, (scope) =>
+    controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, scope),
+  ).then((body) => {
     if (appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
     return body;
   }).catch((error: unknown) => {
@@ -3776,7 +3780,9 @@ export async function listAccessibleAppsPage(
   try {
     // Keep typed searches and scoped reads out of the account-wide cache.
     body = search || owner.isCurrent
-      ? await controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { signal, ...owner })
+      ? await withControlReadDeadline("Apps", { signal, ...owner }, (scope) =>
+        controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, scope),
+      )
       : await withAppReadSignal(readCachedAppsPage(path), signal);
   } catch (error) {
     throwIfReadRetired({ signal, ...owner });

@@ -21,6 +21,41 @@ export function registerHomeSearchCases(mode: string): void {
   test.describe("Home server search", () => {
     test.skip(mode !== "portable", "synthetic account fixtures; no live account reads");
 
+    test("a stalled home app list offers Retry and then loads with reads only", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      await page.clock.install();
+      const held = heldResponse();
+      const reads: string[] = [];
+      const mutations: string[] = [];
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (request.method() !== "GET") mutations.push(path);
+        if (path !== "/api/v1/apps") return route.fallback();
+        reads.push(request.method());
+        if (reads.length === 1) {
+          await held.ready;
+          return route.abort().catch(() => {});
+        }
+        return route.fulfill({ json: { apps: [app("recovered", "Recovered app")] } });
+      });
+      try {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+        await expect.poll(() => reads.length).toBe(1);
+        await page.clock.fastForward(30_100);
+        const home = page.getByTestId("home-apps");
+        const retry = home.getByRole("button", { name: "Retry", exact: true });
+        await expect(retry).toBeVisible();
+        expect(reads).toEqual(["GET"]);
+        await retry.click();
+        await expect(home.getByTestId("home-app")).toContainText("Recovered app");
+        expect(reads).toEqual(["GET", "GET"]);
+        expect(mutations).toEqual([]);
+      } finally {
+        held.release();
+      }
+    });
+
     test("applied-query search follows an empty candidate page without showing false no-results", async ({ page }) => {
       const held = heldResponse();
       let waiting = false;
