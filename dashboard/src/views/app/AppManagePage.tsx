@@ -672,7 +672,8 @@ export default function AppManagePage(props: {
         }
         const replacementRefused = hold && cause instanceof ControlApiError &&
           cause.status === 409 && cause.code === "failed_precondition" &&
-          (uninstallConnectionRefused || cause.reason === "destroy_connection_recovery_unproven");
+          (uninstallConnectionRefused || cause.reason === "provider_connection_setup_required" ||
+            cause.reason === "destroy_connection_recovery_unproven");
         if (removalSubmitted && savingTimedOut && "reservedPlanRunId" in details) {
           hold?.recordReservation(details.reservedPlanRunId);
           submittedOutcome = { reservedPlanRunId: details.reservedPlanRunId };
