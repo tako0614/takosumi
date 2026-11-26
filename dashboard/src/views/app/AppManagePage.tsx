@@ -1658,7 +1658,8 @@ export default function AppManagePage(props: {
             const current = view();
             const run = current.progress.run;
             return isOwner() && !review() && current.state === "uninstalling" &&
-              current.primaryAction === "none" && run && isAppRemovalRun(run.type)
+              current.primaryAction === "none" &&
+              (run?.type === "destroy_apply" || (run?.type === "destroy_plan" && !current.uninstall.scheduled))
               ? run.id : undefined;
           };
           return (

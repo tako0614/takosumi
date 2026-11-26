@@ -196,7 +196,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const now = "2026-11-21T00:00:00.000Z";
       const plan = lifecycleRun("run_saved_removal_review", "destroy_plan", "succeeded", now);
       const apply = lifecycleRun("run_accepted_removal", "destroy_apply", "running", now, { planRunId: plan.id });
-      let scene: "no-run" | "review" | "member" | "owner" = "no-run";
+      let scene: "no-run" | "review" | "scheduled-plan" | "member" | "owner" = "no-run";
       let runReads = 0;
       const mutations: string[] = [];
       await page.route("**/api/v1/**", async (route) => {
@@ -210,10 +210,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === `/api/v1/capsules/${CAPSULE_ID}/app`) {
           const progress = scene === "review" ? { review: { runId: plan.id, runType: plan.type } }
+            : scene === "scheduled-plan" ? { run: { ...plan, status: "queued" } }
             : scene === "no-run" ? {} : { run: apply };
           return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
             state: "uninstalling", primaryAction: scene === "review" ? "review" : "none",
             progress: { revisionPreparing: false, ...progress },
+            ...(scene === "scheduled-plan" ? { status: "uninstalled", uninstall: {
+              mode: "scheduled", graceDays: 7, impact: { usedBy: [] },
+              scheduled: { phase: "destroying", requestedAt: now, deleteAfter: now, cancellable: false, blocked: false },
+            } } : {}),
           }) } });
         }
         if (path === `/api/v1/runs/${apply.id}`) {
@@ -230,7 +235,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
       const actions = page.getByTestId("app-primary");
       const progressLink = actions.getByRole("link", { name: "View uninstall progress", exact: true });
-      for (const state of ["no-run", "review", "member", "owner"] as const) {
+      for (const state of ["no-run", "review", "scheduled-plan", "member", "owner"] as const) {
         scene = state;
         await page.reload({ waitUntil: "domcontentloaded" });
         await expect(appOverviewRow(page, "sharing")).toBeVisible();
