@@ -2463,9 +2463,11 @@ async function runRunner(
           /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(reason)
             ? reason
             : "runner_http_error",
-        detail: sourceBuildFailure
-          ? LOCAL_MUTATION_SOURCE_BUILD_DETAIL
-          : "runner returned a non-success HTTP status",
+        detail: action === "plan" && reason === "required_output_not_declared"
+          ? "A required output is not declared. Update the output mapping or select a compatible revision."
+          : sourceBuildFailure
+            ? LOCAL_MUTATION_SOURCE_BUILD_DETAIL
+            : "runner returned a non-success HTTP status",
       },
     );
   }

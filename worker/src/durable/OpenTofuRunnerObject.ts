@@ -9064,6 +9064,7 @@ function finiteRunnerFailureCode(
   | "opentofu_init_failed"
   | "source_build_failed"
   | "opentofu_resource_precondition_failed"
+  | "required_output_not_declared"
   | "opentofu_plan_failed" {
   if (isTerminalReleaseCommandFailure(payload, phase, releaseActionIds)) {
     return RUNNER_RELEASE_COMMAND_FAILED_CODE;
@@ -9072,6 +9073,9 @@ function finiteRunnerFailureCode(
   // Keep this code outside the detail allowlist and the mutation failure
   // classification. Module preconditions can include arbitrary messages.
   if (phase === "plan" && value === "opentofu_resource_precondition_failed") {
+    return value;
+  }
+  if (phase === "plan" && value === "required_output_not_declared") {
     return value;
   }
   if (
