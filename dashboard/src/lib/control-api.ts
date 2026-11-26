@@ -316,6 +316,46 @@ export async function controlFetch<T>(
   return data as T;
 }
 
+const CONTROL_READ_TIMEOUT_MS = 30_000;
+type ControlReadScope = Pick<RequestOpts, "signal" | "cache" | "isCurrent">;
+
+/** Bounds selected screen reads through response decoding and retires late responses. */
+async function withControlReadDeadline<T>(
+  label: string,
+  scope: ControlReadScope,
+  read: (scope: ControlReadScope) => Promise<T>,
+): Promise<T> {
+  const caller = scope.signal;
+  throwIfAborted(caller);
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const requestScope = { ...scope, signal, isCurrent: () => !signal.aborted && (scope.isCurrent?.() ?? true) };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const stopped = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      reject(new DOMException("Request was aborted.", "AbortError"));
+      controller.abort();
+    };
+    caller?.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(() => {
+      // Settle the timeout before aborting, including when fetch rejects on abort.
+      reject(new ControlApiError(0, "request_timeout", `${label} read timed out after ${CONTROL_READ_TIMEOUT_MS}ms`));
+      controller.abort();
+    }, CONTROL_READ_TIMEOUT_MS);
+  });
+  try {
+    // Some transports and response bodies ignore abort. Race the whole read
+    // and fence controlFetch's session-expiry handling after retirement.
+    const result = await Promise.race([read(requestScope), stopped]);
+    throwIfReadRetired(requestScope);
+    return result;
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) caller?.removeEventListener("abort", onAbort);
+  }
+}
+
 function query(
   params: Record<string, string | number | boolean | undefined>,
 ): string {
@@ -1224,13 +1264,13 @@ export async function getCapsuleConfigurationContext(
   readonly authorityGuard: string;
   readonly configurationPlanResumable?: true;
 }> {
-  const body = await controlFetch<{
+  const body = await withControlReadDeadline("App settings", options, (scope) => controlFetch<{
     capsule: Capsule;
     installConfigReAdoption: {
       readonly authorityGuard: string;
       readonly configurationPlanResumable?: true;
     };
-  }>(`${BASE}/capsules/${encodeURIComponent(id)}`, options);
+  }>(`${BASE}/capsules/${encodeURIComponent(id)}`, scope));
   if (
     !isCapsuleResponse(body.capsule) ||
     typeof body.installConfigReAdoption?.authorityGuard !== "string" ||
@@ -2279,8 +2319,8 @@ export function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> {
 }
 
 export async function getCapsuleAppWithSignal(capsuleId: string, signal?: AbortSignal, options: { readonly isCurrent?: () => boolean } = {}): Promise<CapsuleAppView> {
-  const body = await controlFetch<{ app?: CapsuleAppView }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`, { signal, ...options },
+  const body = await withControlReadDeadline("App", { signal, ...options }, (scope) =>
+    controlFetch<{ app?: CapsuleAppView }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`, scope),
   );
   throwIfReadRetired({ signal, ...options });
   const app = body.app;
@@ -3006,35 +3046,8 @@ export async function getRunWithOptions(
   return body.run;
 }
 
-const RUN_READ_TIMEOUT_MS = 30_000;
-
 export async function getRun(id: string, options: Pick<RequestOpts, "cache" | "isCurrent"> = {}): Promise<Run> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      // Settle the deadline before aborting: a fetch that rejects on abort
-      // must still surface the stable request_timeout error.
-      reject(
-        new ControlApiError(
-          0,
-          "request_timeout",
-          `Run read timed out after ${RUN_READ_TIMEOUT_MS}ms`,
-        ),
-      );
-      controller.abort();
-    }, RUN_READ_TIMEOUT_MS);
-  });
-  try {
-    // Promise.race observes the request's later rejection even if fetch or
-    // response.json() ignores abort and settles after the deadline.
-    return await Promise.race([
-      getRunWithOptions(id, { ...options, signal: controller.signal }),
-      deadline,
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  return await withControlReadDeadline("Run", options, (scope) => getRunWithOptions(id, scope));
 }
 
 /**
