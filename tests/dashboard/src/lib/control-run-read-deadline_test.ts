@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, jest, test } from "bun:test";
 import { setImmediate as realSetImmediate } from "node:timers";
 import {
   ControlApiError,
+  getCapsuleAppWithSignal,
+  getCapsuleConfigurationContext,
   getRun,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -142,4 +144,91 @@ test("getRun preserves 200 and HTTP errors and clears the timer early", async ()
   });
   expect(jest.getTimerCount()).toBe(0);
   expect(requests).toHaveLength(4);
+});
+
+const appId = "cap/demo";
+const appPath = "/api/v1/capsules/cap%2Fdemo";
+const appView = {
+  kind: "takosumi.capsule-app@v1",
+  capsuleId: appId,
+  state: "installed",
+  primaryAction: "open",
+  problems: [],
+  screens: [],
+  version: {},
+  progress: {},
+  uninstall: {},
+};
+
+test.each([
+  ["app view", `${appPath}/app`, (signal?: AbortSignal) => getCapsuleAppWithSignal(appId, signal)],
+  ["settings context", appPath, (signal?: AbortSignal) => getCapsuleConfigurationContext(appId, { signal })],
+] as const)("%s exposes a retryable error when its GET stalls", async (_name, path, read) => {
+  const held = deferred<Response>();
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = ((input, init) => {
+    calls.push({ url: String(input), init });
+    return calls.length === 1 ? held.promise : Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
+  }) as typeof fetch;
+
+  const outcome = observe(read());
+  jest.advanceTimersByTime(29_999);
+  await flushContinuations();
+  expect(outcome()).toBeUndefined();
+  expect(calls).toHaveLength(1);
+  jest.advanceTimersByTime(1);
+  await flushContinuations();
+  expect(outcome()).toMatchObject({ error: { status: 0, code: "request_timeout" } });
+  expect(calls[0]?.init?.signal?.aborted).toBe(true);
+
+  const lateStatus = jest.fn(() => 401);
+  held.resolve({ get status() { return lateStatus(); } } as Response);
+  await flushContinuations();
+  expect(lateStatus).not.toHaveBeenCalled();
+  expect(calls).toHaveLength(1);
+
+  await expect(read()).rejects.toMatchObject({ status: 404, code: "not_found" });
+  expect(calls).toHaveLength(2);
+  for (const call of calls) {
+    expect(call).toMatchObject({ url: path, init: { method: "GET", credentials: "include" } });
+  }
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test("app view body waits are bounded and a later read can open the same app", async () => {
+  const heldBody = deferred<unknown>();
+  globalThis.fetch = (async () => ({
+    status: 200,
+    ok: true,
+    headers: new Headers({ "content-type": "application/json" }),
+    json: () => heldBody.promise,
+  } as Response)) as typeof fetch;
+  const outcome = observe(getCapsuleAppWithSignal(appId));
+  await flushContinuations();
+  jest.advanceTimersByTime(30_000);
+  await flushContinuations();
+  expect(outcome()).toMatchObject({ error: { status: 0, code: "request_timeout" } });
+
+  globalThis.fetch = (async () => Response.json({ app: appView })) as typeof fetch;
+  await expect(getCapsuleAppWithSignal(appId)).resolves.toEqual(appView);
+  heldBody.resolve({ app: { ...appView, state: "uninstalled" } });
+  await flushContinuations();
+  expect(outcome()).toMatchObject({ error: { status: 0, code: "request_timeout" } });
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test("retiring an app read settles immediately even if fetch ignores abort", async () => {
+  const held = deferred<Response>();
+  const fetchApp = jest.fn(() => held.promise);
+  globalThis.fetch = fetchApp as unknown as typeof fetch;
+  const caller = new AbortController();
+  const outcome = observe(getCapsuleAppWithSignal(appId, caller.signal));
+  caller.abort();
+  await flushContinuations();
+  expect(outcome()).toMatchObject({ error: { name: "AbortError" } });
+  expect(jest.getTimerCount()).toBe(0);
+  await expect(getCapsuleAppWithSignal(appId, caller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  expect(fetchApp).toHaveBeenCalledTimes(1);
+  held.reject(new Error("late fetch rejection"));
+  await flushContinuations();
 });

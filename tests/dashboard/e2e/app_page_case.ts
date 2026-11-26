@@ -114,6 +114,43 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
   test.describe("Installed app page", () => {
     test.skip(mode !== "portable", "deterministic app page fixture; not production evidence");
 
+    test("a stalled app read offers Retry and opens the app with reads only", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      await page.clock.install();
+      const appPath = `/api/v1/capsules/${CAPSULE_ID}/app`;
+      const reads: string[] = [];
+      const mutations: string[] = [];
+      let release = () => {};
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (request.method() !== "GET") mutations.push(path);
+        if (path !== appPath) return route.fallback();
+        reads.push(request.method());
+        if (reads.length === 1) {
+          await held;
+          return route.abort().catch(() => {});
+        }
+        return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office") } });
+      });
+
+      try {
+        await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+        await expect.poll(() => reads.length).toBe(1);
+        await page.clock.fastForward(30_100);
+        await expect(page.getByText("Couldn't load this app", { exact: true })).toBeVisible();
+        expect(reads).toEqual(["GET"]);
+
+        await page.getByRole("button", { name: "Retry", exact: true }).click();
+        await expect(page.getByTestId("app-management")).toBeVisible();
+        expect(reads).toEqual(["GET", "GET"]);
+        expect(mutations).toEqual([]);
+      } finally {
+        release();
+      }
+    });
+
     for (const response of ["lost response", "save timeout", "stalled readback"] as const) {
       test(`an ordinary uninstall reopens the submitted Plan after a ${response}`, async ({ page }) => {
         await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
