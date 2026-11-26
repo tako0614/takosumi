@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../accounts/service/src/account-session.ts";
 import { handleControlRoute } from "../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
+import { validateUninstallRequester } from "../../../accounts/service/src/uninstall-requester.ts";
 import { main } from "../../../cli/src/main.ts";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
@@ -28,6 +29,7 @@ const STATE_DIGEST = `sha256:${"3".repeat(64)}`;
 // handler, Accounts authorization, Core ledger and revision coordinator are real.
 async function fixture(options: {
   readonly beforePlan?: (job: OpenTofuPlanJob) => Promise<void>;
+  readonly patExpiresAt?: number;
 } = {}) {
   const runnerCalls = { sync: 0, plan: 0, apply: 0, destroy: 0 };
   const runner: OpenTofuRunner = {
@@ -89,6 +91,7 @@ async function fixture(options: {
   const ledger = new InMemoryOpenTofuControlStore();
   const gitInstallPlanStore = new InMemoryGitInstallPlanStore(ledger);
   ledger.attachGitInstallPlanStore(gitInstallPlanStore);
+  const accounts = new InMemoryAccountsStore();
   const { operations } = await createTakosumiService({
     authorizeInterfaceBearer: () => undefined,
     role: "takosumi-api",
@@ -98,11 +101,12 @@ async function fixture(options: {
     opentofuRunner: runner,
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    validateUninstallRequesterAt: (requester, workspaceId, validAtMs) =>
+      validateUninstallRequester(accounts, requester, workspaceId, validAtMs),
   });
   const workspace = await operations.workspaces.createWorkspace({
     handle: "cli-revision", displayName: "CLI revision", type: "personal", ownerUserId: OWNER,
   });
-  const accounts = new InMemoryAccountsStore();
   const now = Date.now();
   accounts.saveAccount({ subject: OWNER, createdAt: now, updatedAt: now });
   accounts.saveAccountSession({
@@ -157,11 +161,60 @@ async function fixture(options: {
   const pat = {
     tokenId: "pat_cli_revision", tokenPrefix: "synthetic", subject: OWNER,
     name: "CLI revision", scopes: ["read", "write"] as const,
-    appIds: [appId], createdAt: now, expiresAt: now + 600_000,
+    appIds: [appId], createdAt: now, expiresAt: options.patExpiresAt ?? now + 600_000,
   };
   accounts.savePersonalAccessToken(TOKEN, pat);
   return { accounts, pat, appId, ledger, operations, dispatch, runnerCalls };
 }
+
+test("CLI reads the existing uninstall reservation after a lost reply without another write", async () => {
+  const { appId, ledger, dispatch, runnerCalls } = await fixture({
+    patExpiresAt: Date.now() + 30 * 86_400_000,
+  });
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const io = { stdout: (line: string) => stdout.push(line), stderr: (line: string) => stderr.push(line) };
+  const args = ["apps", "uninstall", appId, "--url", ORIGIN, "--token", TOKEN, "--json"];
+  const initialRunnerCalls = { ...runnerCalls };
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(`${request.method} ${new URL(request.url).pathname}`);
+    const response = await dispatch(request);
+    if (request.method === "POST") {
+      expect(response.status).toBe(202);
+      throw new Error("fixture: reply lost after scheduling");
+    }
+    return response;
+  }) as typeof fetch;
+  try {
+    expect(await main([...args, "--status"], io)).toBe(0);
+    expect(JSON.parse(stdout.pop()!)).toEqual({ capsuleId: appId, status: "active", uninstall: null });
+    expect(await main([...args, "--yes"], io)).toBe(1);
+    const scheduled = await ledger.getCapsule(appId);
+    expect(scheduled).toMatchObject({ status: "uninstalled", uninstall: { phase: "scheduled" } });
+    expect(stderr.join("\n")).toContain("--status");
+    expect(stdout).toEqual([]);
+    expect(await main([...args, "--status", "--yes"], io)).toBe(2);
+    expect(await main([...args, "--status=false", "--yes"], io)).toBe(2);
+    expect(await main([...args, "--status"], io)).toBe(0);
+    expect(JSON.parse(stdout[0]!)).toEqual({
+      capsuleId: appId, status: "uninstalled", uninstall: {
+        id: scheduled!.uninstall!.id, phase: "scheduled",
+        requestedAt: scheduled!.uninstall!.requestedAt,
+        scheduledDestroyAt: scheduled!.uninstall!.scheduledDestroyAt,
+      },
+    });
+    expect(requests).toEqual([
+      `GET /api/v1/capsules/${appId}`,
+      `POST /api/v1/capsules/${appId}/uninstall`,
+      `GET /api/v1/capsules/${appId}`,
+    ]);
+    expect(await ledger.getCapsule(appId)).toEqual(scheduled);
+    expect(runnerCalls).toEqual(initialRunnerCalls);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test("Accounts refuses a CLI original Connection selection without partial Destroy evidence", async () => {
   const h = await fixture();

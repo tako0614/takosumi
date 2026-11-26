@@ -138,6 +138,16 @@ takosumi apps apply cap_example --plan plan_example --observe-only \
 `--yes`と`--observe-only`は同時指定できません。
 failed/cancelled/expiredのRunも新Planで盲目的に再実行せず、保存Runとアプリ状態を確認します。
 
+## 削除予約の状態を読む
+
+`apps uninstall <app-id> --yes` の予約応答が途切れたら、同じ接続先・アプリ・Accounts IDで現在の予約を読み取ります。対象アプリを閲覧できるAccounts PATの `read` が必要です。
+
+```bash
+takosumi apps uninstall cap_example --status --url https://takosumi.example.com --json
+```
+
+`--status` は一回のGETで、アプリ状態と保存されている予約のID・段階・要求時刻・削除予定時刻を表示します。`uninstall: null` は読取り時点に予約が見えていない状態です。途中で切れた要求の結果は引き続き不明です。
+
 ## 手動のアンインストールを確認する
 
 出力の反映に失敗した適用結果が `apply_output_projection_failed` を返した場合、保存済みの状態を使って手動でアンインストールを確認できます。現在の接続を使える場合やProviderを使わない場合は、接続の差し替えを指定せずに削除Planを作成します。

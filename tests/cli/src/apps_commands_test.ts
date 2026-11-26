@@ -354,6 +354,30 @@ test("apps uninstall calls the app-scoped uninstall route", async () => {
   }
 });
 
+test("apps uninstall status does not follow a redirect", async () => {
+  const requests: string[] = [];
+  const stdout: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      requests.push(`${request.method} ${path}`);
+      if (path === "/api/v1/capsules/cap_owned") return Response.redirect(new URL("/moved", request.url), 307);
+      return Response.json({ capsule: { id: "cap_owned", status: "active" } });
+    },
+  });
+  try {
+    const code = await main(["apps", "uninstall", "cap_owned", "--status", "--url", server.url.origin, "--token", "synthetic-read-pat"], {
+      stdout: (line) => stdout.push(line),
+      stderr: quietIo.stderr,
+    });
+    expect(code).toBe(1);
+    expect(stdout).toEqual([]);
+    expect(requests).toEqual(["GET /api/v1/capsules/cap_owned"]);
+  } finally { await server.stop(true); }
+});
+
 test("apps help names Accounts PAT auth and uses Japanese app terminology", async () => {
   const originalLanguage = process.env.TAKOSUMI_LANG;
   const stdout: string[] = [];
