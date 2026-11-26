@@ -647,15 +647,19 @@ export default function AppManagePage(props: {
         // A rollback from version history uses the ordinary "apply" review.
         const isRollback = section === "version" && purpose === "apply";
         const isConfigurationChange = section === "settings" && purpose === "apply";
+        const isOrdinaryUninstall = purpose === "uninstall" && options.action === "uninstall_now" &&
+          !options.replaceReview && !options.submittedRemoval;
         const hold = purpose === "uninstall" ? options.replaceReview?.hold() : undefined;
         const removalSubmitted = Boolean(hold || options.submittedRemoval?.());
-        const details = (isRollback || removalSubmitted) && cause instanceof ControlApiError ? cause.details : undefined;
+        const details = (isRollback || isOrdinaryUninstall || removalSubmitted) && cause instanceof ControlApiError
+          ? cause.details : undefined;
         const planCreationTimedOut = cause instanceof ControlApiError && cause.status === 409 &&
           cause.code === "failed_precondition" && cause.reason === "capsule_plan_creation_timeout";
         const savingTimedOut = planCreationTimedOut && typeof details === "object" && details !== null &&
           "stage" in details && details.stage === "plan_run_create";
         // Configuration authority is committed before the server begins creating its Plan.
-        const reviewTimedOut = (isRollback && savingTimedOut) || (isConfigurationChange && planCreationTimedOut);
+        const reviewTimedOut = ((isRollback || isOrdinaryUninstall) && savingTimedOut) ||
+          (isConfigurationChange && planCreationTimedOut);
         if (purpose === "update") {
           const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
           if (target) setReAdoptionRevisionId(target);
@@ -1654,7 +1658,8 @@ export default function AppManagePage(props: {
             const current = view();
             const run = current.progress.run;
             return isOwner() && !review() && current.state === "uninstalling" &&
-              current.primaryAction === "none" && run?.type === "destroy_apply"
+              current.primaryAction === "none" &&
+              (run?.type === "destroy_apply" || (run?.type === "destroy_plan" && !current.uninstall.scheduled))
               ? run.id : undefined;
           };
           return (
