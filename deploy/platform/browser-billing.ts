@@ -238,13 +238,19 @@ export async function handlePlatformBrowserBillingRequest(
   if (identity?.kind !== "authenticated") {
     return failed("auth-unavailable", response(503, "billing_unavailable"));
   }
-  const acceptLanguage = baseView ? headers.get("accept-language") : null;
+  const dashboardUrl = new URL(url);
+  if (language !== null) {
+    // Keep the original spelling and order of selectors that older receivers accept.
+    dashboardUrl.search = url.search.slice(1).split("&")
+      .filter((field) => !new URLSearchParams(field).has("lang")).join("&");
+  }
+  const acceptLanguage = baseView ? language ?? headers.get("accept-language") : null;
   if (acceptLanguage !== null) privateHeaders.set("accept-language", acceptLanguage);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const dispatchDeadline = Symbol();
   try {
     const result = await Promise.race([
-      dispatch(new Request(url, { method, headers: privateHeaders, body, redirect: "manual" }),
+      dispatch(new Request(dashboardUrl, { method, headers: privateHeaders, body, redirect: "manual" }),
         Object.freeze({ authKind: "session", subject: identity.accountId })),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(dispatchDeadline),

@@ -30,6 +30,7 @@ import {
 import {
   ControlApiError,
   getWorkspaceBilling,
+  listWorkspacePage,
   listWorkspaceUsagePage,
   listPersonalUsagePage,
   type UsageEvent,
@@ -93,32 +94,52 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
       hasPlatformExtensionCapability("billing.commercial.v1") &&
       billingContributions().some((contribution) => contribution.presentation === "native"),
   );
-  const displayedContributions = createMemo(() => props.workspaceId
-    ? billingContributions()
-    : billingContributions().filter((contribution) => isHostedBillingLink(contribution)
-      ? isKnownSharedAuthRoutePresent()
-      : commercialBillingEnabled()));
+  const hostedBillingEnabled = () => !props.workspaceId &&
+    isKnownSharedAuthRoutePresent() && billingContributions().some(isHostedBillingLink);
+  const workspaceReadOwner = new AbortController();
+  onCleanup(() => workspaceReadOwner.abort());
 
-  // An account-level link uses the signed-in person's own active Workspace
-  // from Control. The remembered selection may be a team Workspace.
+  // The Hosted link uses the oldest active personal Workspace that Control
+  // currently lists for the caller and that the canonical subject owns.
+  const [hostedBillingWorkspace] = createResource(hostedBillingEnabled, async () => {
+    const session = readSession();
+    if (!session) return undefined;
+    const signal = workspaceReadOwner.signal;
+    const sameSession = currentSessionCheck();
+    const isCurrent = () => !signal.aborted && sameSession();
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    try {
+      while (isCurrent()) {
+        const page = await listWorkspacePage({ cursor, order: "created_asc" }, { isCurrent, signal });
+        if (!isCurrent()) return undefined;
+        const owned = page.workspaces.find((workspace) =>
+          workspace.type === "personal" && workspace.ownerUserId === session.subject && !workspace.archivedAt);
+        if (owned) return owned.id;
+        if (!page.nextCursor || seenCursors.has(page.nextCursor)) return undefined;
+        seenCursors.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
+    } catch {
+      // The account usage view is still available when the optional link cannot be resolved.
+    }
+    return undefined;
+  });
+
+  // Native commercial extensions retain their existing Workspace reference.
   const [billingWorkspace] = createResource(
-    () => props.workspaceId || (displayedContributions().length > 0 ? "personal" : null),
+    () => props.workspaceId || (commercialBillingEnabled() ? "personal" : null),
     async (scope) => {
       if (scope !== "personal") return scope;
       const session = readSession();
       if (!session) return undefined;
       const stillCurrent = currentSessionCheck();
       const identities = new Set([session.subject, session.primaryAccountId]);
-      try {
-        const workspaces = await listWorkspacesCached();
-        if (!stillCurrent()) return undefined;
-        const owned = workspaces.filter((workspace) =>
-          workspace.type === "personal" && identities.has(workspace.ownerUserId) && !workspace.archivedAt);
-        return owned.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0]?.id;
-      } catch (error) {
-        if (stillCurrent() && commercialBillingEnabled()) throw error;
-        return undefined;
-      }
+      const workspaces = await listWorkspacesCached();
+      if (!stillCurrent()) return undefined;
+      const owned = workspaces.filter((workspace) =>
+        workspace.type === "personal" && identities.has(workspace.ownerUserId) && !workspace.archivedAt);
+      return owned.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0]?.id;
     },
   );
 
@@ -190,15 +211,18 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
       <Show when={billingWorkspace.error}>
         <Toast tone="error">{friendlyError(billingWorkspace.error, t).message}</Toast>
       </Show>
-      <Show when={!billingWorkspace.error && billingWorkspace()} keyed>
-        {(workspaceId) => (
-          <For each={displayedContributions()}>
-            {(contribution) => {
-              const label = () =>
-                platformContributionLabel(contribution, intlLocale());
-              const description = () =>
-                platformContributionDescription(contribution, intlLocale());
-              return (
+      <For each={billingContributions()}>
+        {(contribution) => {
+          const label = () =>
+            platformContributionLabel(contribution, intlLocale());
+          const description = () =>
+            platformContributionDescription(contribution, intlLocale());
+          const workspace = () => !props.workspaceId && isHostedBillingLink(contribution)
+            ? hostedBillingEnabled() && !hostedBillingWorkspace.loading && hostedBillingWorkspace()
+            : !billingWorkspace.error && billingWorkspace();
+          return (
+            <Show when={workspace()} keyed>
+              {(workspaceId) => (
                 <Switch>
                   <Match
                     when={
@@ -236,11 +260,11 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
                     </Card>
                   </Match>
                 </Switch>
-              );
-            }}
-          </For>
-        )}
-      </Show>
+              )}
+            </Show>
+          );
+        }}
+      </For>
 
       <Show when={(!props.workspaceId || !forbidden()) && !usageUnsupported()}>
         <section class="acct-list-section" aria-label={t("billing.usage.title")}>

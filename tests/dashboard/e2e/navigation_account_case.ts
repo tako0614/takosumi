@@ -191,30 +191,77 @@ export function registerNavigationAccountCases(mode: string): void {
       ["ja", "stock"],
       ["ja", "no access"],
       ["ja", "unadvertised"],
+      ["en", "retired view"],
+      ["en", "signed out"],
     ] as const) {
       test(`Account usage links only to advertised Hosted personal billing (${language}, ${scenario})`, async ({ page }) => {
         const fixture = await accountFixture(page);
-        await page.addInitScript((lang) => {
+        const holdWorkspaceRead = scenario === "retired view" || scenario === "signed out";
+        await page.addInitScript(({ lang, hold }) => {
           localStorage.setItem("tg_lang", lang);
           localStorage.setItem("takosumi.currentWorkspaceId", "ws_team");
-        }, language);
+          if (!hold) return;
+          const fetch = window.fetch.bind(window);
+          window.fetch = async (input, init) => {
+            const url = new URL(input instanceof Request ? input.url : input.toString(), location.origin);
+            if (url.pathname !== "/api/v1/workspaces" || url.searchParams.get("order") !== "created_asc") {
+              return fetch(input, init);
+            }
+            // Let a response cross the cancellation boundary to check the view/session guard too.
+            const response = await fetch(input, { ...init, signal: null });
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              document.documentElement.dataset.lateBillingWorkspaceRead = String(response.status);
+            }));
+            return response;
+          };
+        }, { lang: language, hold: holdWorkspaceRead });
         const subject = "tsub_usage_fixture";
         const base = { handle: "fixture", displayName: "Fixture", createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z" };
         const workspace = { ...base, id: "ws_personal", type: "personal", ownerUserId: subject };
-        const workspaces = [
+        const otherWorkspaces = [
           { ...workspace, id: "ws_team", type: "organization" },
           { ...workspace, id: "ws_foreign", ownerUserId: "tsub_other" },
           { ...workspace, id: "ws_archived", archivedAt: base.createdAt },
-          ...(scenario === "no access" ? [] : [workspace]),
+          ...Array.from({ length: 47 }, (_, index) => ({ ...workspace, id: `ws_team_${index}`, type: "organization" })),
         ];
+        const workspaceReadStarted = Promise.withResolvers<void>();
+        const releaseWorkspaceRead = Promise.withResolvers<void>();
+        const cursors: Array<string | null> = [];
+        const ownedWorkspacesRoute = (url: URL) =>
+          url.pathname === "/api/v1/workspaces" && url.searchParams.get("order") === "created_asc";
+        await page.route(ownedWorkspacesRoute, async (route) => {
+          const cursor = new URL(route.request().url()).searchParams.get("cursor");
+          expect(route.request().method()).toBe("GET");
+          expect(new URL(route.request().url()).searchParams.get("limit")).toBe("50");
+          cursors.push(cursor);
+          workspaceReadStarted.resolve();
+          if (holdWorkspaceRead) {
+            await releaseWorkspaceRead.promise;
+            if (scenario === "retired view") return route.fulfill({ status: 401, json: { error: "unauthenticated" } });
+          }
+          const workspaces = cursor ? [workspace] : otherWorkspaces;
+          const truncated = !cursor && scenario !== "no access";
+          return route.fulfill({ json: { workspaces, returned: workspaces.length, limit: 50, truncated,
+            ...(truncated ? { nextCursor: "next_workspace_page" } : {}) } });
+        });
+        let authenticated = true;
+        let signOuts = 0;
+        if (scenario === "signed out") {
+          await page.route("**/api/v1/account/session/me", (route) => {
+            if (route.request().method() !== "DELETE") return route.fallback();
+            signOuts += 1;
+            authenticated = false;
+            return route.fulfill({ status: 204 });
+          });
+        }
         if (scenario !== "stock") {
-          await page.route("**/auth/oidc/session", (route) => route.fulfill({ json: { authenticated: true } }));
+          await page.route("**/auth/oidc/session", (route) => route.fulfill({ status: authenticated ? 200 : 401, json: { authenticated } }));
         }
         await page.route("**/api/v1/dashboard/bootstrap?**", (route) => {
           const query = new URL(route.request().url()).searchParams;
           return route.fulfill({ headers: { "x-takosumi-shared-auth-read": "1" }, json: {
             session: { subject }, notifications: [],
-            ...(query.get("includeWorkspaces") === "true" ? { workspaces } : {}),
+            ...(query.get("includeWorkspaces") === "true" ? { workspaces: otherWorkspaces } : {}),
           } });
         });
         await page.route("**/__takosumi/platform/contributions", (route) => route.fulfill({
@@ -228,10 +275,8 @@ export function registerNavigationAccountCases(mode: string): void {
           },
         }));
         const catalog = page.waitForResponse((response) => new URL(response.url()).pathname === "/__takosumi/platform/contributions");
-        const workspaceRead = scenario === "no access" ? page.waitForResponse((response) => {
-          const url = new URL(response.url());
-          return url.pathname === "/api/v1/dashboard/bootstrap" && url.searchParams.get("includeWorkspaces") === "true";
-        }) : undefined;
+        const workspaceRead = scenario === "no access"
+          ? page.waitForResponse((response) => ownedWorkspacesRoute(new URL(response.url()))) : undefined;
         await page.goto("/account/usage", { waitUntil: "domcontentloaded" });
         await catalog;
         await expect(page.getByRole("heading", { level: 1, name: language === "ja" ? "料金と利用量" : "Billing and usage" })).toBeVisible();
@@ -246,9 +291,31 @@ export function registerNavigationAccountCases(mode: string): void {
           await link.click();
           await expect(page.getByRole("heading", { name: "Hosted billing fixture" })).toBeVisible();
           expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(href);
+          expect(cursors).toEqual([null, "next_workspace_page"]);
+        } else if (holdWorkspaceRead) {
+          try {
+            await workspaceReadStarted.promise;
+            if (scenario === "signed out") {
+              await page.getByRole("button", { name: "User menu" }).click();
+              await page.getByRole("button", { name: "Sign out", exact: true }).click();
+            } else {
+              await page.getByRole("link", { name: "Account", exact: true }).filter({ visible: true }).last().click();
+            }
+            const path = scenario === "signed out" ? "/sign-in" : "/account";
+            await expect(page).toHaveURL((url) => url.pathname === path && url.search === "");
+            releaseWorkspaceRead.resolve();
+            await expect(page.locator("html")).toHaveAttribute("data-late-billing-workspace-read", scenario === "signed out" ? "200" : "401");
+            await expect(page).toHaveURL((url) => url.pathname === path && url.search === "");
+            await expect(link).toHaveCount(0);
+            expect(cursors).toEqual([null]);
+            expect(signOuts).toBe(scenario === "signed out" ? 1 : 0);
+          } finally {
+            releaseWorkspaceRead.resolve();
+          }
         } else {
           await workspaceRead;
           await expect(link).toHaveCount(0);
+          expect(cursors).toEqual(scenario === "no access" ? [null] : []);
         }
         expect(fixture.mutations).toEqual([]);
       });
