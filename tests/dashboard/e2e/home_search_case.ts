@@ -56,6 +56,16 @@ export function registerHomeSearchCases(mode: string): void {
       }
     });
 
+    test("an empty home keeps the app discovery entry", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      await page.route("**/api/v1/apps**", (route) => route.fulfill({ json: { apps: [] } }));
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const home = page.getByTestId("home-apps");
+      await expect(home.getByRole("heading", { level: 1, name: "No apps yet" })).toBeVisible();
+      await expect(home.getByRole("link", { name: "Find apps" })).toHaveAttribute("href", "/new");
+      await expect(home.getByRole("searchbox")).toHaveCount(0);
+    });
+
     test("applied-query search follows an empty candidate page without showing false no-results", async ({ page }) => {
       const held = heldResponse();
       let waiting = false;
@@ -135,20 +145,74 @@ export function registerHomeSearchCases(mode: string): void {
       await expect(home.locator(".av-search-empty")).toHaveText("No matching apps. Try another name.");
     });
 
-    test("a first search-page failure can be cleared back to the normal app list", async ({ page }) => {
-      await page.route("**/api/v1/apps**", async (route) => {
-        const q = new URL(route.request().url()).searchParams.get("q");
-        return q ? route.fulfill({ status: 503, json: { error: { code: "unavailable" } } })
-          : route.fulfill({ json: { apps: [app("initial", "Initial app")] } });
+    test("a first search-page failure preserves the search and can retry or clear", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      let unavailable = false;
+      let failedReads = 0;
+      const searches: string[] = [];
+      await page.route("**/auth/oidc/session", (route) => {
+        if (unavailable) {
+          failedReads++;
+          return route.abort("internetdisconnected");
+        }
+        return route.fulfill({ json: { authenticated: true } });
       });
-      const home = await openHome(page);
-      await page.getByRole("searchbox").fill("broken");
-      await expect(home.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
-      await expect(home.locator(".av-search-empty")).toHaveCount(0);
-      await home.getByRole("button", { name: "Clear search", exact: true }).click();
-      await expect(page.getByRole("searchbox")).toHaveValue("");
+      await page.route("**/api/v1/apps**", (route) => {
+        const q = new URL(route.request().url()).searchParams.get("q");
+        if (q && unavailable) {
+          failedReads++;
+          return route.abort("internetdisconnected");
+        }
+        if (q) {
+          searches.push(q);
+          return route.fulfill({ json: { apps: [app("matched", "Matching app")], appliedQuery: q } });
+        }
+        return route.fulfill({ json: { apps: [app("initial", "Initial app")] } });
+      });
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const home = page.getByTestId("home-apps");
+      const heading = home.getByRole("heading", { level: 1, name: "あなたのアプリ" });
+      const search = home.getByRole("searchbox", { name: "アプリを検索" });
+      const alert = home.getByRole("alert");
+      const retry = alert.getByRole("button", { name: "再試行", exact: true });
       await expect(home.getByTestId("home-app")).toContainText("Initial app");
-      await expect(home.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
+
+      unavailable = true;
+      await search.fill("broken");
+      await expect(retry).toBeVisible();
+      expect(failedReads).toBeGreaterThan(0);
+      expect(searches).toEqual([]);
+      expect({
+        headingVisible: await heading.isVisible(),
+        searchVisible: await search.isVisible(),
+        error: await alert.textContent(),
+      }).toMatchObject({
+        headingVisible: true,
+        searchVisible: true,
+        error: expect.stringContaining("読み込めませんでした。時間をおいてもう一度お試しください。"),
+      });
+      await expect(alert).not.toContainText("Hosted session probe");
+      await expect(search).toHaveValue("broken");
+      await expect(search).toBeFocused();
+      await expect(home.locator(".av-search-empty")).toHaveCount(0);
+
+      unavailable = false;
+      await retry.click();
+      await expect(home.getByTestId("home-app")).toContainText("Matching app");
+      await expect(search).toHaveValue("broken");
+      await expect(retry).toHaveCount(0);
+      expect(searches).toEqual(["broken"]);
+
+      unavailable = true;
+      await search.fill("again");
+      await expect(retry).toBeVisible();
+      unavailable = false;
+      await alert.getByRole("button", { name: "検索をクリア", exact: true }).click();
+      await expect(search).toHaveValue("");
+      await expect(search).toBeFocused();
+      await expect(home.getByTestId("home-app")).toContainText("Initial app");
+      await expect(retry).toHaveCount(0);
+      expect(searches).toEqual(["broken"]);
     });
 
     test("300 search results keep the rendered tile count bounded and never trigger per-app reads", async ({ page }) => {
