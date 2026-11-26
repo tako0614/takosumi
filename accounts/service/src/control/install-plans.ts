@@ -3212,10 +3212,17 @@ async function createOrObservePlanRun(
     run.status === "cancelled" ||
     run.status === "expired"
   ) {
-    return failedPlan(progressed(plan, { planRunId: run.id }), {
-      code: "plan_run_failed",
-      message: "The canonical Plan Run did not reach a reviewable state.",
-    });
+    const diagnostic =
+      run.status === "failed" && run.errorCode === "required_output_not_declared"
+        ? {
+            code: run.errorCode,
+            message: "The selected version is missing a required output. Choose a compatible version or check the output mapping.",
+          }
+        : {
+            code: "plan_run_failed",
+            message: "The canonical Plan Run did not reach a reviewable state.",
+          };
+    return failedPlan(progressed(plan, { planRunId: run.id }), diagnostic);
   }
   if (run.status === "succeeded" || run.status === "waiting_approval") {
     await enableInstallSourcePolling(plan, operations);

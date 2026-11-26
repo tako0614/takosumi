@@ -259,6 +259,8 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.problem.compatibility": "This version can't be installed as it is. Check with the app's publisher.",
   "installStore.problem.secretSetting": "This app needs a secret setting that can't be accepted at install time yet.",
   "installStore.problem.plan": "What this app would create couldn't be worked out. Check the reason and logs.",
+  "installStore.problem.requiredOutput":
+    "This version is missing a required output. Choose a compatible version or check the output mapping.",
   "installStore.problem.retryable": "A step couldn't be confirmed. Try again to continue from there.",
   "installStore.problem.nameTaken": "Another app already uses this name. Choose another name.",
   "installStore.problem.connection": "The chosen connection can't be used by this app. Choose another one.",
