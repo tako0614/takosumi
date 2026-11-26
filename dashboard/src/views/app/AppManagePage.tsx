@@ -650,16 +650,18 @@ export default function AppManagePage(props: {
         const hold = purpose === "uninstall" ? options.replaceReview?.hold() : undefined;
         const removalSubmitted = Boolean(hold || options.submittedRemoval?.());
         const details = (isRollback || removalSubmitted) && cause instanceof ControlApiError ? cause.details : undefined;
-        const savingTimedOut = cause instanceof ControlApiError && cause.status === 409 &&
-          cause.code === "failed_precondition" && cause.reason === "capsule_plan_creation_timeout" &&
-          typeof details === "object" && details !== null && "stage" in details && details.stage === "plan_run_create";
-        const rollbackSaveTimedOut = isRollback && savingTimedOut;
+        const planCreationTimedOut = cause instanceof ControlApiError && cause.status === 409 &&
+          cause.code === "failed_precondition" && cause.reason === "capsule_plan_creation_timeout";
+        const savingTimedOut = planCreationTimedOut && typeof details === "object" && details !== null &&
+          "stage" in details && details.stage === "plan_run_create";
+        // Configuration authority is committed before the server begins creating its Plan.
+        const reviewTimedOut = (isRollback && savingTimedOut) || (isConfigurationChange && planCreationTimedOut);
         if (purpose === "update") {
           const target = reAdoptionRevisionFromError(cause, forCapsule, capsule()?.sourceId);
           if (target) setReAdoptionRevisionId(target);
         }
         const responseUncertain = (purpose === "update" || purpose === "uninstall" || isRollback || isConfigurationChange) &&
-          (rollbackSaveTimedOut || (cause instanceof ControlApiError
+          (reviewTimedOut || (cause instanceof ControlApiError
             ? cause.isIndeterminate || cause.status === 0 || cause.status >= 500
             : cause instanceof TypeError));
         // Finding no newer version is an answer, not a failure.
@@ -667,7 +669,7 @@ export default function AppManagePage(props: {
           setNotice({ section, message: t("controlError.revisionAlreadyCurrent") });
         } else {
           const message = uninstallConnectionRefused ? t("app.uninstall.connectionUnavailable")
-            : rollbackSaveTimedOut ? t("app.review.notStarted") : friendlyError(cause, t).message;
+            : reviewTimedOut ? t("app.review.notStarted") : friendlyError(cause, t).message;
           setSectionError({ section, message, ...(isConfigurationChange && responseUncertain ? { configurationUnconfirmed: true } : {}) });
         }
         // A selected Connection can be removed between the inventory read and Plan admission.
@@ -1943,7 +1945,8 @@ export default function AppManagePage(props: {
                   // change would make that change fail when it is applied.
                   reviewBusy={reviewBusy() || versionChangeBusy(view())}
                   changeWaits={!reviewBusy() && versionChangeBusy(view())}
-                  retryUnconfirmed={!reviewBusy() && versionChangeBusy(view()) &&
+                  retryUnconfirmed={!reviewBusy() &&
+                    (versionChangeBusy(view()) || contextLatest()?.configurationPlanResumable === true) &&
                     sectionError()?.section === "settings" && sectionError()?.configurationUnconfirmed === true}
                   onResumeReview={contextLatest()?.configurationPlanResumable ? resumeConfigurationReview : undefined}
                   starting={startingIn("settings")}
