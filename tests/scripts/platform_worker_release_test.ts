@@ -10,6 +10,7 @@ import {
   assertPlatformWorkerStatusVersion,
   assertPublishedVersion,
   bindingNames,
+  dashboardAssetTreeSeal,
   hasHostedDiscovery,
   injectPlatformExecutionEvidencePins,
   matchesHostedRenewableEnvDescriptor,
@@ -25,6 +26,7 @@ import {
   readPlatformWorkerCodeTopology,
   readPlatformContainer,
   remoteBranchContainsCommit,
+  runPlatformWorkerApiKeyActivation,
   runPlatformWorkerCodeRelease,
   runPlatformWorkerLoginAdmissionRelease,
   selectRecoveredVersion,
@@ -503,6 +505,9 @@ async function exerciseCodeLane(options: {
   readonly resume?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-version" | "wrong-predecessor" | "already-serving" | "unhealthy" | "source-drift";
   readonly confirm?: "valid" | "wrong-tag" | "wrong-digest" | "wrong-pins" | "not-serving" | "serving-drift";
   readonly loginAdmission?: "transition" | "normal" | "missing" | "partial" | "already-present";
+  readonly apiKeys?: "transition" | "routine" | "wrong-predecessor" | "wrong-entry" | "wrong-dashboard" |
+    "issuer-changed" | "issuer-split" | "issuer-changed-after-upload" | "product-changed-after-upload" |
+    "workspace-assets-changed" | "unserved-secret-version" | "intervening-secret-version";
   readonly loginSmokeFails?: boolean;
   readonly unrelatedBindingDrift?: boolean;
   readonly bindingReplacedBySecret?: string;
@@ -511,8 +516,13 @@ async function exerciseCodeLane(options: {
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-code-lane-test-"));
   const configPath = join(directory, "wrangler.toml");
-  const codeRoot = options.codeSource ? join(directory, "source") : root;
+  const codeRoot = options.codeSource || options.apiKeys ? join(directory, "source") : root;
   const claimPath = join(codeRoot, "source.ts");
+  const dashboardPath = join(codeRoot, "dashboard/dist");
+  if (options.apiKeys) {
+    mkdirSync(dashboardPath, { recursive: true });
+    writeFileSync(join(dashboardPath, "index.html"), "sealed dashboard");
+  }
   let expectedSourceProvenance: Record<string, string> | undefined;
   if (options.codeSource) {
     mkdirSync(codeRoot);
@@ -560,7 +570,10 @@ async function exerciseCodeLane(options: {
   }
   const sharedSource = codeConfigSource().replace("[vars]\n", '[vars]\nTAKOSUMI_SHARED_AUTH_PROFILE = "shared-account"\nTAKOSUMI_SHARED_AUTH_ORIGIN = "https://app-staging.takosumi.com"\n');
   const rateSource = '\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER"\nnamespace_id = "2026111401"\n[ratelimits.simple]\nlimit = 60\nperiod = 60\n\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER"\nnamespace_id = "2026111402"\n[ratelimits.simple]\nlimit = 10\nperiod = 60\n';
-  const source = options.loginAdmission
+  const apiKeyBaseline = sharedSource.replace("[vars]\n", '[vars]\nTAKOSUMI_ACCOUNTS_ISSUER = "https://app-staging.takosumi.com"\n') + rateSource;
+  const source = options.apiKeys
+    ? apiKeyBaseline.replace("[vars]\n", '[vars]\nTAKOSUMI_SHARED_AUTH_API_KEYS = "enabled"\n')
+    : options.loginAdmission
     ? sharedSource + (options.loginAdmission === "missing" ? "" : rateSource)
     : codeConfigSource();
   writeFileSync(configPath, source, { mode: 0o600 });
@@ -568,7 +581,8 @@ async function exerciseCodeLane(options: {
   const finalSource = injectPlatformExecutionEvidencePins(source, pins);
   const tag = `tks-stg-code-${"1".repeat(32)}`;
   const message = `takosumi-platform-staging-code ${pins.controllerArtifactDigest}`;
-  const predecessorSource = options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "already-present" ? sharedSource : source;
+  const predecessorSource = options.apiKeys ? injectPlatformExecutionEvidencePins(apiKeyBaseline, pins)
+    : options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "already-present" ? sharedSource : source;
   const predecessor = JSON.parse(codeVersionSource(predecessorSource, CODE_PREDECESSOR_ID, {
     tag: "predecessor",
     message: "predecessor",
@@ -588,8 +602,8 @@ async function exerciseCodeLane(options: {
     if (!pin) throw new Error("test execution pin missing");
     pin.text = `sha256:${"0".repeat(64)}`;
   }
-  if (options.loginAdmission && options.loginAdmission !== "missing") deployed.resources.bindings.push(...rateBindings);
-  if (options.loginAdmission === "normal" || options.loginAdmission === "already-present") predecessor.resources.bindings.push(...rateBindings);
+  if (options.apiKeys || (options.loginAdmission && options.loginAdmission !== "missing")) deployed.resources.bindings.push(...rateBindings);
+  if (options.apiKeys || options.loginAdmission === "normal" || options.loginAdmission === "already-present") predecessor.resources.bindings.push(...rateBindings);
   if (options.loginAdmission === "partial") predecessor.resources.bindings.push(rateBindings[0]);
   if (options.unrelatedBindingDrift) predecessor.resources.bindings.find((binding: { name: string }) => binding.name === "HOSTED").service = "foreign-service";
   const listedSecrets: string[] = [...CODE_SECRETS];
@@ -620,6 +634,8 @@ async function exerciseCodeLane(options: {
   let postActivationCandidateReadCount = 0;
   let publicReadbackCount = 0;
   let loginSmokeCount = 0;
+  let issuerReadCount = 0;
+  let uploadedDashboard: string | undefined;
   let topologySnapshot = 0;
   let uploadArgs: readonly string[] = [];
   let activationArgs: readonly string[] = [];
@@ -635,6 +651,10 @@ async function exerciseCodeLane(options: {
       uploadCount += 1;
       uploadArgs = argv;
       uploadConfigSource = readFileSync(argv[argv.indexOf("--config") + 1]!, "utf8");
+      if (options.apiKeys) {
+        const config = Bun.TOML.parse(uploadConfigSource) as { assets: { directory: string } };
+        uploadedDashboard = readFileSync(join(config.assets.directory, "index.html"), "utf8");
+      }
       if (options.uploadFails) throw new Error("lost upload acknowledgement");
       return {
         exitCode: 0,
@@ -657,6 +677,9 @@ async function exerciseCodeLane(options: {
     if (argv[1] === "deployments" && argv[2] === "status") {
       operationOrder.push("serving");
       let versionId = activated ? CODE_DEPLOYED_ID : CODE_PREDECESSOR_ID;
+      if (!activated && options.apiKeys === "product-changed-after-upload" && issuerReadCount === 3) {
+        versionId = STATUS_VERSION_ID;
+      }
       if (options.confirm === "serving-drift" && ++confirmationReads > 1) versionId = CODE_PREDECESSOR_ID;
       if (activationCount > 0) {
         versionId = options.postActivationVersions?.[postActivationReadCount] ?? versionId;
@@ -732,7 +755,9 @@ async function exerciseCodeLane(options: {
   let runnerError: unknown;
   const runnerReads: string[] = [];
   try {
-    await (options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
+    const apiKeyTransition = options.apiKeys && options.apiKeys !== "routine";
+    await (apiKeyTransition ? runPlatformWorkerApiKeyActivation
+      : options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
       options.confirm
         ? [
           "confirm", "--config", configPath, "--version", CODE_DEPLOYED_ID,
@@ -746,7 +771,14 @@ async function exerciseCodeLane(options: {
           "--tag", options.resume === "wrong-tag" ? `tks-stg-code-${"2".repeat(32)}` : tag,
           "--predecessor", options.resume === "wrong-predecessor" ? STATUS_VERSION_ID : CODE_PREDECESSOR_ID,
         ]
-        : ["apply", "--config", configPath],
+        : apiKeyTransition
+        ? ["apply", "--config", configPath,
+          "--predecessor", options.apiKeys === "wrong-predecessor" ? STATUS_VERSION_ID : CODE_PREDECESSOR_ID,
+          "--issuer-version", STATUS_VERSION_ID,
+          "--entry-digest", options.apiKeys === "wrong-entry" ? `sha256:${"0".repeat(64)}` : pins.controllerArtifactDigest,
+          "--dashboard-digest", options.apiKeys === "wrong-dashboard"
+            ? `sha256:${"0".repeat(64)}` : dashboardAssetTreeSeal(dashboardPath).digest,
+        ] : ["apply", "--config", configPath],
       "staging",
       {
         command,
@@ -760,6 +792,7 @@ async function exerciseCodeLane(options: {
         buildDashboard: async () => {
           buildCount += 1;
           if (options.codeSource === "during-build") writeFileSync(claimPath, "// changed during build\n");
+          if (options.apiKeys) return dashboardAssetTreeSeal(dashboardPath);
           return { digest: `sha256:${"d".repeat(64)}`, entries: [] };
         },
         runScopedGate: async () => {
@@ -767,6 +800,20 @@ async function exerciseCodeLane(options: {
           if (options.scopedGateFails) throw new Error("synthetic Worker build unavailable");
         },
         nativeRead: async (path) => {
+          if (options.apiKeys && path === "/workers/scripts/takosumi-staging/versions?page=1&per_page=2") {
+            const ids = [CODE_PREDECESSOR_ID];
+            if (options.apiKeys === "unserved-secret-version" ||
+              (options.apiKeys === "intervening-secret-version" && uploadCount > 0)) {
+              ids.push(STATUS_VERSION_ID);
+            }
+            if (uploadCount > 0) ids.push(CODE_DEPLOYED_ID);
+            return { items: ids.map((id, index) => ({ id, number: 42 + index })).reverse().slice(0, 2) };
+          }
+          if (options.apiKeys && path === "/workers/scripts/takosumi-auth-staging/deployments") {
+            return { deployments: [{ versions: options.apiKeys === "issuer-split"
+              ? [{ version_id: STATUS_VERSION_ID, percentage: 50 }, { version_id: CODE_PREDECESSOR_ID, percentage: 50 }]
+              : [{ version_id: STATUS_VERSION_ID, percentage: 100 }] }] };
+          }
           if (path === "/workers/scripts") topologySnapshot += 1;
           if (options.topologyDriftAt === topologySnapshot) {
             return codeNativeRead(
@@ -802,6 +849,17 @@ async function exerciseCodeLane(options: {
                 "x-takosumi-version-id": versionId,
               } }),
             });
+          }
+        },
+        apiKeyIssuerReadback: async (versionId) => {
+          expect(versionId).toBe(STATUS_VERSION_ID);
+          issuerReadCount++;
+          if (options.apiKeys === "workspace-assets-changed" && issuerReadCount === 2) {
+            writeFileSync(join(dashboardPath, "index.html"), "changed dashboard");
+          }
+          if (options.apiKeys === "issuer-changed" ||
+            (options.apiKeys === "issuer-changed-after-upload" && uploadCount > 0)) {
+            throw new Error("fixture issuer changed");
           }
         },
         nonce: () => "1".repeat(32),
@@ -907,6 +965,8 @@ async function exerciseCodeLane(options: {
     buildCount,
     gateCount,
     loginSmokeCount,
+    issuerReadCount,
+    uploadedDashboard,
     sourceCheckCount,
     operationOrder,
     candidateReads,
@@ -1638,6 +1698,46 @@ test("login admission dedicated transition adds only both ports, then normal cod
     ]);
     expect(result.activationArgs).not.toContain("--containers-rollout");
   }
+});
+
+test("shared staging API-key activation adds one switch to the same sealed Worker and dashboard", async () => {
+  const result = await exerciseCodeLane({ apiKeys: "transition" });
+  expect(result).toMatchObject({
+    error: undefined, uploadCount: 1, activationCount: 1, issuerReadCount: 4, loginSmokeCount: 1,
+    uploadedDashboard: "sealed dashboard",
+  });
+  const concurrentBuild = await exerciseCodeLane({ apiKeys: "workspace-assets-changed" });
+  expect(concurrentBuild).toMatchObject({
+    error: undefined, uploadCount: 1, activationCount: 1, uploadedDashboard: "sealed dashboard",
+  });
+  expect((Bun.TOML.parse(result.uploadConfigSource) as { vars: Record<string, unknown> }).vars)
+    .toHaveProperty("TAKOSUMI_SHARED_AUTH_API_KEYS", "enabled");
+  expect(result.activationArgs).not.toContain("--containers-rollout");
+  expect(result.results[0]).toMatchObject({
+    kind: "takosumi.platform-worker-staging-api-keys@v1", status: "ready",
+    predecessorVersionId: CODE_PREDECESSOR_ID, deployedVersionId: CODE_DEPLOYED_ID,
+  });
+});
+
+test("shared staging API-key activation fences the prior Version, issuer, unrelated bindings, and artifact bytes", async () => {
+  for (const options of [
+    { apiKeys: "routine" }, { apiKeys: "wrong-predecessor" }, { apiKeys: "wrong-entry" },
+    { apiKeys: "wrong-dashboard" }, { apiKeys: "issuer-changed" }, { apiKeys: "issuer-split" },
+    { apiKeys: "unserved-secret-version" },
+    { apiKeys: "transition", unrelatedBindingDrift: true },
+  ] as const) {
+    const result = await exerciseCodeLane(options);
+    expect(result.error).toBeDefined();
+    expect(result).toMatchObject({ uploadCount: 0, activationCount: 0 });
+  }
+  for (const apiKeys of ["issuer-changed-after-upload", "product-changed-after-upload"] as const) {
+    const drift = await exerciseCodeLane({ apiKeys });
+    expect(drift).toMatchObject({ uploadCount: 1, activationCount: 0, issuerReadCount: 3 });
+    expect(drift.results[0]).toMatchObject({ status: "incomplete", mutation: "upload" });
+  }
+  const intervening = await exerciseCodeLane({ apiKeys: "intervening-secret-version" });
+  expect(intervening).toMatchObject({ uploadCount: 1, activationCount: 0, issuerReadCount: 2 });
+  expect(intervening.results[0]).toMatchObject({ status: "incomplete", mutation: "upload" });
 });
 
 test("login admission refuses missing composition, partial predecessors and unrelated drift before upload", async () => {

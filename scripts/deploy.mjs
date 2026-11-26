@@ -72,6 +72,12 @@ const PLATFORM_STAGING_LOGIN_ADMISSION = {
   target: "cloudflare-worker:takosumi-staging",
 };
 
+const PLATFORM_STAGING_API_KEYS = {
+  surface: "takosumi-platform-staging-api-keys",
+  environment: "staging",
+  target: "cloudflare-worker:takosumi-staging",
+};
+
 const PLATFORM_PRODUCTION = {
   surface: "takosumi-platform",
   environment: "production",
@@ -152,6 +158,19 @@ const platformContract = ({ surface, target, environment }) => ({
 const CONTRACT = {
   kind: "takos.deploy-contract@v2",
   surfaces: [
+    {
+      surface: PLATFORM_STAGING_API_KEYS.surface,
+      target: PLATFORM_STAGING_API_KEYS.target,
+      lineage: "integration",
+      triggers: ["authority"],
+      obligations: {
+        provenance: "pins both approved writer Versions and the predecessor entry and dashboard digests; permits exactly the shared staging API-key switch",
+        "independent-review": "requires independent review of the single-variable transition and the two deployed Accounts D1 writers before invocation",
+        "post-conditions": "requires the exact issuer Version at readiness and verifies the updated immutable product Version and unchanged bindings, settings, secret names and Runner with the existing anonymous smoke",
+        reversal: "the preceding product Version disables API-key admission while retaining the repaired writer",
+        "failure-handling": "refuses a changed Version or artifact without activation; reports an incomplete publication without retrying any mutation",
+      },
+    },
     {
       surface: PLATFORM_STAGING_LOGIN_ADMISSION.surface,
       target: PLATFORM_STAGING_LOGIN_ADMISSION.target,
@@ -529,6 +548,12 @@ if (
 ) {
   const { runPlatformWorkerLoginAdmissionRelease } = await import("./platform-worker-release.ts");
   await runPlatformWorkerLoginAdmissionRelease(process.argv.slice(3), PLATFORM_STAGING_LOGIN_ADMISSION.environment);
+  process.exit(0);
+}
+
+if (selected === PLATFORM_STAGING_API_KEYS.surface) {
+  const { runPlatformWorkerApiKeyActivation } = await import("./platform-worker-release.ts");
+  await runPlatformWorkerApiKeyActivation(process.argv.slice(3), PLATFORM_STAGING_API_KEYS.environment);
   process.exit(0);
 }
 

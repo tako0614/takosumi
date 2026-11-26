@@ -146,8 +146,29 @@ and the dedicated issuer both run the field-only PAT usage and revocation
 updates against the common Accounts D1. An older issuer can still write PAT
 usage from its OAuth verification routes. Roll back only to versions that
 retain those field updates while both Workers share the database. Verify the
-management/CLI flow after activation through the owning staging authority.
-The option changes route admission and does not issue or revoke saved keys.
+management and CLI flow after activation with a designated QA account.
+
+Use the independently reviewed, Version-only staging transition from a clean
+checkout. Copy the currently serving TOML with its existing settings, add
+`TAKOSUMI_SHARED_AUTH_API_KEYS = "enabled"` under `[vars]`, and pin the
+checkout in the sibling source file. Take the IDs and digests from the
+reviewed code-publication receipts for the current product and issuer.
+
+```sh
+bun run deploy -- takosumi-platform-staging-api-keys apply \
+  --config /absolute/operator-private/wrangler.staging.toml \
+  --predecessor "<current product Version ID>" \
+  --issuer-version "<current issuer Version ID>" \
+  --entry-digest "sha256:<current product entry>" \
+  --dashboard-digest "sha256:<current product dashboard>"
+```
+
+The entrypoint verifies that removing exactly this declaration gives the
+serving predecessor's configuration. It requires the same bundle and
+dashboard digests, validates the issuer Version again before activation, and
+reuses the existing upload, activation and preservation checks. The predecessor
+Version is the key-disabled rollback point. The option changes route admission
+without issuing or revoking saved keys.
 
 ## Existing-account password sign-in
 

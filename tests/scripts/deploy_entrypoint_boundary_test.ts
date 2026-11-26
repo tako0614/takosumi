@@ -35,6 +35,7 @@ process.stdout.write = (...args) => {
       }[];
     };
     expect(contract.surfaces).toEqual([
+      expect.objectContaining({ surface: "takosumi-platform-staging-api-keys", target: "cloudflare-worker:takosumi-staging", triggers: ["authority"] }),
       expect.objectContaining({ surface: "takosumi-platform-staging-login-admission", target: "cloudflare-worker:takosumi-staging", triggers: ["authority"] }),
       expect.objectContaining({
         surface: "takosumi-platform-staging-code",
