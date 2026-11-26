@@ -278,6 +278,7 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
     const projected = await readAccountInstalledApps(
       ctx, checked.flatMap(({ capsule }) => capsule ? [capsule] : []),
     );
+    if (!projected) return controlPlaneUnavailable();
     return json({
       ...projected,
       projection: INSTALLED_APP_PROJECTION,

@@ -72,14 +72,15 @@ export async function readAccountInstalledApps(
 ) {
   const getConfigs = ctx.operations.capsules.getInstallConfigsByIds;
   if (!capsules.length) return { installedApps: [], complete: true };
-  if (!getConfigs) return { installedApps: [], complete: false };
+  if (!getConfigs) return undefined;
   let configs: ReadonlyMap<string, InstallConfig>;
   try {
     configs = new Map((await getConfigs.call(ctx.operations.capsules, [
       ...new Set(capsules.map((capsule) => capsule.installConfigId)),
     ])).map((config) => [config.id, config]));
   } catch {
-    return { installedApps: [], complete: false };
+    // The entire page depends on this read. Report an outage to the caller.
+    return undefined;
   }
 
   const sourceReads = new Map<string, Promise<Source>>();

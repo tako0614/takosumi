@@ -77,7 +77,10 @@ test("the Store uses only one canonical request per projected page", async () =>
   expect(calls).toEqual([projectionPath, `${projectionPath}&cursor=next`]);
 });
 
-test("an incomplete or failed projected page never enables Workspace or app-detail fallback", async () => {
+test("a failed later projection page preserves known rows without Workspace or app-detail fallback", async () => {
+  const known = {
+    capsuleId: "known", name: "known", state: "installed", installedFrom: { url: repository, path: "deploy/app" },
+  };
   for (const later of [
     Response.json({ apps: [] }),
     Response.json({ error: "route_not_found" }, { status: 404 }),
@@ -85,12 +88,12 @@ test("an incomplete or failed projected page never enables Workspace or app-deta
   ]) {
     const calls = stub((path) => {
       if (path === projectionPath) return Response.json({
-        projection: "installed", complete: false, installedApps: [], nextCursor: "next",
+        projection: "installed", complete: true, installedApps: [known], nextCursor: "next",
       });
       if (path === `${projectionPath}&cursor=next`) return later;
       throw new Error(`unexpected ${path}`);
     }, true);
-    expect(await listInstalledApps()).toEqual({ installedApps: [], complete: false });
+    expect(await listInstalledApps()).toEqual({ installedApps: [known], complete: false });
     expect(calls).toEqual([projectionPath, `${projectionPath}&cursor=next`]);
   }
 });

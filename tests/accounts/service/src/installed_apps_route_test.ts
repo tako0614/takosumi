@@ -110,6 +110,13 @@ test("the account projection batches current app identities behind app role, mem
     ordinary.search = new URLSearchParams({ cursor: nextCursor! }).toString();
     expect((await control(ordinary))?.status).toBe(400);
 
+    for (const target of [url, new URL(`${url.href}&cursor=${nextCursor}`)]) {
+      getConfigs.mockRejectedValueOnce(new Error("fixture install config batch outage"));
+      const unavailable = await control(target);
+      expect(unavailable?.status).toBe(503);
+      expect(await unavailable?.json()).toMatchObject({ error: { code: "feature_unavailable" } });
+    }
+
     const old = (await h.ledger.getCapsule("cap_first"))!;
     await h.ledger.putCapsule({ ...old, installConfigId: "cfg_missing" });
     expect(await (await control())?.json()).toMatchObject({

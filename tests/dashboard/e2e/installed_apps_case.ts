@@ -306,7 +306,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
         await read;
         if (!failed) {
           failed = true;
-          return route.fulfill({ status: 503, json: { error: { code: "unavailable" } } });
+          return route.fulfill({ status: 503, json: { error: { code: "feature_unavailable" } } });
         }
         return route.fallback();
       });
@@ -317,6 +317,8 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       releaseRead();
       await expect(page.getByText("インストール済みのアプリを確認できませんでした。", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeDisabled();
+      expect(h.reads.some((path) => path.endsWith("/installed-apps"))).toBe(false);
+      expect(h.mutations).toEqual([]);
       await page.getByRole("button", { name: "再試行", exact: true }).click();
       await expect(page.getByTestId("install-existing-apps")).toBeVisible();
       await expect(page.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeEnabled();
