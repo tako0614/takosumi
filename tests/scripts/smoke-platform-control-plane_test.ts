@@ -140,6 +140,132 @@ function pinnedControlPlaneFixture(fetcher: FixtureFetch) {
   };
 }
 
+const REGISTERED_SMOKE_SOURCE = {
+  id: "src_existing",
+  workspaceId: "ws_test",
+  name: " resume-source ",
+  url: "https://git.example.test/example/smoke-fixture.git",
+  defaultRef: "v1",
+  defaultPath: "deploy",
+  status: "active",
+  autoSync: false,
+};
+
+const SAVED_SMOKE_SYNC = {
+  id: "ssr_existing",
+  sourceId: REGISTERED_SMOKE_SOURCE.id,
+  workspaceId: REGISTERED_SMOKE_SOURCE.workspaceId,
+  type: "source_sync",
+  status: "succeeded",
+  sourceSnapshotId: "snap_existing",
+};
+
+const SAVED_SMOKE_SNAPSHOT = {
+  id: SAVED_SMOKE_SYNC.sourceSnapshotId,
+  sourceId: REGISTERED_SMOKE_SOURCE.id,
+  workspaceId: REGISTERED_SMOKE_SOURCE.workspaceId,
+  url: REGISTERED_SMOKE_SOURCE.url,
+  ref: REGISTERED_SMOKE_SOURCE.defaultRef,
+  path: REGISTERED_SMOKE_SOURCE.defaultPath,
+  fetchedByRunId: SAVED_SMOKE_SYNC.id,
+  resolvedCommit: "f".repeat(40),
+  archiveRef: "archive_ref_fixture",
+  archiveDigest: "sha256:" + "a".repeat(64),
+  archiveSizeBytes: 100,
+};
+
+async function savedSmokeOptions() {
+  return await resolveOptions(
+    {
+      url: "https://app-staging.takosumi.com",
+      workspace: REGISTERED_SMOKE_SOURCE.workspaceId,
+      appName: "resume",
+      sourceName: REGISTERED_SMOKE_SOURCE.name,
+      sourceGitUrl: REGISTERED_SMOKE_SOURCE.url,
+      sourceRef: REGISTERED_SMOKE_SOURCE.defaultRef,
+      sourcePath: REGISTERED_SMOKE_SOURCE.defaultPath,
+      modulePath: ".",
+      installConfigId: "ic_existing",
+      existingSourceSyncRunId: SAVED_SMOKE_SYNC.id,
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token-fixture" },
+  );
+}
+
+test("platform smoke resumes using the exact saved archive without creating or syncing a Source", async () => {
+  const requests: string[] = [];
+  const result = await runPlatformControlPlaneSmoke(
+    await savedSmokeOptions(),
+    pinnedControlPlaneFixture(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      requests.push(`${init?.method} ${path}`);
+      if (path === "/api/v1/runs/ssr_existing") {
+        return Response.json({ run: SAVED_SMOKE_SYNC });
+      }
+      if (path === "/api/v1/sources/src_existing") {
+        return Response.json({ source: REGISTERED_SMOKE_SOURCE });
+      }
+      if (path === "/api/v1/sources/src_existing/snapshots") {
+        return Response.json({ snapshots: [SAVED_SMOKE_SNAPSHOT] });
+      }
+      if (path === "/api/v1/capsule-configs") {
+        return Response.json({ installConfigs: [{ id: "ic_existing" }] });
+      }
+      expect(JSON.parse(String(init?.body)).sourceSnapshotId).toBe("snap_existing");
+      return Response.json({}, { status: 409 });
+    }),
+  );
+  expect(requests).toEqual([
+    "GET /api/v1/runs/ssr_existing",
+    "GET /api/v1/sources/src_existing",
+    "GET /api/v1/sources/src_existing/snapshots",
+    "GET /api/v1/capsule-configs",
+    "POST /api/v1/sources/src_existing/compatibility-check",
+  ]);
+  expect(result.sourceId).toBe("src_existing");
+  expect(result.sourceSyncRunId).toBe("ssr_existing");
+  expect(result.sourceSnapshotId).toBe("snap_existing");
+  expect(result.completedSteps).toContain("sourceSynced");
+  expect(result.inputs.existingSourceSyncRunId).toBe("ssr_existing");
+});
+
+test("platform smoke rejects mismatched Source sync recovery evidence before writes", async () => {
+  const options = await savedSmokeOptions();
+  for (const [run, source, snapshot, requestCount] of [
+    [{ ...SAVED_SMOKE_SYNC, status: "failed" }, REGISTERED_SMOKE_SOURCE, SAVED_SMOKE_SNAPSHOT, 1],
+    [{ ...SAVED_SMOKE_SYNC, workspaceId: "ws_other" }, REGISTERED_SMOKE_SOURCE, SAVED_SMOKE_SNAPSHOT, 1],
+    [SAVED_SMOKE_SYNC, { ...REGISTERED_SMOKE_SOURCE, name: "resume-source" }, SAVED_SMOKE_SNAPSHOT, 2],
+    [SAVED_SMOKE_SYNC, { ...REGISTERED_SMOKE_SOURCE, authConnectionId: "conn_git" }, SAVED_SMOKE_SNAPSHOT, 2],
+    [SAVED_SMOKE_SYNC, { ...REGISTERED_SMOKE_SOURCE, ownerCapsuleId: "cap_other" }, SAVED_SMOKE_SNAPSHOT, 2],
+    [SAVED_SMOKE_SYNC, REGISTERED_SMOKE_SOURCE, { ...SAVED_SMOKE_SNAPSHOT, fetchedByRunId: "ssr_other" }, 3],
+    [SAVED_SMOKE_SYNC, REGISTERED_SMOKE_SOURCE, { ...SAVED_SMOKE_SNAPSHOT, sourceId: "src_other" }, 3],
+    [SAVED_SMOKE_SYNC, REGISTERED_SMOKE_SOURCE, { ...SAVED_SMOKE_SNAPSHOT, path: "other" }, 3],
+  ] as const) {
+    const requests: string[] = [];
+    const result = await runPlatformControlPlaneSmoke(
+      options,
+      pinnedControlPlaneFixture(async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        requests.push(`${init?.method} ${path}`);
+        if (path === "/api/v1/runs/ssr_existing") return Response.json({ run });
+        if (path === "/api/v1/sources/src_existing") return Response.json({ source });
+        if (path === "/api/v1/sources/src_existing/snapshots") {
+          return Response.json({ snapshots: [snapshot] });
+        }
+        return Response.json({}, { status: 409 });
+      }),
+    );
+    expect(requests).toEqual([
+      "GET /api/v1/runs/ssr_existing",
+      "GET /api/v1/sources/src_existing",
+      "GET /api/v1/sources/src_existing/snapshots",
+    ].slice(0, requestCount));
+    expect(result.status).toBe("failed");
+    expect(result.sourceId).toBeUndefined();
+    expect(result.completedSteps).not.toContain("sourceSynced");
+  }
+});
+
 test("control-plane transport rejects unsafe resolution before exposing bearer or provider secrets", async () => {
   const bearer = "session-bearer-fixture";
   const cloudflareToken = "cloudflare-provider-token-fixture";

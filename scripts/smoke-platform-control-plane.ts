@@ -31,6 +31,7 @@ import type {
   InterfaceBinding,
 } from "../contract/interfaces.ts";
 import type { OpenTofuOperation } from "../contract/internal-deploy-control-api.ts";
+import type { Source } from "../contract/sources.ts";
 import type { JsonObject, JsonValue } from "../contract/types.ts";
 import {
   canonicalProviderSource,
@@ -274,6 +275,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly functionalProbeScriptDigest?: string;
   readonly functionalProbeEnvNames: readonly string[];
   readonly sourceGitUrl?: string;
+  readonly existingSourceSyncRunId?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
   readonly modulePath?: string;
@@ -458,6 +460,7 @@ interface CliArgs {
   readonly environment?: string;
   readonly capsuleDir?: string;
   readonly sourceGitUrl?: string;
+  readonly existingSourceSyncRunId?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
   readonly modulePath?: string;
@@ -639,6 +642,7 @@ class InterfaceTokenUseStillAuthorizedError extends Error {
 
 interface RunRecord {
   readonly id: string;
+  readonly sourceId?: string;
   readonly workspaceId?: string;
   readonly capsuleId?: string;
   readonly planRunId?: string;
@@ -1086,6 +1090,14 @@ export async function resolveOptions(
       : undefined;
   const sourceRef = args.sourceRef ?? env.TAKOSUMI_SMOKE_SOURCE_REF;
   const sourcePath = args.sourcePath ?? env.TAKOSUMI_SMOKE_SOURCE_PATH ?? ".";
+  const existingSourceSyncRunId = args.existingSourceSyncRunId;
+  if (
+    existingSourceSyncRunId !== undefined &&
+    (typeof existingSourceSyncRunId !== "string" ||
+      !/^ssr_[a-z0-9]{1,124}$/u.test(existingSourceSyncRunId))
+  ) {
+    throw new Error("--existing-source-sync-run-id must be a Source sync Run id");
+  }
   const modulePath = args.modulePath ?? env.TAKOSUMI_SMOKE_MODULE_PATH;
   const installConfigId =
     args.installConfigId ?? env.TAKOSUMI_SMOKE_INSTALL_CONFIG_ID;
@@ -1334,6 +1346,7 @@ export async function resolveOptions(
     ...(functionalProbeScriptDigest ? { functionalProbeScriptDigest } : {}),
     functionalProbeEnvNames,
     ...(sourceGitUrl ? { sourceGitUrl } : {}),
+    ...(existingSourceSyncRunId ? { existingSourceSyncRunId } : {}),
     ...(sourceRef ? { sourceRef } : {}),
     ...(sourceGitUrl ? { sourcePath } : {}),
     ...(modulePath ? { modulePath } : {}),
@@ -1866,6 +1879,20 @@ async function runPlatformControlPlaneSmokeInternal(
       serviceIdentitySampleCount += 1;
     }
     workspaceId = await resolveWorkspaceId(options);
+    if (options.existingSourceSyncRunId !== undefined) {
+      beginStep("sourceRegistered");
+      const recovered = await readExistingSmokeSourceSync(
+        options,
+        workspaceId,
+        options.existingSourceSyncRunId,
+      );
+      sourceId = recovered.sourceId;
+      sourceSnapshotTransport = recovered.sourceSnapshotTransport;
+      sourceSyncRunId = sourceSnapshotTransport.fetchedByRunId;
+      sourceSnapshotId = sourceSnapshotTransport.sourceSnapshotId;
+      completeStep("sourceRegistered");
+      completeStep("sourceSynced");
+    }
     if (options.providerBindings.length > 0) {
       beginStep("existingProviderConnectionsSelected");
       providerBindings = await Promise.all(
@@ -1928,16 +1955,21 @@ async function runPlatformControlPlaneSmokeInternal(
         await assertCloudflareResourcePreflight(options);
       completeStep("cloudflareResourcePreflight");
     }
-    beginStep("sourceRegistered");
+    if (sourceId === undefined) {
+      beginStep("sourceRegistered");
+      sourceId = await createSmokeSource(options, workspaceId);
+      completeStep("sourceRegistered");
+    }
     beginStep("sourceSynced");
     beginStep("scratchInstall");
     beginStep("compatibilityChecked");
     beginStep("plan");
     const deploy = await deployGitSourceCapsule(options, {
       workspaceId,
+      sourceId,
+      sourceSnapshotTransport,
       providerBindings,
     });
-    sourceId = deploy.sourceId;
     sourceSyncRunId = deploy.sourceSyncRunId;
     sourceSnapshotId = deploy.sourceSnapshotId;
     sourceSnapshotTransport = deploy.sourceSnapshotTransport;
@@ -1945,7 +1977,6 @@ async function runPlatformControlPlaneSmokeInternal(
     compatibilityReportId = deploy.compatibilityReportId;
     capsuleId = deploy.capsule.id;
     planRunId = deploy.planRun?.id ?? deploy.run.id;
-    completeStep("sourceRegistered");
     completeStep("sourceSynced");
     completeStep("scratchInstall");
     completeStep("compatibilityChecked");
@@ -2282,7 +2313,12 @@ async function runPlatformControlPlaneSmokeInternal(
         publicUrlDestroyChecks =
           failureCleanup.destroyVerification?.publicUrlDestroyChecks;
       }
-    } else if (!applyRunId && !destroyAttempted && !applyStartAttempted) {
+    } else if (
+      !applyRunId &&
+      !destroyAttempted &&
+      !applyStartAttempted &&
+      (options.existingSourceSyncRunId === undefined || capsuleId !== undefined)
+    ) {
       await markPendingSmokeCapsuleError(options, {
         workspaceId,
         capsuleId,
@@ -3122,40 +3158,37 @@ async function deployGitSourceCapsule(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly sourceSnapshotTransport?: SourceSnapshotTransportEvidence;
     readonly providerBindings: readonly SmokeProviderBindingInput[];
   },
 ): Promise<
   DeployResponse & {
-    readonly sourceId: string;
     readonly sourceSyncRunId: string;
     readonly sourceSnapshotId: string;
     readonly sourceSnapshotTransport: SourceSnapshotTransportEvidence;
     readonly installConfigId: string;
   }
 > {
-  if (!options.sourceGitUrl) {
-    throw new Error("sourceGitUrl is required for git source smoke");
-  }
-  const source = await createSmokeSource(options, input.workspaceId);
-  const sourceSyncRun = await syncSmokeSource(options, source.id);
-  const sourceSnapshotId = sourceSyncRun.sourceSnapshotId;
-  if (!sourceSnapshotId) {
-    throw new Error(
-      `source sync run ${sourceSyncRun.id} succeeded without sourceSnapshotId`,
+  const { sourceId } = input;
+  let sourceSnapshotTransport = input.sourceSnapshotTransport;
+  if (!sourceSnapshotTransport) {
+    const sync = await syncSmokeSource(options, sourceId);
+    sourceSnapshotTransport = await readSourceSnapshotTransport(
+      options,
+      sourceId,
+      sync.sourceSnapshotId,
+      sync.id,
     );
   }
-  const sourceSnapshotTransport = await readSourceSnapshotTransport(
-    options,
-    source.id,
-    sourceSnapshotId,
-    sourceSyncRun.id,
-  );
+  const { sourceSnapshotId, fetchedByRunId: sourceSyncRunId } =
+    sourceSnapshotTransport;
   const installConfigId = await findSmokeCapsuleInstallConfigId(
     options,
     input.workspaceId,
   );
   const compatibility = await createSmokeSourceCompatibilityCheck(options, {
-    sourceId: source.id,
+    sourceId,
     sourceSnapshotId,
     capsuleName: options.appName,
     installConfigId,
@@ -3182,7 +3215,7 @@ async function deployGitSourceCapsule(
       : installConfigId;
   const coordinated = await createReviewableSmokeInstallPlan(options, {
     workspaceId: input.workspaceId,
-    sourceId: source.id,
+    sourceId,
     sourceSnapshotId,
     compatibilityCheckRunId: compatibility.run.id,
     compatibilityReportId: compatibility.report.id,
@@ -3194,8 +3227,7 @@ async function deployGitSourceCapsule(
     run: coordinated.run,
     planRun: coordinated.run,
     created: true,
-    sourceId: source.id,
-    sourceSyncRunId: sourceSyncRun.id,
+    sourceSyncRunId,
     sourceSnapshotId,
     sourceSnapshotTransport,
     installConfigId: coordinated.installConfigId,
@@ -3208,6 +3240,7 @@ async function readSourceSnapshotTransport(
   sourceId: string,
   sourceSnapshotId: string,
   sourceSyncRunId: string,
+  expectedSource?: Source,
 ): Promise<SourceSnapshotTransportEvidence> {
   const response = await requestJson<{
     readonly snapshots?: readonly unknown[];
@@ -3231,7 +3264,13 @@ async function readSourceSnapshotTransport(
     !/^sha256:[0-9a-f]{64}$/u.test(snapshot.archiveDigest) ||
     !Number.isInteger(snapshot.archiveSizeBytes) ||
     Number(snapshot.archiveSizeBytes) <= 0 ||
-    snapshot.fetchedByRunId !== sourceSyncRunId
+    snapshot.fetchedByRunId !== sourceSyncRunId ||
+    (expectedSource !== undefined &&
+      (snapshot.sourceId !== expectedSource.id ||
+        snapshot.workspaceId !== expectedSource.workspaceId ||
+        snapshot.url !== expectedSource.url ||
+        snapshot.ref !== expectedSource.defaultRef ||
+        snapshot.path !== expectedSource.defaultPath))
   ) {
     throw new Error(
       "SourceSnapshot did not prove the current archiveRef persistence contract",
@@ -3349,7 +3388,10 @@ export function smokeSourceCompatibilityCheckBody(input: {
 async function createSmokeSource(
   options: PlatformControlPlaneSmokeOptions,
   workspaceId: string,
-): Promise<{ readonly id: string }> {
+): Promise<string> {
+  if (!options.sourceGitUrl) {
+    throw new Error("sourceGitUrl is required for git source smoke");
+  }
   const response = await requestJson<{
     readonly source?: { readonly id?: string };
   }>({
@@ -3367,7 +3409,64 @@ async function createSmokeSource(
   });
   const id = response.source?.id;
   if (!id) throw new Error("source create response did not include source.id");
-  return { id };
+  return id;
+}
+
+async function readExistingSmokeSourceSync(
+  options: PlatformControlPlaneSmokeOptions,
+  workspaceId: string,
+  runId: string,
+): Promise<{
+  readonly sourceId: string;
+  readonly sourceSnapshotTransport: SourceSnapshotTransportEvidence;
+}> {
+  const { run } = await requestJson<{ readonly run?: RunRecord }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}`,
+  });
+  if (
+    run?.id !== runId ||
+    run.type !== "source_sync" ||
+    run.status !== "succeeded" ||
+    run.workspaceId !== workspaceId ||
+    !run.sourceId ||
+    !/^src_[a-z0-9]{1,124}$/u.test(run.sourceId) ||
+    !run.sourceSnapshotId ||
+    !/^snap_[a-z0-9]{1,123}$/u.test(run.sourceSnapshotId)
+  ) {
+    throw new Error("Existing Run must be a successful Source sync in the smoke Workspace");
+  }
+  const id = run.sourceId;
+  const { source } = await requestJson<{
+    readonly source?: Source & { readonly ownerCapsuleId?: string };
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/sources/${encodeURIComponent(id)}`,
+  });
+  if (
+    source?.id !== id ||
+    source.workspaceId !== workspaceId ||
+    source.name !== (options.sourceName ?? `${options.appName}-source`) ||
+    source.url !== options.sourceGitUrl ||
+    source.defaultRef !== (options.sourceRef?.trim() || "HEAD") ||
+    source.defaultPath !== (options.sourcePath?.trim() || ".") ||
+    source.status !== "active" ||
+    source.autoSync !== false ||
+    source.authConnectionId !== undefined ||
+    source.ownerCapsuleId !== undefined
+  ) {
+    throw new Error(
+      "Existing Source does not match the smoke registration inputs",
+    );
+  }
+  return {
+    sourceId: id,
+    sourceSnapshotTransport: await readSourceSnapshotTransport(
+      options, id, run.sourceSnapshotId, runId, source,
+    ),
+  };
 }
 
 async function syncSmokeSource(
@@ -8417,6 +8516,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly functionalProbeEnvNames: readonly string[];
   readonly capsuleDir?: string;
   readonly sourceGitUrlDigest?: string;
+  readonly existingSourceSyncRunId?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
   readonly interfaceBlueprintCount: number;
@@ -8459,6 +8559,9 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
       ? { runnerProfileId: options.runnerProfileId }
       : {}),
     sourceMode: options.sourceMode,
+    ...(options.existingSourceSyncRunId
+      ? { existingSourceSyncRunId: options.existingSourceSyncRunId }
+      : {}),
     verificationMode: options.verificationMode,
     varsDigest: digestJson(options.vars),
     outputAllowlistNames: Object.keys(options.outputAllowlist).sort(),
@@ -9692,6 +9795,7 @@ Options:
   --runner-profile-id <id>                         request an enabled runner profile for Capsule plans; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
   --auth-token-kind <session|pat>                 evidence/source label; inferred from --pat-token-file when omitted and never inferred from token prefixes
   --source-git-url <url>                          Git Source URL to sync; required outside dry-run (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
+  --existing-source-sync-run-id <ssr_...>         reuse the exact saved Source sync before an install attempt; repeat the original app and Git inputs
   --source-ref <ref>                              optional Git ref for --source-git-url; omitted delegates HEAD resolution to Git
   --source-path <path>                            Source archive path inside the Git repo, default .
   --module-path <path>                            OpenTofu Capsule module path inside the SourceSnapshot archive
