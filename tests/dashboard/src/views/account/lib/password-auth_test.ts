@@ -1,10 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
 import { authenticateWithPassword, passwordErrorKey, readSignInMethods, setAccountPassword, validNewPassword } from "../../../../../../dashboard/src/views/account/lib/password-auth.ts";
+import {
+  clearSharedAuthSessionPreflight,
+  probeInitialSharedAuthSession,
+} from "../../../../../../dashboard/src/lib/shared-auth-session-preflight.ts";
 import { ApiError } from "../../../../../../dashboard/src/views/account/lib/http.ts";
 
 const originalFetch = globalThis.fetch;
 const originalLocation = globalThis.location;
 afterEach(() => {
+  clearSharedAuthSessionPreflight();
   globalThis.fetch = originalFetch;
   if (originalLocation === undefined) Reflect.deleteProperty(globalThis, "location");
   else globalThis.location = originalLocation;
@@ -58,4 +63,15 @@ test("settings discovery accepts the local password state and tolerates an older
   expect(await readSignInMethods()).toBeUndefined();
   globalThis.fetch = (async () => Response.json({ passwordEnabled: true })) as typeof fetch;
   await expect(readSignInMethods()).rejects.toThrow("Invalid sign-in methods response");
+});
+
+test("the shared-account dashboard does not request local password settings", async () => {
+  const paths: string[] = [];
+  globalThis.fetch = (async (path) => {
+    paths.push(String(path));
+    return Response.json({ authenticated: true });
+  }) as typeof fetch;
+  await probeInitialSharedAuthSession();
+  expect(await readSignInMethods()).toBeUndefined();
+  expect(paths).toEqual(["/auth/oidc/session"]);
 });
