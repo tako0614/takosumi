@@ -43,9 +43,25 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 ## 仕組み
 
 dashboard では、ストアで選んで入れるものも、ホームに並ぶ追加済みのものも **アプリ** と呼びます。
-ホームから画面を持つアプリを直接開け、アプリ名を押すと **版**・**設定**・**履歴**・**アンインストール**
+ホームから画面を持つアプリを直接開け、アプリ名を押すと **バージョン**・**設定**・**履歴**・**アンインストール**
 をまとめたアプリのページが開きます。docs と API では、この 1 単位を **Capsule** と呼びます。
 Git URL・ref・module path と、変数・接続をまとめたものです（[用語集](./reference/glossary.md)）。
+
+Capsule への変更は、変更の確認（plan）と適用（apply）を別々の Run として記録します。
+適用の Run は確認した変更の Run に固定される（`planRunId`）ため、読んだ差分と実際に
+適用する差分が一致します。
+
+追加や更新は、次の順に進みます。
+
+1. Git URL と module を指定する
+2. 接続と入力を確認する
+3. plan で変更内容を作る
+4. 変更内容を確認する。削除・置き換え・import を含む場合は承認する
+5. 適用（apply）する
+6. state・output・履歴を保存する
+
+Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Cloudflare、AWS
+などは、それぞれの既存 provider が操作します。
 
 ## 関連する製品との役割分担
 
@@ -55,22 +71,6 @@ Git URL・ref・module path と、変数・接続をまとめたものです（[
 - **[Takoform](https://takoform.com/)** — クラウド間で移植しやすい Form 定義と Host API・OpenTofu provider の仕様です。
 
 詳しい責任分界は[製品の境界](./concepts/boundaries.md)にまとめています。
-
-Capsule への変更は、変更の確認（plan）とデプロイ（apply）を別々の Run として記録します。
-デプロイの Run は確認した変更の Run に固定される（`planRunId`）ため、読んだ差分と実際に
-デプロイする差分が一致します。
-
-追加や更新は、次の順に進みます。
-
-1. Git URL と module を指定する
-2. 接続と入力を確認する
-3. plan で変更内容を作る
-4. 変更内容を確認する。削除・置き換え・import を含む場合は承認する
-5. デプロイ（apply）する
-6. state・output・履歴を保存する
-
-Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Cloudflare、AWS
-などは、それぞれの既存 provider が操作します。
 
 ## 次に読むもの
 

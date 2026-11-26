@@ -59,15 +59,6 @@ recorded as two Runs: a plan (shown as Review) and an apply (shown as Apply).
 The apply Run is pinned to the reviewed plan Run (`planRunId`), so the changes
 you read are the changes that are applied.
 
-## Related products
-
-- **Takosumi** (these docs) — the open-source server for installing, updating, and managing Git-hosted OpenTofu modules like apps.
-- **Takosumi hosted service** ([hosted service docs](https://app.takosumi.com/docs/en/)) — the official hosted service at `app.takosumi.com`.
-- **[Takoserver](https://takoserver.com/)** — an independent, self-hostable cloud control plane and Takoform Host. You can connect to it from Takosumi as an external provider, though Takosumi OSS does not require it.
-- **[Takoform](https://takoform.com/)** — the independent portable Host API, Form specification, and OpenTofu provider.
-
-See [Product boundaries](./concepts/boundaries.md) for the full ownership split.
-
 Adding or updating something goes through these steps:
 
 1. Name the Git URL and module.
@@ -80,6 +71,15 @@ Adding or updating something goes through these steps:
 
 Takosumi does not ship a first-party Terraform/OpenTofu provider. Cloudflare,
 AWS, and others are operated by their existing providers.
+
+## Related products
+
+- **Takosumi** (these docs) — the open-source server for installing, updating, and managing Git-hosted OpenTofu modules like apps.
+- **Takosumi hosted service** ([hosted service docs](https://app.takosumi.com/docs/en/)) — the official hosted service at `app.takosumi.com`.
+- **[Takoserver](https://takoserver.com/)** — an independent, self-hostable cloud control plane and Takoform Host. You can connect to it from Takosumi as an external provider, though Takosumi OSS does not require it.
+- **[Takoform](https://takoform.com/)** — the independent portable Host API, Form specification, and OpenTofu provider.
+
+See [Product boundaries](./concepts/boundaries.md) for the full ownership split.
 
 ## Where to go next
 
