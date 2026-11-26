@@ -1282,13 +1282,19 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
     for (const [outcome, title] of [
       ["matching", "recovers its exact settings review with the same key when retried explicitly"],
       ["missing", "leaves nothing to approve without a saved Plan"],
+      ["saved-timeout", "reads back the saved settings and reopens the same Plan"],
+      ["prepared-timeout", "resumes a saved configuration whose Plan has not been created"],
       ["competing", "does not offer a replay when another Plan is pending and only the guard changed"],
       ["unrelated", "keeps the draft after applying a different Plan with the same values"],
     ] as const) test(
       `a lost settings response ${title}`,
       async ({ page }) => {
-        const saved = outcome !== "missing";
-        const rebound = saved && outcome !== "competing";
+        const preparedOnly = outcome === "prepared-timeout";
+        const planSaveTimeout = outcome === "saved-timeout" || preparedOnly;
+        const saved = outcome !== "missing" && !preparedOnly;
+        const rebound = outcome !== "missing" && outcome !== "competing";
+        const retryExact = outcome === "matching" || planSaveTimeout;
+        let planSaved = saved;
         await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
         const errors = pageErrors(page);
         const now = "2026-10-01T00:00:00.000Z";
@@ -1323,12 +1329,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               ...(submitted && rebound ? { installConfigId: successor } : {}),
               ...(applied ? { currentStateGeneration: 2, currentStateVersionId: "sv_recovered_settings" } : {}),
             },
-            installConfigReAdoption: { authorityGuard: submitted && saved ? `sha256:${"b".repeat(64)}` : AUTHORITY_GUARD },
+            installConfigReAdoption: {
+              authorityGuard: submitted && (saved || rebound) ? `sha256:${"b".repeat(64)}` : AUTHORITY_GUARD,
+              ...(submitted && preparedOnly && !planSaved ? { configurationPlanResumable: true } : {}),
+            },
           } });
           if (path === `${appPath}/app`) {
             if (submitted) appReadsAfterSubmit += 1;
             return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
-              progress: { revisionPreparing: false, ...(submitted && saved && !applied ? { review: { runId: planId, runType: "plan" } } : {}) },
+              progress: { revisionPreparing: false, ...(submitted && planSaved && !applied ? { review: { runId: planId, runType: "plan" } } : {}) },
             }) } });
           }
           if (path === `${appPath}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: null } });
@@ -1347,14 +1356,20 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             expect(key).toBeTruthy();
             expect(body.variablePatch).toEqual({ set: { region: "changed" }, remove: [] });
             if (originalRequest) {
-              expect(outcome).toBe("matching");
+              expect(retryExact).toBe(true);
               expect({ body, key }).toEqual(originalRequest);
-              return route.fulfill({ status: 200, json: {
-                configurationPlan: { replayed: true, targetInstallConfigId: successor, planRunId: plan.id },
+              const replayed = planSaved;
+              planSaved = true;
+              return route.fulfill({ status: replayed ? 200 : 201, json: {
+                configurationPlan: { replayed, targetInstallConfigId: successor, planRunId: plan.id },
               } });
             }
             originalRequest = { body, key };
             submitted = true;
+            if (planSaveTimeout) return route.fulfill({ status: 409, json: { error: {
+              code: "failed_precondition", message: "Timed out saving the Plan.",
+              details: { reason: "capsule_plan_creation_timeout", stage: "plan_run_create", timeoutMs: 25_000 },
+            } } });
             return route.fulfill({ status: 502, json: { error: { code: "unavailable", message: "The response was lost." } } });
           }
           if (path === `/api/v1/runs/${planId}/apply` && request.method() === "POST") {
@@ -1368,7 +1383,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             }] : [],
           } });
           if (path === `${appPath}/activity`) return route.fulfill({ json: { events: [] } });
-          if (path === `/api/v1/runs/${planId}` && saved) return route.fulfill({ json: { run: plan } });
+          if (path === `/api/v1/runs/${planId}` && planSaved) return route.fulfill({ json: { run: plan } });
           if (path === `/api/v1/runs/${apply.id}` && applied) return route.fulfill({ json: { run: apply } });
           if (path === `/api/v1/runs/${planId}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
           if (path === `/api/v1/runs/${planId}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
@@ -1380,16 +1395,22 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         const region = settings.getByRole("textbox", { name: /^region/iu });
         const start = settings.getByRole("button", { name: "Review", exact: true });
         await region.fill("changed");
-        const lost = page.waitForResponse((response) => response.url().endsWith(planPath) && response.status() === 502);
+        const lost = page.waitForResponse((response) =>
+          response.url().endsWith(planPath) && response.status() === (planSaveTimeout ? 409 : 502));
         const contextReadback = page.waitForResponse((response) =>
           submitted && new URL(response.url()).pathname === appPath && response.status() === 200);
         await start.click();
         await lost;
-        await contextReadback;
         await expect.poll(() => appReadsAfterSubmit).toBe(1);
+        await contextReadback;
         const waiting = page.locator('[data-problem="review-waiting"]');
-        if (saved) {
-          await expect(waiting).toBeVisible();
+        if (saved || preparedOnly) {
+          if (preparedOnly) {
+            await expect(waiting).toHaveCount(0);
+            await expect(page.getByTestId("app-review")).toHaveCount(0);
+          } else {
+            await expect(waiting).toBeVisible();
+          }
           expect(mutations).toEqual([`POST ${planPath}`]);
           const retry = settings.getByRole("button", { name: "Review again", exact: true });
           if (outcome === "competing") {
@@ -1398,7 +1419,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             expect(errors).toEqual([]);
             return;
           }
-          if (outcome === "matching") {
+          if (retryExact) {
             await retry.click();
           } else {
             await waiting.getByRole("button", { name: "Review", exact: true }).click();
@@ -1407,12 +1428,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           const authorize = review.getByRole("button", { name: "Allow and apply", exact: true });
           await expect(authorize).toBeVisible();
           await expect(review).toContainText("settings_change");
-          const expectedSubmissions = outcome === "matching" ? [`POST ${planPath}`, `POST ${planPath}`] : [`POST ${planPath}`];
+          const expectedSubmissions = retryExact ? [`POST ${planPath}`, `POST ${planPath}`] : [`POST ${planPath}`];
           expect(mutations).toEqual(expectedSubmissions);
           await authorize.click();
           await expect(review).toHaveCount(0);
           const conflict = settings.getByTestId("app-settings-draft-conflict");
-          if (outcome === "matching") {
+          if (retryExact) {
             await expect(conflict).toHaveCount(0);
             await page.locator(".sidebar").getByRole("link", { name: "Home", exact: true }).click();
             await expect(page).toHaveURL(/\/$/u);
