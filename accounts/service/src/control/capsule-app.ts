@@ -1028,6 +1028,17 @@ function safeImageUrl(value: unknown): string | undefined {
 
 // --- version ---------------------------------------------------------------------
 
+/** Store summaries use the same verified version hint for stale installed apps. */
+export async function staleCapsuleAppUpdateAvailable(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+): Promise<boolean> {
+  if (capsule.status !== "stale" || !capsuleIsApplied(capsule) || !capsule.currentStateVersionId) return false;
+  const adopted = await optional(() => operations.getCapsuleAdoptedSourceRevision(capsule.id));
+  if (!adopted.value) return false;
+  return (await readVersion(operations, capsule, { adopted: adopted.value, onIncomplete: () => {} })).updateAvailable;
+}
+
 /** A Git URL without userinfo, query or fragment. */
 export function credentialFreeRepositoryUrl(value: string): string | undefined {
   try {

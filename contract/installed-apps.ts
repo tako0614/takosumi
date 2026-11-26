@@ -25,6 +25,14 @@ export interface ListInstalledAppsResponse {
   readonly complete: boolean;
 }
 
+export const INSTALLED_APP_PROJECTION = "installed";
+
+export interface InstalledAppPage extends ListInstalledAppsResponse {
+  readonly projection: typeof INSTALLED_APP_PROJECTION;
+  readonly installedApps: readonly (InstalledAppSummary & { readonly updateAvailable?: true })[];
+  readonly nextCursor?: string;
+}
+
 /**
  * Value-free display URL. Query content is not public-safe; callers must
  * mark a summary unmatchable when removing it loses executable identity.

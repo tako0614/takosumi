@@ -365,6 +365,8 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 
 ホームは起動・稼働状態を表示します。更新可否はバージョン履歴を調べるアプリ詳細画面で確認し、一覧に履歴走査を持ち込みません。
 
+ストアの導入済み判定には、同じ認可付き一覧の `GET /api/v1/apps?projection=installed&cursor&limit` を使います。応答は `{ projection: "installed", installedApps, complete, nextCursor? }` です。現在のInstallConfigが指すリポジトリとsource path・module pathを返します。資格情報や可変入力は含みません。更新を確認できたアプリには `updateAvailable: true` が付きます。ページに `complete: false` があれば取得できた行だけを使い、未取得の行を未導入と判定しません。cursorはこのprojectionと提示された資格情報のscopeに束縛されます。
+
 | メソッド | パス | 権限と入力 |
 | --- | --- | --- |
 | GET | `/api/v1/capsules/{capsuleId}/members` | 所有者・メンバー。メールは所有者にだけ表示 |

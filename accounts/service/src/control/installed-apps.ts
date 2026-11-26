@@ -1,12 +1,13 @@
-/** Workspace-authorized, value-free app identities for Store discovery. */
+/** Value-free app identities for Store discovery. */
 import { installDisplayName } from "./install-names.ts";
-import { hasCredentialQueryParams, installedAppSourceIsMatchable, installedAppSourceUrl, type InstalledAppSummary, type ListInstalledAppsResponse } from "takosumi-contract";
+import { hasCredentialQueryParams, installedAppSourceIsMatchable, installedAppSourceUrl, isCanonicalRepositoryDirectoryPath, type InstalledAppSummary, type ListInstalledAppsResponse } from "takosumi-contract";
 import { normalizeInstallConfigSourcePath } from "takosumi-contract/install-configs";
-import type { InstallConfig } from "takosumi-contract";
+import type { Capsule, InstallConfig } from "takosumi-contract";
 import type { Source } from "takosumi-contract";
 import { json, methodNotAllowed } from "../http-helpers.ts";
 import { type ControlDispatchContext } from "./shared.ts";
-import { workspaceAppVisibility } from "./app-authorization.ts";
+import { requireAppAccess, sourceCapsuleIds, workspaceAppVisibility } from "./app-authorization.ts";
+import { readCapsuleAppSummaries, staleCapsuleAppUpdateAvailable } from "./capsule-app.ts";
 
 function storeState(capsule: { status: string; currentStateVersionId?: string; currentStateGeneration: number }): InstalledAppSummary["state"] {
   if (!capsule.currentStateVersionId && capsule.currentStateGeneration === 0) return "installing";
@@ -27,6 +28,110 @@ function safeIconUrl(value: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function projectInstalledApp(
+  capsule: Capsule,
+  config: InstallConfig | undefined,
+  source: Source | undefined,
+  state: InstalledAppSummary["state"],
+): InstalledAppSummary | undefined {
+  if (!config || (config.workspaceId && config.workspaceId !== capsule.workspaceId) ||
+    (source && source.workspaceId !== capsule.workspaceId) ||
+    (!source && (!config.sourceSelector?.url || !config.sourceSelector.path))) return undefined;
+  const rawSourcePath = config.sourceSelector?.path ?? source!.defaultPath;
+  const rawModulePath = config.modulePath ?? ".";
+  if (rawSourcePath.trim().startsWith("/") || rawModulePath.trim().startsWith("/")) return undefined;
+  const sourcePath = normalizeInstallConfigSourcePath(rawSourcePath);
+  const modulePath = normalizeInstallConfigSourcePath(rawModulePath);
+  const path = [sourcePath, modulePath].filter((part) => part !== ".").join("/") || ".";
+  if (!isCanonicalRepositoryDirectoryPath(path)) return undefined;
+  const sourceUrl = config.sourceSelector?.url ?? source!.url;
+  const displaySourceUrl = installedAppSourceUrl(sourceUrl);
+  if (!displaySourceUrl) return undefined;
+  const iconUrl = safeIconUrl(config.store?.iconUrl);
+  const displayName = installDisplayName(capsule.name, config, displaySourceUrl);
+  return {
+    capsuleId: capsule.id,
+    name: capsule.name,
+    ...(displayName ? { displayName } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
+    state,
+    installedFrom: {
+      url: displaySourceUrl,
+      path,
+      ...(installedAppSourceIsMatchable(sourceUrl) ? {} : { matchable: false as const }),
+    },
+  };
+}
+
+/** Only used after the account list authorizes these exact Capsules. */
+export async function readAccountInstalledApps(
+  ctx: ControlDispatchContext,
+  capsules: readonly Capsule[],
+) {
+  const getConfigs = ctx.operations.capsules.getInstallConfigsByIds;
+  if (!capsules.length) return { installedApps: [], complete: true };
+  if (!getConfigs) return { installedApps: [], complete: false };
+  let configs: ReadonlyMap<string, InstallConfig>;
+  try {
+    configs = new Map((await getConfigs.call(ctx.operations.capsules, [
+      ...new Set(capsules.map((capsule) => capsule.installConfigId)),
+    ])).map((config) => [config.id, config]));
+  } catch {
+    return { installedApps: [], complete: false };
+  }
+
+  const sourceReads = new Map<string, Promise<Source>>();
+  const summaries = await readCapsuleAppSummaries(ctx,
+    capsules.filter((capsule) => configs.has(capsule.installConfigId)), Date.now(), configs);
+  const byId = new Map(summaries.map((summary) => [summary.capsuleId, summary]));
+  const rows = await Promise.all(capsules.map(async (capsule) => {
+    try {
+      const config = configs.get(capsule.installConfigId);
+      const summary = byId.get(capsule.id);
+      if (!config || !summary) return undefined;
+      let source: Source | undefined;
+      if (!config.sourceSelector?.url || !config.sourceSelector.path) {
+        if (!capsule.sourceId) return undefined;
+        let read = sourceReads.get(capsule.sourceId);
+        if (!read) {
+          read = ctx.operations.getSource(capsule.sourceId).then(({ source }) => source);
+          sourceReads.set(capsule.sourceId, read);
+        }
+        source = await read;
+        if (source.id !== capsule.sourceId || source.workspaceId !== capsule.workspaceId) return undefined;
+        if (source.ownerCapsuleId !== undefined) {
+          if (source.ownerCapsuleId !== capsule.id) return undefined;
+        } else {
+          // An ownerless Source is shared by every live Capsule built from it.
+          const ids = await sourceCapsuleIds(ctx.operations, source);
+          if (!ids.includes(capsule.id)) return undefined;
+          for (const capsuleId of ids) {
+            const access = await requireAppAccess({
+              operations: ctx.operations,
+              store: ctx.store,
+              session: ctx.session,
+              workspaceId: capsule.workspaceId,
+              capsuleId,
+              action: "view",
+              ...(ctx.session.requireCurrentMembership ? { allowWorkspaceFallback: false } : {}),
+            });
+            if (!access.ok) return undefined;
+          }
+        }
+      }
+      const app = projectInstalledApp(capsule, config, source, summary.state);
+      if (app?.state === "installed" && await staleCapsuleAppUpdateAvailable(ctx.operations, capsule)) {
+        return { ...app, updateAvailable: true as const };
+      }
+      return app;
+    } catch {
+      return undefined;
+    }
+  }));
+  const installedApps = rows.filter((app) => app !== undefined);
+  return { installedApps, complete: installedApps.length === capsules.length };
 }
 
 /** The caller has already enforced the ordinary Workspace read boundary. */
@@ -85,37 +190,12 @@ export async function handleWorkspaceInstalledApps(
   if (sourcesTruncated) complete = false;
   const installedApps = live.flatMap((capsule): InstalledAppSummary[] => {
     try {
-      const config = configsById.get(capsule.installConfigId);
-      const source = sourcesById.get(capsule.sourceId);
-      if (!config || (config.workspaceId && config.workspaceId !== workspaceId) ||
-        (source && source.workspaceId !== workspaceId) ||
-        (!source && (!config.sourceSelector?.url || !config.sourceSelector.path))) {
-        complete = false;
-        return [];
-      }
-      const sourcePath = normalizeInstallConfigSourcePath(config.sourceSelector?.path ?? source!.defaultPath);
-      const modulePath = normalizeInstallConfigSourcePath(config.modulePath ?? ".");
-      const path = [sourcePath, modulePath].filter((part) => part !== ".").join("/") || ".";
-      const sourceUrl = config.sourceSelector?.url ?? source!.url;
-      const displaySourceUrl = installedAppSourceUrl(sourceUrl);
-      if (!displaySourceUrl) {
-        complete = false;
-        return [];
-      }
-      const iconUrl = safeIconUrl(config.store?.iconUrl);
-      const displayName = installDisplayName(capsule.name, config, displaySourceUrl);
-      return [{
-        capsuleId: capsule.id,
-        name: capsule.name,
-        ...(displayName ? { displayName } : {}),
-        ...(iconUrl ? { iconUrl } : {}),
-        state: storeState(capsule),
-        installedFrom: {
-          url: displaySourceUrl,
-          path,
-          ...(installedAppSourceIsMatchable(sourceUrl) ? {} : { matchable: false as const }),
-        },
-      }];
+      const app = projectInstalledApp(
+        capsule, configsById.get(capsule.installConfigId), sourcesById.get(capsule.sourceId), storeState(capsule),
+      );
+      if (app) return [app];
+      complete = false;
+      return [];
     } catch {
       // One malformed app cannot take away the Store or its Install action.
       complete = false;
