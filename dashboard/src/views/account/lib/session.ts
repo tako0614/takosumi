@@ -276,9 +276,12 @@ async function fetchSessionMe(
   }
 }
 
-async function fetchAccountSessionMe(confirmation?: { readonly signal: AbortSignal }): Promise<SessionRecord | null> {
+async function fetchAccountSessionMe(
+  confirmation?: { readonly signal: AbortSignal },
+  path = SESSION_ME_PATH,
+): Promise<SessionRecord | null> {
   try {
-    const res = await fetch(SESSION_ME_PATH, {
+    const res = await fetch(path, {
       method: "GET",
       headers: { accept: "application/json" },
       credentials: "include",
@@ -545,6 +548,21 @@ export function currentSessionCheck(): () => boolean {
   return () => epoch === sessionEpoch &&
     cachedSession?.subject === session?.subject &&
     cachedSession?.primaryAccountId === session?.primaryAccountId;
+}
+
+/** Read settings for the current shared account without replacing the shell session. */
+export async function readSharedAccountProfile(
+  subject: string,
+): Promise<Pick<SessionRecord, "displayName" | "email"> | undefined> {
+  if (!isKnownSharedAuthRoutePresent() || cachedSession?.subject !== subject) return undefined;
+  const stillCurrent = currentSessionCheck();
+  const profile = await withSessionDeadline(10_000, (signal) =>
+    fetchAccountSessionMe({ signal }, `${SESSION_ME_PATH}?include=profile`)).catch(() => null);
+  if (profile?.subject !== subject || !stillCurrent()) return undefined;
+  return {
+    displayName: typeof profile.displayName === "string" ? profile.displayName : undefined,
+    email: typeof profile.email === "string" ? profile.email : undefined,
+  };
 }
 
 /** Confirm explicit sign-out before the browser leaves the authenticated view. */

@@ -216,6 +216,48 @@ test("auth routes and logout alias retain exact-origin CSRF and no-store", async
   expect(await handleSharedAuthRouteRequest(request("/auth/oidc/session/extra"), env)).toBeUndefined();
 });
 
+test("the shared session mirror reads only the current RP account on a profile request", async () => {
+  const path = "/api/v1/account/session/me";
+  const env = configured(rpc);
+  const store = new InMemoryAccountsStore();
+  const account = { subject: "tsub_canonical", createdAt: 1, updatedAt: 1 } as const;
+  const session = { subject: account.subject, primaryAccountId: account.subject, expiresAt: 0 };
+  const findAccount = spyOn(store, "findAccount");
+  const lookup = store.findAccount.bind(store);
+  const read = (query = "") => handlePlatformSharedAuthSessionRequest(request(path + query), env, lookup);
+  store.saveAccount({ subject: "tsub_other", displayName: "Other person", email: "other@example.test",
+    emailVerified: true, createdAt: 1, updatedAt: 1 });
+  expect(await (await read())?.json()).toEqual(session);
+  expect(await (await read("?include=profile&subject=tsub_other"))?.json()).toEqual(session);
+  expect(findAccount).not.toHaveBeenCalled();
+
+  expect(await (await read("?include=profile"))?.json()).toEqual(session);
+  for (const emailVerified of [undefined, false, true]) {
+    store.saveAccount({ ...account, displayName: "  Current person  ", email: " self@example.test ", emailVerified,
+      picture: "https://profile.example.test/image" });
+    const response = await read("?include=profile");
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    expect(await response?.json()).toEqual({
+      ...session, displayName: "Current person",
+      ...(emailVerified === true ? { email: "self@example.test" } : {}),
+    });
+  }
+  expect(findAccount.mock.calls).toEqual(Array.from({ length: 4 }, () => [account.subject]));
+
+  for (const [kind, status, body] of [
+    ["unauthenticated", 200, { session: null }],
+    ["unavailable", 503, { error: "authentication_unavailable" }],
+  ] as const) {
+    const response = await handlePlatformSharedAuthSessionRequest(
+      request(path + "?include=profile"), configured({ ...rpc, authenticateSharedAuth: async () => ({ kind }) }), lookup,
+    );
+    expect(response?.status).toBe(status);
+    expect(await response?.json()).toEqual(body);
+  }
+  expect(findAccount).toHaveBeenCalledTimes(4);
+});
+
 test("workspace RPC must return the same account and requested Workspace, with a valid live role", async () => {
   for (const result of [
     { kind: "authorized", accountId: "tsub_attacker", workspaceId: "ws_live", role: "owner" },

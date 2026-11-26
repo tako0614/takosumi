@@ -86,6 +86,7 @@ import {
   TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
   TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH,
   type TakosumiAccountsPatScope,
+  type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   measureServerTiming,
@@ -743,7 +744,9 @@ const platformWorker = {
     }
     const sharedAccountBoundaryResponse = await handleSharedAuthAccountBoundaryRequest(request, env);
     if (sharedAccountBoundaryResponse) return sharedAccountBoundaryResponse;
-    const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(request, env);
+    const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(
+      request, env, (subject) => platformAccountsStore(env).findAccount(subject),
+    );
     if (sharedSessionResponse) return sharedSessionResponse;
     const sharedPushersResponse = await handlePlatformSharedAuthNotificationPushersRequest(request, env);
     if (sharedPushersResponse) return sharedPushersResponse;
@@ -1989,12 +1992,14 @@ function platformExtensionSessionCsrfFailure(
 export async function handlePlatformSharedAuthSessionRequest(
   request: Request,
   env: SharedAuthEnvironment,
+  findAccount?: AccountsStore["findAccount"],
 ): Promise<Response | undefined> {
-  if (new URL(request.url).pathname !== "/api/v1/account/session/me" ||
+  const url = new URL(request.url);
+  if (url.pathname !== "/api/v1/account/session/me" ||
     !sharedAuthConfigured(env)) return undefined;
   const ingressFailure = sharedAuthRequestFailure(request, env);
   if (ingressFailure) return ingressFailure;
-  if (new URL(request.url).origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) {
+  if (url.origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) {
     return Response.json({ error: "not found" }, {
       status: 404, headers: { "cache-control": "no-store" },
     });
@@ -2014,9 +2019,22 @@ export async function handlePlatformSharedAuthSessionRequest(
   }
   const identity = await authenticateSharedAuthRequest(request, env);
   if (identity?.kind === "unavailable") return sharedAuthUnavailableResponse();
-  return Response.json(identity?.kind === "authenticated"
-    ? { subject: identity.accountId, primaryAccountId: identity.accountId, expiresAt: 0 }
-    : { session: null }, { headers: { "cache-control": "no-store" } });
+  const headers = { "cache-control": "no-store" };
+  if (identity?.kind !== "authenticated") return Response.json({ session: null }, { headers });
+  const session = { subject: identity.accountId, primaryAccountId: identity.accountId, expiresAt: 0 };
+  if (url.search !== "?include=profile") return Response.json(session, { headers });
+
+  // Only the settings screen requests this lookup, using the subject proven by the RP.
+  if (!findAccount || !identity.accountId.startsWith("tsub_")) return sharedAuthUnavailableResponse();
+  try {
+    const account = await findAccount(identity.accountId as TakosumiSubject);
+    if (account?.subject !== identity.accountId) return Response.json(session, { headers });
+    const displayName = account.displayName?.trim() || undefined;
+    const email = account.emailVerified === true ? account.email?.trim() || undefined : undefined;
+    return Response.json({ ...session, displayName, email }, { headers });
+  } catch {
+    return sharedAuthUnavailableResponse();
+  }
 }
 
 const sharedAccountNotificationPusherLimiter = createNotificationPusherRateLimiter();

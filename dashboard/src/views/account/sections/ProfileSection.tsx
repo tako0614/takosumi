@@ -2,7 +2,7 @@
 import { createResource, createSignal, For, Show, type JSX } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { ExternalLink } from "lucide-solid";
-import { signOutSession, type SessionRecord } from "../lib/session.ts";
+import { readSharedAccountProfile, signOutSession, type SessionRecord } from "../lib/session.ts";
 import SignInMethodsCard from "../components/SignInMethodsCard.tsx";
 import { intlLocale, locale, setLocale, t } from "../../../i18n/index.ts";
 import type { MessageKey } from "../../../i18n/index.ts";
@@ -23,6 +23,7 @@ import {
   platformContributionsForSlot,
 } from "../../../lib/platform-contributions.ts";
 import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
+import { isKnownSharedAuthRoutePresent } from "../../../lib/shared-auth-session-preflight.ts";
 import { Button, Select } from "../../../components/ui/index.ts";
 
 const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
@@ -55,6 +56,12 @@ export default function ProfileSection(props: {
   );
   const [handlerJustRegistered, setHandlerJustRegistered] = createSignal(false);
   const [contributions] = createResource(loadPlatformContributions);
+  const sharedAccount = isKnownSharedAuthRoutePresent();
+  const [sharedProfile] = createResource(
+    () => sharedAccount && props.session.subject,
+    readSharedAccountProfile,
+  );
+  const profile = () => sharedAccount ? sharedProfile() : props.session;
   const accountPages = () =>
     platformContributionsForSlot(contributions(), "navigation.manage");
 
@@ -90,11 +97,11 @@ export default function ProfileSection(props: {
   const identityRows = () => [
     {
       label: t("account.profile.displayName"),
-      value: props.session.displayName ?? t("account.profile.notSet"),
+      value: profile()?.displayName ?? t("account.profile.notSet"),
     },
     {
       label: t("account.profile.email"),
-      value: props.session.email ?? t("account.profile.notSet"),
+      value: profile()?.email ?? t("account.profile.notSet"),
     },
     ...(props.session.provider
       ? [{ label: t("account.profile.provider"), value: props.session.provider }]
