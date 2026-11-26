@@ -702,12 +702,12 @@ export async function canAccessWorkspace(input: {
     }
     const capsule = await input.operations.capsules.getCapsule(input.capsuleId);
     input.assertActive?.();
-    return capsule.workspaceId === input.workspaceId;
-  }
-  // An unconstrained app OAuth grant may reach the existing membership
-  // intersection only after the owned-app decision, for its exact own app.
-  // Missing ownership/schema and Workspace-wide callers cannot supply it.
-  if (input.session.appIds !== undefined && !input.session.workspaceId) {
+    if (capsule.workspaceId !== input.workspaceId) return false;
+    if (!input.session.requireCurrentMembership) return true;
+  } else if (input.session.appIds !== undefined && !input.session.workspaceId) {
+    // An unconstrained app OAuth grant may reach the existing membership
+    // intersection only after the owned-app decision, for its exact own app.
+    // Missing ownership/schema and Workspace-wide callers cannot supply it.
     if (!isInstalledAppToken(input.session) || input.session.appIds.length !== 1 ||
       !input.capsuleId || input.session.appIds[0] !== input.capsuleId ||
       input.ownedAppAccess?.capsuleId !== input.capsuleId ||

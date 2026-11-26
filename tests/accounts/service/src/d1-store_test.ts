@@ -48,6 +48,39 @@ test("D1AccountsStore resolves uninstall grants by nonsecret exact keys", async 
     .toBeUndefined();
 });
 
+test("D1 PAT usage and revocation preserve separately updated app authority", async () => {
+  const store = new D1AccountsStore(new SqliteFakeD1());
+  const tokenId = "pat_lifecycle";
+  const subject = "tsub_owner";
+  const workspaceId = "ws_owner";
+  const secret = "synthetic-key-for-metadata-check";
+  await store.savePersonalAccessToken(secret, {
+    tokenId, subject, workspaceId, tokenPrefix: "fixture", name: "Metadata fixture",
+    scopes: ["read"], createdAt: 10,
+  });
+  await Promise.all([
+    store.recordPersonalAccessTokenUsed(tokenId, 30),
+    store.recordPersonalAccessTokenUsed(tokenId, 20),
+    store.attenuatePersonalAccessTokenApps({
+      tokenId, subject, expectedWorkspaceId: workspaceId, appIds: ["cap_owner"],
+    }),
+  ]);
+  expect(await store.findPersonalAccessToken(secret)).toMatchObject({
+    tokenId, subject, workspaceId, appIds: ["cap_owner"], lastUsedAt: 30,
+  });
+  expect(await store.revokePersonalAccessToken({ tokenId, subject: "tsub_other", revokedAt: 40 }))
+    .toBeUndefined();
+  await Promise.all([
+    store.revokePersonalAccessToken({ tokenId, subject, revokedAt: 50 }),
+    store.recordPersonalAccessTokenUsed(tokenId, 40),
+  ]);
+  const revoked = await store.findPersonalAccessToken(secret);
+  expect(revoked).toMatchObject({ tokenId, subject, appIds: ["cap_owner"], revokedAt: 50 });
+  await store.recordPersonalAccessTokenUsed(tokenId, 60);
+  expect(await store.findPersonalAccessToken(secret)).toEqual(revoked);
+  expect(await store.listPersonalAccessTokensForSubject(subject)).toEqual([revoked!]);
+});
+
 test("D1AccountsStore persists identity/session data without a Capsule mirror", async () => {
   registerSessionHashSaltConfig({ salt: "d1-test-session-salt" });
   const store = new D1AccountsStore(new MemoryD1Database());

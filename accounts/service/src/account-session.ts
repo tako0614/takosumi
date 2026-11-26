@@ -6,7 +6,7 @@ import type {
 } from "@takosjp/takosumi-accounts-contract";
 import type { CapsuleUninstallRequester } from "takosumi-contract/capsules";
 import { appActionAllowed, type AppAccess, type AppAccessResolver, type AppAction } from "../../../contract/app-access.ts";
-import type { AccountsStore, AccountSessionRecord } from "./store.ts";
+import type { AccountsStore, AccountSessionRecord, PersonalAccessTokenRecord } from "./store.ts";
 import { hostedIssuerSessionId, hostedOpaqueId, HOSTED_SESSION_IDLE_MS, HOSTED_SESSION_ABSOLUTE_MS } from "./hosted-oidc-profile.ts";
 import {
   errorJson,
@@ -16,7 +16,11 @@ import {
 } from "./http-helpers.ts";
 // Shared PAT-activity predicate. Imported (not re-declared) so the activity
 // rule has a single owner and cannot drift between the two call sites.
-import { personalAccessTokenAppIdsAreWellFormed, personalAccessTokenIsActive } from "./pat-routes.ts";
+import {
+  personalAccessTokenAppIdsAreWellFormed,
+  personalAccessTokenAuthorityRecordIsWellFormed,
+  personalAccessTokenIsActive,
+} from "./pat-routes.ts";
 import { sha256Text } from "./encoding.ts";
 import { reportLegacyWorkspaceClaim } from "./legacy-workspace-telemetry.ts";
 import {
@@ -428,22 +432,29 @@ export async function handleAccountSessionMeDelete(input: {
   });
 }
 
-export async function requireAccountsBearer(input: {
+interface AccountsBearerInput {
   request: Request;
   store: AccountsStore;
   scope: AccountsBearerRequiredScope;
   readonly assertActive?: () => void;
+  /** Shared staging Control accepts an explicit PAT as its only bearer kind. */
+  readonly personalAccessTokenOnly?: true;
   /**
    * True when the same request already authenticated this credential and this
    * call only re-checks it; the Workspace-binding telemetry is then not
    * written a second time.
    */
   readonly recheck?: boolean;
-}): Promise<
-  { ok: true; auth: AccountsBearerSubject } | { ok: false; response: Response }
-> {
+}
+
+type AccountsBearerDecision =
+  | { ok: true; auth: AccountsBearerSubject }
+  | { ok: false; response: Response };
+
+export async function requireAccountsBearer(input: AccountsBearerInput): Promise<AccountsBearerDecision> {
   const assertActive = input.assertActive;
   assertActive?.();
+  if (input.personalAccessTokenOnly) return await requireSharedAccountsPat(input);
   // Non-session credentials arrive in the Authorization header. Sessions may
   // also arrive in that header, the explicit session header, or the HttpOnly
   // cookie. An explicit header always wins over a cookie so a stale browser
@@ -610,12 +621,56 @@ export async function requireAccountsBearer(input: {
   if (!activePersonalAccessTokenRecord) {
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
-  if (
-    !personalAccessTokenHasScope(
-      activePersonalAccessTokenRecord.scopes,
-      input.scope,
-    )
-  ) {
+  return await authorizePersonalAccessToken(input, activePersonalAccessTokenRecord, now);
+}
+
+async function requireSharedAccountsPat(input: AccountsBearerInput): Promise<AccountsBearerDecision> {
+  const { request, store, assertActive } = input;
+  const token = request.headers.get("authorization")?.match(/^Bearer ([^\s,]+)$/iu)?.[1];
+  if (!token || request.headers.has("cookie") || request.headers.has("x-takosumi-account-session")) {
+    return { ok: false, response: bearerChallenge("invalid_token") };
+  }
+  if (!store.resolveAccountsBearerCandidates ||
+    !store.findCanonicalAccount || !store.isAccountAuthenticationFenced) {
+    return sharedAccountsPatUnavailable();
+  }
+  try {
+    const now = Date.now();
+    const candidates = await store.resolveAccountsBearerCandidates(token);
+    assertActive?.();
+    const record = candidates.personalAccessToken;
+    if (candidates.session || candidates.accessToken || !record ||
+      !personalAccessTokenAuthorityRecordIsWellFormed(record) ||
+      !personalAccessTokenIsActive(record, now)) {
+      return { ok: false, response: bearerChallenge("invalid_token") };
+    }
+    const [account, fenced] = await Promise.all([
+      store.findCanonicalAccount(record.subject),
+      store.isAccountAuthenticationFenced(record.subject),
+    ]);
+    assertActive?.();
+    if (account?.subject !== record.subject || fenced !== false ||
+      !personalAccessTokenIsActive(record, Date.now())) {
+      return { ok: false, response: bearerChallenge("invalid_token") };
+    }
+    return await authorizePersonalAccessToken(input, record, now);
+  } catch {
+    assertActive?.();
+    return sharedAccountsPatUnavailable();
+  }
+}
+
+function sharedAccountsPatUnavailable(): AccountsBearerDecision {
+  return { ok: false, response: errorJson("authentication_unavailable", "Authentication is unavailable.", 503) };
+}
+
+async function authorizePersonalAccessToken(
+  input: AccountsBearerInput,
+  record: PersonalAccessTokenRecord,
+  now: number,
+): Promise<AccountsBearerDecision> {
+  const assertActive = input.assertActive;
+  if (!personalAccessTokenHasScope(record.scopes, input.scope)) {
     return {
       ok: false,
       response: errorJson(
@@ -631,14 +686,14 @@ export async function requireAccountsBearer(input: {
   }
   assertActive?.();
   await input.store.recordPersonalAccessTokenUsed(
-    activePersonalAccessTokenRecord.tokenId,
+    record.tokenId,
     now,
   );
   assertActive?.();
   if (
     !input.recheck &&
-    activePersonalAccessTokenRecord.workspaceId &&
-    activePersonalAccessTokenRecord.appIds === undefined
+    record.workspaceId &&
+    record.appIds === undefined
   ) {
     // TASK-0118 Phase 9: a PAT bound only to a Workspace fences every route it
     // calls by that Workspace, successor routes included, and stage 9.4
@@ -653,20 +708,20 @@ export async function requireAccountsBearer(input: {
   return {
     ok: true,
     auth: {
-      subject: activePersonalAccessTokenRecord.subject,
+      subject: record.subject,
       uninstallRequester: {
-        subject: activePersonalAccessTokenRecord.subject,
+        subject: record.subject,
         grant: {
           kind: "personal-access-token",
-          tokenId: activePersonalAccessTokenRecord.tokenId,
+          tokenId: record.tokenId,
         },
       },
       credential: "personal-access-token",
-      ...(activePersonalAccessTokenRecord.workspaceId
-        ? { workspaceId: activePersonalAccessTokenRecord.workspaceId }
+      ...(record.workspaceId
+        ? { workspaceId: record.workspaceId }
         : {}),
-      ...(activePersonalAccessTokenRecord.appIds !== undefined
-        ? { appIds: activePersonalAccessTokenRecord.appIds }
+      ...(record.appIds !== undefined
+        ? { appIds: record.appIds }
         : {}),
     },
   };

@@ -32,6 +32,7 @@ import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
   activityCursorSealerFromEnv,
   createNotificationPusherRateLimiter,
+  createPersonalAccessTokenCreationRateLimiter,
   D1AccountsStore,
   handleAuthenticatedControlRoute,
   handleNotificationPusherRequest,
@@ -111,12 +112,14 @@ import {
   sharedAuthConfigured,
   sharedAuthRequestFailure,
   sharedStagingAppAuthorizeSessionResolver,
+  sharedStagingApiKeysEnabled,
   type SharedAuthEnvironment,
 } from "../../worker/src/shared_auth_rpc.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import { handleSourceOwnershipMigrationOperatorRequest } from "../../worker/src/source_ownership_migration_operator.ts";
 import { fenceControlDatabase } from "./fenced-control-database.ts";
 import { handlePlatformBrowserBillingRequest } from "./browser-billing.ts";
+import { handleSharedAuthApiKeyRequest, matchSharedAuthApiKeyRoute } from "./shared-auth-api-keys.ts";
 import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
 import type {
   CapsuleExecutionAuthorityResolver,
@@ -694,6 +697,7 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
 });
 
 const SHARED_AUTH_READ_HEADER = "x-takosumi-shared-auth-read";
+const sharedPatCreationLimiter = createPersonalAccessTokenCreationRateLimiter();
 
 function requiresSharedAuthRead(request: Request, url: URL): boolean {
   return request.method === "GET" &&
@@ -722,13 +726,27 @@ const platformWorker = {
     if (internalEdgeResponse) return internalEdgeResponse;
     const sharedAuthResponse = await handleSharedAuthRouteRequest(request, env);
     if (sharedAuthResponse) return sharedAuthResponse;
+    const url = new URL(request.url);
+    if (sharedStagingApiKeysEnabled(env) && matchSharedAuthApiKeyRoute(url.pathname)) {
+      const apiKeyResponse = await handleSharedAuthApiKeyRequest(request, {
+        origin: env.TAKOSUMI_SHARED_AUTH_ORIGIN!,
+        store: platformAccountsStore(env),
+        authenticate: (incoming) => authenticateSharedAuthRequest(incoming, env),
+        writeCsrfFailure: (incoming) => platformExtensionSessionCsrfFailure(incoming, env, {
+          authenticated: true, authKind: "session", sharedAccount: true,
+        }),
+        creationLimiter: sharedPatCreationLimiter,
+        membershipReader: createCloudflareD1PatWorkspaceMembershipReader(fenceControlDatabase(env.TAKOSUMI_CONTROL_DB)),
+        resolveOperations: () => controlPlaneOperationsFor(env),
+      });
+      if (apiKeyResponse) return apiKeyResponse;
+    }
     const sharedAccountBoundaryResponse = await handleSharedAuthAccountBoundaryRequest(request, env);
     if (sharedAccountBoundaryResponse) return sharedAccountBoundaryResponse;
     const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(request, env);
     if (sharedSessionResponse) return sharedSessionResponse;
     const sharedPushersResponse = await handlePlatformSharedAuthNotificationPushersRequest(request, env);
     if (sharedPushersResponse) return sharedPushersResponse;
-    const url = new URL(request.url);
     const destroyRecoveryResponse =
       await handlePlatformDestroyRecoveryRequest(request, url, env);
     if (destroyRecoveryResponse) return destroyRecoveryResponse;
@@ -2128,12 +2146,48 @@ export async function handlePlatformSharedAuthControlRequest(
   ): Promise<Response> => {
     const ingressFailure = sharedAuthRequestFailure(request, env);
     if (ingressFailure) return ingressFailure;
+    const oauthCallback = connectionOAuthCallbackHelperId(url.pathname, request.method);
+    const controlOptions = () => ({
+      ...platformLegacyWorkspaceSunsetOption(env),
+      ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
+      trustedNativeClients: trustedNativeClientsFromEnv(env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS),
+      ...platformActivityCursorSealerOption(env),
+      ...(diagnostics ? { diagnostics } : {}),
+      ...(assertActive ? { assertActive } : {}),
+      ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
+      ...(dependencies.runStreamTiming ? { runStreamTiming: dependencies.runStreamTiming } : {}),
+    });
+    const resolveOperations = dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env));
     if (request.headers.has("authorization") || request.headers.has("x-takosumi-account-session")) {
-      return Response.json({ error: "unauthenticated" }, {
-        status: 401, headers: { "cache-control": "no-store" },
+      if (!sharedStagingApiKeysEnabled(env) || url.origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN ||
+        !request.headers.has("authorization") || request.headers.has("x-takosumi-account-session") ||
+        oauthCallback || requiresSharedAuthRead(request, url)) {
+        return Response.json({ error: "unauthenticated" }, {
+          status: 401, headers: { "cache-control": "no-store" },
+        });
+      }
+      const salt = env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT;
+      if (!dependencies.store && (typeof salt !== "string" || !salt.trim())) return sharedAuthUnavailableResponse();
+      // PAT rows and the canonical account live in the same Accounts database
+      // used by the issuer. Session candidates are checked for refusal using
+      // this Worker's existing session salt; they never authenticate here.
+      const response = await handleControlRoute({
+        ...controlOptions(),
+        request,
+        url,
+        store: dependencies.store ?? new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+          schemaMode: resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE),
+          sessionHashSalt: salt,
+        }),
+        resolveOperations,
+        sharedPersonalAccessToken: true,
       });
+      if (!response) return Response.json({ error: "not found" }, { status: 404 });
+      const headers = new Headers(response.headers);
+      headers.set("cache-control", "no-store");
+      return new Response(response.body, { status: response.status, headers });
     }
-    if (connectionOAuthCallbackHelperId(url.pathname, request.method)) {
+    if (oauthCallback) {
       if (url.origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) {
         return Response.json({ error: "not found" }, {
           status: 404, headers: { "cache-control": "no-store" },
@@ -2145,7 +2199,7 @@ export async function handlePlatformSharedAuthControlRequest(
         request,
         url,
         store: dependencies.store ?? platformAccountsStore(env),
-        resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
+        resolveOperations,
       }) ?? Response.json({ error: "not found" }, {
         status: 404, headers: { "cache-control": "no-store" },
       });
@@ -2177,19 +2231,12 @@ export async function handlePlatformSharedAuthControlRequest(
       request: authenticatedRequest,
       url,
       store: dependencies.store ?? platformAccountsStore(env),
-      resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
+      resolveOperations,
       subject: identity.accountId,
       credential: "session",
       requireCurrentMembership: true,
       entry: "shared_auth",
-      ...platformLegacyWorkspaceSunsetOption(env),
-      ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
-      trustedNativeClients: trustedNativeClientsFromEnv(env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS),
-      ...platformActivityCursorSealerOption(env),
-      ...(diagnostics ? { diagnostics } : {}),
-      ...(assertActive ? { assertActive } : {}),
-      ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
-      ...(dependencies.runStreamTiming ? { runStreamTiming: dependencies.runStreamTiming } : {}),
+      ...controlOptions(),
       reauthorizeBearer: async () => {
         const current = await authenticateSharedAuthRequest(request, env);
         if (current?.kind === "unauthenticated") return "signed_out";

@@ -84,12 +84,12 @@ check or a new private RP call.
 If a callback fails, start a fresh login attempt rather than replaying its
 single-use authorization code.
 
-On that exact product origin, `/sign-in` redirects to the RP login and other
-local `/api/v1/account/*` management routes return the same 404. Local PAT
-management is not part of this profile. The dedicated issuer origin retains
-its own standard token/grant-backed Workspace directory routes; the profile
-does not proxy that namespace into the product or alter the separate machine
-OAuth protocol namespace.
+On that exact product origin, `/sign-in` redirects to the RP login. The
+dedicated issuer retains its own account management and token/grant-backed
+Workspace directory. The product mounts the browser session mirror and
+notification-pusher routes, plus the optional personal-access-token lifecycle
+below. Other local `/api/v1/account/*` management routes return 404. The machine
+OAuth protocol remains a separate namespace.
 
 For authenticated extensions, the gateway obtains current Workspace membership
 through the private RPC before constructing the existing authenticated context.
@@ -106,9 +106,10 @@ owner membership implicitly in this profile. Existing mutation admission,
 management-epoch checks and durable write CAS remain in the owning Control
 operations. Run streams revalidate the RP grant and canonical account together
 with current membership before emitting later snapshots.
-The shared-profile public Control facade accepts the RP cookie path; an
-explicit Authorization header receives 401. Machine protocol and private
-operator/Run credential lanes retain their separately owned authority.
+The shared-profile public Control facade accepts the RP cookie path. The
+optional personal-access-token path below is its only human Bearer lane.
+Machine protocol and private operator/Run credentials retain their separately
+owned authority.
 
 Portable tests cover stock OSS opt-out, exact configuration/origin, forged
 context, credential fallback, CSRF, suspended owner membership, viewer writes
@@ -116,6 +117,33 @@ and stream revocation. A native workerd test crosses a named Worker service
 binding, a Durable Object session store and a D1 membership store. Its isolated
 database uses bootstrap mode; it does not establish an operator's predeployed
 schema/fence readiness, actual issuer/RP OIDC verification, or staging E2E.
+
+## Personal access tokens on shared staging
+
+The operator can select `TAKOSUMI_SHARED_AUTH_API_KEYS=enabled` for the
+canonical `https://app-staging.takosumi.com` shared-account Worker. The feature
+uses the same Accounts D1 as the staging issuer and the existing Accounts PAT
+records. Other shared-profile deployments keep the browser-only Control surface.
+
+With this option, **CLI / API keys** in the product dashboard lists, issues,
+and revokes the signed-in account's keys. The browser uses its current RP
+session. Creation and revocation require the exact product Origin. Key
+creation uses the existing per-peer mint admission and Accounts scope/app
+validation. Management requires a browser session from the RP. The key value
+is displayed once, and responses are private and non-cacheable.
+
+The CLI sends a PAT alone as its Bearer credential to the canonical Control
+API. The Worker checks the stored PAT's activity, current canonical account,
+scope and optional app or Workspace restrictions. Control checks current app
+and Workspace authority for each operation and retains the PAT ID when
+rechecking a Run or uninstall request. Extension and machine protocol admission
+retain their existing credential verifiers. Browser sign-in and ordinary OSS
+PAT paths keep their existing selection.
+
+Changing this option on a served staging Worker is an authentication
+configuration change. Qualify the common Accounts D1 and the deployed
+management/CLI flow through the owning staging authority. The option changes
+route admission and does not issue or revoke saved keys.
 
 ## Existing-account password sign-in
 

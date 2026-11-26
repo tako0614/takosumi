@@ -753,7 +753,7 @@ export function createAccountsHandler(
   // best-effort guards, NOT a substitute for edge-side limiting.
   const authorizeLimiter = createInMemoryRateLimiter(60);
   const tokenLimiter = createInMemoryRateLimiter(120);
-  const accountTokensLimiter = createInMemoryRateLimiter(10);
+  const accountTokensLimiter = createPersonalAccessTokenCreationRateLimiter();
   // Best-effort per-IP guard; the durable store separately bounds issuance
   // across replicas. Operators still own edge-side admission configuration.
   const passkeyOptionsLimiter = createInMemoryRateLimiter(60);
@@ -1521,6 +1521,11 @@ interface InMemoryRateLimiter {
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_TRACKED_CLIENTS = 4096;
+
+/** The Accounts mint limit, also used by the Hosted browser entry. */
+export function createPersonalAccessTokenCreationRateLimiter(): InMemoryRateLimiter {
+  return createInMemoryRateLimiter(10);
+}
 
 /**
  * The per-source limiter on notification-pusher writes (30 per minute), for

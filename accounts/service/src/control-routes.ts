@@ -234,6 +234,8 @@ interface ControlRouteContext {
     ControlPlaneOperations | undefined
   >;
   readonly issuer?: string;
+  /** Staging product composition where a caller presents an Accounts PAT. */
+  readonly sharedPersonalAccessToken?: true;
   readonly runStreamTiming?: RunStreamTiming;
   readonly assertActive?: () => void;
   readonly withinRunReadDeadline?: RunReadWaiter;
@@ -709,7 +711,13 @@ export async function handleControlRoute(
   context.assertActive?.();
   const bearer = await measureRequestPhase(context.diagnostics, "control_auth", () =>
     measureServerTiming(timings, "tk_control_auth", () =>
-      requireAccountsBearer({ request, store, scope: requiredAccess, assertActive: context.assertActive }),
+      requireAccountsBearer({
+        request,
+        store,
+        scope: requiredAccess,
+        assertActive: context.assertActive,
+        personalAccessTokenOnly: context.sharedPersonalAccessToken,
+      }),
     ),
   );
   context.assertActive?.();
@@ -724,6 +732,7 @@ export async function handleControlRoute(
       request,
       store,
       scope: requiredAccess,
+      personalAccessTokenOnly: context.sharedPersonalAccessToken,
       recheck: true,
     });
     if (!current.ok) {
@@ -737,6 +746,8 @@ export async function handleControlRoute(
       current.auth.workspaceId === initialAuth.workspaceId &&
       JSON.stringify(current.auth.appIds) === JSON.stringify(initialAuth.appIds) &&
       current.auth.credential === initialAuth.credential &&
+      JSON.stringify(current.auth.uninstallRequester.grant) ===
+        JSON.stringify(initialAuth.uninstallRequester.grant) &&
       controlRouteRequiredScope(request) === requiredAccess;
     return sameCredential ? "current" : "denied";
   };
@@ -744,8 +755,10 @@ export async function handleControlRoute(
   return await dispatchAuthenticatedControlRoute(
     {
       ...context,
+      ...(context.sharedPersonalAccessToken ? { entry: "shared_auth" as const } : {}),
       session: {
         subject: bearer.auth.subject,
+        ...(context.sharedPersonalAccessToken ? { requireCurrentMembership: true } : {}),
         credential: bearer.auth.credential,
         uninstallRequester: bearer.auth.uninstallRequester,
         ...(bearer.auth.appIds !== undefined ? { appIds: bearer.auth.appIds } : {}),
