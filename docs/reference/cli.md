@@ -149,7 +149,7 @@ takosumi apps recover-uninstall cap_example --prepare \
 
 `--prepare` は手動の削除Planを作成します。準備には対象アプリを管理できるAccounts PATの `read` と `write` が必要です。承認と実行は確認したPlanを指定する別の操作です。
 
-### 別の接続で再開する
+### 別の接続でアンインストールを再開する
 
 別キーを同じクラウドアカウントの確認済みProvider Connectionとして登録した後、元の接続IDと代替の接続IDを指定します。
 アプリの割当は管理画面または `GET /api/v1/capsules/{app-id}/provider-bindings` で確認できます。
