@@ -107,8 +107,9 @@ OpenTofu is started. A Connection with similar settings is never substituted.
 
 The reasoning is in the Run's `providerResolutions`, one entry per provider.
 
-Put a [token you created](../reference/cli.md#creating-a-token) with `read` and `write` in
-`$TAKOSUMI_DEPLOY_CONTROL_TOKEN` for these examples.
+To inspect `providerResolutions`, read Credential Recipes, and submit configuration plans below,
+set `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` to a [token you created](../reference/cli.md#creating-a-token)
+with `read` and `write`.
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example" \

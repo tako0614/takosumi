@@ -105,7 +105,7 @@ export default function Home() {
               <a class="button button-primary" href="#apps">アプリを選ぶ <span aria-hidden="true">↓</span></a>
               <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
             </div>
-            <p class="hero-note">公式ホスティングは正式提供前（Pre-GA）です。<br />手元で試す手順は<a href="/docs/getting-started/quickstart.html">クイックスタート</a>にあります<span class="nowrap">（Linux、Docker、Bun、sudo などが必要）</span>。</p>
+            <p class="hero-note">公式ホスティングは正式提供前（Pre-GA）です。<br />手元で試す手順は<a href="/docs/getting-started/quickstart">クイックスタート</a>にあります<span class="nowrap">（Linux、Docker、Bun、sudo などが必要）</span>。</p>
           </div>
           <figure class="hero-product">
             <DashboardShot capture={DASHBOARD_CAPTURES.home} alt="Takosumi のホーム画面。ワークスペースに Takos、Takos Office、Yurucommu のアプリと追加操作が並ぶ" class="launcher-shot" priority />
@@ -150,7 +150,7 @@ export default function Home() {
         <section class="after-section site-width" aria-labelledby="after-title">
           <div class="after-intro">
             <h2 id="after-title">入れたあとの更新と記録</h2>
-            <p>追加したあとの更新と設定の変更は、ワークロードの画面の「更新」と「設定」のタブで行います。</p>
+            <p>追加したアプリの画面で、版の更新・設定の変更・履歴の確認を行えます。</p>
           </div>
           <div class="after-steps">
             <div><h3>危ない更新は止まる</h3><p>新しい版への更新でも自動更新でも、作り直しや削除を含む変更は、確認するまでデプロイされません。</p></div>
@@ -171,8 +171,9 @@ export default function Home() {
             </div>
             <div class="closing-actions">
               <a class="button button-primary" href="https://app.takosumi.com/">公式ホスティングで使う <Arrow /></a>
-              <a class="text-link" href="/docs/getting-started/quickstart.html">手元で試す（クイックスタート） <Arrow /></a>
-              <a class="text-link" href="/docs/concepts/self-host.html">セルフホストについて <Arrow /></a>
+              <a class="text-link" href="https://app.takosumi.com/docs/">公式ホスティングのドキュメント <Arrow /></a>
+              <a class="text-link" href="/docs/getting-started/quickstart">手元で試す（クイックスタート） <Arrow /></a>
+              <a class="text-link" href="/docs/concepts/self-host">セルフホストについて <Arrow /></a>
             </div>
           </div>
         </section>
@@ -185,6 +186,8 @@ export default function Home() {
           <a href="/docs/">ドキュメント</a>
           <a href="/docs/en/" hreflang="en" lang="en">English docs</a>
           <a href="https://app.takosumi.com/docs/pricing">料金</a>
+          <a href="https://takoserver.com/">Takoserver <Arrow /></a>
+          <a href="https://takoform.com/">Takoform <Arrow /></a>
           <a href="https://github.com/tako0614/takosumi">GitHub <Arrow /></a>
         </nav>
       </footer>

@@ -1,7 +1,7 @@
 # Show your app on the home screen
 
 If your software has a screen people open (a web app), you can put a tile that opens it on the
-dashboard home (**Your apps**). **Open service** at the end of adding then opens that screen in a
+dashboard home (**Your apps**). **Open** at the end of installing then opens that screen in a
 new tab too. You declare it in the repository's `.well-known/takosumi.json`
 ([Repository manifest](../reference/repository-manifest.md)).
 
@@ -187,7 +187,7 @@ checked against the registered names.
 Templates are compared literally, except that the case of the scheme and host and a default port
 (`:443`) are normalised. Every registered template contains `{origin}`.
 
-By default Takosumi trusts the three native apps in the TASK-0119 design:
+By default Takosumi trusts these three native apps:
 
 | id | Name | Bundle id and package | Templates (iOS and Android) |
 | --- | --- | --- | --- |
@@ -280,9 +280,9 @@ which Takosumi Mobile uses too.
 
 ## What the person adding sees
 
-1. At the end of adding, **Preparing the service** appears while Takosumi waits for the screen's
+1. At the end of installing, **Preparing to open…** appears while Takosumi waits for the screen's
    URL.
-2. On **Service added**, **Open service** opens the screen in a new tab.
+2. On **Installed**, **Open** opens the screen in a new tab.
 3. **Your apps** on the home screen shows a tile with the icon and `display.title` (or the
    service name if there is no title). Clicking it opens the screen in a new tab (on a phone, as
    in [How it opens on a phone](#how-it-opens-on-a-phone)). Without an icon,

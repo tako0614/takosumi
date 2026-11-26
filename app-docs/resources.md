@@ -1,4 +1,4 @@
-# Resources and providers
+# リソースとプロバイダー
 
 Takosumi hosted service で使う cloud resource は、Git repository の OpenTofu module が宣言し、
 選択した provider が作成します。Takosumi は provider を置き換えず、Run と state の境界を
@@ -17,7 +17,7 @@ Takosumi hosted service は provider 名から account、region、secret、価�
 Connection を作り、module の provider requirement へ Binding します。credential は Run の
 間だけ runner の中に実体として用意され、plan 表示、Output、Interface、ログへ書きません。
 
-## Lifecycle
+## ライフサイクル
 
 ```text
 repository commit
@@ -68,7 +68,7 @@ evidence がそろった後にだけ利用可能になります。
 VM のような未対応 compute family は、対応済みと推測しません。現在の truth は hard-coded
 resource list ではなく認証済み catalog です。
 
-## Billing and deletion
+## 課金と削除
 
 有料 operation は実行前に quote、credit、spend limit を確認します。使用量は発生元
 Workspace と支払い owner に紐づきます。価格は [Pricing](./pricing.md) を参照してください。

@@ -3,7 +3,7 @@
 Put an install link in a README or on a website, and readers can open the app install screen with
 the source already filled in. The link only fills in the form. **Opening it creates nothing.**
 Pressing **Install** reads the Git version and shows the version and configuration. The person checks
-required connections, inputs and the cost, then chooses **Allow and install** to apply the changes.
+required connections, inputs and the cost, then chooses **Install** to apply the changes.
 Open **Configuration** for connections, the app name and optional settings; the resource list is under **Resource details**.
 
 Get the repository into the shape described in
@@ -56,7 +56,7 @@ happens after that depends on the kind of `ref`:
 - **A branch** (such as `main`): the app tracks that branch. When a new commit arrives, it
   shows **Update available**.
 - **A tag or commit** (such as `v1.2.0`): the app stays on that version. The person who installed
-  it moves to a newer one with **Change version**
+  it moves to a newer one with **Choose a version**
   ([Update to a new version](./after-adding.md#update-to-a-new-version)). If you move the tag to
   another commit, though, the app shows **Update available**, as it would for a branch.
 
@@ -112,7 +112,7 @@ web+takosumi:install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deplo
 ```
 
 This link opens the Takosumi that the person registered in their browser. They register it in
-that Takosumi's dashboard: under **Account**, in **Where store installs land**, press **Register
+that Takosumi's dashboard: under **Account**, in **Store install links**, press **Register
 this device** and accept the browser's prompt.
 
 - In a browser that has not registered, this link does not open.
@@ -175,7 +175,7 @@ The first screen is the same one shown in the
 2. The app page shows its name, description and a compact version choice. **About this app** contains the repository and pinned version.
 3. Pressing **Install** pins `ref` to a commit and checks the repository. The person checks the
    version, configuration, required connections and settings, and cost, then chooses
-   **Allow and install** to apply them. To enter a Git URL manually, choose **Install from Git** on an empty Home or in the Store, enter the URL,
+   **Install** to apply them. To enter a Git URL manually, choose **Install from Git** on an empty Home or in the Store, enter the URL,
    then choose **Continue**. An existing app
    also offers **Open** and **Install another**.
 

@@ -193,9 +193,29 @@ html:not(.dark) .vp-doc .dark-only {
   }
 }
 
-/* The full nav bar appears at 768px, where the English labels need tighter
- * link padding to stay inside the viewport until the desktop layout. */
-@media (min-width: 768px) and (max-width: 959px) {
+/* Five nav items plus search and the extra menu do not fit VitePress's inline
+ * bar at tablet widths (768px–1199px, where the sidebar also occupies the
+ * left column from 960px). Keep the phone menu button and panel until 1200px,
+ * matching app-docs/.vitepress/theme/style.css. */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .VPNav .VPNavBar .VPNavBarMenu {
+    display: none;
+  }
+
+  .VPNav .VPNavBar .VPNavBarExtra {
+    display: none;
+  }
+
+  .VPNav .VPNavBar .VPNavBarHamburger {
+    display: flex;
+  }
+
+  .VPNav .VPNavScreen {
+    display: block;
+  }
+}
+
+@media (min-width: 1200px) and (max-width: 1359px) {
   .VPNavBar .VPNavBarMenu .VPNavBarMenuLink {
     padding: 0 8px;
   }

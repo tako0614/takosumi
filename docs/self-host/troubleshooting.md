@@ -3,7 +3,7 @@
 ローカル smoke-test project で起動しない場合は、初回起動と同じ shell で
 `local_compose` helper を使って状態と診断出力を確認します。ローカル確認の `local_project` と
 `local_dir` は、[ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)
-で設定したものです。production では、初回起動時と同じ project と Compose file 引数を helper に
+で設定したものです。production では、初回起動時と同じ project と Docker Compose file 引数を helper に
 設定してください。
 
 ```bash
@@ -33,7 +33,7 @@ production Caddy 構成では `https://<公開hostname>/healthz` を確認しま
 | `Invalid keyData` | `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` を鍵として読めない。`.env.example` の仮の値（`replace-with-private-d`）が残っていないか確かめ、生成した JWK に置き換える |
 | `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` | 上流の ID プロバイダを設定したのに `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` が無い |
 | `clientSecretEnv references missing runtime secret` | 記述子の `clientSecretEnv` に書いた名前の secret がコンテナに届いていない。`docker-compose.override.yml` の `accounts.environment` で渡す |
-| `dashboard SPA build not found` | dashboard の build が無く、画面が出ない（起動は続く）。Compose の image には入っている。手で起動する場合は `bun run build:dashboard` を実行するか、`index.html` のあるディレクトリを `TAKOSUMI_ACCOUNTS_STATIC_DIR` に設定する |
+| `dashboard SPA build not found` | dashboard の build が無く、画面が出ない（起動は続く）。Docker Compose の image には入っている。手で起動する場合は `bun run build:dashboard` を実行するか、`index.html` のあるディレクトリを `TAKOSUMI_ACCOUNTS_STATIC_DIR` に設定する |
 
 https で開けない、証明書が出ないときは `logs caddy` を見ます。公開する hostname がこのホストを
 指し、80 番と 443 番に外から届く必要があります。`/readyz` が `503` で `internalApiSecret` を返すのは、

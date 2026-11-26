@@ -3,7 +3,7 @@
 復旧できるよう、データベース、暗号・署名鍵、実際に使う artifact/source/state store、
 配置情報を一組として保全します。
 
-Bun/PostgreSQL の参照 Compose は PostgreSQL、Caddy と `takosumi-runtime` volume を
+Bun/PostgreSQL の参照 Docker Compose は PostgreSQL、Caddy と `takosumi-runtime` volume を
 永続化します。control / pre-destroy export は `TAKOSUMI_BACKUP_ARTIFACTS_DIR`
 (既定 `/var/lib/takosumi/backups`) に保存します。directory は実行ユーザー所有の 0700、
 file は 0600 で、bundle は既存の secret-store の鍵で暗号化して（sealed）保存します。public artifact
@@ -11,7 +11,7 @@ manifest だけは平文です。保存名は、中身を表さない参照名�
 runner は同梱されません。独自の runner/state/artifact store の保存先も backup 対象に加えます。
 
 `TAKOSUMI_BACKUP_ARTIFACTS_DIR` は destroy 前の export を保存するために事実上必須です。
-参照 Compose は既定値を渡しますが、Compose を使わずに起動する場合も永続化した保存先を
+参照 Docker Compose は既定値を渡しますが、Docker Compose を使わずに起動する場合も永続化した保存先を
 明示してください。未設定だと export は `skipped` (`backups_unavailable`) と記録され、
 export が無いまま destroy に進みます。
 
@@ -19,7 +19,7 @@ export が無いまま destroy に進みます。
 
 Accounts と control plane の schema は同じ PostgreSQL database
 `takosumi_accounts` にあります。以下の例は `deploy/node-postgres` から追加の `-p` / `-f`
-なしで起動した既存の default Compose project を対象にします。別 project や Compose file で
+なしで起動した既存の default Docker Compose project を対象にします。別 project や Docker Compose file で
 起動した場合は、その起動時と同じ project/file 引数を全操作に使ってください。backup は checkout
 の外に保存します。
 
@@ -49,7 +49,7 @@ compose up -d --wait accounts
 echo "$backup_file"
 ```
 
-ローカル smoke-test project を backup する場合、default Compose の上記コマンドは使いません。
+ローカル smoke-test project を backup する場合、default Docker Compose の上記コマンドは使いません。
 初回起動と同じ shell / project / override 変数（`local_project` と `local_dir` は
 [ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)で設定したもの）を使い、
 次を実行します。
@@ -87,7 +87,7 @@ echo "$backup_file"
 設定、Git commit、image digest、migration head も記録します。Caddy volume の証明書状態は
 再発行できますが、バックアップすれば ACME 再取得を避けられます。
 
-復旧演習は別の Compose project にある空の database で行います。project 名が専用の新しい
+復旧演習は別の Docker Compose project にある空の database で行います。project 名が専用の新しい
 volume を作るため、元の database に触れません。`--clean` は使わず、既存 checkout の `.env` を
 読み込んで同じ image / migration を使います。復旧中は Caddy を起動しません。確認対象は health と
 匿名 dashboard shell です。認証済みの記録を読む場合は restore-specific provider/client 設定が要ります。
@@ -151,7 +151,7 @@ rm -rf "$restore_dir"
 ```
 
 Workspace export は DB 全体、artifact store、鍵の backup の代わりにはなりません。
-参照 Compose は file backup store を配線します。uninstall の 7 日 grace 中は Capsule backup
+参照 Docker Compose は file backup store を配線します。uninstall の 7 日 grace 中は Capsule backup
 API で export でき、期限後の finalizer も destroy 前に export を試みます。適用済み state を含める
 独自 runner 構成では、その sealed state store の `backupStateObjectReader` を host から明示的に
 接続します。読み取り口や state object が無い場合は export 失敗として記録されますが、
