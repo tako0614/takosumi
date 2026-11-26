@@ -1850,7 +1850,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionReadbackDeadline", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "reviewDifferentConnectionSetupRequired", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "scheduledUnavailable", "uninstallScheduledDuringReplacement", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionReadbackDeadline", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "reviewDifferentConnectionSetupRequired", "reviewDifferentConnectionRemoved", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "scheduledUnavailable", "uninstallScheduledDuringReplacement", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionInventoryUnavailable: "an uninstall review holds old approval until checking replacement connections finishes",
@@ -1864,6 +1864,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       reviewDifferentConnectionApprovedElsewhere: "a held uninstall review stays in the same tab if the old Plan was approved elsewhere",
       reviewDifferentConnectionRejected: "a definite uninstall connection mismatch releases only its provisional hold",
       reviewDifferentConnectionSetupRequired: "a policy refusal when changing uninstall connections releases the previous review",
+      reviewDifferentConnectionRemoved: "a connection removed as uninstall review begins lets the owner choose another key",
       staleReview: "a refused uninstall Apply can open a fresh review with another connection",
       staleReviewSetupRequired: "an uninstall connection rejected by the current policy can be replaced after approval",
       lostReplacementResponse: "a lost replacement Plan response leaves its saved uninstall review reachable",
@@ -1919,7 +1920,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         ? new Promise<void>((resolve) => { finishInventoryCheck = resolve; })
         : Promise.resolve();
       const replacementSetupRequired = scenario === "reviewDifferentConnectionSetupRequired";
-      const replacementIsRejected = scenario === "reviewDifferentConnectionRejected" || replacementSetupRequired;
+      const replacementRemoved = scenario === "reviewDifferentConnectionRemoved";
+      const replacementIsRejected = scenario === "reviewDifferentConnectionRejected" || replacementSetupRequired || replacementRemoved;
       const lostResponseBeforeApproval = scenario === "reviewDifferentConnectionLostResponse" || savesReplacementLate;
       const reviewDifferentConnection = scenario === "reviewDifferentConnection" || replacementInventoryUnavailable ||
         lostResponseBeforeApproval ||
@@ -2313,7 +2315,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               : cloudflareAccount(replacementAccountId, "fixture-team") : {}),
             ...(replacementExpiresBeforeReview ? { expiresAt: replacementExpiry } : {}),
           }] : []),
-          ...(replacementExpiresBeforeReview || replacementRowDisappears || replacementInventoryChanged ? [{
+          ...(replacementExpiresBeforeReview || replacementRowDisappears || replacementInventoryChanged || replacementRemoved ? [{
             id: "conn_later", displayName: "Other verified key", providerSource: connectionProblem.provider,
             scope: "personal", status: "verified", ...cloudflareAccount(replacementAccountId, "fixture-team"),
           }] : []),
@@ -2347,7 +2349,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return route.fulfill({ status: 201, json: { run: sharedKeyPlanPhase === "failed" ? sharedKeyFailedPlan : recoveryPlan } });
           }
           await replacementPlanPending;
-          if (replacementIsRejected) {
+          if (replacementRemoved && replacementPlanBodies.length === 1) {
+            replacementAvailable = false;
+            return route.fulfill({ status: 404, json: { error: {
+              code: "not_found", message: "The selected Provider Connection was not found.",
+              details: { reason: "provider_connection_setup_required" },
+            } } });
+          }
+          if (replacementIsRejected && !replacementRemoved) {
             return route.fulfill({ status: 409, json: { error: {
               code: "failed_precondition",
               message: "The selected connection could not be verified for removal.",
@@ -3256,7 +3265,20 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           await expect(review.getByRole("button", { name: "Approve this change", exact: true })).toBeEnabled();
           expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/destroy-plan`]);
           expect(traffic.failures.map(({ kind, url, status }) => ({ kind, path: new URL(url).pathname, status })))
-            .toEqual([{ kind: "response", path: `/api/v1/capsules/${ID}/destroy-plan`, status: 409 }]);
+            .toEqual([{ kind: "response", path: `/api/v1/capsules/${ID}/destroy-plan`, status: replacementRemoved ? 404 : 409 }]);
+          if (replacementRemoved) {
+            await choose.click();
+            const choices = review.getByRole("combobox", { name: /Cloudflare/ });
+            await expect(choices.getByRole("option", { name: /Other verified key/ })).toBeEnabled();
+            await expect(choices.getByRole("option", { name: /Existing Cloudflare connection/ })).toHaveCount(0);
+            await choices.selectOption("conn_later");
+            await review.getByRole("button", { name: "Review removal" }).click();
+            await expect(review.locator(`a[href="/runs/${recoveryPlan.id}"]`)).toBeVisible();
+            expect(replacementPlanBodies).toEqual(["conn_saved", "conn_later"].map((replacementConnectionId) => ({
+              destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId }],
+            })));
+            expect(seenMutations).toEqual(Array(2).fill(`POST /api/v1/capsules/${ID}/destroy-plan`));
+          }
           expect(errors).toEqual([]);
           return;
         }
