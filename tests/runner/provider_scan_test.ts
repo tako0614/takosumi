@@ -677,6 +677,57 @@ exit 2
   });
 }, 10_000);
 
+test("native plans check required output declarations without relying on planned values", async () => {
+  await withRoot(async (root) => {
+    const source = join(root, "main.tf");
+    await writeFile(source, [
+      'resource "terraform_data" "local" { input = "fixture" }',
+      'output unquoted { value = terraform_data.local.id }',
+      'output "empty_value" { value = null }',
+      'output "ordinary" { value = "fixture" }',
+      "",
+    ].join("\n"));
+    const workspace = pipelineWorkspace(root);
+    const providerScan = await requiredProviderSourcesFromTerraformTree(root);
+    const options = {
+      operation: "create" as const,
+      commandContext: { env: { PATH: Bun.env.PATH ?? "" } },
+      requiredProviders: providerScan.providers,
+      providerScan,
+    };
+
+    const missing = await initPlanAndBuildResponse("missing-output", workspace, root, {
+      ...options,
+      requiredOutputNames: ["unquoted", "empty_value", "missing"],
+    });
+    expect(missing).toMatchObject({
+      status: "failed",
+      errorCode: "required_output_not_declared",
+      stderr: expect.stringContaining('Required output "missing"'),
+    });
+    expect(missing.planArtifact).toBeUndefined();
+    expect(missing.planJsonArtifact).toBeUndefined();
+
+    const present = await initPlanAndBuildResponse("declared-output", workspace, root, {
+      ...options,
+      requiredOutputNames: ["unquoted", "empty_value"],
+    });
+    expect(present.status).toBe("succeeded");
+    expect(present.planArtifact).toBeDefined();
+
+    await writeFile(source, "terraform {}\n");
+    const empty = await initPlanAndBuildResponse("empty-output", workspace, root, {
+      ...options,
+      providerScan: await requiredProviderSourcesFromTerraformTree(root),
+      requiredOutputNames: ["missing"],
+    });
+    expect(empty).toMatchObject({
+      status: "failed",
+      errorCode: "required_output_not_declared",
+    });
+  });
+});
+
 test("provider-free plans report explicit lockfile absence", async () => {
   await withRoot(async (root) => {
     await writeFile(join(root, "main.tf"), "terraform {}\n");

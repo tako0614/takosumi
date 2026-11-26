@@ -23,6 +23,7 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   runner_mutation_indeterminate: "runError.mutationIndeterminate",
   apply_output_projection_failed: "runError.outputProjectionFailed",
   opentofu_resource_precondition_failed: "runError.resourcePreconditionFailed",
+  required_output_not_declared: "installStore.problem.requiredOutput",
   plan_failed: "runError.planFailed",
   apply_failed: "runError.applyFailed",
   run_failed: "runError.runFailed",
