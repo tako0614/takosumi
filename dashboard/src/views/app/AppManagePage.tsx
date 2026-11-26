@@ -536,7 +536,12 @@ export default function AppManagePage(props: {
     { readonly section: ReviewSection; readonly action?: CapsuleAppAction | "continue_revision" }
   >();
   const [sectionError, setSectionError] = createSignal<
-    { readonly section: ReviewSection; readonly message: string; readonly configurationUnconfirmed?: true }
+    {
+      readonly section: ReviewSection;
+      readonly message: string;
+      readonly configurationUnconfirmed?: true;
+      readonly uninstallPlanUnconfirmed?: true;
+    }
   >();
   const [notice, setNotice] = createSignal<
     { readonly section: ReviewSection; readonly message: string }
@@ -674,7 +679,12 @@ export default function AppManagePage(props: {
         } else {
           const message = uninstallConnectionRefused ? t("app.uninstall.connectionUnavailable")
             : reviewTimedOut ? t("app.review.notStarted") : friendlyError(cause, t).message;
-          setSectionError({ section, message, ...(isConfigurationChange && responseUncertain ? { configurationUnconfirmed: true } : {}) });
+          setSectionError({
+            section,
+            message,
+            ...(isConfigurationChange && responseUncertain ? { configurationUnconfirmed: true } : {}),
+            ...(isOrdinaryUninstall && responseUncertain ? { uninstallPlanUnconfirmed: true } : {}),
+          });
         }
         // A selected Connection can be removed between the inventory read and Plan admission.
         const replacementRefused = hold && cause instanceof ControlApiError && (
@@ -694,6 +704,8 @@ export default function AppManagePage(props: {
           } catch {
             // Keep the approval held when the readback also fails.
           }
+        } else if (isOrdinaryUninstall && responseUncertain) {
+          void readUninstallPreflight(async (scope) => await refetchApp(scope), { isCurrent }).catch(() => {});
         } else if (uninstallConnectionRefused || replacementRefused || responseUncertain) {
           if (replacementRefused) hold.release();
           // The app view can report unavailable connections or work accepted
@@ -870,10 +882,12 @@ export default function AppManagePage(props: {
       )}
     </Show>
   );
-  const refreshUnconfirmedUninstallReview = (held: ActiveReview) => {
+  const refreshUnconfirmedUninstallReview = (held?: ActiveReview) => {
+    const error = sectionError();
     const scope = uninstallScope();
     const epoch = uninstallEpoch;
     const isCurrent = () => !disposed && isOwner() && review() === held &&
+      (held !== undefined || (error?.uninstallPlanUnconfirmed === true && sectionError() === error)) &&
       uninstallScope() === scope && uninstallEpoch === epoch;
     void readUninstallPreflight(async (scope) => await refetchApp(scope), { isCurrent }).catch(() => {});
   };
@@ -1851,6 +1865,15 @@ export default function AppManagePage(props: {
               <Show when={uninstallError()}>
                 {(message) => <p class="wa-error" role="alert" data-testid="app-uninstall-error">{message()}</p>}
               </Show>
+              <Show when={sectionError()?.uninstallPlanUnconfirmed && isOwner() && view().applied && !destroyed() &&
+                !isAppRemovalRun(view().progress.run?.type) && !isAppRemovalRun(view().progress.review?.runType)}>
+                <div data-testid="app-uninstall-plan-unconfirmed" role="status">
+                  <Toast tone="neutral">{t("app.uninstall.unconfirmed")}
+                    <Button type="button" variant="secondary" busy={appView.loading}
+                      onClick={() => refreshUnconfirmedUninstallReview()}>{t("common.refresh")}</Button>
+                  </Toast>
+                </div>
+              </Show>
               {reservedRemovalControl(submittedRemovalReceipt)}
               <AppAttentionSection
                 canUninstall={isOwner()}
@@ -1864,7 +1887,7 @@ export default function AppManagePage(props: {
                 uninstallBusy={uninstallBusy()}
                 screenRetryBusy={screenRetryBusy()}
                 {...(screenRetryMessage() ? { screenRetryMessage: screenRetryMessage()! } : {})}
-                {...(errorFor("attention") ? { error: errorFor("attention")! } : {})}
+                {...(errorFor("attention") && !sectionError()?.uninstallPlanUnconfirmed ? { error: errorFor("attention")! } : {})}
                 {...(noticeFor("attention") ? { notice: noticeFor("attention")! } : {})}
                 {...(review()?.section === "attention"
                   ? { reviewRunId: review()!.initialRunId ?? review()!.planRunId }

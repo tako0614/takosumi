@@ -114,39 +114,55 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
   test.describe("Installed app page", () => {
     test.skip(mode !== "portable", "deterministic app page fixture; not production evidence");
 
-    for (const response of ["lost response", "save timeout"] as const) {
+    for (const response of ["lost response", "save timeout", "stalled readback"] as const) {
       test(`an ordinary uninstall reopens the submitted Plan after a ${response}`, async ({ page }) => {
         await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+        if (response === "stalled readback") await page.clock.install();
         const base = `/api/v1/capsules/${CAPSULE_ID}`;
         const plan = lifecycleRun("plan_first_removal", "destroy_plan", "waiting_approval", "2026-11-26T00:00:00.000Z", {
           policyStatus: "pass", requiresApproval: true,
           summary: { add: 0, change: 0, destroy: 1 },
           planResources: [{ address: "test_resource.app", type: "test_resource", actions: ["delete"] }],
         });
-        const pendingPlan = { ...plan, status: response === "save timeout" ? "queued" : "running" };
+        const pendingPlan = { ...plan, status: response === "lost response" ? "running" : "queued" };
         const runPath = `/api/v1/runs/${plan.id}`;
         const mutations: string[] = [];
         let submitted = false;
+        let stored = false;
         let reviewReady = false;
+        let uncommittedReads = 0;
         let planReads = 0;
+        let releaseReadback = () => {};
+        const heldReadback = new Promise<void>((resolve) => { releaseReadback = resolve; });
         await page.route("**/api/v1/**", async (route) => {
           const request = route.request();
           const { pathname, search } = new URL(request.url());
           if (request.method() !== "GET") mutations.push(`${request.method()} ${pathname}${search}`);
           if (pathname === base && search === "?immediate=true" && request.method() === "DELETE") {
             submitted = true;
-            if (response === "lost response") return route.abort("failed");
+            if (response === "lost response") {
+              stored = true;
+              return route.abort("failed");
+            }
             return route.fulfill({ status: 409, json: { error: {
               code: "failed_precondition", message: "Timed out saving the Plan.",
               details: { reason: "capsule_plan_creation_timeout", stage: "plan_run_create" },
             } } });
           }
           if (pathname === `${base}/app`) {
-            const pending = submitted && !reviewReady;
+            if (submitted && !stored) {
+              uncommittedReads += 1;
+              if (response === "stalled readback") {
+                await heldReadback;
+                // The browser already aborted this request at its read deadline.
+                return route.abort("failed").catch(() => {});
+              }
+            }
+            const pending = stored && !reviewReady;
             const latestRun = pending ? pendingPlan : plan;
             return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
               uninstall: { mode: "none", impact: { usedBy: [] } },
-              ...(submitted ? {
+              ...(stored ? {
                 latestRun,
                 state: pending ? "uninstalling" : "installed",
                 primaryAction: pending ? "none" : "open",
@@ -156,7 +172,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               } : {}),
             }) } });
           }
-          if (pathname === runPath && request.method() === "GET" && submitted) {
+          if (pathname === runPath && request.method() === "GET" && stored) {
             planReads += 1;
             return route.fulfill({ json: { run: reviewReady ? plan : pendingPlan } });
           }
@@ -171,8 +187,27 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
         await openAppPane(page, "danger");
         await page.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall now", exact: true }).click();
-        // The automatic readback is required before any reload can discover the Plan.
+        const unconfirmed = page.getByTestId("app-uninstall-plan-unconfirmed");
+        if (response !== "lost response") {
+          // The timed-out save can land after the browser's first automatic readback.
+          await expect.poll(() => uncommittedReads).toBe(1);
+          await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "installed");
+          const refresh = unconfirmed.getByRole("button", { name: "Refresh", exact: true });
+          if (response === "stalled readback") {
+            await expect(refresh).toBeDisabled();
+            try {
+              await page.clock.fastForward(30_001);
+              await expect(refresh).toBeEnabled();
+            } finally {
+              releaseReadback();
+            }
+          }
+          stored = true;
+          await refresh.click();
+        }
+        // Verify the app discovers the original Run through readback before any reload.
         await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "uninstalling");
+        await expect(unconfirmed).toHaveCount(0);
         reviewReady = response === "lost response";
         await page.reload({ waitUntil: "domcontentloaded" });
         if (reviewReady) {
