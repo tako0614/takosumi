@@ -187,7 +187,7 @@ test("Accounts refuses a CLI original Connection selection without partial Destr
   }
 });
 
-test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall with PAT fences", async () => {
+test("CLI prepares and applies one manual uninstall with the existing Accounts PAT fences", async () => {
   const h = await fixture();
   const path = `/api/v1/capsules/${h.appId}/destroy-plan`;
   for (const [token, changes] of [
@@ -205,19 +205,6 @@ test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall wit
     expect(denied.status).toBe(403);
     expect(h.runnerCalls).toEqual(before);
   }
-  const created = await h.dispatch(new Request(`${ORIGIN}${path}`, {
-    method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-    body: "{}",
-  }));
-  expect(created.status).toBe(201);
-  const saved = (await created.json()).run as { id: string; type: string; status: string;
-    capsuleId: string; workspaceId: string };
-  expect(saved).toMatchObject({ type: "destroy_plan", status: "waiting_approval",
-    capsuleId: h.appId });
-  expect(saved.workspaceId).toBeString();
-  expect((await h.operations.getRun(saved.id))?.id).toBe(saved.id);
-  const beforeDestroy = { ...h.runnerCalls };
-
   const originalFetch = globalThis.fetch;
   const requests: Request[] = [];
   globalThis.fetch = (async (input, init) => {
@@ -229,6 +216,29 @@ test("Accounts Destroy Plan and CLI apply complete one no-provider uninstall wit
   const errors: string[] = [];
   const io = { stdout: (line: string) => output.push(line), stderr: (line: string) => errors.push(line) };
   try {
+    const beforePrepare = { ...h.runnerCalls };
+    expect(await main(["apps", "recover-uninstall", h.appId, "--prepare",
+      "--token", TOKEN, "--url", ORIGIN, "--json"], io)).toBe(0);
+    const prepared = JSON.parse(output[0]!);
+    expect(prepared).toMatchObject({
+      status: "review_required", appId: h.appId,
+      plan: { status: "waiting_approval", baseStateGeneration: 1 },
+    });
+    expect(prepared.planRunId).toMatch(/^plan_/u);
+    expect(prepared.plan.providerConnections).toBeUndefined();
+    expect(requests.map(request => [request.method, new URL(request.url).pathname]))
+      .toEqual([["POST", path]]);
+    expect(await requests[0]!.json()).toEqual({});
+    expect(h.runnerCalls).toEqual({ ...beforePrepare, plan: beforePrepare.plan + 1 });
+    expect(await h.ledger.getCapsule(h.appId)).toMatchObject({ status: "active", currentStateGeneration: 1 });
+    const saved = await h.operations.getRun(prepared.planRunId);
+    if (!saved) throw new Error("missing saved Destroy Plan");
+    expect(saved).toMatchObject({ type: "destroy_plan", status: "waiting_approval", capsuleId: h.appId });
+    expect(saved.workspaceId).toBeString();
+    const beforeDestroy = { ...h.runnerCalls };
+    requests.length = 0;
+    output.length = 0;
+
     const reviewArgs = ["apps", "recover-uninstall", h.appId, "--destroy-plan", saved.id,
       "--token", "synthetic-destroy-read-only", "--url", ORIGIN, "--json"];
     expect(await main(reviewArgs, io)).toBe(0);

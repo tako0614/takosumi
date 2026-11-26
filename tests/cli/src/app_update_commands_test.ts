@@ -177,6 +177,9 @@ test("recover-uninstall rejects malformed pairs and confirmation flags before HT
   for (const args of [
     recoverArgs.filter((_, index) => index < 3 || index > 4),
     [...recoverArgs, "--yes"],
+    [...recoverArgs, "--prepare"],
+    [...reviewDestroyArgs, "--prepare"],
+    [...recoverArgs.slice(0, 3), "--prepare", "--current-review"],
     [...recoverArgs, "--destroy-plan", destroyPlan.id],
     [...recoverArgs, "--current-review"],
     [...reviewDestroyArgs, "--current-review"],
@@ -1160,6 +1163,18 @@ test("terminal Apply readback rejects changed evidence and current authorization
     expect(r.result.runStatus).toBeUndefined();
     expect(r.calls.filter(c => c.method === "POST")).toHaveLength(1);
   }
+});
+
+test("observing a failed Apply projection points to a separate manual removal review", async () => {
+  const terminal = { ...apply, status: "failed", errorCode: "apply_output_projection_failed" };
+  const args = applyArgs.filter(arg => arg !== "--yes").concat("--observe-only");
+  const result = await invoke(args, req => normal(req, { apply: terminal, history: { runs: [terminal] } }));
+  expect(result.code).toBe(1);
+  expect(result.result).toMatchObject({
+    status: "failed", runId: apply.id, code: "apply_output_projection_failed",
+    note: expect.stringContaining("apps recover-uninstall <app-id> --prepare"),
+  });
+  expect(result.calls.every(call => call.method === "GET")).toBe(true);
 });
 
 for (const [kind, savedPlan, resultRun, args, serve] of [

@@ -138,7 +138,18 @@ takosumi apps apply cap_example --plan plan_example --observe-only \
 `--yes`と`--observe-only`は同時指定できません。
 failed/cancelled/expiredのRunも新Planで盲目的に再実行せず、保存Runとアプリ状態を確認します。
 
-## 別の接続でアンインストールを再開する
+## 手動のアンインストールを確認する
+
+出力の反映に失敗した適用結果が `apply_output_projection_failed` を返した場合、保存済みの状態を使って手動でアンインストールを確認できます。現在の接続を使える場合やProviderを使わない場合は、接続の差し替えを指定せずに削除Planを作成します。
+
+```bash
+takosumi apps recover-uninstall cap_example --prepare \
+  --url https://takosumi.example.com --json
+```
+
+`--prepare` は手動の削除Planを作成します。準備には対象アプリを管理できるAccounts PATの `read` と `write` が必要です。承認と実行は確認したPlanを指定する別の操作です。
+
+### 別の接続でアンインストールを再開する
 
 別キーを同じクラウドアカウントの確認済みProvider Connectionとして登録した後、元の接続IDと代替の接続IDを指定します。
 アプリの割当は管理画面または `GET /api/v1/capsules/{app-id}/provider-bindings` で確認できます。

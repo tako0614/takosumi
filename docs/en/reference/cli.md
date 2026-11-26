@@ -142,7 +142,18 @@ Observation never approves or creates an Apply. Not finding a linked Apply does 
 `--yes` and `--observe-only` cannot be combined.
 Failed, cancelled or expired Runs also need inspection of the saved Run and app state, rather than a blind new Plan.
 
-## Resume an uninstall with a different Connection
+## Review a manual uninstall
+
+When an Apply returns `apply_output_projection_failed`, its saved state is available for manual uninstall. Use `--prepare` when the current connections are usable or the app needs no Provider credentials.
+
+```bash
+takosumi apps recover-uninstall cap_example --prepare \
+  --url https://takosumi.example.com --json
+```
+
+Preparing a manual Destroy Plan requires an Accounts PAT with `read` and `write` for the app. Review the saved Plan before explicitly approving and executing it with the separate `apps apply` command.
+
+### Resume an uninstall with a different Connection
 
 Register the new key as a verified Provider Connection for the same cloud account, then pass the original and replacement Connection IDs.
 Find the app's assignments on its management page or through `GET /api/v1/capsules/{app-id}/provider-bindings`.
