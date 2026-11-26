@@ -1,5 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
-import { controlFetch, createApplyRun } from "../../../../dashboard/src/lib/control-api.ts";
+import { afterEach, expect, jest, test } from "bun:test";
+import { controlFetch, createApplyRun, listAccessibleAppsPage } from "../../../../dashboard/src/lib/control-api.ts";
 import { apiFetch } from "../../../../dashboard/src/views/account/lib/http.ts";
 import { loadCommercialBillingTransactions } from "../../../../dashboard/src/lib/commercial-billing.ts";
 import { listWorkspacesCached, clearWorkspaceListCache } from "../../../../dashboard/src/lib/workspace-list.ts";
@@ -10,6 +10,7 @@ import {
 } from "../../../../dashboard/src/lib/hosted-resources.ts";
 import {
   clearDashboardBootstrapCache,
+  fetchDashboardBootstrap,
   fetchDashboardWorkspaceBootstrap,
 } from "../../../../dashboard/src/lib/dashboard-bootstrap.ts";
 import {
@@ -479,4 +480,75 @@ test("a known Hosted route completes the original health read before an ordinary
     releaseHealth(Response.json({ authenticated: true }));
     await result;
   }
+});
+
+test("session bootstrap and app list reads share a recent availability observation but send each canonical GET", async () => {
+  const calls: string[] = [];
+  let now = 10_000;
+  const time = jest.spyOn(Date, "now").mockImplementation(() => now);
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path === healthPath) return Response.json({ authenticated: true });
+    if (path.startsWith("/api/v1/dashboard/bootstrap?")) {
+      return Response.json({ session: { subject: "tsub_fixture" }, notifications: [] });
+    }
+    const query = new URL(path, "https://dashboard.invalid").searchParams.get("q");
+    return Response.json({ apps: [], appliedQuery: query });
+  }) as typeof fetch;
+  try {
+    const initial = await probeInitialSharedAuthSession();
+    await expect(fetchDashboardBootstrap({ initialHealthTicket: initial.ticket })).resolves.toMatchObject({
+      session: { subject: "tsub_fixture" },
+    });
+    now += 4_999;
+    await expect(listAccessibleAppsPage(undefined, undefined, "office")).resolves.toMatchObject({
+      apps: [], appliedQuery: "office",
+    });
+    await expect(fetchDashboardBootstrap({ includeNotifications: true })).resolves.toMatchObject({
+      notifications: [],
+    });
+    expect(calls).toEqual([
+      healthPath,
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+      "/api/v1/apps?q=office",
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false&includeNotifications=true",
+    ]);
+    now += 1;
+    await expect(listAccessibleAppsPage(undefined, undefined, "storage")).resolves.toMatchObject({
+      apps: [], appliedQuery: "storage",
+    });
+    expect(calls.slice(-2)).toEqual([healthPath, "/api/v1/apps?q=storage"]);
+  } finally {
+    time.mockRestore();
+  }
+});
+
+test("canonical 401 retires shared availability and mutations still require a fresh probe", async () => {
+  const calls: Array<{ path: string; method: string }> = [];
+  let available = true;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    calls.push({ path, method: init?.method ?? "GET" });
+    if (path === healthPath) return available
+      ? Response.json({ authenticated: true })
+      : Response.json({ error: "authentication_unavailable" }, { status: 503 });
+    if (path === "/api/v1/apps?q=office") {
+      return Response.json({ error: "unauthenticated" }, { status: 401 });
+    }
+    throw new Error(`unexpected canonical request ${path}`);
+  }) as typeof fetch;
+  await probeInitialSharedAuthSession();
+  await expect(listAccessibleAppsPage(undefined, undefined, "office")).rejects.toMatchObject({ status: 401 });
+  available = false;
+  await expect(listAccessibleAppsPage(undefined, undefined, "storage")).rejects.toMatchObject({ status: 503 });
+  available = true;
+  await probeInitialSharedAuthSession();
+  available = false;
+  await expect(controlFetch("/api/v1/capsules", { method: "POST", reuseRecentSharedAuthProbe: true }))
+    .rejects.toMatchObject({ status: 503 });
+  expect(calls.map(({ path }) => path)).toEqual([
+    healthPath, "/api/v1/apps?q=office", healthPath, healthPath, healthPath,
+  ]);
+  expect(calls.every(({ method }) => method === "GET")).toBe(true);
 });

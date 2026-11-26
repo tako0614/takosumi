@@ -1,5 +1,6 @@
 import type { ActivityEvent, Workspace } from "./control-api.ts";
 import {
+  invalidateRecentSharedAuthProbe,
   preflightSharedAuthSession,
   type InitialSharedAuthHealthTicket,
 } from "./shared-auth-session-preflight.ts";
@@ -107,6 +108,7 @@ export function fetchDashboardBootstrap(
     preflight = preflightSharedAuthSession(
       undefined,
       options.initialHealthTicket,
+      options.includeWorkspaces === true ? "fresh" : "read",
     );
   } catch (error) {
     return Promise.reject(error);
@@ -119,6 +121,9 @@ export function fetchDashboardBootstrap(
     });
   const request = (preflight ? preflight.then(send) : send())
     .then(async (res): Promise<DashboardBootstrapResponse | undefined> => {
+      if (res.status === 401 && inflight.get(path) === request) {
+        invalidateRecentSharedAuthProbe();
+      }
       if (res.status === 401 || res.status === 404) return undefined;
       if (!res.ok) {
         const body = await readResponseBody(res);

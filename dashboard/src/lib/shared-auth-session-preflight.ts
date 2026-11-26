@@ -6,6 +6,7 @@
 const HEALTH_PATH = "/auth/oidc/session";
 const ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
 const HEALTH_DEADLINE_MS = 40_000;
+const RECENT_READ_PROBE_MS = 5_000;
 const HOSTED_SESSION_RETRY_MS = [300, 900, 1_800] as const;
 
 type RoutePresence = "present" | "absent";
@@ -36,6 +37,8 @@ let establishedHostedRoute = false;
 let healthInflight: Promise<RoutePresence> | undefined;
 let initialInflight: Promise<RoutePresence> | undefined;
 let generation = 0;
+let availabilityGeneration = 0;
+let lastPresentAt: number | undefined;
 const tickets = new WeakMap<
   object,
   { readonly generation: number; readonly route: RoutePresence }
@@ -49,9 +52,16 @@ export function throwIfSharedAuthCallerAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw aborted();
 }
 
+/** An authoritative 401 retires any recently shared availability observation. */
+export function invalidateRecentSharedAuthProbe(): void {
+  availabilityGeneration += 1;
+  lastPresentAt = undefined;
+}
+
 /** Clear local knowledge; logout cannot cancel another caller's in-flight read. */
 export function clearSharedAuthSessionPreflight(): void {
   generation += 1;
+  invalidateRecentSharedAuthProbe();
   knownRoute = undefined;
   initialFailure = undefined;
   establishedHostedRoute = false;
@@ -190,7 +200,14 @@ function startHealth(initial: boolean): Promise<RoutePresence> {
     if (initial) initialInflight = healthInflight;
     return healthInflight;
   }
-  const request = readHealth().finally(() => {
+  lastPresentAt = undefined;
+  const observedGeneration = availabilityGeneration;
+  const request = readHealth().then((route) => {
+    if (route === "present" && observedGeneration === availabilityGeneration) {
+      lastPresentAt = Date.now();
+    }
+    return route;
+  }).finally(() => {
     if (healthInflight === request) healthInflight = undefined;
   });
   healthInflight = request;
@@ -267,11 +284,14 @@ function forCaller<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 /**
  * Returns undefined when ordinary OSS has no known Hosted route. A one-use
  * ticket carries an already completed initial health read into its matching
- * canonical bootstrap, avoiding a second serial health request.
+ * canonical bootstrap, avoiding a second serial health request. Opted-in GETs
+ * may reuse recent route availability. Their canonical API still authorizes
+ * the current cookie and returns the authoritative session decision.
  */
 export function preflightSharedAuthSession(
   signal?: AbortSignal,
   initialTicket?: InitialSharedAuthHealthTicket,
+  mode: "fresh" | "read" = "fresh",
 ): Promise<void> | undefined {
   throwIfSharedAuthCallerAborted(signal);
   if (initialTicket) {
@@ -320,6 +340,10 @@ export function preflightSharedAuthSession(
     );
   }
   if (knownRoute !== "present") return undefined;
+  if (mode === "read" && !healthInflight && lastPresentAt !== undefined) {
+    const age = Date.now() - lastPresentAt;
+    if (age >= 0 && age < RECENT_READ_PROBE_MS) return undefined;
+  }
   const capturedGeneration = generation;
   return forCaller(startHealth(false), signal).then((route) => {
     throwIfSharedAuthCallerAborted(signal);
