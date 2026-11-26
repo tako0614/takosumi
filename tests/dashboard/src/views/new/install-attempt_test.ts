@@ -4,6 +4,8 @@
  * install screen, and the value-free requests the page may send.
  */
 import { describe, expect, test } from "bun:test";
+import { locale, setLocale, t } from "../../../../../dashboard/src/i18n/index.ts";
+import { runFailureHint } from "../../../../../dashboard/src/lib/run-errors.ts";
 import type {
   GitInstallPlan,
   GitInstallPlanConnectionRequirement,
@@ -465,6 +467,27 @@ describe("words", () => {
     expect(attemptProblemKey("something_new")).toBe("installStore.problem.generic");
     expect(attemptProblemKey(undefined)).toBe("installStore.problem.generic");
     expect(attemptProblemKey("capsule_name_conflict")).toBe("installStore.problem.nameTaken");
+  });
+
+  test("a missing required output explains how to choose a compatible version", () => {
+    const code = "required_output_not_declared";
+    const attempt = respond({ kind: "retry", code, restart: true }, { phase: "failed" });
+    const view = deriveInstallView(attempt);
+    expect(view).toMatchObject({ stage: "failed", primary: "restart", retryCode: code });
+    const key = attemptProblemKey(view.retryCode);
+    const previous = locale();
+    try {
+      setLocale("ja");
+      expect(t(key)).toContain("必要な出力");
+      expect(t(key)).toContain("対応するバージョン");
+      expect(runFailureHint(code)).toBe(t(key));
+      setLocale("en");
+      expect(t(key)).toContain("required output");
+      expect(t(key)).toContain("compatible version");
+      expect(runFailureHint(code)).toBe(t(key));
+    } finally {
+      setLocale(previous);
+    }
   });
 
   test("provenance reads as a person writes it", () => {
