@@ -910,6 +910,47 @@ test("unlisted module keeps the ordinary attempt input and confirmation flow", a
   expect(fixture.applyCalls).toBe(0);
 });
 
+test.each([
+  { reason: "required_output_not_declared", publicCode: "required_output_not_declared" },
+  { reason: "fixture_internal_runner_failure", publicCode: "plan_run_failed" },
+])("failed install Plan exposes only the supported public diagnosis for $reason", async ({ reason, publicCode }) => {
+  const fixture = installFixture({ planFailureCode: reason });
+  const preflight = fixture.seedPreflight({ variableDeclarations: [] });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans", "POST",
+    { ...createBody({ modulePath: ".", providerBindings: [] }), preflight },
+    { "idempotency-key": "failed-plan-guidance" },
+  );
+  expect(created.status).toBe(201);
+  const id = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(id);
+  const response = await fixture.reconcile(id);
+  expect(response.status).toBe(200);
+  const failed = await response.json();
+  expect(failed).toMatchObject({
+    installPlan: {
+      phase: "failed",
+      planRunId: expect.stringMatching(/^plan_/u),
+      diagnostic: { code: publicCode },
+    },
+    nextAction: "none",
+    userAction: { kind: "retry", restart: true, code: publicCode },
+  });
+  if (publicCode === "required_output_not_declared") {
+    expect(failed.installPlan.diagnostic.message).toContain("Choose a compatible version");
+  }
+  expect(failed.links.apply).toBeUndefined();
+  expect(fixture.counts.plan).toBe(1);
+  expect(fixture.approvalCalls).toBe(0);
+  expect(fixture.applyCalls).toBe(0);
+  expect(JSON.stringify(failed)).not.toContain("fixture_internal_runner_failure");
+  const readback = await fixture.request(`/api/v1/install-plans/${id}`);
+  expect((await readback.json()).installPlan.diagnostic).toEqual(
+    failed.installPlan.diagnostic,
+  );
+  expect(fixture.counts.plan).toBe(1);
+});
+
 test("unlisted module preserves exact generic preflight authority", async () => {
   const fixture = installFixture({ repositoryManifest: repositoryManifest(["other/module"]) });
   const preflight = fixture.seedPreflight({ variableDeclarations: [] });
@@ -4677,6 +4718,7 @@ function installFixture(
     readonly failInterfaceRevokeOnce?: boolean;
     readonly loseAckOnce?: readonly LostAckMutation[];
     readonly retryablePlanErrorOnce?: boolean;
+    readonly planFailureCode?: string;
     readonly repositoryManifest?: SourceSnapshot["repositoryManifest"];
     readonly repositoryModules?: SourceSnapshot["repositoryModules"];
     readonly installConfigs?: readonly InstallConfig[];
@@ -5456,7 +5498,8 @@ function installFixture(
         capsuleId,
         environment: "production",
         type: "plan",
-        status: "waiting_approval",
+        status: options.planFailureCode === undefined ? "waiting_approval" : "failed",
+        ...(options.planFailureCode ? { errorCode: options.planFailureCode } : {}),
         sourceSnapshotId: input.sourceSnapshotId,
         createdBy: input.actor!,
         createdAt: new Date().toISOString(),
