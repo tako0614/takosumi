@@ -1358,10 +1358,12 @@ export async function createGitInstallAttempt(
   workspaceId: string | undefined,
   request: CreateGitInstallAttemptRequest,
   idempotencyKey: string,
-  scope: Pick<RequestOpts, "isCurrent"> = {},
+  { isCurrent, beforeDispatch }: Pick<RequestOpts, "isCurrent" | "beforeDispatch"> = {},
 ): Promise<GitInstallPlanResponse> {
+  const scope = isCurrent ? { isCurrent } : {};
   const options = {
     ...scope,
+    ...(beforeDispatch ? { beforeDispatch } : {}),
     method: "POST",
     headers: { "idempotency-key": idempotencyKey },
     body: request,

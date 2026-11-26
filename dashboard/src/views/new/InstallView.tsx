@@ -124,12 +124,12 @@ const SCREEN_READ_BUDGET_MS = SCREEN_READ_ATTEMPTS * SCREEN_READ_DELAY_MS;
 export default function InstallView() {
   return (
     <Page title={t("installStore.title")}>
-      {(session) => <InstallRoute principalId={session().subject} />}
+      {(session) => <InstallRoute principalId={session().subject} accountId={session().primaryAccountId ?? session().subject} />}
     </Page>
   );
 }
 
-function InstallRoute(props: { readonly principalId: string }) {
+function InstallRoute(props: { readonly principalId: string; readonly accountId: string }) {
   const location = useLocation();
   const catalogCache: StoreCatalogCache = {};
   const namesApp = () =>
@@ -152,7 +152,7 @@ function InstallRoute(props: { readonly principalId: string }) {
         {/* The attempt locator can change within one install page. A different
           install link gets a fresh controller and discards late UI responses. */}
         <Show keyed when={`${location.pathname}${withInstallAttempt(location.search, undefined)}`}>
-          {(_installLocation) => <AppInstallPage principalId={props.principalId} />}
+          {(_installLocation) => <AppInstallPage principalId={props.principalId} accountId={props.accountId} />}
         </Show>
       </Match>
       <Match when={`${location.pathname}${location.search}` === GIT_INSTALL_ENTRY}>
@@ -245,7 +245,7 @@ function GitInstallPage() {
 
 // --- One app, not installed yet ------------------------------------------------
 
-function AppInstallPage(props: { readonly principalId: string }) {
+function AppInstallPage(props: { readonly principalId: string; readonly accountId: string }) {
   const location = useLocation();
   const navigate = useNavigate();
   const attemptId = createMemo(() => installAttemptId(location.search));
@@ -304,6 +304,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
 
   const attempt = useInstallAttempt({
     principalId: props.principalId,
+    accountId: props.accountId,
     attemptId,
     onStarted: (attemptId) =>
       navigate(`${location.pathname}${withInstallAttempt(location.search, attemptId)}`, { replace: true }),
