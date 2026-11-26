@@ -141,9 +141,13 @@ retain their existing credential verifiers. Browser sign-in and ordinary OSS
 PAT paths keep their existing selection.
 
 Changing this option on a served staging Worker is an authentication
-configuration change. Qualify the common Accounts D1 and the deployed
-management/CLI flow through the owning staging authority. The option changes
-route admission and does not issue or revoke saved keys.
+configuration change. Before enabling it, confirm that the product Worker
+and the dedicated issuer both run the field-only PAT usage and revocation
+updates against the common Accounts D1. An older issuer can still write PAT
+usage from its OAuth verification routes. Roll back only to versions that
+retain those field updates while both Workers share the database. Verify the
+management/CLI flow after activation through the owning staging authority.
+The option changes route admission and does not issue or revoke saved keys.
 
 ## Existing-account password sign-in
 
