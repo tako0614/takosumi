@@ -2454,7 +2454,7 @@ async function runPlatformWorkerCodePublication(
     const assertApiKeyIssuer = async () => {
       if (!apiKey) return;
       await (runtime.apiKeyIssuerReadback ?? verifyPlatformApiKeyIssuer)(apiKey.issuerVersion);
-      const live = await nativeRead(apiKeyIssuerDeployments);
+      const { result: live } = await nativeRead(apiKeyIssuerDeployments);
       if (!record(live) || !Array.isArray(live.deployments) ||
         !record(live.deployments[0]) ||
         parseServingVersion(JSON.stringify(live.deployments[0])) !== apiKey.issuerVersion) {
@@ -2582,7 +2582,7 @@ async function runPlatformWorkerCodePublication(
     const releaseMessage = `takosumi-platform-staging-code ${entryDigest}`;
     const assertApiKeyUploadHistory = async (candidate?: string) => {
       if (!apiKey) return;
-      const versions = await nativeRead(apiKeyProductVersions);
+      const { result: versions } = await nativeRead(apiKeyProductVersions);
       assertApiKeyActivationUploadHistory(versions, apiKey.predecessor, candidate);
     };
     let deployedVersionId: string;

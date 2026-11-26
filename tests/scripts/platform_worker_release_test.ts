@@ -807,12 +807,12 @@ async function exerciseCodeLane(options: {
               ids.push(STATUS_VERSION_ID);
             }
             if (uploadCount > 0) ids.push(CODE_DEPLOYED_ID);
-            return { items: ids.map((id, index) => ({ id, number: 42 + index })).reverse().slice(0, 2) };
+            return { result: { items: ids.map((id, index) => ({ id, number: 42 + index })).reverse().slice(0, 2) }, resultInfo: { page: 1 } };
           }
           if (options.apiKeys && path === "/workers/scripts/takosumi-auth-staging/deployments") {
-            return { deployments: [{ versions: options.apiKeys === "issuer-split"
+            return { result: { deployments: [{ versions: options.apiKeys === "issuer-split"
               ? [{ version_id: STATUS_VERSION_ID, percentage: 50 }, { version_id: CODE_PREDECESSOR_ID, percentage: 50 }]
-              : [{ version_id: STATUS_VERSION_ID, percentage: 100 }] }] };
+              : [{ version_id: STATUS_VERSION_ID, percentage: 100 }] }] }, resultInfo: null };
           }
           if (path === "/workers/scripts") topologySnapshot += 1;
           if (options.topologyDriftAt === topologySnapshot) {
