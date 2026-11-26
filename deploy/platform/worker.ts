@@ -86,6 +86,7 @@ import {
   TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
   TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH,
   type TakosumiAccountsPatScope,
+  type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   measureServerTiming,
@@ -748,7 +749,9 @@ const platformWorker = {
     }
     const sharedAccountBoundaryResponse = await handleSharedAuthAccountBoundaryRequest(request, env);
     if (sharedAccountBoundaryResponse) return sharedAccountBoundaryResponse;
-    const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(request, env);
+    const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(
+      request, env, () => platformAccountsStore(env),
+    );
     if (sharedSessionResponse) return sharedSessionResponse;
     const sharedPushersResponse = await handlePlatformSharedAuthNotificationPushersRequest(request, env);
     if (sharedPushersResponse) return sharedPushersResponse;
@@ -1994,12 +1997,14 @@ function platformExtensionSessionCsrfFailure(
 export async function handlePlatformSharedAuthSessionRequest(
   request: Request,
   env: SharedAuthEnvironment,
+  getAccountsStore?: () => Pick<AccountsStore, "findCanonicalAccount" | "isAccountAuthenticationFenced">,
 ): Promise<Response | undefined> {
-  if (new URL(request.url).pathname !== "/api/v1/account/session/me" ||
+  const url = new URL(request.url);
+  if (url.pathname !== "/api/v1/account/session/me" ||
     !sharedAuthConfigured(env)) return undefined;
   const ingressFailure = sharedAuthRequestFailure(request, env);
   if (ingressFailure) return ingressFailure;
-  if (new URL(request.url).origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) {
+  if (url.origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) {
     return Response.json({ error: "not found" }, {
       status: 404, headers: { "cache-control": "no-store" },
     });
@@ -2019,9 +2024,33 @@ export async function handlePlatformSharedAuthSessionRequest(
   }
   const identity = await authenticateSharedAuthRequest(request, env);
   if (identity?.kind === "unavailable") return sharedAuthUnavailableResponse();
-  return Response.json(identity?.kind === "authenticated"
-    ? { subject: identity.accountId, primaryAccountId: identity.accountId, expiresAt: 0 }
-    : { session: null }, { headers: { "cache-control": "no-store" } });
+  const headers = { "cache-control": "no-store" };
+  const includeProfile = url.search === "?include=profile";
+  const unauthenticated = () => Response.json({ error: "unauthenticated" }, { status: 401, headers });
+  if (identity?.kind !== "authenticated") {
+    return includeProfile ? unauthenticated() : Response.json({ session: null }, { headers });
+  }
+  const session = { subject: identity.accountId, primaryAccountId: identity.accountId, expiresAt: 0 };
+  if (!includeProfile) return Response.json(session, { headers });
+
+  // RP validation can reuse a grant. The profile requires current Accounts
+  // authority for this exact subject, including during account migration.
+  if (!/^tsub_[A-Za-z0-9_-]+$/u.test(identity.accountId)) return unauthenticated();
+  const subject = identity.accountId as TakosumiSubject;
+  try {
+    const store = getAccountsStore?.();
+    if (!store?.findCanonicalAccount || !store.isAccountAuthenticationFenced) return sharedAuthUnavailableResponse();
+    // Merge activation can lift the fence while redirecting this subject.
+    // Read the canonical account only after confirming the fence is clear.
+    if (await store.isAccountAuthenticationFenced(subject) !== false) return unauthenticated();
+    const account = await store.findCanonicalAccount(subject);
+    if (account?.subject !== subject) return unauthenticated();
+    const displayName = account.displayName?.trim() || undefined;
+    const email = account.emailVerified === true ? account.email?.trim() || undefined : undefined;
+    return Response.json({ ...session, displayName, email }, { headers });
+  } catch {
+    return sharedAuthUnavailableResponse();
+  }
 }
 
 const sharedAccountNotificationPusherLimiter = createNotificationPusherRateLimiter();

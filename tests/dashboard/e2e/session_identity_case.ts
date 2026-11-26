@@ -5,6 +5,36 @@ export function registerSessionIdentityCases(mode: DashboardE2EMode) {
   test.describe("Session identity boundary", () => {
     test.skip(mode !== "portable", "isolated account-switch fixture only");
 
+    test("shows the verified shared profile only when personal Account settings are opened", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const reads: string[] = [];
+      const subject = "tsub_profile_fixture";
+      const sharedRead = { "x-takosumi-shared-auth-read": "1" };
+      const profilePath = "/api/v1/account/session/me?include=profile";
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        reads.push(url.pathname + url.search);
+      });
+      await page.route("**/auth/oidc/session", (route) => route.fulfill({ json: { authenticated: true } }));
+      await page.route("**/api/v1/dashboard/bootstrap?**", (route) => route.fulfill({
+        headers: sharedRead, json: { session: { subject }, notifications: [] },
+      }));
+      await page.route("**/api/v1/apps?**", (route) => route.fulfill({ headers: sharedRead, json: { apps: [] } }));
+      await page.route((url) => url.pathname + url.search === profilePath, (route) => route.fulfill({
+        json: { subject, displayName: "Profile Fixture", email: "profile@example.test" },
+      }));
+
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await expect(page.getByTestId("home-apps")).toBeVisible();
+      expect(reads).not.toContain(profilePath);
+      await page.getByRole("link", { name: "Account", exact: true }).first().click();
+      const profile = page.locator(".tg-settings-values");
+      await expect(profile).toContainText("Profile Fixture");
+      await expect(profile).toContainText("profile@example.test");
+      expect(reads.filter((path) => path === profilePath)).toEqual([profilePath]);
+      expect(reads).not.toContain("/api/v1/account/sign-in-methods");
+    });
+
     for (const [description, nextSubject, nextAccount, nextDisplayName, preservePage] of [
       ["preserves its own page", "a", "account-a", "Renamed person a", true],
       ["replaces the previous person's page identity", "b", "account-b", "Person b", false],

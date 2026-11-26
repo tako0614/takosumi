@@ -14,9 +14,11 @@ import {
   verifyPlatformExtensionBearerToken,
   type CloudflareWorkerEnv,
 } from "../../../deploy/platform/worker.ts";
+import { D1AccountsStore } from "../../../accounts/service/src/d1-store.ts";
 import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
 import { canAccessWorkspace } from "../../../accounts/service/src/control/shared.ts";
 import type { ControlPlaneOperations } from "../../../accounts/service/src/control-operations.ts";
+import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const origin = "https://hosted.staging.example.test";
 const cookie = "__Host-takosumi_hosted_session=opaque-rp-session";
@@ -214,6 +216,107 @@ test("auth routes and logout alias retain exact-origin CSRF and no-store", async
   expect(await mirror?.json()).toEqual({ subject: "tsub_canonical", primaryAccountId: "tsub_canonical", expiresAt: 0 });
   expect(mirror?.headers.get("cache-control")).toBe("no-store");
   expect(await handleSharedAuthRouteRequest(request("/auth/oidc/session/extra"), env)).toBeUndefined();
+});
+
+test("the shared session mirror reads only the current RP account on a profile request", async () => {
+  const path = "/api/v1/account/session/me";
+  const env = configured(rpc);
+  const store = new InMemoryAccountsStore();
+  const account = { subject: "tsub_canonical", createdAt: 1, updatedAt: 1 } as const;
+  const session = { subject: account.subject, primaryAccountId: account.subject, expiresAt: 0 };
+  const findAccount = spyOn(store, "findCanonicalAccount");
+  const lookup = () => store;
+  const read = (query = "") => handlePlatformSharedAuthSessionRequest(request(path + query), env, lookup);
+  store.saveAccount({ subject: "tsub_other", displayName: "Other person", email: "other@example.test",
+    emailVerified: true, createdAt: 1, updatedAt: 1 });
+  expect(await (await read())?.json()).toEqual(session);
+  expect(await (await read("?include=profile&subject=tsub_other"))?.json()).toEqual(session);
+  expect(findAccount).not.toHaveBeenCalled();
+
+  const unregistered = await read("?include=profile");
+  expect(unregistered?.status).toBe(401);
+  expect(await unregistered?.json()).toEqual({ error: "unauthenticated" });
+  for (const emailVerified of [undefined, false, true]) {
+    store.saveAccount({ ...account, displayName: "  Current person  ", email: " self@example.test ", emailVerified,
+      picture: "https://profile.example.test/image" });
+    const response = await read("?include=profile");
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    expect(await response?.json()).toEqual({
+      ...session, displayName: "Current person",
+      ...(emailVerified === true ? { email: "self@example.test" } : {}),
+    });
+  }
+  expect(findAccount.mock.calls).toEqual(Array.from({ length: 4 }, () => [account.subject]));
+
+  for (const [kind, status, body] of [
+    ["unauthenticated", 401, { error: "unauthenticated" }],
+    ["unavailable", 503, { error: "authentication_unavailable" }],
+  ] as const) {
+    const response = await handlePlatformSharedAuthSessionRequest(
+      request(path + "?include=profile"), configured({ ...rpc, authenticateSharedAuth: async () => ({ kind }) }), lookup,
+    );
+    expect(response?.status).toBe(status);
+    expect(await response?.json()).toEqual(body);
+  }
+  expect(findAccount).toHaveBeenCalledTimes(4);
+});
+
+test("the shared profile refuses actual Accounts redirects and merge fences without changing the ordinary mirror", async () => {
+  const db = new SqliteFakeD1();
+  const store = new D1AccountsStore(db);
+  await store.initialize();
+  const subject = "tsub_canonical";
+  const target = "tsub_target";
+  for (const account of [subject, target]) {
+    await store.saveAccount({ subject: account, displayName: account, email: `${account}@example.test`,
+      emailVerified: true, createdAt: 1, updatedAt: 1 });
+  }
+  const path = "/api/v1/account/session/me";
+  const getProfile = () => handlePlatformSharedAuthSessionRequest(request(path + "?include=profile"), configured(rpc), () => store);
+  const assertRefused = async () => {
+    const response = await getProfile();
+    expect(response?.status).toBe(401);
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    expect(await response?.json()).toEqual({ error: "unauthenticated" });
+  };
+  const insertRecord = (bucket: string, key: string, document: object) => db
+    .prepare("INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)")
+    .bind(bucket, key, JSON.stringify(document), 2);
+
+  expect(await (await getProfile())?.json()).toMatchObject({ email: `${subject}@example.test` });
+  const operationId = "fixture-migration";
+  await insertRecord("identity_merge_locks", subject, { operationId }).run();
+  expect(await store.isAccountAuthenticationFenced(subject)).toBe(true);
+  const canonical = spyOn(store, "findCanonicalAccount");
+  await assertRefused();
+  expect(canonical).not.toHaveBeenCalled();
+
+  // Finish the local merge when the profile reaches the real store fence
+  // read. The subsequent canonical read must see the newly redirected subject.
+  const readFence = store.isAccountAuthenticationFenced.bind(store);
+  spyOn(store, "isAccountAuthenticationFenced").mockImplementationOnce(async (candidate) => {
+    expect(canonical).not.toHaveBeenCalled();
+    await db.batch([
+      insertRecord("identity_merge_operations", operationId, { status: "active" }),
+      insertRecord("canonical_accounts", subject, { targetSubject: target }),
+    ]);
+    return await readFence(candidate);
+  });
+  await assertRefused();
+  expect(canonical.mock.calls).toEqual([[subject]]);
+  expect((await store.findCanonicalAccount(subject))?.subject).toBe(target);
+  expect(await store.isAccountAuthenticationFenced(subject)).toBe(false);
+  await assertRefused();
+
+  const env = configured(rpc);
+  const noStore = () => { throw new Error("fixture store unavailable"); };
+  const unavailable = await handlePlatformSharedAuthSessionRequest(request(path + "?include=profile"), env, noStore);
+  expect(unavailable?.status).toBe(503);
+  expect(await unavailable?.json()).toEqual({ error: "authentication_unavailable" });
+  const ordinary = await handlePlatformSharedAuthSessionRequest(request(path), env, noStore);
+  expect(ordinary?.status).toBe(200);
+  expect(await ordinary?.json()).toEqual({ subject, primaryAccountId: subject, expiresAt: 0 });
 });
 
 test("workspace RPC must return the same account and requested Workspace, with a valid live role", async () => {
