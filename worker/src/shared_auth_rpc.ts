@@ -56,6 +56,7 @@ const SHARED_AUTH_PATHS = new Set([
   "/auth/oidc/session",
 ]);
 const SHARED_AUTH_ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
+const BROWSER_AUTH_DEADLINE_MS = 40_000;
 const NOTIFICATION_PUSHER_ROUTE = /^\/api\/v1\/account\/notification-pushers(?:\/[^/]+)?$/u;
 const BILLING_TRACE_HEADER = "x-takosumi-internal-billing-trace";
 const BILLING_TRACE = /^brpc_[0-9a-f]{32}$/u;
@@ -428,7 +429,7 @@ export async function handleSharedAuthRouteRequest(
           });
         }
         return await selected.rpc.fetchSharedAuth(requestForRpc(request, true));
-      }, 40_000,
+      }, BROWSER_AUTH_DEADLINE_MS,
     ).finally(() => { waitActive = false; });
     if (!(response instanceof Response)) return sharedAuthUnavailableResponse();
     const headers = new Headers(response.headers);
@@ -446,6 +447,7 @@ export async function authenticateSharedAuthRequest(
   request: Request,
   env: SharedAuthEnvironment,
   billingTrace?: string,
+  options?: { readonly initialDashboardSession: true },
 ): Promise<SharedAuthIdentity | { readonly kind: "unavailable"; readonly reportedByRp: true } | undefined> {
   if (!sharedAuthConfigured(env)) return undefined;
   // Explicit credentials have their own verifier; a failed bearer, forged
@@ -461,7 +463,8 @@ export async function authenticateSharedAuthRequest(
       return { kind: "unauthenticated" };
     }
     const identity = await boundedRpc(
-      () => selected.rpc.authenticateSharedAuth(requestForRpc(request, false, billingTrace)), 5_000,
+      () => selected.rpc.authenticateSharedAuth(requestForRpc(request, false, billingTrace)),
+      options?.initialDashboardSession ? BROWSER_AUTH_DEADLINE_MS : 5_000,
     );
     if (identity?.kind === "unauthenticated") return { kind: "unauthenticated" };
     if (identity?.kind === "authenticated" && safeId(identity.accountId)) {

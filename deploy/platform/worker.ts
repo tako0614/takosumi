@@ -2191,6 +2191,9 @@ export async function handlePlatformSharedAuthControlRequest(
   const url = new URL(request.url);
   const resource = controlInventoryResourceKey(url.pathname);
   if (!resource || !CONTROL_DISPATCH_RESOURCE_KEYS.includes(resource)) return undefined;
+  const initialDashboardSession = dependencies.initialDashboardSession &&
+    request.method === "GET" && url.pathname === "/api/v1/dashboard/bootstrap" &&
+    url.search === "?includeWorkspaces=false";
   const runRead = isRunGetReadRequest(request);
   const diagnostics = runRead
     ? sharedRunGetPhaseDiagnostics(env).forRequest(request)
@@ -2259,16 +2262,19 @@ export async function handlePlatformSharedAuthControlRequest(
         status: 404, headers: { "cache-control": "no-store" },
       });
     }
+    if (initialDashboardSession && request.signal.aborted) return sharedAuthUnavailableResponse();
     const identity = await measureRequestPhaseOperation(
       diagnostics,
       "control_auth",
-      () => authenticateSharedAuthRequest(request, env),
+      () => authenticateSharedAuthRequest(request, env, undefined,
+        initialDashboardSession ? { initialDashboardSession: true } : undefined),
     );
     assertActive?.();
+    if (initialDashboardSession && request.signal.aborted) return sharedAuthUnavailableResponse();
     if (identity?.kind === "unavailable") {
       // The cold session exchange replaces the browser health read. Preserve
       // the RP's explicit unavailable verdict without marking gateway failures.
-      if (dependencies.initialDashboardSession && "reportedByRp" in identity) {
+      if (initialDashboardSession && "reportedByRp" in identity) {
         return Response.json({ error: { code: "oidc_unavailable" } }, {
           status: 503, headers: { "cache-control": "no-store" },
         });

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, test } from "bun:test";
+import { afterEach, beforeAll, expect, jest, test } from "bun:test";
 import {
   createTakosumiProductCapabilities,
   createTakosumiWellKnownDocument,
@@ -145,6 +145,48 @@ test("logout prevents a scheduled cold contention retry", async () => {
   expect(await signOutSession()).toBe(true);
   expect(await pending).toEqual({ kind: "unauthenticated" });
   expect(calls).toEqual([coldPath]);
+});
+
+test.each(["retry", "fallback"])("the cold %s shares the original forty-second deadline", async (mode) => {
+  const first = Promise.withResolvers<Response>();
+  const firstEntered = Promise.withResolvers<void>();
+  const second = Promise.withResolvers<Response>();
+  const secondEntered = Promise.withResolvers<void>();
+  const signals: Array<AbortSignal | null | undefined> = [];
+  jest.useFakeTimers();
+  try {
+    const calls = stub((_path, init) => {
+      signals.push(init?.signal);
+      if (signals.length === 1) {
+        firstEntered.resolve();
+        return first.promise;
+      }
+      secondEntered.resolve();
+      return second.promise;
+    });
+    const pending = refreshSessionState(initialSessionOptions);
+    await firstEntered.promise;
+    jest.advanceTimersByTime(39_000);
+    first.resolve(mode === "retry" ? Response.json(unavailable, { status: 503, headers: marked })
+      : Response.json({ error: "not found" }, { status: 404 }));
+    if (mode === "retry") {
+      for (let index = 0; index < 12; index++) await Promise.resolve();
+      jest.advanceTimersByTime(300);
+    }
+    await secondEntered.promise;
+    expect(signals[1]).toBe(signals[0]);
+    expect(signals[0]?.aborted).toBe(false);
+    jest.advanceTimersByTime(mode === "retry" ? 700 : 1_000);
+    expect(await pending).toMatchObject({ kind: "error", error: { message: "Hosted session probe timed out." } });
+    expect(signals[0]?.aborted).toBe(true);
+    second.resolve(Response.json(mode === "retry" ? session : { authenticated: true }, { headers: marked }));
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(calls).toEqual([coldPath, mode === "retry" ? coldPath : health]);
+    expect(canReuseRecentSharedAuthProbe()).toBe(false);
+  } finally {
+    second.resolve(Response.json({ error: "fixture complete" }, { status: 503 }));
+    jest.useRealTimers();
+  }
 });
 
 test.each([

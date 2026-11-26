@@ -161,7 +161,7 @@ async function retryHostedSessionRead<T>(
   throw unavailable;
 }
 
-async function readHealth(): Promise<RoutePresence> {
+async function withHostedSessionDeadline<T>(read: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
@@ -176,18 +176,26 @@ async function readHealth(): Promise<RoutePresence> {
       controller.abort();
     }, HEALTH_DEADLINE_MS);
   });
-  const work = retryHostedSessionRead(controller.signal, async () => {
-    const response = await fetch(HEALTH_PATH, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      credentials: "include",
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    return parseHealth(response, await readBody(response));
-  }, (route) => route === "absent");
   try {
-    return await Promise.race([work, deadline]);
+    return await Promise.race([read(controller.signal), deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function readHealth(signal: AbortSignal, assertCurrent?: () => void): Promise<RoutePresence> {
+  try {
+    return await retryHostedSessionRead(signal, async () => {
+      assertCurrent?.();
+      const response = await fetch(HEALTH_PATH, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        signal,
+      });
+      return parseHealth(response, await readBody(response));
+    }, (route) => route === "absent");
   } catch (error) {
     if (error instanceof SharedAuthSessionPreflightError) throw error;
     throw new SharedAuthSessionPreflightError(
@@ -198,8 +206,6 @@ async function readHealth(): Promise<RoutePresence> {
       "Hosted session probe transport is unavailable.",
       error,
     );
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -210,7 +216,7 @@ function startHealth(initial: boolean): Promise<RoutePresence> {
   }
   lastPresentAt = undefined;
   const observedGeneration = availabilityGeneration;
-  const request = readHealth().then((route) => {
+  const request = withHostedSessionDeadline(readHealth).then((route) => {
     if (route === "present" && observedGeneration === availabilityGeneration) {
       lastPresentAt = Date.now();
     }
@@ -242,20 +248,22 @@ export async function probeInitialSharedAuthSession<T extends { readonly authent
     }
   };
   const request = initialInflight ?? (readBootstrap && !healthInflight
-    ? Promise.resolve().then(async (): Promise<RoutePresence> => {
-      const signal = AbortSignal.timeout(HEALTH_DEADLINE_MS);
+    ? Promise.resolve().then(() => withHostedSessionDeadline(async (signal): Promise<RoutePresence> => {
       bootstrap = await retryHostedSessionRead(signal, () => {
         assertCurrent();
         return readBootstrap(signal);
       }, (result) => result === undefined);
       assertCurrent();
-      if (!bootstrap) return await startHealth(false);
-      if (capturedAvailability === availabilityGeneration) {
-        if (bootstrap.authenticated) lastPresentAt = Date.now();
+      throwIfSharedAuthCallerAborted(signal);
+      const route = bootstrap ? "present" : await readHealth(signal, assertCurrent);
+      assertCurrent();
+      throwIfSharedAuthCallerAborted(signal);
+      if (route === "present" && capturedAvailability === availabilityGeneration) {
+        if (!bootstrap || bootstrap.authenticated) lastPresentAt = Date.now();
         else invalidateRecentSharedAuthProbe();
       }
-      return "present";
-    })
+      return route;
+    }))
     : startHealth(true));
   initialInflight = request;
   try {
