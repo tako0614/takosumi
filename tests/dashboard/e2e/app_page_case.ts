@@ -1889,7 +1889,21 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === "/api/v1/connections") return route.fulfill({ json: { connections: [
           { id: "conn_removed", displayName: "Original Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: partialRecovery || (firstRemovalRefusal && connectionRemoved) || unusedUnavailable || noReplacement ? "revoked" : "verified" },
-          ...(replacementAvailable ? [{ id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider, scope: "personal", status: replacementVerified ? "verified" : "pending" }] : []),
+          ...(replacementAvailable ? [{
+            id: "conn_saved", displayName: "Existing Cloudflare connection", providerSource: connectionProblem.provider,
+            scope: "personal", status: replacementVerified ? "verified" : "pending",
+            ...(canScheduleUninstall && replacementVerified ? {
+              credentialVerification: {
+                kind: "takosumi.credential-verification@v1",
+                capabilities: ["cloudflare.account-workers-subdomain.v1"],
+                verifierId: "cloudflare/account-workers-subdomain@v1",
+              },
+              scopeHints: {
+                providerSettings: { accountId: "a".repeat(32), workersSubdomain: "fixture-team" },
+                moduleInputDefaults: { cloudflare_account_id: "a".repeat(32), cloudflare_workers_subdomain: "fixture-team" },
+              },
+            } : {}),
+          }] : []),
           { id: "conn_expired", displayName: "Expired connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" },
           { id: "conn_aws", displayName: "AWS connection", providerSource: "registry.opentofu.org/hashicorp/aws", scope: "personal", status: "verified" },
           ...(unusedUnavailable || unusedOnlyUnavailable ? [{ id: "conn_unused", displayName: "Unused alias connection", providerSource: connectionProblem.provider, scope: "personal", status: "expired" }] : []),
