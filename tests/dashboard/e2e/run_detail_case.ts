@@ -838,13 +838,19 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
     });
     }
 
-    for (const runType of ["apply", "plan"] as const) {
-      test(`a completed shared ${runType === "apply" ? "Apply keeps authorized Open without redundant session reads" : "Plan retains a fresh approval history read"}`, async ({ page }) => {
+    for (const [scenario, title] of [
+      ["apply", "a completed shared Apply keeps authorized Open without redundant session reads"],
+      ["plan", "a completed shared Plan retains a fresh approval history read"],
+      ["waiting_approval", "a shared Plan awaiting approval retries current state before withholding stale approval"],
+    ] as const) {
+      test(title, async ({ page }) => {
         await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         const capsuleId = "cap_partial_run";
-        const runId = `${runType}_partial_run`;
+        const runType = scenario === "apply" ? "apply" : "plan";
+        const waiting = scenario === "waiting_approval";
+        const runId = `${scenario}_partial_run`;
         const stateId = "sv_partial_run";
         const now = "2026-11-14T00:00:00Z";
         const launchUrl = "https://screens.example.test/authorized";
@@ -853,6 +859,9 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const mutations: string[] = [];
         const health = "/auth/oidc/session";
         const marker = "x-takosumi-shared-auth-read";
+        const finishHealth = Promise.withResolvers<void>();
+        let healthReads = 0;
+        let guardedCapsule = false;
         const requests: { path: string; guarded: boolean }[] = [];
         page.on("request", (request) => {
           const path = new URL(request.url()).pathname;
@@ -868,7 +877,14 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           headers: { [TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER]: "1" },
           json: { session: { subject: "portable-e2e" } },
         }));
-        await page.route(`**${health}`, (route) => route.fulfill({ json: { authenticated: true } }));
+        await page.route(`**${health}`, async (route) => {
+          healthReads++;
+          if (waiting && healthReads === 1) {
+            return route.fulfill({ status: 503, json: { error: { code: "oidc_unavailable" } } });
+          }
+          if (waiting) await finishHealth.promise;
+          return route.fulfill({ json: { authenticated: true } });
+        });
         let partial = true;
         await page.route("**/api/v1/**", async (route) => {
           const request = route.request();
@@ -885,8 +901,13 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             headers, json: { session: { subject: "portable-e2e" }, notifications: [], workspaces: [] },
           });
           if (path === `/api/v1/runs/${runId}`) return route.fulfill({ headers, json: { run: {
-            id: runId, workspaceId: "ws_alpha", capsuleId, type: runType, status: "succeeded",
+            id: runId, workspaceId: "ws_alpha", capsuleId, type: runType, status: waiting ? "waiting_approval" : "succeeded",
             ...(runType === "plan" ? { policyStatus: "pass", summary: { add: 1, change: 0, destroy: 0 } } : {}),
+            ...(waiting ? { applyExpected: {
+              planId: runId, capsuleId, currentStateVersionId: "sv_before_another_apply",
+              runnerId: "opentofu-default", sourceDigest: "sha256:source", variablesDigest: "sha256:variables",
+              policyDecisionDigest: "sha256:policy", planDigest: "sha256:plan", planArtifactDigest: "sha256:artifact",
+            } } : {}),
             createdBy: "portable-e2e", createdAt: now,
           } } });
           if (path === `/api/v1/runs/${runId}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
@@ -894,10 +915,16 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           if (path === `/api/v1/runs/${runId}/cost`) return route.fulfill({ headers, json: { cost: {
             runId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [],
           } } });
-          if (path === `/api/v1/capsules/${capsuleId}`) return route.fulfill({ headers, json: { capsule: {
-            id: capsuleId, workspaceId: "ws_alpha", name: "Partial Run App", slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production", status: "active",
-            currentStateGeneration: 1, currentStateVersionId: stateId, createdAt: now, updatedAt: now,
-          } } });
+          if (path === `/api/v1/capsules/${capsuleId}`) {
+            if (waiting && request.headers()[marker] === "1") {
+              guardedCapsule = true;
+              return route.fulfill({ status: 503, json: { error: "authentication_unavailable" } });
+            }
+            return route.fulfill({ headers, json: { capsule: {
+              id: capsuleId, workspaceId: "ws_alpha", name: "Partial Run App", slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production", status: "active",
+              currentStateGeneration: waiting ? 2 : 1, currentStateVersionId: stateId, createdAt: now, updatedAt: now,
+            } } });
+          }
           if (path === `/api/v1/capsules/${capsuleId}/state-versions`) return route.fulfill({ headers, json: { stateVersions: [{
             id: stateId, workspaceId: "ws_alpha", capsuleId, environment: "production", generation: 1,
             createdByRunId: runId, createdAt: now,
@@ -932,6 +959,28 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           return route.continue();
         });
         await page.goto(`/runs/${runId}`, { waitUntil: "domcontentloaded" });
+        if (waiting) {
+          const approval = page.getByRole("button", { name: "Approve this change", exact: true });
+          const capsulePath = `/api/v1/capsules/${capsuleId}`;
+          try {
+            await expect.poll(() => healthReads > 0 || guardedCapsule).toBe(true);
+            expect(guardedCapsule).toBe(false);
+            await expect.poll(() => healthReads).toBe(2);
+            await expect(page.getByText("Checking it is ready to apply…", { exact: true })).toBeVisible();
+            await expect(approval).toHaveCount(0);
+            expect(requests.filter(({ path }) => path === capsulePath)).toEqual([]);
+            finishHealth.resolve();
+            await expect(page.getByText("Another change was applied first. Review again before applying.", { exact: true })).toBeVisible();
+            await expect(approval).toHaveCount(0);
+            expect(requests.filter(({ path }) => path === capsulePath)).toEqual([{ path: capsulePath, guarded: false }]);
+            expect(healthReads).toBe(2);
+            expect(mutations).toEqual([]);
+            expect(errors).toEqual([]);
+          } finally {
+            finishHealth.resolve();
+          }
+          return;
+        }
         if (runType === "plan") {
           await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
           expect(requests.filter(({ path }) => path === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH)).toHaveLength(1);

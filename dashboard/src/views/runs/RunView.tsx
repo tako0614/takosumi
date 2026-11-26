@@ -154,6 +154,10 @@ export default function RunView() {
   return <Page>{(session) => <Inner session={session()} />}</Page>;
 }
 
+function isSucceededApplyRun(run: Run | undefined): boolean {
+  return run?.status === "succeeded" && (run.type === "apply" || run.type === "destroy_apply");
+}
+
 /** True when the run fetch failed because the run genuinely does not exist —
  * anything else (network, 5xx, auth hiccup) is a transient load error and must
  * NOT render the "not found" empty state. */
@@ -601,10 +605,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     () => {
       const r = runLatest();
       if (!r?.capsuleId) return null;
-      const isCompletedApply =
-        (r.type === "apply" || r.type === "destroy_apply") &&
-        r.status === "succeeded";
-      return isCompletedApply ? r.capsuleId : null;
+      return isSucceededApplyRun(r) ? r.capsuleId : null;
     },
     (id, { refetching }) => listCapsuleActivity(id, 100, {
       ...readOptions(), reuseRecentSharedAuthProbe: !refetching,
@@ -620,7 +621,9 @@ function Inner(props: { readonly session: SessionRecord }) {
     async ({ id, scope }) => ({
       scope,
       value: await getCapsule(id, {
-        ...readOptions(scope), reuseRecentSharedAuthProbe: true,
+        ...readOptions(scope),
+        // A Plan also uses this read to check the base state before approval.
+        reuseRecentSharedAuthProbe: isSucceededApplyRun(runLatest()),
         cache: "no-store", signal: AbortSignal.timeout(REVIEW_STATE_READ_TIMEOUT_MS),
       }),
     }),
