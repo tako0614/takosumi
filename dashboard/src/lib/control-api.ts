@@ -19,7 +19,11 @@
 import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import { randomUuid } from "./random-uuid.ts";
 import {
+  canReuseRecentSharedAuthProbe,
+  invalidateRecentSharedAuthProbe,
   preflightSharedAuthSession,
+  requireSharedAuthReadResponse,
+  SHARED_AUTH_READ_HEADER,
   SharedAuthSessionPreflightError,
   throwIfSharedAuthCallerAborted,
 } from "./shared-auth-session-preflight.ts";
@@ -213,6 +217,7 @@ function controlErrorDetails(body: unknown): unknown {
 interface RequestOpts {
   readonly cache?: "no-store";
   readonly acceptResponseAfterAbort?: boolean;
+  readonly reuseRecentSharedAuthProbe?: boolean;
   readonly isCurrent?: () => boolean;
   readonly beforeDispatch?: () => void;
   readonly method?: string;
@@ -251,18 +256,24 @@ export async function controlFetch<T>(
     }
     body = JSON.stringify(opts.body);
   }
-  const preflight = preflightSharedAuthSession(opts.signal);
-  if (preflight) await preflight;
+  const method = opts.method ?? "GET";
+  const reusedProbe = method === "GET" && opts.reuseRecentSharedAuthProbe &&
+    canReuseRecentSharedAuthProbe();
+  if (reusedProbe) headers[SHARED_AUTH_READ_HEADER] = "1";
+  else {
+    const preflight = preflightSharedAuthSession(opts.signal);
+    if (preflight) await preflight;
+  }
   throwIfSharedAuthCallerAborted(opts.signal);
   throwIfReadRetired(opts);
   opts.beforeDispatch?.();
   const res = await fetch(path, {
-    method: opts.method ?? "GET",
+    method,
     headers,
     body,
     credentials: "include",
     signal: opts.signal,
-    ...(opts.cache ? { cache: opts.cache } : {}),
+    ...(reusedProbe ? { cache: "no-store" } : opts.cache ? { cache: opts.cache } : {}),
   });
 
   // A late response must not redirect a replacement screen or clear its
@@ -271,7 +282,9 @@ export async function controlFetch<T>(
   throwIfReadRetired(opts.acceptResponseAfterAbort
     ? { isCurrent: opts.isCurrent }
     : opts);
+  if (reusedProbe) requireSharedAuthReadResponse(res);
   if (res.status === 401) {
+    invalidateRecentSharedAuthProbe();
     resetAppOwnershipCache();
     // The control routes share the account-plane session gate. On expiry, send
     // the operator back through sign-in, preserving the intended destination
@@ -3738,7 +3751,7 @@ function readCachedAppsPage(path: string): Promise<{ nextCursor?: string } & Rec
   // Bound the shared transport, so every waiter sees the same result and an
   // expired request is evicted. Each view still cancels only its own wait.
   const request = withControlReadDeadline("Apps", {}, (scope) =>
-    controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, scope),
+    controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { ...scope, reuseRecentSharedAuthProbe: true }),
   ).then((body) => {
     if (appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
     return body;
@@ -3781,7 +3794,7 @@ export async function listAccessibleAppsPage(
     // Keep typed searches and scoped reads out of the account-wide cache.
     body = search || owner.isCurrent
       ? await withControlReadDeadline("Apps", { signal, ...owner }, (scope) =>
-        controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, scope),
+        controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { ...scope, reuseRecentSharedAuthProbe: true }),
       )
       : await withAppReadSignal(readCachedAppsPage(path), signal);
   } catch (error) {

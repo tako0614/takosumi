@@ -1,6 +1,10 @@
 import type { ActivityEvent, Workspace } from "./control-api.ts";
 import {
+  canReuseRecentSharedAuthProbe,
+  invalidateRecentSharedAuthProbe,
   preflightSharedAuthSession,
+  requireSharedAuthReadResponse,
+  SHARED_AUTH_READ_HEADER,
   type InitialSharedAuthHealthTicket,
 } from "./shared-auth-session-preflight.ts";
 
@@ -102,23 +106,32 @@ export function fetchDashboardBootstrap(
   if (current) return current;
   if (typeof fetch === "undefined") return Promise.resolve(undefined);
 
+  const reusedProbe = !options.initialHealthTicket &&
+    options.includeWorkspaces !== true && canReuseRecentSharedAuthProbe();
   let preflight: Promise<void> | undefined;
   try {
-    preflight = preflightSharedAuthSession(
-      undefined,
-      options.initialHealthTicket,
-    );
+    if (!reusedProbe) {
+      preflight = preflightSharedAuthSession(undefined, options.initialHealthTicket);
+    }
   } catch (error) {
     return Promise.reject(error);
   }
   const send = () =>
     fetch(path, {
       method: "GET",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        ...(reusedProbe ? { [SHARED_AUTH_READ_HEADER]: "1" } : {}),
+      },
       credentials: "include",
+      ...(reusedProbe ? { cache: "no-store" } : {}),
     });
   const request = (preflight ? preflight.then(send) : send())
     .then(async (res): Promise<DashboardBootstrapResponse | undefined> => {
+      if (reusedProbe) requireSharedAuthReadResponse(res);
+      if (res.status === 401 && inflight.get(path) === request) {
+        invalidateRecentSharedAuthProbe();
+      }
       if (res.status === 401 || res.status === 404) return undefined;
       if (!res.ok) {
         const body = await readResponseBody(res);

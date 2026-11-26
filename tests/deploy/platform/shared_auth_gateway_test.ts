@@ -105,6 +105,27 @@ test("local account management is absent on every opted-in product alias; separa
   expect(await handleSharedAuthAccountBoundaryRequest(request("/sign-in"), {})).toBeUndefined();
 });
 
+test("guarded GET confirms the shared-profile response only after RP authentication", async () => {
+  const path = "/api/v1/dashboard/bootstrap?includeWorkspaces=false";
+  const headers = { cookie, "x-takosumi-shared-auth-read": "1" };
+  const env = configured(rpc) as CloudflareWorkerEnv;
+  const deps = {
+    store: new InMemoryAccountsStore(),
+    resolveOperations: async () => ({}) as ControlPlaneOperations,
+  };
+  const current = await handlePlatformSharedAuthControlRequest(request(path, { headers }), env, deps);
+  expect(current?.status).toBe(200);
+  expect(current?.headers.get("x-takosumi-shared-auth-read")).toBe("1");
+  expect(await current?.json()).toMatchObject({ session: { subject: "tsub_canonical" } });
+  const revoked = configured({
+    ...rpc,
+    authenticateSharedAuth: async () => ({ kind: "unauthenticated" }),
+  }) as CloudflareWorkerEnv;
+  const signedOut = await handlePlatformSharedAuthControlRequest(request(path, { headers }), revoked, deps);
+  expect(signedOut?.status).toBe(401);
+  expect(signedOut?.headers.get("x-takosumi-shared-auth-read")).toBeNull();
+});
+
 test("shared authentication is an exact HTTPS staging-only operator opt-in", async () => {
   for (const change of [
     { TAKOSUMI_ENVIRONMENT: "production" },

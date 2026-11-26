@@ -5,7 +5,9 @@
  */
 const HEALTH_PATH = "/auth/oidc/session";
 const ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
+export const SHARED_AUTH_READ_HEADER = "x-takosumi-shared-auth-read";
 const HEALTH_DEADLINE_MS = 40_000;
+const RECENT_READ_PROBE_MS = 5_000;
 const HOSTED_SESSION_RETRY_MS = [300, 900, 1_800] as const;
 
 type RoutePresence = "present" | "absent";
@@ -36,6 +38,8 @@ let establishedHostedRoute = false;
 let healthInflight: Promise<RoutePresence> | undefined;
 let initialInflight: Promise<RoutePresence> | undefined;
 let generation = 0;
+let availabilityGeneration = 0;
+let lastPresentAt: number | undefined;
 const tickets = new WeakMap<
   object,
   { readonly generation: number; readonly route: RoutePresence }
@@ -49,9 +53,16 @@ export function throwIfSharedAuthCallerAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw aborted();
 }
 
+/** An authoritative 401 retires any recently shared availability observation. */
+export function invalidateRecentSharedAuthProbe(): void {
+  availabilityGeneration += 1;
+  lastPresentAt = undefined;
+}
+
 /** Clear local knowledge; logout cannot cancel another caller's in-flight read. */
 export function clearSharedAuthSessionPreflight(): void {
   generation += 1;
+  invalidateRecentSharedAuthProbe();
   knownRoute = undefined;
   initialFailure = undefined;
   establishedHostedRoute = false;
@@ -190,7 +201,14 @@ function startHealth(initial: boolean): Promise<RoutePresence> {
     if (initial) initialInflight = healthInflight;
     return healthInflight;
   }
-  const request = readHealth().finally(() => {
+  lastPresentAt = undefined;
+  const observedGeneration = availabilityGeneration;
+  const request = readHealth().then((route) => {
+    if (route === "present" && observedGeneration === availabilityGeneration) {
+      lastPresentAt = Date.now();
+    }
+    return route;
+  }).finally(() => {
     if (healthInflight === request) healthInflight = undefined;
   });
   healthInflight = request;
@@ -262,6 +280,26 @@ function forCaller<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
       },
     );
   });
+}
+
+/** The server must still handle a reused read through the shared profile. */
+export function canReuseRecentSharedAuthProbe(): boolean {
+  if (knownRoute !== "present" || initialInflight || healthInflight || lastPresentAt === undefined) {
+    return false;
+  }
+  const age = Date.now() - lastPresentAt;
+  return age >= 0 && age < RECENT_READ_PROBE_MS;
+}
+
+/** A previous Worker version may lack the request fence after rollback. */
+export function requireSharedAuthReadResponse(response: Response): void {
+  if ((response.ok || response.status === 404) &&
+    response.headers.get(SHARED_AUTH_READ_HEADER) !== "1") {
+    invalidateRecentSharedAuthProbe();
+    throw new SharedAuthSessionPreflightError(
+      503, "", new Headers(), undefined, "Hosted session route became unavailable.",
+    );
+  }
 }
 
 /**

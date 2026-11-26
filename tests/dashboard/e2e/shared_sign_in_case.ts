@@ -24,9 +24,15 @@ export function registerSharedSignInCases(mode: DashboardE2EMode): void {
       await page.route("**/auth/oidc/session", (route) => route.fulfill({
         status: authenticated ? 200 : 401, json: { authenticated },
       }));
-      await page.route("**/api/v1/dashboard/bootstrap?**", (route) => authenticated
-        ? route.fallback()
-        : route.fulfill({ status: 401, json: { error: "unauthenticated" } }));
+      await page.route((url) =>
+        url.pathname === "/api/v1/dashboard/bootstrap" || url.pathname === "/api/v1/apps",
+      async (route) => {
+        if (!authenticated) return route.fulfill({ status: 401, json: { error: "unauthenticated" } });
+        const header = "x-takosumi-shared-auth-read";
+        if (route.request().headers()[header] !== "1") return route.fallback();
+        const response = await route.fetch();
+        return route.fulfill({ response, headers: { ...response.headers(), [header]: "1" } });
+      });
       await page.route("**/api/v1/account/session/me", (route) => {
         if (route.request().method() === "DELETE") {
           if (++logoutRequests === 1) return route.fulfill({ status: 503, json: { error: "session_revocation_unavailable" } });
