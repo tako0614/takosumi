@@ -244,12 +244,19 @@ export async function handleCapsules(
           capsule.status === "destroyed" ||
           !capsuleHasAppliedState(capsule)
         ) {
+          const key = request.headers.get("idempotency-key");
+          const ownerEpoch = key !== null && directUninstallRequester &&
+            ctx.session.uninstallRequester?.subject === actor && auth.authority === "app" &&
+            auth.access.role === "owner" && auth.access.ownerAccountId === actor
+            ? auth.access.ownershipEpoch
+            : retryOwnershipEpoch;
           return await deleteCapsule(
             operations,
             capsule,
             capsuleId,
-            { actor, ...(retryOwnershipEpoch !== undefined ? { actorOwnershipEpoch: retryOwnershipEpoch } : {}) },
+            { actor, ...(ownerEpoch !== undefined ? { actorOwnershipEpoch: ownerEpoch } : {}) },
             lifecycleMutation ? requireCapturedManagement() : undefined,
+            key,
           );
         }
         // Applied DELETE shares the exact uninstall admission below, including
@@ -697,6 +704,7 @@ async function deleteCapsule(
   capsuleId: string,
   requester: { readonly actor: string; readonly actorOwnershipEpoch?: number },
   expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
+  idempotencyKey: string | null,
 ): Promise<Response> {
   if (capsule.status === "destroyed") {
     if (!capsuleHasAppliedState(capsule)) {
@@ -725,7 +733,17 @@ async function deleteCapsule(
       expectedWorkspaceManagementAuthority,
     });
   }
-  const response = await operations.createCapsuleDestroyPlan(capsuleId, requester);
+  if (idempotencyKey !== null && (!idempotencyKey || idempotencyKey.trim() !== idempotencyKey ||
+    /[\u0000-\u001f\u007f]/u.test(idempotencyKey) || new TextEncoder().encode(idempotencyKey).byteLength > 256)) {
+    return errorJson("invalid_argument", "Idempotency-Key must be 1-256 bytes without control characters.", 400);
+  }
+  const response = await operations.createCapsuleDestroyPlan(capsuleId, {
+    ...requester,
+    ...(idempotencyKey === null ? {} : {
+      idempotencyKey,
+      ...(expectedWorkspaceManagementAuthority ? { expectedWorkspaceManagementAuthority } : {}),
+    }),
+  });
   return jsonStatus(await publicPlanActionResponse(operations, response), 202);
 }
 

@@ -599,6 +599,8 @@ Plan の確認・承認と、その Run の Apply が別途必要です。`immed
 同じ意味で、その他の値は `400` です。`POST .../uninstall` と `POST .../destroy-plan` は
 引き続き利用できます。
 
+適用済みアプリでは、応答が途切れたときに同じ `Idempotency-Key`（1〜256バイト）で再送すると、同じ呼出者・アプリの保存済みPlanを再利用します。新しく削除を開始するときは新しいキーを使います。
+
 この変更は DELETE の応答契約を破壊的に変更します。release cutover で旧 DELETE の暗黙の
 即時 Plan 意味論は終了し、legacy fallback はありません。移行中は既存の POST uninstall と
 destroy-plan が bridge になります。猶予なしで破棄したい client は cutover より前に

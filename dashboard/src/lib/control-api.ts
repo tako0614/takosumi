@@ -1868,9 +1868,10 @@ export interface DeleteCapsuleResult {
   readonly projectionStatus?: string;
 }
 
-export interface DeleteCapsuleOptions {
+export interface DeleteCapsuleOptions extends Pick<RequestOpts, "isCurrent"> {
   /** Create the legacy reviewable destroy Plan instead of scheduling deletion. */
   readonly immediate?: boolean;
+  readonly idempotencyKey?: string;
 }
 
 export interface CapsuleAbandonmentExpectation {
@@ -1931,7 +1932,13 @@ export async function deleteCapsule(
     : `?immediate=${options.immediate}`;
   return await controlFetch<DeleteCapsuleResult>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}${immediate}`,
-    { method: "DELETE" },
+    {
+      method: "DELETE",
+      isCurrent: options.isCurrent,
+      ...(options.immediate === true && options.idempotencyKey
+        ? { headers: { "idempotency-key": options.idempotencyKey } }
+        : {}),
+    },
   );
 }
 

@@ -1962,7 +1962,7 @@ export class OpenTofuController {
     return this.#runEngine.validateCapsuleConfigurationProviderBindings(input);
   }
 
-  createCapsuleDestroyPlan(
+  async createCapsuleDestroyPlan(
     capsuleId: string,
     context: DeployControlActorContext = {},
     internal: Pick<
@@ -1972,13 +1972,58 @@ export class OpenTofuController {
       | "planRunId"
       | "expectedWorkspaceManagementAuthority"
       | "destroyProviderConnectionReplacements"
-    > = {},
+    > & { readonly idempotencyKey?: string } = {},
   ): Promise<PlanRunResponse> {
-    return this.#runEngine.createCapsuleDestroyPlan(
+    const { idempotencyKey, ...options } = internal;
+    if (idempotencyKey === undefined) {
+      return await this.#runEngine.createCapsuleDestroyPlan(capsuleId, context, options);
+    }
+    requireNonEmptyString(context.actor, "actor");
+    if (options.planRunId !== undefined || options.sourceSnapshotId !== undefined ||
+      options.runnerProfileId !== undefined || options.destroyProviderConnectionReplacements !== undefined) {
+      throw new OpenTofuControllerError("invalid_argument", "Idempotency-Key is only supported for ordinary immediate uninstall.");
+    }
+    const { capsule } = await this.#capsules.getCapsule(capsuleId);
+    const digest = await stableJsonDigest({
+      kind: "takosumi.immediate-uninstall@v1",
+      actor: context.actor,
+      workspaceId: capsule.workspaceId,
       capsuleId,
-      context,
-      internal,
+      idempotencyKey,
+    });
+    const planRunId = `plan_${digest.slice("sha256:".length)}`;
+    const conflict = () => new OpenTofuControllerError(
+      "failed_precondition",
+      "The previous uninstall request no longer matches the current Plan inputs. Check the original Run.",
+      { reason: "uninstall_plan_preparation_conflict" },
     );
+    const existing = await this.#store.getPlanRun(planRunId);
+    if (existing) {
+      if (existing.workspaceId !== capsule.workspaceId || existing.capsuleId !== capsuleId ||
+        existing.createdBy !== context.actor || existing.operation !== "destroy" ||
+        existing.origin !== undefined || existing.destroyConnectionRecovery?.replacements.some(
+          ({ connectionId, replacementConnectionId }) => connectionId !== replacementConnectionId,
+        )) throw conflict();
+      // An already-serviced replay returns its saved Plan. Queued Plans use the
+      // atomic preparation path so a missing delivery can also be repaired.
+      if (existing.status !== "queued") {
+        if (context.actorOwnershipEpoch !== undefined) {
+          const ownership = await this.#appOwnership?.getOwnership(capsuleId);
+          if (ownership?.ownerAccountId !== context.actor || ownership?.ownershipEpoch !== context.actorOwnershipEpoch) {
+            throw new OpenTofuControllerError("failed_precondition", "The app's owner changed before the Run could be read.", {
+              reason: "app_owner_changed",
+            });
+          }
+        }
+        return { planRun: publicPlanRun(existing) };
+      }
+    }
+    try {
+      return await this.#runEngine.createCapsuleDestroyPlan(capsuleId, context, { ...options, planRunId });
+    } catch (error) {
+      if (error instanceof PlanRunPreparationConflictError) throw conflict();
+      throw error;
+    }
   }
 
   createCapsuleDriftCheck(
