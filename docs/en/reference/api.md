@@ -1049,6 +1049,8 @@ Plan, then apply that Run. `immediate=false` has the same meaning as the default
 other values return `400`. `POST .../uninstall` and `POST .../destroy-plan` remain
 available.
 
+For an applied app, you can retry an interrupted request using the same `Idempotency-Key` (1–256 bytes). A retry by the same caller for the same app reuses the saved Plan. Use a new key for a new uninstall attempt.
+
 This changes the DELETE response contract. At release cutover, the old implicit
 immediate-Plan meaning of DELETE ends; there is no implicit legacy fallback. The
 existing POST uninstall and destroy-plan routes are the migration bridge. Clients

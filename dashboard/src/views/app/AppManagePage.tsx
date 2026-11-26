@@ -141,6 +141,7 @@ import AppLinkedSection from "./AppLinkedSection.tsx";
 import AppSharingSection from "./AppSharingSection.tsx";
 import AppUninstallConnectionRecovery from "./AppUninstallConnectionRecovery.tsx";
 import { appPrimaryAllowed, isAppRemovalRun, resolveAppRole } from "../../lib/app-access.ts";
+import { randomUuid } from "../../lib/random-uuid.ts";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
 
 /** Runs read per history page (the server accepts at most 100). */
@@ -1329,14 +1330,53 @@ export default function AppManagePage(props: {
       if (sameUninstallScope(operation)) setUninstallBusy(false);
     }
   };
+  let immediateUninstallAttempt: { readonly scope: string; readonly key: string } | undefined;
+  const immediateUninstallKey = (stateVersionId: string | undefined, latestRemovalId: string | undefined) => {
+    const scope = JSON.stringify([uninstallScope(), stateVersionId, latestRemovalId]);
+    const storageKey = `takosumi.immediate-uninstall:${uninstallScope()}`;
+    if (immediateUninstallAttempt?.scope === scope) return immediateUninstallAttempt.key;
+    try {
+      const saved = JSON.parse(window.sessionStorage.getItem(storageKey) ?? "null");
+      if (saved?.scope === scope && typeof saved.key === "string" &&
+        /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(saved.key)) {
+        immediateUninstallAttempt = { scope, key: saved.key };
+        return saved.key as string;
+      }
+    } catch {
+      // Continue with the live page's key if session storage is unavailable.
+    }
+    const key = randomUuid();
+    immediateUninstallAttempt = { scope, key };
+    try {
+      window.sessionStorage.setItem(storageKey, JSON.stringify(immediateUninstallAttempt));
+    } catch {
+      // Keep the in-memory attempt when persistence is unavailable.
+    }
+    return key;
+  };
   // The immediate teardown is a plan reviewed in place: its removal list,
   // the explicit check and the approval dialog all stay in front of it.
+  const pendingUninstallReview = () => {
+    const pending = app()?.progress.review;
+    return pending?.runType === "destroy_plan" ? pending : undefined;
+  };
   const uninstallNow = () => {
-    if (!isOwner() || uninstallConnectionNotice() || runMutationOutcomeUnknown(app()?.latestRun)) return;
+    const inst = capsule();
+    const latestRun = app()?.latestRun;
+    if (!inst || !isOwner() || uninstallConnectionNotice() || runMutationOutcomeUnknown(latestRun)) return;
+    const pending = pendingUninstallReview();
+    if (pending) {
+      openRunReview(pending.runId, pending.runType);
+      return;
+    }
     void startReview(
       "attention",
       "uninstall",
-      async () => extractRunId(await deleteCapsule(capsuleId(), { immediate: true })),
+      async (isCurrent) => extractRunId(await deleteCapsule(inst.id, {
+        immediate: true,
+        idempotencyKey: immediateUninstallKey(inst.currentStateVersionId, isAppRemovalRun(latestRun?.type) ? latestRun?.id : undefined),
+        isCurrent,
+      })),
       { restartable: false, action: "uninstall_now" },
     );
   };
@@ -2086,7 +2126,7 @@ export default function AppManagePage(props: {
                             runMutationOutcomeUnknown(view().latestRun)}
                           onClick={uninstallNow}
                         >
-                          {t("app.uninstall.now")}
+                          {t(pendingUninstallReview() ? "app.uninstall.openLatestReview" : "app.uninstall.now")}
                         </Button>
                       }
                     >

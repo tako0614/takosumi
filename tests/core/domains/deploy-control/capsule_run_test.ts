@@ -4252,7 +4252,13 @@ test("legacy source-less destroy omits a legacy OpenTofu builtin from provider i
     sourceId: undefined as never,
   });
 
-  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  const context = { actor: "legacy-uninstall-owner" };
+  const options = { idempotencyKey: "legacy-uninstall-retry" };
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id, context, options);
+  expect((await controller.createCapsuleDestroyPlan(seeded.capsule.id, context, options)).planRun.id)
+    .toBe(destroy.planRun.id);
+  expect(runner.planJobs).toHaveLength(2);
+  expect(runner.destroyJobs).toHaveLength(0);
 
   expect(destroy.planRun.requiredProviders).toEqual(
     LEGACY_DESTROY_PROVIDERS,
@@ -14482,18 +14488,24 @@ test.each(["1", "2", "2-selective", "2-conflict", "2-restore-original", "1-origi
       createCapsuleDestroyPlan: (id: string, options?: Parameters<Operations["createCapsuleDestroyPlan"]>[1]) =>
         controller.createCapsuleDestroyPlan(id, {
           actor: options?.actor, actorOwnershipEpoch: options?.actorOwnershipEpoch,
-        }, { destroyProviderConnectionReplacements: options?.destroyProviderConnectionReplacements }),
+        }, {
+          destroyProviderConnectionReplacements: options?.destroyProviderConnectionReplacements,
+          idempotencyKey: options?.idempotencyKey,
+        }),
       getRun: (id: string) => controller.getRun(id),
       getRunCost: async () => undefined,
     } as unknown as Operations;
-    const startReview = async (actor = ownership.ownerAccountId, explicit = restoreOneOriginal) => {
+    const startReview = async (actor = ownership.ownerAccountId, explicit = restoreOneOriginal, key?: string) => {
       const segments = ["capsules", seeded.capsule.id];
       const base = `https://fixture.invalid/api/v1/capsules/${seeded.capsule.id}`;
       if (explicit) segments.push("destroy-plan");
       const request = explicit ? new Request(base + "/destroy-plan", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ destroyProviderConnectionReplacements: replacementsFor(original.id) }),
-      }) : new Request(base + "?immediate=true", { method: "DELETE" });
+      }) : new Request(base + "?immediate=true", {
+        method: "DELETE",
+        ...(key ? { headers: { "idempotency-key": key } } : {}),
+      });
       return (await handleCapsules({
         request, url: new URL(request.url), operations, store: accountsStore,
         session: { subject: actor, credential: "session", uninstallRequester: { subject: actor } },
@@ -14524,7 +14536,8 @@ test.each(["1", "2", "2-selective", "2-conflict", "2-restore-original", "1-origi
 
     const finalBaseGeneration = repeatOriginal ? 3 : 2;
     for (let generation = 2; generation <= finalBaseGeneration; generation += 1) {
-      const requested = await startReview();
+      const key = `retained-state-uninstall-${generation}`;
+      const requested = await startReview(ownership.ownerAccountId, restoreOneOriginal, key);
       expect(requested.status).toBe(restoreOneOriginal ? 201 : 202);
       const { run } = await requested.json() as { run: Run };
       const { planRun: retry } = await controller.getPlanRun(run.id);
@@ -14533,6 +14546,16 @@ test.each(["1", "2", "2-selective", "2-conflict", "2-restore-original", "1-origi
       expect(retry.destroyConnectionRecovery?.replacements).toEqual(replacementsFor(original.id));
       expect(mints.at(-1)).toEqual(expectedMint(original.id));
       expect(runner.destroyJobs).toHaveLength(generation - 1);
+      if (!restoreOneOriginal) {
+        const retryRequest = await startReview(ownership.ownerAccountId, false, key);
+        expect(retryRequest.status).toBe(202);
+        expect((await retryRequest.json() as { run: Run }).run.id).toBe(run.id);
+        await expect(controller.createCapsuleDestroyPlan(seeded.capsule.id, {
+          ...actorContext, actorOwnershipEpoch: ownership.ownershipEpoch + 1,
+        }, { idempotencyKey: key })).rejects.toMatchObject({ details: { reason: "app_owner_changed" } });
+        expect(mints.at(-1)).toEqual(expectedMint(original.id));
+        expect(runner.destroyJobs).toHaveLength(generation - 1);
+      }
       await controller.approveRun(retry.id, { approvedBy: ownership.ownerAccountId });
 
       const result = await controller.createApplyRun({

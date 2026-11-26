@@ -2993,6 +2993,7 @@ export class RunEngine {
         capsule,
         runnerProfile,
         context,
+        ...(internal.origin === undefined && internal.planRunId !== undefined ? { planRunId: internal.planRunId } : {}),
         ...(workspaceManagementAuthority
           ? { expectedWorkspaceManagementAuthority: workspaceManagementAuthority }
           : {}),
@@ -4803,6 +4804,7 @@ export class RunEngine {
     readonly capsule: Capsule;
     readonly runnerProfile: RunnerProfile;
     readonly context: DeployControlActorContext;
+    readonly planRunId?: string;
     readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
     readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   }): Promise<PlanRunResponse> {
@@ -4901,6 +4903,7 @@ export class RunEngine {
                 input.expectedWorkspaceManagementAuthority,
             }
           : {}),
+        ...(input.planRunId === undefined ? {} : { planRunId: input.planRunId }),
         baseStateGeneration: capsule.currentStateGeneration,
         legacySourcelessDestroyRecovery: true,
         genericRootDispatch: {

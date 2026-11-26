@@ -841,6 +841,8 @@ export interface TakosumiOperations {
       readonly runnerProfileId?: string;
       readonly actor?: string;
       readonly actorOwnershipEpoch?: number;
+      readonly idempotencyKey?: string;
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
     },
   ): Promise<PlanRunResponse>;
   /**
@@ -2100,6 +2102,10 @@ export async function createTakosumiService(
             : {}),
         },
         {
+          ...(options?.expectedWorkspaceManagementAuthority
+            ? { expectedWorkspaceManagementAuthority: options.expectedWorkspaceManagementAuthority }
+            : {}),
+          ...(options?.idempotencyKey !== undefined ? { idempotencyKey: options.idempotencyKey } : {}),
           ...(options?.runnerProfileId ? { runnerProfileId: options.runnerProfileId } : {}),
           ...(options?.destroyProviderConnectionReplacements !== undefined ? { destroyProviderConnectionReplacements: options.destroyProviderConnectionReplacements } : {}),
         },

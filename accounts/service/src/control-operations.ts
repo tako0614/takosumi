@@ -733,6 +733,8 @@ export interface ControlPlaneOperations {
       readonly actor?: string;
       /** Canonical owner read for a manual retry from retained Destroy state. */
       readonly actorOwnershipEpoch?: number;
+      readonly idempotencyKey?: string;
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
     },
   ): Promise<PlanRunResponse>;
   createCapsuleDriftCheck(capsuleId: string, options?: { readonly actor?: string }): Promise<PlanRunResponse>;

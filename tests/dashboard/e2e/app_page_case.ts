@@ -225,6 +225,60 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       });
     }
 
+    test("an explicit immediate uninstall retry reuses its key after reloading", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const base = `/api/v1/capsules/${CAPSULE_ID}`;
+      const plan = lifecycleRun("plan_same_immediate_uninstall", "destroy_plan", "waiting_approval", "2026-11-26T00:00:00.000Z", {
+        policyStatus: "pass", requiresApproval: true,
+        summary: { add: 0, change: 0, destroy: 1 },
+        planResources: [{ address: "test_resource.app", type: "test_resource", actions: ["delete"] }],
+      });
+      const writes: string[] = [];
+      let stored = false;
+      const requestKeys: Array<string | undefined> = [];
+      await page.route("**/api/v1/**", async (route) => {
+        const req = route.request();
+        const { pathname, search } = new URL(req.url());
+        if (req.method() !== "GET") writes.push(`${req.method()} ${pathname}${search}`);
+        if (req.method() === "DELETE" && pathname === base && search === "?immediate=true") {
+          requestKeys.push(req.headers()["idempotency-key"]);
+          // Until the first queued save is visible, both navigation and Refresh
+          // can only read the previous app view.
+          if (requestKeys.length === 1) return route.abort("failed");
+          stored = true;
+          return route.fulfill({ status: 202, json: { run: plan } });
+        }
+        if (pathname === `${base}/app`) return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
+          uninstall: { mode: "none", impact: { usedBy: [] } },
+          ...(stored ? {
+            latestRun: plan,
+            progress: { revisionPreparing: false, review: { runId: plan.id, runType: plan.type } },
+          } : {}),
+        }) } });
+        if (pathname === `/api/v1/runs/${plan.id}`) return route.fulfill({ json: { run: plan } });
+        return route.fallback();
+      });
+
+      await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+      await openAppPane(page, "danger");
+      const uninstall = page.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall now", exact: true });
+      await uninstall.click();
+      const refresh = page.getByTestId("app-uninstall-plan-unconfirmed").getByRole("button", { name: "Refresh", exact: true });
+      await refresh.click();
+      expect(writes).toEqual([`DELETE ${base}?immediate=true`]);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(uninstall).toBeVisible();
+      expect(writes).toEqual([`DELETE ${base}?immediate=true`]);
+      await uninstall.click();
+      await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+      expect(requestKeys[0]).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(requestKeys).toEqual([requestKeys[0], requestKeys[0]]);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByTestId("app-uninstall").getByRole("button", { name: "Open latest removal review", exact: true }).click();
+      await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+      expect(writes).toEqual(Array(2).fill(`DELETE ${base}?immediate=true`));
+    });
+
     test("a reopened app links its owner to the accepted uninstall Run", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);

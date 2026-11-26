@@ -6535,6 +6535,63 @@ async function d1ReAdoptionRouteFixture(
   return { database, fixture };
 }
 
+test("overlapping immediate uninstall requests with the same key save one destroy Plan", async () => {
+  const { fixture } = await d1ReAdoptionRouteFixture("immediate-uninstall-replay");
+  await applyRevisedSourceSnapshot(fixture, "immediate-uninstall-replay");
+  const { operations, deployStore, runner } = fixture;
+  const apps = `/api/v1/capsules/${fixture.seeded.capsule.id}`;
+  const before = await deployStore.getCapsule(fixture.seeded.capsule.id);
+  const initialPlans = runner.planJobs.length;
+  const initialApplies = runner.applyJobs.length;
+  const send = (cookie = fixture.cookie, key = "immediate-retry-key", status = 202) =>
+    controlJson<{ run: { id: string; type: string; status: string } }>({
+      operations, store: fixture.accountStore, cookie, method: "DELETE",
+      path: `${apps}?immediate=true`, headers: { "idempotency-key": key },
+    }, status);
+
+  await send(fixture.foreignCookie, "immediate-retry-key", 403);
+  await send(fixture.cookie, "x".repeat(257), 400);
+  const firstSave = Promise.withResolvers<void>();
+  const releaseSave = Promise.withResolvers<void>();
+  const originalPrepare = deployStore.preparePlanRun.bind(deployStore);
+  const observedIds: string[] = [];
+  deployStore.preparePlanRun = async (input) => {
+    observedIds.push(input.run.id);
+    if (observedIds.length === 1) {
+      firstSave.resolve();
+      await releaseSave.promise;
+    }
+    return await originalPrepare(input);
+  };
+  const first = send();
+  const observed = await Promise.race([
+    firstSave.promise.then(() => true),
+    first.then(() => false),
+  ]);
+  expect(observed).toBe(true);
+  try {
+    const retry = await send();
+    expect(retry.run).toMatchObject({ type: "destroy_plan", status: "waiting_approval" });
+    releaseSave.resolve();
+    expect((await first).run.id).toBe(retry.run.id);
+    expect(observedIds).toEqual([retry.run.id, retry.run.id]);
+    const replay = await send();
+    expect(replay.run).toEqual(retry.run);
+    expect(observedIds).toHaveLength(2);
+    expect(runner.planJobs).toHaveLength(initialPlans + 1);
+    expect(runner.applyJobs).toHaveLength(initialApplies);
+    expect(runner.destroyJobs).toHaveLength(0);
+    expect(await deployStore.getCapsule(fixture.seeded.capsule.id)).toEqual(before);
+    const runs = await operations.listRuns(fixture.seeded.workspace.id);
+    expect(runs.filter((run) => run.type === "destroy_plan").map((run) => run.id)).toEqual([retry.run.id]);
+    expect(runs.filter((run) => run.type === "destroy_apply")).toHaveLength(0);
+  } finally {
+    releaseSave.resolve();
+    await first.catch(() => undefined);
+    deployStore.preparePlanRun = originalPrepare;
+  }
+});
+
 async function d1ConfigurationPlanRouteFixture(suffix: string): Promise<{
   readonly database: SqliteFakeD1;
   readonly fixture: Awaited<ReturnType<typeof configurationPlanRouteFixture>>;
