@@ -204,6 +204,9 @@ import {
 } from "./platform_extensions.ts";
 import {
   TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER,
   normalizePublicStoreEndpoint,
   type CreateTakosumiDiscoveryOptions,
   type TakosumiOperatorCapabilities,
@@ -733,6 +736,9 @@ const platformWorker = {
     const sharedAuthResponse = await handleSharedAuthRouteRequest(request, env);
     if (sharedAuthResponse) return sharedAuthResponse;
     const url = new URL(request.url);
+    if (url.pathname === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH) {
+      return handlePlatformSharedDashboardSessionRequest(request, env);
+    }
     if (sharedStagingApiKeysEnabled(env) && matchSharedAuthApiKeyRoute(url.pathname)) {
       const apiKeyResponse = await handleSharedAuthApiKeyRequest(request, {
         origin: env.TAKOSUMI_SHARED_AUTH_ORIGIN!,
@@ -1352,6 +1358,7 @@ function platformDiscoveryOptions(
   const operator = platformOperatorCapabilities(env);
   const mobileOidcClientId = configuredTakosumiMobileOidcClientId(env);
   const storeEndpoint = normalizePublicStoreEndpoint(env.TAKOSUMI_TCS_STORE_URL);
+  const sharedDashboardSession = sharedDashboardSessionEnabled(origin, env);
   const oidcIssuer = env.TAKOSUMI_ACCOUNTS_ISSUER?.trim() || undefined;
   return {
     origin,
@@ -1366,6 +1373,7 @@ function platformDiscoveryOptions(
         ...extensionDiscovery.extensions,
         ...(operatorControlMcp ? ["mcp.operator-control.v1"] : []),
         ...(storeEndpoint ? ["takosumi.tcs-store.v1"] : []),
+        ...(sharedDashboardSession ? [TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY] : []),
       ]),
     ],
     endpoints: Object.fromEntries(
@@ -1376,6 +1384,9 @@ function platformDiscoveryOptions(
           : []),
         ...(storeEndpoint
           ? ([["takosumi.tcs-store.v1", storeEndpoint]] as const)
+          : []),
+        ...(sharedDashboardSession
+          ? ([[TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY, TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH]] as const)
           : []),
       ].map(([token, path]) => [token, new URL(path, origin).toString()]),
     ),
@@ -2151,6 +2162,44 @@ export function platformAccountsStore(env: CloudflareWorkerEnv): AccountsStore {
   });
 }
 
+function sharedDashboardSessionEnabled(origin: string, env: SharedAuthEnvironment): boolean {
+  return env.TAKOSUMI_ENVIRONMENT === "staging" &&
+    env.TAKOSUMI_SHARED_AUTH_PROFILE === "shared-account" &&
+    env.TAKOSUMI_SHARED_AUTH_ORIGIN === origin;
+}
+
+/** Bootstrap under the shared cookie profile, with the same Control handler as the regular GET. */
+export async function handlePlatformSharedDashboardSessionRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  dependencies?: Parameters<typeof handlePlatformSharedAuthControlRequest>[2],
+): Promise<Response> {
+  const url = new URL(request.url);
+  const headers = { "cache-control": "no-store" };
+  if (url.pathname !== TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH || !sharedDashboardSessionEnabled(url.origin, env)) {
+    return Response.json({ error: "not found" }, { status: 404, headers });
+  }
+  if (request.method !== "GET") {
+    return Response.json({ error: "method_not_allowed" }, { status: 405, headers: { ...headers, allow: "GET" } });
+  }
+  if (url.search !== "") {
+    return Response.json({ error: "invalid_request" }, { status: 400, headers });
+  }
+  url.pathname = "/api/v1/dashboard/bootstrap";
+  url.search = "?includeWorkspaces=false";
+  const canonicalHeaders = new Headers(request.headers);
+  canonicalHeaders.set(SHARED_AUTH_READ_HEADER, "1");
+  const canonical = new Request(url, { headers: canonicalHeaders, signal: request.signal });
+  const response = await handlePlatformSharedAuthControlRequest(canonical, env, {
+    ...dependencies, initialDashboardSession: true,
+  }) ??
+    sharedAuthUnavailableResponse();
+  const responseHeaders = new Headers(response.headers);
+  responseHeaders.set("cache-control", "no-store");
+  responseHeaders.set(TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER, "1");
+  return new Response(response.body, { status: response.status, headers: responseHeaders });
+}
+
 /**
  * Shared-profile browser authentication is verified by the private RP, then
  * existing Control handlers read the canonical Workspace/member authority and
@@ -2164,12 +2213,16 @@ export async function handlePlatformSharedAuthControlRequest(
     readonly store?: AccountsStore;
     readonly resolveOperations?: () => Promise<ControlPlaneOperations>;
     readonly runStreamTiming?: RunStreamTiming;
+    readonly initialDashboardSession?: true;
   } = {},
 ): Promise<Response | undefined> {
   if (!sharedAuthConfigured(env)) return undefined;
   const url = new URL(request.url);
   const resource = controlInventoryResourceKey(url.pathname);
   if (!resource || !CONTROL_DISPATCH_RESOURCE_KEYS.includes(resource)) return undefined;
+  const initialDashboardSession = dependencies.initialDashboardSession &&
+    request.method === "GET" && url.pathname === "/api/v1/dashboard/bootstrap" &&
+    url.search === "?includeWorkspaces=false";
   const runRead = isRunGetReadRequest(request);
   const diagnostics = runRead
     ? sharedRunGetPhaseDiagnostics(env).forRequest(request)
@@ -2238,13 +2291,25 @@ export async function handlePlatformSharedAuthControlRequest(
         status: 404, headers: { "cache-control": "no-store" },
       });
     }
+    if (initialDashboardSession && request.signal.aborted) return sharedAuthUnavailableResponse();
     const identity = await measureRequestPhaseOperation(
       diagnostics,
       "control_auth",
-      () => authenticateSharedAuthRequest(request, env),
+      () => authenticateSharedAuthRequest(request, env, undefined,
+        initialDashboardSession ? { initialDashboardSession: true } : undefined),
     );
     assertActive?.();
-    if (identity?.kind === "unavailable") return sharedAuthUnavailableResponse();
+    if (initialDashboardSession && request.signal.aborted) return sharedAuthUnavailableResponse();
+    if (identity?.kind === "unavailable") {
+      // The cold session exchange replaces the browser health read. Preserve
+      // the RP's explicit unavailable verdict without marking gateway failures.
+      if (initialDashboardSession && "reportedByRp" in identity) {
+        return Response.json({ error: { code: "oidc_unavailable" } }, {
+          status: 503, headers: { "cache-control": "no-store" },
+        });
+      }
+      return sharedAuthUnavailableResponse();
+    }
     if (identity?.kind !== "authenticated") {
       return Response.json({ error: "unauthenticated" }, {
         status: 401, headers: { "cache-control": "no-store" },
@@ -2677,6 +2742,7 @@ function platformExtensionDiscovery(env: CloudflareWorkerEnv): {
   const endpoints: Record<string, string> = {};
   for (const route of configuredRoutes) {
     for (const capability of route.capabilities ?? []) {
+      if (capability === TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY) continue;
       extensions.add(capability);
       endpoints[capability] = route.basePath;
     }

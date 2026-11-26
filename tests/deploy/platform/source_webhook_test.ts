@@ -8,7 +8,10 @@ import {
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 
-import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
+import {
+  TAKOSUMI_API_VERSION,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY,
+} from "../../../contract/capabilities.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
@@ -2107,7 +2110,9 @@ for (const [label, change] of [
       `https://operator.example${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
     ), env);
     expect(response.status).toBe(200);
-    expect((await response.json()).extensions).toEqual([]);
+    expect((await response.json()).extensions).toEqual([
+      TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY,
+    ]);
     // Preserve existing malformed-config behavior: contribution GET throws,
     // the Dashboard loader treats the failed fetch as no extra entries.
     expect(() => platformExtensionContributionCatalog(env)).toThrow("shared authentication billing");

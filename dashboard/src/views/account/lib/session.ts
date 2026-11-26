@@ -26,11 +26,14 @@ import {
 import {
   fetchDashboardBootstrap,
   fetchDashboardWorkspaceBootstrap,
+  fetchInitialSharedDashboardBootstrap,
   DashboardBootstrapError,
   dashboardFailureKind,
   dashboardResponseErrorDetails,
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
+import { TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY } from "takosumi-contract";
+import { hasPlatformExtensionCapability } from "../../../lib/runtime-capabilities.ts";
 import { SESSION_ME } from "./paths.ts";
 import { resetAppOwnershipCache, type Workspace } from "../../../lib/control-api.ts";
 import { clearNotificationFeeds } from "../../../lib/notifications.ts";
@@ -202,8 +205,15 @@ async function fetchSessionMe(
   }
   try {
     const initialHealth = options.initialSharedAuthPreflight
-      ? await probeInitialSharedAuthSession()
+      ? await probeInitialSharedAuthSession(!options.includeWorkspaces && !isKnownSharedAuthRoutePresent() &&
+        hasPlatformExtensionCapability(TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY)
+        ? fetchInitialSharedDashboardBootstrap
+        : undefined)
       : undefined;
+    const bootstrap = initialHealth?.bootstrap;
+    if (bootstrap) {
+      return { session: bootstrap.authenticated ? { subject: bootstrap.subject, expiresAt: 0 } : null };
+    }
     const sharedAuthRoute = initialHealth?.route ??
       (isKnownSharedAuthRoutePresent() ? "present" : "absent");
     // The health result grants nothing. Canonical bootstrap must still

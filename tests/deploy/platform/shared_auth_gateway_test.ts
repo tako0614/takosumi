@@ -11,6 +11,7 @@ import {
   handlePlatformExtensionRouteRequest,
   handlePlatformSharedAuthControlRequest,
   handlePlatformSharedAuthSessionRequest,
+  handlePlatformSharedDashboardSessionRequest,
   verifyPlatformExtensionBearerToken,
   type CloudflareWorkerEnv,
 } from "../../../deploy/platform/worker.ts";
@@ -18,6 +19,10 @@ import { D1AccountsStore } from "../../../accounts/service/src/d1-store.ts";
 import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
 import { canAccessWorkspace } from "../../../accounts/service/src/control/shared.ts";
 import type { ControlPlaneOperations } from "../../../accounts/service/src/control-operations.ts";
+import {
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH as dashboardSessionPath,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER as dashboardProof,
+} from "../../../contract/capabilities.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const origin = "https://hosted.staging.example.test";
@@ -126,6 +131,123 @@ test("guarded GET confirms the shared-profile response only after RP authenticat
   const signedOut = await handlePlatformSharedAuthControlRequest(request(path, { headers }), revoked, deps);
   expect(signedOut?.status).toBe(401);
   expect(signedOut?.headers.get("x-takosumi-shared-auth-read")).toBeNull();
+});
+
+test("cold dashboard bootstrap authenticates the RP once and only reads the session", async () => {
+  let identity: Awaited<ReturnType<SharedAuthRpc["authenticateSharedAuth"]>> = { kind: "authenticated", accountId: "tsub_canonical" };
+  const authenticate = jest.fn(async (incoming: Request) => {
+    expect(incoming.headers.get("cookie")).toBe(cookie);
+    return identity;
+  });
+  const health = jest.fn(rpc.fetchSharedAuth);
+  const env = configured({ ...rpc, authenticateSharedAuth: authenticate, fetchSharedAuth: health }) as CloudflareWorkerEnv;
+  const operations = jest.fn(async () => ({}) as ControlPlaneOperations);
+  const deps = { store: new InMemoryAccountsStore(), resolveOperations: operations };
+  const call = (path = dashboardSessionPath, init?: RequestInit) => handlePlatformSharedDashboardSessionRequest(request(path, init), env, deps);
+
+  const success = await call();
+  expect(success.status).toBe(200);
+  expect(success.headers.get("cache-control")).toBe("no-store");
+  expect(success.headers.get(dashboardProof)).toBe("1");
+  expect(await success.json()).toEqual({ session: { subject: "tsub_canonical" } });
+  expect(authenticate).toHaveBeenCalledTimes(1);
+  expect(health).not.toHaveBeenCalled();
+  expect(operations).toHaveBeenCalledTimes(1);
+
+  for (const [next, status] of [["unauthenticated", 401], ["unavailable", 503]] as const) {
+    identity = { kind: next };
+    const denied = await call();
+    expect(denied.status).toBe(status);
+    expect(denied.headers.get(dashboardProof)).toBe("1");
+    expect(await denied.json()).toEqual(next === "unauthenticated"
+      ? { error: "unauthenticated" }
+      : { error: { code: "oidc_unavailable" } });
+  }
+  const brokenBinding = configured({
+    ...rpc,
+    authenticateSharedAuth: async () => { throw new Error("fixture RPC transport failure"); },
+  }) as CloudflareWorkerEnv;
+  const failure = await handlePlatformSharedDashboardSessionRequest(request(dashboardSessionPath), brokenBinding, deps);
+  expect(failure.status).toBe(503);
+  expect(await failure.json()).toEqual({ error: "authentication_unavailable" });
+  expect((await call(dashboardSessionPath, { method: "POST" })).status).toBe(405);
+  expect((await call(dashboardSessionPath + "?includeNotifications=true")).status).toBe(400);
+  expect((await call(dashboardSessionPath, { headers: { authorization: "Bearer fixture" } })).status).toBe(401);
+  expect(authenticate).toHaveBeenCalledTimes(3);
+  expect(operations).toHaveBeenCalledTimes(1);
+});
+
+test("only the initial Dashboard session can await a valid RP result after five seconds", async () => {
+  const entered = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<Awaited<ReturnType<SharedAuthRpc["authenticateSharedAuth"]>>>();
+  const authenticate = jest.fn(() => {
+    if (authenticate.mock.calls.length === 2) entered.resolve();
+    return ready.promise;
+  });
+  const env = configured({ ...rpc, authenticateSharedAuth: authenticate }) as CloudflareWorkerEnv;
+  const resolveOperations = jest.fn(async () => ({}) as ControlPlaneOperations);
+  const deps = { store: new InMemoryAccountsStore(), resolveOperations };
+  jest.useFakeTimers();
+  try {
+    const cold = handlePlatformSharedDashboardSessionRequest(request(dashboardSessionPath), env, deps);
+    const ordinary = handlePlatformSharedAuthControlRequest(
+      request("/api/v1/dashboard/bootstrap?includeWorkspaces=false", {
+        headers: { cookie, [dashboardProof]: "1" },
+      }), env, deps,
+    );
+    await entered.promise;
+    jest.advanceTimersByTime(5_000);
+    const timeout = await ordinary;
+    expect(timeout?.status).toBe(503);
+    expect(await timeout?.json()).toEqual({ error: "authentication_unavailable" });
+    expect(resolveOperations).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(1_000);
+    ready.resolve({ kind: "authenticated", accountId: "tsub_canonical" });
+    const response = await cold;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ session: { subject: "tsub_canonical" } });
+    expect(resolveOperations).toHaveBeenCalledTimes(1);
+  } finally {
+    ready.resolve({ kind: "unauthenticated" });
+    jest.useRealTimers();
+  }
+});
+
+test.each(["deadline", "cancel"])("cold Dashboard %s cannot start Control after the RP returns late", async (mode) => {
+  const entered = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<Awaited<ReturnType<SharedAuthRpc["authenticateSharedAuth"]>>>();
+  const env = configured({ ...rpc, authenticateSharedAuth: () => {
+    entered.resolve();
+    return ready.promise;
+  } }) as CloudflareWorkerEnv;
+  const resolveOperations = jest.fn(async () => ({}) as ControlPlaneOperations);
+  const attempt = new AbortController();
+  jest.useFakeTimers();
+  try {
+    const pending = handlePlatformSharedDashboardSessionRequest(request(dashboardSessionPath, { signal: attempt.signal }), env,
+      { resolveOperations });
+    await entered.promise;
+    if (mode === "deadline") {
+      let settled = false;
+      void pending.then(() => { settled = true; });
+      jest.advanceTimersByTime(39_999);
+      for (let index = 0; index < 10; index++) await Promise.resolve();
+      expect(settled).toBe(false);
+      jest.advanceTimersByTime(1);
+    } else {
+      attempt.abort();
+      ready.resolve({ kind: "authenticated", accountId: "tsub_canonical" });
+    }
+    const response = await pending;
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "authentication_unavailable" });
+    ready.resolve({ kind: "authenticated", accountId: "tsub_canonical" });
+    await Promise.resolve();
+    expect(resolveOperations).not.toHaveBeenCalled();
+  } finally {
+    ready.resolve({ kind: "unauthenticated" });
+    jest.useRealTimers();
+  }
 });
 
 test("shared authentication is an exact HTTPS staging-only operator opt-in", async () => {

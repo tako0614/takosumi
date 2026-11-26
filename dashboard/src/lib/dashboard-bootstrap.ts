@@ -1,9 +1,14 @@
 import type { ActivityEvent, Workspace } from "./control-api.ts";
 import {
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER,
+} from "takosumi-contract";
+import {
   canReuseRecentSharedAuthProbe,
   invalidateRecentSharedAuthProbe,
   preflightSharedAuthSession,
   requireSharedAuthReadResponse,
+  SharedAuthSessionPreflightError,
   SHARED_AUTH_READ_HEADER,
   type InitialSharedAuthHealthTicket,
 } from "./shared-auth-session-preflight.ts";
@@ -67,6 +72,54 @@ export class DashboardBootstrapError extends Error {
     super(message);
     this.name = "DashboardBootstrapError";
   }
+}
+
+/** Return undefined only for the reserved route's older-Worker 404. */
+export async function fetchInitialSharedDashboardBootstrap(signal: AbortSignal): Promise<
+  { readonly authenticated: true; readonly subject: string } | { readonly authenticated: false } | undefined
+> {
+  const response = await fetch(TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH, {
+    method: "GET",
+    headers: { accept: "application/json" },
+    credentials: "include",
+    cache: "no-store",
+    redirect: "error",
+    signal,
+  });
+  const marked = response.headers.get(TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER) === "1";
+  const json = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+  const body = await readResponseBody(response);
+  if (marked && json && response.status === 503 &&
+    (body as { error?: { code?: unknown } } | undefined)?.error?.code === "oidc_unavailable") {
+    throw new SharedAuthSessionPreflightError(
+      response.status, response.statusText, response.headers, body, "Hosted session probe failed (503).",
+    );
+  }
+  if (!marked && response.status === 404 && json && body &&
+    typeof body === "object" && Object.keys(body).length === 1 &&
+    "error" in body && body.error === "not found") return undefined;
+  if (marked && json && response.status === 401) return { authenticated: false };
+  if (marked && json && response.status === 200 && body && typeof body === "object" && "session" in body) {
+    const session = body.session;
+    if (session && typeof session === "object" && "subject" in session &&
+      typeof session.subject === "string" && session.subject.length > 0) {
+      return { authenticated: true, subject: session.subject };
+    }
+  }
+  throw dashboardBootstrapFailure(response, body);
+}
+
+function dashboardBootstrapFailure(response: Response, body: unknown): DashboardBootstrapError {
+  const error = dashboardResponseErrorDetails(body, response.status, response.statusText);
+  return new DashboardBootstrapError(
+    dashboardFailureKind(response.status, response.headers, body, error.code),
+    response.status,
+    response.statusText,
+    new Headers(response.headers),
+    body,
+    error.message,
+    error.code,
+  );
 }
 
 const inflight = new Map<
@@ -134,21 +187,7 @@ export function fetchDashboardBootstrap(
       }
       if (res.status === 401 || res.status === 404) return undefined;
       if (!res.ok) {
-        const body = await readResponseBody(res);
-        const error = dashboardResponseErrorDetails(
-          body,
-          res.status,
-          res.statusText,
-        );
-        throw new DashboardBootstrapError(
-          dashboardFailureKind(res.status, res.headers, body, error.code),
-          res.status,
-          res.statusText,
-          new Headers(res.headers),
-          body,
-          error.message,
-          error.code,
-        );
+        throw dashboardBootstrapFailure(res, await readResponseBody(res));
       }
       return (await res.json()) as DashboardBootstrapResponse;
     })

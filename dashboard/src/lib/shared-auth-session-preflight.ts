@@ -134,7 +134,34 @@ function parseHealth(response: Response, body: unknown): RoutePresence {
   );
 }
 
-async function readHealth(): Promise<RoutePresence> {
+async function retryHostedSessionRead<T>(
+  signal: AbortSignal,
+  read: () => Promise<T>,
+  isAbsent: (result: T) => boolean,
+): Promise<T> {
+  let unavailable: SharedAuthSessionPreflightError | undefined;
+  for (const delay of [0, ...HOSTED_SESSION_RETRY_MS]) {
+    if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    throwIfSharedAuthCallerAborted(signal);
+    let result: T;
+    try {
+      result = await read();
+    } catch (error) {
+      // A concurrent Hosted grant check can briefly occupy the session. Only
+      // repeat the RP probe; an explicit Retry-After takes precedence.
+      if (!isHostedSessionUnavailable(error) || error.headers.has("retry-after")) throw error;
+      unavailable = error;
+      continue;
+    }
+    // A later absence cannot select an ordinary session after explicit
+    // Hosted unavailability during the same probe.
+    if (unavailable && isAbsent(result)) throw unavailable;
+    return result;
+  }
+  throw unavailable;
+}
+
+async function withHostedSessionDeadline<T>(read: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
@@ -149,42 +176,26 @@ async function readHealth(): Promise<RoutePresence> {
       controller.abort();
     }, HEALTH_DEADLINE_MS);
   });
-  const work = (async () => {
-    let unavailable: SharedAuthSessionPreflightError | undefined;
-    for (const delay of [0, ...HOSTED_SESSION_RETRY_MS]) {
-      if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
-      throwIfSharedAuthCallerAborted(controller.signal);
+  try {
+    return await Promise.race([read(controller.signal), deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function readHealth(signal: AbortSignal, assertCurrent?: () => void): Promise<RoutePresence> {
+  try {
+    return await retryHostedSessionRead(signal, async () => {
+      assertCurrent?.();
       const response = await fetch(HEALTH_PATH, {
         method: "GET",
         headers: { accept: "application/json" },
         credentials: "include",
         cache: "no-store",
-        signal: controller.signal,
+        signal,
       });
-      const body = await readBody(response);
-      let route: RoutePresence;
-      try {
-        route = parseHealth(response, body);
-      } catch (error) {
-        // A concurrent Hosted grant check can briefly occupy the session.
-        // Only retry its health GET, never the caller's protected operation.
-        // An explicit server retry interval is outside the short contention
-        // retry. Surface it to the caller instead of retrying sooner.
-        if (!isHostedSessionUnavailable(error) || error.headers.has("retry-after")) {
-          throw error;
-        }
-        unavailable = error;
-        continue;
-      }
-      // A later absence cannot open the ordinary OSS fallback after Hosted
-      // has responded as unavailable during the same probe.
-      if (unavailable && route === "absent") throw unavailable;
-      return route;
-    }
-    throw unavailable;
-  })();
-  try {
-    return await Promise.race([work, deadline]);
+      return parseHealth(response, await readBody(response));
+    }, (route) => route === "absent");
   } catch (error) {
     if (error instanceof SharedAuthSessionPreflightError) throw error;
     throw new SharedAuthSessionPreflightError(
@@ -195,8 +206,6 @@ async function readHealth(): Promise<RoutePresence> {
       "Hosted session probe transport is unavailable.",
       error,
     );
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -207,7 +216,7 @@ function startHealth(initial: boolean): Promise<RoutePresence> {
   }
   lastPresentAt = undefined;
   const observedGeneration = availabilityGeneration;
-  const request = readHealth().then((route) => {
+  const request = withHostedSessionDeadline(readHealth).then((route) => {
     if (route === "present" && observedGeneration === availabilityGeneration) {
       lastPresentAt = Date.now();
     }
@@ -221,20 +230,45 @@ function startHealth(initial: boolean): Promise<RoutePresence> {
 }
 
 /** The initial guarded read records only genuine route presence. */
-export async function probeInitialSharedAuthSession(): Promise<{
+export async function probeInitialSharedAuthSession<T extends { readonly authenticated: boolean } = never>(
+  readBootstrap?: (signal: AbortSignal) => Promise<T | undefined>,
+): Promise<{
   readonly route: RoutePresence;
   readonly ticket: InitialSharedAuthHealthTicket;
+  readonly bootstrap?: T;
 }> {
   const capturedGeneration = generation;
-  const request = startHealth(true);
-  try {
-    const route = await request;
+  const capturedAvailability = availabilityGeneration;
+  let bootstrap: T | undefined;
+  const assertCurrent = () => {
     if (capturedGeneration !== generation) {
       throw new SharedAuthSessionPreflightError(
-        0, "", new Headers(), undefined,
-        "Hosted session probe was superseded.",
+        0, "", new Headers(), undefined, "Hosted session probe was superseded.",
       );
     }
+  };
+  const request = initialInflight ?? (readBootstrap && !healthInflight
+    ? Promise.resolve().then(() => withHostedSessionDeadline(async (signal): Promise<RoutePresence> => {
+      bootstrap = await retryHostedSessionRead(signal, () => {
+        assertCurrent();
+        return readBootstrap(signal);
+      }, (result) => result === undefined);
+      assertCurrent();
+      throwIfSharedAuthCallerAborted(signal);
+      const route = bootstrap ? "present" : await readHealth(signal, assertCurrent);
+      assertCurrent();
+      throwIfSharedAuthCallerAborted(signal);
+      if (route === "present" && capturedAvailability === availabilityGeneration) {
+        if (!bootstrap || bootstrap.authenticated) lastPresentAt = Date.now();
+        else invalidateRecentSharedAuthProbe();
+      }
+      return route;
+    }))
+    : startHealth(true));
+  initialInflight = request;
+  try {
+    const route = await request;
+    assertCurrent();
     if (route === "absent" && establishedHostedRoute) {
       throw new SharedAuthSessionPreflightError(
         404, "", new Headers(), undefined,
@@ -246,7 +280,7 @@ export async function probeInitialSharedAuthSession(): Promise<{
     initialFailure = undefined;
     const ticket = Object.freeze({}) as InitialSharedAuthHealthTicket;
     tickets.set(ticket, { generation, route });
-    return { route, ticket };
+    return { route, ticket, ...(bootstrap ? { bootstrap } : {}) };
   } catch (error) {
     if (capturedGeneration === generation) {
       knownRoute = "failed";

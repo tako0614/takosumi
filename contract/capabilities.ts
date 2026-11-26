@@ -1,5 +1,8 @@
 export const TAKOSUMI_API_VERSION = "takosumi.dev/v1alpha1" as const;
 export const TAKOSUMI_INTERFACES_CAPABILITY = "takosumi.interfaces.v1" as const;
+export const TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY = "takosumi.shared-dashboard-session.v1";
+export const TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH = "/__takosumi/platform/dashboard-session";
+export const TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER = "x-takosumi-shared-dashboard-session";
 
 export interface TakosumiWellKnownDocument {
   /** Identifies this document as the Takosumi native-client discovery target. */
