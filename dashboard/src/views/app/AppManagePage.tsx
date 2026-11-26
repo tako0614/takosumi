@@ -1415,6 +1415,10 @@ export default function AppManagePage(props: {
           !matchesUninstallReplacementRows(fresh, replacements)) {
           throw new Error(t("app.uninstall.replacementAppliedEvidenceUnavailable"));
         }
+        if (!view.uninstall.scheduled && (fresh.uninstall.scheduled ||
+          fresh.state === "uninstalling" || fresh.state === "uninstall_scheduled")) {
+          throw new Error(t("app.state.sentence.uninstalling"));
+        }
         return extractRunId(await createCapsuleDestroyRecoveryPlan(fresh.capsuleId, replacements, {
           isCurrent,
           beforeDispatch: () => { submitted = trackSubmittedUninstallReview(receiptScope); },
@@ -2024,7 +2028,7 @@ export default function AppManagePage(props: {
                   <Show when={uninstallConnectionNotice()}>
                     {(notice) => <p role="status">{t(notice())}</p>}
                   </Show>
-                  <Show when={view().uninstall.mode === "none" && appUninstallRecoveryMode(view()) === "unavailable" && uninstallScope()} keyed>
+                  <Show when={appUninstallRecoveryMode(view()) === "unavailable" && uninstallScope()} keyed>
                     {(_scope) => <AppUninstallConnectionRecovery
                       app={view()}
                       mode="unavailable"
