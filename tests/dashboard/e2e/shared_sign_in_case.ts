@@ -25,7 +25,8 @@ export function registerSharedSignInCases(mode: DashboardE2EMode): void {
         status: authenticated ? 200 : 401, json: { authenticated },
       }));
       await page.route((url) =>
-        url.pathname === "/api/v1/dashboard/bootstrap" || url.pathname === "/api/v1/apps",
+        url.pathname === "/api/v1/dashboard/bootstrap" || url.pathname === "/api/v1/apps" ||
+        url.pathname === "/api/v1/ownership-transfers",
       async (route) => {
         if (!authenticated) return route.fulfill({ status: 401, json: { error: "unauthenticated" } });
         const header = "x-takosumi-shared-auth-read";

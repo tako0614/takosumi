@@ -700,9 +700,14 @@ const SHARED_AUTH_READ_HEADER = "x-takosumi-shared-auth-read";
 const sharedPatCreationLimiter = createPersonalAccessTokenCreationRateLimiter();
 
 function requiresSharedAuthRead(request: Request, url: URL): boolean {
-  return request.method === "GET" &&
-    (url.pathname === "/api/v1/apps" || url.pathname === "/api/v1/dashboard/bootstrap") &&
-    request.headers.get(SHARED_AUTH_READ_HEADER) === "1";
+  if (request.method !== "GET" || request.headers.get(SHARED_AUTH_READ_HEADER) !== "1") {
+    return false;
+  }
+  const path = url.pathname;
+  return path === "/api/v1/apps" || path === "/api/v1/dashboard/bootstrap" ||
+    (path === "/api/v1/connections" && !url.searchParams.has("workspaceId")) ||
+    (path === "/api/v1/ownership-transfers" && url.searchParams.get("state") === "pending") ||
+    /^\/api\/v1\/(?:capsules\/[^/]+(?:\/provider-bindings)?|capsule-configs\/[^/]+|runs\/[^/]+(?:\/(?:logs|cost))?)$/u.test(path);
 }
 
 const platformWorker = {

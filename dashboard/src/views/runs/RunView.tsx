@@ -513,16 +513,26 @@ function Inner(props: { readonly session: SessionRecord }) {
   const readOptions = (scope = readScope()) => ({
     isCurrent: () => !disposed && readScope() === scope,
   });
-  const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
+  const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource<Run, ReturnType<typeof readScope>>(
     readScope,
-    (scope) => getRun(scope.id, readOptions(scope)),
+    (scope, { refetching }) => getRun(scope.id, {
+      ...readOptions(scope), reuseRecentSharedAuthProbe: !refetching,
+    }),
   );
   // A failed refetch keeps the last good Run for this id, without displaying
   // it under another Run while navigation's next read is pending.
   const runLatest = createLastGoodValue(run, (r) => r.id === runId());
-  const [logs, { refetch: refetchLogs }] = createResource(
+  const [logs, { refetch: refetchLogs }] = createResource<
+    { scope: ReturnType<typeof readScope>; logs: RunLogs },
+    ReturnType<typeof readScope>
+  >(
     readScope,
-    async (scope) => ({ scope, logs: await getRunLogs(scope.id, readOptions(scope)) }),
+    async (scope, { refetching }) => ({
+      scope,
+      logs: await getRunLogs(scope.id, {
+        ...readOptions(scope), reuseRecentSharedAuthProbe: !refetching,
+      }),
+    }),
   );
   // Logs are supporting detail. Read .latest in an effect so a slow initial
   // log request never suspends the Run screen itself.

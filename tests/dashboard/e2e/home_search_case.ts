@@ -149,13 +149,20 @@ export function registerHomeSearchCases(mode: string): void {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       let unavailable = false;
       let failedReads = 0;
+      let healthReads = 0;
       const searches: string[] = [];
       await page.route("**/auth/oidc/session", (route) => {
+        healthReads++;
         if (unavailable) {
           failedReads++;
           return route.abort("internetdisconnected");
         }
         return route.fulfill({ json: { authenticated: true } });
+      });
+      await page.route("**/api/v1/ownership-transfers?**", (route) => {
+        const header = "x-takosumi-shared-auth-read";
+        const headers = route.request().headers()[header] === "1" ? { [header]: "1" } : undefined;
+        return route.fulfill({ headers, json: { ownershipTransfers: [] } });
       });
       await page.route("**/api/v1/apps**", (route) => {
         const request = route.request();
@@ -172,6 +179,8 @@ export function registerHomeSearchCases(mode: string): void {
         }
         return route.fulfill({ headers, json: { apps: [app("initial", "Initial app")] } });
       });
+      const transfers = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === "/api/v1/ownership-transfers");
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const home = page.getByTestId("home-apps");
       const heading = home.getByRole("heading", { level: 1, name: "あなたのアプリ" });
@@ -179,6 +188,8 @@ export function registerHomeSearchCases(mode: string): void {
       const alert = home.getByRole("alert");
       const retry = alert.getByRole("button", { name: "再試行", exact: true });
       await expect(home.getByTestId("home-app")).toContainText("Initial app");
+      expect((await transfers).headers()["x-takosumi-shared-auth-read"]).toBe("1");
+      expect(healthReads).toBe(1);
 
       unavailable = true;
       await search.fill("broken");
