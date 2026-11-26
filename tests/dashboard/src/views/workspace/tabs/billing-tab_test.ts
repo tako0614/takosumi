@@ -34,7 +34,7 @@ test("BillingTab is provider-neutral and keeps usage/showback visible", () => {
   expect(source).not.toContain("invoice");
   expect(source).not.toContain("hasCommercialBillingCapability");
   expect(source).toContain("props.workspaceId && current() && !commercialBillingEnabled()");
-  expect(source).toContain('<Show when={!commercialWorkspace.error && commercialWorkspace()} keyed>');
+  expect(source).toContain('<Show when={workspace()} keyed>');
 });
 
 test("BillingTab shows usage directly, as cards, with paging", () => {

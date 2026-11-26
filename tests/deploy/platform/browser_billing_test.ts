@@ -120,6 +120,61 @@ test("base POST forwards only an exact selected Workspace view request with its 
   expect(f.seen.generic).toHaveLength(0);
 });
 
+test("only the base billing view relays locale and preserves the old receiver's selectors", async () => {
+  const f = fixture();
+  const dashboard = f.rpc.fetchWorkspaceDashboard;
+  f.rpc.fetchWorkspaceDashboard = async function (value, session) {
+    const allowed = value.method === "GET" ? ["workspaceId", "format"] : ["workspaceId"];
+    if ([...new URL(value.url).searchParams.keys()].some((key) => !allowed.includes(key))) {
+      return Response.json({ error: "invalid_billing_request" }, { status: 400 });
+    }
+    return dashboard.call(this, value, session);
+  };
+  const browserLanguage = "ja-JP,ja;q=0.9,en;q=0.7";
+  const headers = { "accept-language": browserLanguage };
+  const query = "?workspaceId=%77s_selected";
+  const form = "workspaceId=ws%5Fselected";
+  for (const [value, forwardedQuery, language] of [
+    [request(root + query + "&lang=ja", { headers }), query, "ja"],
+    [request(root + query + "&l%61ng=en&format=j%73on", { headers }), query + "&format=j%73on", "en"],
+    [post(root + query + "&lang=ja", form, { ...headers, "content-type": "application/x-www-form-urlencoded" }), query, "ja"],
+    [request(root + query, { headers }), query, browserLanguage],
+  ] as const) {
+    expect((await fetch(value, f.env)).status).toBe(200);
+    const forwarded = f.seen.dashboard.at(-1)!;
+    expect(forwarded.request.url).toBe(origin + root + forwardedQuery);
+    expect(forwarded.request.headers.get("accept-language")).toBe(language);
+    expect(forwarded.session).toEqual({ authKind: "session", subject: "tsub_canonical" });
+    expect(f.seen.auth.at(-1)!.url).toBe(value.url);
+    expect(f.seen.auth.at(-1)!.headers.get("accept-language")).toBeNull();
+  }
+  expect(await f.seen.dashboard[2]!.request.text()).toBe(form);
+  expect((await fetch(request(root + "/subscription" + query, { headers }), f.env)).status).toBe(200);
+  expect(f.seen.dashboard.at(-1)!.request.headers.get("accept-language")).toBeNull();
+  expect(f.seen.selected).toBe(0);
+  expect(f.seen.generic).toHaveLength(0);
+});
+
+test("billing rejects invalid or duplicate locale and locale on financial leaves or JSON POST before authentication", async () => {
+  const f = fixture();
+  const query = "?workspaceId=ws_selected";
+  const formHeaders = { "content-type": "application/x-www-form-urlencoded" };
+  for (const value of [
+    request(root + query + "&lang="),
+    request(root + query + "&lang=fr"),
+    request(root + query + "&lang=en&lang=en"),
+    request(root + "/top-up" + query + "&lang=ja"),
+    post(root + "/subscription" + query + "&lang=ja"),
+    post(root + query + "&lang=en", { workspaceId: "ws_selected" }),
+    post(root + query + "&lang=ja&lang=en", "workspaceId=ws_selected", formHeaders),
+    post(root + query + "&lang=ja", "workspaceId=ws_selected&lang=ja", formHeaders),
+  ]) {
+    expect((await fetch(value, f.env)).status).toBe(400);
+  }
+  expect(f.seen.auth).toHaveLength(0);
+  expect(f.seen.dashboard).toHaveLength(0);
+});
+
 test("base POST rejects absent, mismatched or extra Workspace selectors before authentication", async () => {
   const f = fixture();
   const invalid = [

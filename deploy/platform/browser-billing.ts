@@ -178,8 +178,11 @@ export async function handlePlatformBrowserBillingRequest(
   }
   const query = url.searchParams;
   const allowedQuery = method === "GET" ? ["workspaceId", "format"] : ["workspaceId"];
+  if (baseView) allowedQuery.push("lang");
+  const language = query.get("lang");
   if ([...query.keys()].some((key) => !allowedQuery.includes(key) || query.getAll(key).length !== 1) ||
-    (query.has("format") && query.get("format") !== "json")) {
+    (query.has("format") && query.get("format") !== "json") ||
+    (language !== null && language !== "en" && language !== "ja")) {
     return response(400, "invalid_billing_request");
   }
   const selectedWorkspace = query.get("workspaceId");
@@ -193,6 +196,9 @@ export async function handlePlatformBrowserBillingRequest(
   let body: Uint8Array<ArrayBuffer> | undefined;
   if (method === "POST") {
     const contentType = headers.get("content-type")?.split(";")[0];
+    if (language !== null && contentType !== "application/x-www-form-urlencoded") {
+      return response(400, "invalid_billing_request");
+    }
     if (contentType !== "application/json" && contentType !== "application/x-www-form-urlencoded") {
       return response(415, "unsupported_media_type");
     }
@@ -232,11 +238,19 @@ export async function handlePlatformBrowserBillingRequest(
   if (identity?.kind !== "authenticated") {
     return failed("auth-unavailable", response(503, "billing_unavailable"));
   }
+  const dashboardUrl = new URL(url);
+  if (language !== null) {
+    // Keep the original spelling and order of selectors that older receivers accept.
+    dashboardUrl.search = url.search.slice(1).split("&")
+      .filter((field) => !new URLSearchParams(field).has("lang")).join("&");
+  }
+  const acceptLanguage = baseView ? language ?? headers.get("accept-language") : null;
+  if (acceptLanguage !== null) privateHeaders.set("accept-language", acceptLanguage);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const dispatchDeadline = Symbol();
   try {
     const result = await Promise.race([
-      dispatch(new Request(url, { method, headers: privateHeaders, body, redirect: "manual" }),
+      dispatch(new Request(dashboardUrl, { method, headers: privateHeaders, body, redirect: "manual" }),
         Object.freeze({ authKind: "session", subject: identity.accountId })),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(dispatchDeadline),
