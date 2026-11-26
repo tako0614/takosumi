@@ -11,12 +11,17 @@ import {
   handlePlatformExtensionRouteRequest,
   handlePlatformSharedAuthControlRequest,
   handlePlatformSharedAuthSessionRequest,
+  handlePlatformSharedDashboardSessionRequest,
   verifyPlatformExtensionBearerToken,
   type CloudflareWorkerEnv,
 } from "../../../deploy/platform/worker.ts";
 import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
 import { canAccessWorkspace } from "../../../accounts/service/src/control/shared.ts";
 import type { ControlPlaneOperations } from "../../../accounts/service/src/control-operations.ts";
+import {
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH as dashboardSessionPath,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER as dashboardProof,
+} from "../../../contract/capabilities.ts";
 
 const origin = "https://hosted.staging.example.test";
 const cookie = "__Host-takosumi_hosted_session=opaque-rp-session";
@@ -124,6 +129,41 @@ test("guarded GET confirms the shared-profile response only after RP authenticat
   const signedOut = await handlePlatformSharedAuthControlRequest(request(path, { headers }), revoked, deps);
   expect(signedOut?.status).toBe(401);
   expect(signedOut?.headers.get("x-takosumi-shared-auth-read")).toBeNull();
+});
+
+test("cold dashboard bootstrap authenticates the RP once and only reads the session", async () => {
+  let identity: Awaited<ReturnType<SharedAuthRpc["authenticateSharedAuth"]>> = { kind: "authenticated", accountId: "tsub_canonical" };
+  const authenticate = jest.fn(async (incoming: Request) => {
+    expect(incoming.headers.get("cookie")).toBe(cookie);
+    return identity;
+  });
+  const health = jest.fn(rpc.fetchSharedAuth);
+  const env = configured({ ...rpc, authenticateSharedAuth: authenticate, fetchSharedAuth: health }) as CloudflareWorkerEnv;
+  const operations = jest.fn(async () => ({}) as ControlPlaneOperations);
+  const deps = { store: new InMemoryAccountsStore(), resolveOperations: operations };
+  const call = (path = dashboardSessionPath, init?: RequestInit) => handlePlatformSharedDashboardSessionRequest(request(path, init), env, deps);
+
+  const success = await call();
+  expect(success.status).toBe(200);
+  expect(success.headers.get("cache-control")).toBe("no-store");
+  expect(success.headers.get(dashboardProof)).toBe("1");
+  expect(await success.json()).toEqual({ session: { subject: "tsub_canonical" } });
+  expect(authenticate).toHaveBeenCalledTimes(1);
+  expect(health).not.toHaveBeenCalled();
+  expect(operations).toHaveBeenCalledTimes(1);
+
+  for (const [next, status] of [["unauthenticated", 401], ["unavailable", 503]] as const) {
+    identity = { kind: next };
+    const denied = await call();
+    expect(denied.status).toBe(status);
+    expect(denied.headers.get(dashboardProof)).toBe("1");
+    expect(await denied.json()).not.toHaveProperty("session");
+  }
+  expect((await call(dashboardSessionPath, { method: "POST" })).status).toBe(405);
+  expect((await call(dashboardSessionPath + "?includeNotifications=true")).status).toBe(400);
+  expect((await call(dashboardSessionPath, { headers: { authorization: "Bearer fixture" } })).status).toBe(401);
+  expect(authenticate).toHaveBeenCalledTimes(3);
+  expect(operations).toHaveBeenCalledTimes(1);
 });
 
 test("shared authentication is an exact HTTPS staging-only operator opt-in", async () => {

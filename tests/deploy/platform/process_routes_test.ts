@@ -9,6 +9,11 @@ import {
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "../../../contract/api-surface.ts";
 import worker from "../../../deploy/platform/worker.ts";
+import {
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_CAPABILITY as dashboardSessionCapability,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH as dashboardSessionPath,
+  TAKOSUMI_SHARED_DASHBOARD_SESSION_PROOF_HEADER as dashboardSessionProof,
+} from "../../../contract/capabilities.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const TOKEN = "process-route-token";
@@ -237,6 +242,41 @@ test("platform reserves unknown machine-prefix paths outside the SPA fallback", 
     );
     expect(await response.json(), path).toEqual({ error: "not found" });
   }
+  expect(assetRequests).toEqual([]);
+});
+
+test("only the owning shared platform advertises and mounts its cold dashboard session GET", async () => {
+  const { env: baseEnv, assetRequests } = platformEnv();
+  const origin = "https://app.takosumi.test";
+  const send = (path: string, env = baseEnv, host = origin) => worker.fetch(new Request(host + path), env);
+  const stock = await send(TAKOSUMI_PRODUCT_CAPABILITIES_PATH);
+  expect((await stock.json()).extensions).not.toContain(dashboardSessionCapability);
+  const unsupported = await send(dashboardSessionPath);
+  expect(unsupported.status).toBe(404);
+  expect(unsupported.headers.get(dashboardSessionProof)).toBeNull();
+  expect(await unsupported.json()).toEqual({ error: "not found" });
+
+  const shared = {
+    ...baseEnv as object,
+    TAKOSUMI_ENVIRONMENT: "staging",
+    TAKOSUMI_SHARED_AUTH_PROFILE: "shared-account",
+    TAKOSUMI_SHARED_AUTH_ORIGIN: origin,
+    HOSTED: {
+      fetchSharedAuth: () => { throw new Error("unexpected legacy health dispatch"); },
+      authenticateSharedAuth: async () => ({ kind: "unauthenticated" }),
+      resolveSharedAuthWorkspace: () => { throw new Error("unexpected Workspace dispatch"); },
+    },
+  } as never;
+  const capabilities = await send(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, shared);
+  expect((await capabilities.json()).extensions).toContain(dashboardSessionCapability);
+  const discovery = await send(TAKOSUMI_WELL_KNOWN_PATH, shared);
+  expect((await discovery.json()).endpoints.extensions[dashboardSessionCapability]).toBe(origin + dashboardSessionPath);
+  const alias = await send(dashboardSessionPath, shared, "https://alias.takosumi.test");
+  expect(alias.status).toBe(404);
+  expect(alias.headers.get(dashboardSessionProof)).toBeNull();
+  const denied = await send(dashboardSessionPath, shared);
+  expect(denied.status).toBe(401);
+  expect(denied.headers.get(dashboardSessionProof)).toBe("1");
   expect(assetRequests).toEqual([]);
 });
 

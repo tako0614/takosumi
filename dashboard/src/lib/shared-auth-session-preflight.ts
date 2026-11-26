@@ -221,20 +221,40 @@ function startHealth(initial: boolean): Promise<RoutePresence> {
 }
 
 /** The initial guarded read records only genuine route presence. */
-export async function probeInitialSharedAuthSession(): Promise<{
+export async function probeInitialSharedAuthSession<T extends { readonly authenticated: boolean } = never>(
+  readBootstrap?: () => Promise<T | undefined>,
+): Promise<{
   readonly route: RoutePresence;
   readonly ticket: InitialSharedAuthHealthTicket;
+  readonly bootstrap?: T;
 }> {
   const capturedGeneration = generation;
-  const request = startHealth(true);
-  try {
-    const route = await request;
+  const capturedAvailability = availabilityGeneration;
+  let bootstrap: T | undefined;
+  const assertCurrent = () => {
     if (capturedGeneration !== generation) {
       throw new SharedAuthSessionPreflightError(
-        0, "", new Headers(), undefined,
-        "Hosted session probe was superseded.",
+        0, "", new Headers(), undefined, "Hosted session probe was superseded.",
       );
     }
+  };
+  const request = initialInflight ?? (readBootstrap && !healthInflight
+    ? Promise.resolve().then(async (): Promise<RoutePresence> => {
+      assertCurrent();
+      bootstrap = await readBootstrap();
+      assertCurrent();
+      if (!bootstrap) return await startHealth(false);
+      if (capturedAvailability === availabilityGeneration) {
+        if (bootstrap.authenticated) lastPresentAt = Date.now();
+        else invalidateRecentSharedAuthProbe();
+      }
+      return "present";
+    })
+    : startHealth(true));
+  initialInflight = request;
+  try {
+    const route = await request;
+    assertCurrent();
     if (route === "absent" && establishedHostedRoute) {
       throw new SharedAuthSessionPreflightError(
         404, "", new Headers(), undefined,
@@ -246,7 +266,7 @@ export async function probeInitialSharedAuthSession(): Promise<{
     initialFailure = undefined;
     const ticket = Object.freeze({}) as InitialSharedAuthHealthTicket;
     tickets.set(ticket, { generation, route });
-    return { route, ticket };
+    return { route, ticket, ...(bootstrap ? { bootstrap } : {}) };
   } catch (error) {
     if (capturedGeneration === generation) {
       knownRoute = "failed";
