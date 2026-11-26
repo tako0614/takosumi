@@ -35,6 +35,7 @@ import {
 import { planOwnNotification } from "../../../core/domains/notifications/own_notifications.ts";
 import { createDefaultRunnerProfiles } from "../../../core/domains/deploy-control/runner_profiles.ts";
 import { SqlOpenTofuControlStore } from "../../../core/domains/deploy-control/store_sql.ts";
+import { GIT_INSTALL_PLAN_RECONCILE_LEASE_MS } from "../../../core/domains/install-plans/store.ts";
 import { startLocalApplyStartupRecovery } from "./local-apply-startup-recovery.ts";
 import { startSourceRetirementSweeper } from "./source-retirement-sweeper.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
@@ -544,6 +545,17 @@ interface ServerConfig {
 // Runtime-provided peer address; never accept a public forwarding header here.
 const privatePeerAddresses = new WeakMap<Request, string>();
 
+export function setReconcileRequestTimeout(
+  request: Request,
+  server: { timeout(request: Request, seconds: number): void },
+): void {
+  if (request.method === "POST" &&
+    /^\/api\/v1\/(?:install-plans|revision-plans)\/[^/]+\/reconcile$/u.test(new URL(request.url).pathname)) {
+    // Let the existing coordinator lease govern a silent reconciliation.
+    server.timeout(request, Math.ceil(GIT_INSTALL_PLAN_RECONCILE_LEASE_MS / 1_000));
+  }
+}
+
 async function serveOnAnyRuntime(
   handler: (req: Request) => Promise<Response> | Response,
   options: ServerConfig,
@@ -552,7 +564,10 @@ async function serveOnAnyRuntime(
     globalThis as {
       Bun?: {
         serve: (opts: ServerConfig & {
-          fetch: (req: Request, server: { requestIP(req: Request): { address: string } | null }) => ReturnType<typeof handler>;
+          fetch: (req: Request, server: {
+            requestIP(req: Request): { address: string } | null;
+            timeout(req: Request, seconds: number): void;
+          }) => ReturnType<typeof handler>;
         }) => unknown;
       };
     }
@@ -563,6 +578,7 @@ async function serveOnAnyRuntime(
       fetch(request, server) {
         const address = server.requestIP(request)?.address;
         if (address) privatePeerAddresses.set(request, address);
+        setReconcileRequestTimeout(request, server);
         return handler(request);
       },
     });

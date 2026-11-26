@@ -261,7 +261,7 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
         coordinatorReturned = true;
       }
       let delay = 250; let lastProgress: string | undefined; let coordinatorIdentity: string | undefined;
-      let reconcileRefusal: DeployControlApiError | undefined;
+      let reconcileFailure: { cause: unknown } | undefined;
       for (let step = 0; step <= 120; step++) {
         signal.throwIfAborted();
         const rp = isRecord(current) ? current.revisionPlan : undefined;
@@ -284,7 +284,7 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
           return plan;
         }
         if (current.nextAction !== "reconcile") throw new Refusal(isRecord(rp.diagnostic) && TOKEN.test(String(rp.diagnostic.code)) ? String(rp.diagnostic.code) : "revision_not_reviewable");
-        if (reconcileRefusal) throw reconcileRefusal;
+        if (reconcileFailure) throw reconcileFailure.cause;
         if (step === 120) throw new Refusal("reconcile_limit");
         const progress = JSON.stringify([rp.phase, rp.sourceSnapshotId, rp.compatibilityReportId, rp.planRunId]);
         delay = progress === lastProgress ? Math.min(5_000, delay * 2) : 250;
@@ -294,11 +294,12 @@ export async function runAppUpdate(args: string[], io: CliIo): Promise<number> {
         try {
           current = await request(`${path}/reconcile`, "POST");
         } catch (error) {
-          if (!(error instanceof DeployControlApiError) || error.status !== 409 ||
-            (error.code !== "reconcile_in_progress" && error.code !== "reconcile_conflict")) throw error;
-          reconcileRefusal = error;
-          // Another caller may already have published the saved Plan. Read
-          // the same coordinator once and let the normal identity checks run.
+          signal.throwIfAborted();
+          if (error instanceof DeployControlApiError && error.status < 500 &&
+            !(error.status === 409 && (error.code === "reconcile_in_progress" || error.code === "reconcile_conflict"))) throw error;
+          reconcileFailure = { cause: error };
+          // The request may have prepared the Plan before losing its response.
+          // Read the same coordinator once and let the normal identity checks run.
           try { current = await request(path); } catch { throw error; }
         }
       }
