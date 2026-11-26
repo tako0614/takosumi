@@ -2035,11 +2035,11 @@ export async function handlePlatformSharedAuthSessionRequest(
   try {
     const store = getAccountsStore?.();
     if (!store?.findCanonicalAccount || !store.isAccountAuthenticationFenced) return sharedAuthUnavailableResponse();
-    const [account, fenced] = await Promise.all([
-      store.findCanonicalAccount(subject),
-      store.isAccountAuthenticationFenced(subject),
-    ]);
-    if (account?.subject !== subject || fenced !== false) return unauthenticated();
+    // Merge activation can lift the fence while redirecting this subject.
+    // Read the canonical account only after confirming the fence is clear.
+    if (await store.isAccountAuthenticationFenced(subject) !== false) return unauthenticated();
+    const account = await store.findCanonicalAccount(subject);
+    if (account?.subject !== subject) return unauthenticated();
     const displayName = account.displayName?.trim() || undefined;
     const email = account.emailVerified === true ? account.email?.trim() || undefined : undefined;
     return Response.json({ ...session, displayName, email }, { headers });

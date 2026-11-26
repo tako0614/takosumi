@@ -280,17 +280,31 @@ test("the shared profile refuses actual Accounts redirects and merge fences with
     expect(response?.headers.get("cache-control")).toBe("no-store");
     expect(await response?.json()).toEqual({ error: "unauthenticated" });
   };
-  const putRecord = (bucket: string, key: string, document: object) => db
+  const insertRecord = (bucket: string, key: string, document: object) => db
     .prepare("INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)")
-    .bind(bucket, key, JSON.stringify(document), 2).run();
+    .bind(bucket, key, JSON.stringify(document), 2);
 
   expect(await (await getProfile())?.json()).toMatchObject({ email: `${subject}@example.test` });
-  await putRecord("identity_merge_locks", subject, { operationId: "fixture-migration" });
+  const operationId = "fixture-migration";
+  await insertRecord("identity_merge_locks", subject, { operationId }).run();
   expect(await store.isAccountAuthenticationFenced(subject)).toBe(true);
+  const canonical = spyOn(store, "findCanonicalAccount");
   await assertRefused();
+  expect(canonical).not.toHaveBeenCalled();
 
-  await db.prepare("DELETE FROM takosumi_accounts_documents WHERE bucket = 'identity_merge_locks' AND key = ?").bind(subject).run();
-  await putRecord("canonical_accounts", subject, { targetSubject: target });
+  // Finish the local merge when the profile reaches the real store fence
+  // read. The subsequent canonical read must see the newly redirected subject.
+  const readFence = store.isAccountAuthenticationFenced.bind(store);
+  spyOn(store, "isAccountAuthenticationFenced").mockImplementationOnce(async (candidate) => {
+    expect(canonical).not.toHaveBeenCalled();
+    await db.batch([
+      insertRecord("identity_merge_operations", operationId, { status: "active" }),
+      insertRecord("canonical_accounts", subject, { targetSubject: target }),
+    ]);
+    return await readFence(candidate);
+  });
+  await assertRefused();
+  expect(canonical.mock.calls).toEqual([[subject]]);
   expect((await store.findCanonicalAccount(subject))?.subject).toBe(target);
   expect(await store.isAccountAuthenticationFenced(subject)).toBe(false);
   await assertRefused();
