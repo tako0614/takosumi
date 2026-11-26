@@ -9141,6 +9141,13 @@ export class RunEngine {
           ? { requireMirror: true }
           : undefined;
       const scopeSelectors = planScopeSelectors(planPolicy?.scopeBoundary);
+      const requiredOutputNames = effectiveRunning.operation !== "destroy" &&
+          !effectiveRunning.refreshOnly && !effectiveRunning.driftCheck &&
+          !dispatch.generatedRoot
+        ? [...new Set(Object.values(dispatch.outputAllowlist ?? {}).flatMap(
+            (entry) => entry.required && !entry.sensitive ? [entry.from] : [],
+          ))].sort()
+        : [];
       const runner = this.#runnerForProfile(profile);
       let runnerPlanMs = 0;
       const dispatchPlan = async (
@@ -9156,6 +9163,7 @@ export class RunEngine {
             ? { providerInstallationPolicy }
             : {}),
           ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
+          ...(requiredOutputNames.length > 0 ? { requiredOutputNames } : {}),
           // Capsules use a generated root only when explicit provider configuration
           // requires a child-module wrapper.
           ...(dispatch.generatedRoot
