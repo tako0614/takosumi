@@ -240,6 +240,40 @@ test("platform reserves unknown machine-prefix paths outside the SPA fallback", 
   expect(assetRequests).toEqual([]);
 });
 
+test("a shared-profile dashboard read cannot use an ordinary Accounts session after profile removal", async () => {
+  const { env: baseEnv } = platformEnv();
+  const accountsDb = new SqliteFakeD1();
+  const salt = "fixture-session-salt";
+  for (const migration of (await loadD1AccountsMigrationCatalog()).migrations) {
+    await applyD1AccountsMigrationBatch(accountsDb, migration, 1_000 + migration.version);
+  }
+  const accounts = new D1AccountsStore(accountsDb, { schemaMode: "predeployed", sessionHashSalt: salt });
+  const now = Date.now();
+  const subject = "tsub_ordinary";
+  await accounts.saveAccount({ subject, createdAt: now, updatedAt: now });
+  await accounts.saveAccountSession({
+    sessionId: "sess_fixture_ordinary", subject, createdAt: now, expiresAt: now + 60_000,
+  });
+  const env = {
+    ...baseEnv as object,
+    TAKOSUMI_ACCOUNTS_DB: accountsDb,
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "http://app.takosumi.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: salt,
+  } as never;
+  const url = "https://app.takosumi.test/api/v1/dashboard/bootstrap";
+  const cookie = "takosumi_session=sess_fixture_ordinary";
+  const guardedHeaders = { cookie, "x-takosumi-shared-auth-read": "1" };
+  const ordinary = await worker.fetch(new Request(url, { headers: { cookie } }), env);
+  expect(ordinary.status).toBe(200);
+  expect(await ordinary.json()).toMatchObject({ session: { subject } });
+  for (const path of [url, "https://app.takosumi.test/api/v1/apps?q=office"]) {
+    const guarded = await worker.fetch(new Request(path, { headers: guardedHeaders }), env);
+    expect(guarded.status).toBe(503);
+    expect(guarded.headers.get("cache-control")).toBe("no-store");
+  }
+});
+
 test("platform delegates the canonical Accounts API v1 surface", async () => {
   const { env: baseEnv, assetRequests } = platformEnv();
   const accountsDb = new SqliteFakeD1();

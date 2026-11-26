@@ -5,6 +5,7 @@
  */
 const HEALTH_PATH = "/auth/oidc/session";
 const ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
+export const SHARED_AUTH_READ_HEADER = "x-takosumi-shared-auth-read";
 const HEALTH_DEADLINE_MS = 40_000;
 const RECENT_READ_PROBE_MS = 5_000;
 const HOSTED_SESSION_RETRY_MS = [300, 900, 1_800] as const;
@@ -281,17 +282,34 @@ function forCaller<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 
+/** The server must still handle a reused read through the shared profile. */
+export function canReuseRecentSharedAuthProbe(): boolean {
+  if (knownRoute !== "present" || initialInflight || healthInflight || lastPresentAt === undefined) {
+    return false;
+  }
+  const age = Date.now() - lastPresentAt;
+  return age >= 0 && age < RECENT_READ_PROBE_MS;
+}
+
+/** A previous Worker version may lack the request fence after rollback. */
+export function requireSharedAuthReadResponse(response: Response): void {
+  if ((response.ok || response.status === 404) &&
+    response.headers.get(SHARED_AUTH_READ_HEADER) !== "1") {
+    invalidateRecentSharedAuthProbe();
+    throw new SharedAuthSessionPreflightError(
+      503, "", new Headers(), undefined, "Hosted session route became unavailable.",
+    );
+  }
+}
+
 /**
  * Returns undefined when ordinary OSS has no known Hosted route. A one-use
  * ticket carries an already completed initial health read into its matching
- * canonical bootstrap, avoiding a second serial health request. Opted-in GETs
- * may reuse recent route availability. Their canonical API still authorizes
- * the current cookie and returns the authoritative session decision.
+ * canonical bootstrap, avoiding a second serial health request.
  */
 export function preflightSharedAuthSession(
   signal?: AbortSignal,
   initialTicket?: InitialSharedAuthHealthTicket,
-  mode: "fresh" | "read" = "fresh",
 ): Promise<void> | undefined {
   throwIfSharedAuthCallerAborted(signal);
   if (initialTicket) {
@@ -340,10 +358,6 @@ export function preflightSharedAuthSession(
     );
   }
   if (knownRoute !== "present") return undefined;
-  if (mode === "read" && !healthInflight && lastPresentAt !== undefined) {
-    const age = Date.now() - lastPresentAt;
-    if (age >= 0 && age < RECENT_READ_PROBE_MS) return undefined;
-  }
   const capturedGeneration = generation;
   return forCaller(startHealth(false), signal).then((route) => {
     throwIfSharedAuthCallerAborted(signal);

@@ -693,6 +693,14 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
     platformExtensionSelfServicePatScopesForAccounts(env),
 });
 
+const SHARED_AUTH_READ_HEADER = "x-takosumi-shared-auth-read";
+
+function requiresSharedAuthRead(request: Request, url: URL): boolean {
+  return request.method === "GET" &&
+    (url.pathname === "/api/v1/apps" || url.pathname === "/api/v1/dashboard/bootstrap") &&
+    request.headers.get(SHARED_AUTH_READ_HEADER) === "1";
+}
+
 const platformWorker = {
   async fetch(
     request: Request,
@@ -916,6 +924,9 @@ const platformWorker = {
       request, env,
     );
     if (sharedControlResponse) return sharedControlResponse;
+    // A dashboard that reused recent RP availability must not fall through
+    // to the ordinary Accounts session when the shared profile is removed.
+    if (requiresSharedAuthRead(request, url)) return sharedAuthUnavailableResponse();
     if (isPlatformReservedMachinePath(url.pathname)) {
       return Response.json({ error: "not found" }, { status: 404 });
     }
@@ -2190,6 +2201,7 @@ export async function handlePlatformSharedAuthControlRequest(
     if (!response) return Response.json({ error: "not found" }, { status: 404 });
     const responseHeaders = new Headers(response.headers);
     responseHeaders.set("cache-control", "no-store");
+    if (requiresSharedAuthRead(request, url)) responseHeaders.set(SHARED_AUTH_READ_HEADER, "1");
     return new Response(response.body, { status: response.status, headers: responseHeaders });
   };
   return runRead

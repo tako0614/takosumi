@@ -19,8 +19,11 @@
 import type { DestroyProviderConnectionReplacement } from "takosumi-contract";
 import { randomUuid } from "./random-uuid.ts";
 import {
+  canReuseRecentSharedAuthProbe,
   invalidateRecentSharedAuthProbe,
   preflightSharedAuthSession,
+  requireSharedAuthReadResponse,
+  SHARED_AUTH_READ_HEADER,
   SharedAuthSessionPreflightError,
   throwIfSharedAuthCallerAborted,
 } from "./shared-auth-session-preflight.ts";
@@ -254,10 +257,13 @@ export async function controlFetch<T>(
     body = JSON.stringify(opts.body);
   }
   const method = opts.method ?? "GET";
-  const preflight = preflightSharedAuthSession(
-    opts.signal, undefined, method === "GET" && opts.reuseRecentSharedAuthProbe ? "read" : "fresh",
-  );
-  if (preflight) await preflight;
+  const reusedProbe = method === "GET" && opts.reuseRecentSharedAuthProbe &&
+    canReuseRecentSharedAuthProbe();
+  if (reusedProbe) headers[SHARED_AUTH_READ_HEADER] = "1";
+  else {
+    const preflight = preflightSharedAuthSession(opts.signal);
+    if (preflight) await preflight;
+  }
   throwIfSharedAuthCallerAborted(opts.signal);
   throwIfReadRetired(opts);
   opts.beforeDispatch?.();
@@ -267,7 +273,7 @@ export async function controlFetch<T>(
     body,
     credentials: "include",
     signal: opts.signal,
-    ...(opts.cache ? { cache: opts.cache } : {}),
+    ...(reusedProbe ? { cache: "no-store" } : opts.cache ? { cache: opts.cache } : {}),
   });
 
   // A late response must not redirect a replacement screen or clear its
@@ -276,6 +282,7 @@ export async function controlFetch<T>(
   throwIfReadRetired(opts.acceptResponseAfterAbort
     ? { isCurrent: opts.isCurrent }
     : opts);
+  if (reusedProbe) requireSharedAuthReadResponse(res);
   if (res.status === 401) {
     invalidateRecentSharedAuthProbe();
     resetAppOwnershipCache();

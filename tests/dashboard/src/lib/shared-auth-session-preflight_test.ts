@@ -484,17 +484,24 @@ test("a known Hosted route completes the original health read before an ordinary
 
 test("session bootstrap and app list reads share a recent availability observation but send each canonical GET", async () => {
   const calls: string[] = [];
+  const guarded: string[] = [];
   let now = 10_000;
   const time = jest.spyOn(Date, "now").mockImplementation(() => now);
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     calls.push(path);
     if (path === healthPath) return Response.json({ authenticated: true });
+    const header = new Headers(init?.headers).get("x-takosumi-shared-auth-read");
+    const headers = header ? { "x-takosumi-shared-auth-read": header } : undefined;
+    if (header === "1") {
+      guarded.push(path);
+      expect(init?.cache).toBe("no-store");
+    }
     if (path.startsWith("/api/v1/dashboard/bootstrap?")) {
-      return Response.json({ session: { subject: "tsub_fixture" }, notifications: [] });
+      return Response.json({ session: { subject: "tsub_fixture" }, notifications: [] }, { headers });
     }
     const query = new URL(path, "https://dashboard.invalid").searchParams.get("q");
-    return Response.json({ apps: [], appliedQuery: query });
+    return Response.json({ apps: [], appliedQuery: query }, { headers });
   }) as typeof fetch;
   try {
     const initial = await probeInitialSharedAuthSession();
@@ -514,6 +521,7 @@ test("session bootstrap and app list reads share a recent availability observati
       "/api/v1/apps?q=office",
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false&includeNotifications=true",
     ]);
+    expect(guarded).toEqual([calls[2], calls[3]]);
     now += 1;
     await expect(listAccessibleAppsPage(undefined, undefined, "storage")).resolves.toMatchObject({
       apps: [], appliedQuery: "storage",
@@ -521,6 +529,22 @@ test("session bootstrap and app list reads share a recent availability observati
     expect(calls.slice(-2)).toEqual([healthPath, "/api/v1/apps?q=storage"]);
   } finally {
     time.mockRestore();
+  }
+});
+
+test("reused availability rejects an unmarked legacy success after a Worker rollback", async () => {
+  for (const read of [fetchDashboardBootstrap, () => listAccessibleAppsPage(undefined, undefined, "office")]) {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === healthPath) return Response.json({ authenticated: true });
+      expect(new Headers(init?.headers).get("x-takosumi-shared-auth-read")).toBe("1");
+      return Response.json({ session: { subject: "tsub_ordinary" }, apps: [] });
+    }) as typeof fetch;
+    await probeInitialSharedAuthSession();
+    await expect(read()).rejects.toMatchObject({ status: 503 });
+    expect(calls).toHaveLength(2);
   }
 });
 
