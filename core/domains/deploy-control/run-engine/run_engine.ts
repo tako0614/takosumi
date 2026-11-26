@@ -143,6 +143,7 @@ import type { ObservabilitySink } from "../../observability/mod.ts";
 import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
 import {
   capsuleRunRuntimeSafetyMatches,
+  committedOutputProjectionStateMatches,
   readPersistedProviderPartialDestroyPlan,
 } from "../run_credential_context.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
@@ -6948,11 +6949,16 @@ export class RunEngine {
     if (!state || ownership?.capsuleId !== capsule.id ||
       appliedPlan.ownershipEpoch !== ownership.ownershipEpoch) return;
     const apply = await this.#store.getApplyRun(state.createdByRunId);
-    if (!apply || apply.status !== (partialDestroy ? "failed" : "succeeded") ||
-      appliedPlan.appliedApplyRunId !== apply.id ||
+    if (!apply || appliedPlan.appliedApplyRunId !== apply.id ||
       !applyRunMatchesStateVersion(capsule, state, apply) ||
       !planRunMatchesAppliedState(capsule, state, apply, appliedPlan) ||
       apply.expected.resolvedProviderBindingsDigest !== appliedPlan.resolvedProviderBindingsDigest) return;
+    if (partialDestroy && apply.status !== "failed") return;
+    if (!partialDestroy && apply.status !== "succeeded") {
+      const retiringCommittedDestroy = purpose === "retirement" && capsule.status === "destroyed";
+      if ((capsule.status !== "error" && !retiringCommittedDestroy) ||
+        !committedOutputProjectionStateMatches(capsule, state, apply, appliedPlan)) return;
+    }
     const approvedBy = partialDestroy
       ? appliedPlan.approval?.approvedBy
       : apply.approval?.approvedBy ?? appliedPlan.createdBy;

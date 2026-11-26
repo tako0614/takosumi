@@ -1,5 +1,7 @@
+import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { Capsule } from "takosumi-contract/capsules";
 import { assertRunExecutionEvidence } from "takosumi-contract/runs";
+import type { StateVersion } from "takosumi-contract/state-versions";
 
 import type { OpenTofuControlStore } from "./store.ts";
 import { exactCommittedPostApplyRecoveryRowsMatch } from "./committed_post_apply_recovery.ts";
@@ -521,7 +523,44 @@ async function committedPostApplyRecoveryRowsMatch(
   );
 }
 
-/** A verified provider Apply retained state while publishing no Output. */
+/** Only the exact committed Apply whose output projection failed supplies this state. */
+export function committedOutputProjectionStateMatches(
+  capsule: Capsule,
+  state: StateVersion,
+  apply: ApplyRun,
+  plan: PlanRun,
+): boolean {
+  if (
+    capsule.currentOutputId !== undefined ||
+    capsule.currentStateVersionId !== state.id ||
+    apply.status !== "failed" || (apply.operation !== "create" && apply.operation !== "update") ||
+    apply.workspaceId !== capsule.workspaceId || apply.capsuleId !== capsule.id ||
+    apply.stateVersionId !== state.id || apply.outputId !== undefined ||
+    state.workspaceId !== capsule.workspaceId || state.capsuleId !== capsule.id ||
+    state.environment !== capsule.environment || state.generation !== capsule.currentStateGeneration ||
+    state.createdByRunId !== apply.id
+  ) return false;
+  const receipts = apply.auditEvents.filter(({ type }) => type === "apply.output_projection_failed");
+  if (receipts.length !== 1 || receipts[0]?.data?.stateVersionId !== state.id ||
+    receipts[0]?.data?.stateDigest !== state.digest) return false;
+  let evidence: ReturnType<typeof assertRunExecutionEvidence>;
+  try {
+    evidence = assertRunExecutionEvidence(apply.executionEvidence);
+  } catch {
+    return false;
+  }
+  return (
+    plan.id === apply.planRunId && plan.workspaceId === capsule.workspaceId &&
+    plan.capsuleId === capsule.id && plan.status === "succeeded" &&
+    plan.operation === apply.operation && plan.appliedApplyRunId === apply.id &&
+    (plan.baseStateGeneration ?? 0) + 1 === state.generation &&
+    evidence.runId === apply.id && evidence.planRunId === plan.id &&
+    evidence.action === "apply" && evidence.outcome === "committed" &&
+    evidence.receipt.operationId === apply.id && evidence.commit.stateVersionId === state.id &&
+    evidence.plan.digest === plan.planDigest && evidence.plan.artifactDigest === plan.planArtifact?.digest
+  );
+}
+
 async function committedOutputProjectionFailureMatches(
   store: CapsuleRunCredentialLedger,
   failedRunId: string,
@@ -536,41 +575,18 @@ async function committedOutputProjectionFailureMatches(
     store.getApplyRun(destroyRunId),
   ]);
   if (
-    !failed || failed.id !== failedRunId || failed.status !== "failed" ||
-    (failed.operation !== "create" && failed.operation !== "update") ||
-    failed.workspaceId !== capsule.workspaceId || failed.capsuleId !== capsule.id ||
-    failed.stateVersionId !== stateVersionId || failed.outputId !== undefined ||
-    !state || state.id !== stateVersionId ||
-    state.workspaceId !== capsule.workspaceId || state.capsuleId !== capsule.id ||
-    state.environment !== capsule.environment || state.generation !== capsule.currentStateGeneration ||
-    state.createdByRunId !== failed.id ||
+    !failed || failed.id !== failedRunId || !state || state.id !== stateVersionId ||
     !destroy || destroy.id !== destroyRunId || destroy.status !== "running" ||
     destroy.operation !== "destroy" || destroy.workspaceId !== capsule.workspaceId ||
     destroy.capsuleId !== capsule.id || destroy.expected.planRunId !== destroy.planRunId ||
     destroy.expected.capsuleId !== capsule.id || destroy.expected.currentStateVersionId !== state.id
   ) return false;
-  const receipts = failed.auditEvents.filter(({ type }) => type === "apply.output_projection_failed");
-  if (receipts.length !== 1 || receipts[0]?.data?.stateVersionId !== state.id ||
-    receipts[0]?.data?.stateDigest !== state.digest) return false;
-  let evidence: ReturnType<typeof assertRunExecutionEvidence>;
-  try {
-    evidence = assertRunExecutionEvidence(failed.executionEvidence);
-  } catch {
-    return false;
-  }
   const [plan, destroyPlan] = await Promise.all([
     store.getPlanRun(failed.planRunId),
     store.getPlanRun(destroy.planRunId),
   ]);
   return Boolean(
-    plan && plan.id === failed.planRunId && plan.workspaceId === capsule.workspaceId &&
-    plan.capsuleId === capsule.id && plan.status === "succeeded" &&
-    plan.operation === failed.operation && plan.appliedApplyRunId === failedRunId &&
-    (plan.baseStateGeneration ?? 0) + 1 === state.generation &&
-    evidence.runId === failedRunId && evidence.planRunId === plan.id &&
-    evidence.action === "apply" && evidence.outcome === "committed" &&
-    evidence.receipt.operationId === failedRunId && evidence.commit.stateVersionId === state.id &&
-    evidence.plan.digest === plan.planDigest && evidence.plan.artifactDigest === plan.planArtifact?.digest &&
+    plan && committedOutputProjectionStateMatches(capsule, state, failed, plan) &&
     destroyPlan && destroyPlan.id === destroy.planRunId &&
     destroyPlan.workspaceId === capsule.workspaceId && destroyPlan.capsuleId === capsule.id &&
     destroyPlan.operation === "destroy" && destroyPlan.capsuleCurrentStateVersionId === state.id &&
