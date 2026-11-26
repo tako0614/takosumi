@@ -114,6 +114,82 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
   test.describe("Installed app page", () => {
     test.skip(mode !== "portable", "deterministic app page fixture; not production evidence");
 
+    for (const response of ["lost response", "save timeout"] as const) {
+      test(`an ordinary uninstall reopens the submitted Plan after a ${response}`, async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+        const base = `/api/v1/capsules/${CAPSULE_ID}`;
+        const plan = lifecycleRun("plan_first_removal", "destroy_plan", "waiting_approval", "2026-11-26T00:00:00.000Z", {
+          policyStatus: "pass", requiresApproval: true,
+          summary: { add: 0, change: 0, destroy: 1 },
+          planResources: [{ address: "test_resource.app", type: "test_resource", actions: ["delete"] }],
+        });
+        const pendingPlan = { ...plan, status: response === "save timeout" ? "queued" : "running" };
+        const runPath = `/api/v1/runs/${plan.id}`;
+        const mutations: string[] = [];
+        let submitted = false;
+        let reviewReady = false;
+        let planReads = 0;
+        await page.route("**/api/v1/**", async (route) => {
+          const request = route.request();
+          const { pathname, search } = new URL(request.url());
+          if (request.method() !== "GET") mutations.push(`${request.method()} ${pathname}${search}`);
+          if (pathname === base && search === "?immediate=true" && request.method() === "DELETE") {
+            submitted = true;
+            if (response === "lost response") return route.abort("failed");
+            return route.fulfill({ status: 409, json: { error: {
+              code: "failed_precondition", message: "Timed out saving the Plan.",
+              details: { reason: "capsule_plan_creation_timeout", stage: "plan_run_create" },
+            } } });
+          }
+          if (pathname === `${base}/app`) {
+            const pending = submitted && !reviewReady;
+            const latestRun = pending ? pendingPlan : plan;
+            return route.fulfill({ json: { app: appView(CAPSULE_ID, "Repository Office", {
+              uninstall: { mode: "none", impact: { usedBy: [] } },
+              ...(submitted ? {
+                latestRun,
+                state: pending ? "uninstalling" : "installed",
+                primaryAction: pending ? "none" : "open",
+                progress: pending ? { revisionPreparing: false, run: latestRun } : {
+                  revisionPreparing: false, review: { runId: plan.id, runType: plan.type },
+                },
+              } : {}),
+            }) } });
+          }
+          if (pathname === runPath && request.method() === "GET" && submitted) {
+            planReads += 1;
+            return route.fulfill({ json: { run: reviewReady ? plan : pendingPlan } });
+          }
+          if (pathname === `${runPath}/cost`) return route.fulfill({ json: { cost: {
+            runId: plan.id, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [],
+          } } });
+          if (pathname === `${runPath}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (pathname === `${runPath}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
+          return route.fallback();
+        });
+
+        await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+        await openAppPane(page, "danger");
+        await page.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall now", exact: true }).click();
+        // The automatic readback is required before any reload can discover the Plan.
+        await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "uninstalling");
+        reviewReady = response === "lost response";
+        await page.reload({ waitUntil: "domcontentloaded" });
+        if (reviewReady) {
+          await page.locator('[data-problem="review-waiting"]').getByRole("button", { name: "Review", exact: true }).click();
+          await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+        } else {
+          const progress = page.getByRole("link", { name: "View uninstall progress", exact: true });
+          await expect(progress).toHaveAttribute("href", `/runs/${plan.id}`);
+          await progress.click();
+          await expect(page).toHaveURL(new RegExp(`/runs/${plan.id}$`, "u"));
+          await expect(page.getByText("Waiting to run…", { exact: true })).toBeVisible();
+        }
+        expect(planReads).toBeGreaterThan(0);
+        expect(mutations).toEqual([`DELETE ${base}?immediate=true`]);
+      });
+    }
+
     test("a reopened app links its owner to the accepted uninstall Run", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
