@@ -745,7 +745,7 @@ const platformWorker = {
     const sharedAccountBoundaryResponse = await handleSharedAuthAccountBoundaryRequest(request, env);
     if (sharedAccountBoundaryResponse) return sharedAccountBoundaryResponse;
     const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(
-      request, env, (subject) => platformAccountsStore(env).findAccount(subject),
+      request, env, () => platformAccountsStore(env),
     );
     if (sharedSessionResponse) return sharedSessionResponse;
     const sharedPushersResponse = await handlePlatformSharedAuthNotificationPushersRequest(request, env);
@@ -1992,7 +1992,7 @@ function platformExtensionSessionCsrfFailure(
 export async function handlePlatformSharedAuthSessionRequest(
   request: Request,
   env: SharedAuthEnvironment,
-  findAccount?: AccountsStore["findAccount"],
+  getAccountsStore?: () => Pick<AccountsStore, "findCanonicalAccount" | "isAccountAuthenticationFenced">,
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
   if (url.pathname !== "/api/v1/account/session/me" ||
@@ -2020,15 +2020,26 @@ export async function handlePlatformSharedAuthSessionRequest(
   const identity = await authenticateSharedAuthRequest(request, env);
   if (identity?.kind === "unavailable") return sharedAuthUnavailableResponse();
   const headers = { "cache-control": "no-store" };
-  if (identity?.kind !== "authenticated") return Response.json({ session: null }, { headers });
+  const includeProfile = url.search === "?include=profile";
+  const unauthenticated = () => Response.json({ error: "unauthenticated" }, { status: 401, headers });
+  if (identity?.kind !== "authenticated") {
+    return includeProfile ? unauthenticated() : Response.json({ session: null }, { headers });
+  }
   const session = { subject: identity.accountId, primaryAccountId: identity.accountId, expiresAt: 0 };
-  if (url.search !== "?include=profile") return Response.json(session, { headers });
+  if (!includeProfile) return Response.json(session, { headers });
 
-  // Only the settings screen requests this lookup, using the subject proven by the RP.
-  if (!findAccount || !identity.accountId.startsWith("tsub_")) return sharedAuthUnavailableResponse();
+  // RP validation can reuse a grant. The profile requires current Accounts
+  // authority for this exact subject, including during account migration.
+  if (!/^tsub_[A-Za-z0-9_-]+$/u.test(identity.accountId)) return unauthenticated();
+  const subject = identity.accountId as TakosumiSubject;
   try {
-    const account = await findAccount(identity.accountId as TakosumiSubject);
-    if (account?.subject !== identity.accountId) return Response.json(session, { headers });
+    const store = getAccountsStore?.();
+    if (!store?.findCanonicalAccount || !store.isAccountAuthenticationFenced) return sharedAuthUnavailableResponse();
+    const [account, fenced] = await Promise.all([
+      store.findCanonicalAccount(subject),
+      store.isAccountAuthenticationFenced(subject),
+    ]);
+    if (account?.subject !== subject || fenced !== false) return unauthenticated();
     const displayName = account.displayName?.trim() || undefined;
     const email = account.emailVerified === true ? account.email?.trim() || undefined : undefined;
     return Response.json({ ...session, displayName, email }, { headers });
