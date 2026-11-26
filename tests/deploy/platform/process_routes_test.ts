@@ -307,7 +307,13 @@ test("a shared-profile dashboard read cannot use an ordinary Accounts session af
   const ordinary = await worker.fetch(new Request(url, { headers: { cookie } }), env);
   expect(ordinary.status).toBe(200);
   expect(await ordinary.json()).toMatchObject({ session: { subject } });
-  for (const path of [url, "https://app.takosumi.test/api/v1/apps?q=office"]) {
+  for (const path of [
+    url,
+    "https://app.takosumi.test/api/v1/apps?q=office",
+    "https://app.takosumi.test/api/v1/capsules/cap_fixture/state-versions",
+    "https://app.takosumi.test/api/v1/capsules/cap_fixture/activity?limit=100",
+    "https://app.takosumi.test/api/v1/ui-surfaces?capsuleId=cap_fixture",
+  ]) {
     const guarded = await worker.fetch(new Request(path, { headers: guardedHeaders }), env);
     expect(guarded.status).toBe(503);
     expect(guarded.headers.get("cache-control")).toBe("no-store");

@@ -30,7 +30,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { Activity, ExternalLink } from "lucide-solid";
 import { redactString } from "takosumi-contract/redaction";
 import Page from "../account/components/auth/Page.tsx";
-import type { SessionRecord } from "../account/lib/session.ts";
+import { currentSessionCheck, type SessionRecord } from "../account/lib/session.ts";
 import {
   abandonUnappliedCapsule,
   approveRun,
@@ -510,9 +510,10 @@ function Inner(props: { readonly session: SessionRecord }) {
     typeof location === "undefined" ? "" : location.search,
   );
   const readScope = createMemo(() => ({ id: runId() }));
-  const readOptions = (scope = readScope()) => ({
-    isCurrent: () => !disposed && readScope() === scope,
-  });
+  const readOptions = (scope = readScope()) => {
+    const isCurrentSession = currentSessionCheck();
+    return { isCurrent: () => !disposed && readScope() === scope && isCurrentSession() };
+  };
   const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource<Run, ReturnType<typeof readScope>>(
     readScope,
     (scope, { refetching }) => getRun(scope.id, {
@@ -594,7 +595,9 @@ function Inner(props: { readonly session: SessionRecord }) {
   // Activity feeds post-apply readiness, so fetch it only for a succeeded
   // apply/destroy-apply run, then poll only while release activation remains
   // unsettled. Runtime launch URLs are read separately from Interface.
-  const [activity, { refetch: refetchActivity }] = createResource(
+  const [activity, { refetch: refetchActivity }] = createResource<
+    Awaited<ReturnType<typeof listCapsuleActivity>>, string
+  >(
     () => {
       const r = runLatest();
       if (!r?.capsuleId) return null;
@@ -603,7 +606,9 @@ function Inner(props: { readonly session: SessionRecord }) {
         r.status === "succeeded";
       return isCompletedApply ? r.capsuleId : null;
     },
-    (id) => listCapsuleActivity(id, 100, readOptions()),
+    (id, { refetching }) => listCapsuleActivity(id, 100, {
+      ...readOptions(), reuseRecentSharedAuthProbe: !refetching,
+    }),
   );
   // The owning app, for the plain-language summary sentence + back link.
   const capsuleId = createMemo(() => runLatest()?.capsuleId ?? null);
@@ -615,7 +620,8 @@ function Inner(props: { readonly session: SessionRecord }) {
     async ({ id, scope }) => ({
       scope,
       value: await getCapsule(id, {
-        ...readOptions(scope), cache: "no-store", signal: AbortSignal.timeout(REVIEW_STATE_READ_TIMEOUT_MS),
+        ...readOptions(scope), reuseRecentSharedAuthProbe: true,
+        cache: "no-store", signal: AbortSignal.timeout(REVIEW_STATE_READ_TIMEOUT_MS),
       }),
     }),
   );
@@ -683,11 +689,13 @@ function Inner(props: { readonly session: SessionRecord }) {
     }
     return `${id}:${r.id}`;
   });
-  const [stateVersions, { refetch: refetchStateVersions }] = createResource(
+  const [stateVersions, { refetch: refetchStateVersions }] = createResource<
+    Awaited<ReturnType<typeof listStateVersions>>, string
+  >(
     appliedRunStateVersionKey,
-    async (key) => {
+    async (key, { refetching }) => {
       const [id] = key.split(":");
-      return await listStateVersions(id, readOptions());
+      return await listStateVersions(id, { ...readOptions(), reuseRecentSharedAuthProbe: !refetching });
     },
   );
   const completedRunStateVersion = createMemo(() => {
@@ -734,13 +742,21 @@ function Inner(props: { readonly session: SessionRecord }) {
     }
     return { workspaceId: r.workspaceId, capsuleId: id, runId: r.id };
   });
-  const [completedRunUiSurfaces, { refetch: refetchCompletedRunUiSurfaces }] = createResource(
+  type CompletedRunUiSurfaceScope = NonNullable<ReturnType<typeof completedRunUiSurfaceKey>>;
+  const [completedRunUiSurfaces, { refetch: refetchCompletedRunUiSurfaces }] = createResource<{
+    scope: CompletedRunUiSurfaceScope;
+    surfaces: Awaited<ReturnType<typeof listAuthorizedUiSurfaces>>;
+    incomplete: boolean;
+  }, CompletedRunUiSurfaceScope>(
     completedRunUiSurfaceKey,
-    async (scope) => {
+    async (scope, { refetching }) => {
       const { workspaceId, capsuleId: id } = scope;
+      const owner = readOptions();
       let incomplete = false;
       const surfaces = await listAuthorizedUiSurfaces(workspaceId, {
         capsuleId: id,
+        isCurrent: () => owner.isCurrent() && completedRunUiSurfaceKey() === scope,
+        reuseRecentSharedAuthProbe: !refetching,
         onIncomplete: () => { incomplete = true; },
       });
       return { scope, surfaces, incomplete };
