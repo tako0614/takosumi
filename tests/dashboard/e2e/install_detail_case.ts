@@ -318,6 +318,103 @@ async function expectNothingStored(page: Page, ...values: string[]): Promise<voi
 export function registerInstallDetailCases(mode: string, base: (page: Page, provider: boolean) => Promise<BaseFixture>) {
   test.describe("Inline app detail installation", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
+    for (const entry of ["Git", "Store", "Git with a refused replay"] as const) {
+      test(`reopening the same ${entry} install after a lost creation response resumes the original attempt`, async ({ page }) => {
+        const f = await detailFixture(page, base);
+        const git = "https://github.com/example/cloudflare-service.git";
+        const store = "https://store.example.test";
+        const newCommit = "a".repeat(40);
+        let url = sourceUrl;
+        let resolutions = 0;
+        const refusedReplay = entry === "Git with a refused replay";
+        if (entry === "Git") {
+          // A supported HTTP LAN origin has storage but no subtle crypto.
+          await page.addInitScript(() => {
+            Object.defineProperty(crypto, "subtle", { value: undefined });
+            Object.defineProperty(crypto, "randomUUID", { value: undefined });
+          });
+        }
+        if (refusedReplay) {
+          await page.addInitScript(() => {
+            const store = Storage.prototype.setItem;
+            Storage.prototype.setItem = function (key, value) {
+              if (key.startsWith("takosumi.install-start:") && document.documentElement.dataset.blockInstallReceipt) {
+                throw new DOMException("Fixture temporarily denied storage", "SecurityError");
+              }
+              return store.call(this, key, value);
+            };
+          });
+        }
+        if (entry === "Store") {
+          url = `/new?tcsBase=${encodeURIComponent(store)}&tcsListing=tako%2Fservice`;
+          await page.route(`${store}/**`, (route) => route.fulfill({ json: {
+            id: "tako/service", source: { git, path: "." }, suggestedName: "cloudflare-service",
+            name: { en: "Store Service" }, createdAt: now, updatedAt: now,
+          } }));
+          await page.route(
+            (url) => url.pathname === "/api/v1/source-ref-resolutions" || url.pathname.endsWith("/source-ref-resolutions/stable-semver"),
+            (route) => route.fulfill({ json: ++resolutions === 1
+              ? { tag: "v1.0.0", commit: sourceCommit }
+              : { tag: "v1.1.0", commit: newCommit } }),
+          );
+        }
+        const keys: (string | undefined)[] = [];
+        const refs: string[] = [];
+        const acceptedIds: string[] = [];
+        await page.route("**/api/v1/install-plans", async (route) => {
+          const request = route.request();
+          if (request.method() !== "POST") return route.fallback();
+          const idempotencyKey = request.headers()["idempotency-key"];
+          const body = request.postDataJSON();
+          keys.push(idempotencyKey);
+          refs.push(body.source.ref);
+          if (refusedReplay && keys.length === 2) {
+            return route.fulfill({ status: 403, json: { error: { code: "forbidden", message: "Fixture refused replay" } } });
+          }
+          const accepted = f.attempts.handle({ method: "POST", path: "/api/v1/install-plans", idempotencyKey, body })!;
+          acceptedIds.push(f.attempts.latest()!.id);
+          if (keys.length === 1) return route.abort("failed");
+          return route.fulfill({ status: accepted.status, json: accepted.json });
+        });
+
+        await page.goto(url);
+        if (refusedReplay) await page.evaluate(() => { document.documentElement.dataset.blockInstallReceipt = "yes"; });
+        const installButton = page.getByRole("button", { name: "Install", exact: true });
+        await installButton.click();
+        await expect(page.locator(".iv-error[role=alert]")).toBeVisible();
+        expect(keys).toHaveLength(1);
+        expect(keys[0]).toBeTruthy();
+        const stored = await page.evaluate(() => JSON.stringify({ ...sessionStorage }));
+        expect(stored).not.toContain(git);
+        if (refusedReplay) {
+          expect(stored).not.toContain(keys[0]!);
+          await page.evaluate(() => { delete document.documentElement.dataset.blockInstallReceipt; });
+          const refused = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/install-plans" &&
+            response.request().method() === "POST" && response.status() === 403);
+          await installButton.click();
+          await refused;
+          await expect(installButton).toBeEnabled();
+        }
+        await page.reload();
+        await expect(installButton).toBeEnabled();
+        const submissions = refusedReplay ? 3 : 2;
+        expect(keys).toHaveLength(submissions - 1);
+        await openInstallSheet(page);
+        expect(keys).toEqual(Array(submissions).fill(keys[0]));
+        expect(acceptedIds).toEqual([acceptedIds[0], acceptedIds[0]]);
+        expect(refs).toEqual(Array(submissions).fill(sourceCommit));
+        expect(resolutions).toBe(entry === "Store" ? 1 : 0);
+        await expect(page).toHaveURL(new RegExp(`installPlan=${acceptedIds[0]}`, "u"));
+        expect(f.mutations).not.toContain(applyMutation);
+
+        await page.goto(url);
+        await openInstallSheet(page);
+        expect(keys[submissions]).not.toBe(keys[0]);
+        expect(acceptedIds[2]).not.toBe(acceptedIds[0]);
+        expect(refs[submissions]).toBe(entry === "Store" ? newCommit : sourceCommit);
+      });
+    }
+
     test("Store app detail presents its gallery, release notes, and reviews without starting an install", async ({ page }) => {
       const f = await detailFixture(page, base);
       const store = "https://store.example.test";

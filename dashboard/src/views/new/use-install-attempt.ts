@@ -55,6 +55,13 @@ import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  installStartReceiptKey,
+  readInstallStartReceipt,
+  releaseInstallStartReceipt,
+  retainInstallStartReceipt,
+  type ResolvedStoreVersion,
+} from "./install-start-receipt.ts";
+import {
   appNameValue,
   attemptBelongsHere,
   attemptPastInputs,
@@ -125,11 +132,6 @@ export type InstallMutation =
   | "discard"
   | "restart"
   | "replan";
-
-export interface ResolvedStoreVersion {
-  readonly tag: string;
-  readonly commit: string;
-}
 
 /** How the page spends time between reconcile commands (replaceable in tests). */
 export interface InstallAttemptPacing {
@@ -280,6 +282,7 @@ export function installErrorMessage(cause: unknown): string {
 
 export interface InstallAttemptOptions {
   readonly principalId: string;
+  readonly accountId: string;
   /** The attempt the URL names, if any. */
   readonly attemptId: () => string | undefined;
   /** Put a new attempt's id into the URL. */
@@ -845,24 +848,30 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
+  const pendingInstallKey = (workspaceId: string | undefined, body: string) =>
+    pendingStart && pendingStart.workspaceId === workspaceId && pendingStart.body === body
+      ? pendingStart.key : undefined;
+
   /** POST one attempt; an unconfirmed POST is resent with the same key. */
   const postAttempt = async (
     workspaceId: string | undefined,
     request: CreateGitInstallAttemptRequest,
     isCurrent: () => boolean,
     latest?: ResolvedStoreVersion,
+    initial?: { readonly key: string; readonly replay: boolean; readonly beforeDispatch: () => void },
   ): Promise<GitInstallPlanResponse> => {
     const body = JSON.stringify(request);
-    const key = pendingStart && pendingStart.workspaceId === workspaceId && pendingStart.body === body
-      ? pendingStart.key
-      : randomUuid();
+    const key = initial?.key ?? pendingInstallKey(workspaceId, body) ?? randomUuid();
     pendingStart = { workspaceId, body, key, latest };
     try {
-      const created = await createGitInstallAttempt(workspaceId, request, key, { isCurrent });
+      const created = await createGitInstallAttempt(workspaceId, request, key, {
+        isCurrent,
+        ...(initial ? { beforeDispatch: initial.beforeDispatch } : {}),
+      });
       pendingStart = undefined;
       return created;
     } catch (cause) {
-      if (!outcomeUnknown(cause)) pendingStart = undefined;
+      if (!initial?.replay && !outcomeUnknown(cause)) pendingStart = undefined;
       throw cause;
     }
   };
@@ -935,8 +944,16 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       legacyWorkspaceContext = workspaceId;
       legacyWorkspaceSelection = selectedWorkspace;
       const ref = candidate.ref.trim();
-      let latest: ResolvedStoreVersion | undefined;
-      if (startOptions.fromStore && !ref) {
+      const storeLatest = startOptions.fromStore && !ref;
+      const storageKey = installStartReceiptKey(
+        [options.principalId, options.accountId, workspaceId],
+        startOptions.fromStore,
+        attemptCreateRequest(candidate),
+      );
+      const saved = readInstallStartReceipt(storageKey);
+      const retained = saved && Boolean(saved.latest) === storeLatest ? saved : undefined;
+      let latest = retained?.latest;
+      if (storeLatest && !latest) {
         const pending = pendingStart;
         // Retry an unconfirmed start with its original release if the rest of
         // the request still matches. A fresh start resolves the current release.
@@ -948,8 +965,24 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       }
       if (!stillStartingHere()) return;
       const request = attemptCreateRequest({ ...candidate, ref: latest?.commit ?? ref });
-      const created = await postAttempt(workspaceId, request, stillStartingHere, latest);
-      adoptNewAttempt(created, expected, { latest });
+      const previousKey = retained?.key ?? pendingInstallKey(workspaceId, JSON.stringify(request));
+      const key = previousKey ?? randomUuid();
+      try {
+        const created = await postAttempt(workspaceId, request, stillStartingHere, latest, {
+          key,
+          replay: previousKey !== undefined,
+          beforeDispatch: () => retainInstallStartReceipt(storageKey, { key, ...(latest ? { latest } : {}) }),
+        });
+        if (adoptNewAttempt(created, expected, { latest })) {
+          releaseInstallStartReceipt(storageKey, key);
+        }
+      } catch (cause) {
+        // A refusal of a replay does not resolve whether the first POST committed.
+        if (!previousKey && stillStartingHere() && !outcomeUnknown(cause)) {
+          releaseInstallStartReceipt(storageKey, key);
+        }
+        throw cause;
+      }
     } catch (cause) {
       if (stillOpening()) setError(installErrorMessage(cause));
     } finally {
