@@ -180,24 +180,43 @@ export async function runAppUninstall(args: string[], io: CliIo): Promise<number
     io.stderr(isJapaneseCli() ? "アプリID が必要です" : "app id is required");
     return 2;
   }
-  if (!booleanOption(options, "yes")) {
+  const statusOnly = options.status === true;
+  if (options.status !== undefined && (!statusOnly || options.yes !== undefined)) {
+    io.stderr(isJapaneseCli()
+      ? "--status は値と --yes を指定せずに使ってください。"
+      : "Pass --status without a value or --yes.");
+    return 2;
+  }
+  if (!statusOnly && !booleanOption(options, "yes")) {
     io.stderr(isJapaneseCli()
       ? `アプリ ${capsuleId} のアンインストールを開始するには --yes を指定してください。`
       : `Pass --yes to confirm uninstalling app ${capsuleId}.`);
     return 2;
   }
+  const json = booleanOption(options, "json");
   try {
+    const path = `/api/v1/capsules/${encodeURIComponent(capsuleId)}`;
+    if (statusOnly) {
+      const response = await requestDeployControlApi({ path, options, auth: "accounts" });
+      io.stdout(formatAppUninstallStatus(capsuleId, response, json));
+      return 0;
+    }
     const response = await requestDeployControlApi({
-      path: `/api/v1/capsules/${encodeURIComponent(capsuleId)}/uninstall`,
+      path: `${path}/uninstall`,
       method: "POST",
       body: {},
       options,
       auth: "accounts",
     });
-    io.stdout(formatAppUninstall(capsuleId, response, booleanOption(options, "json")));
+    io.stdout(formatAppUninstall(capsuleId, response, json));
     return 0;
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
+    if (!statusOnly && (!(error instanceof DeployControlApiError) || error.status >= 500)) {
+      io.stderr(isJapaneseCli()
+        ? "予約の受付を確認できませんでした。同じ接続先・アプリ・Accounts IDで `apps uninstall <app-id> --status` を実行し、現在の予約を確認してください。"
+        : "The reservation is unconfirmed. Use `apps uninstall <app-id> --status` with the same server, app and Accounts identity to read the current reservation.");
+    }
     return 1;
   }
 }
@@ -242,6 +261,32 @@ function formatAppUninstall(capsuleId: string, value: unknown, json: boolean): s
   return isJapaneseCli()
     ? `アプリ ${capsuleId} のアンインストールを受け付けました${status ? ` (${status})` : ""}`
     : `App ${capsuleId} uninstall accepted${status ? ` (${status})` : ""}`;
+}
+
+function formatAppUninstallStatus(capsuleId: string, value: unknown, json: boolean): string {
+  const capsule = isRecord(value) ? value.capsule : undefined;
+  const invalid = isJapaneseCli() ? "アプリの予約状態を確認できませんでした。" : "Unable to confirm the app's reservation status.";
+  if (!isRecord(capsule) || capsule.id !== capsuleId || typeof capsule.status !== "string" ||
+    !["pending", "active", "stale", "error", "disabled", "uninstalled", "destroyed"].includes(capsule.status)) {
+    throw new Error(invalid);
+  }
+
+  let uninstall = null;
+  if (capsule.uninstall !== undefined) {
+    if (!isRecord(capsule.uninstall)) throw new Error(invalid);
+    const { id, phase, requestedAt, scheduledDestroyAt } = capsule.uninstall;
+    if (typeof id !== "string" || /^[A-Za-z0-9_-]{1,256}$/u.exec(id)?.[0] !== id ||
+      (phase !== "scheduled" && phase !== "destroying" && phase !== "cancelled") ||
+      typeof requestedAt !== "string" || !Number.isFinite(Date.parse(requestedAt)) ||
+      typeof scheduledDestroyAt !== "string" || !Number.isFinite(Date.parse(scheduledDestroyAt))) {
+      throw new Error(invalid);
+    }
+    uninstall = { id, phase, requestedAt, scheduledDestroyAt };
+  }
+  if (json) return JSON.stringify({ capsuleId, status: capsule.status, uninstall }, null, 2);
+  const summary = `${capsuleId} — ${capsule.status}`;
+  if (!uninstall) return `${summary}\n${isJapaneseCli() ? "保存済みの削除予約はありません。" : "No saved uninstall reservation."}`;
+  return `${summary}\n${uninstall.id} — ${uninstall.phase} (${new Date(uninstall.scheduledDestroyAt).toISOString()})`;
 }
 
 export function appsHelpText(): string {
@@ -306,12 +351,16 @@ export function appsInstallHelpText(): string {
 export function appsUninstallHelpText(): string {
   return isJapaneseCli() ? [
     "takosumi apps uninstall <app-id> --yes",
+    "takosumi apps uninstall <app-id> --status",
     "", "--yes で確認し、通常のアンインストール処理を開始します。",
+    "--status は現在のアプリ状態と保存済みの削除予約を読み取ります。",
     "--url <Takosumi origin> --token <Accounts PAT> --json",
     "環境変数: TAKOSUMI_ACCOUNT_TOKEN",
   ].join("\n") : [
     "takosumi apps uninstall <app-id> --yes",
+    "takosumi apps uninstall <app-id> --status",
     "", "--yes confirms starting the app's normal uninstall process.",
+    "--status reads the current app state and saved uninstall reservation.",
     "--url <Takosumi origin> --token <Accounts PAT> --json",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN",
   ].join("\n");

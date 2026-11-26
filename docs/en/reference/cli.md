@@ -142,6 +142,16 @@ Observation never approves or creates an Apply. Not finding a linked Apply does 
 `--yes` and `--observe-only` cannot be combined.
 Failed, cancelled or expired Runs also need inspection of the saved Run and app state, rather than a blind new Plan.
 
+## Read an uninstall reservation
+
+If the response to `apps uninstall <app-id> --yes` is interrupted, read the current reservation using the same server, app and Accounts identity. This requires an Accounts PAT with `read` access to the app.
+
+```bash
+takosumi apps uninstall cap_example --status --url https://takosumi.example.com --json
+```
+
+`--status` issues one GET and reports the app state and the saved reservation's ID, phase, request time and scheduled deletion time. `uninstall: null` means there was no visible reservation at the time of the read. The interrupted request's outcome remains unknown.
+
 ## Review a manual uninstall
 
 When an Apply returns `apply_output_projection_failed`, its saved state is available for manual uninstall. Use `--prepare` when the current connections are usable or the app needs no Provider credentials.
