@@ -7,8 +7,9 @@ import { errorJson, json, methodNotAllowed, readJsonObject } from "../http-helpe
 import { appOwnershipMutationsFrozenResponse } from "../app-ownership-mutations-freeze.ts";
 import { bearerAppAllows } from "../account-session.ts";
 import type { ControlDispatchContext } from "./shared.ts";
-import { controlPlaneUnavailable } from "./shared.ts";
+import { canAccessWorkspace, controlPlaneUnavailable } from "./shared.ts";
 import { readCapsuleAppSummaries, readCapsuleAppView } from "./capsule-app.ts";
+import { accountAppAllowed } from "./app-scope.ts";
 import { AppAuthorizationError } from "../../../../core/domains/app-authorization/errors.ts";
 
 export interface AppMemberRecord {
@@ -132,11 +133,26 @@ async function accessTo(
   return await capsuleWithinBearerScope(ctx, capsuleId) ? access : undefined;
 }
 
+function requiresSharedPatMembership(ctx: ControlDispatchContext): boolean {
+  return ctx.session.requireCurrentMembership === true &&
+    ctx.session.credential === "personal-access-token";
+}
+
 async function capsuleWithinBearerScope(ctx: ControlDispatchContext, capsuleId: string): Promise<boolean> {
   if (!bearerAppAllows(ctx.session, capsuleId)) return false;
-  if (!ctx.session.workspaceId) return true;
+  const requireMembership = requiresSharedPatMembership(ctx);
+  if (!ctx.session.workspaceId && !requireMembership) return true;
   const capsule = await ctx.operations.capsules.getCapsule(capsuleId);
-  return capsule.workspaceId === ctx.session.workspaceId;
+  if (capsule.id !== capsuleId ||
+    (ctx.session.workspaceId && capsule.workspaceId !== ctx.session.workspaceId)) return false;
+  return !requireMembership || await canAccessWorkspace({
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    workspaceId: capsule.workspaceId,
+    capsuleId,
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+  });
 }
 
 function accountId(value: unknown): string | undefined {
@@ -225,8 +241,12 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
   const capsules = liveAccesses.length > 0
     ? await ctx.operations.capsules.getCapsulesByIds(liveAccesses.map((entry) => entry.capsuleId))
     : [];
-  const visible = capsules.filter((capsule) => capsule.status !== "destroyed" &&
+  const inCredentialScope = capsules.filter((capsule) => capsule.status !== "destroyed" &&
     (!ctx.session.workspaceId || capsule.workspaceId === ctx.session.workspaceId));
+  const visible = requiresSharedPatMembership(ctx)
+    ? (await Promise.all(inCredentialScope.map(async (capsule) =>
+      await accountAppAllowed(ctx, capsule) ? capsule : undefined))).filter((capsule) => capsule !== undefined)
+    : inCredentialScope;
   const visibleIds = new Set(visible.map((capsule) => capsule.id));
   const visibleAccesses = liveAccesses.filter((access) => visibleIds.has(access.capsuleId));
   const metadata = await Promise.all([

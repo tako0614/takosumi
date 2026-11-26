@@ -1090,20 +1090,17 @@ export class D1AccountsStore implements AccountsStore {
     tokenId: string;
     revokedAt: number;
   }): Promise<PersonalAccessTokenRecord | undefined> {
-    const record = await this.#get<PersonalAccessTokenRecord>(
-      "personal_access_tokens",
-      input.tokenId,
-    );
-    if (!record || record.subject !== input.subject) return undefined;
-    const updated = { ...record, revokedAt: input.revokedAt };
-    await this.#put("personal_access_tokens", updated.tokenId, updated, [
-      {
-        name: "personal_access_tokens_by_subject",
-        key: updated.subject,
-        sortKey: updated.createdAt,
-      },
-    ]);
-    return updated;
+    await this.initialize();
+    // Change only revocation metadata. Scope attenuation may commit concurrently.
+    const row = await this.#db.prepare(`UPDATE takosumi_accounts_documents
+      SET document = json_set(document, '$.revokedAt', ?1), updated_at = MAX(updated_at, ?2)
+      WHERE bucket = 'personal_access_tokens' AND key = ?3
+        AND json_extract(document, '$.tokenId') = ?3
+        AND json_extract(document, '$.subject') = ?4
+      RETURNING document`)
+      .bind(input.revokedAt, Date.now(), input.tokenId, input.subject)
+      .first<D1DocumentRow>();
+    return row ? JSON.parse(row.document) as PersonalAccessTokenRecord : undefined;
   }
 
   async attenuatePersonalAccessTokenApps(input: PersonalAccessTokenAppAttenuation): Promise<boolean> {
@@ -1127,23 +1124,18 @@ export class D1AccountsStore implements AccountsStore {
     tokenId: string,
     lastUsedAt: number,
   ): Promise<void> {
-    const record = await this.#get<PersonalAccessTokenRecord>(
-      "personal_access_tokens",
-      tokenId,
-    );
-    if (!record) return;
-    await this.#put(
-      "personal_access_tokens",
-      tokenId,
-      { ...record, lastUsedAt },
-      [
-        {
-          name: "personal_access_tokens_by_subject",
-          key: record.subject,
-          sortKey: record.createdAt,
-        },
-      ],
-    );
+    await this.initialize();
+    // An authentication finishing later cannot rewrite authority or move
+    // lastUsedAt backwards. The subject index is independent of this field.
+    const result = await this.#db.prepare(`UPDATE takosumi_accounts_documents
+      SET document = json_set(document, '$.lastUsedAt', ?1), updated_at = MAX(updated_at, ?2)
+      WHERE bucket = 'personal_access_tokens' AND key = ?3
+        AND json_extract(document, '$.tokenId') = ?3
+        AND json_extract(document, '$.revokedAt') IS NULL
+        AND COALESCE(json_extract(document, '$.lastUsedAt'), -1) < ?1`)
+      .bind(lastUsedAt, Date.now(), tokenId)
+      .run();
+    if (!result.success) throw new Error("D1 PAT usage update failed");
   }
 
   saveOidcClient(record: OidcClientRecord): Promise<void> {

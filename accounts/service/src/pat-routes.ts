@@ -181,9 +181,15 @@ export async function handlePersonalAccessTokenScopeCatalog(input: {
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
+  return personalAccessTokenScopeCatalogResponse(input.extensionScopes);
+}
+
+export function personalAccessTokenScopeCatalogResponse(
+  extensionScopes?: readonly TakosumiAccountsPatScope[],
+): Response {
   const body: TakosumiAccountsPatScopeCatalogResponse = {
     kind: TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND,
-    scopes: personalAccessTokenScopeCatalog(input.extensionScopes),
+    scopes: personalAccessTokenScopeCatalog(extensionScopes),
   };
   return json(body);
 }
@@ -564,7 +570,7 @@ export async function handleCurrentPersonalAccessTokenAuthority(input: {
   return json(currentPersonalAccessTokenAuthorityBody(record, scopes, role));
 }
 
-function personalAccessTokenAuthorityRecordIsWellFormed(
+export function personalAccessTokenAuthorityRecordIsWellFormed(
   record: PersonalAccessTokenRecord,
 ): boolean {
   return (
@@ -728,6 +734,19 @@ export async function handleListPersonalAccessTokens(input: {
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
+  return await listPersonalAccessTokensForVerifiedSubject({
+    url: input.url,
+    store: input.store,
+    subject: session.subject,
+  });
+}
+
+/** Account identity must already have been authenticated by the caller. */
+export async function listPersonalAccessTokensForVerifiedSubject(input: {
+  readonly url: URL;
+  readonly store: AccountsStore;
+  readonly subject: TakosumiSubject;
+}): Promise<Response> {
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
     return errorJson(
@@ -741,7 +760,7 @@ export async function handleListPersonalAccessTokens(input: {
     return errorJson("invalid_request", "cursor is malformed", 400);
   }
   const tokens = await input.store.listPersonalAccessTokensForSubject(
-    session.subject,
+    input.subject,
   );
   const page = paginateById(tokens, {
     getId: (token) => token.tokenId,
@@ -754,7 +773,7 @@ export async function handleListPersonalAccessTokens(input: {
   });
 }
 
-export async function handleCreatePersonalAccessToken(input: {
+interface CreatePersonalAccessTokenInput {
   request: Request;
   store: AccountsStore;
   operations?: ControlPlaneOperations;
@@ -765,10 +784,23 @@ export async function handleCreatePersonalAccessToken(input: {
   workspaceAuthorityTimeoutMs?: number;
   /** Called when the body names a Workspace (TASK-0118 Phase 9 telemetry). */
   observeWorkspaceBinding?: () => void;
-}): Promise<Response> {
+}
+
+export async function handleCreatePersonalAccessToken(
+  input: CreatePersonalAccessTokenInput,
+): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
+  return await createPersonalAccessTokenForVerifiedSubject({
+    ...input,
+    subject: session.subject,
+  });
+}
 
+/** Account identity must already have been authenticated by the caller. */
+export async function createPersonalAccessTokenForVerifiedSubject(
+  input: CreatePersonalAccessTokenInput & { readonly subject: TakosumiSubject },
+): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body || Array.isArray(body)) {
     return errorJson("invalid_request", "invalid request", 400);
@@ -826,7 +858,7 @@ export async function handleCreatePersonalAccessToken(input: {
       operations: input.operations,
       resolveOperations: input.resolveOperations,
       membershipReader: input.membershipReader,
-      subject: session.subject,
+      subject: input.subject,
       workspaceId,
       timeoutMs:
         input.workspaceAuthorityTimeoutMs ??
@@ -853,7 +885,7 @@ export async function handleCreatePersonalAccessToken(input: {
       if (!operations?.appAccess) {
         return errorJson("app_authority_unavailable", "App authority is temporarily unavailable.", 503, input.request);
       }
-      const accesses = await Promise.all(appIds.map((id) => operations.appAccess!.resolveAppAccess(session.subject, id)));
+      const accesses = await Promise.all(appIds.map((id) => operations.appAccess!.resolveAppAccess(input.subject, id)));
       accessible = accesses.every((access, index) => access?.capsuleId === appIds[index] &&
         (access.role === "owner" || access.role === "member"));
     } catch {
@@ -866,7 +898,7 @@ export async function handleCreatePersonalAccessToken(input: {
   const record: PersonalAccessTokenRecord = {
     tokenId: `pat_${crypto.randomUUID().replaceAll("-", "")}`,
     tokenPrefix: personalAccessTokenPrefix(token),
-    subject: session.subject,
+    subject: input.subject,
     name,
     scopes,
     ...(workspaceId ? { workspaceId } : {}),
@@ -958,8 +990,21 @@ export async function handleRevokePersonalAccessToken(input: {
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
-  const record = await input.store.revokePersonalAccessToken({
+  return await revokePersonalAccessTokenForVerifiedSubject({
+    tokenId: input.tokenId,
+    store: input.store,
     subject: session.subject,
+  });
+}
+
+/** Account identity must already have been authenticated by the caller. */
+export async function revokePersonalAccessTokenForVerifiedSubject(input: {
+  readonly tokenId: string;
+  readonly store: AccountsStore;
+  readonly subject: TakosumiSubject;
+}): Promise<Response> {
+  const record = await input.store.revokePersonalAccessToken({
+    subject: input.subject,
     tokenId: input.tokenId,
     revokedAt: Date.now(),
   });

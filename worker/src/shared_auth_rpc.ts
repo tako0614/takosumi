@@ -41,6 +41,7 @@ export interface SharedAuthEnvironment {
   readonly TAKOSUMI_SHARED_AUTH_PROFILE?: string;
   readonly TAKOSUMI_SHARED_AUTH_ORIGIN?: string;
   readonly TAKOSUMI_HOSTED_AUTH_MAINTENANCE_ENABLED?: string;
+  readonly TAKOSUMI_SHARED_AUTH_API_KEYS?: string;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly HOSTED?: unknown;
@@ -127,6 +128,11 @@ function isSharedStagingAppIssuer(env: SharedAuthEnvironment): boolean {
     env.TAKOSUMI_SHARED_AUTH_PROFILE === "shared-account" &&
     env.TAKOSUMI_SHARED_AUTH_ORIGIN === STAGING_PLATFORM_ORIGIN &&
     env.TAKOSUMI_ACCOUNTS_ISSUER === STAGING_PLATFORM_ORIGIN;
+}
+
+/** Select the shared Accounts key surface only on its owning staging Worker. */
+export function sharedStagingApiKeysEnabled(env: SharedAuthEnvironment): boolean {
+  return isSharedStagingAppIssuer(env) && env.TAKOSUMI_SHARED_AUTH_API_KEYS === "enabled";
 }
 
 function isSharedStagingAppAuthorizeRequest(request: Request, url: URL): boolean {
