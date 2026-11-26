@@ -2237,7 +2237,8 @@ export async function listInstalledApps(workspaceId?: string): Promise<{
     } catch (error) {
       if (page === 0 && isKnownSharedAuthRouteAbsent() &&
         isMissingControlRoute(normalizeAppsRouteError(path, error))) return listLegacyInstalledApps(workspaceId);
-      if (page === 0 || (error instanceof ControlApiError && (error.status === 401 || error.status === 403))) throw error;
+      if (installedApps.length === 0 ||
+        (error instanceof ControlApiError && (error.status === 401 || error.status === 403))) throw error;
       return { installedApps, complete: false };
     }
   }

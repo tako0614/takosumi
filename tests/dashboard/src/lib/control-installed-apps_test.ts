@@ -98,6 +98,20 @@ test("a failed later projection page preserves known rows without Workspace or a
   }
 });
 
+test("a failed later projection page with no known rows rejects discovery", async () => {
+  const calls = stub((path) => {
+    if (path === projectionPath) return Response.json({
+      projection: INSTALLED_APP_PROJECTION, complete: true, installedApps: [], nextCursor: "next",
+    });
+    if (path === `${projectionPath}&cursor=next`) {
+      return Response.json({ error: { code: "feature_unavailable" } }, { status: 503 });
+    }
+    throw new Error(`unexpected ${path}`);
+  }, true);
+  await expect(listInstalledApps("ws_legacy")).rejects.toMatchObject({ status: 503, code: "feature_unavailable" });
+  expect(calls).toEqual([projectionPath, `${projectionPath}&cursor=next`]);
+});
+
 test("shared installs reject a legacy or malformed first result before reading any Workspace", async () => {
   for (const legacy of [
     Response.json({ apps: [] }, { headers: { "x-takosumi-shared-auth-read": "1" } }),
