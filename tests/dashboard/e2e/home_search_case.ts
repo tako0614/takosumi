@@ -158,16 +158,19 @@ export function registerHomeSearchCases(mode: string): void {
         return route.fulfill({ json: { authenticated: true } });
       });
       await page.route("**/api/v1/apps**", (route) => {
-        const q = new URL(route.request().url()).searchParams.get("q");
+        const request = route.request();
+        const q = new URL(request.url()).searchParams.get("q");
         if (q && unavailable) {
           failedReads++;
           return route.abort("internetdisconnected");
         }
+        const sharedRead = "x-takosumi-shared-auth-read";
+        const headers = request.headers()[sharedRead] === "1" ? { [sharedRead]: "1" } : undefined;
         if (q) {
           searches.push(q);
-          return route.fulfill({ json: { apps: [app("matched", "Matching app")], appliedQuery: q } });
+          return route.fulfill({ headers, json: { apps: [app("matched", "Matching app")], appliedQuery: q } });
         }
-        return route.fulfill({ json: { apps: [app("initial", "Initial app")] } });
+        return route.fulfill({ headers, json: { apps: [app("initial", "Initial app")] } });
       });
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const home = page.getByTestId("home-apps");
