@@ -26,6 +26,7 @@ export async function requestDeployControlApi(input: {
   readonly auth?: "deploy-control" | "accounts";
   readonly extraHeaders?: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
+  readonly redirect?: RequestRedirect;
 }): Promise<unknown> {
   input.signal?.throwIfAborted();
   // `takosumi-client` is value-free self-identification read only by the
@@ -50,6 +51,7 @@ export async function requestDeployControlApi(input: {
   }
 
   const init: RequestInit = { method: input.method ?? "GET", headers, ...(input.signal ? { signal: input.signal } : {}) };
+  if (input.redirect !== undefined) init.redirect = input.redirect;
   if (input.body !== undefined) {
     headers.set("content-type", "application/json");
     init.body = JSON.stringify(input.body);

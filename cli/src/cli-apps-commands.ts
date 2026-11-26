@@ -197,7 +197,7 @@ export async function runAppUninstall(args: string[], io: CliIo): Promise<number
   try {
     const path = `/api/v1/capsules/${encodeURIComponent(capsuleId)}`;
     if (statusOnly) {
-      const response = await requestDeployControlApi({ path, options, auth: "accounts" });
+      const response = await requestDeployControlApi({ path, options, auth: "accounts", redirect: "error" });
       io.stdout(formatAppUninstallStatus(capsuleId, response, json));
       return 0;
     }
