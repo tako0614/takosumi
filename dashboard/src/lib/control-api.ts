@@ -325,14 +325,19 @@ async function withControlReadDeadline<T>(
   scope: ControlReadScope,
   read: (scope: ControlReadScope) => Promise<T>,
 ): Promise<T> {
+  const caller = scope.signal;
+  throwIfAborted(caller);
   const controller = new AbortController();
-  const signal = scope.signal ? AbortSignal.any([scope.signal, controller.signal]) : controller.signal;
-  throwIfAborted(signal);
+  const signal = controller.signal;
+  const requestScope = { ...scope, signal, isCurrent: () => !signal.aborted && (scope.isCurrent?.() ?? true) };
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const stopped = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new DOMException("Request was aborted.", "AbortError"));
-    signal.addEventListener("abort", onAbort, { once: true });
+    onAbort = () => {
+      reject(new DOMException("Request was aborted.", "AbortError"));
+      controller.abort();
+    };
+    caller?.addEventListener("abort", onAbort, { once: true });
     timer = setTimeout(() => {
       // Settle the timeout before aborting, including when fetch rejects on abort.
       reject(new ControlApiError(0, "request_timeout", `${label} read timed out after ${CONTROL_READ_TIMEOUT_MS}ms`));
@@ -342,13 +347,12 @@ async function withControlReadDeadline<T>(
   try {
     // Some transports and response bodies ignore abort. Race the whole read
     // and fence controlFetch's session-expiry handling after retirement.
-    return await Promise.race([
-      read({ ...scope, signal, isCurrent: () => !signal.aborted && (scope.isCurrent?.() ?? true) }),
-      stopped,
-    ]);
+    const result = await Promise.race([read(requestScope), stopped]);
+    throwIfReadRetired(requestScope);
+    return result;
   } finally {
     clearTimeout(timer);
-    if (onAbort) signal.removeEventListener("abort", onAbort);
+    if (onAbort) caller?.removeEventListener("abort", onAbort);
   }
 }
 

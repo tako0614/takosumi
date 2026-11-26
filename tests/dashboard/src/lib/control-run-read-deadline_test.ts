@@ -232,3 +232,23 @@ test("retiring an app read settles immediately even if fetch ignores abort", asy
   held.reject(new Error("late fetch rejection"));
   await flushContinuations();
 });
+
+test("a settings read discards a response decoded after its caller retires", async () => {
+  const body = deferred<unknown>();
+  const decode = jest.fn(() => body.promise);
+  globalThis.fetch = (async () => ({
+    status: 200,
+    ok: true,
+    headers: new Headers({ "content-type": "application/json" }),
+    json: decode,
+  } as Response)) as typeof fetch;
+  let current = true;
+  const result = observe(getCapsuleConfigurationContext(appId, { isCurrent: () => current }));
+  await flushContinuations();
+  expect(decode).toHaveBeenCalledTimes(1);
+  current = false;
+  body.resolve({});
+  await flushContinuations();
+  expect(result()).toMatchObject({ error: { name: "AbortError" } });
+  expect(jest.getTimerCount()).toBe(0);
+});
