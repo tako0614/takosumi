@@ -2516,13 +2516,16 @@ test("OpenTofu runner Durable Object normalizes arbitrary non-2xx runner payload
   });
 });
 
-test("OpenTofu runner Durable Object relays the precondition code without module output", async () => {
+test.each([
+  "opentofu_resource_precondition_failed",
+  "required_output_not_declared",
+])("OpenTofu runner Durable Object relays %s without module output", async (errorCode) => {
   const runner = runnerWithContainer(new FakeR2Bucket(), {
     async containerFetch(request) {
       if (request.method === "GET") return Response.json({ status: "ok" });
       return Response.json(
         {
-          errorCode: "opentofu_resource_precondition_failed",
+          errorCode,
           stdout: "fixture stdout",
           stderr: "fixture module-authored message",
           detail: "fixture detail",
@@ -2548,7 +2551,7 @@ test("OpenTofu runner Durable Object relays the precondition code without module
   assert.equal(response.status, 500);
   assert.deepEqual(await response.json(), {
     status: "failed",
-    errorCode: "opentofu_resource_precondition_failed",
+    errorCode,
     phase: "plan",
   });
 });

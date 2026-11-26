@@ -541,6 +541,8 @@ export interface OpenTofuPlanJob
   };
   /** Policy-derived, selector-only non-secret scope projection request. */
   readonly scopeSelectors?: readonly PlanScopeSelector[];
+  /** Public projection sources that must be declared by the actual direct root. */
+  readonly requiredOutputNames?: readonly string[];
   readonly credentials?: RunCredentials;
   readonly privateRunFiles?: readonly PrivateRunFileDispatch[];
 }

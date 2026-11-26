@@ -45,6 +45,20 @@ export function parseRefreshOnly(request: unknown): boolean {
   return isRecord(planRun) && planRun.refreshOnly === true;
 }
 
+export function parseRequiredOutputNames(request: unknown): readonly string[] {
+  const names = recordField(request, "requiredOutputNames");
+  if (names === undefined) return [];
+  if (
+    !Array.isArray(names) || names.length > 128 ||
+    names.some((name) =>
+      typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]{0,127}$/u.test(name)
+    )
+  ) {
+    throw new Error("requiredOutputNames must be a bounded list of output names");
+  }
+  return names;
+}
+
 const LEGACY_SOURCELESS_DESTROY_ERROR =
   "operator_module is limited to internal legacy source-less destroy recovery";
 

@@ -1016,6 +1016,8 @@ export function attemptProblemKey(code: string | undefined): MessageKey {
       return "installStore.problem.interfaceConflict";
     case "plan_run_failed":
       return "installStore.problem.plan";
+    case "required_output_not_declared":
+      return "installStore.problem.requiredOutput";
     case "install_plan_reconcile_retryable":
       return "installStore.problem.retryable";
     case "capsule_name_conflict":

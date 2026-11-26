@@ -269,6 +269,8 @@ export const ja = {
   "installStore.problem.compatibility": "このバージョンはそのままではインストールできません。アプリの提供元に確認してください。",
   "installStore.problem.secretSetting": "このアプリには、インストール時にはまだ受け付けられない秘密の設定が必要です。",
   "installStore.problem.plan": "作られるものを計算できませんでした。理由とログを確認してください。",
+  "installStore.problem.requiredOutput":
+    "このバージョンには、導入に必要な出力がありません。対応するバージョンを選ぶか、出力の設定を確認してください。",
   "installStore.problem.retryable": "途中の処理を確認できませんでした。もう一度試すと続きから進みます。",
   "installStore.problem.nameTaken": "この名前はほかのアプリが使っています。別の名前にしてください。",
   "installStore.problem.connection": "選んだ接続はこのアプリでは使えません。別の接続を選んでください。",
