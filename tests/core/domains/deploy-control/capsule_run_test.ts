@@ -12710,6 +12710,148 @@ test("Output projection fails closed on required output type mismatch", async ()
   );
 });
 
+test("initial Apply with an unprojectable output retains state for explicitly reviewed Destroy", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({ requiredProviders: [] }, {});
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    requiredProviders: [],
+    installConfig: {
+      outputAllowlist: {
+        endpoint: { from: "missing_output", type: "url", required: true },
+      },
+    },
+  });
+  const controller = controllerWith(store, runner);
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const input = { planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun) };
+  const { applyRun } = await controller.createApplyRun(input);
+
+  expect(applyRun.status).toBe("failed");
+  expect(await store.getCapsule("cap_fixture1")).toMatchObject({
+    status: "error",
+    currentStateGeneration: 1,
+    currentStateVersionId: applyRun.stateVersionId,
+  });
+  expect(applyRun.diagnostics).toContainEqual(
+    expect.objectContaining({ code: "apply_output_projection_failed" }),
+  );
+  expect(applyRun.auditEvents).toContainEqual(
+    expect.objectContaining({
+      type: "apply.output_projection_failed",
+      data: expect.objectContaining({ stateVersionId: applyRun.stateVersionId, stateDigest: STATE_DIGEST }),
+    }),
+  );
+  expect(applyRun.stateVersionId).toBeDefined();
+  expect(await store.getStateVersion(applyRun.stateVersionId!)).toMatchObject({
+    createdByRunId: applyRun.id,
+    digest: STATE_DIGEST,
+    generation: 1,
+  });
+  expect(applyRun.executionEvidence?.outcome).toBe("committed");
+  expect(applyRun.outputId).toBeUndefined();
+  expect(await store.getCapsuleRuntimeSafety("cap_fixture1")).toMatchObject({
+    phase: "unknown",
+    runId: applyRun.id,
+  });
+  expect((await controller.createApplyRun(input)).applyRun.id).toBe(applyRun.id);
+  expect(runner.applyJobs).toHaveLength(1);
+
+  expect((await store.getCapsule("cap_fixture1"))?.currentOutputId).toBeUndefined();
+  expect((await store.getApplyRun(applyRun.id))?.status).toBe("failed");
+  expect(runner.destroyJobs).toHaveLength(0);
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  await expect(controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  })).rejects.toMatchObject({ code: "failed_precondition" });
+  expect(runner.destroyJobs).toHaveLength(0);
+  await controller.approveRun(destroy.planRun.id);
+  const removed = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(removed.applyRun.status).toBe("succeeded");
+  expect((await store.getCapsule("cap_fixture1"))?.status).toBe("destroyed");
+  expect(runner.destroyJobs).toHaveLength(1);
+});
+
+test.each(["executionEvidence", "stateDigest"] as const)(
+  "Apply with missing %s cannot classify an output projection failure",
+  async (missing) => {
+    const { store, runner, controller } = await seededController({
+      installConfig: {
+        outputAllowlist: {
+          endpoint: { from: "missing_output", type: "url", required: true },
+        },
+      },
+    });
+    const apply = runner.apply;
+    runner.apply = async (job) => ({
+      ...(await apply(job)),
+      [missing]: undefined,
+    });
+    const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+    const { applyRun } = await controller.createApplyRun({
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    });
+    expect(applyRun.status).toBe("failed");
+    expect(applyRun.diagnostics).toContainEqual(
+      expect.objectContaining(missing === "executionEvidence"
+        ? { code: "execution_evidence_missing" }
+        : { message: expect.stringContaining("without a durable state digest") }),
+    );
+    expect(await store.getCapsule("cap_fixture1")).toMatchObject({
+      status: "pending",
+      currentStateGeneration: 0,
+    });
+    expect((await store.getPlanRun(planRun.id))?.appliedApplyRunId).toBeUndefined();
+    expect(applyRun.auditEvents.find(({ type }) => type === "apply.failed")?.data)
+      .not.toHaveProperty("providerApplySucceeded");
+  },
+);
+
+test("an update with an unprojectable output retains new state and retires the old output from the app view", async () => {
+  const { store, runner, controller } = await seededController({
+    installConfig: {
+      outputAllowlist: {
+        endpoint: { from: "public_url", type: "url", required: true },
+      },
+    },
+  });
+  const initial = await controller.createCapsulePlan("cap_fixture1");
+  const installed = await controller.createApplyRun({
+    planRunId: initial.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(initial.planRun),
+  });
+  expect(installed.applyRun.status).toBe("succeeded");
+  const previousOutputId = installed.applyRun.outputId!;
+  const apply = runner.apply;
+  runner.apply = async (job) => ({ ...(await apply(job)), outputs: {} });
+
+  const update = await controller.createCapsulePlan("cap_fixture1");
+  expect(update.planRun.operation).toBe("update");
+  const failed = await controller.createApplyRun({
+    planRunId: update.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(update.planRun),
+  });
+  expect(failed.applyRun.status).toBe("failed");
+  expect(await store.getCapsule("cap_fixture1")).toMatchObject({
+    status: "error",
+    currentStateGeneration: 2,
+    currentStateVersionId: failed.applyRun.stateVersionId,
+  });
+  expect((await store.getCapsule("cap_fixture1"))?.currentOutputId).toBeUndefined();
+  expect(await store.getOutput(previousOutputId)).toBeDefined();
+  expect(await store.getCapsuleRuntimeSafety("cap_fixture1")).toMatchObject({
+    phase: "unknown",
+    runId: failed.applyRun.id,
+  });
+});
+
 test("a sensitive-flagged runner output leaks into NO projection (invariants 11/12)", async () => {
   const { store, controller } = await seededController();
 

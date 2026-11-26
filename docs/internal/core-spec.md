@@ -502,6 +502,16 @@ pending, and an update's existing generation and Output remain unchanged.
 None of these status projections supplies recovery approval or a staged state
 artifact.
 
+If the exact Apply receipt confirms a committed provider mutation but output
+projection fails, the controller records `apply_output_projection_failed` on
+the original failed Run. The same fenced commit consumes the Plan, attaches
+the original StateVersion and marks the Capsule `error`. It publishes no
+Output and does not start post-apply actions. The same handling applies
+when the receipt is confirmed through RunOwner recovery. A new, explicitly
+approved manual Destroy can use that state only when the failed Apply,
+receipt, consumed Plan and current StateVersion match. Runtime safety stays
+`unknown` for other mutations, and existing pre-destroy checks still apply.
+
 The state-only recovery Core primitive is operator-only and has no public route
 or default service mount. The explicit [local Bun/Postgres command](../operations/local-state-recovery.md)
 uses a protected, purpose-specific single-case approval matched to the actual

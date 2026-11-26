@@ -21,6 +21,7 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   state_version_mismatch: "runError.stateGenerationMismatch",
   provider_credential_env_conflict: "runError.providerCredentialEnvConflict",
   runner_mutation_indeterminate: "runError.mutationIndeterminate",
+  apply_output_projection_failed: "runError.outputProjectionFailed",
   opentofu_resource_precondition_failed: "runError.resourcePreconditionFailed",
   plan_failed: "runError.planFailed",
   apply_failed: "runError.applyFailed",
@@ -28,8 +29,18 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
   backup_failed: "runError.backupFailed",
 };
 
-export function runMutationOutcomeUnknown(run: { readonly errorCode?: string } | undefined): boolean {
+export function runMutationOutcomeUnknown(
+  run: { readonly errorCode?: string } | undefined,
+): boolean {
   return run?.errorCode === "runner_mutation_indeterminate";
+}
+
+/** Neither an unconfirmed mutation nor a failed projection may retry Apply. */
+export function runApplyRequiresRecovery(
+  run: { readonly errorCode?: string } | undefined,
+): run is { readonly errorCode: "runner_mutation_indeterminate" | "apply_output_projection_failed" } {
+  return run?.errorCode === "runner_mutation_indeterminate" ||
+    run?.errorCode === "apply_output_projection_failed";
 }
 
 /** Friendly failure hint for a run summary — never the raw error code. */

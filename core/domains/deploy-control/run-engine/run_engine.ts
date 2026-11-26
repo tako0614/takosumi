@@ -188,6 +188,8 @@ import {
 } from "../plan_resolution.ts";
 import { evaluatePolicy } from "../policy.ts";
 import {
+  APPLY_OUTPUT_PROJECTION_FAILED_REASON,
+  ApplyOutputProjectionError,
   errorDiagnostic,
   errorMessage,
   normalizePlanArtifact,
@@ -10203,15 +10205,15 @@ export class RunEngine {
           now,
         });
       }
-      const projected = await this.#projectAndRecordApplyOutputs({
-        planRun,
-        applyRun,
-        plannedCapsule,
+      const executionEvidence = this.#requireExecutionEvidence({
         result,
-        envDispatch,
-        dispatch,
-        now,
-        executionEvidenceCommit,
+        applyRun: runningWithEnv,
+        planRun,
+        profile,
+        action: "apply",
+        outcome: "committed",
+        commit: executionEvidenceCommit,
+        admittedExecutionAuthority: recovered?.executionEvidenceAuthority,
       });
       const stateVersion = await this.#buildStateVersion({
         envDispatch,
@@ -10226,80 +10228,112 @@ export class RunEngine {
           "apply completed without a durable Capsule state scope",
         );
       }
-      // Build the terminal ApplyRun + apply-once PlanRun marker before the
-      // atomic Run + StateVersion + Output commit.
-      const providerApplied = this.#buildCompletedApplyRun({
-        running: runningWithEnv,
-        applyRun,
+      const projection = await this.#projectAndRecordApplyOutputs({
         planRun,
-        profile,
-        capsule: projected.capsule,
-        stateVersionId: stateVersion.id,
-        outputId: projected.output.id,
-        outputCount: Object.keys(projected.output.publicOutputs).length,
+        applyRun,
+        plannedCapsule,
         result,
+        envDispatch,
+        dispatch,
+        now,
         executionEvidenceCommit,
-        admittedExecutionAuthority: recovered?.executionEvidenceAuthority,
-        providerInstallationPolicy,
-        startedAt,
-        now,
+      }).catch((error: unknown) => {
+        if (error instanceof ApplyOutputProjectionError) return error;
+        throw error;
       });
-      // Required post-apply actions are part of the reviewed Run boundary, not
-      // a best-effort notification after readiness. Execute the Plan-pinned
-      // commands after provider state/output persistence has completed in the
-      // runner, but before the atomic ledger makes the Capsule active.
-      const lifecycleOutcome = await this.#withRunRenewal(
-        "apply",
-        runningWithEnv,
-        leaseToken,
-        lease,
-        (signal) =>
-          this.#activateReleaseAfterApply({
-            planRun,
-            applyRun: providerApplied,
-            runLease: Object.freeze({ runId: runningWithEnv.id, leaseToken }),
-            capsule: projected.capsule,
+      const projected = projection instanceof ApplyOutputProjectionError ? undefined : projection;
+      const capsule = projected?.capsule ??
+        plannedCapsule ?? await this.#requireCurrentPlannedCapsule(planRun);
+      const nextStateGeneration = projected?.nextStateGeneration ?? stateVersion.generation;
+      const output = projected?.output;
+      const outputCount = output ? Object.keys(output.publicOutputs).length : 0;
+      let completed: ApplyRun;
+      if (projection instanceof ApplyOutputProjectionError) {
+        // The exact provider receipt is committed. Retain its original state
+        // coordinate without publishing an Output or starting post_apply.
+        const failed = this.#failedApplyRunCandidate(
+          runningWithEnv,
+          profile.stateBackend,
+          startedAt,
+          "apply.failed",
+          projection,
+          true,
+        );
+        completed = this.#withPendingApplyBillingCapture({
+          ...failed,
+          stateVersionId: stateVersion.id,
+          executionEvidence,
+          auditEvents: [
+            ...failed.auditEvents,
+            auditEvent(applyRun.id, "apply.output_projection_failed", now, {
+              stateVersionId: stateVersion.id,
+              stateDigest: stateVersion.digest,
+            }),
+          ],
+        }, now);
+      } else {
+        const providerApplied = this.#buildCompletedApplyRun({
+          running: runningWithEnv,
+          applyRun,
+          profile,
+          capsule,
+          stateVersionId: stateVersion.id,
+          outputId: projection.output.id,
+          outputCount,
+          result,
+          executionEvidence,
+          providerInstallationPolicy,
+          startedAt,
+          now,
+        });
+        // Required post-apply actions precede the atomic visibility commit.
+        const lifecycleOutcome = await this.#withRunRenewal(
+          "apply",
+          runningWithEnv,
+          leaseToken,
+          lease,
+          (signal) =>
+            this.#activateReleaseAfterApply({
+              planRun,
+              applyRun: providerApplied,
+              runLease: Object.freeze({ runId: runningWithEnv.id, leaseToken }),
+              capsule,
+              stateVersion,
+              output: projection.output,
+              result,
+              lifecycleActions: dispatch.lifecycleActions,
+              sourceBuild: dispatch.sourceBuild,
+              signal,
+              deadlineAt,
+            }),
+        );
+        completed = this.#applyPostApplyLifecycleOutcome({
+          providerApplied,
+          lifecycleOutcome,
+          now,
+        });
+        if (lifecycleOutcome) {
+          await this.#recordLifecycleActionOutcome({
+            applyRun: completed,
+            capsule,
             stateVersion,
-            output: projected.output,
-            result,
-            lifecycleActions: dispatch.lifecycleActions,
-            sourceBuild: dispatch.sourceBuild,
-            signal,
-            deadlineAt,
-          }),
-      );
-      const completed = this.#applyPostApplyLifecycleOutcome({
-        providerApplied,
-        lifecycleOutcome,
-        now,
-      });
+            outcome: lifecycleOutcome,
+          });
+        }
+      }
       const appliedPlan: PlanRun = {
         ...planRun,
         appliedApplyRunId: applyRun.id,
         updatedAt: now,
       };
-      // Close the observable lifecycle Activity before attempting the guarded
-      // ledger commit. The action has already reached a concrete adapter
-      // outcome; if the commit loses its lease or conflicts, leaving only the
-      // earlier `pending` Activity would falsely imply resumable background
-      // work. This Activity describes the action outcome, not ledger success.
-      if (lifecycleOutcome) {
-        await this.#recordLifecycleActionOutcome({
-          applyRun: completed,
-          capsule: projected.capsule,
-          stateVersion,
-          outcome: lifecycleOutcome,
-        });
-      }
-      // Atomic authority: terminal Run + StateVersion + Output + Capsule cursors.
       const patched = await this.#commitApplyLedger({
         planRun,
         plannedCapsule,
-        capsule: projected.capsule,
+        capsule,
         stateVersion,
-        output: projected.output,
-        previousOutput: projected.previousOutput,
-        nextStateGeneration: projected.nextStateGeneration,
+        output,
+        previousOutput: projected?.previousOutput,
+        nextStateGeneration,
         applyRunTerminal: completed,
         planRunApplied: appliedPlan,
         applyRunLeaseToken: leaseToken,
@@ -10314,15 +10348,22 @@ export class RunEngine {
         };
       }
       ledgerCommitted = true;
+      const receiptFinishedAt = Date.parse(executionEvidence.committedAt);
       return await this.#completeApplyRun({
         completed,
         planRun,
-        capsule: projected.capsule,
+        capsule,
         patched,
-        outputCount: Object.keys(projected.output.publicOutputs).length,
-        nextStateGeneration: projected.nextStateGeneration,
+        outputCount,
+        nextStateGeneration,
         startedAt,
         now,
+        ...(projection instanceof ApplyOutputProjectionError ? {
+          runnerTiming: running.startedAt !== undefined &&
+              receiptFinishedAt > running.startedAt && receiptFinishedAt <= now
+            ? { startedAt: running.startedAt, finishedAt: receiptFinishedAt }
+            : { finishedAt: now },
+        } : {}),
       });
     } catch (error) {
       // A busy Capsule lease is a queue contention signal, not an Apply
@@ -11049,7 +11090,7 @@ export class RunEngine {
     readonly plannedCapsule: Capsule | undefined;
     readonly capsule: Capsule;
     readonly stateVersion: StateVersion;
-    readonly output: Output;
+    readonly output: Output | undefined;
     readonly previousOutput: Output | undefined;
     readonly nextStateGeneration: number;
     readonly applyRunTerminal: ApplyRun;
@@ -11066,7 +11107,7 @@ export class RunEngine {
     try {
       committed = await this.#store.commitRunState({
         stateVersion,
-        output,
+        ...(output ? { output } : {}),
         capsulePatch: {
           id: capsule.id,
           patch: {
@@ -11074,7 +11115,7 @@ export class RunEngine {
             status: input.capsuleStatus,
             updatedAt: new Date(now).toISOString(),
             currentStateGeneration: input.nextStateGeneration,
-            currentOutputId: output.id,
+            currentOutputId: output?.id,
           },
           guard: {
             currentStateVersionId:
@@ -11086,7 +11127,7 @@ export class RunEngine {
         applyRunTerminal: input.applyRunTerminal,
         planRunApplied: input.planRunApplied,
         applyRunLeaseToken: input.applyRunLeaseToken,
-        ...(input.applyRunTerminal.status === "succeeded" &&
+        ...(output && input.applyRunTerminal.status === "succeeded" &&
         input.inputs?.interfaceMaterialization
           ? {
               interfaceMaterializationIntent:
@@ -12043,15 +12084,13 @@ export class RunEngine {
   #buildCompletedApplyRun(input: {
     readonly running: ApplyRun;
     readonly applyRun: ApplyRun;
-    readonly planRun: PlanRun;
     readonly profile: RunnerProfile;
     readonly capsule: Capsule;
     readonly stateVersionId: string;
     readonly outputId: string;
     readonly outputCount: number;
     readonly result: OpenTofuApplyResult;
-    readonly executionEvidenceCommit: RunExecutionCommit;
-    readonly admittedExecutionAuthority?: PreparedApplyReceiptDispatch["executionEvidenceAuthority"] | undefined;
+    readonly executionEvidence: RunExecutionEvidence;
     readonly providerInstallationPolicy: { requireMirror: boolean } | undefined;
     readonly startedAt: number;
     readonly now: number;
@@ -12065,16 +12104,7 @@ export class RunEngine {
       capsuleId: capsule.id,
       stateVersionId,
       outputId,
-      executionEvidence: this.#requireExecutionEvidence({
-        result,
-        applyRun: running,
-        planRun: input.planRun,
-        profile,
-        action: "apply",
-        outcome: "committed",
-        commit: input.executionEvidenceCommit,
-        admittedExecutionAuthority: input.admittedExecutionAuthority,
-      }),
+      executionEvidence: input.executionEvidence,
       status: "succeeded",
       stateLock:
         result.stateLock ??
@@ -12303,6 +12333,7 @@ export class RunEngine {
     readonly nextStateGeneration: number;
     readonly startedAt: number;
     readonly now: number;
+    readonly runnerTiming?: { readonly startedAt?: number; readonly finishedAt: number };
   }): Promise<ApplyRunResponse> {
     const { completed, planRun, capsule, outputCount, startedAt, now } = input;
     const finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
@@ -12314,8 +12345,7 @@ export class RunEngine {
         workspaceId: completed.workspaceId,
         runId: completed.id,
         capsuleId: completed.capsuleId,
-        startedAt,
-        finishedAt: now,
+        ...(input.runnerTiming ?? { startedAt, finishedAt: now }),
       });
       await this.#recordDeployOperationMetric({
         run: completed,
@@ -12333,15 +12363,15 @@ export class RunEngine {
         message: errorMessage(error),
       });
     }
-    const lifecycleFailed = completed.status === "failed";
-    const lifecycleErrorCode = lifecycleFailed
-      ? CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE
-      : undefined;
+    const failed = completed.status === "failed";
+    const errorCode = completed.diagnostics?.some(({ code }) => code === APPLY_OUTPUT_PROJECTION_FAILED_REASON)
+      ? APPLY_OUTPUT_PROJECTION_FAILED_REASON
+      : CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE;
     // A failed lifecycle action is still explicit that the provider-applied
     // StateVersion/Output were retained; callers must not retry the same Plan.
     await this.#recordActivity({
       workspaceId: completed.workspaceId,
-      action: lifecycleFailed ? "run.failed" : "run.applied",
+      action: failed ? "run.failed" : "run.applied",
       targetType: "run",
       targetId: completed.id,
       runId: completed.id,
@@ -12353,9 +12383,9 @@ export class RunEngine {
         stateGeneration: input.nextStateGeneration,
         outputId: completed.outputId,
         outputCount,
-        ...(lifecycleFailed
+        ...(failed
           ? {
-              errorCode: lifecycleErrorCode!,
+              errorCode,
               providerApplySucceeded: true,
               appliedStateRetained: true,
             }

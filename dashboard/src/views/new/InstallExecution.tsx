@@ -38,7 +38,7 @@ import {
 import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
-import { runFailureHint, runMutationOutcomeUnknown } from "../../lib/run-errors.ts";
+import { runFailureHint, runApplyRequiresRecovery } from "../../lib/run-errors.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
 import { runStatusLabel } from "../../lib/labels.ts";
 import {
@@ -350,7 +350,7 @@ export default function InstallExecution(props: Props) {
   // 3s fallback read below means one 5xx mid-install replaced the whole app
   // with the root reload card. A failed refetch keeps the last good run.
   const runLatest = createLastGoodValue(run, (r) => r.id === runId() && r.capsuleId === props.capsuleId);
-  const mutationOutcomeUnknown = () => runMutationOutcomeUnknown(runLatest());
+  const applyRequiresRecovery = () => runApplyRequiresRecovery(runLatest());
   const [applying, setApplying] = createSignal(false);
   const [stalePlanId, setStalePlanId] = createSignal<string>();
   const stalePlan = () => runId() === stalePlanId();
@@ -680,7 +680,7 @@ export default function InstallExecution(props: Props) {
   const retryFailedApply = async () => {
     const previous = runLatest();
     const capsuleId = previous?.capsuleId;
-    if (!previous || !capsuleId || restarting() || mutationOutcomeUnknown()) return;
+    if (!previous || !capsuleId || restarting() || applyRequiresRecovery()) return;
     const attempt = applyAttempt(previous);
     const isCurrent = () => ownsApply(attempt);
     if (!isCurrent()) return;
@@ -705,7 +705,7 @@ export default function InstallExecution(props: Props) {
 
   const restartWithLatestSource = async () => {
     const previous = runLatest();
-    if (!previous || restarting() || mutationOutcomeUnknown()) return;
+    if (!previous || restarting() || applyRequiresRecovery()) return;
     const attempt = applyAttempt(previous);
     if (!ownsApply(attempt)) return;
     setRestarting(true);
@@ -1100,10 +1100,10 @@ export default function InstallExecution(props: Props) {
                 <strong>{t(copy().failed)}</strong>
                 <p>{runFailureHint(current().errorCode)}</p>
                 <div class="iv-action-row">
-                  <Show when={!mutationOutcomeUnknown() && isInstall() && isApplyRun(current().type) && canRetryApply()}>
+                  <Show when={!applyRequiresRecovery() && isInstall() && isApplyRun(current().type) && canRetryApply()}>
                     <Button type="button" variant="primary" busy={restarting()} onClick={() => void retryFailedApply()}>{t("installStore.retryInstall")}</Button>
                   </Show>
-                  <Show when={!mutationOutcomeUnknown() && isInstall() && isReviewRun(current().type)}>
+                  <Show when={!applyRequiresRecovery() && isInstall() && isReviewRun(current().type)}>
                     <Button
                       type="button"
                       variant="primary"
@@ -1114,7 +1114,7 @@ export default function InstallExecution(props: Props) {
                       {canRestart() ? (props.restartLabel ?? t("installStore.restartWithLatestSource")) : t("installStore.retryInstall")}
                     </Button>
                   </Show>
-                  <Show when={!mutationOutcomeUnknown() && !isInstall() && canRestart()}>
+                  <Show when={!applyRequiresRecovery() && !isInstall() && canRestart()}>
                     <Button
                       type="button"
                       variant="primary"
@@ -1135,7 +1135,7 @@ export default function InstallExecution(props: Props) {
                   {closeButton()}
                 </div>
               </div>
-              <Show when={!mutationOutcomeUnknown() && current().status === "failed" && isAppRemovalRun(current().type) && current().id} keyed>
+              <Show when={!applyRequiresRecovery() && current().status === "failed" && isAppRemovalRun(current().type) && current().id} keyed>
                 {(runId) => props.uninstallConnectionRecovery?.(runId, "failed")}
               </Show>
             </Show>
