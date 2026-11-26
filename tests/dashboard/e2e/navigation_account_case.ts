@@ -185,6 +185,75 @@ export function registerNavigationAccountCases(mode: string): void {
   test.describe("Navigation, connections and account", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
 
+    for (const [language, scenario] of [
+      ["ja", "shared"],
+      ["en", "shared"],
+      ["ja", "stock"],
+      ["ja", "no access"],
+      ["ja", "unadvertised"],
+    ] as const) {
+      test(`Account usage links only to advertised Hosted personal billing (${language}, ${scenario})`, async ({ page }) => {
+        const fixture = await accountFixture(page);
+        await page.addInitScript((lang) => {
+          localStorage.setItem("tg_lang", lang);
+          localStorage.setItem("takosumi.currentWorkspaceId", "ws_team");
+        }, language);
+        const subject = "tsub_usage_fixture";
+        const base = { handle: "fixture", displayName: "Fixture", createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z" };
+        const workspace = { ...base, id: "ws_personal", type: "personal", ownerUserId: subject };
+        const workspaces = [
+          { ...workspace, id: "ws_team", type: "organization" },
+          { ...workspace, id: "ws_foreign", ownerUserId: "tsub_other" },
+          { ...workspace, id: "ws_archived", archivedAt: base.createdAt },
+          ...(scenario === "no access" ? [] : [workspace]),
+        ];
+        if (scenario !== "stock") {
+          await page.route("**/auth/oidc/session", (route) => route.fulfill({ json: { authenticated: true } }));
+        }
+        await page.route("**/api/v1/dashboard/bootstrap?**", (route) => {
+          const query = new URL(route.request().url()).searchParams;
+          return route.fulfill({ headers: { "x-takosumi-shared-auth-read": "1" }, json: {
+            session: { subject }, notifications: [],
+            ...(query.get("includeWorkspaces") === "true" ? { workspaces } : {}),
+          } });
+        });
+        await page.route("**/__takosumi/platform/contributions", (route) => route.fulfill({
+          json: {
+            kind: "takosumi.platform-extension-contributions@v1",
+            contributions: [{
+              id: "hosted-workspace-billing", slot: "workspace.billing",
+              href: scenario === "unadvertised" ? "/api/v1/billing/subscription" : "/api/v1/billing",
+              presentation: "link", label: "使用量と課金", labels: { en: "Usage and billing", ja: "使用量と課金" },
+            }],
+          },
+        }));
+        const catalog = page.waitForResponse((response) => new URL(response.url()).pathname === "/__takosumi/platform/contributions");
+        const workspaceRead = scenario === "no access" ? page.waitForResponse((response) => {
+          const url = new URL(response.url());
+          return url.pathname === "/api/v1/dashboard/bootstrap" && url.searchParams.get("includeWorkspaces") === "true";
+        }) : undefined;
+        await page.goto("/account/usage", { waitUntil: "domcontentloaded" });
+        await catalog;
+        await expect(page.getByRole("heading", { level: 1, name: language === "ja" ? "料金と利用量" : "Billing and usage" })).toBeVisible();
+        const link = page.getByRole("link", { name: language === "ja" ? "使用量と課金" : "Usage and billing", exact: true });
+        if (scenario === "shared") {
+          const href = `/api/v1/billing?workspaceId=ws_personal&lang=${language}`;
+          await expect(link).toHaveAttribute("href", href);
+          await page.route("**/api/v1/billing?**", (route) => {
+            expect(route.request().method()).toBe("GET");
+            return route.fulfill({ contentType: "text/html", body: "<h1>Hosted billing fixture</h1>" });
+          });
+          await link.click();
+          await expect(page.getByRole("heading", { name: "Hosted billing fixture" })).toBeVisible();
+          expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(href);
+        } else {
+          await workspaceRead;
+          await expect(link).toHaveCount(0);
+        }
+        expect(fixture.mutations).toEqual([]);
+      });
+    }
+
     for (const [language, theme] of [["ja", "dark"], ["en", "light"]] as const) {
       test(`Home, Store, App, Connections and Account fit at five widths (${language}, ${theme})`, async ({ page }, info) => {
         test.setTimeout(75_000);

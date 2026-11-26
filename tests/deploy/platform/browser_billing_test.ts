@@ -120,6 +120,52 @@ test("base POST forwards only an exact selected Workspace view request with its 
   expect(f.seen.generic).toHaveLength(0);
 });
 
+test("only the base billing view relays locale without changing the session or form", async () => {
+  const f = fixture();
+  const language = "ja-JP,ja;q=0.9,en;q=0.7";
+  const headers = { "accept-language": language };
+  const query = "?workspaceId=ws_selected";
+  const form = "workspaceId=ws_selected";
+  const localized = [
+    request(root + query + "&lang=ja", { headers }),
+    request(root + query + "&format=json&lang=en", { headers }),
+    post(root + query + "&lang=ja", form, { ...headers, "content-type": "application/x-www-form-urlencoded" }),
+  ];
+  for (const value of localized) {
+    expect((await fetch(value, f.env)).status).toBe(200);
+    const forwarded = f.seen.dashboard.at(-1)!;
+    expect(forwarded.request.url).toBe(value.url);
+    expect(forwarded.request.headers.get("accept-language")).toBe(language);
+    expect(forwarded.session).toEqual({ authKind: "session", subject: "tsub_canonical" });
+    expect(f.seen.auth.at(-1)!.headers.get("accept-language")).toBeNull();
+  }
+  expect(await f.seen.dashboard[2]!.request.text()).toBe(form);
+  expect((await fetch(request(root + "/subscription" + query, { headers }), f.env)).status).toBe(200);
+  expect(f.seen.dashboard.at(-1)!.request.headers.get("accept-language")).toBeNull();
+  expect(f.seen.selected).toBe(0);
+  expect(f.seen.generic).toHaveLength(0);
+});
+
+test("billing rejects invalid or duplicate locale and locale on financial leaves or JSON POST before authentication", async () => {
+  const f = fixture();
+  const query = "?workspaceId=ws_selected";
+  const formHeaders = { "content-type": "application/x-www-form-urlencoded" };
+  for (const value of [
+    request(root + query + "&lang="),
+    request(root + query + "&lang=fr"),
+    request(root + query + "&lang=en&lang=en"),
+    request(root + "/top-up" + query + "&lang=ja"),
+    post(root + "/subscription" + query + "&lang=ja"),
+    post(root + query + "&lang=en", { workspaceId: "ws_selected" }),
+    post(root + query + "&lang=ja&lang=en", "workspaceId=ws_selected", formHeaders),
+    post(root + query + "&lang=ja", "workspaceId=ws_selected&lang=ja", formHeaders),
+  ]) {
+    expect((await fetch(value, f.env)).status).toBe(400);
+  }
+  expect(f.seen.auth).toHaveLength(0);
+  expect(f.seen.dashboard).toHaveLength(0);
+});
+
 test("base POST rejects absent, mismatched or extra Workspace selectors before authentication", async () => {
   const f = fixture();
   const invalid = [
