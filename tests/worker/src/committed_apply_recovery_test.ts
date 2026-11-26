@@ -148,10 +148,16 @@ test("RunOwner records output projection failure from a confirmed Apply receipt 
       committedAt: finishedAt,
     };
   });
+  const observedAtRelease: Array<{
+    status: string | undefined;
+    appliedApplyRunId: string | undefined;
+  }> = [];
   const release = spyOn(BillingService.prototype, "releaseApplyBilling")
     .mockImplementation(async () => {
-      expect((await f.store.getApplyRun(f.run.id))?.status).toBe("failed");
-      expect((await f.store.getPlanRun(f.run.planRunId))?.appliedApplyRunId).toBe(f.run.id);
+      observedAtRelease.push({
+        status: (await f.store.getApplyRun(f.run.id))?.status,
+        appliedApplyRunId: (await f.store.getPlanRun(f.run.planRunId))?.appliedApplyRunId,
+      });
       throw new Error("fixture billing reservation release unavailable");
     });
   const rating = spyOn(BillingService.prototype, "rateUsageMeasurement");
@@ -174,6 +180,7 @@ test("RunOwner records output projection failure from a confirmed Apply receipt 
     expect(f.counts()).toEqual({ calls: 0, reads: 1, inspections: 1 });
     await f.dispatch();
     expect(release).toHaveBeenCalledTimes(1);
+    expect(observedAtRelease).toEqual([{ status: "failed", appliedApplyRunId: f.run.id }]);
     expect(rating).toHaveBeenCalledTimes(1);
     expect(rating).toHaveBeenCalledWith(expect.objectContaining({
       runId: f.run.id,
