@@ -14911,8 +14911,11 @@ const destroyKeyRotationCases = [
   { originalAuth: "api_token", replacementAuth: "oauth", originalIncludesAccount: false, revokeBeforePlan: false, name: "Destroy uses a verified Cloudflare OAuth replacement for an applied token-only key" },
   { originalAuth: "api_token", replacementAuth: "oauth", originalIncludesAccount: true, revokeBeforePlan: false, name: "Destroy preserves the verified Cloudflare account with an OAuth replacement after late revocation" },
   { originalAuth: "api_token", replacementAuth: "oauth", originalIncludesAccount: true, revokeBeforePlan: true, name: "Destroy uses a verified Cloudflare OAuth replacement after revoking the applied two-field key" },
+  { originalAuth: "api_token", replacementAuth: "api_token", originalIncludesAccount: true, revokeBeforePlan: true, outputProjectionFailure: true, name: "Destroy recovers a revoked connection after a committed Apply output projection failure" },
 ] as const;
-for (const { originalAuth, replacementAuth, originalIncludesAccount, revokeBeforePlan, name } of destroyKeyRotationCases) test(name, async () => {
+for (const testCase of destroyKeyRotationCases) test(testCase.name, async () => {
+  const { originalAuth, replacementAuth, originalIncludesAccount, revokeBeforePlan } = testCase;
+  const outputProjectionFailure = "outputProjectionFailure" in testCase;
   const { StaticSecretConnectionVault } = await import("../../../../core/adapters/vault/mod.ts");
   const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
   const { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION, referenceCredentialDriversFromEnv } = await import("../../../../providers/registry.ts");
@@ -14923,7 +14926,12 @@ for (const { originalAuth, replacementAuth, originalIncludesAccount, revokeBefor
   const store = new InMemoryOpenTofuControlStore();
   const seeded = await seedRunnableCapsuleModel(store, {
     environment: "preview",
-    installConfig: oidcMaterializedInstallConfig(),
+    installConfig: {
+      ...oidcMaterializedInstallConfig(),
+      ...(outputProjectionFailure ? {
+        outputAllowlist: { launch_url: { from: "launch_url", type: "number", required: true } },
+      } : {}),
+    },
   });
   const { InMemoryAppOwnershipStore } = await import("../../../../core/domains/app-ownership/store.ts");
   const { InMemoryAppMintLeaseStore } = await import("../../../../core/domains/app-authorization/mint-leases.ts");
@@ -15041,10 +15049,16 @@ for (const { originalAuth, replacementAuth, originalIncludesAccount, revokeBefor
     mintedConnectionIds.push(args[1].map(entry => entry.connectionId));
     return await mint(...args);
   };
+  const retiredConnectionIds: string[][] = [];
   const controller = controllerWith(store, runner, {
     vault,
     appOwnership,
-    moduleVariableMaterializer: fixtureAuthorityBoundModuleVariableMaterializer(),
+    moduleVariableMaterializer: {
+      ...fixtureAuthorityBoundModuleVariableMaterializer(),
+      async retire({ resolvedProviderBindings }) {
+        retiredConnectionIds.push(resolvedProviderBindings.map(({ connection }) => connection.id));
+      },
+    },
   });
   const initialPlan = await controller.createCapsulePlan(seeded.capsule.id, actorContext);
   expect(initialPlan.planRun.status, JSON.stringify(initialPlan.planRun.diagnostics)).toBe("succeeded");
@@ -15060,7 +15074,15 @@ for (const { originalAuth, replacementAuth, originalIncludesAccount, revokeBefor
     planRunId: initialPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(initialPlan.planRun),
   }, actorContext);
-  expect(initialApply.applyRun.status).toBe("succeeded");
+  const appliedStatus = outputProjectionFailure ? "failed" : "succeeded";
+  expect(initialApply.applyRun.status).toBe(appliedStatus);
+  if (outputProjectionFailure) {
+    expect(initialApply.applyRun.executionEvidence?.outcome).toBe("committed");
+    expect(initialApply.applyRun.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "apply_output_projection_failed" }),
+    );
+    expect(initialApply.applyRun.outputId).toBeUndefined();
+  }
   expect(envOf(runner.applyJobs[0]!)).toMatchObject({
     CLOUDFLARE_API_TOKEN: originalToken,
   });
@@ -15114,7 +15136,7 @@ for (const { originalAuth, replacementAuth, originalIncludesAccount, revokeBefor
   expect(storedPlan.id).toBe(initialPlan.planRun.id);
   expect(storedPlan.status).toBe("succeeded");
   expect(storedPlan.resolvedProviderBindingsDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
-  expect(storedApply.status).toBe("succeeded");
+  expect(storedApply.status).toBe(appliedStatus);
   expect(storedApply.stateVersionId).toBe(storedState.id);
   expect(storedState).toMatchObject({
     capsuleId: seeded.capsule.id,
@@ -15159,6 +15181,20 @@ for (const { originalAuth, replacementAuth, originalIncludesAccount, revokeBefor
     store.listCredentialMintEventsForRun = readMintEvents;
     expect(withoutOwnershipEpoch.status).toBe(409);
     expect(dispatchCounts()).toEqual(dispatchBeforeReplacement);
+  }
+
+  if (outputProjectionFailure) {
+    const overrideRead = store.getApplyRun.bind(store);
+    store.getApplyRun = async (id) => {
+      const apply = await overrideRead(id);
+      return id === storedApply.id && apply ? { ...apply, executionEvidence: undefined } : apply;
+    };
+    try {
+      expect((await requestDestroyPlan(replacement.id)).status).toBe(409);
+      expect(dispatchCounts()).toEqual(dispatchBeforeReplacement);
+    } finally {
+      store.getApplyRun = overrideRead;
+    }
   }
 
   const response = await requestDestroyPlan(replacement.id);
@@ -15231,5 +15267,6 @@ for (const { originalAuth, replacementAuth, originalIncludesAccount, revokeBefor
     ownershipEpoch: ownership.ownershipEpoch,
   });
   expect(await store.getStateVersion(storedState.id)).toEqual(storedState);
+  if (outputProjectionFailure) expect(retiredConnectionIds).toEqual([[replacement.id]]);
   expect(await store.listCredentialMintEventsForRun(storedApply.id)).toEqual(audit);
 });

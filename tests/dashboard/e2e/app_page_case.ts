@@ -1850,7 +1850,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionReadbackDeadline", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionReadbackDeadline", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "scheduledUnavailable", "uninstallScheduledDuringReplacement", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionInventoryUnavailable: "an uninstall review holds old approval until checking replacement connections finishes",
@@ -1880,6 +1880,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       restoreOriginal: "a failed uninstall can restore its original connection and select it for a second binding",
       effectiveHealthyOptional: "a prior effective key can keep a revoked original without forcing its replacement",
       unusedUnavailable: "uninstall replacement only asks for unavailable connections used by the applied plan",
+      scheduledUnavailable: "an owner can review uninstall with a replacement when scheduling is available",
+      uninstallScheduledDuringReplacement: "a newly scheduled uninstall stops a pending replacement review",
       unusedOnlyUnavailable: "ordinary uninstall proceeds when only an unused saved alias is unavailable",
       firstRemovalRefusal: "a refused first uninstall refreshes the app and offers a replacement connection",
       failedOpenReview: "a failed uninstall offers another connection inside its open review",
@@ -1944,7 +1946,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const effectiveHealthyOptional = scenario === "effectiveHealthyOptional";
       const restoreOriginal = scenario === "restoreOriginal";
       const effectiveRecovery = effectiveRequiredNoOption || effectiveRequiredWithOption || effectiveHealthyOptional || restoreOriginal;
-      const unusedUnavailable = scenario === "unusedUnavailable";
+      const scheduleDuringReplacement = scenario === "uninstallScheduledDuringReplacement";
+      const canScheduleUninstall = scenario === "scheduledUnavailable" || scheduleDuringReplacement;
+      let scheduleOnNextAppRead = false;
+      let reservationReadStarted = false;
+      let releaseReservationRead = () => {};
+      const reservationRead = scheduleDuringReplacement
+        ? new Promise<void>((resolve) => { releaseReservationRead = resolve; })
+        : Promise.resolve();
+      const unusedUnavailable = scenario === "unusedUnavailable" || canScheduleUninstall;
       const unusedOnlyUnavailable = scenario === "unusedOnlyUnavailable";
       const firstRemovalRefusal = scenario === "firstRemovalRefusal";
       const replacementAccountId = "a".repeat(32);
@@ -2104,7 +2114,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
                   ? { problems: [unusedConnectionProblem], state: "needs_attention", primaryAction: "fix_connection" }
                 : connectionRemoved ? { problems: [connectionProblem] } : {}),
               uninstall: {
-                mode: "none", impact: { usedBy: [] },
+                mode: canScheduleUninstall ? "scheduled" : "none", impact: { usedBy: [] },
+                ...(canScheduleUninstall ? { graceDays: 7 } : {}),
                 ...(unusedUnavailable ? { recoveryConnectionIds: ["conn_removed"] } : {}),
                 ...(unusedOnlyUnavailable ? { requiredConnectionIds: ["conn_removed"] } : {}),
               },
@@ -2370,6 +2381,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === base) return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
         if (path === `${base}/app`) {
+          if (scheduleOnNextAppRead) {
+            reservationReadStarted = true;
+            await reservationRead;
+            const app = view();
+            return route.fulfill({ json: { app: {
+              ...app, state: "uninstall_scheduled", status: "uninstalled", primaryAction: "cancel_uninstall",
+              uninstall: {
+                ...app.uninstall,
+                scheduled: { phase: "scheduled", requestedAt: now, deleteAfter, cancellable: true, blocked: false },
+              },
+            } } });
+          }
           if (stallAppPreflight) {
             appPreflightStarted = true;
             await appPreflightPending;
@@ -2693,11 +2716,29 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await openAppPane(page, "danger");
         await expect(problems.locator('[data-problem="connection_unavailable"]')).toHaveCount(2);
         const danger = page.getByTestId("app-uninstall");
+        if (canScheduleUninstall) {
+          await expect(danger.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
+        }
         await danger.getByRole("button", { name: "Choose connection for uninstall" }).click();
         const choices = danger.getByRole("combobox", { name: "Cloudflare" });
         await expect(choices).toHaveCount(1);
         await choices.selectOption("conn_saved");
+        scheduleOnNextAppRead = scheduleDuringReplacement;
         await danger.getByRole("button", { name: "Review removal" }).click();
+        if (scheduleDuringReplacement) {
+          try {
+            await expect.poll(() => reservationReadStarted).toBe(true);
+            expect(seenMutations).toEqual([]);
+          } finally {
+            releaseReservationRead();
+          }
+          await expect(problems).toContainText("Uninstall is scheduled.");
+          expect(replacementPlanBodies).toEqual([]);
+          expect(seenMutations).toEqual([]);
+          expect(errors).toEqual([]);
+          traffic.assertNoFailures();
+          return;
+        }
         await expect(page.getByTestId("app-review").getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
         expect(replacementPlanBodies).toEqual([{
           destroyProviderConnectionReplacements: [{ connectionId: "conn_removed", replacementConnectionId: "conn_saved" }],
