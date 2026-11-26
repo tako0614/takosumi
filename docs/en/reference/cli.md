@@ -155,7 +155,7 @@ Preparing a manual Destroy Plan requires an Accounts PAT with `read` and `write`
 
 ### Resume an uninstall with a different Connection
 
-Register the new key as a verified Provider Connection for the same cloud account, then pass the original and replacement Connection IDs.
+Choose a verified Provider Connection for the original cloud account and pass the original and replacement Connection IDs. To use a new key, register and verify the connection first.
 Find the app's assignments on its management page or through `GET /api/v1/capsules/{app-id}/provider-bindings`.
 Use an Accounts PAT with `read` and `write` access to the app.
 
@@ -166,6 +166,7 @@ takosumi apps recover-uninstall cap_example \
 ```
 
 The server checks current ownership, the cloud account, and the applied connection settings before preparing a Destroy Plan.
+For Cloudflare, you can switch between an API token and OAuth for the same account when the server can preserve how credentials were supplied to the applied run. The selected connection needs permission to read and delete the app's resources.
 To restore the original Connection for a binding that used a replacement during a partial Destroy, pass the original ID in both `connectionId` and `replacementConnectionId`.
 The server checks the current app owner's verified selection against the saved partial Destroy record.
 When a `refused` result includes `connectionRecoveryFailure`, verify the replacement connection for `replacement_unverified`,

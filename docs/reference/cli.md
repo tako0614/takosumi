@@ -151,7 +151,7 @@ takosumi apps recover-uninstall cap_example --prepare \
 
 ### 別の接続でアンインストールを再開する
 
-別キーを同じクラウドアカウントの確認済みProvider Connectionとして登録した後、元の接続IDと代替の接続IDを指定します。
+元と同じクラウドアカウントの確認済みProvider Connectionを選び、元の接続IDと代替の接続IDを指定します。新しいキーを使う場合は、先に接続を登録して確認します。
 アプリの割当は管理画面または `GET /api/v1/capsules/{app-id}/provider-bindings` で確認できます。
 この操作には対象アプリを管理できるAccounts PATの `read` と `write` が必要です。
 
@@ -162,6 +162,7 @@ takosumi apps recover-uninstall cap_example \
 ```
 
 サーバーが現在の所有者、クラウドアカウント、適用済みの接続設定を照合し、削除Planを準備します。
+Cloudflareでは、適用時の資格の渡し方を維持できる場合、同じアカウントのAPIトークン接続とOAuth接続を相互に差し替えられます。選んだ接続には、対象リソースの読取りと削除に必要な権限が必要です。
 部分削除で代替した割当を元の接続に戻す場合は、`connectionId` と `replacementConnectionId` に同じ元のIDを指定します。
 現在のアプリ所有者が選んだ確認済み接続を、サーバーが保存済みの部分削除の記録と照合します。
 `refused` に `connectionRecoveryFailure` がある場合、`replacement_unverified` なら代替接続を確認し、
