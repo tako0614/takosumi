@@ -215,7 +215,7 @@ test("cold dashboard bootstrap authenticates the RP once and only reads the sess
   });
   const health = jest.fn(rpc.fetchSharedAuth);
   const env = configured({ ...rpc, authenticateSharedAuth: authenticate, fetchSharedAuth: health }) as CloudflareWorkerEnv;
-  const operations = jest.fn(async () => ({}) as ControlPlaneOperations);
+  const operations = jest.fn(async () => { throw new Error("fixture Control resolver unavailable"); });
   const deps = { store: new InMemoryAccountsStore(), resolveOperations: operations };
   const call = (path = dashboardSessionPath, init?: RequestInit) => handlePlatformSharedDashboardSessionRequest(request(path, init), env, deps);
 
@@ -223,16 +223,18 @@ test("cold dashboard bootstrap authenticates the RP once and only reads the sess
   expect(success.status).toBe(200);
   expect(success.headers.get("cache-control")).toBe("no-store");
   expect(success.headers.get(dashboardProof)).toBe("1");
+  expect(success.headers.get("server-timing")).toMatch(/^tk_dashboard;dur=\d+\.\d, tk_control_auth;dur=\d+\.\d$/u);
   expect(await success.json()).toEqual({ session: { subject: "tsub_canonical" } });
   expect(authenticate).toHaveBeenCalledTimes(1);
   expect(health).not.toHaveBeenCalled();
-  expect(operations).toHaveBeenCalledTimes(1);
+  expect(operations).not.toHaveBeenCalled();
 
   for (const [next, status] of [["unauthenticated", 401], ["unavailable", 503]] as const) {
     identity = { kind: next };
     const denied = await call();
     expect(denied.status).toBe(status);
     expect(denied.headers.get(dashboardProof)).toBe("1");
+    expect(denied.headers.get("server-timing")).toBeNull();
     expect(await denied.json()).toEqual(next === "unauthenticated"
       ? { error: "unauthenticated" }
       : { error: { code: "oidc_unavailable" } });
@@ -243,12 +245,29 @@ test("cold dashboard bootstrap authenticates the RP once and only reads the sess
   }) as CloudflareWorkerEnv;
   const failure = await handlePlatformSharedDashboardSessionRequest(request(dashboardSessionPath), brokenBinding, deps);
   expect(failure.status).toBe(503);
+  expect(failure.headers.get("server-timing")).toBeNull();
   expect(await failure.json()).toEqual({ error: "authentication_unavailable" });
   expect((await call(dashboardSessionPath, { method: "POST" })).status).toBe(405);
   expect((await call(dashboardSessionPath + "?includeNotifications=true")).status).toBe(400);
   expect((await call(dashboardSessionPath, { headers: { authorization: "Bearer fixture" } })).status).toBe(401);
   expect(authenticate).toHaveBeenCalledTimes(3);
-  expect(operations).toHaveBeenCalledTimes(1);
+  expect(operations).not.toHaveBeenCalled();
+
+  identity = { kind: "authenticated", accountId: "tsub_canonical" };
+  for (const path of [
+    "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    "/api/v1/dashboard/bootstrap?includeWorkspaces=false&includeNotifications=true",
+    "/api/v1/apps",
+  ]) {
+    const ordinary = await handlePlatformSharedAuthControlRequest(
+      request(path, { headers: { cookie, [dashboardProof]: "1" } }), env, deps,
+    );
+    expect(ordinary?.status, path).toBe(503);
+    expect(ordinary?.headers.get("server-timing"), path).toContain("tk_control_init");
+    expect(ordinary?.headers.get("server-timing"), path).not.toContain("tk_control_auth");
+    expect(ordinary?.headers.get(dashboardProof), path).toBeNull();
+  }
+  expect(operations).toHaveBeenCalledTimes(1); // The existing failed-initializer cooldown is shared by these reads.
 });
 
 test("only the initial Dashboard session can await a valid RP result after five seconds", async () => {
@@ -280,7 +299,7 @@ test("only the initial Dashboard session can await a valid RP result after five 
     const response = await cold;
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ session: { subject: "tsub_canonical" } });
-    expect(resolveOperations).toHaveBeenCalledTimes(1);
+    expect(resolveOperations).not.toHaveBeenCalled();
   } finally {
     ready.resolve({ kind: "unauthenticated" });
     jest.useRealTimers();

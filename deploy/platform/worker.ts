@@ -89,6 +89,7 @@ import {
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
+  appendServerTiming,
   measureServerTiming,
   type ServerTimingBucket,
 } from "../../accounts/service/src/server-timing.ts";
@@ -2225,6 +2226,7 @@ export async function handlePlatformSharedAuthControlRequest(
   const initialDashboardSession = dependencies.initialDashboardSession &&
     request.method === "GET" && url.pathname === "/api/v1/dashboard/bootstrap" &&
     url.search === "?includeWorkspaces=false";
+  const initialSessionTimings: ServerTimingBucket = initialDashboardSession ? [] : undefined;
   const runRead = isRunGetReadRequest(request);
   const diagnostics = runRead
     ? sharedRunGetPhaseDiagnostics(env).forRequest(request)
@@ -2294,11 +2296,13 @@ export async function handlePlatformSharedAuthControlRequest(
       });
     }
     if (initialDashboardSession && request.signal.aborted) return sharedAuthUnavailableResponse();
-    const identity = await measureRequestPhaseOperation(
-      diagnostics,
-      "control_auth",
-      () => authenticateSharedAuthRequest(request, env, undefined,
-        initialDashboardSession ? { initialDashboardSession: true } : undefined),
+    const identity = await measureServerTiming(initialSessionTimings, "tk_control_auth", () =>
+      measureRequestPhaseOperation(
+        diagnostics,
+        "control_auth",
+        () => authenticateSharedAuthRequest(request, env, undefined,
+          initialDashboardSession ? { initialDashboardSession: true } : undefined),
+      ),
     );
     assertActive?.();
     if (initialDashboardSession && request.signal.aborted) return sharedAuthUnavailableResponse();
@@ -2337,6 +2341,7 @@ export async function handlePlatformSharedAuthControlRequest(
       credential: "session",
       requireCurrentMembership: true,
       entry: "shared_auth",
+      ...(initialDashboardSession ? { initialDashboardSession: true } : {}),
       ...controlOptions(),
       reauthorizeBearer: async () => {
         const current = await authenticateSharedAuthRequest(request, env);
@@ -2350,7 +2355,8 @@ export async function handlePlatformSharedAuthControlRequest(
     const responseHeaders = new Headers(response.headers);
     responseHeaders.set("cache-control", "no-store");
     if (requiresSharedAuthRead(request, url)) responseHeaders.set(SHARED_AUTH_READ_HEADER, "1");
-    return new Response(response.body, { status: response.status, headers: responseHeaders });
+    const result = new Response(response.body, { status: response.status, headers: responseHeaders });
+    return result.ok ? appendServerTiming(result, initialSessionTimings) : result;
   };
   return runRead
     ? await runGetWithinDeadline((assertActive, wait) => handle(assertActive, wait))
