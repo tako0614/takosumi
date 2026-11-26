@@ -788,38 +788,43 @@ function Inner(props: { readonly session: SessionRecord }) {
     clearWorkspaceProjectionCaches(r.workspaceId);
   });
 
-  // Primary: subscribe to run status over SSE (real-time push, no client poll).
+  // Primary: subscribe after the first read establishes a current, live Run.
   // The 3s poll below stays as a fallback for when the stream can't connect.
   const [sseActive, setSseActive] = createSignal(false);
+  const activeRunStreamScope = createMemo(() => {
+    const current = runLatest();
+    return current && !isTerminalRunStatus(current.status) ? readScope() : undefined;
+  });
   createEffect(() => {
-    const id = runId();
-    if (!id) return;
-    let disposed = false;
-    const close = openRunStream(id, {
+    const scope = activeRunStreamScope();
+    if (!scope) return;
+    const { isCurrent } = readOptions(scope);
+    let closed = false;
+    const stopStream = () => {
+      if (closed) return;
+      closed = true;
+      setSseActive(false);
+      close();
+    };
+    const close = openRunStream(scope.id, {
       onOpen: () => {
-        if (!disposed) setSseActive(true);
+        if (!closed && isCurrent()) setSseActive(true);
       },
       onRun: (r) => {
-        if (disposed) return;
+        if (closed || !isCurrent() || r.id !== scope.id) return;
         mutateRun(r);
         // `mutate` does not clear a failed read's error, and the last-good
         // accessor ignores the value while it stands: re-read once so the
         // pushed status shows instead of freezing until the run ends.
         if (run.error) void refetchRun();
         void refetchLogs();
-        if (isTerminalRunStatus(r.status)) {
-          disposed = true;
-          setSseActive(false);
-          close();
-        }
+        if (isTerminalRunStatus(r.status)) stopStream();
       },
-      onError: () => setSseActive(false),
+      onError: () => {
+        if (!closed && isCurrent()) setSseActive(false);
+      },
     });
-    onCleanup(() => {
-      disposed = true;
-      setSseActive(false);
-      close();
-    });
+    onCleanup(stopStream);
   });
 
   // Fallback poll while the run is non-terminal and the SSE stream is not
