@@ -25,7 +25,7 @@ import {
 import { installAttemptHref, uninstallConnectionsHref } from "../../lib/app-links.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
 import { appUninstallBanner, appUninstallConnectionNotice, appUninstallExportNote, appUninstallFailure, appUninstallRecoveryMode } from "../../lib/capsule-uninstall.ts";
-import { runFailureHint, runMutationOutcomeUnknown } from "../../lib/run-errors.ts";
+import { runApplyRequiresRecovery, runFailureHint, runMutationOutcomeUnknown } from "../../lib/run-errors.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
@@ -234,7 +234,7 @@ export default function AppAttentionSection(props: {
   const actionButton = (problem: CapsuleAppProblem) => {
     const action = PROBLEM_ACTION[problem.code];
     if (!action || isPrimary(problem, action) ||
-      (action === "retry" && (outcomeUnknown() || runMutationOutcomeUnknown(problem))) ||
+      (action === "retry" && (runApplyRequiresRecovery(app().latestRun) || runApplyRequiresRecovery(problem))) ||
       (props.canUninstall === false && (isAppRemovalRun(problem.runType) || problem.code === "uninstall_failed"))) return null;
     switch (action) {
       case "review_interface_link":

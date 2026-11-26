@@ -235,6 +235,18 @@ test("members cannot open any uninstall action disguised as retry or review", ()
   expect(appPrimaryAllowed("member", { primaryAction: "retry", problems: [{ severity: "error", code: "run_failed", runType: "plan" }], progress: {} } as unknown as CapsuleAppView)).toBe(true);
 });
 
+test("only an owner can review uninstall after an output projection failure", () => {
+  const app = {
+    primaryAction: "uninstall_now",
+    problems: [],
+    progress: {},
+    latestRun: { status: "failed", errorCode: "apply_output_projection_failed" },
+  } as unknown as CapsuleAppView;
+  expect(appPrimaryAllowed("owner", app)).toBe(true);
+  expect(appPrimaryAllowed("member", app)).toBe(false);
+  expect(appPrimaryAllowed("owner", { ...app, primaryAction: "retry" })).toBe(false);
+});
+
 test("app detail accepts capsule authority without a legacy workspace", async () => {
   const capsule = { id: "a", name: "app", slug: "app", installConfigId: "ic", environment: "production", currentStateGeneration: 0, status: "pending", createdAt: "2026-10-28T00:00:00Z", updatedAt: "2026-10-28T00:00:00Z" };
   stub(() => Response.json({ capsule, installConfigReAdoption: { authorityGuard: "guard" } }));

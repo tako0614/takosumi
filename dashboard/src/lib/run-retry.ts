@@ -37,7 +37,7 @@ import {
   type RevisionPlanAttemptScope,
   type RevisionPlanAttemptStore,
 } from "./revision-plan-attempt.ts";
-import { runMutationOutcomeUnknown } from "./run-errors.ts";
+import { runFailureHint, runApplyRequiresRecovery } from "./run-errors.ts";
 import { t } from "../i18n/index.ts";
 
 /** The change "try again" plans for a failed run. */
@@ -99,8 +99,8 @@ export function retryChangeForRun(input: {
   if (!run.capsuleId || capsule.id !== run.capsuleId || capsule.workspaceId !== run.workspaceId) {
     throw new ControlApiError(409, "retry_plan_identity_mismatch", t("controlError.sourceRevisionMismatch"));
   }
-  if (runMutationOutcomeUnknown(run)) {
-    throw new ControlApiError(409, "runner_mutation_indeterminate", t("runError.mutationIndeterminate"));
+  if (runApplyRequiresRecovery(run)) {
+    throw new ControlApiError(409, run.errorCode, runFailureHint(run.errorCode));
   }
   if (isRemoval(run.type)) return { kind: "removal" };
   const initialReport = initialPlanRetryReport(run, capsule);
