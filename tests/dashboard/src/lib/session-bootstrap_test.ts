@@ -4,6 +4,7 @@ import {
   clearSession,
   initialSessionOptions,
   onSessionStateChange,
+  readSharedAccountProfile,
   readSession,
   readSessionState,
   refreshSession,
@@ -22,6 +23,7 @@ const realFetch = globalThis.fetch;
 const workspaceBootstrapPath =
   "/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=50";
 const hostedSessionPath = "/auth/oidc/session";
+const profilePath = "/api/v1/account/session/me?include=profile";
 const absenceHeader = "x-takosumi-shared-auth-absent";
 
 afterEach(() => {
@@ -70,6 +72,43 @@ describe("dashboard session bootstrap", () => {
       session: { subject: "tsub_canonical" },
     });
     expect(calls).toEqual([hostedSessionPath, workspaceBootstrapPath]);
+  });
+
+  test("shared profile discovery is explicit and ignores a delayed previous account", async () => {
+    const calls: string[] = [];
+    const oldProfile = Promise.withResolvers<Response>();
+    let subject = "tsub_first";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === hostedSessionPath) return Response.json({ authenticated: true });
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return Response.json({ session: { subject } });
+      }
+      if (path === profilePath) {
+        expect(init?.credentials).toBe("include");
+        expect(init?.method).toBe("GET");
+        expect(init?.cache).toBe("no-store");
+        expect(init?.redirect).toBe("error");
+        return subject === "tsub_first" ? oldProfile.promise : Response.json({
+          subject, displayName: "Current person", email: "current@example.test",
+        });
+      }
+      return Response.json({ session: null });
+    }) as typeof fetch;
+
+    expect(await refreshSession(initialSessionOptions)).toMatchObject({ subject });
+    expect(calls).not.toContain(profilePath);
+    const previous = readSharedAccountProfile(subject);
+    expect(calls).toContain(profilePath);
+    subject = "tsub_second";
+    expect(await refreshSession(initialSessionOptions)).toMatchObject({ subject });
+    oldProfile.resolve(Response.json({ subject: "tsub_first", email: "old@example.test" }));
+    expect(await previous).toBeUndefined();
+    expect(await readSharedAccountProfile(subject)).toEqual({
+      displayName: "Current person", email: "current@example.test",
+    });
+    expect(readSession()?.email).toBeUndefined();
   });
 
   test("the guarded shell authenticates without reading the legacy Workspace list", async () => {
