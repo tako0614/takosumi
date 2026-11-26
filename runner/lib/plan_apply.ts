@@ -89,6 +89,7 @@ import {
   parseProviderInstallationPolicy,
   parsePlanScopeSelectors,
   parseOutputAllowlist,
+  parseRequiredOutputNames,
   parsePlanArtifact,
   verifyPlanArtifact,
 } from "./parsing.ts";
@@ -282,6 +283,11 @@ export async function runDirectRootPlan(
   const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
   const outputAllowlist = parseOutputAllowlist(request);
+  const requiredOutputNames =
+    operation === "destroy" || refreshOnly ||
+      recordField(recordField(request, "planRun"), "driftCheck") === true
+      ? []
+      : parseRequiredOutputNames(request);
   const scopeSelectors = parsePlanScopeSelectors(request);
   const commandContext = commandContextFromRequest(
     request,
@@ -374,6 +380,7 @@ export async function runDirectRootPlan(
       providerScan,
       variableFilePath,
       ...(outputAllowlist ? { outputAllowlist } : {}),
+      ...(requiredOutputNames.length > 0 ? { requiredOutputNames } : {}),
       ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
       ...(parseProviderInstallationPolicy(request)
         ? {
@@ -516,7 +523,27 @@ export async function initPlanAndBuildResponse(
   if ("failure" in planJsonRead) {
     return planFailure(planJsonRead.failure);
   }
-  const planJson: string | undefined = planJsonRead.json;
+  const planJson = planJsonRead.json;
+  const missingOutput = firstMissingRequiredOutput(
+    planJson,
+    options.requiredOutputNames ?? [],
+  );
+  if (missingOutput !== undefined) {
+    return withPhaseTimings(
+      {
+        runId,
+        action: "plan",
+        status: "failed",
+        exitCode: 1,
+        errorCode: "required_output_not_declared",
+        stderr: redactRunnerOutput(
+          `Required output "${missingOutput}" is not declared in the selected OpenTofu module. Update the output mapping or select a compatible revision.`,
+          commandContext.redactionValues,
+        ),
+      },
+      timer,
+    );
+  }
 
   const finishSuccessfulPlanFinalization =
     options.successfulPlanTiming?.start("runner_plan_finalize");
@@ -621,6 +648,22 @@ export async function initPlanAndBuildResponse(
       ),
     ],
   };
+}
+
+function firstMissingRequiredOutput(
+  planJson: string,
+  requiredNames: readonly string[],
+): string | undefined {
+  if (requiredNames.length === 0) return undefined;
+  const plan: unknown = JSON.parse(planJson);
+  const version = stringField(plan, "format_version");
+  const root = recordField(recordField(plan, "configuration"), "root_module");
+  if (!version || !/^1\.\d+$/u.test(version) || !isRecord(root)) return undefined;
+  // OpenTofu omits the declaration map when the root has no outputs.
+  const outputs = root.outputs;
+  if (outputs === undefined) return requiredNames[0];
+  if (!isRecord(outputs)) return undefined;
+  return requiredNames.find((name) => !Object.hasOwn(outputs, name));
 }
 
 export function mergeBuildLog(

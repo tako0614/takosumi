@@ -12512,15 +12512,29 @@ test("capsule destroy: a D1 ledger-tail failure requeues the same ApplyRun witho
 });
 
 test("generic Capsule apply projects InstallConfig outputAllowlist outputs", async () => {
-  const { store, controller } = await seededController({
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({ requiredProviders: [] });
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    requiredProviders: [],
     installConfig: {
       outputAllowlist: {
         endpoint: { from: "public_url", type: "url", required: true },
+        optional: { from: "optional_url", type: "url" },
+        private: {
+          from: "admin_token",
+          type: "string",
+          required: true,
+          sensitive: true,
+        },
       },
     },
   });
+  const controller = controllerWith(store, runner);
 
   const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  expect(runner.planJobs[0]?.generatedRoot).toBeUndefined();
+  expect(runner.planJobs[0]?.requiredOutputNames).toEqual(["public_url"]);
   const { applyRun } = await controller.createApplyRun({
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
@@ -12534,6 +12548,12 @@ test("generic Capsule apply projects InstallConfig outputAllowlist outputs", asy
     public_url: "https://public.example",
   });
   expect(snapshot?.publicOutputs).not.toHaveProperty("admin_token");
+
+  await controller.createCapsuleDriftCheck("cap_fixture1");
+  await controller.createCapsuleDestroyPlan("cap_fixture1");
+  expect(runner.planJobs).toHaveLength(3);
+  expect(runner.planJobs[1]?.requiredOutputNames).toBeUndefined();
+  expect(runner.planJobs[2]?.requiredOutputNames).toBeUndefined();
 });
 
 test("generic Capsule captures ordinary root Outputs without publishing unallowlisted values", async () => {

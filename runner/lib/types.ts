@@ -257,6 +257,7 @@ export interface PlanResponseOptions {
       }
     >
   >;
+  readonly requiredOutputNames?: readonly string[];
   readonly providerInstallationPolicy?: {
     readonly requireMirror: boolean;
   };

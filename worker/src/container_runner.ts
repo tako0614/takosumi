@@ -1447,6 +1447,12 @@ function runnerExecutionErrorFromPayload(
       : errorCode;
     return new OpenTofuRunnerExecutionError(runnerFailureMessage(reason), { reason });
   }
+  if (action === "plan" && errorCode === "required_output_not_declared") {
+    return new OpenTofuRunnerExecutionError(runnerFailureMessage(errorCode), {
+      reason: errorCode,
+      detail: "A required output is not declared. Update the output mapping or select a compatible revision.",
+    });
+  }
   if (
     action === "source_sync" &&
     errorCode === SOURCE_REF_NOT_FOUND_REASON
