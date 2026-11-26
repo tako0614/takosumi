@@ -18,7 +18,6 @@ import { type AppState } from "../../lib/app-page.ts";
 import { homeAppOpens, homeAppWaiting } from "../../lib/home-launcher.ts";
 import { type MessageKey, t } from "../../i18n/index.ts";
 import { Button, Input, Toast } from "../../components/ui/index.ts";
-import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { appPageHref } from "../../lib/app-links.ts";
 import { screenOpenRoute } from "../../lib/open-choice-state.ts";
 import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
@@ -42,6 +41,11 @@ function Inner() {
     setVisible, screens, loadingMore, moreFailed, failedScreens, retryVisible, refresh, loadNext,
     searching, searchComplete } = createHomeLibrary();
   const titleId = createUniqueId();
+  const showSearch = createMemo((wasShown) => {
+    if (term()) return true;
+    if (home.loading || home.error) return wasShown;
+    return Boolean(firstPage() && (apps().length > 0 || cursor()));
+  }, false);
   let searchInput: HTMLInputElement | undefined;
   function clearSearch() { setQuery(""); searchInput?.focus(); }
 
@@ -49,10 +53,37 @@ function Inner() {
     <>
       <IncomingOwnershipTransfers appNames={names()} onChanged={refresh} />
       <div data-testid="home-apps">
+        <Show when={showSearch()}>
+          <div class="av-section-head">
+            <h1 id={titleId}>{t("apps.sectionYours")}</h1>
+            <Show when={firstPage() && !cursor()}>
+              <span class="av-section-head-count">{apps().length}</span>
+            </Show>
+          </div>
+          <div class="av-home-search" role="search" aria-label={t("apps.search")}>
+            <Search size={18} aria-hidden="true" />
+            <Input
+              ref={searchInput}
+              type="search"
+              maxLength={200}
+              aria-label={t("apps.search")}
+              placeholder={t("apps.search")}
+              value={query()}
+              onInput={(event) => setQuery(event.currentTarget.value)}
+              onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
+            />
+            <Show when={query() && !home.error}>
+              <button type="button" aria-label={t("apps.clearSearch")} onClick={clearSearch}>
+                <X size={18} aria-hidden="true" />
+              </button>
+            </Show>
+          </div>
+        </Show>
         <Switch>
           <Match when={home.loading && !firstPage()}><LauncherSkeleton /></Match>
           <Match when={home.error}>
-            <Toast tone="error">{fetchFailedMessage(home.error, t)}
+            <Toast tone="error">
+              {t("common.fetchFailedGeneric")}
               <Button variant="secondary" size="sm" type="button" onClick={() => void refresh()}>{t("common.retry")}</Button>
               <Show when={term()}>
                 <Button variant="secondary" size="sm" type="button" onClick={clearSearch}>{t("apps.clearSearch")}</Button>
@@ -61,30 +92,6 @@ function Inner() {
           </Match>
           <Match when={firstPage()}>
             <Show when={apps().length > 0 || cursor() || term()} fallback={<AppStartPanel />}>
-              <div class="av-section-head">
-                <h1 id={titleId}>{t("apps.sectionYours")}</h1>
-                <Show when={!cursor()}>
-                  <span class="av-section-head-count">{apps().length}</span>
-                </Show>
-              </div>
-              <div class="av-home-search" role="search" aria-label={t("apps.search")}>
-                <Search size={18} aria-hidden="true" />
-                <Input
-                  ref={searchInput}
-                  type="search"
-                  maxLength={200}
-                  aria-label={t("apps.search")}
-                  placeholder={t("apps.search")}
-                  value={query()}
-                  onInput={(event) => setQuery(event.currentTarget.value)}
-                  onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
-                />
-                <Show when={query()}>
-                  <button type="button" aria-label={t("apps.clearSearch")} onClick={clearSearch}>
-                    <X size={18} aria-hidden="true" />
-                  </button>
-                </Show>
-              </div>
               <Show when={firstPage()?.surfacesFailed || failedScreens()}>
                 <Toast tone="error">
                   {t("apps.listIncomplete")}
