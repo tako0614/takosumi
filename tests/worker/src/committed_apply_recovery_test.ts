@@ -5,6 +5,7 @@ import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import { OpenTofuController, RUN_HEARTBEAT_STALE_MS, applyExpectedGuardFromPlanRun, type OpenTofuApplyJob } from "../../../core/domains/deploy-control/mod.ts";
 import { RunEnvResolver } from "../../../core/domains/deploy-control/run_env_resolver.ts";
 import { RunCredentialBroker } from "../../../core/domains/deploy-control/run_credential_broker.ts";
+import { BillingService } from "../../../core/domains/deploy-control/billing_service.ts";
 import { createDefaultRunnerProfiles } from "../../../core/domains/deploy-control/runner_profiles.ts";
 import { InMemoryOpenTofuControlStore, planRunExecutionInputsDigestMaterial } from "../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
@@ -12,9 +13,18 @@ import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { seedCapsuleModel, FIXTURE_EXECUTION_EVIDENCE_AUTHORITY, fixtureExecutionEvidence } from "../../helpers/deploy-control/model_fixture.ts";
 
 const DIGEST = `sha256:${"a".repeat(64)}` as const;
-async function fixture(failure = false, afterWorkerUpdate = false) {
+async function fixture(failure = false, afterWorkerUpdate = false, missingOutput = false) {
   const store = new InMemoryOpenTofuControlStore();
-  const seeded = await seedCapsuleModel(store, { requiredProviders: [] });
+  const seeded = await seedCapsuleModel(store, {
+    requiredProviders: [],
+    ...(missingOutput ? {
+      installConfig: {
+        outputAllowlist: {
+          endpoint: { from: "missing_output", type: "url", required: true },
+        },
+      },
+    } : {}),
+  });
   const profile = createDefaultRunnerProfiles(1)[0]!;
   let calls = 0, reads = 0, inspections = 0;
   let phase = "completed", status = "valid", malformed = false;
@@ -124,6 +134,59 @@ test("RunOwner settles a completed Apply from its admitted artifacts across a Wo
   } finally {
     mint.mockRestore();
     apply.mockRestore();
+  }
+});
+
+test("RunOwner records output projection failure from a confirmed Apply receipt without redispatch", async () => {
+  const f = await fixture(false, true, true);
+  const mint = spyOn(RunCredentialBroker.prototype, "mintRunCredentials");
+  const apply = spyOn(f.runner, "apply");
+  const finishedAt = new Date(f.run.startedAt + 600).toISOString();
+  f.setMutate((value) => {
+    value.executionEvidence = {
+      ...fixtureExecutionEvidence(f.job, "apply"),
+      committedAt: finishedAt,
+    };
+  });
+  const release = spyOn(BillingService.prototype, "releaseApplyBilling")
+    .mockImplementation(async () => {
+      expect((await f.store.getApplyRun(f.run.id))?.status).toBe("failed");
+      expect((await f.store.getPlanRun(f.run.planRunId))?.appliedApplyRunId).toBe(f.run.id);
+    });
+  const rating = spyOn(BillingService.prototype, "rateUsageMeasurement");
+  try {
+    await f.dispatch();
+    const failed = await f.store.getApplyRun(f.run.id);
+    expect(failed).toMatchObject({ id: f.run.id, status: "failed" });
+    expect(failed?.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "apply_output_projection_failed" }),
+    );
+    expect(failed?.auditEvents.find(({ type }) => type === "apply.failed")?.data)
+      .toMatchObject({ providerDispatched: true, providerApplySucceeded: true });
+    expect(await f.store.getCapsule(f.run.capsuleId!)).toMatchObject({
+      status: "error",
+      currentStateGeneration: 0,
+    });
+    expect((await f.store.getPlanRun(f.run.planRunId))?.appliedApplyRunId).toBe(f.run.id);
+    expect(failed?.stateVersionId).toBeUndefined();
+    expect(failed?.outputId).toBeUndefined();
+    expect(f.counts()).toEqual({ calls: 0, reads: 1, inspections: 1 });
+    await f.dispatch();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(rating).toHaveBeenCalledTimes(1);
+    expect(rating).toHaveBeenCalledWith(expect.objectContaining({
+      runId: f.run.id,
+      kind: "runner_minute",
+      quantity: 600 / 60_000,
+      createdAt: finishedAt,
+    }));
+    expect(mint).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+  } finally {
+    mint.mockRestore();
+    apply.mockRestore();
+    release.mockRestore();
+    rating.mockRestore();
   }
 });
 

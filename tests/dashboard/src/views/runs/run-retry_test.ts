@@ -226,6 +226,15 @@ describe("retryPlanForRun", () => {
     },
   );
 
+  test("an Apply with unpublished outputs requires state recovery before retry", async () => {
+    const { api, calls } = recorder();
+    const failure = run({ type: "apply", errorCode: "apply_output_projection_failed" });
+    await expect(retryPlanForRun(failure, capsule(), api)).rejects.toMatchObject({
+      code: "apply_output_projection_failed",
+    });
+    expect(calls).toEqual([]);
+  });
+
   test("a failed removal is retried as a removal", async () => {
     for (const type of ["destroy_plan", "destroy_apply"] as const) {
       const { api, calls } = recorder();

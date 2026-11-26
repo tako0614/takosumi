@@ -188,6 +188,7 @@ import {
 } from "../plan_resolution.ts";
 import { evaluatePolicy } from "../policy.ts";
 import {
+  ApplyOutputProjectionError,
   errorDiagnostic,
   errorMessage,
   normalizePlanArtifact,
@@ -8641,6 +8642,7 @@ export class RunEngine {
     providerDispatched = false,
     lifecycleActionDispatched = false,
     lifecycleOutcome?: LifecycleActionOutcome,
+    providerApplySucceeded = false,
   ): ApplyRun {
     const now = this.#now();
     const refusal = scheduledUninstallRefusal(error);
@@ -8679,6 +8681,7 @@ export class RunEngine {
         auditEvent(running.id, eventType, now, {
           message: errorMessage(error),
           providerDispatched,
+          ...(providerApplySucceeded ? { providerApplySucceeded: true } : {}),
           ...(lifecycleActionDispatched
             ? { lifecycleActionDispatched: true }
             : {}),
@@ -8742,14 +8745,19 @@ export class RunEngine {
     providerDispatched = false,
     lifecycleActionDispatched = false,
     lifecycleOutcome?: LifecycleActionOutcome,
-    initialCreate?: { readonly planRun: PlanRun; readonly plannedCapsule: Capsule | undefined },
+    applyContext?: {
+      readonly planRun: PlanRun;
+      readonly plannedCapsule: Capsule | undefined;
+      readonly verifiedOutputProjectionFailure?: RunExecutionEvidence;
+    },
   ): Promise<ApplyRun> {
     const failed = this.#failedApplyRunCandidate(
       running, profile.stateBackend, startedAt, eventType, error,
       providerDispatched, lifecycleActionDispatched, lifecycleOutcome,
+      Boolean(applyContext?.verifiedOutputProjectionFailure),
     );
-    const initialFailure = await this.#persistIndeterminateInitialCreateFailure({
-      failed, leaseToken, error, providerDispatched, initialCreate,
+    const initialFailure = await this.#persistInitialCreateRecoveryFailure({
+      failed, leaseToken, error, providerDispatched, applyContext,
     });
     const persisted = initialFailure ?? await this.#persistTerminalRun(
       "apply", failed, leaseToken,
@@ -8757,22 +8765,51 @@ export class RunEngine {
     if (initialFailure?.won) await this.#afterTerminalRunWon("apply", failed);
     if (!persisted.won) return persisted.run;
     await this.#recordApplyFailure(failed, startedAt, eventType, error);
+    const receipt = applyContext?.verifiedOutputProjectionFailure;
+    if (receipt) {
+      // The Run-lease winner owns the reservation and original execution time.
+      try {
+        await this.#billing.releaseApplyBilling(applyContext.planRun);
+        const finishedAt = Date.parse(receipt.committedAt);
+        if (running.startedAt !== undefined && finishedAt > running.startedAt &&
+          finishedAt <= failed.finishedAt!) {
+          await this.#recordRunnerMinuteUsage({
+            workspaceId: failed.workspaceId,
+            runId: failed.id,
+            capsuleId: failed.capsuleId,
+            startedAt: running.startedAt,
+            finishedAt,
+          });
+        }
+      } catch (error) {
+        log.warn("deploy_control.output_projection_failure_finalization_failed", {
+          applyRunId: failed.id,
+          message: errorMessage(error),
+        });
+      }
+    }
     return failed;
   }
 
-  /** Keep an initial unknown mutation recoverable without asserting an outcome. */
-  async #persistIndeterminateInitialCreateFailure(input: {
+  /** Keep a failed initial mutation eligible for verified state-only recovery. */
+  async #persistInitialCreateRecoveryFailure(input: {
     readonly failed: ApplyRun;
     readonly leaseToken: string;
     readonly error: unknown;
     readonly providerDispatched: boolean;
-    readonly initialCreate: { readonly planRun: PlanRun; readonly plannedCapsule: Capsule | undefined } | undefined;
+    readonly applyContext: {
+      readonly planRun: PlanRun;
+      readonly plannedCapsule: Capsule | undefined;
+      readonly verifiedOutputProjectionFailure?: RunExecutionEvidence;
+    } | undefined;
   }): Promise<TerminalRunPersistResult<ApplyRun> | undefined> {
-    const { failed, error, initialCreate } = input;
-    const plan = initialCreate?.planRun;
-    const planned = initialCreate?.plannedCapsule;
-    if (!input.providerDispatched || !(error instanceof OpenTofuRunnerExecutionError) ||
-      error.reason !== "runner_mutation_indeterminate" ||
+    const { failed, error, applyContext } = input;
+    const plan = applyContext?.planRun;
+    const planned = applyContext?.plannedCapsule;
+    const indeterminate = error instanceof OpenTofuRunnerExecutionError &&
+      error.reason === "runner_mutation_indeterminate";
+    if (!input.providerDispatched ||
+      (!indeterminate && !applyContext?.verifiedOutputProjectionFailure) ||
       !plan || !planned || plan.operation !== "create" || failed.operation !== "create" ||
       plan.baseStateGeneration !== 0 || plan.capsuleCurrentStateVersionId != null ||
       planned.status !== "pending" || planned.currentStateGeneration !== 0 ||
@@ -10046,6 +10083,7 @@ export class RunEngine {
     const leaseToken = claim.leaseToken;
     let runningForFailure = running;
     let runnerDispatched = false;
+    let providerCommit: RunExecutionEvidence | undefined;
     let ledgerCommitted = false;
     let plannedCapsule: Capsule | undefined;
 
@@ -10215,15 +10253,15 @@ export class RunEngine {
           now,
         });
       }
-      const projected = await this.#projectAndRecordApplyOutputs({
-        planRun,
-        applyRun,
-        plannedCapsule,
+      const executionEvidence = this.#requireExecutionEvidence({
         result,
-        envDispatch,
-        dispatch,
-        now,
-        executionEvidenceCommit,
+        applyRun: runningWithEnv,
+        planRun,
+        profile,
+        action: "apply",
+        outcome: "committed",
+        commit: executionEvidenceCommit,
+        admittedExecutionAuthority: recovered?.executionEvidenceAuthority,
       });
       const stateVersion = await this.#buildStateVersion({
         envDispatch,
@@ -10238,20 +10276,29 @@ export class RunEngine {
           "apply completed without a durable Capsule state scope",
         );
       }
+      providerCommit = executionEvidence;
+      const projected = await this.#projectAndRecordApplyOutputs({
+        planRun,
+        applyRun,
+        plannedCapsule,
+        result,
+        envDispatch,
+        dispatch,
+        now,
+        executionEvidenceCommit,
+      });
       // Build the terminal ApplyRun + apply-once PlanRun marker before the
       // atomic Run + StateVersion + Output commit.
       const providerApplied = this.#buildCompletedApplyRun({
         running: runningWithEnv,
         applyRun,
-        planRun,
         profile,
         capsule: projected.capsule,
         stateVersionId: stateVersion.id,
         outputId: projected.output.id,
         outputCount: Object.keys(projected.output.publicOutputs).length,
         result,
-        executionEvidenceCommit,
-        admittedExecutionAuthority: recovered?.executionEvidenceAuthority,
+        executionEvidence,
         providerInstallationPolicy,
         startedAt,
         now,
@@ -10363,7 +10410,10 @@ export class RunEngine {
           ...(currentCapsule ? { capsule: currentCapsule } : {}),
         };
       }
-      if (recovered) {
+      const verifiedOutputProjectionFailure = error instanceof ApplyOutputProjectionError
+        ? providerCommit
+        : undefined;
+      if (recovered && !verifiedOutputProjectionFailure) {
         // No observation failure is a new provider outcome. An ACK-lost commit
         // returns its durable winner; otherwise retain the current claimed Run.
         return await this.getApplyRun(applyRun.id);
@@ -10490,7 +10540,7 @@ export class RunEngine {
           throw retryError;
         }
       }
-      await this.#billing.releaseApplyBilling(planRun);
+      if (!verifiedOutputProjectionFailure) await this.#billing.releaseApplyBilling(planRun);
       const failed = await this.#failApplyRun(
         runEnvironmentFailedRun(runningForFailure, error),
         leaseToken,
@@ -10498,13 +10548,14 @@ export class RunEngine {
         startedAt,
         "apply.failed",
         error,
-        runnerDispatched,
+        runnerDispatched || verifiedOutputProjectionFailure !== undefined,
         false,
         undefined,
-        { planRun, plannedCapsule },
+        { planRun, plannedCapsule, ...(verifiedOutputProjectionFailure ? { verifiedOutputProjectionFailure } : {}) },
       );
       if (
         runnerDispatched &&
+        !verifiedOutputProjectionFailure &&
         !isPreProviderRunnerRefusal(error) &&
         failed.finishedAt !== undefined
       ) {
@@ -12055,15 +12106,13 @@ export class RunEngine {
   #buildCompletedApplyRun(input: {
     readonly running: ApplyRun;
     readonly applyRun: ApplyRun;
-    readonly planRun: PlanRun;
     readonly profile: RunnerProfile;
     readonly capsule: Capsule;
     readonly stateVersionId: string;
     readonly outputId: string;
     readonly outputCount: number;
     readonly result: OpenTofuApplyResult;
-    readonly executionEvidenceCommit: RunExecutionCommit;
-    readonly admittedExecutionAuthority?: PreparedApplyReceiptDispatch["executionEvidenceAuthority"] | undefined;
+    readonly executionEvidence: RunExecutionEvidence;
     readonly providerInstallationPolicy: { requireMirror: boolean } | undefined;
     readonly startedAt: number;
     readonly now: number;
@@ -12077,16 +12126,7 @@ export class RunEngine {
       capsuleId: capsule.id,
       stateVersionId,
       outputId,
-      executionEvidence: this.#requireExecutionEvidence({
-        result,
-        applyRun: running,
-        planRun: input.planRun,
-        profile,
-        action: "apply",
-        outcome: "committed",
-        commit: input.executionEvidenceCommit,
-        admittedExecutionAuthority: input.admittedExecutionAuthority,
-      }),
+      executionEvidence: input.executionEvidence,
       status: "succeeded",
       stateLock:
         result.stateLock ??

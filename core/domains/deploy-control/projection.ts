@@ -45,6 +45,12 @@ export const WORKSPACE_OUTPUT_PROJECTION_LIMITS = {
   maxTotalBytes: 256 * 1024,
 } as const;
 
+export class ApplyOutputProjectionError extends OpenTofuControllerError {
+  constructor(message: string) {
+    super("failed_precondition", message, { reason: "apply_output_projection_failed" });
+  }
+}
+
 export function projectOutputAllowlistPublicOutputs(
   outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>,
   outputs: OpenTofuOutputEnvelope | undefined,
@@ -63,8 +69,7 @@ export function projectOutputAllowlistPublicOutputs(
       !isPublishableOutputValue(spec.from, kind, value)
     ) {
       if (spec.required) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
+        throw new ApplyOutputProjectionError(
           `required output ${spec.from} cannot be published as ${publicName}`,
         );
       }
@@ -95,8 +100,7 @@ export function projectOutputAllowlistSpaceOutputs(
     const entry = byName.get(spec.from);
     if (!entry) {
       if (spec.required) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
+        throw new ApplyOutputProjectionError(
           `required output ${spec.from} is missing for projection ${projectedName}`,
         );
       }
@@ -104,8 +108,7 @@ export function projectOutputAllowlistSpaceOutputs(
     }
     if (entry.sensitive) {
       if (spec.required) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
+        throw new ApplyOutputProjectionError(
           `required output ${spec.from} is sensitive and cannot be projected as ${projectedName}`,
         );
       }
@@ -115,8 +118,7 @@ export function projectOutputAllowlistSpaceOutputs(
       continue;
     }
     if (!outputValueMatchesType(entry.value, spec.type)) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
+      throw new ApplyOutputProjectionError(
         `output ${spec.from} does not match declared projection type ${spec.type} (actual ${describeJsonValueType(entry.value)})`,
       );
     }
@@ -130,8 +132,7 @@ export function projectOutputAllowlistSpaceOutputs(
         WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxTotalBytes
     ) {
       if (spec.required) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
+        throw new ApplyOutputProjectionError(
           `required output ${spec.from} exceeds the Workspace Output projection limits`,
         );
       }
