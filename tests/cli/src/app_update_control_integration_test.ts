@@ -841,7 +841,7 @@ test("a competing CLI update reads the Plan completed by another reconciler with
   }
 });
 
-test("apps update resumes only the exact saved revision coordinator after a lost reconcile ACK", async () => {
+test.each(["preparing", "reviewable"] as const)("apps update reads the exact saved %s revision after a lost reconcile ACK", async lossAt => {
   const h = await fixture();
   const originalFetch = globalThis.fetch;
   const created = await h.dispatch(new Request(`${ORIGIN}/api/v1/capsules/${h.appId}/revision-plans`, {
@@ -865,16 +865,19 @@ test("apps update resumes only the exact saved revision coordinator after a lost
     ...h.pat, tokenId: "pat_cli_revision_read_only", scopes: ["read"],
   });
   const requests: Request[] = [];
-  let loseFirstReconcileAck = true;
+  let loseReconcileAck = true;
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init);
     requests.push(request.clone());
     const response = await h.dispatch(request);
     const path = new URL(request.url).pathname;
-    if (loseFirstReconcileAck && request.method === "POST" &&
+    if (loseReconcileAck && request.method === "POST" &&
       path === `/api/v1/revision-plans/${saved.id}/reconcile` && response.ok) {
-      loseFirstReconcileAck = false;
-      throw new Error("synthetic lost reconcile ACK after persisted Core progress");
+      const { nextAction } = await response.clone().json();
+      if (lossAt === "preparing" || nextAction === "review_run") {
+        loseReconcileAck = false;
+        throw new TypeError("synthetic lost reconcile ACK after persisted Core progress");
+      }
     }
     return response;
   }) as typeof fetch;
@@ -916,25 +919,33 @@ test("apps update resumes only the exact saved revision coordinator after a lost
     output.length = 0;
     requests.length = 0;
     const beforeResume = { ...h.runnerCalls };
-    expect(await main(update(h.appId), io)).toBe(1);
-    expect(JSON.parse(output[0]!)).toMatchObject({
-      status: "unconfirmed", appId: h.appId, revisionPlanId: saved.id, ref: "release/v2",
-    });
-    expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
-      ["GET", `/api/v1/revision-plans/${saved.id}`],
-      ["POST", `/api/v1/revision-plans/${saved.id}/reconcile`],
-    ]);
-
-    output.length = 0;
-    requests.length = 0;
+    const self = `/api/v1/revision-plans/${saved.id}`;
+    if (lossAt === "preparing") {
+      expect(await main(update(h.appId), io)).toBe(1);
+      expect(JSON.parse(output[0]!)).toMatchObject({
+        status: "unconfirmed", appId: h.appId, revisionPlanId: saved.id, ref: "release/v2",
+      });
+      expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
+        ["GET", self], ["POST", `${self}/reconcile`], ["GET", self],
+      ]);
+      output.length = 0;
+      requests.length = 0;
+    }
     expect(await main(update(h.appId), io)).toBe(0);
+    expect(loseReconcileAck).toBe(false);
     const review = JSON.parse(output[0]!);
+    const returnedPlanId = review.planRunId;
     expect(review).toMatchObject({
       status: "review_required", appId: h.appId, revisionPlanId: saved.id,
       planRunId: expect.stringMatching(/^plan_/u), plan: { ref: "release/v2" },
     });
     expect(requests[0]?.method).toBe("GET");
     expect(new URL(requests[0]!.url).pathname).toBe(`/api/v1/revision-plans/${saved.id}`);
+    if (lossAt === "reviewable") {
+      expect(requests.slice(-3).map(request => [request.method, new URL(request.url).pathname])).toEqual([
+        ["POST", `${self}/reconcile`], ["GET", self], ["GET", `/api/v1/runs/${returnedPlanId}`],
+      ]);
+    }
     const posts = requests.filter(request => request.method === "POST");
     expect(posts.length).toBeGreaterThan(0);
     expect(posts.every(request => new URL(request.url).pathname ===
