@@ -105,7 +105,12 @@ export interface SharedAccountWorkspaceDirectory {
     readonly displayName: string;
     readonly type: "organization";
   }): Promise<SharedAccountWorkspaceChoice>;
-  billingOrganization(session: SharedAccountWorkspaceSession, workspaceId: string, diagnostics?: RequestPhaseObserver): Promise<SharedWorkspaceBillingOrganization>;
+  billingOrganization(
+    session: SharedAccountWorkspaceSession,
+    workspaceId: string,
+    diagnostics?: RequestPhaseObserver,
+    projection?: "entry-v1",
+  ): Promise<SharedWorkspaceBillingOrganization & { readonly displayName?: string }>;
 }
 
 export interface SharedAccountWorkspaceDependencies {
@@ -280,7 +285,7 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       await canonicalAccount(session);
       return await authorized(account.subject, workspace.id);
     },
-    async billingOrganization(session, workspaceId, diagnostics) {
+    async billingOrganization(session, workspaceId, diagnostics, projection) {
       const account = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
         const current = await canonicalAccount(session);
         await authorized(current.subject, workspaceId);
@@ -304,11 +309,12 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       }
       // A resolver can await an owner handshake. No authorization result from
       // before that wait survives a concurrent membership revocation or merge.
-      await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
+      const workspace = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
         await canonicalAccount(session);
-        await authorized(account.subject, workspaceId);
+        return authorized(account.subject, workspaceId);
       });
-      return { workspaceId, workspaceRef: binding.workspaceRef, organizationId: binding.organizationId };
+      const scope = { workspaceId, workspaceRef: binding.workspaceRef, organizationId: binding.organizationId };
+      return projection === "entry-v1" ? { ...scope, displayName: workspace.displayName } : scope;
     },
   };
   return directory;
@@ -398,8 +404,12 @@ export async function handleSharedAccountWorkspaceRoute(input: {
         return respond(json({ workspace: await input.directory.choose(session, workspaceId) }));
       }
       if (method !== "GET") return respond(methodNotAllowed("GET"));
-      if ([...input.url.searchParams.keys()].length) throw new SharedAccountWorkspaceError("invalid_request", "Billing resolution accepts only a Workspace id.", 400);
-      return respond(json(await input.directory.billingOrganization(session, workspaceId, input.diagnostics)));
+      const { searchParams } = input.url;
+      const projection = searchParams.get("projection") === "entry-v1" ? "entry-v1" : undefined;
+      if (searchParams.size !== 0 && (searchParams.size !== 1 || projection === undefined)) {
+        throw new SharedAccountWorkspaceError("invalid_request", "Billing resolution accepts only the optional entry-v1 projection.", 400);
+      }
+      return respond(json(await input.directory.billingOrganization(session, workspaceId, input.diagnostics, projection)));
     }
     return respond(errorJson("not_found", "not found", 404, input.request));
   } catch (error) {

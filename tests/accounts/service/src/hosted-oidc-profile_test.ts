@@ -422,6 +422,62 @@ test("dedicated first-party directory Bearer yields the same canonical account/W
   expect((await f.request(`/${workspace.id}/select`,a.access_token,"POST",{})).status).toBe(403);
 });
 
+test("billing entry projection keeps the legacy response and returns the name from the final authorized Workspace", async () => {
+  const f = await directoryFixture();
+  const hosted = await f.grant();
+  const takoserver = await f.grant("takoserver");
+  const bootstrap = await f.request("/bootstrap", hosted.access_token, "POST", {});
+  const { workspace } = await bootstrap.json() as { workspace: { id: string; displayName: string } };
+  const billingPath = `/${workspace.id}/billing-organization`;
+  const scope = { workspaceId: workspace.id, workspaceRef: "wrk_retained_directory_reference", organizationId: "org_retained_ledger" };
+  const legacy = await f.request(billingPath, takoserver.access_token);
+  expect(legacy.status).toBe(200);
+  expect(await legacy.json()).toEqual(scope);
+
+  for (const query of [
+    "projection=",
+    "projection=entry-v2",
+    "projection=entry-v1&projection=entry-v1",
+    "projection=entry-v1&organizationId=foreign",
+    "accountId=foreign",
+  ]) {
+    const rejected = await f.request(`${billingPath}?${query}`, hosted.access_token);
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ error: { code: "invalid_request" } });
+  }
+  expect((await f.request(`${billingPath}?projection=entry-v1`, hosted.access_token, "POST", {})).status).toBe(405);
+
+  f.pause();
+  const pending = f.request(`${billingPath}?projection=entry-v1`, hosted.access_token);
+  await Promise.race([f.entered, pending.then((response) => { throw new Error(`Expected billing resolution, received ${response.status}`); })]);
+  const current = (await f.control.getWorkspace(workspace.id))!;
+  const displayName = `Updated ${workspace.displayName}`;
+  await f.control.putWorkspace({ ...current, displayName });
+  f.billingRelease();
+  const entry = await pending;
+  expect(entry.status).toBe(200);
+  expect(entry.headers.get("cache-control")).toBe("no-store");
+  expect(await entry.json()).toEqual({ ...scope, displayName });
+});
+
+test("billing entry projection refuses membership lost while resolving the billing binding", async () => {
+  const f = await directoryFixture();
+  const grant = await f.grant();
+  const bootstrap = await f.request("/bootstrap", grant.access_token, "POST", {});
+  const { workspace } = await bootstrap.json() as { workspace: { id: string; displayName: string } };
+  f.pause();
+  const pending = f.request(`/${workspace.id}/billing-organization?projection=entry-v1`, grant.access_token);
+  await Promise.race([f.entered, pending.then((response) => { throw new Error(`Expected billing resolution, received ${response.status}`); })]);
+  const member = (await f.control.getWorkspaceMember(workspace.id, subject))!;
+  await f.control.putWorkspaceMember({ ...member, status: "suspended" });
+  f.billingRelease();
+  const rejected = await pending;
+  expect(rejected.status).toBe(403);
+  expect(await rejected.json()).toEqual({
+    error: { code: "forbidden", message: "Current Workspace membership is required.", requestId: expect.any(String) },
+  });
+});
+
 test("directory rejects spoofed IDs, legacy/PAT/Interface credentials, revoked/fenced/aliased grants and bad pagination",async()=>{
   const f=await directoryFixture();const grant=await f.grant();
   expect((await f.request("/bootstrap",grant.access_token,"POST",{accountId:"tsub_attacker"})).status).toBe(400);
