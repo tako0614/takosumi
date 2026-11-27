@@ -3350,16 +3350,35 @@ export async function createApplyRun(
   }
 }
 
-/**
- * Requests cancellation of a queued/running Run (`POST /api/v1/runs/:id/cancel`).
- * The backend moves the run to a terminal `cancelled` state when it is still
- * cancellable; already-terminal runs return their current state.
- */
-export async function cancelRun(runId: string): Promise<{ readonly run: Run }> {
-  return await controlFetch<{ run: Run }>(
-    `${BASE}/runs/${encodeURIComponent(runId)}/cancel`,
-    { method: "POST" },
-  );
+/** Cancel a queued or waiting-for-approval Run and verify its settled state. */
+export async function cancelRun(
+  run: Run,
+  scope: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<Run> {
+  const matchesCancelledRun = (observed: Run | undefined): observed is Run =>
+    observed?.id === run.id && observed.type === run.type &&
+    observed.workspaceId === run.workspaceId && observed.capsuleId === run.capsuleId &&
+    observed.status === "cancelled";
+  try {
+    const body = await controlFetch<{ run: Run }>(
+      `${BASE}/runs/${encodeURIComponent(run.id)}/cancel`,
+      { ...scope, method: "POST" },
+    );
+    throwIfReadRetired(scope);
+    if (matchesCancelledRun(body?.run)) return body.run;
+    throw new ControlApiError(502, "invalid_run_cancellation_response", "The cancellation response did not match this Run.");
+  } catch (failure) {
+    const outcomeUnknown = failure instanceof ControlApiError
+      ? failure.status >= 500
+      : failure instanceof TypeError;
+    if (!outcomeUnknown) throw failure;
+    // A transport failure may follow a committed cancellation.
+    throwIfReadRetired(scope);
+    const observed = await getRun(run.id, { ...scope, cache: "no-store" });
+    throwIfReadRetired(scope);
+    if (matchesCancelledRun(observed)) return observed;
+    throw failure;
+  }
 }
 
 // --- StateVersions ---------------------------------------------------------

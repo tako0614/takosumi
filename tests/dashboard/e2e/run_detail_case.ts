@@ -365,6 +365,119 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${target}/cancel`]);
     });
 
+    for (const scenario of ["committed", "uncommitted", "foreign-read", "retired-401"] as const) {
+      test(`Run cancellation reconciles only its original screen (${scenario})`, async ({ page }) => {
+        const id = "apply_cancel_witness";
+        const nextId = "apply_cancel_replacement";
+        const path = `/api/v1/runs/${id}`;
+        const cancelPath = `${path}/cancel`;
+        await page.addInitScript((cancelPath) => {
+          localStorage.setItem("tg_lang", "en");
+          const fetch = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const response = await fetch(...args);
+            if (response.status === 401 && new URL(response.url).pathname === cancelPath) {
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                document.documentElement.dataset.retiredCancelSettled = "true";
+              }));
+            }
+            return response;
+          };
+        }, cancelPath);
+        if (scenario !== "retired-401") {
+          await page.clock.install();
+          await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
+        }
+        const createdAt = "2026-11-18T00:00:00Z";
+        const run = {
+          id, workspaceId: "ws_alpha", capsuleId: "cap_cancel_witness", type: "apply",
+          status: "queued", createdBy: "portable-e2e", createdAt,
+        };
+        const successor = { ...run, id: nextId, capsuleId: "cap_cancel_replacement", status: "failed" };
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        let dispatched = false;
+        let reads = 0;
+        const writes: string[] = [];
+        await page.route("**/api/v1/**", async (route) => {
+          const request = route.request();
+          const pathname = new URL(request.url()).pathname;
+          if (request.method() !== "GET") writes.push(`${request.method()} ${pathname}`);
+          if (pathname === cancelPath && request.method() === "POST") {
+            dispatched = true;
+            if (scenario === "retired-401") {
+              await held;
+              return route.fulfill({ status: 401, json: { error: "invalid_token" } });
+            }
+            return route.abort("failed");
+          }
+          if (pathname === path) {
+            reads += 1;
+            const observed = dispatched && scenario === "foreign-read"
+              ? { ...run, capsuleId: "cap_unrelated", status: "cancelled" }
+              : dispatched && scenario === "committed" ? { ...run, status: "cancelled" } : run;
+            return route.fulfill({ json: { run: observed } });
+          }
+          if (pathname === `/api/v1/runs/${nextId}`) return route.fulfill({ json: { run: successor } });
+          if (pathname.endsWith("/stream")) return route.fulfill({ status: 503, json: { error: "stream_unavailable" } });
+          if (pathname.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (pathname.endsWith("/cost")) return route.fulfill({ json: { cost: {
+            runId: pathname.split("/")[4], billingMode: "disabled", ratingStatus: "not_applicable",
+            estimatedUsdMicros: 0, blocked: false, reasons: [],
+          } } });
+          if (pathname.startsWith("/api/v1/capsules/cap_cancel_")) {
+            if (pathname.endsWith("/runs")) return route.fulfill({ json: { runs: [] } });
+            return route.fulfill({ json: { capsule: {
+              id: pathname.split("/")[4], workspaceId: "ws_alpha", name: "Cancellation fixture",
+              status: "active", environment: "production", currentStateGeneration: 1, createdAt, updatedAt: createdAt,
+            } } });
+          }
+          return route.fallback();
+        });
+
+        try {
+          await page.goto(`/runs/${id}`, { waitUntil: "domcontentloaded" });
+          const action = page.getByRole("button", { name: "Cancel this run", exact: true });
+          const summary = page.locator(".av-run-summary");
+          const failure = page.getByRole("alert").filter({ hasText: "Something went wrong." });
+          await action.click();
+          const readsBefore = reads;
+          await page.getByRole("dialog").getByRole("button", { name: "Cancel run", exact: true }).click();
+          if (scenario === "retired-401") {
+            await expect.poll(() => dispatched).toBe(true);
+            await page.evaluate((target) => {
+              history.pushState(null, "", `/runs/${target}`);
+              window.dispatchEvent(new PopStateEvent("popstate"));
+            }, nextId);
+            const replacement = page.getByRole("link", { name: "Back to the app", exact: true });
+            await expect(replacement).toHaveAttribute("href", `/apps/${successor.capsuleId}`);
+            const completed = Promise.race([
+              page.waitForRequest((request) => request.isNavigationRequest() &&
+                new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+              page.waitForFunction(() => document.documentElement.dataset.retiredCancelSettled === "true").then(() => "stayed"),
+            ]);
+            release();
+            expect(await completed).toBe("stayed");
+            await expect(replacement).toHaveAttribute("href", `/apps/${successor.capsuleId}`);
+          } else {
+            if (scenario === "committed") {
+              await expect(summary).toContainText("This run was cancelled.");
+              await expect(action).toHaveCount(0);
+              await expect(failure).toHaveCount(0);
+            } else {
+              await expect(failure).toBeVisible();
+              await expect(summary).not.toContainText("This run was cancelled.");
+              await expect(action).toBeEnabled();
+            }
+            expect(reads).toBe(readsBefore + 1);
+          }
+          expect(writes).toEqual([`POST ${cancelPath}`]);
+        } finally {
+          release();
+        }
+      });
+    }
+
     test("a destructive approval stays with its displayed Run", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const a = "run_confirm_destroy_a", b = "run_confirm_destroy_b";
