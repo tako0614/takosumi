@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
+import { setImmediate as realSetImmediate } from "node:timers";
 
 import {
   awaitsDeployApproval,
@@ -136,6 +137,54 @@ describe("readback after approving a reviewed Plan", () => {
   const approved = { ...reviewed, status: "succeeded" } as const;
   const approvalPath = "/api/v1/runs/run_plan/approve";
   const runPath = "/api/v1/runs/run_plan";
+
+  test.each(["no response", "accepted body stalled", "refused body stalled"] as const)(
+    "approval deadline settles %s and only reads when warranted",
+    async (scenario) => {
+      jest.useFakeTimers();
+      try {
+        const calls: { method: string; path: string; signal?: AbortSignal | null }[] = [];
+        globalThis.fetch = (async (input, init) => {
+          const path = String(input);
+          calls.push({ method: init?.method ?? "GET", path, signal: init?.signal });
+          if (path === runPath) {
+            expect(init?.cache).toBe("no-store");
+            return Response.json({ run: approved });
+          }
+          expect(path).toBe(approvalPath);
+          if (scenario === "no response") return new Promise<Response>(() => {});
+          return new Response(new ReadableStream(), {
+            status: scenario === "refused body stalled" ? 403 : 200,
+            headers: { "content-type": "application/json" },
+          });
+        }) as typeof fetch;
+        let outcome: { run: Run } | { failure: unknown } | undefined;
+        void approveRun(reviewed).then(
+          (run) => { outcome = { run }; },
+          (failure) => { outcome = { failure }; },
+        );
+        await new Promise<void>((resolve) => { realSetImmediate(resolve); });
+        jest.advanceTimersByTime(29_999);
+        expect(outcome).toBeUndefined();
+        jest.advanceTimersByTime(1);
+        await new Promise<void>((resolve) => { realSetImmediate(resolve); });
+        if (scenario === "refused body stalled") {
+          expect(outcome).toMatchObject({ failure: { status: 403 } });
+          expect(calls.map(({ method, path }) => [method, path])).toEqual([["POST", approvalPath]]);
+        } else {
+          expect(outcome).toEqual({ run: approved });
+          expect(calls.map(({ method, path }) => [method, path])).toEqual([
+            ["POST", approvalPath], ["GET", runPath],
+          ]);
+        }
+        expect(calls[0]?.signal?.aborted).toBe(true);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    },
+  );
 
   test.each(["matching approval", "bad gateway", "transport error", "mismatched approval"] as const)(
     "%s only accepts the exact approved Plan",

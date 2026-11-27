@@ -533,6 +533,58 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${b}/approve`]);
     });
 
+    test("a stalled approval reads back the saved Plan at its deadline", async ({ page }) => {
+      const id = "plan_stalled_approval";
+      const capsuleId = "cap_stalled_approval";
+      const path = `/api/v1/runs/${id}`;
+      const run = { id, capsuleId, workspaceId: "ws_alpha", type: "plan", status: "waiting_approval",
+        policyStatus: "pass", planDigest: "sha256:reviewed", baseStateGeneration: 1,
+        summary: { add: 0, change: 1, destroy: 0 }, createdBy: "portable-e2e", createdAt: "2026-11-27T00:00:00Z" };
+      await page.addInitScript((runPath) => {
+        localStorage.setItem("tg_lang", "en");
+        const fetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          if (input === runPath && init?.method === "GET" && init.cache === "no-store") {
+            document.documentElement.dataset.approvalReadback = "true";
+          }
+          return fetch(input, init);
+        };
+      }, path);
+      await page.clock.install();
+      const writes: string[] = [];
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const { pathname } = new URL(request.url());
+        if (request.method() !== "GET") writes.push(pathname);
+        if (pathname === `${path}/approve`) {
+          run.status = "succeeded";
+          await held;
+          return route.fulfill({ json: { run } });
+        }
+        if (pathname === path) return route.fulfill({ json: { run } });
+        if (pathname === `${path}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
+        if (pathname === `${path}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        if (pathname === `/api/v1/capsules/${capsuleId}/runs`) return route.fulfill({ json: { runs: [] } });
+        return route.fallback();
+      });
+      try {
+        await page.goto(`/runs/${id}`);
+        const approve = page.getByRole("button", { name: "Approve this change", exact: true });
+        await approve.click();
+        await expect.poll(() => writes).toEqual([`${path}/approve`]);
+        expect(await page.locator("html").getAttribute("data-approval-readback")).toBeNull();
+        await page.clock.fastForward(30_000);
+        await expect(page.locator("html")).toHaveAttribute("data-approval-readback", "true");
+        await expect(approve).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toBeEnabled();
+        expect(writes).toEqual([`${path}/approve`]);
+      } finally {
+        release();
+      }
+    });
+
     for (const recoveryCase of ["transport", "read-refused", "server-error", "wrong-ack", "post-retired-401", "pending", "stale"] as const) {
     test(recoveryCase === "read-refused"
       ? "an individual Run refusal keeps a lost Apply unconfirmed without another mutation"
