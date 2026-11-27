@@ -100,7 +100,9 @@ async function relayTestDiagnostics(
   let progressWritten = true;
   try {
     for await (const line of lines) {
-      const file = TEST_FILE_HEADER.exec(line)?.[1];
+      // On GitHub Actions Bun uses a group command for the same file heading.
+      const heading = line.startsWith("::group::") ? line.slice("::group::".length) : line;
+      const file = TEST_FILE_HEADER.exec(heading)?.[1];
       if (file && progressWritten) {
         try {
           // Nested fixtures can print Bun headers from a different checkout.

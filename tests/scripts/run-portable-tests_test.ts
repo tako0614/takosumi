@@ -243,8 +243,11 @@ test("command execution preserves the original nonzero and stops later commands"
   }
 });
 
-test("an actual Bun file blocked in beforeAll leaves a private file checkpoint before exit", async () => {
+test.each(["plain", "GitHub Actions"] as const)("%s Bun reporter leaves a private file checkpoint during beforeAll", async (reporter) => {
   const root = await mkdtemp(join(tmpdir(), "takosumi-shard-file-progress-"));
+  const actions = process.env.GITHUB_ACTIONS;
+  if (reporter === "GitHub Actions") process.env.GITHUB_ACTIONS = "true";
+  else delete process.env.GITHUB_ACTIONS;
   try {
     const tests = join(root, "tests");
     const artifacts = join(root, "artifacts");
@@ -292,6 +295,8 @@ test("an actual Bun file blocked in beforeAll leaves a private file checkpoint b
     }
     expect(JSON.parse(await readFile(checkpoint, "utf8")).file).toBe("tests/paused_test.ts");
   } finally {
+    if (actions === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = actions;
     await rm(root, { recursive: true, force: true });
   }
 }, 12_000);
