@@ -384,6 +384,43 @@ rollback owner; restoring it also restores its former fail-closed login503.
 Any upload, activation or final-smoke ambiguity remains incomplete; no mutation
 is retried. Production and other targets are outside this surface.
 
+### Enable Hosted auth maintenance in shared staging
+
+The five-minute staging schedule can complete Hosted session revocations after
+a browser logs out or replaces an interrupted session. The Hosted binding must
+already serve a version that supports private revocation and has been qualified
+with the configured Accounts issuer. The schedule, target and binding already
+exist in the realized config.
+
+After independent review and approval, add only
+`TAKOSUMI_HOSTED_AUTH_MAINTENANCE_ENABLED = "1"` to the private config. Use a clean
+selected checkout. Obtain the Platform predecessor Version, entry digest and
+full Dashboard digest from its ready deployment receipt, and obtain the Hosted
+Version from its separate owning readback.
+
+```sh
+bun run deploy -- takosumi-platform-staging-hosted-auth-maintenance apply \
+  --config /absolute/operator-private/wrangler.staging.toml \
+  --predecessor <platform-version> --hosted-version <hosted-version> \
+  --entry-digest <sha256:entry> --dashboard-digest <sha256:dashboard>
+```
+
+The command requires the serving Platform and Hosted Versions at 100 percent,
+the existing five-minute schedule, and matching entry and Dashboard bytes
+(including the docs overlay). The predecessor must lack the maintenance flag.
+If the currently serving source predates the deployment tool, the selected
+checkout can add just the tool files to that source. The pinned artifact digests
+verify that its built Worker and Dashboard still match the predecessor. The
+publication checks the private binding, other vars and bindings, secret-name
+set, routes, schedules, and healthy Runner. It uploads and activates one
+immutable Worker Version and checks the serving Version again. It uses the
+existing anonymous smoke; the next scheduled invocation and its result are
+verified separately.
+
+Keep the predecessor Version to stop future scheduled revocations if needed.
+Already-revoked issuer grants remain revoked. On an incomplete release, verify
+the tagged Version and serving deployment before deciding how to recover.
+
 ### Optional private Run file machine ingress
 
 The source supports an optional `TAKOSUMI_PRIVATE_RUN_FILES` nonsecret JSON

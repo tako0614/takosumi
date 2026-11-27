@@ -78,6 +78,12 @@ const PLATFORM_STAGING_API_KEYS = {
   target: "cloudflare-worker:takosumi-staging",
 };
 
+const PLATFORM_STAGING_HOSTED_AUTH_MAINTENANCE = {
+  surface: "takosumi-platform-staging-hosted-auth-maintenance",
+  environment: "staging",
+  target: "cloudflare-worker:takosumi-staging",
+};
+
 const PLATFORM_PRODUCTION = {
   surface: "takosumi-platform",
   environment: "production",
@@ -158,6 +164,20 @@ const platformContract = ({ surface, target, environment }) => ({
 const CONTRACT = {
   kind: "takos.deploy-contract@v2",
   surfaces: [
+    {
+      surface: PLATFORM_STAGING_HOSTED_AUTH_MAINTENANCE.surface,
+      target: PLATFORM_STAGING_HOSTED_AUTH_MAINTENANCE.target,
+      lineage: "integration",
+      triggers: ["irreversible", "authority"],
+      obligations: {
+        provenance: "pins the clean selected source and exact entry and Dashboard digests of the serving Platform predecessor, and permits only adding the Hosted auth maintenance flag",
+        "pre-mutation-proof": "requires one 100-percent serving Platform predecessor and the approved 100-percent serving Hosted Version, exact artifact bytes, an existing five-minute schedule, unchanged bindings, runtime settings, routes, secrets and healthy Runner, and no intervening Version for secret inheritance",
+        "independent-review": "requires operator review of the single-flag configuration delta, exact predecessor and Hosted pins, and isolated revocation proof before invocation",
+        "post-conditions": "reads back one serving Platform Version at 100 percent with the exact new binding and retained authority, checks the approved Hosted Version again, and verifies the existing anonymous root and discovery; scheduled revocation is verified separately",
+        reversal: "returning to the preceding product Version stops future scheduled revocations; issuer revocations already made cannot be reversed",
+        "failure-handling": "refuses drift or malformed readback and reports incomplete publication after a possible mutation; never retries upload or activation",
+      },
+    },
     {
       surface: PLATFORM_STAGING_API_KEYS.surface,
       target: PLATFORM_STAGING_API_KEYS.target,
@@ -554,6 +574,15 @@ if (
 if (selected === PLATFORM_STAGING_API_KEYS.surface) {
   const { runPlatformWorkerApiKeyActivation } = await import("./platform-worker-release.ts");
   await runPlatformWorkerApiKeyActivation(process.argv.slice(3), PLATFORM_STAGING_API_KEYS.environment);
+  process.exit(0);
+}
+
+if (selected === PLATFORM_STAGING_HOSTED_AUTH_MAINTENANCE.surface) {
+  const { runPlatformWorkerHostedAuthMaintenanceActivation } = await import("./platform-worker-release.ts");
+  await runPlatformWorkerHostedAuthMaintenanceActivation(
+    process.argv.slice(3),
+    PLATFORM_STAGING_HOSTED_AUTH_MAINTENANCE.environment,
+  );
   process.exit(0);
 }
 

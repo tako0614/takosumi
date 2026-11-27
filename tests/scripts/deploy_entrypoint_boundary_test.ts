@@ -35,6 +35,20 @@ process.stdout.write = (...args) => {
       }[];
     };
     expect(contract.surfaces).toEqual([
+      expect.objectContaining({
+        surface: "takosumi-platform-staging-hosted-auth-maintenance",
+        target: "cloudflare-worker:takosumi-staging",
+        lineage: "integration",
+        triggers: ["irreversible", "authority"],
+        obligations: {
+          provenance: expect.any(String),
+          "pre-mutation-proof": expect.any(String),
+          "independent-review": expect.any(String),
+          "post-conditions": expect.any(String),
+          reversal: expect.stringContaining("cannot be reversed"),
+          "failure-handling": expect.any(String),
+        },
+      }),
       expect.objectContaining({ surface: "takosumi-platform-staging-api-keys", target: "cloudflare-worker:takosumi-staging", triggers: ["authority"] }),
       expect.objectContaining({ surface: "takosumi-platform-staging-login-admission", target: "cloudflare-worker:takosumi-staging", triggers: ["authority"] }),
       expect.objectContaining({
