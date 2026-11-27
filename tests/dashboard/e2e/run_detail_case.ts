@@ -628,8 +628,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             if (outcome === "wrong-ack") return route.fulfill({
               status: 201, json: { run: { ...apply, id: unrelatedId, planRunId: "another_plan" } },
             });
-            if (outcome === "pending" && attempts === 2) {
-              // Freeze before the final failure can start the recovery timer.
+            if (outcome === "pending") {
+              // Freeze before the failed response can start the recovery timer.
               await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
             }
             return route.abort("failed");
@@ -714,7 +714,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         await page.goto(`/runs/${planId}`, { waitUntil: "domcontentloaded" });
         const allow = page.getByRole("button", { name: "Allow and apply", exact: true });
         await expect(allow).toBeEnabled();
-        await allow.click();
+        if (recoveryCase === "transport") await allow.press("Enter");
+        else await allow.click();
         if (outcome === "stale") {
           await expect(page.getByRole("alert").filter({ hasText: "Another change was applied first. Review again before applying." })).toBeVisible();
           await expect(allow).toHaveCount(0);
@@ -787,7 +788,6 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           await page.unroute("**/api/v1/**");
           continue;
         }
-        const expectedPosts = outcome === "normal" || outcome === "rejected" || outcome === "server-error" || outcome === "wrong-ack" ? 1 : 2;
         if (outcome === "normal" || outcome === "rejected") {
           await expect.poll(() => attempts).toBe(1);
           if (outcome === "normal") {
@@ -797,7 +797,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           } else await expect(allow).toBeEnabled();
           expect(historyAfterApply).toEqual([]);
         } else {
-          await expect.poll(() => attempts).toBe(expectedPosts);
+          await expect.poll(() => attempts).toBe(1);
           const pages = outcome === "accepted" || outcome === "incomplete" ? 2 : 1;
           await expect.poll(() => historyAfterApply.length).toBe(pages);
           if (outcome === "accepted" || outcome === "server-error" || outcome === "wrong-ack") {
@@ -844,7 +844,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         }
         expect(acceptedEffects).toBe(outcome === "absent" || outcome === "rejected" ? 0 : 1);
         expect(unrelatedReads).toBe(0);
-        expect(mutations).toEqual(Array.from({ length: expectedPosts }, () => `POST /api/v1/runs/${planId}/apply`));
+        expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
         await page.unroute("**/api/v1/**");
       }
       expect(errors).toEqual([]);

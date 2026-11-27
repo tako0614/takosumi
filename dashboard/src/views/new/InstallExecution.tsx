@@ -633,24 +633,25 @@ export default function InstallExecution(props: Props) {
         setApplyUnconfirmed(true);
         setError(t("run.applyUnconfirmed"));
         await recoverApply(attempt);
-      } else if (!(cause instanceof ControlApiError) || cause.status === 0 || cause.status >= 500) {
-        setApplyUnconfirmed(true);
-        setError(t("installStore.applyUnconfirmed"));
       } else {
+        const refusal = cause instanceof ControlApiError ? cause : undefined;
         // These typed refusals also occur before Apply admission while
         // checking materialized inputs against the selected connection.
-        const connectionUnavailable = cause.reason === "provider_connection_not_ready" ||
-          cause.reason === "provider_connection_setup_required";
-        const canReplaceConnection = props.uninstallConnectionRecovery && plan.type === "destroy_plan" && cause.status === 409 &&
-          cause.code === "failed_precondition" && (connectionUnavailable || cause.reason === "destroy_connection_recovery_unproven");
+        const connectionUnavailable = refusal?.reason === "provider_connection_not_ready" ||
+          refusal?.reason === "provider_connection_setup_required";
+        const canReplaceConnection = props.uninstallConnectionRecovery && plan.type === "destroy_plan" && refusal?.status === 409 &&
+          refusal.code === "failed_precondition" && (connectionUnavailable || refusal.reason === "destroy_connection_recovery_unproven");
+        const message = refusal && refusal.status > 0
+          ? friendlyError(refusal, t).message
+          : t("common.fetchFailedGeneric");
         setError(canReplaceConnection && connectionUnavailable
           ? t("app.uninstall.reviewConnectionUnavailable")
-          : friendlyError(cause, t).message);
+          : message);
         if (canReplaceConnection) {
           setConfirmed(false);
           setRefusedConnectionPlanId(plan.id);
         }
-        if (props.onClose && plan.type === "plan" && cause.isApplyStateConflict) {
+        if (props.onClose && plan.type === "plan" && refusal?.isApplyStateConflict) {
           setConfirmed(false);
           setStalePlanId(plan.id);
         }

@@ -188,7 +188,6 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.cloudConnection": "Cloud connection",
   "installStore.logs": "Progress and logs",
   "installStore.retryInstall": "Retry installation",
-  "installStore.applyUnconfirmed": "The execution could not be confirmed. Check the existing run before starting another execution.",
   "installStore.providerHint": "Choose the connections this app will use.",
   "installStore.chooseConnection": "Choose a Host / account",
   "installStore.destination": "Host / account",

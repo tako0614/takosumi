@@ -3286,13 +3286,6 @@ export async function getRunCostInfo(
   return body.cost;
 }
 
-function isApplyRetryableTransportError(error: unknown): boolean {
-  if (error instanceof SharedAuthSessionPreflightError) return false;
-  if (error instanceof ControlApiIndeterminateError) return false;
-  if (!(error instanceof ControlApiError)) return true;
-  return error.status === 0 || error.code === "request_timeout";
-}
-
 function isAbortError(error: unknown): boolean {
   return (
     (error instanceof DOMException && error.name === "AbortError") ||
@@ -3316,71 +3309,43 @@ export async function createApplyRun(
   }
   const planRunId = plan.id;
   throwIfReadRetired(input);
-  const attempt = async (): Promise<{ readonly run: Run }> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const controller =
-      input.timeoutMs && input.timeoutMs > 0
-        ? new AbortController()
-        : undefined;
-    if (controller && input.timeoutMs) {
-      timeout = setTimeout(() => controller.abort(), input.timeoutMs);
-    }
-    try {
-      const body = await controlFetch<unknown>(
-        `${BASE}/runs/${encodeURIComponent(planRunId)}/apply`,
-        {
-          method: "POST",
-          signal: controller?.signal,
-          isCurrent: input.isCurrent,
-          acceptResponseAfterAbort: true,
-          body: {},
-        },
-      );
-      throwIfReadRetired(input);
-      if (!isRecord(body) || !matchesReviewedApplyRun(plan, body.run)) {
-        throw new ControlApiError(
-          502,
-          "invalid_apply_response",
-          "Apply returned an invalid response.",
-        );
-      }
-      return { run: body.run as Run };
-    } catch (error) {
-      if (controller?.signal.aborted && isAbortError(error)) {
-        throw new ControlApiError(
-          0,
-          "request_timeout",
-          `apply request timed out after ${input.timeoutMs}ms`,
-        );
-      }
-      throw error;
-    } finally {
-      if (timeout) clearTimeout(timeout);
-    }
-  };
-
-  const unconfirmed = (cause: unknown) => new ControlApiIndeterminateError(
-    "apply",
-    "Apply request outcome is indeterminate; reconcile the exact PlanRun before trying again.",
-    cause,
-  );
+  const controller = input.timeoutMs && input.timeoutMs > 0 ? new AbortController() : undefined;
+  const timeout = controller ? setTimeout(() => controller.abort(), input.timeoutMs) : undefined;
+  let dispatched = false;
   try {
-    return await attempt();
-  } catch (firstError) {
-    // A server failure or malformed success envelope cannot show whether Apply
-    // started. Leave these responses to read-only reconciliation.
-    if (firstError instanceof ControlApiError && firstError.status >= 500) {
-      throw unconfirmed(firstError);
+    const body = await controlFetch<unknown>(
+      `${BASE}/runs/${encodeURIComponent(planRunId)}/apply`,
+      {
+        method: "POST",
+        signal: controller?.signal,
+        isCurrent: input.isCurrent,
+        beforeDispatch: () => { dispatched = true; },
+        acceptResponseAfterAbort: true,
+        body: {},
+      },
+    );
+    throwIfReadRetired(input);
+    if (!isRecord(body) || !matchesReviewedApplyRun(plan, body.run)) {
+      throw new ControlApiError(502, "invalid_apply_response", "Apply returned an invalid response.");
     }
-    if (!isApplyRetryableTransportError(firstError)) throw firstError;
-    if (input.isCurrent?.() === false) throw unconfirmed(firstError);
-  }
-  // Keep the bounded retry for a missing response or timeout on this exact
-  // PlanRun. A refusal of that retry does not establish the first outcome.
-  try {
-    return await attempt();
-  } catch (secondError) {
-    throw unconfirmed(secondError);
+    return { run: body.run as Run };
+  } catch (error) {
+    const cause = controller?.signal.aborted && isAbortError(error)
+      ? new ControlApiError(0, "request_timeout", `apply request timed out after ${input.timeoutMs}ms`)
+      : error;
+    if (!dispatched || (cause instanceof ControlApiError && cause.status > 0 &&
+      cause.status < 500 && cause.status !== 408 && cause.code !== "request_timeout")) {
+      throw cause;
+    }
+    // The server may have queued an Apply before its response was lost.
+    // Callers now reconcile through read-only Run history.
+    throw new ControlApiIndeterminateError(
+      "apply",
+      "Apply request outcome is indeterminate; reconcile the exact PlanRun before trying again.",
+      cause,
+    );
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
   }
 }
 

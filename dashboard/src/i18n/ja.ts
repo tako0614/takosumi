@@ -198,7 +198,6 @@ export const ja = {
   "installStore.cloudConnection": "クラウド接続",
   "installStore.logs": "進捗とログ",
   "installStore.retryInstall": "インストールを再試行",
-  "installStore.applyUnconfirmed": "実行結果を確認できませんでした。再実行せず、実行履歴で状態を確認してください。",
   "installStore.providerHint": "このアプリで使う接続先を選んでください。",
   "installStore.chooseConnection": "ホスト / アカウントを選択",
   "installStore.destination": "ホスト / アカウント",
