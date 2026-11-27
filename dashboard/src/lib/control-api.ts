@@ -189,12 +189,12 @@ function summarizeControlError(error: unknown): ControlApiErrorSummary {
  * issuing another mutation.
  */
 export class ControlApiIndeterminateError extends ControlApiError {
-  readonly operation: "apply" | "source_create" | "source_patch";
+  readonly operation: "apply" | "source_create" | "source_patch" | "rollback_plan";
   readonly isIndeterminate = true;
   readonly causeSummary?: ControlApiErrorSummary;
 
   constructor(
-    operation: "apply" | "source_create" | "source_patch",
+    operation: ControlApiIndeterminateError["operation"],
     message: string,
     cause?: unknown,
   ) {
@@ -3466,7 +3466,7 @@ export async function createStateVersionRollbackPlan(
 ): Promise<unknown> {
   let responseStatus: number | undefined;
   try {
-    return await withControlDeadline("Rollback Plan", { isCurrent: options.isCurrent }, (scope) =>
+    const result = await withControlDeadline("Rollback Plan", { isCurrent: options.isCurrent }, (scope) =>
       controlFetch<unknown>(`${BASE}/state-versions/${encodeURIComponent(stateVersionId)}/rollback-plan`, {
         ...scope,
         method: "POST",
@@ -3474,12 +3474,20 @@ export async function createStateVersionRollbackPlan(
         ...(options.idempotencyKey === undefined ? {} : { headers: { "idempotency-key": options.idempotencyKey } }),
       }),
     );
+    if (!extractRunId(result)) {
+      throw new ControlApiIndeterminateError("rollback_plan", "The saved rollback Plan could not be confirmed.");
+    }
+    return result;
   } catch (failure) {
     throwIfReadRetired(options);
     // A rollback 409 can report that saving the Plan timed out. If its body
     // is unreadable, leave the outcome open for the app's read-only recovery.
-    const rejection = responseStatus === 409 ? undefined : clientRejectionOnDeadline(responseStatus, failure);
-    throw rejection ?? failure;
+    if (responseStatus === 409 && failure instanceof ControlApiError &&
+      (failure.code === "request_timeout" ||
+        (failure.status === 409 && failure.code === undefined && failure.isHttpStatusFallback))) {
+      throw new ControlApiIndeterminateError("rollback_plan", "The saved rollback Plan could not be confirmed.", failure);
+    }
+    throw clientRejectionOnDeadline(responseStatus, failure) ?? failure;
   }
 }
 

@@ -1489,6 +1489,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       let definiteRejection = false;
       let rollbackSaveTimeout = false;
       let stalledRollbackStatus: 201 | 403 | 409 | undefined;
+      let truncatedRollbackStatus: 201 | 409 | undefined;
       let holdReadback = false;
       let releaseReadback: (() => Promise<void>) | undefined;
       let committed = false;
@@ -1572,6 +1573,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           // the actual browser fetch. No second operation is manufactured.
           committed = acceptUpdate && !retireUpdate;
           submitted = true;
+          if (truncatedRollbackStatus !== undefined) {
+            return route.fulfill({ status: truncatedRollbackStatus, contentType: "application/json", body: "{" });
+          }
           if (stalledRollbackStatus !== undefined) {
             return route.fulfill({
               status: stalledRollbackStatus,
@@ -1673,14 +1677,17 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       }
 
       const scenes = rollbackDeadline
-        ? ["rollback-body-saved", "rollback-body-conflict", "rollback-body-refused"] as const
+        ? ["rollback-body-saved", "rollback-body-conflict", "rollback-body-refused",
+          "rollback-body-truncated", "rollback-conflict-truncated"] as const
         : ["accepted", "not-accepted", "definite-rejection", "readback-pending", "rollback-save-timeout"] as const;
       for (const scene of scenes) {
         rollbackSaveTimeout = scene === "rollback-save-timeout";
         stalledRollbackStatus = scene === "rollback-body-saved" ? 201 :
           scene === "rollback-body-conflict" ? 409 : scene === "rollback-body-refused" ? 403 : undefined;
+        truncatedRollbackStatus = scene === "rollback-body-truncated" ? 201 : scene === "rollback-conflict-truncated" ? 409 : undefined;
         if (rollbackSaveTimeout && !rollback) continue;
-        const accepted = scene === "accepted" || rollbackSaveTimeout || stalledRollbackStatus === 201 || stalledRollbackStatus === 409;
+        const accepted = scene === "accepted" || rollbackSaveTimeout || stalledRollbackStatus === 201 ||
+          stalledRollbackStatus === 409 || truncatedRollbackStatus !== undefined;
         acceptUpdate = accepted || (rollback && scene === "readback-pending");
         definiteRejection = scene === "definite-rejection" || scene === "rollback-body-refused";
         holdReadback = scene === "readback-pending";
