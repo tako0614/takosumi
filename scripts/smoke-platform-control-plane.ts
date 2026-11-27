@@ -606,9 +606,17 @@ class RunPollTimeoutError extends Error {
   }
 }
 
+interface ApplyRunIdentity {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly planRunId: string;
+  readonly type: "apply" | "destroy_apply";
+}
+
 class ApplyStartIndeterminateError extends Error {
   constructor(
     readonly planRunId: string,
+    readonly runType: ApplyRunIdentity["type"],
     readonly reason: "run_authority_unavailable" | "no_exact_run" | "ambiguous_exact_runs",
   ) {
     const detail = reason === "run_authority_unavailable"
@@ -616,8 +624,9 @@ class ApplyStartIndeterminateError extends Error {
       : reason === "ambiguous_exact_runs"
         ? "the Workspace Run authority returned multiple exact matches"
         : "the Workspace Run authority returned no exact match";
+    const action = runType === "destroy_apply" ? "Destroy Apply" : "Apply";
     super(
-      `Apply POST acknowledgement was lost and no exact ApplyRun could be reconciled for plan ${planRunId}: ${detail}`,
+      `${action} POST acknowledgement was lost and no exact ${action}Run could be reconciled for plan ${planRunId}: ${detail}`,
     );
     this.name = "ApplyStartIndeterminateError";
   }
@@ -1999,6 +2008,7 @@ async function runPlatformControlPlaneSmokeInternal(
         workspaceId,
         capsuleId,
         planRunId,
+        type: "apply",
       });
     }
     applyRunId = applyRun.id;
@@ -2105,6 +2115,7 @@ async function runPlatformControlPlaneSmokeInternal(
     destroyAttempted = true;
     destroyProgress = { destroyApplyAttempted: false };
     const destroyResult = await destroySmokeCapsule(options, {
+      workspaceId,
       capsuleId,
       reason: "Layer-2 platform-control-plane smoke cleanup",
       verifyCloudflareWorkerGone: shouldVerifyCloudflareWorker(options),
@@ -2286,6 +2297,7 @@ async function runPlatformControlPlaneSmokeInternal(
       destroyProgress = { destroyApplyAttempted: false };
       try {
         const destroyResult = await destroySmokeCapsule(options, {
+          workspaceId,
           capsuleId,
           reason:
             "Layer-2 platform-control-plane smoke cleanup after verification failure",
@@ -2432,11 +2444,7 @@ async function runPlatformControlPlaneSmokeInternal(
 
 async function startApplyRunWithReconciliation(
   options: PlatformControlPlaneSmokeOptions,
-  input: {
-    readonly workspaceId: string;
-    readonly capsuleId: string;
-    readonly planRunId: string;
-  },
+  input: ApplyRunIdentity,
 ): Promise<RunRecord> {
   try {
     const response = await requestJson<{ readonly run?: RunRecord }>({
@@ -2444,7 +2452,7 @@ async function startApplyRunWithReconciliation(
       token: options.accountSessionToken,
       method: "POST",
       path: `${API_PREFIX}/runs/${encodeURIComponent(input.planRunId)}/apply`,
-      body: {},
+      body: input.type === "destroy_apply" ? { confirmDestructive: true } : {},
     });
     if (isExactApplyRun(response.run, input)) {
       return response.run;
@@ -2468,12 +2476,14 @@ async function startApplyRunWithReconciliation(
   } catch {
     throw new ApplyStartIndeterminateError(
       input.planRunId,
+      input.type,
       "run_authority_unavailable",
     );
   }
   if (!Array.isArray(response.runs)) {
     throw new ApplyStartIndeterminateError(
       input.planRunId,
+      input.type,
       "run_authority_unavailable",
     );
   }
@@ -2481,11 +2491,16 @@ async function startApplyRunWithReconciliation(
     (candidate): candidate is RunRecord => isExactApplyRun(candidate, input),
   );
   if (matches.length === 0) {
-    throw new ApplyStartIndeterminateError(input.planRunId, "no_exact_run");
+    throw new ApplyStartIndeterminateError(
+      input.planRunId,
+      input.type,
+      "no_exact_run",
+    );
   }
   if (matches.length !== 1) {
     throw new ApplyStartIndeterminateError(
       input.planRunId,
+      input.type,
       "ambiguous_exact_runs",
     );
   }
@@ -2494,11 +2509,7 @@ async function startApplyRunWithReconciliation(
 
 function isExactApplyRun(
   candidate: unknown,
-  input: {
-    readonly workspaceId: string;
-    readonly capsuleId: string;
-    readonly planRunId: string;
-  },
+  input: ApplyRunIdentity,
 ): candidate is RunRecord {
   return isRecord(candidate) &&
     typeof candidate.id === "string" &&
@@ -2507,7 +2518,7 @@ function isExactApplyRun(
     candidate.workspaceId === input.workspaceId &&
     candidate.capsuleId === input.capsuleId &&
     candidate.planRunId === input.planRunId &&
-    candidate.type === "apply";
+    candidate.type === input.type;
 }
 
 export function failedResult(
@@ -2677,11 +2688,19 @@ function smokeRedactedValues(
 function failedNextAction(input: {
   readonly capsuleId?: string;
   readonly planRunId?: string;
+  readonly failureCleanup?: FailureCleanupResult;
   readonly connectionRevokeSkippedReason?: string;
   readonly error: unknown;
 }): string {
   if (input.error instanceof CloudflareResourcePreflightError) {
     return "Update the operator Cloudflare API token so it can read and create the Cloudflare account resources required by the Capsule, or use a non-resource-creating Capsule smoke before rerunning this apply.";
+  }
+  if (
+    input.failureCleanup?.retainedForOperatorRecovery &&
+    input.failureCleanup.destroyPlanRunId &&
+    !input.failureCleanup.destroyApplyRunId
+  ) {
+    return `Keep the ProviderConnection and reconcile the exact Destroy Apply from the Workspace Run ledger for plan ${input.failureCleanup.destroyPlanRunId} without resending the POST. Confirm the Run and resource state before revoking recovery credentials.`;
   }
   if (input.error instanceof ApplyStartIndeterminateError) {
     return `The Apply POST for plan ${input.error.planRunId} became indeterminate. Keep the recorded Capsule and ProviderConnection, reconcile the exact Plan-linked ApplyRun from the Workspace Run ledger, then cancel or destroy it before revoking recovery credentials.`;
@@ -3842,6 +3861,7 @@ async function ensurePlanReadyForApply(
 async function destroySmokeCapsule(
   options: PlatformControlPlaneSmokeOptions,
   input: {
+    readonly workspaceId: string;
     readonly capsuleId: string;
     readonly reason: string;
     readonly verifyCloudflareWorkerGone: boolean;
@@ -3879,15 +3899,14 @@ async function destroySmokeCapsule(
     body: { reason: input.reason },
   });
   progress.destroyApplyAttempted = true;
-  const destroyApply = await requestJson<{ readonly run: RunRecord }>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    method: "POST",
-    path: `${API_PREFIX}/runs/${encodeURIComponent(destroyPlan.run.id)}/apply`,
-    body: { confirmDestructive: true },
+  const destroyApply = await startApplyRunWithReconciliation(options, {
+    workspaceId: input.workspaceId,
+    capsuleId: input.capsuleId,
+    planRunId: destroyPlan.run.id,
+    type: "destroy_apply",
   });
-  progress.destroyApplyRun = destroyApply.run;
-  const completedDestroy = await pollRun(options, destroyApply.run.id);
+  progress.destroyApplyRun = destroyApply;
+  const completedDestroy = await pollRun(options, destroyApply.id);
   progress.destroyApplyRun = completedDestroy;
   assertRunSucceeded(completedDestroy, "destroy apply");
   const destroyVerification = await verifyDestroyedSmokeCapsule(
@@ -3994,6 +4013,8 @@ function failedDestroyCleanupResult(
     publicUrlLifecycleChecks,
     error,
   );
+  const indeterminate = error instanceof ApplyStartIndeterminateError &&
+    error.runType === "destroy_apply";
   return {
     attempted: true,
     cloudflareWorkerGone: false,
@@ -4008,7 +4029,9 @@ function failedDestroyCleanupResult(
     ...(progress?.destroyApplyRun
       ? { destroyApplyRunId: progress.destroyApplyRun.id }
       : {}),
-    destroySucceeded: false,
+    ...(indeterminate
+      ? { retainedForOperatorRecovery: true }
+      : { destroySucceeded: false }),
     destroyError: errorMessage(error),
     destroyVerification,
     error: destroyVerification.error,
