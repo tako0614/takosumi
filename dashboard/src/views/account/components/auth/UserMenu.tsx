@@ -122,7 +122,7 @@ export default function UserMenu() {
         // No haspopup hint: the popup is a role="group" of links/controls,
         // not a role="menu"; aria-expanded alone matches the real semantics.
         aria-expanded={open()}
-        aria-controls={menuId}
+        aria-controls={open() ? menuId : undefined}
         ref={triggerRef}
         onClick={() => setOpen(!open())}
       >

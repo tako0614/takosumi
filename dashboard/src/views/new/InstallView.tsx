@@ -682,7 +682,7 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
             </Match>
             <Match when={stage() === "loading"}>
               <section class="iv-workbench iv-centered" role="status" aria-live="polite" data-testid="install-loading">
-                <Spinner size={24} />
+                <Spinner size={24} decorative />
                 <h2 data-stage-heading tabindex="-1">{t("common.loading")}</h2>
               </section>
             </Match>

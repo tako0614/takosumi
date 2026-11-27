@@ -187,7 +187,10 @@ describe("StoreBrowser install UI", () => {
   test("provides search clear button, Escape shortcut, and empty-result filter recovery", () => {
     expect(storeBrowserSource).toContain('class="tcs-search-clear"');
     expect(storeBrowserSource).toContain('aria-label={s("clearSearch", props.locale)}');
-    expect(storeBrowserSource).toContain('if (e.key === "Escape" && searchInput())');
+    expect(storeBrowserSource).toContain(
+      'if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && searchInput())',
+    );
+    expect(storeBrowserSource).toContain("e.stopPropagation();");
     expect(storeBrowserSource).toContain("onClick={clearFilters}");
     expect(storeBrowserCss).toContain(".tcs-search-clear");
   });

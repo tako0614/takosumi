@@ -146,7 +146,7 @@ describe("dashboard shell navigation layout", () => {
     expect(userMenuSource).not.toContain('href="/settings');
     expect(userMenuSource).not.toContain('href="/connections"');
     expect(userMenuSource).not.toContain('href="/advanced');
-    expect(userMenuSource).toContain("aria-controls={menuId}");
+    expect(userMenuSource).toContain("aria-controls={open() ? menuId : undefined}");
     expect(userMenuSource).toContain("onFocusOut={");
     // Sign-out is the last, plain item.
     expect(userMenuSource).not.toContain("user-menu-danger");

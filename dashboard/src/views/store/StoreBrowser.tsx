@@ -440,8 +440,9 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             value={searchInput()}
             onInput={(e) => setSearchInput(e.currentTarget.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape" && searchInput()) {
+              if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && searchInput()) {
                 e.preventDefault();
+                e.stopPropagation();
                 clearSearch();
               }
             }}
