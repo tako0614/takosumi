@@ -575,6 +575,7 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | DELETE   | `/api/v1/capsules/{capsuleId}`                             | 削除を予約する（即時破棄計画は `?immediate=true`） |
 | POST     | `/api/v1/capsules/{capsuleId}/uninstall`                   | 猶予付きの削除 (二段階アンインストール) を予約する |
 | POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall`            | 猶予期間中の削除予約を取り消す               |
+| POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall-reservation` | 指定した削除予約を取り消す |
 | GET      | `/api/v1/capsules/{capsuleId}/app`                         | アプリの状態・主操作・問題・画面・版・削除条件をまとめて読む |
 | GET      | `/api/v1/capsules/{capsuleId}/runs`                        | この Capsule の Run を新しい順に一覧する     |
 | GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
@@ -594,6 +595,11 @@ OAuth では `capsules:write`）を要求します。
 `POST /api/v1/capsules/{capsuleId}/cancel-uninstall` で取り消せます。破棄済み Capsule
 への再試行は `200 {capsule,alreadyDeleted:true}` です。未デプロイの Capsule は従来どおり即時
 abandon します。
+
+表示した削除予約だけを取り消すには、`POST /api/v1/capsules/{capsuleId}/cancel-uninstall-reservation`
+へ JSON 本文 `{"expectedUninstallId":"<予約ID>"}` を送ります。予約 ID は Capsule の `uninstall.id` または
+アプリ詳細の `uninstall.scheduled.id` から取得します。予約が変わっていた場合は
+`409` と `capsule_uninstall_reservation_changed` を返し、現在の予約は保持します。
 
 旧来の即時 Plan 作成は `DELETE /api/v1/capsules/{capsuleId}?immediate=true` で明示します。
 これは `202 {run}` を返して破棄 Plan を作るだけです。リソースを破棄するには owner による

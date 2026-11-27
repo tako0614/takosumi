@@ -953,6 +953,8 @@ export interface CapsuleAppUninstall {
   readonly requiredConnectionIds?: readonly string[];
   /** The current scheduled uninstall, when one is pending or running. */
   readonly scheduled?: {
+    /** Reservation identity used to keep a cancellation tied to the viewed request. */
+    readonly id?: string;
     readonly phase: "scheduled" | "destroying";
     readonly requestedAt: string;
     readonly deleteAfter: string;

@@ -34,10 +34,14 @@ async function fixture() {
       throw new OpenTofuControllerError("failed_precondition", "explicit Plan path selected", { reason: "test_immediate_plan" });
     },
   } as unknown as ControlPlaneOperations;
-  async function request(method: string, suffix = "", bearer = token) {
+  async function request(method: string, suffix = "", bearer = token, body?: unknown) {
     const url = new URL(`https://app.example.test/api/v1/capsules/${seeded.capsule.id}${suffix}`);
     const response = await handleControlRoute({
-      request: new Request(url, { method, headers: { authorization: `Bearer ${bearer}` } }),
+      request: new Request(url, {
+        method,
+        headers: { authorization: `Bearer ${bearer}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
       url, store: accounts, operations,
     });
     expect(response).toBeDefined();
@@ -85,6 +89,31 @@ test("public DELETE reserves seven days, replay preserves reservation, cancel re
   expect(events.filter(event => event.action === "capsule.uninstall_cancelled")).toHaveLength(1);
   expect(events.filter(event => event.action.startsWith("capsule.uninstall_")).every(event => event.actorId === "user_test" && Boolean(event.createdAt))).toBe(true);
   expect(h.effects.immediatePlans).toBe(0);
+  expect(await h.ledger.listRunsByWorkspace(h.seeded.workspace.id)).toHaveLength(0);
+});
+
+test("cancelling an observed uninstall cannot cancel a replacement reservation", async () => {
+  const h = await fixture();
+  const first = (await (await h.request("DELETE")).json()).capsule.uninstall;
+  const cancel = (expectedUninstallId: unknown) =>
+    h.request("POST", "/cancel-uninstall-reservation", undefined, { expectedUninstallId });
+
+  expect((await cancel(first.id)).status).toBe(200);
+  expect((await cancel(first.id)).status).toBe(200);
+  const second = (await (await h.request("DELETE")).json()).capsule.uninstall;
+  expect(second.id).not.toBe(first.id);
+
+  const stale = await cancel(first.id);
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toMatchObject({
+    error: { details: { reason: "capsule_uninstall_reservation_changed" } },
+  });
+  expect((await cancel(null)).status).toBe(400);
+  expect((await h.request("POST", "/cancel-uninstall-reservation")).status).toBe(400);
+  expect((await h.ledger.getCapsule(h.seeded.capsule.id))?.uninstall).toMatchObject(second);
+  expect((await cancel(second.id)).status).toBe(200);
+  const events = await h.ledger.listActivityEvents(h.seeded.workspace.id);
+  expect(events.filter((event) => event.action === "capsule.uninstall_cancelled")).toHaveLength(2);
   expect(await h.ledger.listRunsByWorkspace(h.seeded.workspace.id)).toHaveLength(0);
 });
 
@@ -150,7 +179,7 @@ test("member cannot reserve/cancel/immediately delete or write Workspace Activit
   h.accounts.saveAccount({ subject: "member424", createdAt: now, updatedAt: now });
   h.accounts.saveAccountSession({ sessionId: "member424-session", subject: "member424", createdAt: now, expiresAt: now + 60000 });
   await h.ledger.putWorkspaceMember({ id: "wsm_member424", workspaceId: h.seeded.workspace.id, accountId: "member424", roles: ["member"], status: "active", createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() });
-  for (const [method, suffix] of [["DELETE", ""], ["DELETE", "?immediate=true"], ["POST", "/cancel-uninstall"], ["POST", "/uninstall"], ["POST", "/destroy-plan"]]) {
+  for (const [method, suffix] of [["DELETE", ""], ["DELETE", "?immediate=true"], ["POST", "/cancel-uninstall"], ["POST", "/cancel-uninstall-reservation"], ["POST", "/uninstall"], ["POST", "/destroy-plan"]]) {
     expect((await h.request(method!, suffix!, "member424-session")).status).toBe(403);
   }
   expect(h.effects.immediatePlans).toBe(0);

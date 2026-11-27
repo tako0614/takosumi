@@ -1917,10 +1917,12 @@ export async function scheduleCapsuleUninstall(
 /** Cancels a scheduled uninstall during its grace period. */
 export async function cancelCapsuleUninstall(
   capsuleId: string,
+  expectedUninstallId: string,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<Capsule> {
   const body = await controlFetch<{ capsule: Capsule }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/cancel-uninstall`,
-    { method: "POST" },
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/cancel-uninstall-reservation`,
+    { ...options, method: "POST", body: { expectedUninstallId } },
   );
   return body.capsule;
 }

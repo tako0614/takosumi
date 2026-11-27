@@ -511,6 +511,7 @@ describe("installed-app OAuth tokens never perform owner-only actions", () => {
       for (const [method, path] of [
         ["POST", `/capsules/${CAPSULE}/destroy-plan`], ["POST", `/capsules/${CAPSULE}/uninstall`],
         ["POST", `/capsules/${CAPSULE}/abandon`], ["POST", `/capsules/${CAPSULE}/cancel-uninstall`],
+        ["POST", `/capsules/${CAPSULE}/cancel-uninstall-reservation`],
         ["DELETE", `/capsules/${CAPSULE}?immediate=true`], ["DELETE", `/capsules/${CAPSULE}`],
       ] as const) {
         expect(await h.call(method, path, token, method === "POST" ? {} : undefined), `${method} ${path}`)

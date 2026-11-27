@@ -620,6 +620,7 @@ data and settings.
 | DELETE | `/api/v1/capsules/{capsuleId}` | Schedule deletion of an applied Capsule after a grace period; `?immediate=true` creates a destroy Plan only, which still needs review and Apply |
 | POST | `/api/v1/capsules/{capsuleId}/uninstall` | Schedule a two-stage uninstall: keep resources and data through the grace period, then export and destroy |
 | POST | `/api/v1/capsules/{capsuleId}/cancel-uninstall` | Cancel a scheduled uninstall during its grace period |
+| POST | `/api/v1/capsules/{capsuleId}/cancel-uninstall-reservation` | Cancel the specified uninstall reservation |
 | GET | `/api/v1/capsules/{capsuleId}/app` | Read the server-computed installed-app view: state, primary action, problems, screens, version and uninstall terms |
 | GET | `/api/v1/capsules/{capsuleId}/runs` | List the Capsule's Runs newest first with a keyset cursor |
 | GET | `/api/v1/capsules/{capsuleId}/outputs` | Read the Capsule's current public Output projection |
@@ -1041,6 +1042,13 @@ default in OSS); while it is pending, cancel it with
 `POST /api/v1/capsules/{capsuleId}/cancel-uninstall`. Retrying after destruction
 returns `200 {capsule,alreadyDeleted:true}`. A Capsule that has never been applied
 keeps the existing immediate abandonment behavior.
+
+To cancel only the reservation shown to the caller, send
+`{"expectedUninstallId":"<reservation-id>"}` to
+`POST /api/v1/capsules/{capsuleId}/cancel-uninstall-reservation`.
+Read the ID from `uninstall.id` on the Capsule or `uninstall.scheduled.id`
+in the app view. If the reservation changed, the API returns `409` with
+`capsule_uninstall_reservation_changed` and keeps the current reservation.
 
 To create the legacy immediate destroy Plan, explicitly call
 `DELETE /api/v1/capsules/{capsuleId}?immediate=true`. It returns `202 {run}` and

@@ -174,7 +174,8 @@ export async function handleCapsules(
         (method === "POST" && segments.length === 3 && (
           segments[2] === "abandon" ||
           segments[2] === "uninstall" ||
-          segments[2] === "cancel-uninstall"
+          segments[2] === "cancel-uninstall" ||
+          segments[2] === "cancel-uninstall-reservation"
         ))
       ));
     const capturedManagement = lifecycleMutation ||
@@ -337,7 +338,7 @@ export async function handleCapsules(
         202,
       );
     }
-    if (leaf === "cancel-uninstall" && segments.length === 3) {
+    if ((leaf === "cancel-uninstall" || leaf === "cancel-uninstall-reservation") && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       const cancel = operations.capsules.cancelCapsuleUninstall;
       if (typeof cancel !== "function") {
@@ -353,8 +354,19 @@ export async function handleCapsules(
           { reason: "capsule_not_uninstalled" },
         );
       }
+      let expectedUninstallId: string | undefined;
+      // Use a separate route so an older server cannot silently drop the
+      // reservation condition and act on whatever is now scheduled.
+      if (leaf === "cancel-uninstall-reservation") {
+        const body = await readJsonObject(request);
+        expectedUninstallId = stringValue(body?.expectedUninstallId);
+        if (!expectedUninstallId?.trim()) {
+          return errorJson("invalid_request", "expectedUninstallId must be a non-empty string.", 400);
+        }
+      }
       const updated = await cancel.call(operations.capsules, capsule.id, {
         actor: ctx.session.subject,
+        ...(expectedUninstallId === undefined ? {} : { expectedUninstallId }),
         expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
       return json({ capsule: publicCapsule(updated) });
@@ -537,6 +549,7 @@ async function capsuleRouteAppAction(
     case "abandon":
     case "uninstall":
     case "cancel-uninstall":
+    case "cancel-uninstall-reservation":
     case "destroy-plan":
       return "uninstall";
     case "plan":

@@ -1057,9 +1057,11 @@ export class CapsulesService {
     id: string,
     options: {
       readonly actor?: string;
+      readonly expectedUninstallId?: string;
       readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
     } = {},
   ): Promise<Capsule> {
+    const expectedUninstallId = options.expectedUninstallId;
     const suppliedAuthority =
       options.expectedWorkspaceManagementAuthority === undefined
         ? undefined
@@ -1068,6 +1070,13 @@ export class CapsulesService {
     const cancel = async (): Promise<Capsule> => {
       const current = prepared.capsule;
       const record = current.uninstall;
+      if (expectedUninstallId !== undefined && record?.id !== expectedUninstallId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "The uninstall reservation changed.",
+          { reason: CAPSULE_UNINSTALL_REASONS.reservationChanged },
+        );
+      }
       if (
         (current.status !== "uninstalled" || record === undefined) &&
         record?.phase === "cancelled" &&

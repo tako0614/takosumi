@@ -4,6 +4,7 @@ import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-reci
 import {
   createInstallAttemptFixture,
   fixtureAttemptName,
+  PORTABLE_CAPSULES,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_UI_SURFACES,
   type InstallAttemptFixture,
@@ -24,6 +25,7 @@ const sourceUrl = `/new?git=https%3A%2F%2Fgithub.com%2Fexample%2Fcloudflare-serv
 const domainField = /^Domain(?:\s*\*)?$/;
 const applyMutation = `POST /api/v1/runs/${planId}/apply`;
 const attemptPost = "POST /api/v1/install-plans";
+const cancelUninstallPath = `/api/v1/capsules/${capId}/cancel-uninstall-reservation`;
 
 /**
  * One app behind the install-plan coordinator: the attempt routes come from
@@ -115,7 +117,7 @@ async function detailFixture(
         return {
           ...base, state: "uninstall_scheduled", primaryAction: "cancel_uninstall",
           problems: [{ code: "uninstall_scheduled", severity: "warning" }],
-          uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "scheduled", requestedAt: now, deleteAfter: "2026-11-03T01:00:00Z", cancellable: true, blocked: false } },
+          uninstall: { mode: "scheduled", graceDays: 7, scheduled: { id: uninstallRecord?.id, phase: "scheduled", requestedAt: now, deleteAfter: "2026-11-03T01:00:00Z", cancellable: true, blocked: false } },
         };
       case "disabled":
         return { ...base, state: "stopped", primaryAction: "none", uninstall: { mode: "none" } };
@@ -185,7 +187,10 @@ async function detailFixture(
     if (path === `/api/v1/capsules/${capId}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: { id: "pbs_inline", workspaceId: "ws_alpha", capsuleId: capId, environment: "production", bindings: provider ? [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: connection.id }] : [], createdAt: now, updatedAt: now } } });
     if (path === `/api/v1/capsules/${capId}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: capId, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_inline", generation: 1, applyRunId: applyId, planRunId: planId, recordedAt: now, availability: "recorded", resources: planResources.map(({ address, type }) => ({ address, type, providerSource: cloudflare })) } } });
     if (path === `/api/v1/capsules/${capId}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: capId, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
-    if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) {
+    if (path === cancelUninstallPath) {
+      if (request.postDataJSON()?.expectedUninstallId !== uninstallRecord?.id) {
+        return route.fulfill({ status: 409, json: { error: { code: "failed_precondition", details: { reason: "capsule_uninstall_reservation_changed" } } } });
+      }
       capsuleStatus = uninstallRecord?.previousStatus ?? "active";
       if (uninstallRecord) uninstallRecord = { ...uninstallRecord, revision: uninstallRecord.revision + 1,
         phase: "cancelled", cancelledAt: "2026-10-27T01:02:00Z" };
@@ -2067,11 +2072,92 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.getByTestId("app-section-back").click();
       await expect(appPage).toHaveAttribute("data-app-section", "overview");
       await expect(page.locator('[data-app-section-link="danger"]')).toHaveCount(0);
+      const cancellation = page.waitForRequest((request) => request.method() === "POST" &&
+        new URL(request.url()).pathname === cancelUninstallPath);
       await page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true }).click();
+      expect((await cancellation).postDataJSON()).toEqual({ expectedUninstallId: f.capsule().uninstall?.id });
       await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
       f.destroy(); await page.reload();
       await expect(appPage).toHaveAttribute("data-app-state", "uninstalled");
       await expect(page.getByTestId("app-header").getByRole("link", { name: "Install again", exact: true })).toBeVisible();
+    });
+    test("a changed reservation identity requests a refresh before sending a cancellation", async ({ page }) => {
+      const f = await detailFixture(page, base); f.finish();
+      await page.clock.setFixedTime(new Date(now));
+      await page.route(`**/api/v1/capsules/${capId}`, (route) => {
+        if (route.request().method() !== "GET" || f.capsule().uninstall?.phase !== "scheduled") return route.fallback();
+        const current = f.capsule();
+        return route.fulfill({ json: {
+          capsule: { ...current, uninstall: { ...current.uninstall!, id: "another_reservation" } },
+          installConfigReAdoption: { authorityGuard: `sha256:${"c".repeat(64)}` },
+        } });
+      });
+      await page.goto(`/apps/${capId}`);
+      const section = await openUninstall(page);
+      await section.getByRole("button", { name: "Uninstall", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Uninstall", exact: true }).click();
+      await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "uninstall_scheduled");
+      await page.getByTestId("app-section-back").click();
+      const reread = page.waitForResponse((response) => response.request().method() === "GET" &&
+        new URL(response.url()).pathname === `/api/v1/capsules/${capId}/app`);
+      await page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true }).click();
+      await expect(page.getByTestId("app-uninstall-error")).toContainText("Check the current reservation before cancelling.");
+      expect((await reread).ok()).toBe(true);
+      expect(f.mutations).toEqual([`DELETE /api/v1/capsules/${capId}`]);
+    });
+    test("a late cancellation read cannot redirect the replacement app", async ({ page }) => {
+      const f = await detailFixture(page, base); f.finish();
+      await page.clock.setFixedTime(new Date(now));
+      const appPath = `/api/v1/capsules/${capId}/app`;
+      const replacement = PORTABLE_CAPSULES.ws_beta[0];
+      await page.addInitScript((path) => {
+        const fetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+          const response = await fetch(...args);
+          if (response.status === 401 && new URL(response.url).pathname === path) {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              document.documentElement.dataset.cancelReadSettled = "true";
+            }));
+          }
+          return response;
+        };
+      }, appPath);
+      let waitingRead = false;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      await page.route(`**${appPath}`, async (route) => {
+        if (f.capsule().uninstall?.phase !== "cancelled") return route.fallback();
+        waitingRead = true;
+        await held;
+        return route.fulfill({ status: 401, json: { error: "unauthenticated" } });
+      });
+      try {
+        await page.goto(`/apps/${capId}`);
+        const section = await openUninstall(page);
+        await section.getByRole("button", { name: "Uninstall", exact: true }).click();
+        await page.getByRole("dialog").getByRole("button", { name: "Uninstall", exact: true }).click();
+        await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "uninstall_scheduled");
+        await page.getByTestId("app-section-back").click();
+        await page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true }).click();
+        await expect.poll(() => waitingRead).toBe(true);
+        await page.evaluate((id) => {
+          history.pushState(null, "", `/apps/${id}`);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }, replacement.id);
+        const heading = page.getByRole("heading", { level: 1, name: replacement.name });
+        await expect(heading).toBeVisible();
+        const settled = Promise.race([
+          page.waitForRequest((request) => request.isNavigationRequest() &&
+            new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+          page.waitForFunction(() => document.documentElement.dataset.cancelReadSettled === "true").then(() => "stayed"),
+        ]);
+        release();
+        expect(await settled).toBe("stayed");
+        await expect(heading).toBeVisible();
+        expect(f.mutations).toEqual([`DELETE /api/v1/capsules/${capId}`, `POST ${cancelUninstallPath}`]);
+      } finally {
+        release();
+      }
     });
     test("lost uninstall and cancellation answers recover the current reservation without resending", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish(); f.loseRemovalAnswer(); f.loseCancellationAnswer();
@@ -2105,7 +2191,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.getByTestId("app-section-back").click();
       await page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true }).click();
       // The server committed exactly one cancellation, although its answer was lost.
-      await expect.poll(() => f.mutations.filter((m) => m.endsWith("/cancel-uninstall")).length).toBe(1);
+      await expect.poll(() => f.mutations.filter((m) => m === `POST ${cancelUninstallPath}`).length).toBe(1);
       expect(f.capsule().uninstall).toMatchObject({ id: scheduled.id, revision: 2, phase: "cancelled" });
       await expect(appPage).toHaveAttribute("data-app-state", "installed");
       await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
@@ -2125,14 +2211,14 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(scheduleErrors).toEqual([]);
       await expect(appPage.locator('[role="alert"].wa-error')).toHaveCount(0);
       expect(f.mutations.filter((m) => m === `DELETE /api/v1/capsules/${capId}`)).toHaveLength(1);
-      expect(f.mutations.filter((m) => m.endsWith("/cancel-uninstall"))).toHaveLength(1);
+      expect(f.mutations.filter((m) => m === `POST ${cancelUninstallPath}`)).toHaveLength(1);
     });
     test("a refused cancellation stays visible when a later read shows the app restored", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
       await page.clock.setFixedTime(new Date(now));
       let refused = false;
       let cancellations = 0;
-      await page.route(`**/api/v1/capsules/${capId}/cancel-uninstall`, (route) => {
+      await page.route(`**${cancelUninstallPath}`, (route) => {
         cancellations += 1; refused = true;
         return route.fulfill({ status: 403, json: { error: { code: "forbidden", message: "Cancellation was refused." } } });
       });
