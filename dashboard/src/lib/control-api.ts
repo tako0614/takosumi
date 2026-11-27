@@ -377,6 +377,14 @@ async function withControlDeadline<T>(
   }
 }
 
+/** Keep a received client rejection when its response body never finishes. */
+function clientRejectionOnDeadline(status: number | undefined, failure: unknown): ControlApiError | undefined {
+  if (status !== undefined && status >= 400 && status < 500 &&
+    failure instanceof ControlApiError && failure.code === "request_timeout") {
+    return new ControlApiError(status, undefined, `HTTP ${status}`, undefined, true);
+  }
+}
+
 function query(
   params: Record<string, string | number | boolean | undefined>,
 ): string {
@@ -3261,11 +3269,8 @@ async function postRunDecision(
       : new ControlApiError(502, "invalid_run_cancellation_response", "The cancellation response did not match this Run.");
   } catch (failure) {
     throwIfReadRetired(scope);
-    if (responseStatus !== undefined && responseStatus >= 400 && responseStatus < 500 &&
-      failure instanceof ControlApiError && failure.code === "request_timeout") {
-      // Preserve the received HTTP status when decoding its body times out.
-      throw new ControlApiError(responseStatus, undefined, `HTTP ${responseStatus}`, undefined, true);
-    }
+    const rejection = clientRejectionOnDeadline(responseStatus, failure);
+    if (rejection) throw rejection;
     if (!dispatched || !isMutationOutcomeUnknown(failure)) throw failure;
     // An uncertain POST is settled by a fresh read of the original Run.
     const observed = await getRun(id, { ...scope, cache: "no-store" });
@@ -3459,14 +3464,23 @@ export async function createStateVersionRollbackPlan(
   stateVersionId: string,
   options: { readonly idempotencyKey?: string; readonly isCurrent?: () => boolean } = {},
 ): Promise<unknown> {
-  return await controlFetch<unknown>(
-    `${BASE}/state-versions/${encodeURIComponent(stateVersionId)}/rollback-plan`,
-    {
-      method: "POST",
-      isCurrent: options.isCurrent,
-      ...(options.idempotencyKey === undefined ? {} : { headers: { "idempotency-key": options.idempotencyKey } }),
-    },
-  );
+  let responseStatus: number | undefined;
+  try {
+    return await withControlDeadline("Rollback Plan", { isCurrent: options.isCurrent }, (scope) =>
+      controlFetch<unknown>(`${BASE}/state-versions/${encodeURIComponent(stateVersionId)}/rollback-plan`, {
+        ...scope,
+        method: "POST",
+        onResponseStatus: (status) => { responseStatus = status; },
+        ...(options.idempotencyKey === undefined ? {} : { headers: { "idempotency-key": options.idempotencyKey } }),
+      }),
+    );
+  } catch (failure) {
+    throwIfReadRetired(options);
+    // A rollback 409 can report that saving the Plan timed out. If its body
+    // is unreadable, leave the outcome open for the app's read-only recovery.
+    const rejection = responseStatus === 409 ? undefined : clientRejectionOnDeadline(responseStatus, failure);
+    throw rejection ?? failure;
+  }
 }
 
 export async function getRunGroup(id: string): Promise<RunGroupWithRuns> {
