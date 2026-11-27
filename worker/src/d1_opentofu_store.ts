@@ -13707,6 +13707,9 @@ function d1CapsuleApplyRunAdmissionFenceGuardStmt(
         fence.currentStateVersionId === null
           ? sql`json_extract(${capsule.recordJson}, '$.currentStateVersionId') IS NULL`
           : sql`json_extract(${capsule.recordJson}, '$.currentStateVersionId') = ${fence.currentStateVersionId}`,
+        fence.requireAutoUpdate
+          ? sql`json_type(${capsule.recordJson}, '$.autoUpdate') = 'true'`
+          : undefined,
         fence.uninstall === undefined ? undefined : and(
           sql`json_extract(${capsule.recordJson}, '$.uninstall.phase') <> 'cancelled'`,
           sql`json_extract(${capsule.recordJson}, '$.uninstall.blockedReason') IS NULL`,

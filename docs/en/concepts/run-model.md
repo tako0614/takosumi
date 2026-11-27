@@ -124,6 +124,8 @@ The exception is a Capsule whose user turned on automatic updates (`autoUpdate`)
 snapshot, Takosumi creates one update plan and records `autoApplyRequested` on the Run: continue
 from plan to apply if the plan finishes cleanly. A plan with deletions, an approval policy, a
 billing check, or another policy gate still stops for review.
+If you turn off auto-update before the apply is queued, you can still review and apply
+the saved plan manually. An apply already queued continues.
 
 On the dashboard app page, **Update** (or **Check for updates**) under **Version** creates a plan
 and shows the changes. Apply starts only after you review them and press **Allow and update**.

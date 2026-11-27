@@ -113,6 +113,8 @@ plan に digest があれば、apply は `tofu init` の後の lockfile の SHA-
 ごとに 1 回、更新用の plan を作り、「plan が安全に完了したら apply まで続ける」という要求を
 `autoApplyRequested` として Run に記録します。それでも、削除を含む変更、承認ポリシー、
 料金や policy の gate がある plan は自動で apply されず、確認画面で停止します。
+apply の登録前に自動更新をオフにすると、作成済みの plan は手動で確認・適用できます。
+登録済みの apply の処理は続きます。
 
 dashboard のアプリページでは、**版** の **更新**（または **新しい版を確認**）は plan を作り、
 変更内容を表示します。内容を確かめて **許可して更新** を押すまで apply は始まりません。

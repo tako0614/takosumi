@@ -5186,6 +5186,13 @@ export class RunEngine {
     const plannedCapsule = planRun.capsuleId
       ? await this.#requireCurrentPlannedCapsule(planRun)
       : undefined;
+    if (internal.requireAutoUpdate && plannedCapsule?.autoUpdate !== true) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "automatic Apply requires auto-update to remain enabled",
+        { reason: "auto_update_disabled" },
+      );
+    }
     if (plannedCapsule) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
     }
@@ -5200,11 +5207,14 @@ export class RunEngine {
     // asynchronous preparation. Recapturing the Capsule at insertion would
     // authorize a stale Plan against its replacement or newer state.
     const expectedCapsule = plannedCapsule
-      ? capsuleApplyRunAdmissionFence(
-        plannedCapsule,
-        planRun.capsuleExecutionAuthorityEpoch ?? 1,
-        scheduledUninstall,
-      )
+      ? {
+        ...capsuleApplyRunAdmissionFence(
+          plannedCapsule,
+          planRun.capsuleExecutionAuthorityEpoch ?? 1,
+          scheduledUninstall,
+        ),
+        ...(internal.requireAutoUpdate ? { requireAutoUpdate: true as const } : {}),
+      }
       : undefined;
     // Source snapshot revalidation (spec invariant 10): an env-driven plan is
     // pinned to a SourceSnapshot; the apply must run against the SAME snapshot
@@ -6648,13 +6658,24 @@ export class RunEngine {
           expected: applyExpectedGuardFromPlanRun(planRun),
         },
         { actor: planRun.createdBy },
-        { expectedWorkspaceManagementAuthority: authority },
+        {
+          expectedWorkspaceManagementAuthority: authority,
+          requireAutoUpdate: true,
+        },
       );
       await this.#recordActivity({ workspaceId: planRun.workspaceId,
         actorId: "system:auto-update", action: "capsule.auto_update_apply_started",
         targetType: "capsule", targetId: planRun.capsuleId ?? planRun.id,
         metadata: { planRunId: planRun.id } });
     } catch (error) {
+      if (error instanceof OpenTofuControllerError && isRecord(error.details)) {
+        const reason = error.details.reason;
+        if (reason === "auto_update_disabled") return;
+        // The storage fence rejects concurrent changes atomically. Only a
+        // confirmed opt-out makes that refusal an expected stop.
+        if (reason === "capsule_execution_authority_changed" && planRun.capsuleId &&
+          (await this.#store.getCapsule(planRun.capsuleId).catch(() => undefined))?.autoUpdate === false) return;
+      }
       await this.#recordActivity({
         workspaceId: planRun.workspaceId,
         action: "capsule.auto_update_apply_failed",

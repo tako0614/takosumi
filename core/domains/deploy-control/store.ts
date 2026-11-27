@@ -1036,6 +1036,8 @@ export interface CapsuleApplyRunAdmissionFence {
   readonly executionAuthorityEpoch: number;
   readonly currentStateVersionId: string | null;
   readonly currentStateGeneration: number;
+  /** An unattended update requires the current explicit opt-in at admission. */
+  readonly requireAutoUpdate?: true;
   /** Exact live request authorizing a finalizer-created destroy Plan. */
   readonly uninstall?: {
     readonly id: string;
@@ -1084,6 +1086,7 @@ function isCapsuleApplyRunAdmissionFenceShape(
         fence.currentStateVersionId.trim() !== "")) &&
     Number.isSafeInteger(fence.currentStateGeneration) &&
     (fence.currentStateGeneration as number) >= 0 &&
+    (fence.requireAutoUpdate === undefined || fence.requireAutoUpdate === true) &&
     (uninstall === undefined ||
       (fence.status === "uninstalled" &&
         typeof uninstall === "object" && uninstall !== null &&
@@ -1140,6 +1143,7 @@ export function capsuleApplyRunAdmissionFenceMatchesRun(
   };
   return run.capsuleId === expectedCapsule.capsuleId &&
     run.workspaceId === expectedCapsule.workspaceId &&
+    (!expectedCapsule.requireAutoUpdate || run.operation === "update") &&
     (expectedCapsule.uninstall === undefined ||
       (run.operation === "destroy" &&
         run.planRunId === expectedCapsule.uninstall.destroyPlanRunId)) &&
@@ -1151,7 +1155,7 @@ export function capsuleApplyRunAdmissionFenceMatchesRun(
       expectedCapsule.executionAuthorityEpoch;
 }
 
-/** Pure current-row matcher for all eight Capsule admission fields. */
+/** Pure current-row matcher for the Capsule admission fence. */
 export function capsuleApplyRunAdmissionFenceMatchesCurrent(
   capsule: Capsule | undefined,
   executionAuthorityEpoch: number | undefined,
@@ -1173,6 +1177,7 @@ export function capsuleApplyRunAdmissionFenceMatchesCurrent(
     (capsule.currentStateVersionId ?? null) ===
       expectedCapsule.currentStateVersionId &&
     capsule.currentStateGeneration === expectedCapsule.currentStateGeneration &&
+    (!expectedCapsule.requireAutoUpdate || capsule.autoUpdate === true) &&
     (expectedCapsule.uninstall === undefined ||
       (capsule.uninstall !== undefined &&
         capsule.uninstall.phase !== "cancelled" &&

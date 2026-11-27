@@ -1388,6 +1388,8 @@ export interface PlanRunInternalContext {
  */
 export interface ApplyRunInternalContext {
   readonly applyRunId?: string;
+  /** Only automatic continuations require the app's current opt-in. */
+  readonly requireAutoUpdate?: true;
   /**
    * Private Workspace-management authority retained by an automatic
    * continuation's original Plan/Source callback. It is never a public
