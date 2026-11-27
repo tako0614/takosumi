@@ -4152,6 +4152,7 @@ async function runConfiguredPublicUrlLifecycleFixture(
     readonly applyAcknowledgement?: "transport-loss" | "timeout";
     readonly reconcileApply?: boolean;
     readonly ambiguousApplyReconciliation?: boolean;
+    readonly destroyApplyAcknowledgement?: "lost" | "missing" | "ambiguous" | "unavailable";
     readonly temporaryConnection?: boolean;
     readonly connectionListMode?: "personal" | "missing" | "forbidden" | "workspace";
     readonly explicitProviderBindings?: boolean;
@@ -4215,13 +4216,19 @@ async function runConfiguredPublicUrlLifecycleFixture(
     },
     destroyApply: {
       id: "run_destroy_apply_configured_public_url",
+      workspaceId,
+      capsuleId,
+      planRunId: "run_destroy_plan_configured_public_url",
       status: "succeeded",
-      type: "destroy",
+      type: "destroy_apply",
     },
     destroyApplyFailed: {
       id: "run_destroy_apply_configured_public_url",
+      workspaceId,
+      capsuleId,
+      planRunId: "run_destroy_plan_configured_public_url",
       status: "failed",
-      type: "destroy",
+      type: "destroy_apply",
     },
   } as const;
   const options = await resolveOptions(
@@ -4496,6 +4503,24 @@ async function runConfiguredPublicUrlLifecycleFixture(
         method === "GET" &&
         path === `/api/v1/workspaces/${workspaceId}/runs`
       ) {
+        if (behavior.destroyApplyAcknowledgement) {
+          if (behavior.destroyApplyAcknowledgement === "unavailable") {
+            return Response.json(null);
+          }
+          const destroy = runs.destroyApply;
+          return Response.json({
+            runs: [
+              { ...destroy, id: "run_other_type", type: "apply" },
+              { ...destroy, id: "run_other_plan", planRunId: runs.planSucceeded.id },
+              { ...destroy, id: "run_other_capsule", capsuleId: "cap_other" },
+              { ...destroy, id: "run_other_workspace", workspaceId: "ws_other" },
+              ...(behavior.destroyApplyAcknowledgement !== "missing" ? [destroy] : []),
+              ...(behavior.destroyApplyAcknowledgement === "ambiguous"
+                ? [{ ...destroy, id: "run_duplicate_destroy_apply" }]
+                : []),
+            ],
+          });
+        }
         return Response.json({
           runs: behavior.reconcileApply === false
             ? []
@@ -4590,7 +4615,13 @@ async function runConfiguredPublicUrlLifecycleFixture(
         return Response.json({});
       }
       if (method === "POST" && path === `/api/v1/runs/${runs.destroyPlan.id}/apply`) {
+        if (behavior.destroyApplyAcknowledgement === "unavailable") {
+          return new Response(null, { status: 403 });
+        }
         destroyed = !behavior.destroyApplyFails;
+        if (behavior.destroyApplyAcknowledgement) {
+          throw new Error("fixture process lost the Destroy Apply acknowledgement");
+        }
         return Response.json({
           run: behavior.destroyApplyFails
             ? runs.destroyApplyFailed
@@ -5143,6 +5174,64 @@ test("platform smoke refuses to guess between multiple Plan-linked ApplyRuns", a
   )).toBe(false);
 });
 
+test("platform smoke reads back a lost Destroy Apply acknowledgement without a second mutation", async () => {
+  const cases = [
+    { destroyApplyAcknowledgement: "lost" },
+    { destroyApplyAcknowledgement: "missing" },
+    { destroyApplyAcknowledgement: "ambiguous", failReadyCheckBeforeDestroy: true },
+    { destroyApplyAcknowledgement: "unavailable" },
+  ] as const;
+  for (const behavior of cases) {
+    const fixture = await runConfiguredPublicUrlLifecycleFixture(
+      { kind: "http-404" },
+      { ...behavior, temporaryConnection: true },
+    );
+    const { result, runs, controlPlaneRequests } = fixture;
+    const cleanupMutations = controlPlaneRequests.filter(({ method, path }) =>
+      method === "POST" && (
+        path.endsWith("/destroy-plan") ||
+        path.startsWith(`/api/v1/runs/${runs.destroyPlan.id}/`)
+      )
+    );
+    expect(cleanupMutations.map(({ path }) => path)).toEqual([
+      `/api/v1/capsules/${runs.destroyApply.capsuleId}/destroy-plan`,
+      `/api/v1/runs/${runs.destroyPlan.id}/approve`,
+      `/api/v1/runs/${runs.destroyPlan.id}/apply`,
+    ]);
+    const body = new TextDecoder().decode(cleanupMutations[2]!.body);
+    expect(JSON.parse(body)).toEqual({
+      confirmDestructive: true,
+    });
+    expect(controlPlaneRequests.filter(({ method, path }) =>
+      method === "GET" &&
+      path === "/api/v1/workspaces/ws_configuredpublicurl/runs?limit=500"
+    )).toHaveLength(1);
+    if (behavior.destroyApplyAcknowledgement === "lost") {
+      expect(result.status).toBe("passed");
+      expect(result.destroyApplyRunId).toBe(runs.destroyApply.id);
+      expect(result.destroyVerified).toBe(true);
+      expect(result.connectionRevoked).toBe(true);
+    } else {
+      expect(result.status).toBe("failed");
+      expect(result.destroyPlanRunId).toBe(runs.destroyPlan.id);
+      expect(result.destroyApplyRunId).toBeUndefined();
+      expect(result.destroyVerified).toBe(false);
+      expect(result.connectionRevoked).toBe(false);
+      expect(result.failureCleanup?.retainedForOperatorRecovery).toBe(true);
+      expect(result.failureCleanup?.destroySucceeded).toBeUndefined();
+      expect(result.nextAction).toContain(runs.destroyPlan.id);
+      expect(result.nextAction).toContain("without resending the POST");
+      if (behavior.destroyApplyAcknowledgement === "unavailable") {
+        expect(result.error).toContain("Workspace Run authority could not be read");
+        expect(result.error).toContain("failed (403)");
+      }
+      expect(controlPlaneRequests.some(({ method, path }) =>
+        method === "GET" && path === `/api/v1/runs/${runs.destroyApply.id}`
+      )).toBe(false);
+    }
+  }
+});
+
 test("generic OpenTofu smoke does not claim Destroy when URL absence is not verifiable", async () => {
   const fixture = await runConfiguredPublicUrlLifecycleFixture({
     kind: "not-verifiable",
@@ -5219,8 +5308,11 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
     },
     destroySucceeded: {
       id: "run_destroy_apply_output_fixture",
+      workspaceId: "ws_destroyoutput",
+      capsuleId,
+      planRunId: "run_destroy_plan_output_fixture",
       status: "succeeded",
-      type: "destroy",
+      type: "destroy_apply",
     },
   } as const;
   const options = await resolveOptions(
@@ -5591,8 +5683,11 @@ test("platform smoke does not retry or directly delete after a failed destroy ap
     },
     destroyFailed: {
       id: "run_destroy_apply_failure_fixture",
+      workspaceId: "ws_destroyfailure",
+      capsuleId,
+      planRunId: "run_destroy_plan_failure_fixture",
       status: "failed",
-      type: "destroy",
+      type: "destroy_apply",
     },
   } as const;
   const options = await resolveOptions(
@@ -5981,8 +6076,11 @@ async function runDestroyApplyReconciliationFixture(
     },
     destroyApplyRunning: {
       id: destroyApplyRunId,
+      workspaceId,
+      capsuleId,
+      planRunId: destroyPlanRunId,
       status: "running",
-      type: "destroy",
+      type: "destroy_apply",
       createdAt: "2026-01-01T00:00:00.000Z",
       startedAt: "2026-01-01T00:00:02.000Z",
     },
