@@ -1,13 +1,14 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import type { CapsuleAppLink, CapsuleAppView } from "takosumi-contract";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, Select, Spinner } from "../../components/ui/index.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { appPageHref } from "../../lib/app-links.ts";
 import { decideInterfaceLink, getInterfaceLinkCandidates, revokeInterfaceLink, setInterfaceLink, type InterfaceLinkCandidate } from "../../lib/control-api.ts";
-import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+import { useConfirmDialog, type ConfirmDialogOptions } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { interfacePermissionList } from "../../lib/interface-labels.ts";
+import { currentSessionCheck } from "../account/lib/session.ts";
 import { AppSection } from "./app-ui.tsx";
 
 const STATE_LABELS: Record<CapsuleAppLink["state"], MessageKey> = {
@@ -21,12 +22,25 @@ const HEALTH_LABELS: Record<Exclude<CapsuleAppLink["health"], "ok">, MessageKey>
   provider_removed: "app.links.provider_removed",
 };
 
+type LinkRequestScope = { readonly isCurrent: () => boolean };
+type LinkWriteScope = LinkRequestScope & { readonly beforeDispatch: () => void };
+
 /** Links are the server's pinned relationships, including requirements left for later. */
 export default function AppLinkedSection(props: {
   readonly app: CapsuleAppView;
-  readonly onChanged: () => Promise<unknown> | void;
+  readonly active: boolean;
+  readonly onChanged: (scope: LinkRequestScope) => Promise<unknown> | void;
 }) {
   const { confirm } = useConfirmDialog();
+  const owner = new AbortController();
+  let pane = new AbortController();
+  onCleanup(() => { pane.abort(); owner.abort(); });
+  const requestScopes = () => {
+    const sessionIsCurrent = currentSessionCheck();
+    const signal = pane.signal;
+    const app = { isCurrent: () => !owner.signal.aborted && sessionIsCurrent() };
+    return { app, signal, visible: { isCurrent: () => props.active && !signal.aborted && app.isCurrent() } };
+  };
   const [editing, setEditing] = createSignal<string>();
   const [candidates, setCandidates] = createSignal<readonly InterfaceLinkCandidate[]>([]);
   const [generation, setGeneration] = createSignal(0);
@@ -34,78 +48,95 @@ export default function AppLinkedSection(props: {
   const [loading, setLoading] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
-  const refresh = async () => {
-    try { await props.onChanged(); } catch { setError(t("app.links.unreadable")); }
-  };
+  createEffect(on(() => props.active, (active) => {
+    if (active) {
+      pane = new AbortController();
+      return;
+    }
+    pane.abort();
+    setEditing(undefined);
+    setLoading(false);
+    setError(undefined);
+  }, { defer: true }));
   const rowKey = (row: CapsuleAppLink) => `${row.consumerCapsuleId}:${row.requirementKey}`;
   const name = (row: CapsuleAppLink) => row.otherApp?.displayName?.[locale()] || row.otherApp?.name || row.requirementKey;
   const accessibleName = (row: CapsuleAppLink, incoming: boolean, index: number) =>
     `${row.otherApp ? name(row) : t("app.links.title")} · ${t(incoming ? "app.links.usedBy" : "app.links.uses")} ${index + 1}`;
   const startChoosing = async (row: CapsuleAppLink) => {
     if (busy() || loading()) return;
+    const { visible, signal } = requestScopes();
+    if (!visible.isCurrent()) return;
     setEditing(rowKey(row));
     setCandidates([]);
     setChoice("");
     setError(undefined);
     setLoading(true);
     try {
-      const result = await getInterfaceLinkCandidates(row.consumerCapsuleId, row.requirementKey);
+      const result = await getInterfaceLinkCandidates(row.consumerCapsuleId, row.requirementKey, visible);
+      if (!visible.isCurrent()) return;
       setCandidates(result.candidates);
       setGeneration(result.generation);
       setChoice(result.candidates.some((candidate) => candidate.interfaceId === row.providerInterfaceId)
         ? row.providerInterfaceId! : result.candidates.length === 1 ? result.candidates[0]!.interfaceId : "");
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      if (visible.isCurrent()) setError(friendlyError(cause, t).message);
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   };
-  const save = async (row: CapsuleAppLink) => {
-    if (busy() || loading() || !choice()) return;
+  const changeLink = async (
+    submit: (scope: LinkWriteScope) => Promise<unknown>,
+    confirmation?: ConfirmDialogOptions,
+  ) => {
+    if (busy()) return;
+    const { app, visible, signal } = requestScopes();
+    if (!visible.isCurrent()) return;
     setBusy(true);
-    setError(undefined);
     try {
-      await setInterfaceLink(row.consumerCapsuleId, row.requirementKey, {
-        interfaceId: choice(), expectedGeneration: generation(),
-      });
-      setEditing(undefined);
-      await refresh();
-    } catch (cause) {
-      setError(friendlyError(cause, t).message);
-      // Refresh the guarded generation before a retry can make another change.
-      setEditing(undefined);
-      await refresh();
+      if (confirmation && !await confirm({ ...confirmation, signal })) return;
+      if (!visible.isCurrent()) return;
+      setError(undefined);
+      let dispatched = false;
+      try {
+        await submit({ ...visible, beforeDispatch: () => { dispatched = true; } });
+      } catch (cause) {
+        if (visible.isCurrent()) setError(friendlyError(cause, t).message);
+      }
+      if (visible.isCurrent()) setEditing(undefined);
+      // A sent change can affect the same app after the links pane closes.
+      if (dispatched && app.isCurrent()) {
+        try {
+          await props.onChanged(app);
+        } catch {
+          if (visible.isCurrent()) setError(t("app.links.unreadable"));
+        }
+      }
     } finally {
-      setBusy(false);
+      if (!owner.signal.aborted) setBusy(false);
     }
   };
-  const revoke = async (row: CapsuleAppLink) => {
-    if (busy() || !(await confirm({
+  const save = (row: CapsuleAppLink) => {
+    const interfaceId = choice();
+    if (loading() || !interfaceId) return;
+    const input = { interfaceId, expectedGeneration: generation() };
+    return changeLink((scope) => setInterfaceLink(row.consumerCapsuleId, row.requirementKey, input, scope));
+  };
+  const revoke = (row: CapsuleAppLink) =>
+    changeLink((scope) => revokeInterfaceLink(row.consumerCapsuleId, row.requirementKey, row.generation, scope), {
       title: t("app.links.revokeTitle"),
       message: props.app.capsuleId === row.consumerCapsuleId
         ? t("app.links.revokeHint")
         : t("app.links.revokeProviderHint", { name: name(row) }),
       confirmText: t("app.links.revoke"), cancelText: t("common.cancel"), danger: true,
-    }))) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      await revokeInterfaceLink(row.consumerCapsuleId, row.requirementKey, row.generation);
-      setEditing(undefined);
-      await refresh();
-    } catch (cause) {
-      setError(friendlyError(cause, t).message);
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
   // The provider's consent. This page is the provider app: a pending usedBy
   // row is decided here by link id and the generation the page read.
-  const decide = async (row: CapsuleAppLink, decision: "approve" | "decline") => {
-    if (busy() || !row.linkId) return;
+  const decide = (row: CapsuleAppLink, decision: "approve" | "decline") => {
+    const linkId = row.linkId;
+    if (!linkId) return;
+    const providerCapsuleId = props.app.capsuleId;
     const permissions = interfacePermissionList(row.permissions);
-    if (!(await confirm(decision === "approve"
+    return changeLink((scope) => decideInterfaceLink(providerCapsuleId, linkId, decision, row.generation, scope), decision === "approve"
       ? {
           title: t("app.links.approveTitle"),
           message: t("app.links.approveHint", { name: name(row), permissions }),
@@ -115,18 +146,7 @@ export default function AppLinkedSection(props: {
           title: t("app.links.declineTitle"),
           message: t("app.links.declineHint", { name: name(row) }),
           confirmText: t("app.links.decline"), cancelText: t("common.cancel"), danger: true,
-        }))) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      await decideInterfaceLink(props.app.capsuleId, row.linkId, decision, row.generation);
-      await refresh();
-    } catch (cause) {
-      setError(friendlyError(cause, t).message);
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
+        });
   };
   const stateText = (row: CapsuleAppLink, incoming: boolean) =>
     !incoming && row.state === "pending_approval" && row.otherApp

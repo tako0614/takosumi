@@ -2468,25 +2468,34 @@ export interface InterfaceLinkCandidate {
 const interfaceLinkPath = (capsuleId: string, requirementKey: string) =>
   `${BASE}/capsules/${encodeURIComponent(capsuleId)}/interface-links/${encodeURIComponent(requirementKey)}`;
 
-export function getInterfaceLinkCandidates(capsuleId: string, requirementKey: string): Promise<{
+export function getInterfaceLinkCandidates(
+  capsuleId: string,
+  requirementKey: string,
+  options: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<{
   readonly candidates: readonly InterfaceLinkCandidate[];
   readonly generation: number;
 }> {
-  return controlFetch(`${interfaceLinkPath(capsuleId, requirementKey)}/candidates`);
+  return controlFetch(`${interfaceLinkPath(capsuleId, requirementKey)}/candidates`, options);
 }
 
 export function setInterfaceLink(capsuleId: string, requirementKey: string, input: {
   readonly interfaceId: string;
   readonly expectedGeneration: number;
-}): Promise<{ readonly link: import("takosumi-contract").InterfaceLink }> {
-  return controlFetch(interfaceLinkPath(capsuleId, requirementKey), { method: "PUT", body: input });
+}, options: Pick<RequestOpts, "isCurrent" | "beforeDispatch"> = {}): Promise<{ readonly link: import("takosumi-contract").InterfaceLink }> {
+  return controlFetch(interfaceLinkPath(capsuleId, requirementKey), { ...options, method: "PUT", body: input });
 }
 
-export function revokeInterfaceLink(capsuleId: string, requirementKey: string, expectedGeneration: number): Promise<{
+export function revokeInterfaceLink(
+  capsuleId: string,
+  requirementKey: string,
+  expectedGeneration: number,
+  options: Pick<RequestOpts, "isCurrent" | "beforeDispatch"> = {},
+): Promise<{
   readonly link: import("takosumi-contract").InterfaceLink;
 }> {
   return controlFetch(interfaceLinkPath(capsuleId, requirementKey), {
-    method: "DELETE", body: { expectedGeneration },
+    ...options, method: "DELETE", body: { expectedGeneration },
   });
 }
 
@@ -2495,12 +2504,18 @@ export function revokeInterfaceLink(capsuleId: string, requirementKey: string, e
  * (`decline`). Addressed to the PROVIDER app by link id, guarded by the
  * link generation the page read.
  */
-export function decideInterfaceLink(providerCapsuleId: string, linkId: string, decision: "approve" | "decline", expectedGeneration: number): Promise<{
+export function decideInterfaceLink(
+  providerCapsuleId: string,
+  linkId: string,
+  decision: "approve" | "decline",
+  expectedGeneration: number,
+  options: Pick<RequestOpts, "isCurrent" | "beforeDispatch"> = {},
+): Promise<{
   readonly link: import("takosumi-contract").InterfaceLink;
 }> {
   return controlFetch(
     `${BASE}/capsules/${encodeURIComponent(providerCapsuleId)}/interface-links/${encodeURIComponent(linkId)}/${decision}`,
-    { method: "POST", body: { expectedGeneration } },
+    { ...options, method: "POST", body: { expectedGeneration } },
   );
 }
 
