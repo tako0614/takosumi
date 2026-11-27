@@ -1059,7 +1059,7 @@ test("a supporting read that fails is reported as incomplete instead of silently
           throw new Error("interface store unavailable");
         },
       } as unknown as ControlPlaneOperations["interfaces"],
-      listInterfaceMaterializationFailures: async () => {
+      listCapsuleInterfaceMaterializationFailures: async () => {
         throw new Error("intent ledger unavailable");
       },
     },
@@ -1940,8 +1940,8 @@ test("a disabled app is not offered a scheduled uninstall the command would refu
   expect((await h.request("", h.owner, "DELETE")).status).toBe(409);
 });
 
-test("a full Workspace failure window without this app's entry is reported as incomplete", async () => {
-  const failure = (index: number): CapsuleInterfaceMaterializationFailure => ({
+function screenFailure(index: number): CapsuleInterfaceMaterializationFailure {
+  return {
     id: `intent_other_${index}`,
     capsuleId: `cap_other_${index}`,
     stateVersionId: `sv_other_${index}`,
@@ -1958,20 +1958,58 @@ test("a full Workspace failure window without this app's entry is reported as in
     },
     deadLetteredAt: "2026-10-27T00:00:00.000Z",
     failureDigest: `sha256:${"d".repeat(64)}`,
-  });
+  };
+}
+
+test("a full Workspace failure window without this app's entry is reported as incomplete", async () => {
   const full = await fixture({
     overrides: {
+      listCapsuleInterfaceMaterializationFailures: undefined,
       listInterfaceMaterializationFailures: async (_workspaceId, options) =>
-        Array.from({ length: options?.limit ?? 100 }, (_, index) => failure(index)),
+        Array.from({ length: options?.limit ?? 100 }, (_, index) => screenFailure(index)),
     },
   });
   expect((await full.app()).incomplete).toEqual(["screen_problems"]);
   const partial = await fixture({
     overrides: {
-      listInterfaceMaterializationFailures: async () => [failure(1), failure(2)],
+      listCapsuleInterfaceMaterializationFailures: undefined,
+      listInterfaceMaterializationFailures: async () => [screenFailure(1), screenFailure(2)],
     },
   });
   expect((await partial.app()).incomplete).toBeUndefined();
+});
+
+test("app detail finds the current screen failure without a Workspace scan", async () => {
+  const forApp = { ...screenFailure(1), capsuleId: CAPSULE, stateVersionId: "sv_current" };
+  const stale = { ...forApp, id: "old_intent", stateVersionId: "sv_replaced" };
+  const appReads: string[] = [];
+  let workspaceReads = 0;
+  const h = await fixture({
+    currentStateVersionId: forApp.stateVersionId,
+    overrides: {
+      listInterfaceMaterializationFailures: async (_workspaceId, options) => {
+        workspaceReads += 1;
+        return Array.from({ length: options?.limit ?? 100 }, (_, index) => screenFailure(index));
+      },
+      listCapsuleInterfaceMaterializationFailures: async (capsuleId) => {
+        appReads.push(capsuleId);
+        return [screenFailure(0), stale, forApp];
+      },
+    },
+  });
+  const app = await h.app();
+  expect(app.primaryAction).toBe("retry_screen");
+  expect(app.problems).toContainEqual({
+    code: "screen_unavailable",
+    severity: "error",
+    screenFailure: {
+      id: forApp.id, failureDigest: forApp.failureDigest, stateVersionId: forApp.stateVersionId,
+      stateGeneration: forApp.stateGeneration, errorCode: forApp.error.code,
+    },
+  });
+  expect(app.incomplete ?? []).not.toContain("screen_problems");
+  expect(appReads).toEqual([CAPSULE]);
+  expect(workspaceReads).toBe(0);
 });
 
 test("a destroyed app renders after its Source has retired", async () => {

@@ -174,7 +174,7 @@ async function optional<T>(read: () => Promise<T>): Promise<Optional<T>> {
 }
 
 /** Share repeated inventory reads within one response, never between viewers/requests. */
-function appReadInventory(operations: ControlPlaneOperations) {
+function appReadInventory(operations: ControlPlaneOperations, screenScope: "workspace" | "app") {
   function once<K, V>(read: (key: K) => Promise<V>) {
     const pending = new Map<K, Promise<V>>();
     return (key: K): Promise<V> => {
@@ -184,9 +184,14 @@ function appReadInventory(operations: ControlPlaneOperations) {
     };
   }
   const connections = once((workspace: string) => operations.connections.listProviderConnections(workspace));
+  const listAppScreenFailures = screenScope === "app" ? operations.listCapsuleInterfaceMaterializationFailures : undefined;
+  const screenFailures = once((key: string) => listAppScreenFailures
+    ? listAppScreenFailures.call(operations, key, { limit: APP_SCREEN_FAILURE_LIMIT })
+    : operations.listInterfaceMaterializationFailures(key, { limit: APP_SCREEN_FAILURE_LIMIT }));
   return {
     connections,
-    screenFailures: once((workspace: string) => operations.listInterfaceMaterializationFailures(workspace, { limit: APP_SCREEN_FAILURE_LIMIT })),
+    screenFailures: (capsule: Pick<Capsule, "id" | "workspaceId">) =>
+      screenFailures(listAppScreenFailures ? capsule.id : capsule.workspaceId),
     ownerConnections: once(async (owner: string) => {
       const result: Awaited<ReturnType<typeof connections>>[number][] = [];
       if (operations.accountResources) {
@@ -222,7 +227,7 @@ export async function readCapsuleAppSummaries(
   preloadedConfigs?: ReadonlyMap<string, InstallConfig>,
 ) {
   const configs = ctx.operations.capsules;
-  const inventory = appReadInventory(ctx.operations);
+  const inventory = appReadInventory(ctx.operations, "workspace");
   const batch = preloadedConfigs
     ? Promise.resolve({ value: preloadedConfigs, failed: false })
     : configs.getInstallConfigsByIds && capsules.length > 0
@@ -256,7 +261,7 @@ export async function readCapsuleAppView(
 ): Promise<CapsuleAppView> {
   const { operations } = ctx;
   const [overview, source, adopted] = await Promise.all([
-    readAppOverview(ctx, capsule, now, optional(() => operations.capsules.getInstallConfig(capsule.installConfigId)), appReadInventory(operations)),
+    readAppOverview(ctx, capsule, now, optional(() => operations.capsules.getInstallConfig(capsule.installConfigId)), appReadInventory(operations, "app")),
     capsule.status === "destroyed"
       ? Promise.resolve<Optional<Source>>({ failed: false })
       : optional(async () => (await operations.getSource(capsule.sourceId)).source),
@@ -823,25 +828,24 @@ async function readConnectionIssues(
 
 interface ScreenFailureRead {
   readonly failure?: CapsuleAppScreenFailure;
-  /** False when the Workspace window was full, so a miss proves nothing. */
+  /** False when the failure window was full and did not contain this state. */
   readonly complete: boolean;
 }
 
 /**
- * The current generation's dead-lettered screen materialization, if any. The
- * ledger lists dead letters per Workspace, newest first, in a bounded window;
- * when the window is full and this app's entry is not in it, the answer is
- * reported as incomplete rather than as "no failure".
+ * The current state's dead-lettered screen materialization, if any. The app
+ * page uses its own records; launcher summaries share the Workspace window.
  */
 async function readScreenFailure(
   inventory: AppReadInventory,
   capsule: Capsule,
 ): Promise<ScreenFailureRead> {
-  const failures = await inventory.screenFailures(capsule.workspaceId);
+  const failures = await inventory.screenFailures(capsule);
   const failure = failures.find(
     (candidate) =>
       candidate.capsuleId === capsule.id &&
-      candidate.stateGeneration === capsule.currentStateGeneration,
+      candidate.stateGeneration === capsule.currentStateGeneration &&
+      (capsule.currentStateVersionId === undefined || candidate.stateVersionId === capsule.currentStateVersionId),
   );
   if (!failure) return { complete: failures.length < APP_SCREEN_FAILURE_LIMIT };
   return {

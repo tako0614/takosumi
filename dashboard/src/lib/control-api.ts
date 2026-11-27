@@ -1110,29 +1110,37 @@ export async function getWorkspaceBilling(
 
 /**
  * Queues one observed Interface materialization failure using the exact
- * failure/state identity returned by the preceding list read.
+ * failure/state identity shown by the app. An unknown outcome carries no receipt.
  */
-export async function retryInterfaceMaterializationFailure(
-  workspaceId: string,
+export async function retryCapsuleInterfaceMaterializationFailure(
+  capsuleId: string,
   intentId: string,
   input: RetryCapsuleInterfaceMaterializationFailureInput,
-): Promise<CapsuleInterfaceMaterializationRetryReceipt> {
-  const body = await controlFetch<{
-    readonly retry: CapsuleInterfaceMaterializationRetryReceipt;
-  }>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/interface-materialization-failures/${encodeURIComponent(intentId)}/retries`,
-    {
-      method: "POST",
-      // Keep this object explicit: the server's CAS contract rejects every
-      // extra key, and no fresh state identity may be invented client-side.
-      body: {
-        failureDigest: input.failureDigest,
-        stateVersionId: input.stateVersionId,
-        stateGeneration: input.stateGeneration,
+  scope: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<CapsuleInterfaceMaterializationRetryReceipt | undefined> {
+  let response: { readonly retry?: CapsuleInterfaceMaterializationRetryReceipt } | undefined;
+  try {
+    response = await controlFetch<typeof response>(
+      `${BASE}/capsules/${encodeURIComponent(capsuleId)}/interface-materialization-failures/${encodeURIComponent(intentId)}/retries`,
+      {
+        ...scope,
+        method: "POST",
+        body: {
+          failureDigest: input.failureDigest,
+          stateVersionId: input.stateVersionId,
+          stateGeneration: input.stateGeneration,
+        },
       },
-    },
-  );
-  return body.retry;
+    );
+  } catch (cause) {
+    if (!isMutationOutcomeUnknown(cause)) throw cause;
+  }
+  throwIfReadRetired(scope);
+  const receipt = response?.retry;
+  if (receipt?.status === "pending" && receipt.id === intentId && receipt.capsuleId === capsuleId &&
+    receipt.stateVersionId === input.stateVersionId && receipt.stateGeneration === input.stateGeneration) {
+    return receipt;
+  }
 }
 
 /** A listed failure may have disappeared or changed before its retry click. */

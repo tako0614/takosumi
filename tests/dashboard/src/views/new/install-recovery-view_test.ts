@@ -36,7 +36,7 @@ test("an unfinished install continues in place from its saved settings, never th
   expect(page).toContain("return managed() && typeof ref === \"string\"");
   // Continuing plans the app as configured and opens the in-page install
   // review; the old `/new?capsule=` locator now redirects to the app page.
-  const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const [screenRetryBusy"));
+  const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const continueRevision ="));
   expect(continueInstall).toContain('"install",');
   expect(continueInstall).toContain("extractRunId(await planCapsule(capsuleId()))");
   expect(page).not.toContain("/new?capsule=");

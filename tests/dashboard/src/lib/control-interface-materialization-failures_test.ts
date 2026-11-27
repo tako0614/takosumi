@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   ControlApiError,
   isInterfaceMaterializationRetryStale,
-  retryInterfaceMaterializationFailure,
+  retryCapsuleInterfaceMaterializationFailure,
   type CapsuleInterfaceMaterializationFailure,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -61,9 +61,9 @@ describe("Interface materialization failure control client", () => {
       );
     }) as typeof fetch;
 
-    const receipt = await retryInterfaceMaterializationFailure(
-      "workspace 1",
-      "intent 1",
+    const receipt = await retryCapsuleInterfaceMaterializationFailure(
+      FAILURE.capsuleId,
+      FAILURE.id,
       {
         failureDigest: FAILURE.failureDigest,
         stateVersionId: FAILURE.stateVersionId,
@@ -71,9 +71,9 @@ describe("Interface materialization failure control client", () => {
       },
     );
 
-    expect(receipt.status).toBe("pending");
+    expect(receipt?.status).toBe("pending");
     expect(captured!.url).toBe(
-      "/api/v1/workspaces/workspace%201/interface-materialization-failures/intent%201/retries",
+      `/api/v1/capsules/${FAILURE.capsuleId}/interface-materialization-failures/${FAILURE.id}/retries`,
     );
     expect(captured!.init?.method).toBe("POST");
     expect(JSON.parse(String(captured!.init?.body))).toEqual({
@@ -81,6 +81,21 @@ describe("Interface materialization failure control client", () => {
       stateVersionId: FAILURE.stateVersionId,
       stateGeneration: FAILURE.stateGeneration,
     });
+  });
+
+  test("does not confirm another app's receipt or a lost response", async () => {
+    for (const response of [
+      Response.json({ retry: {
+        id: FAILURE.id, capsuleId: "other_app", stateVersionId: FAILURE.stateVersionId,
+        stateGeneration: FAILURE.stateGeneration, status: "pending",
+      } }),
+      Response.json({ error: "unavailable" }, { status: 503 }),
+    ]) {
+      let requests = 0;
+      globalThis.fetch = (async () => { requests += 1; return response; }) as typeof fetch;
+      expect(await retryCapsuleInterfaceMaterializationFailure(FAILURE.capsuleId, FAILURE.id, FAILURE)).toBeUndefined();
+      expect(requests).toBe(1);
+    }
   });
 
   test("classifies disappeared and changed rows as stale without classifying 403", () => {
