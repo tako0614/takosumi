@@ -86,6 +86,84 @@ test("the advertised cold route supplies the shared session once and leaves noti
   expect(calls).toEqual([coldPath, notifications, health]);
 });
 
+function installTabLock(request: (options: LockOptions, read: () => Promise<unknown>) => Promise<unknown>) {
+  const original = Object.getOwnPropertyDescriptor(navigator, "locks");
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: { request: (_name: string, options: LockOptions, read: () => Promise<unknown>) => request(options, read) },
+  });
+  return () => {
+    if (original) Object.defineProperty(navigator, "locks", original);
+    else Reflect.deleteProperty(navigator, "locks");
+  };
+}
+
+test("a waiting tab makes its own initial session read after the other tab finishes", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const restore = installTabLock(async (_options, read) => {
+    entered.resolve();
+    await release.promise;
+    return read();
+  });
+  const calls = stub(() => Response.json(session, { headers: marked }));
+  try {
+    const pending = refreshSessionState(initialSessionOptions);
+    await entered.promise;
+    expect(calls).toEqual([]);
+    release.resolve();
+    expect(await pending).toMatchObject({ kind: "authenticated", ...session });
+    expect(calls).toEqual([coldPath]);
+  } finally {
+    release.resolve();
+    restore();
+  }
+});
+
+test("a stalled tab lock falls back to the authenticated GET at four seconds", async () => {
+  const entered = Promise.withResolvers<void>();
+  const restore = installTabLock(({ signal }) => new Promise((_resolve, reject) => {
+    signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+    entered.resolve();
+  }));
+  jest.useFakeTimers();
+  const calls = stub(() => Response.json(session, { headers: marked }));
+  try {
+    const pending = refreshSessionState(initialSessionOptions);
+    await entered.promise;
+    jest.advanceTimersByTime(3_999);
+    expect(calls).toEqual([]);
+    jest.advanceTimersByTime(1);
+    expect(await pending).toMatchObject({ kind: "authenticated", ...session });
+    expect(calls).toEqual([coldPath]);
+  } finally {
+    jest.useRealTimers();
+    restore();
+  }
+});
+
+test("sign-out while a tab waits prevents sending its superseded dashboard GET", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const restore = installTabLock(async (_options, read) => {
+    entered.resolve();
+    await release.promise;
+    return read();
+  });
+  const calls = stub(() => Response.json(session, { headers: marked }));
+  try {
+    const pending = refreshSessionState(initialSessionOptions);
+    await entered.promise;
+    expect(await signOutSession()).toBe(true);
+    release.resolve();
+    expect(await pending).toEqual({ kind: "unauthenticated" });
+    expect(calls).toEqual([]);
+  } finally {
+    release.resolve();
+    restore();
+  }
+});
+
 test("rollback with a stale capability only uses the old health-to-bootstrap flow after the reserved 404", async () => {
   const calls = stub((path) => {
     if (path === coldPath) return Response.json({ error: "not found" }, { status: 404 });

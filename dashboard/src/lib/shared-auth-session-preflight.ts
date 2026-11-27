@@ -9,6 +9,8 @@ export const SHARED_AUTH_READ_HEADER = "x-takosumi-shared-auth-read";
 const HEALTH_DEADLINE_MS = 40_000;
 const RECENT_READ_PROBE_MS = 5_000;
 const HOSTED_SESSION_RETRY_MS = [300, 900, 1_800] as const;
+const INITIAL_TAB_LOCK = "takosumi.dashboard-session.initial";
+const INITIAL_TAB_WAIT_MS = 4_000;
 
 type RoutePresence = "present" | "absent";
 type RouteKnowledge = RoutePresence | "failed";
@@ -183,6 +185,37 @@ async function withHostedSessionDeadline<T>(read: (signal: AbortSignal) => Promi
   }
 }
 
+async function coordinateInitialDashboardRead<T>(signal: AbortSignal, read: () => Promise<T>): Promise<T> {
+  const waiting = new AbortController();
+  const abortWait = () => waiting.abort();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let started = false;
+  try {
+    const locks = globalThis.navigator?.locks;
+    if (locks) {
+      throwIfSharedAuthCallerAborted(signal);
+      signal.addEventListener("abort", abortWait, { once: true });
+      timer = setTimeout(abortWait, INITIAL_TAB_WAIT_MS);
+      return await locks.request(INITIAL_TAB_LOCK, { signal: waiting.signal }, () => {
+        started = true;
+        clearTimeout(timer);
+        throwIfSharedAuthCallerAborted(signal);
+        // Each tab still makes its own authenticated read. Release the lock
+        // at the same deadline even if the browser transport never settles.
+        return forCaller(read(), signal);
+      });
+    }
+  } catch (error) {
+    if (started || signal.aborted) throw error;
+    // Unsupported or stalled coordination must leave the ordinary GET usable.
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", abortWait);
+  }
+  throwIfSharedAuthCallerAborted(signal);
+  return read();
+}
+
 async function readHealth(signal: AbortSignal, assertCurrent?: () => void): Promise<RoutePresence> {
   try {
     return await retryHostedSessionRead(signal, async () => {
@@ -248,22 +281,23 @@ export async function probeInitialSharedAuthSession<T extends { readonly authent
     }
   };
   const request = initialInflight ?? (readBootstrap && !healthInflight
-    ? Promise.resolve().then(() => withHostedSessionDeadline(async (signal): Promise<RoutePresence> => {
-      bootstrap = await retryHostedSessionRead(signal, () => {
+    ? Promise.resolve().then(() => withHostedSessionDeadline((signal): Promise<RoutePresence> =>
+      coordinateInitialDashboardRead(signal, async () => {
+        bootstrap = await retryHostedSessionRead(signal, () => {
+          assertCurrent();
+          return readBootstrap(signal);
+        }, (result) => result === undefined);
         assertCurrent();
-        return readBootstrap(signal);
-      }, (result) => result === undefined);
-      assertCurrent();
-      throwIfSharedAuthCallerAborted(signal);
-      const route = bootstrap ? "present" : await readHealth(signal, assertCurrent);
-      assertCurrent();
-      throwIfSharedAuthCallerAborted(signal);
-      if (route === "present" && capturedAvailability === availabilityGeneration) {
-        if (!bootstrap || bootstrap.authenticated) lastPresentAt = Date.now();
-        else invalidateRecentSharedAuthProbe();
-      }
-      return route;
-    }))
+        throwIfSharedAuthCallerAborted(signal);
+        const route = bootstrap ? "present" : await readHealth(signal, assertCurrent);
+        assertCurrent();
+        throwIfSharedAuthCallerAborted(signal);
+        if (route === "present" && capturedAvailability === availabilityGeneration) {
+          if (!bootstrap || bootstrap.authenticated) lastPresentAt = Date.now();
+          else invalidateRecentSharedAuthProbe();
+        }
+        return route;
+      })))
     : startHealth(true));
   initialInflight = request;
   try {
