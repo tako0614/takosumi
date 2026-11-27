@@ -70,6 +70,18 @@ export interface HostedOidcGrantRecord {
   authorizationCodeHash?: string;
 }
 
+export interface HostedGrantAuthorityInput {
+  readonly sid: string;
+  readonly subject: TakosumiSubject;
+  readonly issuerSessionId: string;
+  readonly clientId: string;
+}
+
+export interface HostedGrantAuthoritySnapshot {
+  readonly grant: HostedOidcGrantRecord;
+  readonly authenticationGeneration: number;
+}
+
 export interface UpstreamIdentityStatusRecord {
   identityKey: string;
   canonicalSubject: TakosumiSubject;
@@ -431,6 +443,11 @@ export interface FinancialSourceReceiptMutation {
 
 /** Optional ports keep ordinary self-host Accounts independent of hosted mode. */
 export interface HostedIdentityStore {
+  /** Read the live grant and generation at one storage snapshot. A missing,
+   * aliased or fenced account, or a revoked session/client, yields no result. */
+  findHostedGrantAuthority?(
+    input: HostedGrantAuthorityInput,
+  ): Promise<HostedGrantAuthoritySnapshot | undefined>;
   pruneConnectionOAuthAttempts?(input: ConnectionOAuthAttemptSweepInput): ConnectionOAuthAttemptSweepResult | Promise<ConnectionOAuthAttemptSweepResult>;
   createConnectionOAuthAttempt?(record: ConnectionOAuthAttemptRecord): boolean | Promise<boolean>;
   consumeConnectionOAuthAttempt?(id: string, browserBindingHash: string, now: number):

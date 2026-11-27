@@ -384,6 +384,105 @@ test("D1-backed hosted flow across two stores rotates and fails replay without r
   expect(persisted).not.toContain(grant.access_token);expect(persisted).not.toContain(grant.refresh_token!);expect(persisted).not.toContain(f.session.sessionId);expect(persisted).not.toContain(grant.code);
 });
 
+test("D1 hosted grant introspection uses one authority read and preserves durable denials", async () => {
+  const db = new SqliteFakeD1();
+  const store = new D1AccountsStore(db, { sessionHashSalt: "isolated-grant-authority-test-salt" });
+  const prepare = db.prepare.bind(db);
+  const reads: string[] = [];
+  let authorityUnavailable = false;
+  db.prepare = (query) => {
+    if (/^\s*(?:select|with)\b/iu.test(query)) reads.push(query);
+    if (authorityUnavailable && query.includes("AS grant_document")) throw new Error("Fixture authority read unavailable");
+    return prepare(query);
+  };
+  const f = await fixture(store);
+  const grant = await f.grant();
+  const token = (await store.findAccessToken(grant.access_token))!;
+  const sid = token.sid!;
+  const retained = (await store.findHostedOidcGrant(sid))!;
+  const account = (await store.findAccount(subject))!;
+  const introspect = () => f.introspect(grant.access_token);
+  const put = (bucket: string, key: string, value: unknown) => db.prepare(
+    "INSERT OR REPLACE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, 0)",
+  ).bind(bucket, key, JSON.stringify(value)).run();
+  const remove = (bucket: string, key: string) => db.prepare(
+    "DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key = ?",
+  ).bind(bucket, key).run();
+
+  reads.length = 0;
+  const optimized = await introspect();
+  expect(optimized).toMatchObject({ active: true, sub: subject });
+  expect(reads.filter((query) => query.includes("AS grant_document"))).toHaveLength(1);
+  const optimizedReads = reads.length;
+  const findAuthority = store.findHostedGrantAuthority;
+  store.findHostedGrantAuthority = undefined as never;
+  reads.length = 0;
+  try {
+    expect(await introspect()).toEqual(optimized);
+    expect(reads.length - optimizedReads).toBe(11);
+  } finally {
+    store.findHostedGrantAuthority = findAuthority;
+  }
+  authorityUnavailable = true;
+  try {
+    await expect(introspect()).rejects.toThrow("Fixture authority read unavailable");
+  } finally {
+    authorityUnavailable = false;
+  }
+
+  await store.saveAccessToken(grant.access_token, { ...token, identityGeneration: undefined });
+  const legacyGrant = { ...retained, identityGeneration: undefined };
+  await put("hosted_oidc_grants", sid, legacyGrant);
+  await put("authentication_generations", subject, { generation: null });
+  await put("canonical_accounts", subject, null);
+  await put("identity_merge_locks", subject, null);
+  expect(await introspect()).toEqual(optimized);
+  for (const generation of [1, false]) {
+    await put("authentication_generations", subject, { generation });
+    expect(await introspect()).toEqual({ active: false });
+  }
+  await remove("authentication_generations", subject);
+
+  await store.saveAccount({ ...account, subject: "tsub_other_canonical" });
+  await put("canonical_accounts", subject, { targetSubject: "tsub_other_canonical" });
+  expect(await introspect()).toEqual({ active: false });
+  await remove("canonical_accounts", subject);
+  await remove("accounts", subject);
+  expect(await introspect()).toEqual({ active: false });
+  await store.saveAccount(account);
+
+  await put("identity_merge_locks", subject, { operationId: "merge_fixture" });
+  expect(await introspect()).toEqual({ active: false });
+  await put("identity_merge_operations", "merge_fixture", { status: "reconciled" });
+  expect(await introspect()).toEqual({ active: false });
+  await put("identity_merge_operations", "merge_fixture", { status: "active" });
+  expect(await introspect()).toEqual(optimized);
+
+  const authorityInput = { sid, subject, issuerSessionId: token.issuerSessionId!, clientId: token.clientId };
+  for (const [bucket, key, expected] of [
+    ["hosted_oidc_revoked_sessions", authorityInput.issuerSessionId, { active: false }],
+    ["hosted_oidc_revoked_clients", authorityInput.clientId, { error: "invalid_client" }],
+  ] as const) {
+    // Marker presence is sufficient, even with a JSON null payload.
+    await put(bucket, key, null);
+    expect(await store.findHostedGrantAuthority(authorityInput)).toBeUndefined();
+    expect(await introspect()).toEqual(expected);
+    await remove(bucket, key);
+  }
+  for (const patch of [
+    { absoluteExpiresAt: Date.now() - 1 }, { absoluteExpiresAt: undefined },
+    { revokedAt: null }, { issuer: "https://other-issuer.example.test" },
+    { scope: "openid" }, { subject: "tsub_other_canonical" },
+  ]) {
+    await put("hosted_oidc_grants", sid, { ...legacyGrant, ...patch });
+    expect(await introspect()).toEqual({ active: false });
+  }
+  await put("hosted_oidc_grants", sid, legacyGrant);
+  expect(await introspect()).toEqual(optimized);
+  await store.revokeHostedOidcGrant(sid, Date.now());
+  expect(await introspect()).toEqual({ active: false });
+});
+
 async function directoryFixture(workspaceMutationsFrozen?: boolean) {
   const f=await fixture();
   const control=new InMemoryOpenTofuControlStore();let id=0;
@@ -595,6 +694,8 @@ test("workerd + native D1 completes hosted HTTP flow and refresh race with hashe
     const headers={"content-type":"application/x-www-form-urlencoded",authorization:`Basic ${btoa("hosted:workerd-test-secret")}`};
     const exchanged=await runtime.dispatchFetch(`${issuer}/oauth/token`,{method:"POST",headers,body:new URLSearchParams({grant_type:"authorization_code",code,redirect_uri:"https://hosted.example.test/auth/callback",code_verifier:verifier}).toString()});expect(exchanged.status).toBe(200);
     const grant=await exchanged.json() as {access_token:string;refresh_token:string;id_token:string};expect(claims(grant.id_token)).toMatchObject({iss:issuer,sub:"tsub_workerd_shared",aud:"hosted",nonce:"workerd-nonce"});
+    const active=await runtime.dispatchFetch(`${issuer}/oauth/introspect`,{method:"POST",headers,body:new URLSearchParams({token:grant.access_token}).toString()});
+    expect(await active.json()).toMatchObject({active:true,sub:"tsub_workerd_shared"});
     const refresh=()=>runtime.dispatchFetch(`${issuer}/oauth/token`,{method:"POST",headers,body:new URLSearchParams({grant_type:"refresh_token",refresh_token:grant.refresh_token}).toString()});
     const race=await Promise.all([refresh(),refresh()]);expect(race.filter((r)=>r.status===200).length).toBeLessThanOrEqual(1);expect(race.some((r)=>r.status===400)).toBe(true);
     for(const result of race) if(result.status===200) {

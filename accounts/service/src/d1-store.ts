@@ -5,7 +5,7 @@ import { prepareInterfaceInvocationAccessRecord } from "../../../contract/intern
 import { HostedIdentityRecords } from "./hosted-identity-records.ts";
 import { admitD1PasskeyChallenge, pruneD1PasskeyChallenges } from "./passkey-challenge-d1.ts";
 import type { PasskeyChallengeAdmissionInput, PasskeyChallengeSweepInput, PasskeyChallengeSweepResult } from "./passkey-challenge-policy.ts";
-import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
+import type { IdentityOperationReceiptRecord, AccountEmailProofRecord, HostedGrantAuthorityInput, HostedGrantAuthoritySnapshot, HostedOidcGrantRecord, IdentityMergeMutation, IdentityMergeOperation, UnlinkUpstreamIdentityInput, UpstreamIdentityStatusRecord, UpstreamLoginTransactionRecord } from "./identity-state.ts";
 import { D1IdentityRecordRepository } from "./d1-identity-records.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { TAKOSUMI_ACCOUNTS_PAT_SCOPES } from "@takosjp/takosumi-accounts-contract";
@@ -222,6 +222,33 @@ from presented_pat_secret
 join takosumi_accounts_documents as pat
   on pat.bucket = 'personal_access_tokens'
  and pat.key = json_extract(presented_pat_secret.document, '$.tokenId')`;
+
+// Each lookup uses the existing (bucket, key) primary key. Revocation is row
+// presence, whereas a decoded null alias/lock is absent in the identity store.
+const FIND_HOSTED_GRANT_AUTHORITY_SQL = `
+  SELECT hosted_grant.document AS grant_document,
+    (SELECT document FROM ${d1AccountsTableNames.documents}
+      WHERE bucket = 'authentication_generations' AND key = ?2) AS generation_document
+  FROM ${d1AccountsTableNames.documents} hosted_grant
+  WHERE hosted_grant.bucket = 'hosted_oidc_grants' AND hosted_grant.key = ?1
+    AND EXISTS (SELECT 1 FROM ${d1AccountsTableNames.documents} account
+      WHERE account.bucket = 'accounts' AND account.key = ?2
+        AND json_extract(account.document, '$.subject') = ?2)
+    AND NOT EXISTS (SELECT 1 FROM ${d1AccountsTableNames.documents} alias
+      WHERE alias.bucket = 'canonical_accounts' AND alias.key = ?2
+        AND json_type(alias.document) <> 'null')
+    AND NOT EXISTS (SELECT 1 FROM ${d1AccountsTableNames.documents} lock
+      WHERE lock.bucket = 'identity_merge_locks' AND lock.key = ?2
+        AND json_type(lock.document) <> 'null'
+        AND NOT EXISTS (SELECT 1 FROM ${d1AccountsTableNames.documents} operation
+          WHERE operation.bucket = 'identity_merge_operations'
+            AND json_type(lock.document, '$.operationId') = 'text'
+            AND operation.key = json_extract(lock.document, '$.operationId')
+            AND json_extract(operation.document, '$.status') = 'active'))
+    AND NOT EXISTS (SELECT 1 FROM ${d1AccountsTableNames.documents}
+      WHERE bucket = 'hosted_oidc_revoked_sessions' AND key = ?3)
+    AND NOT EXISTS (SELECT 1 FROM ${d1AccountsTableNames.documents}
+      WHERE bucket = 'hosted_oidc_revoked_clients' AND key = ?4)`;
 
 const PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL = `with
   subject_tokens as (
@@ -671,6 +698,21 @@ export class D1AccountsStore implements AccountsStore {
   consumeUpstreamLoginTransaction(id: string, browserBindingHash: string, now: number): Promise<UpstreamLoginTransactionRecord | undefined> { return this.#hosted.consumeUpstreamLoginTransaction(id, browserBindingHash, now); }
   saveHostedOidcGrant(record: HostedOidcGrantRecord): Promise<void> { return this.#hosted.saveHostedOidcGrant(record); }
   findHostedOidcGrant(sid: string): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrant(sid); }
+  async findHostedGrantAuthority(input: HostedGrantAuthorityInput): Promise<HostedGrantAuthoritySnapshot | undefined> {
+    await this.initialize();
+    const row = await this.#db.prepare(FIND_HOSTED_GRANT_AUTHORITY_SQL)
+      .bind(input.sid, input.subject, input.issuerSessionId, input.clientId)
+      .first<{ grant_document: string; generation_document: string | null }>();
+    if (!row) return undefined;
+    const grant = JSON.parse(row.grant_document) as HostedOidcGrantRecord | null;
+    const generation = row.generation_document === null
+      ? null
+      : JSON.parse(row.generation_document) as { generation?: number } | null;
+    // Decode in TypeScript so a stored JSON boolean is never a generation 0/1.
+    const authenticationGeneration = generation?.generation ?? 0;
+    if (!grant || !Number.isSafeInteger(authenticationGeneration) || authenticationGeneration < 0) return undefined;
+    return { grant, authenticationGeneration };
+  }
   findHostedOidcGrantForSession(input: {issuerSessionId: string; clientId: string; subject: TakosumiSubject}): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrantForSession(input); }
   findHostedOidcGrantForCode(authorizationCodeHash: string): Promise<HostedOidcGrantRecord | undefined> { return this.#hosted.findHostedOidcGrantForCode(authorizationCodeHash); }
   revokeHostedOidcGrant(sid: string, now: number): Promise<void> { return this.#hosted.revokeHostedOidcGrant(sid, now); }
