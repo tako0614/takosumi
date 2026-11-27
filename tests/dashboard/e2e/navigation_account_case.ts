@@ -271,6 +271,7 @@ export function registerNavigationAccountCases(mode: string): void {
               id: "hosted-workspace-billing", slot: "workspace.billing",
               href: scenario === "unadvertised" ? "/api/v1/billing/subscription" : "/api/v1/billing",
               presentation: "link", label: "使用量と課金", labels: { en: "Usage and billing", ja: "使用量と課金" },
+              descriptions: { en: "Rates and invoices", ja: "料金明細を確認" },
             }],
           },
         }));
@@ -280,18 +281,29 @@ export function registerNavigationAccountCases(mode: string): void {
         await page.goto("/account/usage", { waitUntil: "domcontentloaded" });
         await catalog;
         await expect(page.getByRole("heading", { level: 1, name: language === "ja" ? "料金と利用量" : "Billing and usage" })).toBeVisible();
-        const link = page.getByRole("link", { name: language === "ja" ? "使用量と課金" : "Usage and billing", exact: true });
+        const label = language === "ja" ? "使用量と課金" : "Usage and billing";
+        const link = page.getByRole("link", { name: label, exact: true });
         if (scenario === "shared") {
           const href = `/api/v1/billing?workspaceId=ws_personal&lang=${language}`;
           await expect(link).toHaveAttribute("href", href);
+          await expect(page.getByText(label, { exact: true })).toHaveCount(1);
+          await expect(page.getByText(language === "ja" ? "料金明細を確認" : "Rates and invoices", { exact: true })).toBeVisible();
+          expect(cursors).toEqual([null, "next_workspace_page"]);
           await page.route("**/api/v1/billing?**", (route) => {
             expect(route.request().method()).toBe("GET");
-            return route.fulfill({ contentType: "text/html", body: "<h1>Hosted billing fixture</h1>" });
+            return route.fulfill({
+              contentType: "text/html",
+              body: '<h1>Hosted billing fixture</h1><a href="/account/usage">Return to usage</a>',
+            });
           });
           await link.click();
           await expect(page.getByRole("heading", { name: "Hosted billing fixture" })).toBeVisible();
           expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(href);
-          expect(cursors).toEqual([null, "next_workspace_page"]);
+          await page.getByRole("link", { name: "Return to usage" }).click();
+          await expect(page).toHaveURL((url) => url.pathname === "/account/usage");
+          await expect(link).toHaveAttribute("href", href);
+          await expect(page.getByText(label, { exact: true })).toHaveCount(1);
+          expect(cursors).toEqual([null, "next_workspace_page", null, "next_workspace_page"]);
         } else if (holdWorkspaceRead) {
           try {
             await workspaceReadStarted.promise;

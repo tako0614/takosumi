@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import platformWorker, { type CloudflareWorkerEnv } from "../../../deploy/platform/worker.ts";
 import { handlePlatformBrowserBillingRequest } from "../../../deploy/platform/browser-billing.ts";
 import type { PlatformExtensionRoute } from "../../../deploy/platform/platform_extensions.ts";
@@ -74,6 +74,80 @@ test("actual platform fetch captures RP cookie before generic stripping and send
   expect(forwarded.request.headers.get("cookie")).toBe(cookie);
   expect(forwarded.request.headers.get("x-untrusted-extra")).toBeNull();
   expect(value.bodyUsed).toBe(false);
+});
+
+test("staging billing HTML adds only the authenticated RP and billing RPC timings", async () => {
+  const f = fixture();
+  const authenticate = f.rpc.authenticateSharedAuth;
+  const dispatch = f.rpc.fetchWorkspaceDashboard;
+  let now = 1_000;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  try {
+    f.rpc.authenticateSharedAuth = async function (incoming) {
+      const identity = await authenticate.call(this, incoming);
+      now += 24;
+      return identity;
+    };
+    f.rpc.fetchWorkspaceDashboard = async function (incoming, session) {
+      await dispatch.call(this, incoming, session);
+      now += 36;
+      return new Response("<h1>Workspace billing</h1>", { headers: {
+        "content-type": "text/html; charset=utf-8",
+        "content-language": "ja",
+        "server-timing": "tk_hosted_billing_workspace;dur=8.0, tk_hosted_billing_reply;dur=1.0",
+      } });
+    };
+    const result = await fetch(request(root + "?workspaceId=ws_selected&lang=ja", { headers: {
+      accept: "text/html",
+      "server-timing": "client_supplied;dur=123",
+    } }), f.env);
+    expect(result.status).toBe(200);
+    expect(result.headers.get("server-timing")).toBe(
+      "tk_hosted_billing_workspace;dur=8.0, tk_hosted_billing_reply;dur=1.0, tk_billing_rp_auth;dur=24.0, tk_billing_rpc;dur=36.0",
+    );
+    expect(result.headers.get("cache-control")).toBe("private, no-store");
+    expect(result.headers.get("content-language")).toBe("ja");
+    expect(await result.text()).toBe("<h1>Workspace billing</h1>");
+    expect(f.seen.auth).toHaveLength(1);
+    expect(f.seen.auth[0]!.headers.has("server-timing")).toBe(false);
+    expect(f.seen.dashboard).toHaveLength(1);
+    expect(f.seen.dashboard[0]!.request.headers.has("server-timing")).toBe(false);
+    expect(f.seen.dashboard[0]!.session).toEqual({ authKind: "session", subject: "tsub_canonical" });
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test("billing timings leave JSON, actions, redirects, errors and financial leaves untouched", async () => {
+  const existing = "tk_hosted_existing;dur=1.0";
+  const view = root + "?workspaceId=ws_selected";
+  for (const [value, status, contentType, expected] of [
+    [request(view + "&format=json"), 200, "text/html", 200],
+    [request(view), 200, "application/json", 200],
+    [request(view), 206, "text/html", 206],
+    [post(view, "workspaceId=ws_selected", { "content-type": "application/x-www-form-urlencoded" }), 200, "text/html", 200],
+    [post(view, { workspaceId: "ws_selected" }), 303, "text/html", 200],
+    [request(view), 303, "text/html", 303],
+    [request(view), 401, "text/html", 401],
+    [request(view), 503, "text/html", 503],
+    [request(root + "/subscription?workspaceId=ws_selected"), 200, "text/html", 200],
+  ] as const) {
+    const f = fixture();
+    f.rpc.fetchWorkspaceDashboard = async () => new Response(status === 303 ? null : "fixture", { status, headers: {
+      "content-type": contentType,
+      "server-timing": existing,
+      ...(status === 303 ? { location: "https://console.example.test/original-view" } : {}),
+    } });
+    const response = await fetch(value, f.env);
+    expect(response.status).toBe(expected);
+    expect(response.headers.get("server-timing")).toBe(existing);
+  }
+  const anonymous = fixture();
+  anonymous.rpc.authenticateSharedAuth = async () => ({ kind: "unauthenticated" });
+  const denied = await fetch(request(view), anonymous.env);
+  expect(denied.status).toBe(401);
+  expect(denied.headers.get("server-timing")).toBeNull();
+  expect(anonymous.seen.dashboard).toHaveLength(0);
 });
 
 test("exact staging billing base views generate a private auth trace, never forwarding a browser trace", async () => {

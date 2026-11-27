@@ -1,4 +1,9 @@
 import {
+  appendServerTiming,
+  measureServerTiming,
+  type ServerTimingBucket,
+} from "../../accounts/service/src/server-timing.ts";
+import {
   authenticateSharedAuthRequest,
   sharedAuthConfigured,
   type SharedAuthEnvironment,
@@ -230,9 +235,11 @@ export async function handlePlatformBrowserBillingRequest(
   // Authentication gets a headers-only snapshot, so no tee or duplicate body
   // read exists. Only the narrow dashboard RPC receives the bounded body bytes.
   if (signal.aborted) return response(400, "invalid_billing_request");
-  const identity = await authenticateSharedAuthRequest(new Request(url, {
-    method, headers: privateHeaders, redirect: "manual",
-  }), capturedEnv, billingTrace);
+  const timings: ServerTimingBucket = baseView && method === "GET" && !query.has("format") ? [] : undefined;
+  const identity = await measureServerTiming(timings, "tk_billing_rp_auth", () =>
+    authenticateSharedAuthRequest(new Request(url, {
+      method, headers: privateHeaders, redirect: "manual",
+    }), capturedEnv, billingTrace));
   if (signal.aborted) return response(400, "invalid_billing_request");
   if (identity?.kind === "unauthenticated") return response(401, "unauthenticated");
   if (identity?.kind !== "authenticated") {
@@ -249,14 +256,15 @@ export async function handlePlatformBrowserBillingRequest(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const dispatchDeadline = Symbol();
   try {
-    const result = await Promise.race([
-      dispatch(new Request(dashboardUrl, { method, headers: privateHeaders, body, redirect: "manual" }),
-        Object.freeze({ authKind: "session", subject: identity.accountId })),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(dispatchDeadline),
-          baseView ? viewDispatchTimeoutMs : financialDispatchTimeoutMs);
-      }),
-    ]);
+    const result = await measureServerTiming(timings, "tk_billing_rpc", () =>
+      Promise.race([
+        dispatch(new Request(dashboardUrl, { method, headers: privateHeaders, body, redirect: "manual" }),
+          Object.freeze({ authKind: "session", subject: identity.accountId })),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(dispatchDeadline),
+            baseView ? viewDispatchTimeoutMs : financialDispatchTimeoutMs);
+        }),
+      ]));
     if (!(result instanceof Response)) {
       return failed("dispatch-nonresponse", response(503, "billing_unavailable"));
     }
@@ -270,7 +278,13 @@ export async function handlePlatformBrowserBillingRequest(
     responseHeaders.delete(failurePhaseHeader);
     responseHeaders.set("cache-control", "private, no-store");
     const returned = new Response(selectedResult.body, { status: selectedResult.status, statusText: selectedResult.statusText, headers: responseHeaders });
-    return returned.status === 503 ? failed("receiver-returned503", returned) : returned;
+    if (returned.status === 503) return failed("receiver-returned503", returned);
+    // Only authenticated HTML page loads expose these two fixed durations.
+    if (timings && returned.status === 200 &&
+      responseHeaders.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "text/html") {
+      return appendServerTiming(returned, timings);
+    }
+    return returned;
   } catch (error) {
     // A lost response never retries or creates a new operation/reference.
     return failed(error === dispatchDeadline ? "dispatch-timeout" : "dispatch-rejected",
