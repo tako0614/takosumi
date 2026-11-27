@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { GitInstallPlanPhase } from "takosumi-contract/install-plans";
+import type { GitInstallPlanPhase } from "takosumi-contract";
 import { isJapaneseCli } from "./cli-help.ts";
 import type { CliIo } from "./cli-io.ts";
 import { booleanOption, optionalStringOption, parseOptions } from "./cli-options.ts";
