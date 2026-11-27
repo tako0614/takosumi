@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { GitInstallPlanPhase } from "takosumi-contract/install-plans";
 import { isJapaneseCli } from "./cli-help.ts";
 import type { CliIo } from "./cli-io.ts";
 import { booleanOption, optionalStringOption, parseOptions } from "./cli-options.ts";
@@ -11,8 +12,19 @@ import { runAppUpdate, runAppRollback, runAppHistory, runAppApply, runAppRecover
 
 const APPS_PATH = "/api/v1/apps";
 const INSTALL_PLANS_PATH = "/api/v1/install-plans";
+const installPlanPhases = {
+  syncing_source: true,
+  compiling_install: true,
+  analyzing_compatibility: true,
+  awaiting_input: true,
+  creating_capsule: true,
+  planning: true,
+  reviewable: true,
+  failed: true,
+  discarded: true,
+} satisfies Record<GitInstallPlanPhase, true>;
 
-function isMissingAppRoute(error: unknown): error is DeployControlApiError {
+function isMissingAppRoute(error: unknown, allowUnclassified = false): error is DeployControlApiError {
   const bodyError = error instanceof DeployControlApiError && isRecord(error.body)
     ? error.body.error
     : undefined;
@@ -25,7 +37,8 @@ function isMissingAppRoute(error: unknown): error is DeployControlApiError {
     !stringValue(bodyError.message) && hasOnlyRouteEnvelopeFields;
 
   return error instanceof DeployControlApiError && error.status === 404 &&
-    (error.code === undefined || ["route_not_found", "fixture_route_not_found"].includes(error.code) ||
+    ((error.code === undefined && (allowUnclassified || error.plainRouteMissing)) ||
+      error.code === "route_not_found" || error.code === "fixture_route_not_found" ||
       (error.code === "not_found" && isRecord(error.body) && (
         error.body.error === "not_found" ||
         isCodeOnlyRouteNotFound || isDocumentedRouteNotFound
@@ -68,7 +81,7 @@ export async function runAppsList(args: string[], io: CliIo): Promise<number> {
         auth: "accounts",
       });
     } catch (error) {
-      if (!isMissingAppRoute(error) || !workspaceId) {
+      if (!isMissingAppRoute(error, true) || !workspaceId) {
         throw error;
       }
       path = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/installed-apps`;
@@ -96,6 +109,14 @@ export async function runAppInstall(args: string[], io: CliIo): Promise<number> 
   }
   const workspaceId = optionalStringOption(options, "workspace");
   const requestedIdempotencyKey = options.idempotencyKey;
+  const resumeLegacyWorkspaceId = optionalStringOption(options, "resumeLegacyWorkspace");
+  if (options.resumeLegacyWorkspace !== undefined &&
+      (!resumeLegacyWorkspaceId || options.workspace !== undefined || typeof requestedIdempotencyKey !== "string")) {
+    io.stderr(isJapaneseCli()
+      ? "--resume-legacy-workspace <id> には保存済みの --idempotency-key が必要です。--workspace は省略してください。"
+      : "Pass a saved --idempotency-key with --resume-legacy-workspace <id> and omit --workspace.");
+    return 2;
+  }
   if (requestedIdempotencyKey !== undefined && (
     typeof requestedIdempotencyKey !== "string" ||
     requestedIdempotencyKey.length === 0 ||
@@ -129,42 +150,56 @@ export async function runAppInstall(args: string[], io: CliIo): Promise<number> 
     source,
     ...(Object.keys(capsule).length > 0 ? { capsule } : {}),
   };
+  let legacyAttemptWorkspaceId = resumeLegacyWorkspaceId;
+  const post = () => {
+    if (legacyAttemptWorkspaceId) {
+      io.stderr(JSON.stringify({ kind: "install_attempt_legacy_workspace", workspaceId: legacyAttemptWorkspaceId }));
+    }
+    return requestDeployControlApi({
+      path: legacyAttemptWorkspaceId
+        ? `/api/v1/workspaces/${encodeURIComponent(legacyAttemptWorkspaceId)}/install-plans`
+        : INSTALL_PLANS_PATH,
+      method: "POST",
+      body,
+      options,
+      auth: "accounts",
+      extraHeaders: attemptHeaders,
+      redirect: "error",
+    });
+  };
   try {
     // Retain this before dispatch: a lost create response must not strand the
     // generated key. It is an intent reference, not proof of acceptance.
     io.stderr(JSON.stringify({ kind: "install_attempt_key", idempotencyKey }));
     let response: unknown;
     try {
-      response = await requestDeployControlApi({
-        path: INSTALL_PLANS_PATH,
-        method: "POST",
-        body,
-        options,
-        auth: "accounts",
-        extraHeaders: attemptHeaders,
-      });
+      response = await post();
     } catch (error) {
-      if (!isMissingAppRoute(error) || !workspaceId) {
-        if (isMissingAppRoute(error) && !workspaceId) {
-          throw new Error(isJapaneseCli()
-            ? "このサーバーはワークスペースなしのアプリインストールに対応していません。サーバーを更新するか、旧サーバーとの互換利用で --workspace を指定してください。"
-            : "Workspace-less app install is not available on this server; update the server or pass --workspace for legacy compatibility.");
-        }
-        throw error;
+      if (legacyAttemptWorkspaceId || !isMissingAppRoute(error)) throw error;
+      if (!workspaceId) {
+        io.stderr(isJapaneseCli()
+          ? "このサーバーはワークスペースなしのアプリインストールに対応していません。サーバーを更新するか、旧サーバーとの互換利用で --workspace を指定してください。"
+          : "Workspace-less app install is not available on this server; update the server or pass --workspace for legacy compatibility.");
+        return 1;
       }
-      response = await requestDeployControlApi({
-        path: `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/install-plans`,
-        method: "POST",
-        body,
-        options,
-        auth: "accounts",
-        extraHeaders: attemptHeaders,
-      });
+      legacyAttemptWorkspaceId = workspaceId;
+      response = await post();
     }
     io.stdout(formatAppInstall(response, booleanOption(options, "json")));
     return 0;
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
+    if (!(error instanceof DeployControlApiError) || error.status >= 500 ||
+        (error.status === 404 && error.code === undefined)) {
+      io.stderr(isJapaneseCli()
+        ? "導入の受付を確認できませんでした。同じ接続先・Accounts ID・要求で、出力された試行キーを --idempotency-key に指定して再実行してください。"
+        : "Install acceptance is unconfirmed. Retry with the same server, Accounts identity, and request, using the printed attempt key as --idempotency-key.");
+      if (legacyAttemptWorkspaceId) {
+        io.stderr(isJapaneseCli()
+          ? "旧経路の試行を復旧するには、--workspace の代わりに --resume-legacy-workspace と出力された Workspace ID を指定してください。"
+          : "To recover an attempt sent to a legacy Workspace, replace --workspace with --resume-legacy-workspace and the printed Workspace ID.");
+      }
+    }
     return 1;
   }
 }
@@ -245,13 +280,21 @@ function formatAppsList(value: unknown, json: boolean): string {
 }
 
 function formatAppInstall(value: unknown, json: boolean): string {
-  if (json) return JSON.stringify(value, null, 2);
   const plan = isRecord(value) && isRecord(value.installPlan) ? value.installPlan : undefined;
-  const id = plan ? stringValue(plan.id) : undefined;
-  const phase = plan ? stringValue(plan.phase) : undefined;
+  const id = plan?.id;
+  const phase = plan?.phase;
+  if (typeof id !== "string" || /^[A-Za-z0-9_-]{1,256}$/u.exec(id)?.[0] !== id ||
+      typeof phase !== "string" || !Object.hasOwn(installPlanPhases, phase) ||
+      (plan?.operation !== undefined && plan.operation !== "install") ||
+      (plan?.mode !== undefined && plan.mode !== "attempt")) {
+    throw new Error(isJapaneseCli()
+      ? "接続先から有効な導入の試行を確認できませんでした。"
+      : "The server did not confirm an install attempt.");
+  }
+  if (json) return JSON.stringify(value, null, 2);
   return isJapaneseCli()
-    ? `アプリのインストールを開始しました${id ? `: ${id}` : ""}${phase ? ` (${phase})` : ""}`
-    : `App install started${id ? `: ${id}` : ""}${phase ? ` (${phase})` : ""}`;
+    ? `アプリの導入試行: ${id} (${phase})`
+    : `App install attempt: ${id} (${phase})`;
 }
 
 function formatAppUninstall(capsuleId: string, value: unknown, json: boolean): string {
@@ -349,6 +392,7 @@ export function appsInstallHelpText(): string {
     "         --app-name <name>, --environment <name>, --workspace <id>",
     "--workspace is used only when an older server returns 404.",
     "--idempotency-key <key> reuses this attempt key for a manual retry.",
+    "--resume-legacy-workspace <id> reuses the saved legacy route with --idempotency-key.",
     "The key is printed as JSON to stderr before sending; retain it with the same request.",
     "--url <Takosumi origin> --token <Accounts PAT> --json",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN",
@@ -359,6 +403,7 @@ export function appsInstallHelpText(): string {
     "          --app-name <name>、--environment <name>、--workspace <id>",
     "--workspace は旧サーバーが 404 を返した場合だけ使います。",
     "--idempotency-key <key> は手動再試行で同じ試行キーを使います。",
+    "--resume-legacy-workspace <id> は --idempotency-key とともに保存済みの旧経路を使います。",
     "送信前にキーを標準エラーへJSONで出力します。同じ要求と一緒に保持してください。",
     "--url <Takosumi origin> --token <Accounts PAT> --json",
     "環境変数: TAKOSUMI_ACCOUNT_TOKEN",

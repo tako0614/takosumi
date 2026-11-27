@@ -10,6 +10,7 @@ export class DeployControlApiError extends Error {
     readonly status: number,
     readonly code?: string,
     readonly body?: unknown,
+    readonly plainRouteMissing = false,
   ) {
     super(message);
     this.name = "DeployControlApiError";
@@ -71,11 +72,16 @@ export async function requestDeployControlApi(input: {
     }
   }
   if (!response.ok) {
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    const plainRouteMissing = response.status === 404 &&
+      (contentType === undefined || contentType === "text/plain") &&
+      /^(?:not found|route missing)$/iu.test(text.trim());
     throw new DeployControlApiError(
       deployControlApiErrorMessage(body, `HTTP ${response.status}`),
       response.status,
       isRecord(body) ? (isRecord(body.error) ? stringValue(body.error.code) : stringValue(body.error)) : undefined,
       body,
+      plainRouteMissing,
     );
   }
   if (body === undefined) {

@@ -38,10 +38,11 @@ takosumi apps install --git https://git.example.com/team/app.git \
 ```
 
 Omitting `--idempotency-key` generates a key. Retain the printed key together with the selected target, account, Git URL, ref, path, names, and environment.
-If a lost response leaves acceptance unknown, manually retry with the same account, target, request, and `--idempotency-key`.
-Inline values such as `--idempotency-key=initial=app=01` remain intact. The CLI does not automatically resend a POST when a lost response leaves acceptance unknown.
+The CLI reports acceptance after it receives a valid install attempt ID and phase. If the server redirects, the connection drops, or the response fails to confirm an attempt, rerun the command with the same account, target, request, and printed `--idempotency-key`.
+With `--idempotency-key=initial=app=01`, the entire value is the attempt key.
 Existing legacy compatibility remains: with `--workspace`, a recognized route-missing 404 triggers a POST with the same key and request to the old Workspace route.
-The same key and request return the existing attempt; changing the request with that key returns 409.
+Before sending to a legacy Workspace, the CLI writes `kind: "install_attempt_legacy_workspace"` and `workspaceId` to stderr. To recover that attempt, replace `--workspace` with `--resume-legacy-workspace <workspaceId>` and use the same printed `--idempotency-key`. This sends the request directly to that Workspace after a server upgrade as well. If an earlier CLI invocation left the route unclear, inspect the apps and install attempts before rerunning the command.
+The same route, key, and request return the saved attempt. Changing the request with the same route and key returns 409.
 An expired attempt is not replaced by a new one under the same key. Inspect the original attempt and current state before starting with a new key.
 
 ## Review and execute an app Git update

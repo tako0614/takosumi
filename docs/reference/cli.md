@@ -38,10 +38,11 @@ takosumi apps install --git https://git.example.com/team/app.git \
 ```
 
 `--idempotency-key`を省くとキーを自動生成します。出力したキーを、選択した接続先・本人・Git URL・ref・path・名前・環境と一緒に保持してください。
-応答喪失などで受付結果が不明な場合は、同じ本人・接続先・要求を保ち、同じキーを`--idempotency-key`に指定して手動再送します。
-`--idempotency-key=initial=app=01`も全体を保持します。応答喪失などで受付結果が不明な場合、CLIはPOSTを自動再送しません。
+CLI は応答に有効な導入試行 ID と状態がある場合に受付を表示します。リダイレクト、通信断、試行を確認できない応答では、同じ本人・接続先・要求を保ち、出力された同じキーを `--idempotency-key` に指定して再実行します。
+`--idempotency-key=initial=app=01` では、値全体が試行キーになります。
 既存の互換動作として、`--workspace`指定時に新routeが未提供と分かる404を返した場合だけ、同じkeyと要求を旧Workspace routeへ送ります。
-同じkeyと同じ要求は既存attemptを返し、同じkeyで要求が異なる場合は409です。
+旧経路へ送信する直前には、標準エラーへ `kind: "install_attempt_legacy_workspace"` と `workspaceId` を出力します。旧経路の試行の復旧には、`--workspace` の代わりに `--resume-legacy-workspace <workspaceId>` を指定し、出力された同じ `--idempotency-key` を使ってください。サーバー更新後も、指定した旧 Workspace に直接送ります。以前の CLI で受付経路が分からない場合は、再実行前にアプリと導入試行の一覧を確認してください。
+同じ経路・キー・要求は保存済み試行を返します。同じ経路とキーで異なる要求を送ると409です。
 期限切れattemptも同じkeyでは新規に置き換えません。元attemptと現在の状態を確認し、不明なまま新keyで始め直さないでください。
 
 ## アプリのGit版更新を確認・実行する
