@@ -358,34 +358,49 @@ test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client
     .toEqual(["create", "update"]);
 });
 
-test("disabling auto-update while the Plan runs leaves the review for manual Apply", async () => {
-  const { store, controller, runner, initialApplyCalls } =
-    await buildActiveCapsule({ autoUpdate: true });
-  const capsules = new CapsulesService({ store });
-  runner.beforePlanResult = async () => {
-    expect((await capsules.setCapsuleAutoUpdate("cap_auto0001", false)).autoUpdate)
-      .toBe(false);
-  };
+test.each(["while the Plan runs", "just before Apply registration"] as const)(
+  "disabling auto-update %s leaves the review for manual Apply",
+  async (timing) => {
+    const { store, controller, runner, initialApplyCalls } =
+      await buildActiveCapsule({ autoUpdate: true });
+    const capsules = new CapsulesService({ store });
+    const turnOff = async () => {
+      expect((await capsules.setCapsuleAutoUpdate("cap_auto0001", false)).autoUpdate)
+        .toBe(false);
+    };
+    if (timing === "while the Plan runs") {
+      runner.beforePlanResult = turnOff;
+    } else {
+      const beginApplyRun = store.beginApplyRun.bind(store);
+      store.beginApplyRun = async (...args) => {
+        store.beginApplyRun = beginApplyRun;
+        await turnOff();
+        return await beginApplyRun(...args);
+      };
+    }
 
-  await syncNewCommit(controller);
+    await syncNewCommit(controller);
 
-  const plan = (await planRunsOf(controller, store)).find((run) => run.autoApplyRequested);
-  if (!plan) throw new Error("auto-update Plan was not created");
-  expect(plan.status).toBe("succeeded");
-  expect(plan.appliedApplyRunId).toBeUndefined();
-  expect((await store.listRunsByWorkspace("ws_test001"))
-    .filter((run) => "planRunId" in run && run.planRunId === plan.id)).toHaveLength(0);
-  expect(runner.applyCalls).toBe(initialApplyCalls);
-  expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(1);
+    const plan = (await planRunsOf(controller, store)).find((run) => run.autoApplyRequested);
+    if (!plan) throw new Error("auto-update Plan was not created");
+    expect(plan.status).toBe("succeeded");
+    expect(plan.appliedApplyRunId).toBeUndefined();
+    expect((await store.listRunsByWorkspace("ws_test001"))
+      .filter((run) => "planRunId" in run && run.planRunId === plan.id)).toHaveLength(0);
+    expect(runner.applyCalls).toBe(initialApplyCalls);
+    expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(1);
+    expect((await store.listActivityEvents("ws_test001")).some((event) =>
+      event.action === "capsule.auto_update_apply_failed")).toBe(false);
 
-  const result = await controller.createApplyRun({
-    planRunId: plan.id,
-    expected: applyExpectedGuardFromPlanRun(plan),
-  });
-  expect(result.applyRun.status).toBe("succeeded");
-  expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(2);
-  expect((await store.getCapsule("cap_auto0001"))?.autoUpdate).toBe(false);
-});
+    const result = await controller.createApplyRun({
+      planRunId: plan.id,
+      expected: applyExpectedGuardFromPlanRun(plan),
+    });
+    expect(result.applyRun.status).toBe("succeeded");
+    expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(2);
+    expect((await store.getCapsule("cap_auto0001"))?.autoUpdate).toBe(false);
+  },
+);
 
 test("owned app automatic policy uses its pinned owner authority and records the system trigger", async () => {
   const { store, controller } = await buildActiveCapsule({ autoUpdate: true, ownedApp: true });

@@ -6668,6 +6668,14 @@ export class RunEngine {
         targetType: "capsule", targetId: planRun.capsuleId ?? planRun.id,
         metadata: { planRunId: planRun.id } });
     } catch (error) {
+      if (error instanceof OpenTofuControllerError && isRecord(error.details)) {
+        const reason = error.details.reason;
+        if (reason === "auto_update_disabled") return;
+        // The storage fence rejects concurrent changes atomically. Only a
+        // confirmed opt-out makes that refusal an expected stop.
+        if (reason === "capsule_execution_authority_changed" && planRun.capsuleId &&
+          (await this.#store.getCapsule(planRun.capsuleId).catch(() => undefined))?.autoUpdate === false) return;
+      }
       await this.#recordActivity({
         workspaceId: planRun.workspaceId,
         action: "capsule.auto_update_apply_failed",
