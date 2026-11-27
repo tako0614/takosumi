@@ -36,6 +36,7 @@ import {
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import { InMemoryAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -355,6 +356,35 @@ test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client
   // The install's first Apply is marked `create` (the install-complete notification).
   expect(activity.filter((event) => event.action === "run.applied").map((event) => event.metadata.operation).sort())
     .toEqual(["create", "update"]);
+});
+
+test("disabling auto-update while the Plan runs leaves the review for manual Apply", async () => {
+  const { store, controller, runner, initialApplyCalls } =
+    await buildActiveCapsule({ autoUpdate: true });
+  const capsules = new CapsulesService({ store });
+  runner.beforePlanResult = async () => {
+    expect((await capsules.setCapsuleAutoUpdate("cap_auto0001", false)).autoUpdate)
+      .toBe(false);
+  };
+
+  await syncNewCommit(controller);
+
+  const plan = (await planRunsOf(controller, store)).find((run) => run.autoApplyRequested);
+  if (!plan) throw new Error("auto-update Plan was not created");
+  expect(plan.status).toBe("succeeded");
+  expect(plan.appliedApplyRunId).toBeUndefined();
+  expect((await store.listRunsByWorkspace("ws_test001"))
+    .filter((run) => "planRunId" in run && run.planRunId === plan.id)).toHaveLength(0);
+  expect(runner.applyCalls).toBe(initialApplyCalls);
+  expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(1);
+
+  const result = await controller.createApplyRun({
+    planRunId: plan.id,
+    expected: applyExpectedGuardFromPlanRun(plan),
+  });
+  expect(result.applyRun.status).toBe("succeeded");
+  expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(2);
+  expect((await store.getCapsule("cap_auto0001"))?.autoUpdate).toBe(false);
 });
 
 test("owned app automatic policy uses its pinned owner authority and records the system trigger", async () => {

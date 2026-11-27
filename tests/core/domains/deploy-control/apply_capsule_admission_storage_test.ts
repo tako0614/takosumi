@@ -1,4 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { Miniflare } from "miniflare";
 import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import type { Capsule } from "takosumi-contract/capsules";
 import {
@@ -17,6 +18,8 @@ import type { D1PreparedStatement, D1Result } from "../../../../worker/src/bindi
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import { workerdD1Database, workerdD1Module } from "../../../helpers/deploy-control/workerd_d1.ts";
+import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
 
 setDefaultTimeout(30_000);
 const clients: PGliteSqlClient[] = [];
@@ -138,6 +141,45 @@ test("Apply Capsule admission stores reject every stale Capsule field and missin
         .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
       expect(await store.getApplyRun(run.id), label).toBeUndefined();
     }
+  }
+});
+
+test("automatic Apply requires the opt-in at atomic storage admission", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [workerdD1Module("automatic-apply-admission.mjs")],
+    d1Databases: { CONTROL: "automatic-apply-admission" },
+  });
+  try {
+    const nativeStore = new CloudflareD1OpenTofuControlStore(workerdD1Database(runtime));
+    const adapters = [...await stores(), ["workerd D1", nativeStore] as const];
+    for (const [label, store] of adapters) {
+      const { capsule } = await seedCapsuleModel(store);
+      const enabled: Capsule = { ...capsule, status: "stale", autoUpdate: true };
+      await store.putCapsule(enabled);
+      const authority = workspaceAuthority(enabled);
+      const fence = capsuleApplyRunAdmissionFence(enabled, 1);
+      const automaticFence = { ...fence, requireAutoUpdate: true } as const;
+      const admitted = applyRun("automatic-before-disable", enabled, automaticFence);
+      expect((await store.beginApplyRun(admitted, authority, automaticFence)).status, label)
+        .toBe("created");
+
+      const capsules = new CapsulesService({ store });
+      const disabled = await capsules.setCapsuleAutoUpdate(enabled.id, false);
+      expect(disabled.autoUpdate, label).toBe(false);
+      const prepared = applyRun("automatic-after-disable", enabled, automaticFence);
+      await expect(store.beginApplyRun(prepared, authority, automaticFence), label)
+        .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
+      expect(await store.getApplyRun(prepared.id), label).toBeUndefined();
+      expect((await store.beginApplyRun(admitted, authority, automaticFence)).status, label)
+        .toBe("existing");
+
+      const manual = applyRun("manual-after-disable", disabled, fence);
+      expect((await store.beginApplyRun(manual, authority, fence)).status, label)
+        .toBe("created");
+    }
+  } finally {
+    await runtime.dispose();
   }
 });
 
