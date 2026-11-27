@@ -1446,18 +1446,32 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const action of ["update", "retireUpdate", "reloadUpdate", "rollback"] as const) test({
+    for (const action of ["update", "retireUpdate", "reloadUpdate", "rollback", "rollbackDeadline"] as const) test({
       update: "a lost Update response reads the same app once and recovers only its existing review",
       retireUpdate: "leaving a version check lets the user continue its accepted request from the app",
       reloadUpdate: "a lost revision create response keeps the same request after reload",
       rollback: "a lost rollback response recovers the same review from history after reload",
+      rollbackDeadline: "a stalled rollback response body respects the deadline and preserves the decision",
     }[action], async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const now = "2026-10-01T00:00:00.000Z";
       const retireUpdate = action === "retireUpdate";
-      const rollback = action === "rollback";
+      const rollbackDeadline = action === "rollbackDeadline";
+      const rollback = action === "rollback" || rollbackDeadline;
       const reloadUpdate = action === "reloadUpdate";
+      if (rollbackDeadline) {
+        await page.clock.install();
+        await page.addInitScript(() => {
+          const request = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const response = await request(...args);
+            if (!response.headers.has("x-fixture-stalled-rollback-body")) return response;
+            document.documentElement.dataset.rollbackAckBody = "stalled";
+            return new Response(new ReadableStream(), { status: response.status, headers: response.headers });
+          };
+        });
+      }
       const previousState = "sv_lost_response_previous";
       const currentState = "sv_lost_response_current";
       const actionPath = rollback ? `/api/v1/state-versions/${previousState}/rollback-plan` : `/api/v1/capsules/${CAPSULE_ID}/revision-plans`;
@@ -1474,6 +1488,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       let acceptUpdate = true;
       let definiteRejection = false;
       let rollbackSaveTimeout = false;
+      let stalledRollbackStatus: 201 | 403 | 409 | undefined;
+      let truncatedRollbackStatus: 201 | 409 | undefined;
       let holdReadback = false;
       let releaseReadback: (() => Promise<void>) | undefined;
       let committed = false;
@@ -1557,6 +1573,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           // the actual browser fetch. No second operation is manufactured.
           committed = acceptUpdate && !retireUpdate;
           submitted = true;
+          if (truncatedRollbackStatus !== undefined) {
+            return route.fulfill({ status: truncatedRollbackStatus, contentType: "application/json", body: "{" });
+          }
+          if (stalledRollbackStatus !== undefined) {
+            return route.fulfill({
+              status: stalledRollbackStatus,
+              headers: { "x-fixture-stalled-rollback-body": "1" },
+              json: stalledRollbackStatus === 201 ? { run: plan } : { error: "fixture_rollback_status" },
+            });
+          }
           if (retireUpdate) {
             return await new Promise<void>((resolve) => {
               releaseCreation = async () => {
@@ -1650,12 +1676,20 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         return;
       }
 
-      for (const scene of ["accepted", "not-accepted", "definite-rejection", "readback-pending", "rollback-save-timeout"] as const) {
+      const scenes = rollbackDeadline
+        ? ["rollback-body-saved", "rollback-body-conflict", "rollback-body-refused",
+          "rollback-body-truncated", "rollback-conflict-truncated"] as const
+        : ["accepted", "not-accepted", "definite-rejection", "readback-pending", "rollback-save-timeout"] as const;
+      for (const scene of scenes) {
         rollbackSaveTimeout = scene === "rollback-save-timeout";
+        stalledRollbackStatus = scene === "rollback-body-saved" ? 201 :
+          scene === "rollback-body-conflict" ? 409 : scene === "rollback-body-refused" ? 403 : undefined;
+        truncatedRollbackStatus = scene === "rollback-body-truncated" ? 201 : scene === "rollback-conflict-truncated" ? 409 : undefined;
         if (rollbackSaveTimeout && !rollback) continue;
-        const accepted = scene === "accepted" || rollbackSaveTimeout;
+        const accepted = scene === "accepted" || rollbackSaveTimeout || stalledRollbackStatus === 201 ||
+          stalledRollbackStatus === 409 || truncatedRollbackStatus !== undefined;
         acceptUpdate = accepted || (rollback && scene === "readback-pending");
-        definiteRejection = scene === "definite-rejection";
+        definiteRejection = scene === "definite-rejection" || scene === "rollback-body-refused";
         holdReadback = scene === "readback-pending";
         releaseReadback = undefined;
         committed = false;
@@ -1667,12 +1701,17 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
         await openAppPane(page, "version");
         const rejected = definiteRejection
-          ? page.waitForResponse((response) => response.url().endsWith(actionPath) && response.status() === 409)
+          ? page.waitForResponse((response) => response.url().endsWith(actionPath) && response.status() === (stalledRollbackStatus ?? 409))
           : undefined;
         const start = page.getByTestId("app-version").getByRole("button", { name: actionName, exact: true });
         await expect(start).toBeEnabled();
         await start.click();
         if (rollback) await expect.poll(() => requestKeys.length).toBe(1);
+        if (stalledRollbackStatus !== undefined) {
+          await expect(page.locator("html")).toHaveAttribute("data-rollback-ack-body", "stalled");
+          await expect(start).toBeDisabled();
+          await page.clock.fastForward(30_100);
+        }
         if (rejected) {
           await rejected;
           await expect(start).toBeEnabled();

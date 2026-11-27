@@ -58,7 +58,10 @@ describe("retryPlanForRun", () => {
     try {
       expect(await api.planRollback("sv_1", () => false)).toBeUndefined();
       expect(keys).toEqual([]);
-      expect(await retryPlanForRun(prior, capsule(), api)).toBeUndefined();
+      await expect(retryPlanForRun(prior, capsule(), api)).rejects.toMatchObject({
+        operation: "rollback_plan",
+        isIndeterminate: true,
+      });
       expect(await retryPlanForRun(prior, capsule(), api)).toBe("plan_2");
       expect(await retryPlanForRun(prior, capsule(), api)).toBe("plan_3");
       expect(keys[0]).toBeTruthy();

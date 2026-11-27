@@ -189,12 +189,12 @@ function summarizeControlError(error: unknown): ControlApiErrorSummary {
  * issuing another mutation.
  */
 export class ControlApiIndeterminateError extends ControlApiError {
-  readonly operation: "apply" | "source_create" | "source_patch";
+  readonly operation: "apply" | "source_create" | "source_patch" | "rollback_plan";
   readonly isIndeterminate = true;
   readonly causeSummary?: ControlApiErrorSummary;
 
   constructor(
-    operation: "apply" | "source_create" | "source_patch",
+    operation: ControlApiIndeterminateError["operation"],
     message: string,
     cause?: unknown,
   ) {
@@ -374,6 +374,14 @@ async function withControlDeadline<T>(
   } finally {
     clearTimeout(timer);
     if (onAbort) caller?.removeEventListener("abort", onAbort);
+  }
+}
+
+/** Keep a received client rejection when its response body never finishes. */
+function clientRejectionOnDeadline(status: number | undefined, failure: unknown): ControlApiError | undefined {
+  if (status !== undefined && status >= 400 && status < 500 &&
+    failure instanceof ControlApiError && failure.code === "request_timeout") {
+    return new ControlApiError(status, undefined, `HTTP ${status}`, undefined, true);
   }
 }
 
@@ -3261,11 +3269,8 @@ async function postRunDecision(
       : new ControlApiError(502, "invalid_run_cancellation_response", "The cancellation response did not match this Run.");
   } catch (failure) {
     throwIfReadRetired(scope);
-    if (responseStatus !== undefined && responseStatus >= 400 && responseStatus < 500 &&
-      failure instanceof ControlApiError && failure.code === "request_timeout") {
-      // Preserve the received HTTP status when decoding its body times out.
-      throw new ControlApiError(responseStatus, undefined, `HTTP ${responseStatus}`, undefined, true);
-    }
+    const rejection = clientRejectionOnDeadline(responseStatus, failure);
+    if (rejection) throw rejection;
     if (!dispatched || !isMutationOutcomeUnknown(failure)) throw failure;
     // An uncertain POST is settled by a fresh read of the original Run.
     const observed = await getRun(id, { ...scope, cache: "no-store" });
@@ -3459,14 +3464,31 @@ export async function createStateVersionRollbackPlan(
   stateVersionId: string,
   options: { readonly idempotencyKey?: string; readonly isCurrent?: () => boolean } = {},
 ): Promise<unknown> {
-  return await controlFetch<unknown>(
-    `${BASE}/state-versions/${encodeURIComponent(stateVersionId)}/rollback-plan`,
-    {
-      method: "POST",
-      isCurrent: options.isCurrent,
-      ...(options.idempotencyKey === undefined ? {} : { headers: { "idempotency-key": options.idempotencyKey } }),
-    },
-  );
+  let responseStatus: number | undefined;
+  try {
+    const result = await withControlDeadline("Rollback Plan", { isCurrent: options.isCurrent }, (scope) =>
+      controlFetch<unknown>(`${BASE}/state-versions/${encodeURIComponent(stateVersionId)}/rollback-plan`, {
+        ...scope,
+        method: "POST",
+        onResponseStatus: (status) => { responseStatus = status; },
+        ...(options.idempotencyKey === undefined ? {} : { headers: { "idempotency-key": options.idempotencyKey } }),
+      }),
+    );
+    if (!extractRunId(result)) {
+      throw new ControlApiIndeterminateError("rollback_plan", "The saved rollback Plan could not be confirmed.");
+    }
+    return result;
+  } catch (failure) {
+    throwIfReadRetired(options);
+    // A rollback 409 can report that saving the Plan timed out. If its body
+    // is unreadable, leave the outcome open for the app's read-only recovery.
+    if (responseStatus === 409 && failure instanceof ControlApiError &&
+      (failure.code === "request_timeout" ||
+        (failure.status === 409 && failure.code === undefined && failure.isHttpStatusFallback))) {
+      throw new ControlApiIndeterminateError("rollback_plan", "The saved rollback Plan could not be confirmed.", failure);
+    }
+    throw clientRejectionOnDeadline(responseStatus, failure) ?? failure;
+  }
 }
 
 export async function getRunGroup(id: string): Promise<RunGroupWithRuns> {
