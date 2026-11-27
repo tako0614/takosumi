@@ -1,5 +1,5 @@
 import type { OidcClientRegistration } from "./mod.ts";
-import type { AccountsStore, AuthorizationCodeRecord, TokenRecord } from "./store.ts";
+import type { AccountsStore, AuthorizationCodeRecord, HostedOidcGrantRecord, TokenRecord } from "./store.ts";
 import { base64UrlEncodeBytes, sha256Text } from "./encoding.ts";
 
 export const HOSTED_OIDC_SCOPES = ["openid", "email", "profile", "offline_access"] as const;
@@ -50,27 +50,37 @@ export async function hostedGrantIsActive(input: {
   const { record, client, store } = input;
   const now = input.now ?? Date.now();
   if (record.oidcProfile !== "shared-account") return client.profile !== "shared-account";
+  const scopes = record.scope.split(/\s+/u);
   if (
     client.profile !== "shared-account" || client.enabled !== true ||
     !record.issuer || (input.issuer !== undefined && record.issuer !== input.issuer) ||
     !record.sid || !record.issuerSessionId || !Number.isSafeInteger(record.authTime) ||
     record.authTime! < 0 || record.authTime! > Math.floor(now / 1000) + 60 ||
     ("audience" in record && record.audience !== undefined && record.audience !== client.clientId) ||
-    record.subject !== record.takosumiSubject || record.capsuleId || record.workspaceId || record.role ||
-    !record.scope.split(/\s+/u).includes("openid") ||
-    !record.scope.split(/\s+/u).every((scope) => client.allowedScopes?.includes(scope) && (HOSTED_OIDC_SCOPES as readonly string[]).includes(scope)) ||
-    !store.findHostedOidcGrant || !store.isHostedOidcSessionRevoked
+    !record.takosumiSubject || record.subject !== record.takosumiSubject || record.capsuleId || record.workspaceId || record.role ||
+    !scopes.includes("openid") ||
+    !scopes.every((scope) => client.allowedScopes?.includes(scope) && (HOSTED_OIDC_SCOPES as readonly string[]).includes(scope))
   ) return false;
+  const generation = record.identityGeneration ?? 0;
+  const matchesGrant = (grant: HostedOidcGrantRecord): boolean =>
+    grant.revokedAt === undefined && Number.isSafeInteger(grant.absoluteExpiresAt) && grant.absoluteExpiresAt > now &&
+    (grant.identityGeneration ?? 0) === generation &&
+    grant.issuer === record.issuer && grant.clientId === client.clientId && grant.subject === record.subject &&
+    grant.issuerSessionId === record.issuerSessionId && grant.authTime === record.authTime &&
+    scopes.every((scope) => grant.scope.split(/\s+/u).includes(scope));
+  if (store.findHostedGrantAuthority) {
+    const snapshot = await store.findHostedGrantAuthority({
+      sid: record.sid, subject: record.takosumiSubject, issuerSessionId: record.issuerSessionId, clientId: client.clientId,
+    });
+    return snapshot !== undefined && snapshot.authenticationGeneration === generation && matchesGrant(snapshot.grant);
+  }
+  if (!store.findHostedOidcGrant || !store.isHostedOidcSessionRevoked) return false;
   if (await store.isHostedOidcSessionRevoked(record.issuerSessionId)) return false;
   if (!store.isHostedOidcClientRevoked || await store.isHostedOidcClientRevoked(client.clientId)) return false;
-  if (!store.getAccountAuthenticationGeneration || (record.identityGeneration ?? 0) !== await store.getAccountAuthenticationGeneration(record.takosumiSubject!)) return false;
+  if (!store.getAccountAuthenticationGeneration || generation !== await store.getAccountAuthenticationGeneration(record.takosumiSubject)) return false;
   const grant = await store.findHostedOidcGrant(record.sid);
   if (
-    !grant || grant.revokedAt !== undefined || grant.absoluteExpiresAt <= now ||
-    (grant.identityGeneration ?? 0) !== (record.identityGeneration ?? 0) ||
-    grant.issuer !== record.issuer || grant.clientId !== client.clientId || grant.subject !== record.subject ||
-    grant.issuerSessionId !== record.issuerSessionId || grant.authTime !== record.authTime ||
-    !record.scope.split(/\s+/u).every((scope) => grant.scope.split(/\s+/u).includes(scope)) ||
+    !grant || !matchesGrant(grant) ||
     !(await store.findAccount(grant.subject)) || (await store.isAccountAuthenticationFenced?.(grant.subject))
   ) return false;
   if (store.findCanonicalAccount) {
@@ -81,7 +91,7 @@ export async function hostedGrantIsActive(input: {
   // merge/global logout/client disable cannot revive an earlier snapshot.
   const currentGrant = await store.findHostedOidcGrant(record.sid);
   return currentGrant !== undefined && currentGrant.revokedAt === undefined &&
-    (record.identityGeneration ?? 0) === await store.getAccountAuthenticationGeneration(record.takosumiSubject!) &&
+    generation === await store.getAccountAuthenticationGeneration(record.takosumiSubject) &&
     !(await store.isHostedOidcSessionRevoked(record.issuerSessionId)) &&
     !(await store.isHostedOidcClientRevoked(client.clientId));
 }
