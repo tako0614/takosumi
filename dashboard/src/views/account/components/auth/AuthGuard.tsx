@@ -27,6 +27,7 @@ import { appPathForSignIn } from "../../../../lib/app-links.ts";
 interface Props {
   children: (session: Accessor<SessionRecord>) => JSX.Element;
   loadingFallback?: JSX.Element;
+  transportRecoveryLayout?: (body: JSX.Element) => JSX.Element;
 }
 
 type AuthState = Exclude<SessionState["kind"], "loading"> | "loading";
@@ -60,6 +61,9 @@ export default function AuthGuard(props: Props) {
   const [state, setState] = createSignal<AuthState>(
     cached.kind === "authenticated" ? "authenticated" : cached.kind,
   );
+  const [hadAuthenticatedSession, setHadAuthenticatedSession] = createSignal(
+    cached.kind === "authenticated",
+  );
   const [failure, setFailure] = createSignal<SessionError | null>(
     cached.kind === "maintenance" || cached.kind === "error"
       ? cached.error
@@ -68,6 +72,10 @@ export default function AuthGuard(props: Props) {
   const nav = useNavigate();
   const loc = useLocation();
   const canSignInAgain = () => isHostedSessionUnavailable(failure()?.cause);
+  const withRecoveryLayout = (body: JSX.Element) =>
+    hadAuthenticatedSession() && failure()?.status === 0 && props.transportRecoveryLayout
+      ? props.transportRecoveryLayout(body)
+      : body;
 
   const redirectToSignIn = (preserveReturn: boolean): void => {
     const target = preserveReturn
@@ -84,17 +92,18 @@ export default function AuthGuard(props: Props) {
     next: SessionState,
     preserveReturn: boolean,
   ): void => {
-    setFailure(
-      next.kind === "maintenance" || next.kind === "error"
-        ? next.error
-        : null,
-    );
     if (next.kind === "loading") {
       setSession(null);
       setState("loading");
       return;
     }
+    setFailure(
+      next.kind === "maintenance" || next.kind === "error"
+        ? next.error
+        : null,
+    );
     if (next.kind === "authenticated") {
+      setHadAuthenticatedSession(true);
       setSession(next.session);
       setState("authenticated");
       return;
@@ -102,6 +111,7 @@ export default function AuthGuard(props: Props) {
     setSession(null);
     setState(next.kind);
     if (next.kind === "unauthenticated") {
+      setHadAuthenticatedSession(false);
       redirectToSignIn(preserveReturn);
     }
   };
@@ -139,7 +149,7 @@ export default function AuthGuard(props: Props) {
   return (
     <Switch>
       <Match when={state() === "loading"}>
-        {props.loadingFallback ?? (
+        {withRecoveryLayout(props.loadingFallback ?? (
           <div
             class="auth-loading"
             role="status"
@@ -147,10 +157,10 @@ export default function AuthGuard(props: Props) {
           >
             <span class="tg-spinner" aria-hidden="true" />
           </div>
-        )}
+        ))}
       </Match>
       <Match when={state() === "maintenance" || state() === "error"}>
-        <main class="auth-page">
+        {withRecoveryLayout(<main class="auth-page">
           <div class="sign-in-panel notfound-panel">
             <h1 class="sign-in-title">
               {canSignInAgain() ? t("auth.sessionCouldNotVerify") : state() === "maintenance"
@@ -176,7 +186,7 @@ export default function AuthGuard(props: Props) {
               </span>
             </Show>
           </div>
-        </main>
+        </main>)}
       </Match>
       <Match when={state() === "authenticated" && session()}>
         {(s) => (
