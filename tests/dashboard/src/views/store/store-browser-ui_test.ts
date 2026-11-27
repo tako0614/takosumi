@@ -202,7 +202,13 @@ describe("StoreBrowser install UI", () => {
     expect(storeHostSource).not.toContain("checkCapsuleCompatibility");
     expect(storeHostSource).toContain("void attempt.start(");
     expect(storeHostSource).not.toContain("deriveInstallReadiness");
-    expect(storeHostSource).not.toContain("listingBadge");
+    // The selected Store's localized badge flows from the matching detail to
+    // plain text. Neither the discovery grid nor the install inputs take it.
+    expect(storeHostSource).toContain("detailBadge: sameModule ? listing.badge : undefined");
+    expect(storeHostSource).toContain("const value = detail.detailBadge?.[locale()];");
+    expect(storeHostSource).toContain("<Show when={listingBadge()}>{(text) => <p>{text()}</p>}</Show>");
+    expect(storeHostSource.match(/\bdetailBadge\b/gu)).toHaveLength(3);
+    expect(storeHostSource.match(/\blistingBadge\b/gu)).toHaveLength(2);
     expect(storeBrowserSource).not.toContain("listingBadge");
     expect(storeBrowserSource).not.toContain("すぐに使える");
     expect(storeBrowserCss).not.toContain("tcs-ready-badge");
