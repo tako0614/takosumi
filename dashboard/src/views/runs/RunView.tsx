@@ -704,7 +704,7 @@ function Inner(props: { readonly session: SessionRecord }) {
   // The owning app, for the plain-language summary sentence + back link.
   const capsuleId = createMemo(() => runLatest()?.capsuleId ?? null);
   const completedAppActionId = () => isSucceededApplyRun(runLatest()) ? capsuleId() : undefined;
-  const [capsule] = createResource(
+  const [capsule, { refetch: refetchCapsule }] = createResource(
     () => {
       const id = capsuleId();
       return id ? { id, scope: readScope() } : null;
@@ -802,18 +802,22 @@ function Inner(props: { readonly session: SessionRecord }) {
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return undefined;
     }
-    // A rejected Resource accessor throws. This memo is a separate reactive
-    // computation from `completedRunReadiness`, so its dependency can update
-    // on the rejection before the parent memo gets a chance to inspect
-    // `stateVersions.error`. Guard here as well and keep the last UI shell
-    // alive; the parent maps the failed read to `unavailable` and retries it.
-    if (stateVersions.error) return undefined;
-    return (stateVersions.latest ?? []).find((row) => row.createdByRunId === r.id);
+    // Use a settled read; Solid can retain the previous value while reloading.
+    return readyOrUndefined(stateVersions)?.find((row) =>
+      row.createdByRunId === r.id && row.capsuleId === r.capsuleId && row.workspaceId === r.workspaceId,
+    );
   });
-  const completedRunReadiness = createMemo((): StateVersionReadiness => {
+  const completedRunReadiness = createMemo((): StateVersionReadiness | "historical" => {
     const r = runLatest();
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return "settling";
+    }
+    if (capsule.loading) return "settling";
+    const app = capsuleLatest();
+    if (!app || app.workspaceId !== r.workspaceId) return "unavailable";
+    const version = completedRunStateVersion();
+    if (app.status === "destroyed" || (version && app.currentStateGeneration > version.generation)) {
+      return "historical";
     }
     if (stateVersions.loading || activity.loading) {
       return "settling";
@@ -821,8 +825,14 @@ function Inner(props: { readonly session: SessionRecord }) {
     if (stateVersions.error || activity.error) {
       return "unavailable";
     }
+    // Older Capsule projections can omit the StateVersion id. In either
+    // case the current generation must match the one committed by this Run.
+    if (version && (app.currentStateGeneration !== version.generation ||
+      (app.currentStateVersionId !== undefined && app.currentStateVersionId !== version.id))) {
+      return "unavailable";
+    }
     return stateVersionReadinessAfterApply(
-      completedRunStateVersion(),
+      version,
       activity.latest ?? [],
       capsuleId() ?? undefined,
     );
@@ -1003,9 +1013,11 @@ function Inner(props: { readonly session: SessionRecord }) {
       return;
     }
     const readiness = completedRunReadiness();
-    if (readiness === "ready" || readiness === "activation_failed") return;
+    if (readiness === "ready" || readiness === "activation_failed" || readiness === "historical") return;
     const timer = setTimeout(() => {
-      void Promise.all([refetchStateVersions(), refetchActivity()]);
+      void Promise.all([
+        capsule.loading ? undefined : refetchCapsule(), refetchStateVersions(), refetchActivity(),
+      ]);
     }, RELEASE_ACTIVATION_POLL_MS);
     onCleanup(() => clearTimeout(timer));
   });
@@ -1540,6 +1552,9 @@ function Inner(props: { readonly session: SessionRecord }) {
       if (r.status === "succeeded") {
         if (r.type === "apply") {
           const readiness = completedRunReadiness();
+          if (readiness === "historical") {
+            return { kind: "history", text: t("run.summary.applySucceeded"), sub: t("run.summary.historicalApply") };
+          }
           if (readiness === "settling") {
             return { kind: "progress", text: t("run.summary.finishing") };
           }
