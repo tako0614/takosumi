@@ -237,7 +237,7 @@ describe("installed app page", () => {
     expect(attention).toContain("<For each={cardKeys()}>");
     // Screen recovery retries the exact failure the server named.
     expect(page).toContain("const failure = problem?.screenFailure;");
-    expect(page).toContain("retryInterfaceMaterializationFailure(workspace, failure.id, {");
+    expect(page).toContain("retryCapsuleInterfaceMaterializationFailure(forApp, failure.id, {");
     expect(attention).toContain("appUninstallBanner(app(), props.displayName)");
   });
 
@@ -292,7 +292,7 @@ describe("installed app page", () => {
   });
 
   test("continuing an install advances the attempt that owns the app instead of planning beside it", () => {
-    const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const [screenRetryBusy"));
+    const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const continueRevision ="));
     expect(continueInstall).toContain("const attempt = app()?.progress.installPlanId;");
     expect(continueInstall).toContain("await advanceGitInstallPlan(attempt, { isCurrent })");
     // An install that waits for the person continues on its own install page,
@@ -304,7 +304,7 @@ describe("installed app page", () => {
   });
 
   test("a stalled version change is continued through its own coordinator; updates wait while one is under way", () => {
-    const continueRevision = page.slice(page.indexOf("const continueRevision = (revisionPlanId: string) =>"), page.indexOf("const [screenRetryBusy"));
+    const continueRevision = page.slice(page.indexOf("const continueRevision = (revisionPlanId: string) =>"), page.indexOf("const screenRecoveryScope ="));
     // A continued revision that settles without a Plan (for example already
     // current) reports its own diagnostic, not a generic "not started".
     expect(continueRevision).toContain("const response = await advanceGitRevisionPlan(revisionPlanId, { isCurrent, expectedCapsuleId: forCapsule });");

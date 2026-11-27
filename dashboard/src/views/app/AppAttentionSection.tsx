@@ -112,7 +112,6 @@ export default function AppAttentionSection(props: {
   readonly canUninstall?: boolean;
   readonly uninstallBusy: boolean;
   readonly screenRetryBusy: boolean;
-  readonly screenRetryMessage?: string;
   readonly error?: string;
   readonly notice?: string;
   /** The run of the review open in this section, if any. */
@@ -449,9 +448,6 @@ export default function AppAttentionSection(props: {
                   {actionButton(problem())}
                   <Show when={problem().runId}>{(runId) => detailsLink(runId())}</Show>
                 </div>
-                <Show when={problem().code === "screen_unavailable" && props.screenRetryMessage}>
-                  <p role="status">{props.screenRetryMessage}</p>
-                </Show>
               </article>
                   )}
                 </Show>

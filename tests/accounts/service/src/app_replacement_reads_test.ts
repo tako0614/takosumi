@@ -174,6 +174,16 @@ function assertOutcome(outcome: { readonly status: number; readonly code?: strin
 }
 
 describe("per-app replacement routes authorize by app role only", () => {
+  test("screen retry does not require a Workspace role", async () => {
+    const h = await fixture();
+    const suffix = "/interface-materialization-failures/cimi_missing/retries";
+    const member = h.headers.session(MEMBER);
+    const body = { failureDigest: `sha256:${"1".repeat(64)}`, stateVersionId: "sv_missing", stateGeneration: 1 };
+    expect((await h.call("POST", `/workspaces/${WORKSPACE}${suffix}`, member, body)).status).toBe(403);
+    // Only the per-app request can reach the domain's missing-intent check.
+    expect((await h.call("POST", `/capsules/${CAPSULE}${suffix}`, member, body)).status).toBe(404);
+  });
+
   for (const principal of APP_PRINCIPALS) {
     test(principal.name, async () => {
       const h = await fixture();

@@ -75,7 +75,7 @@ import {
   planCapsule,
   requireReviewableRevisionPlan,
   resumeCapsuleConfigurationPlan,
-  retryInterfaceMaterializationFailure,
+  retryCapsuleInterfaceMaterializationFailure,
   type Run,
   type RunType,
   setCapsuleAutoUpdate,
@@ -543,6 +543,8 @@ export default function AppManagePage(props: {
   const [reAdoptionRevisionId, setReAdoptionRevisionId] = createSignal<string>();
   const [autoUpdateBusy, setAutoUpdateBusy] = createSignal(false);
   const [autoUpdateError, setAutoUpdateError] = createSignal<string>();
+  const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);
+  const [screenRetryMessage, setScreenRetryMessage] = createSignal<string>();
   const reAdoptionTargetId = () => reAdoptionRevisionId() ?? reAdoptionRevisionFromApp(app());
   const uninstallReviewAppScope = () => [props.principalId, props.accountId, workspaceId(), capsuleId()] as const;
   const uninstallReviewScope = (planRunId: string) => [...uninstallReviewAppScope(), planRunId] as const;
@@ -595,6 +597,7 @@ export default function AppManagePage(props: {
         setUninstallError(undefined);
         setAutoUpdateBusy(false);
         setAutoUpdateError(undefined);
+        setScreenRetryBusy(false);
         setScreenRetryMessage(undefined);
         setOlderRuns(undefined);
         setMoreError(undefined);
@@ -1151,30 +1154,44 @@ export default function AppManagePage(props: {
       },
       { action: "continue_revision", restartable: false },
     );
-  const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);
-  const [screenRetryMessage, setScreenRetryMessage] = createSignal<string>();
+  const screenRecoveryScope = () => {
+    const forApp = capsuleId();
+    const forAccount = props.accountId;
+    const forPrincipal = props.principalId;
+    const forEpoch = reviewScopeEpoch;
+    const sessionIsCurrent = currentSessionCheck();
+    const ownsScreen = () => !disposed && reviewScopeEpoch === forEpoch && capsuleId() === forApp &&
+      props.accountId === forAccount && props.principalId === forPrincipal;
+    return {
+      ownsScreen,
+      read: { isCurrent: () => ownsScreen() && sessionIsCurrent(), cache: "no-store" as const },
+    };
+  };
   const retryScreen = async (problem: CapsuleAppProblem | undefined) => {
     const failure = problem?.screenFailure;
-    const workspace = workspaceId();
-    if (!failure || !workspace || screenRetryBusy()) return;
+    const forApp = capsuleId();
+    if (!failure || appRole() === undefined || screenRetryBusy()) return;
+    const { ownsScreen, read } = screenRecoveryScope();
     setScreenRetryBusy(true);
     setScreenRetryMessage(undefined);
     try {
-      await retryInterfaceMaterializationFailure(workspace, failure.id, {
+      const receipt = await retryCapsuleInterfaceMaterializationFailure(forApp, failure.id, {
         failureDigest: failure.failureDigest,
         stateVersionId: failure.stateVersionId,
         stateGeneration: failure.stateGeneration,
-      });
-      setScreenRetryMessage(t("app.problem.screenRetryQueued"));
+      }, { isCurrent: read.isCurrent });
+      if (read.isCurrent()) {
+        setScreenRetryMessage(t(receipt ? "app.problem.screenRetryQueued" : "app.problem.screenRetryUnconfirmed"));
+      }
     } catch (cause) {
-      setScreenRetryMessage(
+      if (read.isCurrent()) setScreenRetryMessage(
         isInterfaceMaterializationRetryStale(cause)
           ? t("app.problem.screenRetryStale")
           : friendlyError(cause, t).message,
       );
     } finally {
-      setScreenRetryBusy(false);
-      void refetchApp();
+      if (read.isCurrent()) await Promise.resolve(refetchApp(read)).catch(() => {});
+      if (ownsScreen()) setScreenRetryBusy(false);
     }
   };
   const fixConnection = () => {
@@ -1886,6 +1903,19 @@ export default function AppManagePage(props: {
                   </Show>
                 </div>
               </header>
+              <Show when={!destroyed() && screenRetryMessage()}>
+                {(message) => (
+                  <div data-testid="screen-retry-result">
+                    <Toast tone="neutral" onDismiss={() => setScreenRetryMessage(undefined)}>
+                      {message()}
+                      <Button variant="secondary" type="button" busy={appView.loading || screenRetryBusy()}
+                        onClick={() => void refetchApp(screenRecoveryScope().read)}>
+                        {t("common.refresh")}
+                      </Button>
+                    </Toast>
+                  </div>
+                )}
+              </Show>
 
               <Show when={props.justInstalled && managed() && !activeSection() && view().primaryAction !== "open"}>
                 <p class="ap-notice" role="status">{t("app.installedNotice")}</p>
@@ -1968,7 +1998,6 @@ export default function AppManagePage(props: {
                   : {})}
                 uninstallBusy={uninstallBusy()}
                 screenRetryBusy={screenRetryBusy()}
-                {...(screenRetryMessage() ? { screenRetryMessage: screenRetryMessage()! } : {})}
                 {...(errorFor("attention") && !sectionError()?.uninstallPlanUnconfirmed ? { error: errorFor("attention")! } : {})}
                 {...(noticeFor("attention") ? { notice: noticeFor("attention")! } : {})}
                 {...(review()?.section === "attention"

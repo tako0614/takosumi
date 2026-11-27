@@ -639,6 +639,65 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
+    for (const response of ["accepted", "interrupted"] as const) {
+      test(`screen retry (${response}) uses the app and refreshes without another write`, async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+        const base = `/api/v1/capsules/${CAPSULE_ID}`;
+        const failure = {
+          id: "screen_intent_fixture", failureDigest: `sha256:${"d".repeat(64)}`, stateVersionId: "sv_screen_retry",
+          stateGeneration: 3, errorCode: "interface_materialization_failed",
+        };
+        const retryPath = `${base}/interface-materialization-failures/${failure.id}/retries`;
+        const screenUrl = "https://apps.example.test/recovered-screen";
+        const writes: { path: string; body: unknown }[] = [];
+        let pending = false;
+        let screenAvailable = false;
+        let readbacks = 0;
+        await page.route("**/api/v1/**", async (route) => {
+          const request = route.request();
+          const path = new URL(request.url()).pathname;
+          if (request.method() === "POST" && path.endsWith("/retries")) {
+            writes.push({ path, body: request.postDataJSON() });
+            if (path !== retryPath) return route.fulfill({ status: 403, json: { error: "workspace_role_required" } });
+            pending = true;
+            if (response === "interrupted") return route.abort("failed");
+            return route.fulfill({ json: { retry: {
+              id: failure.id, capsuleId: CAPSULE_ID, stateVersionId: failure.stateVersionId,
+              stateGeneration: failure.stateGeneration, status: "pending",
+            } } });
+          }
+          if (path === `${base}/app`) {
+            if (pending) readbacks += 1;
+            return route.fulfill({ json: { app: appView(CAPSULE_ID, PORTABLE_EXPECTATIONS.appName, {
+              state: pending ? "installed" : "needs_attention",
+              primaryAction: screenAvailable ? "open" : pending ? "view_resources" : "retry_screen",
+              problems: pending ? [] : [{ code: "screen_unavailable", severity: "error", screenFailure: failure }],
+              screens: screenAvailable
+                ? [{ interfaceId: "if_recovered", name: "app.launcher", title: "Recovered screen", url: screenUrl }]
+                : [],
+            }) } });
+          }
+          return route.fallback();
+        });
+
+        await page.goto(`/apps/${CAPSULE_ID}`);
+        await page.getByTestId("app-primary").getByRole("button", { name: "Try again", exact: true }).click();
+        const notice = page.getByTestId("screen-retry-result");
+        await expect(notice).toContainText(response === "accepted" ? "The screen retry was accepted." : "Could not confirm the screen retry.");
+        await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "installed");
+        await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+        expect(readbacks).toBe(1);
+
+        screenAvailable = true;
+        await notice.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", screenUrl);
+        expect(readbacks).toBe(2);
+        expect(writes).toEqual([{ path: retryPath, body: {
+          failureDigest: failure.failureDigest, stateVersionId: failure.stateVersionId, stateGeneration: failure.stateGeneration,
+        } }]);
+      });
+    }
+
     for (const scenario of ["saved", "unsaved", "refused", "retired", "overlapping read"] as const) {
       test(`automatic update setting confirms its saved value (${scenario})`, async ({ page }) => {
         const capsulePath = `/api/v1/capsules/${CAPSULE_ID}`;
