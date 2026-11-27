@@ -207,6 +207,7 @@ export async function runAppUninstall(args: string[], io: CliIo): Promise<number
       body: {},
       options,
       auth: "accounts",
+      redirect: "error",
     });
     io.stdout(formatAppUninstall(capsuleId, response, json));
     return 0;
@@ -254,37 +255,54 @@ function formatAppInstall(value: unknown, json: boolean): string {
 }
 
 function formatAppUninstall(capsuleId: string, value: unknown, json: boolean): string {
+  const { status, uninstall } = readAppUninstallStatus(capsuleId, value);
+  const alreadyDeleted = isRecord(value) && value.alreadyDeleted === true;
+  if (alreadyDeleted ? status !== "destroyed"
+    : status !== "uninstalled" || !uninstall || uninstall.phase === "cancelled") {
+    throw new Error(appUninstallStatusUnconfirmed());
+  }
   if (json) return JSON.stringify(value, null, 2);
-  const status = isRecord(value) && isRecord(value.capsule)
-    ? stringValue(value.capsule.status)
-    : undefined;
+  if (alreadyDeleted) {
+    return isJapaneseCli()
+      ? `アプリ ${capsuleId} は既にアンインストールされています。`
+      : `App ${capsuleId} is already uninstalled.`;
+  }
   return isJapaneseCli()
-    ? `アプリ ${capsuleId} のアンインストールを受け付けました${status ? ` (${status})` : ""}`
-    : `App ${capsuleId} uninstall accepted${status ? ` (${status})` : ""}`;
+    ? `アプリ ${capsuleId} のアンインストールを受け付けました (${status})`
+    : `App ${capsuleId} uninstall accepted (${status})`;
 }
 
-function formatAppUninstallStatus(capsuleId: string, value: unknown, json: boolean): string {
+function appUninstallStatusUnconfirmed(): string {
+  return isJapaneseCli() ? "アプリの予約状態を確認できませんでした。" : "Unable to confirm the app's reservation status.";
+}
+
+function readAppUninstallStatus(capsuleId: string, value: unknown) {
   const capsule = isRecord(value) ? value.capsule : undefined;
-  const invalid = isJapaneseCli() ? "アプリの予約状態を確認できませんでした。" : "Unable to confirm the app's reservation status.";
   if (!isRecord(capsule) || capsule.id !== capsuleId || typeof capsule.status !== "string" ||
     !["pending", "active", "stale", "error", "disabled", "uninstalled", "destroyed"].includes(capsule.status)) {
-    throw new Error(invalid);
+    throw new Error(appUninstallStatusUnconfirmed());
   }
 
   let uninstall = null;
   if (capsule.uninstall !== undefined) {
-    if (!isRecord(capsule.uninstall)) throw new Error(invalid);
+    if (!isRecord(capsule.uninstall)) throw new Error(appUninstallStatusUnconfirmed());
     const { id, phase, requestedAt, scheduledDestroyAt } = capsule.uninstall;
     if (typeof id !== "string" || /^[A-Za-z0-9_-]{1,256}$/u.exec(id)?.[0] !== id ||
       (phase !== "scheduled" && phase !== "destroying" && phase !== "cancelled") ||
       typeof requestedAt !== "string" || !Number.isFinite(Date.parse(requestedAt)) ||
       typeof scheduledDestroyAt !== "string" || !Number.isFinite(Date.parse(scheduledDestroyAt))) {
-      throw new Error(invalid);
+      throw new Error(appUninstallStatusUnconfirmed());
     }
     uninstall = { id, phase, requestedAt, scheduledDestroyAt };
   }
-  if (json) return JSON.stringify({ capsuleId, status: capsule.status, uninstall }, null, 2);
-  const summary = `${capsuleId} — ${capsule.status}`;
+  return { capsuleId, status: capsule.status, uninstall };
+}
+
+function formatAppUninstallStatus(capsuleId: string, value: unknown, json: boolean): string {
+  const receipt = readAppUninstallStatus(capsuleId, value);
+  if (json) return JSON.stringify(receipt, null, 2);
+  const { status, uninstall } = receipt;
+  const summary = `${capsuleId} — ${status}`;
   if (!uninstall) return `${summary}\n${isJapaneseCli() ? "保存済みの削除予約はありません。" : "No saved uninstall reservation."}`;
   return `${summary}\n${uninstall.id} — ${uninstall.phase} (${new Date(uninstall.scheduledDestroyAt).toISOString()})`;
 }

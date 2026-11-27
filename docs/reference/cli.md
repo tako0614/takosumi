@@ -140,7 +140,7 @@ failed/cancelled/expiredのRunも新Planで盲目的に再実行せず、保存R
 
 ## 削除予約の状態を読む
 
-`apps uninstall <app-id> --yes` の予約応答が途切れたら、同じ接続先・アプリ・Accounts IDで現在の予約を読み取ります。対象アプリを閲覧できるAccounts PATの `read` が必要です。
+`apps uninstall <app-id> --yes` は選んだ接続先へ一回だけ予約を要求します。通信が途切れたり、リダイレクトや対象アプリの予約を確認できない応答が返ったりした場合は、同じ接続先・アプリ・Accounts IDで `--status` を実行し、予約状況を読み取ってください。読取りには対象アプリを閲覧できるAccounts PATの `read` が必要です。
 
 ```bash
 takosumi apps uninstall cap_example --status --url https://takosumi.example.com --json

@@ -337,45 +337,97 @@ test("default deploy-control API auth continues to use the operator token", asyn
   }
 });
 
-test("apps uninstall calls the app-scoped uninstall route", async () => {
+const uninstallReservation = {
+  id: "uninstall_owned", phase: "scheduled",
+  requestedAt: "2026-11-27T00:00:00Z", scheduledDestroyAt: "2026-12-04T00:00:00Z",
+};
+const scheduledUninstallResponse = {
+  capsule: { id: "cap_owned", status: "uninstalled", uninstall: uninstallReservation },
+  graceDays: 7,
+};
+
+test("apps uninstall calls the app-scoped uninstall route and returns the saved reservation", async () => {
   const originalFetch = globalThis.fetch;
   let request: Request | undefined;
+  const stdout: string[] = [];
   globalThis.fetch = (async (input, init) => {
     request = new Request(input, init);
-    return Response.json({ capsule: { id: "cap_owned", status: "uninstalled" } }, { status: 202 });
+    return Response.json(scheduledUninstallResponse, { status: 202 });
   }) as typeof fetch;
   try {
-    expect(await main(["apps", "uninstall", "cap_owned", "--yes", "--url", "https://takosumi.example.test", "--token", "account-pat"], quietIo)).toBe(0);
+    expect(await main(["apps", "uninstall", "cap_owned", "--yes", "--json", "--url", "https://takosumi.example.test", "--token", "account-pat"], {
+      ...quietIo, stdout: (line) => stdout.push(line),
+    })).toBe(0);
     expect(new URL(request!.url).pathname).toBe("/api/v1/capsules/cap_owned/uninstall");
     expect(request!.method).toBe("POST");
     expect(await request!.json()).toEqual({});
+    expect(JSON.parse(stdout[0]!)).toEqual(scheduledUninstallResponse);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("apps uninstall status does not follow a redirect", async () => {
+test.each([
+  { mode: "--status", method: "GET", path: "/api/v1/capsules/cap_owned" },
+  { mode: "--yes", method: "POST", path: "/api/v1/capsules/cap_owned/uninstall" },
+])("apps uninstall $mode does not follow a redirect", async ({ mode, method, path: originalPath }) => {
   const requests: string[] = [];
   const stdout: string[] = [];
+  const stderr: string[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     fetch(request) {
       const path = new URL(request.url).pathname;
       requests.push(`${request.method} ${path}`);
-      if (path === "/api/v1/capsules/cap_owned") return Response.redirect(new URL("/moved", request.url), 307);
-      return Response.json({ capsule: { id: "cap_owned", status: "active" } });
+      if (path === originalPath) return Response.redirect(new URL("/moved", request.url), 307);
+      return Response.json(scheduledUninstallResponse, { status: 202 });
     },
   });
   try {
-    const code = await main(["apps", "uninstall", "cap_owned", "--status", "--url", server.url.origin, "--token", "synthetic-read-pat"], {
+    const code = await main(["apps", "uninstall", "cap_owned", mode, "--url", server.url.origin, "--token", "synthetic-fixture-pat"], {
       stdout: (line) => stdout.push(line),
-      stderr: quietIo.stderr,
+      stderr: (line) => stderr.push(line),
     });
     expect(code).toBe(1);
     expect(stdout).toEqual([]);
-    expect(requests).toEqual(["GET /api/v1/capsules/cap_owned"]);
+    expect(requests).toEqual([`${method} ${originalPath}`]);
+    if (mode === "--yes") expect(stderr.join("\n")).toContain("--status");
   } finally { await server.stop(true); }
+});
+
+test.each([
+  ["a reservation for a different app", { capsule: { ...scheduledUninstallResponse.capsule, id: "cap_other" } }],
+  ["a missing reservation", { capsule: { id: "cap_owned", status: "uninstalled" } }],
+  ["a cancelled reservation", { capsule: { ...scheduledUninstallResponse.capsule, uninstall: { ...uninstallReservation, phase: "cancelled" } } }],
+  ["an already-deleted marker on the wrong app", { capsule: { id: "cap_other", status: "destroyed" }, alreadyDeleted: true }],
+])("apps uninstall treats %s as unconfirmed", async (_label, payload) => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  globalThis.fetch = (async () => { requests += 1; return Response.json(payload); }) as typeof fetch;
+  try {
+    expect(await main(["apps", "uninstall", "cap_owned", "--yes", "--json", "--url", "https://takosumi.example.test", "--token", "account-pat"], {
+      stdout: (line) => stdout.push(line), stderr: (line) => stderr.push(line),
+    })).toBe(1);
+    expect(requests).toBe(1);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("--status");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("apps uninstall still accepts a matching already-deleted response", async () => {
+  const originalFetch = globalThis.fetch;
+  const payload = { capsule: { id: "cap_owned", status: "destroyed" }, alreadyDeleted: true };
+  const stdout: string[] = [];
+  globalThis.fetch = (async () => Response.json(payload)) as typeof fetch;
+  try {
+    expect(await main(["apps", "uninstall", "cap_owned", "--yes", "--json", "--url", "https://takosumi.example.test", "--token", "account-pat"], {
+      ...quietIo, stdout: (line) => stdout.push(line),
+    })).toBe(0);
+    expect(JSON.parse(stdout[0]!)).toEqual(payload);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("apps help names Accounts PAT auth and uses Japanese app terminology", async () => {
