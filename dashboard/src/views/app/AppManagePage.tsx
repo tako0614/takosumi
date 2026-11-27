@@ -97,6 +97,7 @@ import {
   trackSubmittedUninstallReview,
 } from "../../lib/uninstall-review-hold.ts";
 import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
+import { currentSessionCheck } from "../account/lib/session.ts";
 import {
   APP_HISTORY_RUN_TYPES,
   appPrimaryActionLabel,
@@ -285,7 +286,12 @@ export default function AppManagePage(props: {
 
 
 
-  const [appView, { refetch: refetchApp }] = createResource<CapsuleAppView, string, AbortSignal | { readonly signal?: AbortSignal; readonly isCurrent: () => boolean }>(capsuleId, (id, info) =>
+  const [appView, { refetch: refetchApp }] = createResource<CapsuleAppView, string, AbortSignal | {
+    readonly signal?: AbortSignal;
+    readonly isCurrent: () => boolean;
+    readonly cache?: "no-store";
+    readonly workspaceId?: string;
+  }>(capsuleId, (id, info) =>
     getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching
       : info.refetching && typeof info.refetching === "object" ? info.refetching.signal : undefined,
       typeof info.refetching === "object" && info.refetching !== null && !(info.refetching instanceof AbortSignal) ? info.refetching : {}));
@@ -531,6 +537,8 @@ export default function AppManagePage(props: {
   const rollbackAttemptKeys = new Map<string, string>();
   let reviewScopeEpoch = 0;
   const [reAdoptionRevisionId, setReAdoptionRevisionId] = createSignal<string>();
+  const [autoUpdateBusy, setAutoUpdateBusy] = createSignal(false);
+  const [autoUpdateError, setAutoUpdateError] = createSignal<string>();
   const reAdoptionTargetId = () => reAdoptionRevisionId() ?? reAdoptionRevisionFromApp(app());
   const uninstallReviewAppScope = () => [props.principalId, props.accountId, workspaceId(), capsuleId()] as const;
   const uninstallReviewScope = (planRunId: string) => [...uninstallReviewAppScope(), planRunId] as const;
@@ -581,6 +589,7 @@ export default function AppManagePage(props: {
         setSectionError(undefined);
         setNotice(undefined);
         setUninstallError(undefined);
+        setAutoUpdateBusy(false);
         setAutoUpdateError(undefined);
         setScreenRetryMessage(undefined);
         setOlderRuns(undefined);
@@ -1006,18 +1015,34 @@ export default function AppManagePage(props: {
   const startRollback = (stateVersionId: string) =>
     void startReview("version", "apply", async (isCurrent) =>
       extractRunId(await planRollbackFromHistory(stateVersionId, isCurrent, capsule()?.currentStateVersionId)));
-  const [autoUpdateBusy, setAutoUpdateBusy] = createSignal(false);
-  const [autoUpdateError, setAutoUpdateError] = createSignal<string>();
   const toggleAutoUpdate = async (enabled: boolean) => {
+    const target = app();
+    if (!target || autoUpdateBusy()) return;
+    const forAccount = props.accountId;
+    const forPrincipal = props.principalId;
+    const forEpoch = reviewScopeEpoch;
+    const sessionIsCurrent = currentSessionCheck();
+    const ownsToggle = () => !disposed && reviewScopeEpoch === forEpoch && capsuleId() === target.capsuleId &&
+      props.accountId === forAccount && props.principalId === forPrincipal;
+    const isCurrent = () => ownsToggle() && sessionIsCurrent();
+
     setAutoUpdateBusy(true);
     setAutoUpdateError(undefined);
     try {
-      await setCapsuleAutoUpdate(capsuleId(), enabled);
-      await Promise.allSettled([refetchContext(), refetchApp()]);
+      await setCapsuleAutoUpdate(target.capsuleId, enabled, { isCurrent });
+      if (!isCurrent()) return;
+      // Use the same resource as background refreshes so response order cannot
+      // replace a more recent app view with an older confirmation snapshot.
+      const observed = await refetchApp({ isCurrent, cache: "no-store", workspaceId: target.workspaceId });
+      if (!isCurrent()) return;
+      if (observed?.version.autoUpdate !== enabled) {
+        throw new ControlApiError(502, "auto_update_unconfirmed", "Automatic update setting could not be confirmed.");
+      }
+      await Promise.allSettled([refetchContext({ isCurrent })]);
     } catch (cause) {
-      setAutoUpdateError(friendlyError(cause, t).message);
+      if (isCurrent()) setAutoUpdateError(friendlyError(cause, t).message);
     } finally {
-      setAutoUpdateBusy(false);
+      if (ownsToggle()) setAutoUpdateBusy(false);
     }
   };
 

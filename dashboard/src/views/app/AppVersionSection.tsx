@@ -148,7 +148,11 @@ export default function AppVersionSection(props: {
         <Checkbox
           checked={props.version.autoUpdate === true}
           disabled={props.autoUpdateBusy}
-          onChange={(event) => props.onAutoUpdate(event.currentTarget.checked)}
+          onChange={(event) => {
+            const enabled = event.currentTarget.checked;
+            event.currentTarget.checked = props.version.autoUpdate === true;
+            props.onAutoUpdate(enabled);
+          }}
           label={t("app.version.autoLabel")}
         />
         <p class="ap-muted">{t("app.version.autoHint")}</p>

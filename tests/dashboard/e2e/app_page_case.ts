@@ -639,6 +639,121 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
+    for (const scenario of ["saved", "unsaved", "refused", "retired", "overlapping read"] as const) {
+      test(`automatic update setting confirms its saved value (${scenario})`, async ({ page }) => {
+        const capsulePath = `/api/v1/capsules/${CAPSULE_ID}`;
+        const replacement = PORTABLE_CAPSULES.ws_beta[0];
+        const overlapping = scenario === "overlapping read";
+        if (overlapping) await page.clock.install();
+        await page.addInitScript((path) => {
+          localStorage.setItem("tg_lang", "en");
+          const fetch = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const response = await fetch(...args);
+            if (response.status === 401 && new URL(response.url).pathname === path) {
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                document.documentElement.dataset.retiredAutoUpdateSettled = "true";
+              }));
+            }
+            return response;
+          };
+        }, capsulePath);
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        let readsBeforeWrite = 0;
+        let persisted = false;
+        let appReadsAfterWrite = 0;
+        const writes: { method: string; path: string; body: unknown }[] = [];
+        await page.route("**/api/v1/**", async (route) => {
+          const request = route.request();
+          const path = new URL(request.url()).pathname;
+          const method = request.method();
+          if (method !== "GET") writes.push({ method, path, body: request.postDataJSON() });
+          if (path === capsulePath && method === "PATCH") {
+            if (scenario === "refused") return route.fulfill({ status: 409, json: { error: "write_refused" } });
+            if (scenario === "retired") {
+              await held;
+              return route.fulfill({ status: 401, json: { error: "unauthenticated" } });
+            }
+            persisted = scenario === "saved" || overlapping;
+            return route.abort("failed");
+          }
+          if (path === `${capsulePath}/app`) {
+            const written = writes.length > 0;
+            if (written) appReadsAfterWrite += 1;
+            else if (++readsBeforeWrite === 2 && overlapping) await held;
+            return route.fulfill({ json: {
+              app: appView(CAPSULE_ID, PORTABLE_EXPECTATIONS.appName, {
+                progress: { revisionPreparing: overlapping && !written },
+                version: {
+                  updateAvailable: false, stale: false, autoUpdate: written && persisted,
+                  current: { ref: "main", commit: written ? "2222222" : "1111111" },
+                },
+              }),
+            } });
+          }
+          if (path === `${capsulePath}/state-versions` ||
+            path === `/api/v1/capsules/${replacement.id}/state-versions`) {
+            return route.fulfill({ json: { stateVersions: [] } });
+          }
+          return route.fallback();
+        });
+
+        try {
+          await page.goto(`/apps/${CAPSULE_ID}#version`, { waitUntil: "domcontentloaded" });
+          const checkbox = page.getByRole("checkbox", { name: "Update automatically when a newer version is found" });
+          const feedback = page.getByTestId("app-version").getByRole("alert");
+          await expect(checkbox).not.toBeChecked();
+          if (overlapping) {
+            await page.clock.fastForward(16_000);
+            await expect.poll(() => readsBeforeWrite).toBe(2);
+          }
+          await checkbox.click();
+
+          if (scenario === "retired") {
+            await expect.poll(() => writes.length).toBe(1);
+            await page.evaluate((id) => {
+              history.pushState(null, "", `/apps/${id}#version`);
+              window.dispatchEvent(new PopStateEvent("popstate"));
+            }, replacement.id);
+            await expect(page.getByRole("heading", { level: 1, name: replacement.name })).toBeVisible();
+            const settled = Promise.race([
+              page.waitForRequest((request) => request.isNavigationRequest() &&
+                new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+              page.waitForFunction(() => document.documentElement.dataset.retiredAutoUpdateSettled === "true").then(() => "stayed"),
+            ]);
+            release();
+            expect(await settled).toBe("stayed");
+            await expect(page.getByRole("heading", { level: 1, name: replacement.name })).toBeVisible();
+            await expect(feedback).toHaveCount(0);
+          } else if (scenario === "saved" || overlapping) {
+            await expect.poll(() => appReadsAfterWrite).toBe(1);
+            await expect(checkbox).toBeChecked();
+            await expect(checkbox).toBeEnabled();
+            await expect(feedback).toHaveCount(0);
+            if (overlapping) {
+              const staleResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `${capsulePath}/app`);
+              release();
+              await (await staleResponse).finished();
+              await page.evaluate(() => new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              }));
+              await expect(page.getByTestId("app-current-version")).toHaveText("main · 2222222");
+              await expect(checkbox).toBeChecked();
+            }
+          } else {
+            await expect(feedback).toBeVisible();
+            await expect(checkbox).not.toBeChecked();
+            await expect(checkbox).toBeEnabled();
+          }
+          expect(appReadsAfterWrite).toBe(scenario === "refused" || scenario === "retired" ? 0 : 1);
+          expect(writes).toEqual([{ method: "PATCH", path: capsulePath, body: { autoUpdate: true } }]);
+        } finally {
+          release();
+        }
+      });
+    }
+
     test("keeps an installed app: open, update, settings, what it created and history in place", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       await page.clock.install();
@@ -950,11 +1065,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           response.url() === `${origin}/api/v1/capsules/${CAPSULE_ID}` &&
           response.request().method() === "PATCH",
         ),
-        app.getByRole("checkbox", { name: "Update automatically when a newer version is found" }).check(),
+        app.getByRole("checkbox", { name: "Update automatically when a newer version is found" }).click(),
       ]);
       expect(autoUpdateResponse.status()).toBe(200);
       expect(await autoUpdateResponse.finished()).toBeNull();
       await expect.poll(() => autoUpdate).toBe(true);
+      await expect(app.getByRole("checkbox", { name: "Update automatically when a newer version is found" })).toBeChecked();
 
       // A newer version: reviewed in place, applied only by Allow and update.
       stale = true;
@@ -1003,8 +1119,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       changedConfiguration = true;
       const readLatest = page.waitForResponse((response) =>
         new URL(response.url()).pathname === configPath(latestConfigId) && response.ok());
-      await versionSection.getByRole("checkbox", { name: "Update automatically when a newer version is found" }).uncheck();
+      await versionSection.getByRole("checkbox", { name: "Update automatically when a newer version is found" }).click();
       await readLatest;
+      await expect(versionSection.getByRole("checkbox", { name: "Update automatically when a newer version is found" })).not.toBeChecked();
       await showAppOverview(page);
       await openAppPane(page, "connections");
       const conflict = settings.getByTestId("app-settings-draft-conflict");

@@ -1877,16 +1877,20 @@ function isMutationOutcomeUnknown(error: unknown): boolean {
   return true;
 }
 
-/** Toggles the Capsule's auto-update opt-in (PATCH /capsules/:id). */
+/** Sets the opt-in once. A lost response leaves the caller to read the app. */
 export async function setCapsuleAutoUpdate(
   capsuleId: string,
   enabled: boolean,
-): Promise<Capsule> {
-  const body = await controlFetch<{ capsule: Capsule }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}`,
-    { method: "PATCH", body: { autoUpdate: enabled } },
-  );
-  return body.capsule;
+  scope: Pick<RequestOpts, "isCurrent"> = {},
+): Promise<void> {
+  try {
+    await controlFetch<unknown>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}`, {
+      ...scope, method: "PATCH", body: { autoUpdate: enabled },
+    });
+  } catch (cause) {
+    if (!isMutationOutcomeUnknown(cause)) throw cause;
+  }
+  throwIfReadRetired(scope);
 }
 
 export interface ScheduleCapsuleUninstallResult {
@@ -2412,7 +2416,11 @@ export function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> {
   return getCapsuleAppWithSignal(capsuleId);
 }
 
-export async function getCapsuleAppWithSignal(capsuleId: string, signal?: AbortSignal, options: { readonly isCurrent?: () => boolean } = {}): Promise<CapsuleAppView> {
+export async function getCapsuleAppWithSignal(
+  capsuleId: string,
+  signal?: AbortSignal,
+  options: Pick<ControlReadScope, "isCurrent" | "cache"> & { readonly workspaceId?: string } = {},
+): Promise<CapsuleAppView> {
   const body = await withControlReadDeadline("App", { signal, ...options }, (scope) =>
     controlFetch<{ app?: CapsuleAppView }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`, scope),
   );
@@ -2422,6 +2430,7 @@ export async function getCapsuleAppWithSignal(capsuleId: string, signal?: AbortS
     !isRecord(app) ||
     app.kind !== CAPSULE_APP_VIEW_KIND ||
     app.capsuleId !== capsuleId ||
+    (options.workspaceId !== undefined && app.workspaceId !== options.workspaceId) ||
     typeof app.state !== "string" ||
     typeof app.primaryAction !== "string" ||
     !Array.isArray(app.problems) ||
