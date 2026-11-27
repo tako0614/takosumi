@@ -2171,30 +2171,67 @@ async function hostedEmailVerified(store: AccountsStore, account: TakosumiAccoun
   return !!proof && proof.address === account.email && proof.observedAt <= Date.now() && proof.validUntil > Date.now();
 }
 
+// Only this issuer's original request context carries the reader. Results are
+// never retained, and a directory backed by another store cannot use it.
+const sharedGrantSubjectReaders = new WeakMap<SharedHostedSessionContext, {
+  readonly store: AccountsStore;
+  readonly readCurrentCanonicalSubject: () => Promise<TakosumiSubject | undefined>;
+}>();
+
+export function sharedGrantSubjectReader(session: SharedHostedSessionContext, store: AccountsStore) {
+  const reader = sharedGrantSubjectReaders.get(session);
+  return reader?.store === store ? reader.readCurrentCanonicalSubject : undefined;
+}
+
 /** Dedicated shared directory grant: never an account/control bearer promotion. */
 export async function resolveSharedAccountGrantSession(input: {
   issuer?: string;
   request: Request;
   store: AccountsStore;
+  /** The same base store when `store` is wrapped by the Accounts handler. */
+  canonicalSubjectStore?: AccountsStore;
   clients: ReadonlyMap<string, OidcClientRegistration>;
   /** Receives the grant's registered OAuth client (telemetry only). */
   observeClientId?: (clientId: string) => void;
 }): Promise<{ok:true;session:SharedHostedSessionContext}|{ok:false;response:Response}> {
   const token = bearerToken(input.request.headers.get("authorization"));
   if (!token) return {ok:false,response:bearerChallenge("invalid_token")};
-  const load = async () => {
-    const record = await findActiveAccessToken({store:input.store,token});
+  const loadCandidate = async (store: AccountsStore) => {
+    const record = await findActiveAccessToken({store,token});
     if (!record || record.oidcProfile !== "shared-account") return undefined;
-    const client = await resolveOidcClient({clientId:record.clientId,clients:input.clients,store:input.store});
-    return client?.profile === "shared-account" && await hostedGrantIsActive({store:input.store,client,record,issuer:input.issuer}) ? record : undefined;
+    const client = await resolveOidcClient({clientId:record.clientId,clients:input.clients,store});
+    return client?.profile === "shared-account" ? {store,client,record,issuer:input.issuer} : undefined;
+  };
+  const load = async () => {
+    const candidate = await loadCandidate(input.store);
+    return candidate && await hostedGrantIsActive(candidate) ? candidate.record : undefined;
   };
   const record = await load();
   if (!record?.takosumiSubject) return {ok:false,response:bearerChallenge("invalid_token")};
   input.observeClientId?.(record.clientId);
-  return {ok:true,session:{kind:"shared-hosted-session",canonicalAccountId:record.takosumiSubject,assertCurrentGrant:async()=>{
-    const current = await load();
-    return current?.subject === record.subject && current.sid === record.sid;
-  }}};
+  const session: SharedHostedSessionContext = {
+    kind: "shared-hosted-session", canonicalAccountId: record.takosumiSubject,
+    assertCurrentGrant: async () => {
+      const current = await load();
+      return current?.subject === record.subject && current.sid === record.sid;
+    },
+  };
+  const canonicalSubjectStore = input.canonicalSubjectStore ?? input.store;
+  if (canonicalSubjectStore.findHostedGrantAuthority) {
+    sharedGrantSubjectReaders.set(session, {
+      store: canonicalSubjectStore,
+      async readCurrentCanonicalSubject() {
+        const candidate = await loadCandidate(canonicalSubjectStore);
+        if (!candidate || !canonicalSubjectStore.findHostedGrantAuthority ||
+          candidate.record.subject !== record.subject || candidate.record.sid !== record.sid ||
+          candidate.record.clientId !== record.clientId || candidate.record.issuer !== record.issuer ||
+          candidate.record.issuerSessionId !== record.issuerSessionId) return undefined;
+        // The snapshot includes the exact canonical account and merge fence.
+        return await hostedGrantIsActive(candidate) ? candidate.record.takosumiSubject : undefined;
+      },
+    });
+  }
+  return {ok:true,session};
 }
 
 const NATIVE_CONSENT_TRANSACTION_PREFIX = "ncons_";

@@ -13,6 +13,7 @@ import { requireAccountSession } from "./account-session.ts";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 import { ensurePersonalWorkspaceForAccount } from "./control-personal-workspace.ts";
 import { errorJson, json, methodNotAllowed, readJsonObject, RequestBodyReadError, withPrivateNoStoreHeaders } from "./http-helpers.ts";
+import { sharedGrantSubjectReader } from "./oidc-routes.ts";
 import type { AccountsStore, TakosumiAccountRecord } from "./store.ts";
 import { measureRequestPhaseOperation, type RequestPhaseObserver } from "./request-phase-diagnostics.ts";
 
@@ -286,19 +287,30 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       return await authorized(account.subject, workspace.id);
     },
     async billingOrganization(session, workspaceId, diagnostics, projection) {
-      const account = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
-        const current = await canonicalAccount(session);
-        await authorized(current.subject, workspaceId);
+      const currentBillingSubject = async (): Promise<TakosumiSubject> => {
+        if (projection === "entry-v1" && "canonicalAccountId" in session &&
+          deps.store.findCanonicalAccount && deps.store.isAccountAuthenticationFenced) {
+          const readCurrentSubject = sharedGrantSubjectReader(session, deps.store);
+          if (readCurrentSubject) {
+            const subject = await readCurrentSubject();
+            return subject === session.canonicalAccountId ? subject : rejectSession();
+          }
+        }
+        return (await canonicalAccount(session)).subject;
+      };
+      const subject = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
+        const current = await currentBillingSubject();
+        await authorized(current, workspaceId);
         return current;
       });
       if (!deps.resolveWorkspaceBilling) {
         throw new SharedAccountWorkspaceError("capability_unavailable", "Workspace billing resolver is unavailable.", 503);
       }
       const binding = await deps.resolveWorkspaceBilling({
-        workspaceId, canonicalAccountId: account.subject,
+        workspaceId, canonicalAccountId: subject,
         ...(diagnostics ? { diagnostics } : {}),
         assertCurrentGrant: async () => {
-          try { await canonicalAccount(session); return true; }
+          try { await currentBillingSubject(); return true; }
           catch { return false; }
         },
       });
@@ -310,9 +322,9 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       // A resolver can await an owner handshake. No authorization result from
       // before that wait survives a concurrent membership revocation or merge.
       const workspace = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
-        await canonicalAccount(session);
-        const current = await authorized(account.subject, workspaceId);
-        if (projection === "entry-v1") await canonicalAccount(session);
+        await currentBillingSubject();
+        const current = await authorized(subject, workspaceId);
+        if (projection === "entry-v1") await currentBillingSubject();
         return current;
       });
       const scope = { workspaceId, workspaceRef: binding.workspaceRef, organizationId: binding.organizationId };
