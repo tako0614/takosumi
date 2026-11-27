@@ -840,6 +840,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
 
     for (const [scenario, title] of [
       ["apply", "a completed shared Apply keeps authorized Open without redundant session reads"],
+      ["apply_without_open", "a completed shared Apply without Open offers one app return"],
+      ["destroy_apply", "a completed shared Destroy offers one app return without Open"],
       ["plan", "a completed shared Plan retains a fresh approval history read"],
       ["waiting_approval", "a shared Plan awaiting approval retries current state before withholding stale approval"],
     ] as const) {
@@ -848,7 +850,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         const capsuleId = "cap_partial_run";
-        const runType = scenario === "apply" ? "apply" : "plan";
+        const runType = scenario === "waiting_approval" ? "plan" : scenario === "apply_without_open" ? "apply" : scenario;
         const waiting = scenario === "waiting_approval";
         const runId = `${scenario}_partial_run`;
         const stateId = "sv_partial_run";
@@ -921,7 +923,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
               return route.fulfill({ status: 503, json: { error: "authentication_unavailable" } });
             }
             return route.fulfill({ headers, json: { capsule: {
-              id: capsuleId, workspaceId: "ws_alpha", name: "Partial Run App", slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production", status: "active",
+              id: capsuleId, workspaceId: "ws_alpha", name: "Partial Run App", slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production",
+              status: runType === "destroy_apply" ? "destroyed" : "active",
               currentStateGeneration: waiting ? 2 : 1, currentStateVersionId: stateId, createdAt: now, updatedAt: now,
             } } });
           }
@@ -942,6 +945,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           if (path === "/api/v1/ui-surfaces") {
             launcherReads.push(url.search);
             expect(url.searchParams.get("capsuleId")).toBe(capsuleId);
+            if (scenario === "apply_without_open") return route.fulfill({ headers, json: { interfaces: [] } });
             return route.fulfill({ headers, json: { interfaces: [{
               apiVersion: "takosumi.dev/v1alpha1", kind: "Interface",
               metadata: { id: "if_partial_run", workspaceId: "ws_alpha", name: "app.launcher", ownerRef: { kind: "Capsule", id: capsuleId }, generation: 1 },
@@ -958,6 +962,11 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           }
           return route.continue();
         });
+        const backToApp = page.getByRole("link", { name: "Back to the app", exact: true });
+        const surfacesResponse = scenario === "apply_without_open"
+          ? page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/ui-surfaces")
+            .then((response) => response.finished())
+          : undefined;
         await page.goto(`/runs/${runId}`, { waitUntil: "domcontentloaded" });
         if (waiting) {
           const approval = page.getByRole("button", { name: "Approve this change", exact: true });
@@ -983,6 +992,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         }
         if (runType === "plan") {
           await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+          await expect(backToApp).toHaveAttribute("href", `/apps/${capsuleId}`);
           expect(requests.filter(({ path }) => path === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH)).toHaveLength(1);
           expect(requests.filter(({ path }) => path === health)).toHaveLength(1);
           expect(requests.filter(({ path }) => path === `/api/v1/capsules/${capsuleId}/runs`)).toEqual([
@@ -995,9 +1005,24 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           return;
         }
         const open = page.getByRole("link", { name: "Open app", exact: true });
+        if (scenario === "apply_without_open" || scenario === "destroy_apply") {
+          await expect(page.getByText(runType === "apply" ? "Applied." : "Deletion complete.", { exact: true })).toBeVisible();
+          if (surfacesResponse) expect(await surfacesResponse).toBeNull();
+          expect(launcherReads).toEqual(runType === "apply" ? [`?capsuleId=${capsuleId}`] : []);
+          await expect(open).toHaveCount(0);
+          await expect(backToApp).toHaveCount(1);
+          await expect(backToApp).toHaveAttribute("href", `/apps/${capsuleId}`);
+          await backToApp.click();
+          await expect(page).toHaveURL((url) => url.pathname === `/apps/${capsuleId}`);
+          expect(mutations).toEqual([]);
+          expect(errors).toEqual([]);
+          return;
+        }
         const warning = page.getByRole("alert").filter({ hasText: "Couldn't read its screens." });
         await expect(open).toHaveAttribute("href", launchUrl);
         await expect(warning).toBeVisible();
+        await expect(backToApp).toHaveCount(1);
+        await expect(backToApp).toHaveAttribute("href", `/apps/${capsuleId}`);
         expect(requests.filter(({ path }) => path === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH)).toHaveLength(1);
         expect(requests.filter(({ path }) => path === health), JSON.stringify(requests)).toHaveLength(0);
         const normalRunReads = [
@@ -1014,6 +1039,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         await expect.poll(() => launcherReads.length).toBe(2);
         await expect(warning).toHaveCount(0);
         await expect(open).toHaveAttribute("href", launchUrl);
+        await expect(backToApp).toHaveCount(1);
         expect(requests.filter(({ path }) => path === health)).toHaveLength(1);
         expect(requests.filter(({ path }) => path === "/api/v1/ui-surfaces").map((read) => read.guarded)).toEqual([true, false]);
         expect(launcherReads).toEqual([`?capsuleId=${capsuleId}`, `?capsuleId=${capsuleId}`]);
