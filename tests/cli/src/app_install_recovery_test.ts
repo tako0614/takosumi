@@ -20,7 +20,7 @@ function retainedKey(lines: string[]): string | undefined {
   }
 }
 
-test("lost install ACK retains a pre-dispatch key and manual replay returns the same actual attempt", async () => {
+test.each(["lost", "incomplete", "legacy-after-upgrade"])("install acknowledgement %s: retain the key for the saved attempt", async (mode) => {
   // Initial identity/PAT and persistence are synthetic. Accounts authentication,
   // the public handler and the Core install coordinator are production code.
   const ledger = new InMemoryOpenTofuControlStore();
@@ -31,7 +31,10 @@ test("lost install ACK retains a pre-dispatch key and manual replay returns the 
     role: "takosumi-api", runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: ledger, gitInstallPlanStore: plans,
   });
-  const workspace = await operations.workspaces.createWorkspace({ handle: "cli-install-recovery", displayName: "CLI install recovery", type: "personal", ownerUserId: SUBJECT });
+  const legacy = mode === "legacy-after-upgrade";
+  const workspace = await operations.workspaces.createWorkspace({ handle: "cli-install-recovery", displayName: "CLI install recovery", type: legacy ? "organization" : "personal", ownerUserId: SUBJECT });
+  const directPath = "/api/v1/install-plans";
+  const path = legacy ? `/api/v1/workspaces/${workspace.id}/install-plans` : directPath;
   const accounts = new InMemoryAccountsStore();
   const now = Date.now();
   accounts.saveAccount({ subject: SUBJECT, createdAt: now, updatedAt: now });
@@ -47,46 +50,80 @@ test("lost install ACK retains a pre-dispatch key and manual replay returns the 
   const bodies: string[] = [];
   const keyReadyBeforeSend: boolean[] = [];
   let acceptedId = "";
-  let calls = 0;
+  const paths: string[] = [];
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init);
-    expect(request.url).toBe(`${ORIGIN}/api/v1/install-plans`);
+    const url = new URL(request.url);
+    paths.push(url.pathname);
+    expect(url.origin).toBe(ORIGIN);
     expect(request.method).toBe("POST");
     keyReadyBeforeSend.push(retainedKey(stderr) === request.headers.get("idempotency-key"));
     bodies.push(await request.clone().text());
-    calls++;
-    const response = await handleControlRoute({ request, url: new URL(request.url), store: accounts, operations });
+    // The original server lacks the new route. By the next invocation it
+    // is present, which would select an unrelated personal Workspace.
+    if (legacy && paths.length === 1 && url.pathname === directPath) {
+      return Response.json({ error: "not_found" }, { status: 404 });
+    }
+    const response = await handleControlRoute({ request, url, store: accounts, operations });
     expect(response).toBeDefined();
     statuses.push(response!.status);
-    if (calls === 1) {
+    if (statuses.length === 1) {
       acceptedId = (await response!.json()).installPlan.id;
+      if (mode === "incomplete") return Response.json({ installPlan: { phase: "syncing_source" } }, { status: 201 });
       throw new Error("fixture: response lost after coordinator create");
     }
     return response!;
   }) as typeof fetch;
   try {
-    expect(await runAppInstall(baseArgs, io)).toBe(1);
-    expect(calls).toBe(1); // The CLI never retries a POST automatically.
+    const initialArgs = legacy ? [...baseArgs, "--workspace", workspace.id] : baseArgs;
+    expect(await runAppInstall(initialArgs, io)).toBe(1);
+    expect(paths).toEqual(legacy ? [directPath, path] : [path]);
     expect(stdout).toEqual([]);
     expect(statuses).toEqual([201]);
-    expect(keyReadyBeforeSend).toEqual([true]);
+    expect(keyReadyBeforeSend).toEqual(legacy ? [true, true] : [true]);
     const key = retainedKey(stderr);
     expect(key).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(stderr.join("\n")).toContain("--idempotency-key");
     expect(stderr.join("\n")).not.toContain(TOKEN);
     expect(stderr.join("\n")).not.toContain(baseArgs[1]!);
+    if (legacy) {
+      expect(JSON.parse(stderr[1]!)).toEqual({ kind: "install_attempt_legacy_workspace", workspaceId: workspace.id });
+      expect(stderr.join("\n")).toContain("--resume-legacy-workspace");
+    }
     stderr.length = 0;
-    expect(await runAppInstall([...baseArgs, `--idempotency-key=${key}`], io)).toBe(0);
+    const replay = [...baseArgs, `--idempotency-key=${key}`, ...(legacy ? ["--resume-legacy-workspace", workspace.id] : [])];
+    expect(await runAppInstall(replay, io)).toBe(0);
+    expect(paths).toEqual(legacy ? [directPath, path, path] : [path, path]);
     expect(JSON.parse(stdout.join("\n")).installPlan.id).toBe(acceptedId);
     expect(statuses).toEqual([201, 200]);
-    expect(bodies[1]).toBe(bodies[0]);
+    expect(bodies.every((body) => body === bodies[0])).toBe(true);
     expect(await plans.listOpenAttempts({ actorSubject: SUBJECT })).toHaveLength(1);
     stdout.length = 0;
     stderr.length = 0;
-    expect(await runAppInstall([...baseArgs, `--idempotency-key=${key}`, "--app-name", "different-intent"], io)).toBe(1);
+    expect(await runAppInstall([...replay, "--app-name", "different-intent"], io)).toBe(1);
     expect(statuses.at(-1)).toBe(409);
     expect(await plans.listOpenAttempts({ actorSubject: SUBJECT })).toHaveLength(1);
     expect(stdout).toEqual([]);
     expect(await ledger.listRunsByWorkspace(workspace.id)).toHaveLength(0);
+  } finally { globalThis.fetch = original; }
+});
+
+test("legacy resume requires a saved key and a single explicit Workspace", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => { calls++; throw new Error("unexpected HTTP"); }) as typeof fetch;
+  try {
+    const io = { stdout: () => {}, stderr: () => {} };
+    for (const flags of [["--resume-legacy-workspace", "ws_old"],
+      ["--resume-legacy-workspace", "ws_old", "--workspace", "ws_other", "--idempotency-key", "saved"],
+      ["--resume-legacy-workspace", "--idempotency-key", "saved"],
+      ["--resume-legacy-workspace", ".", "--idempotency-key", "saved"],
+      ["--resume-legacy-workspace", "..", "--idempotency-key", "saved"],
+      ["--workspace", "."],
+      ["--workspace", ".."]]) {
+      expect(await runAppInstall([...baseArgs, ...flags], io)).toBe(2);
+    }
+    expect(calls).toBe(0);
   } finally { globalThis.fetch = original; }
 });
 

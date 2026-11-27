@@ -49,7 +49,7 @@ test("apps install preserves a user idempotency key on the legacy 404 fallback",
     const url = new URL(request.url);
     paths.push(url.pathname);
     if (paths.length === 1) return new Response("route missing", { status: 404 });
-    return Response.json({ installPlan: { id: "ip_legacy", phase: "syncing_source" } }, { status: 201 });
+    return Response.json({ installPlan: { id: "ip_legacy", phase: "syncing_source", workspaceId: "ws_legacy" } }, { status: 201 });
   }) as typeof fetch;
   try {
     expect(await main([
@@ -110,6 +110,95 @@ test("apps install never falls back on non-404 errors", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("an unclassified 404 cannot move the install POST into another Workspace", async () => {
+  const originalFetch = globalThis.fetch;
+  const paths: string[] = [];
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  globalThis.fetch = (async (input) => {
+    paths.push(new URL(String(input)).pathname);
+    if (paths.length === 1) return new Response("<h1>404 from proxy</h1>", {
+      status: 404, headers: { "content-type": "text/html" },
+    });
+    return Response.json({ installPlan: { id: "ip_other_scope", phase: "syncing_source" } });
+  }) as typeof fetch;
+  try {
+    expect(await main(["apps", "install", "--git", "https://git.example.test/team/app.git", "--workspace", "ws_legacy",
+      "--url", "https://takosumi.example.test", "--token", "account-pat"], {
+      stdout: (line) => stdout.push(line), stderr: (line) => stderr.push(line),
+    })).toBe(1);
+    expect(paths).toEqual(["/api/v1/install-plans"]);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("--idempotency-key");
+    expect(stderr.join("\n")).toContain("Omit --workspace");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("apps install cannot confirm a saved attempt from a different legacy Workspace", async () => {
+  const originalFetch = globalThis.fetch;
+  const paths: string[] = [];
+  const stdout: string[] = [];
+  globalThis.fetch = (async (input) => {
+    paths.push(new URL(String(input)).pathname);
+    return Response.json({ installPlan: { id: "ip_fixture", phase: "syncing_source", workspaceId: "ws_other" } });
+  }) as typeof fetch;
+  try {
+    expect(await main(["apps", "install", "--git", "https://git.example.test/team/app.git",
+      "--resume-legacy-workspace", "ws_legacy", "--idempotency-key", "saved-key",
+      "--url", "https://takosumi.example.test", "--token", "account-pat"], { ...quietIo, stdout: (line) => stdout.push(line) })).toBe(1);
+    expect(paths).toEqual(["/api/v1/workspaces/ws_legacy/install-plans"]);
+    expect(stdout).toEqual([]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test.each(["app", "legacy"])("apps install stays on the selected route when the %s route redirects", async (scope) => {
+  const directPath = "/api/v1/install-plans";
+  const legacyPath = "/api/v1/workspaces/ws_legacy/install-plans";
+  const redirectPath = scope === "app" ? directPath : legacyPath;
+  const expectedPaths = scope === "app" ? [directPath] : [directPath, legacyPath];
+  const requests: Array<{ method: string; path: string; key: string | null }> = [];
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      requests.push({ method: request.method, path, key: request.headers.get("idempotency-key") });
+      if (path === redirectPath) return Response.redirect(new URL("/moved", request.url), 307);
+      if (path === directPath) return Response.json({ error: "not_found" }, { status: 404 });
+      return Response.json({ installPlan: { id: "ip_fixture", phase: "syncing_source", workspaceId: "ws_legacy" } }, { status: 201 });
+    },
+  });
+  try {
+    expect(await main([
+      "apps", "install", "--git", "https://git.example.test/team/app.git", "--workspace", "ws_legacy",
+      "--idempotency-key", "retained-key", "--url", server.url.origin, "--token", "synthetic-fixture-pat", "--json",
+    ], { stdout: (line) => stdout.push(line), stderr: (line) => stderr.push(line) })).toBe(1);
+    expect(requests).toEqual(expectedPaths.map((path) => ({ method: "POST", path, key: "retained-key" })));
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("--idempotency-key");
+  } finally { await server.stop(true); }
+});
+
+test.each([
+  { installPlan: { id: "ip_fixture", phase: "checking" } },
+  { installPlan: { id: "ip_fixture", phase: "planning", operation: "revision" } },
+])("apps install rejects an unrelated or unrecognized receipt", async (body) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json(body)) as typeof fetch;
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  try {
+    expect(await main(["apps", "install", "--git", "https://git.example.test/team/app.git",
+      "--url", "https://takosumi.example.test", "--token", "account-pat"], {
+      stdout: (line) => stdout.push(line), stderr: (line) => stderr.push(line),
+    })).toBe(1);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("--idempotency-key");
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("apps list without a workspace does not retry a legacy route on 404", async () => {
@@ -500,7 +589,7 @@ for (const envelope of ["flat", "nested", "nested-with-request-id"] as const) {
         }
         return Response.json(command === "list"
           ? { installedApps: [], complete: true }
-          : { installPlan: { id: "ip_legacy", phase: "syncing_source" } });
+          : { installPlan: { id: "ip_legacy", phase: "syncing_source", workspaceId: "ws_legacy" } });
       }) as typeof fetch;
       try {
         expect(await main(["apps", command,
