@@ -944,6 +944,7 @@ export const ja = {
   "run.summary.readinessUnavailableHint":
     "準備状況を再確認します。確認に成功するまで適用完了とは表示しません。",
   "run.summary.applySucceeded": "適用が完了しました。",
+  "run.summary.historicalApply": "この実行の後にアプリの状態が変わりました。",
   "run.summary.removing": "削除しています…",
   "run.summary.removed": "削除が完了しました。",
   "run.summary.failed": "{operation}に失敗しました。",

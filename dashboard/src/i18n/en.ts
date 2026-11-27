@@ -932,6 +932,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.readinessUnavailableHint":
     "Takosumi will retry the readiness read. The apply is not reported as ready until the check succeeds.",
   "run.summary.applySucceeded": "Applied.",
+  "run.summary.historicalApply": "The app's state changed after this run.",
   "run.summary.removing": "Deleting…",
   "run.summary.removed": "Deletion complete.",
   "run.summary.failed": "{operation} failed.",

@@ -997,6 +997,9 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
     for (const [scenario, title] of [
       ["apply", "a completed shared Apply keeps authorized Open without redundant session reads"],
       ["apply_without_open", "a completed shared Apply without Open offers one app return"],
+      ["superseded_apply", "a historical Apply stops waiting for activation after a newer state"],
+      ["removed_apply", "a historical Apply offers app management after removal"],
+      ["unavailable_apply", "a historical Apply withholds Open until current app state is read"],
       ["destroy_apply", "a completed shared Destroy offers one app return without Open"],
       ["plan", "a completed shared Plan retains a fresh approval history read"],
       ["waiting_approval", "a shared Plan awaiting approval retries current state before withholding stale approval"],
@@ -1006,8 +1009,13 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         const capsuleId = "cap_partial_run";
-        const runType = scenario === "waiting_approval" ? "plan" : scenario === "apply_without_open" ? "apply" : scenario;
         const waiting = scenario === "waiting_approval";
+        const removed = scenario === "removed_apply";
+        const unavailable = scenario === "unavailable_apply";
+        const historical = scenario === "superseded_apply" || removed || unavailable;
+        const runType = waiting ? "plan" : historical || scenario === "apply_without_open" ? "apply" : scenario;
+        let capsuleUnavailable = unavailable;
+        if (historical) await page.clock.install();
         const rawName = "app-11111111-1111-4111-8111-111111111111";
         const displayName = scenario === "apply"
           ? { en: "takosumi", ja: "takosumi" }
@@ -1094,6 +1102,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             runId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [],
           } } });
           if (path === `/api/v1/capsules/${capsuleId}`) {
+            if (capsuleUnavailable) return route.fulfill({ status: 503, json: { error: "fixture_unavailable" } });
             if (waiting && request.headers()[marker] === "1") {
               guardedCapsule = true;
               return route.fulfill({ status: 503, json: { error: "authentication_unavailable" } });
@@ -1101,8 +1110,10 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             return route.fulfill({ headers, json: { capsule: {
               id: capsuleId, workspaceId: "ws_alpha", name: rawName, slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production",
               ...(displayName ? { displayName } : {}),
-              status: runType === "destroy_apply" ? "destroyed" : "active",
-              currentStateGeneration: waiting ? 2 : 1, currentStateVersionId: stateId, createdAt: now, updatedAt: now,
+              status: removed || runType === "destroy_apply" ? "destroyed" : "active",
+              currentStateGeneration: waiting || historical ? 2 : 1,
+              currentStateVersionId: removed ? null : historical ? "sv_newer_partial_run" : stateId,
+              createdAt: now, updatedAt: now,
             } } });
           }
           if (path === `/api/v1/capsules/${capsuleId}/state-versions`) return route.fulfill({ headers, json: { stateVersions: [{
@@ -1110,7 +1121,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             createdByRunId: runId, createdAt: now,
           }] } });
           if (path === `/api/v1/capsules/${capsuleId}/activity`) return route.fulfill({ headers, json: { events: [{
-            id: "act_partial_run", workspaceId: "ws_alpha", action: "release_activation.succeeded", targetType: "Capsule",
+            id: "act_partial_run", workspaceId: "ws_alpha",
+            action: scenario === "superseded_apply" ? "release_activation.pending" : "release_activation.succeeded", targetType: "Capsule",
             targetId: capsuleId, runId, metadata: { applyRunId: runId, stateVersionId: stateId, capsuleId }, createdAt: now,
           }] } });
           if (path === `/api/v1/capsules/${capsuleId}/runs`) {
@@ -1194,6 +1206,34 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           return;
         }
         const open = page.getByRole("link", { name: "Open app", exact: true });
+        if (historical) {
+          const readinessPaths = new Set([
+            `/api/v1/capsules/${capsuleId}/state-versions`,
+            `/api/v1/capsules/${capsuleId}/activity`,
+          ]);
+          if (unavailable) {
+            await expect(page.getByText("The app's readiness couldn't be checked.", { exact: true })).toBeVisible();
+            await expect(backToApp).toHaveAttribute("href", `/apps/${capsuleId}`);
+            await expect(open).toHaveCount(0);
+            expect(launcherReads).toEqual([]);
+            capsuleUnavailable = false;
+            await page.clock.runFor(3_100);
+          }
+          await expect(page.getByText("Applied.", { exact: true })).toBeVisible();
+          await expect(page.getByText("The app's state changed after this run.", { exact: true })).toBeVisible();
+          await expect(backToApp).toHaveAttribute("href", `/apps/${capsuleId}`);
+          const initialReadCount = unavailable ? 4 : 2;
+          await expect.poll(() => requests.filter(({ path }) => readinessPaths.has(path)).length).toBe(initialReadCount);
+          await page.clock.runFor(6_100);
+          expect(requests.filter(({ path }) => readinessPaths.has(path))).toHaveLength(initialReadCount);
+          await expect(open).toHaveCount(0);
+          expect(launcherReads).toEqual([]);
+          await backToApp.click();
+          await expect(page).toHaveURL((url) => url.pathname === `/apps/${capsuleId}`);
+          expect(mutations).toEqual([]);
+          expect(errors).toEqual([]);
+          return;
+        }
         if (scenario === "apply_without_open" || scenario === "destroy_apply") {
           await expect(page.getByText(runType === "apply" ? "Applied." : "Deletion complete.", { exact: true })).toBeVisible();
           if (surfacesResponse) expect(await surfacesResponse).toBeNull();

@@ -332,8 +332,7 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain('readiness === "activation_pending"');
     expect(runViewSource).toContain('readiness === "activation_failed"');
     expect(runViewSource).toContain('readiness === "unavailable"');
-    expect(runViewSource).toContain("if (stateVersions.error) return undefined;");
-    expect(runViewSource).toContain("stateVersions.latest");
+    expect(runViewSource).toContain("readyOrUndefined(stateVersions)");
     expect(runViewSource).toContain("activity.latest");
     expect(runViewSource).not.toContain("stateVersions()");
     expect(runViewSource).toContain("stateVersions.error || activity.error");
@@ -342,7 +341,7 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain('t("run.summary.readinessUnavailable")');
     expect(runViewSource).toContain('text: t("run.summary.activationFailed")');
     expect(runViewSource).toContain(
-      'if (readiness === "ready" || readiness === "activation_failed") return;',
+      'if (readiness === "ready" || readiness === "activation_failed" || readiness === "historical") return;',
     );
     expect(runViewSource).toContain("refetchStateVersions()");
     expect(runViewSource).toContain("refetchActivity()");
