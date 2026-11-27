@@ -613,6 +613,7 @@ function Inner(props: { readonly session: SessionRecord }) {
   );
   // The owning app, for the plain-language summary sentence + back link.
   const capsuleId = createMemo(() => runLatest()?.capsuleId ?? null);
+  const completedAppActionId = () => isSucceededApplyRun(runLatest()) ? capsuleId() : undefined;
   const [capsule] = createResource(
     () => {
       const id = capsuleId();
@@ -1715,7 +1716,7 @@ function Inner(props: { readonly session: SessionRecord }) {
             </span>
           }
           subtitle={appName() ? `${appName()}` : undefined}
-          actions={
+          actions={completedAppActionId() ? undefined : (
             <Show
               when={capsuleId()}
               fallback={
@@ -1733,7 +1734,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                 </Button>
               )}
             </Show>
-          }
+          )}
         />
 
         <Switch>
@@ -1967,14 +1968,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                       </Button>
                     </Show>
 
-                    <Show
-                      when={
-                        r().status === "succeeded" &&
-                        (r().type === "apply" ||
-                          r().type === "destroy_apply") &&
-                        capsuleId()
-                      }
-                    >
+                    <Show when={completedAppActionId()}>
                       {(id) => (
                         <>
                           <Show when={completedRunLaunchUrl()}>
