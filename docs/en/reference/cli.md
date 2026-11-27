@@ -144,7 +144,7 @@ Failed, cancelled or expired Runs also need inspection of the saved Run and app 
 
 ## Read an uninstall reservation
 
-If the response to `apps uninstall <app-id> --yes` is interrupted, read the current reservation using the same server, app and Accounts identity. This requires an Accounts PAT with `read` access to the app.
+`apps uninstall <app-id> --yes` sends one reservation request to the selected server. If the connection drops, the server sends a redirect, or the response fails to confirm this app's reservation, use `--status` to read the current reservation with the same server, app and Accounts identity. The read requires an Accounts PAT with `read` access to the app.
 
 ```bash
 takosumi apps uninstall cap_example --status --url https://takosumi.example.com --json
