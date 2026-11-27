@@ -113,7 +113,7 @@ Origin. RP Bearer requests use no ambient cookie authority.
 | POST `/bootstrap` | `{}` | existing or atomically ensured personal Workspace |
 | POST root | `{handle, displayName, type:"organization"}` | current authorized Workspace choice |
 | POST `/{workspaceId}/select` | `{}` | authorized choice |
-| GET `/{workspaceId}/billing-organization` | no account/Org input | `{workspaceId, workspaceRef, organizationId}` |
+| GET `/{workspaceId}/billing-organization` | optional `projection=entry-v1` | `{workspaceId, workspaceRef, organizationId}`, with `displayName` when requested |
 
 ## Phase 3 Workspace mutation freeze
 
@@ -141,8 +141,11 @@ Each choice contains `id`, `handle`, `displayName`, `type`, current `roles` and
 `owner`. Exact active membership is re-read from canonical Control. A stored
 owner field cannot override suspended/deleted membership. Menu reads do not
 create Workspaces or repair memberships. Billing lookup checks membership and
-the same current grant again after awaiting the owner port. Missing directory
-or billing capability returns 503; pending/ambiguous bindings fail closed.
+the same current grant again after awaiting the owner port. With
+`projection=entry-v1`, the same final authorized choice supplies `displayName`
+after Accounts rechecks the grant following the final Workspace and membership read.
+The projection must be the sole query parameter. Missing directory or billing
+capability returns 503. Pending or ambiguous bindings fail closed.
 
 Shared creation installs the initial owner atomically only for a newly created
 Workspace. An existing or concurrently recovered request requires its current

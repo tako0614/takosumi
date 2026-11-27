@@ -1435,9 +1435,9 @@ function lazySharedAccountWorkspaceDirectory<TEnv extends CloudflareWorkerEnv>(
     menu: async (session, input) => (await resolve()).menu(session, input),
     choose: async (session, workspaceId) => (await resolve()).choose(session, workspaceId),
     create: async (session, input) => (await resolve()).create(session, input),
-    billingOrganization: async (session, workspaceId, diagnostics) => {
+    billingOrganization: async (session, workspaceId, diagnostics, projection) => {
       const directory = await measureRequestPhaseOperation(diagnostics, "shared_workspace_control_resolve", resolve);
-      return directory.billingOrganization(session, workspaceId, diagnostics);
+      return directory.billingOrganization(session, workspaceId, diagnostics, projection);
     },
   };
 }

@@ -22,11 +22,13 @@ base path は `/api/v1/account/shared-workspaces` です。
 | POST `/bootstrap` | `{}` | 1つの canonical personal Workspace |
 | POST base | `{handle, displayName, type:"organization"}` | 追加 Workspace |
 | POST `/{workspaceId}/select` | `{}` | 現在 access できる Workspace |
-| GET `/{workspaceId}/billing-organization` | なし | `{workspaceId, workspaceRef, organizationId}` |
+| GET `/{workspaceId}/billing-organization` | `projection=entry-v1`（任意） | `{workspaceId, workspaceRef, organizationId}`。指定時は `displayName` を追加 |
 
 一覧は account や membership を変更しません。各 choice は `id`, `handle`,
 `displayName`, `type`, 現在の `roles`, `owner` を返します。無効な membership を owner
 field で迂回できません。binding 未設定や機能未構成は 503、権限不足は 403 です。
+課金先応答の `displayName` は、binding 解決後の membership 確認で参照した Workspace の表示名です。
+未知・重複・他項目と混在する query は 400 です。
 追加 Workspace の初期 owner は新規作成時に原子的に設定します。同じ作成の再試行で
 suspended・demoted・missing membership を修復しません。共有 login の Workspace／member
 変更も現在の role と保存時の authority を検証します。
