@@ -174,6 +174,48 @@ function diagnosticDisplayText(value: string | undefined): string | undefined {
   return redacted.length > 4_000 ? `${redacted.slice(0, 4_000)}...` : redacted;
 }
 
+const CORE_PLAN_TIMING_FIELDS = [
+  "preClaimPreparationMs",
+  "claimMs",
+  "resolveRunEnvironmentMs",
+  "providerBindingResolutionMs",
+  "credentialMintMs",
+  "brokerBindingResolutionMs",
+  "brokerPrePolicyMs",
+  "brokerRuntimeInputsMs",
+  "vaultMintMs",
+  "credentialValidationMs",
+  "postMintPolicyAuditMs",
+  "dispatchPreparationMs",
+  "renewalOutsideRunnerMs",
+  "runnerPlanMs",
+] as const;
+
+function corePlanTimingDetail(diagnostic: RunDiagnostic): string | undefined {
+  if (diagnostic.code !== "core_plan_elapsed_timings" || diagnostic.severity !== "info" ||
+    diagnostic.message !== "core Plan elapsed timings (ms)" || !diagnostic.detail ||
+    diagnostic.detail.length > 4_000) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(diagnostic.detail);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Object.keys(parsed).length !== CORE_PLAN_TIMING_FIELDS.length) {
+    return undefined;
+  }
+  // Rebuild the documented, numeric-only projection. All other details use
+  // ordinary diagnostic redaction, including malformed timings.
+  const fields = parsed as Record<string, unknown>;
+  const durations: Record<string, number> = {};
+  for (const key of CORE_PLAN_TIMING_FIELDS) {
+    const duration = fields[key];
+    if (typeof duration !== "number" || !Number.isFinite(duration) || duration < 0) return undefined;
+    durations[key] = duration;
+  }
+  return JSON.stringify(durations);
+}
+
 type AccessIssueKind =
   | "connection_verification"
   | "connection_setup"
@@ -280,7 +322,7 @@ function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
   const detail = () =>
     accessIssue()
       ? accessIssueDiagnostic(accessIssue()!).detail
-      : diagnosticDisplayText(props.diagnostic.detail);
+      : corePlanTimingDetail(props.diagnostic) ?? diagnosticDisplayText(props.diagnostic.detail);
   // A raw (code-less) runner error keeps its own newlines — the .wa-diag-msg
   // span flattens them into flowing prose. Render multi-line raw text in a
   // <pre> (THEME's .wa-pre applies white-space: pre-wrap). Classified issues
