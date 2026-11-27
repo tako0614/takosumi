@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   ControlApiError,
+  controlFetch,
   createApplyRun,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -20,10 +21,28 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+test.each([
+  ["GET", "follow"],
+  ["HEAD", "follow"],
+  ["OPTIONS", "follow"],
+  ["POST", "error"],
+  ["PATCH", "error"],
+  ["PUT", "error"],
+  ["DELETE", "error"],
+] as const)("uses %s with redirect mode %s", async (method, redirect) => {
+  const requests: Array<{ path: string; redirect: RequestRedirect }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push({ path: String(input), redirect: init?.redirect ?? "follow" });
+    return json({ ok: true });
+  }) as typeof fetch;
+
+  await controlFetch("/api/v1/apps/example", { method });
+  expect(requests).toEqual([{ path: "/api/v1/apps/example", redirect }]);
+});
 
 describe("createApplyRun acknowledgement recovery", () => {
   test("does not resend Apply after a lost response", async () => {
-    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const calls: Array<{ url: string; method: string; body: unknown; redirect: RequestRedirect | undefined }> = [];
     let attempts = 0;
     globalThis.fetch = (async (
       input: RequestInfo | URL,
@@ -34,6 +53,7 @@ describe("createApplyRun acknowledgement recovery", () => {
         url: String(input),
         method: init?.method ?? "GET",
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+        redirect: init?.redirect,
       });
       if (attempts === 1) throw new Error("commit response lost");
       return json({ run: apply }, 201);
@@ -48,6 +68,7 @@ describe("createApplyRun acknowledgement recovery", () => {
         url: "/api/v1/runs/plan_1/apply",
         method: "POST",
         body: {},
+        redirect: "error",
       },
     ]);
   });

@@ -260,6 +260,8 @@ export async function controlFetch<T>(
     body = JSON.stringify(opts.body);
   }
   const method = opts.method ?? "GET";
+  // JSON mutations must stay on the API route selected by the caller.
+  const redirect = ["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase()) ? "follow" : "error";
   const reusedProbe = method === "GET" && opts.reuseRecentSharedAuthProbe &&
     canReuseRecentSharedAuthProbe();
   if (reusedProbe) headers[SHARED_AUTH_READ_HEADER] = "1";
@@ -275,6 +277,7 @@ export async function controlFetch<T>(
     headers,
     body,
     credentials: "include",
+    redirect,
     signal: opts.signal,
     ...(reusedProbe ? { cache: "no-store" } : opts.cache ? { cache: opts.cache } : {}),
   });
