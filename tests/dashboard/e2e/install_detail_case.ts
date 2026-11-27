@@ -2013,10 +2013,50 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       }
     });
     }
+    test("a failed Hosted session check before Apply leaves the installation review available", async ({ page }) => {
+      const f = await detailFixture(page, base);
+      const readMarker = "x-takosumi-shared-auth-read";
+      await page.addInitScript((marker) => {
+        const fetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const response = await fetch(input, init);
+          if (new Headers(init?.headers).get(marker) !== "1") return response;
+          const headers = new Headers(response.headers);
+          headers.set(marker, "1");
+          return new Response(response.body, { status: response.status, headers });
+        };
+      }, readMarker);
+      await page.route((url) => url.pathname === "/api/v1/apps" &&
+        url.searchParams.get("projection") === "installed", (route) => route.fulfill({
+        json: { projection: "installed", installedApps: [], complete: true },
+      }));
+      let sessionUnavailable = false;
+      let unavailableReads = 0;
+      await page.route("**/auth/oidc/session", (route) => {
+        if (!sessionUnavailable) return route.fulfill({ json: { authenticated: true } });
+        unavailableReads += 1;
+        return route.fulfill({ status: 502, json: { error: "fixture_session_unavailable" } });
+      });
+      await page.goto(sourceUrl);
+      await openInstallSheet(page);
+      const review = await waitForPlan(page);
+      const install = review.getByRole("button", { name: "Install", exact: true });
+      await expect(install).toBeEnabled();
+      sessionUnavailable = true;
+      await install.press("Enter");
+      await expect(review.getByRole("alert")).toContainText("Couldn't load. Please try again in a moment.");
+      await expect(install).toBeEnabled();
+      expect(unavailableReads).toBeGreaterThan(0);
+      expect(f.mutations.filter((entry) => entry === applyMutation)).toEqual([]);
+      sessionUnavailable = false;
+      await install.press("Enter");
+      await expect.poll(() => f.mutations.filter((entry) => entry === applyMutation)).toEqual([applyMutation]);
+    });
+
     test("an unconfirmed Apply is held and reload does not restore consent", async ({ page }) => {
       await detailFixture(page, base);
       let posts = 0;
-      await page.route(`**/runs/${planId}/apply`, (route) => { posts += 1; return route.fulfill({ status: 503, json: { error: "fixture_indeterminate" } }); });
+      await page.route(`**/runs/${planId}/apply`, (route) => { posts += 1; return route.abort("failed"); });
       await page.goto(sourceUrl); await openInstallSheet(page);
       const review = await waitForPlan(page);
       expect(posts).toBe(0);

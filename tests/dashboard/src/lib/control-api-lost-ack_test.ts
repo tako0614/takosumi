@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   ControlApiError,
-  ControlApiIndeterminateError,
   createApplyRun,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -23,7 +22,7 @@ function json(body: unknown, status = 200): Response {
 
 
 describe("createApplyRun acknowledgement recovery", () => {
-  test("replays the exact PlanRun once after a lost response", async () => {
+  test("does not resend Apply after a lost response", async () => {
     const calls: Array<{ url: string; method: string; body: unknown }> = [];
     let attempts = 0;
     globalThis.fetch = (async (
@@ -40,15 +39,11 @@ describe("createApplyRun acknowledgement recovery", () => {
       return json({ run: apply }, 201);
     }) as typeof fetch;
 
-    await expect(createApplyRun(plan)).resolves.toEqual({
-      run: apply,
+    await expect(createApplyRun(plan)).rejects.toMatchObject({
+      operation: "apply",
+      code: "request_indeterminate",
     });
     expect(calls).toEqual([
-      {
-        url: "/api/v1/runs/plan_1/apply",
-        method: "POST",
-        body: {},
-      },
       {
         url: "/api/v1/runs/plan_1/apply",
         method: "POST",
@@ -201,22 +196,25 @@ describe("createApplyRun acknowledgement recovery", () => {
     await expect(createApplyRun(destroyPlan)).resolves.toEqual({ run: destroyApply });
   });
 
-  test("leaves HTTP 5xx to read-only reconciliation without resending Apply", async () => {
-    let calls = 0;
-    globalThis.fetch = (async () => {
-      calls += 1;
-      return json({ error: "gateway_unavailable" }, 503);
-    }) as typeof fetch;
+  test.each([[503, "gateway_unavailable"], [408, "gateway_timeout"]] as const)(
+    "leaves HTTP %i to read-only reconciliation without resending Apply",
+    async (status, code) => {
+      let calls = 0;
+      globalThis.fetch = (async () => {
+        calls += 1;
+        return json({ error: code }, status);
+      }) as typeof fetch;
 
-    await expect(createApplyRun(plan)).rejects.toMatchObject({
-      operation: "apply",
-      code: "request_indeterminate",
-      causeSummary: { status: 503, code: "gateway_unavailable" },
-    });
-    expect(calls).toBe(1);
-  });
+      await expect(createApplyRun(plan)).rejects.toMatchObject({
+        operation: "apply",
+        code: "request_indeterminate",
+        causeSummary: { status, code },
+      });
+      expect(calls).toBe(1);
+    },
+  );
 
-  test("a rejected replay cannot resolve an earlier missing acknowledgement", async () => {
+  test("does not resend Destroy Apply after a lost response", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {
       calls += 1;
@@ -224,38 +222,14 @@ describe("createApplyRun acknowledgement recovery", () => {
       return json({ error: "failed_precondition" }, 409);
     }) as typeof fetch;
 
-    await expect(createApplyRun(plan)).rejects.toMatchObject({
+    await expect(createApplyRun({ ...plan, type: "destroy_plan" })).rejects.toMatchObject({
       operation: "apply",
       code: "request_indeterminate",
-      causeSummary: { status: 409, code: "failed_precondition" },
     });
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 
-  test("makes two transport failures explicitly indeterminate", async () => {
-    let calls = 0;
-    globalThis.fetch = (async () => {
-      calls += 1;
-      throw new Error(`transport failure ${calls}`);
-    }) as typeof fetch;
-
-    let error: unknown;
-    try {
-      await createApplyRun(plan);
-    } catch (caught) {
-      error = caught;
-    }
-    expect(error).toBeInstanceOf(ControlApiIndeterminateError);
-    expect(error).toBeInstanceOf(ControlApiError);
-    expect(error).toMatchObject({
-      code: "request_indeterminate",
-      operation: "apply",
-      isIndeterminate: true,
-    });
-    expect(calls).toBe(2);
-  });
-
-  test("retries one request timeout with the same PlanRun id", async () => {
+  test("returns an indeterminate result after a dispatched Apply times out", async () => {
     let calls = 0;
     globalThis.fetch = ((
       _input: RequestInfo | URL,
@@ -274,8 +248,12 @@ describe("createApplyRun acknowledgement recovery", () => {
 
     await expect(
       createApplyRun({ ...plan, id: "plan_timeout" }, { timeoutMs: 1 }),
-    ).resolves.toEqual({ run: { ...apply, planRunId: "plan_timeout" } });
-    expect(calls).toBe(2);
+    ).rejects.toMatchObject({
+      operation: "apply",
+      code: "request_indeterminate",
+      causeSummary: { status: 0, code: "request_timeout" },
+    });
+    expect(calls).toBe(1);
   });
 
   test("does not retry a definite HTTP rejection parsed after the timer fires", async () => {
