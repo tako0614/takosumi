@@ -421,9 +421,15 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     return typeof provider === "string" && provider.trim() ? tcsProviderLabel(provider) : undefined;
   };
   const listingBadge = () => {
-    if (!isListingCandidate() || listing.loading || (prefill()?.sourcePath ?? ".") !== ".") return undefined;
+    const requested = prefill();
+    if (!isListingCandidate() || listing.loading || (requested?.sourcePath ?? ".") !== ".") return undefined;
     const detail = resolvedListing();
-    if (!detail || (detail.listing.source.path ?? ".") !== (provenanceModulePath() || ".")) return undefined;
+    if (!detail) return undefined;
+    const listingModule = detail.listing.source.path ?? ".";
+    // The provenance display prefers the listing, so check the link's own
+    // module before attributing the listing badge to this candidate.
+    if (requested?.path && requested.path !== listingModule) return undefined;
+    if (listingModule !== (provenanceModulePath() || ".")) return undefined;
     const value = detail.detailBadge?.[locale()];
     if (typeof value !== "string") return undefined;
     const text = value.trim();
