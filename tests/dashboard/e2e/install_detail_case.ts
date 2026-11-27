@@ -320,12 +320,16 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
     for (const entry of ["Git", "Store", "Git with a refused replay"] as const) {
       test(`reopening the same ${entry} install after a lost creation response resumes the original attempt`, async ({ page }) => {
-        const f = await detailFixture(page, base);
+        const originalStoreModule = "deploy/original";
+        const f = await detailFixture(page, base, false, false, "not_applicable", entry === "Store"
+          ? { modules: [{ path: originalStoreModule, providers: [] }] }
+          : {});
         const git = "https://github.com/example/cloudflare-service.git";
         const store = "https://store.example.test";
         const newCommit = "a".repeat(40);
         let url = sourceUrl;
         let resolutions = 0;
+        let changedListing = false;
         const refusedReplay = entry === "Git with a refused replay";
         if (entry === "Git") {
           // A supported HTTP LAN origin has storage but no subtle crypto.
@@ -348,8 +352,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         if (entry === "Store") {
           url = `/new?tcsBase=${encodeURIComponent(store)}&tcsListing=tako%2Fservice`;
           await page.route(`${store}/**`, (route) => route.fulfill({ json: {
-            id: "tako/service", source: { git, path: "." }, suggestedName: "cloudflare-service",
-            name: { en: "Store Service" }, createdAt: now, updatedAt: now,
+            id: "tako/service", source: { git, path: changedListing ? "deploy/replacement" : originalStoreModule },
+            provider: changedListing ? "aws" : "cloudflare", suggestedName: "cloudflare-service",
+            name: { en: changedListing ? "Updated Store Service" : "Store Service" }, createdAt: now, updatedAt: now,
           } }));
           await page.route(
             (url) => url.pathname === "/api/v1/source-ref-resolutions" || url.pathname.endsWith("/source-ref-resolutions/stable-semver"),
@@ -395,7 +400,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
           await refused;
           await expect(installButton).toBeEnabled();
         }
-        await page.reload();
+        await page.reload({ waitUntil: "domcontentloaded" });
         await expect(installButton).toBeEnabled();
         const submissions = refusedReplay ? 3 : 2;
         expect(keys).toHaveLength(submissions - 1);
@@ -409,6 +414,18 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         if (entry === "Store") {
           await page.getByText("Source and version", { exact: true }).click();
           await expect(page.getByTestId("install-provenance")).toContainText(`v1.0.0 · ${sourceCommit.slice(0, 7)}`);
+
+          changedListing = true;
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await expect(page.getByRole("heading", { name: "Updated Store Service" })).toBeVisible();
+          await expect(installSheet(page)).toBeVisible();
+          await page.getByText("Source and version", { exact: true }).click();
+          const provenance = page.getByTestId("install-provenance");
+          await expect(provenance).toContainText(`Module path ${originalStoreModule}`);
+          await expect(provenance).not.toContainText(/deploy\/replacement|Store connection hint|AWS/u);
+          expect(keys).toHaveLength(submissions);
+          expect(resolutions).toBe(1);
+          changedListing = false;
         }
 
         await page.goto(url);

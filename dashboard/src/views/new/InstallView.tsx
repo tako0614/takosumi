@@ -405,6 +405,7 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     return current ? current.options.modulePath : listed()?.source.path ?? prefill()?.path;
   };
   const listingProvider = () => {
+    if (attemptId() || attempt.view().stage !== "candidate") return undefined;
     const provider = listed()?.provider;
     return typeof provider === "string" && provider.trim() ? tcsProviderLabel(provider) : undefined;
   };
