@@ -632,6 +632,34 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations).toEqual([]);
     });
 
+    test("Store badge respects the requested module in a direct install link", async ({ page }) => {
+      const f = await detailFixture(page, base);
+      const store = "https://store.example.test";
+      const id = "tako/takos";
+      const git = "https://github.com/tako0614/takos";
+      const modulePath = "deploy/opentofu/cloudflare";
+      const badgeText = "Cloudflare connection required";
+      const detailPath = `${store}/tcs/v2/listings/${id}`;
+      await page.route(`${detailPath}/reviews**`, (route) => route.fulfill({ json: { items: [] } }));
+      await page.route(detailPath, (route) => route.fulfill({ json: {
+        id, source: { git, path: modulePath }, suggestedName: "takos",
+        name: { en: "Takos on the Store" }, description: { en: "A Store app" },
+        badge: { en: badgeText }, createdAt: now, updatedAt: now,
+      } }));
+      const header = page.getByTestId("install-app-header");
+      const badge = header.getByText(badgeText, { exact: true });
+      for (const [path, visible] of [
+        ["deploy/other/mismatch", false], [".", false], [modulePath, true], [undefined, true],
+      ] as const) {
+        const search = new URLSearchParams({ tcsBase: store, tcsListing: id, git });
+        if (path !== undefined) search.set("path", path);
+        await page.goto(`/new?${search}`);
+        await expect(header.getByRole("heading", { name: "Takos on the Store", exact: true })).toBeVisible();
+        await expect(badge).toHaveCount(visible ? 1 : 0);
+      }
+      expect(f.mutations).toEqual([]);
+    });
+
     test("a late install response cannot take over a different app's page", async ({ page }) => {
       const f = await detailFixture(page, base, false, false, "not_applicable", { holdSourceReading: () => true });
       const otherGit = "https://github.com/example/other-service.git";
