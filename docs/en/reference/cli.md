@@ -51,6 +51,7 @@ An expired attempt is not replaced by a new one under the same key. Inspect the 
 Use a personal Accounts PAT with independent `read` and `write` scopes. Without `--token`, these commands use `TAKOSUMI_ACCOUNT_TOKEN`,
 never the operator's `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
 Each invocation retains its selected URL and credential; the server checks current authorization on every route.
+The CLI rejects redirects on POST requests for update, rollback, Destroy Plan preparation, approval, and Apply. If the response is uncertain, follow the recovery steps for that operation.
 
 ```bash
 export TAKOSUMI_ACCOUNT_TOKEN='<Accounts PAT with read and write>'

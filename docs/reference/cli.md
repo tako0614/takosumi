@@ -51,6 +51,7 @@ CLI は応答に有効な導入試行 ID と状態がある場合に受付を表
 Accountsの個人PATに独立した`read`と`write` scopeが必要です。`--token`を省くと`TAKOSUMI_ACCOUNT_TOKEN`を使い、
 operator用の`TAKOSUMI_DEPLOY_CONTROL_TOKEN`へはfallbackしません。
 1回のコマンド内では選択したURLと資格を固定し、各routeの現在の認可はserverで確認します。
+更新、切り戻し、削除Planの準備、承認、適用のPOSTはリダイレクトを追いません。応答を確認できないときは、各操作の復旧手順で元の要求を確認してください。
 
 ```bash
 export TAKOSUMI_ACCOUNT_TOKEN='<Accounts PAT with read and write>'

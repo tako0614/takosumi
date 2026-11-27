@@ -96,8 +96,9 @@ async function pause(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function client(options: CliOptions, signal: AbortSignal) {
-  return (path: string, method = "GET", body?: unknown, key?: string) => requestDeployControlApi({
+  return (path: string, method: "GET" | "POST" = "GET", body?: unknown, key?: string) => requestDeployControlApi({
     path, method, ...(body !== undefined ? { body } : {}), options, auth: "accounts", signal,
+    redirect: method === "POST" ? "error" : "follow",
     ...(key ? { extraHeaders: { "Idempotency-Key": key } } : {}),
   });
 }
