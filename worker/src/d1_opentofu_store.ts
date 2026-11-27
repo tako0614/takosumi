@@ -2588,7 +2588,7 @@ type D1PredeployedWorkspacePageRow = {
 type D1PredeployedWorkspaceRow = Pick<
   D1PredeployedWorkspacePageRow,
   "maintenance_json" | "columns_json" | "migrations_json" | "structures_json" | "workspace_record"
->;
+> & { readonly member_record: unknown };
 
 // `createTakosumiWorkerService` constructs a fresh store for every request, but
 // Cloudflare reuses the bound D1 object for the lifetime of an isolate. Keep the
@@ -5786,7 +5786,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
     if (this.#schemaMode === "predeployed") {
-      return await this.#getPredeployedWorkspace(id);
+      const row = await this.#readPredeployedWorkspace(id);
+      return row.workspace_record === null ? undefined : parseD1WorkspaceRecord(row.workspace_record);
     }
     return await this.#drizzleFirstJson<Workspace>(
       schema.workspaces,
@@ -5795,7 +5796,33 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  async #getPredeployedWorkspace(id: string): Promise<Workspace | undefined> {
+  async readWorkspaceMembership(
+    workspaceId: string,
+    accountId: string,
+  ): Promise<{ readonly workspace: Workspace; readonly member: WorkspaceMember } | undefined> {
+    if (this.#schemaMode !== "predeployed") {
+      const workspace = await this.getWorkspace(workspaceId);
+      if (!workspace) return undefined;
+      const member = await this.getWorkspaceMember(workspaceId, accountId);
+      return member ? { workspace, member } : undefined;
+    }
+    const row = await this.#readPredeployedWorkspace(workspaceId, accountId);
+    if (row.workspace_record === null || row.member_record === null) return undefined;
+    const workspace = parseD1WorkspaceRecord(row.workspace_record);
+    const evidence = parseD1JsonObject(row.member_record, "member record");
+    const member = workspaceMemberFromRow({
+      id: evidence.id,
+      workspaceId: evidence.workspaceId,
+      accountId: evidence.accountId,
+      status: evidence.status,
+      recordJson: evidence.recordJson,
+      createdAt: evidence.createdAt,
+      updatedAt: evidence.updatedAt,
+    }, { workspaceId, accountId });
+    return { workspace, member };
+  }
+
+  async #readPredeployedWorkspace(id: string, accountId?: string): Promise<D1PredeployedWorkspaceRow> {
     const includeSchemaEvidence = !this.#predeployedSchemaVerified;
     const result = await this.db
       .prepare(
@@ -5858,9 +5885,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                   FROM workspaces
                   WHERE id = ?
                   LIMIT 1
-                ) AS workspace_record`,
+                ) AS workspace_record,
+                ${accountId === undefined ? "NULL" : `(
+                  SELECT json_object(
+                    'id', id,
+                    'workspaceId', workspace_id,
+                    'accountId', account_id,
+                    'status', status,
+                    'recordJson', record_json,
+                    'createdAt', created_at,
+                    'updatedAt', updated_at
+                  )
+                  FROM workspace_members
+                  WHERE workspace_id = ? AND account_id = ?
+                  LIMIT 1
+                )`} AS member_record`,
       )
-      .bind(id)
+      .bind(...(accountId === undefined ? [id] : [id, id, accountId]))
       .first<D1PredeployedWorkspaceRow>();
     if (!result) {
       throw new Error("D1 predeployed Workspace read evidence is incomplete");
@@ -5869,9 +5910,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       result,
       includeSchemaEvidence,
     );
-    return result.workspace_record === null
-      ? undefined
-      : parseD1WorkspaceRecord(result.workspace_record);
+    return result;
   }
 
   async listWorkspacesByIds(

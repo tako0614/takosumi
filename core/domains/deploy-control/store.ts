@@ -4012,6 +4012,10 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     initialOwnerMember?: WorkspaceMember,
   ): Promise<Workspace | undefined>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
+  readWorkspaceMembership?(
+    workspaceId: string,
+    accountId: string,
+  ): Promise<{ readonly workspace: Workspace; readonly member: WorkspaceMember } | undefined>;
   listWorkspacesByIds(ids: readonly string[]): Promise<readonly Workspace[]>;
   getWorkspaceByHandle(handle: string): Promise<Workspace | undefined>;
   listWorkspaces(): Promise<readonly Workspace[]>;
