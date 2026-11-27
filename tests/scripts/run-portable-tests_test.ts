@@ -260,7 +260,10 @@ test("an actual Bun file blocked in beforeAll leaves a private file checkpoint b
           await Bun.sleep(10);
         }
       });
-      test("fixture failure after release", () => { throw new Error("isolated fixture failure"); });
+      test("fixture failure after release", () => {
+        console.error("tests/nested_fixture_test.ts:");
+        throw new Error("isolated fixture failure");
+      });
     `);
     const output = preparePrivateTimingOutput(join(artifacts, "timings.json"));
     const checkpoint = join(artifacts, "last-announced-test-file.json");
@@ -287,10 +290,53 @@ test("an actual Bun file blocked in beforeAll leaves a private file checkpoint b
       await writeFile(join(root, "release"), "");
       expect(await running).toBe(1);
     }
+    expect(JSON.parse(await readFile(checkpoint, "utf8")).file).toBe("tests/paused_test.ts");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }, 12_000);
+
+test("test exit is retained when a fixture descendant still has the diagnostics pipe", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-shard-retained-pipe-"));
+  try {
+    await mkdir(join(root, "tests"));
+    const holdStderr = `
+      const release = Bun.file("release");
+      const end = Date.now() + 6_000;
+      while (!await release.exists() && Date.now() < end) await Bun.sleep(10);
+      await Bun.write("descendant-finished", "");
+    `;
+    await writeFile(join(root, "tests/retained_pipe_test.ts"), `
+      import { spawn } from "node:child_process";
+      import { test } from "bun:test";
+      test("fixture with a retained pipe", () => {
+        spawn(process.execPath, ["--eval", ${JSON.stringify(holdStderr)}], {
+          detached: true, stdio: ["ignore", "ignore", "inherit"],
+        }).unref();
+        process.exit(23);
+      });
+    `);
+    const output = preparePrivateTimingOutput(join(root, "timings.json"));
+    const running = runPortableTestCommands(
+      [[process.execPath, "test", "--isolate", "./tests"]],
+      root,
+      output,
+    );
+    try {
+      const status = await Promise.race([running, Bun.sleep(2_000).then(() => "still waiting for stderr")]);
+      expect(status).toBe(23);
+    } finally {
+      await writeFile(join(root, "release"), "");
+      await running;
+      const finished = join(root, "descendant-finished");
+      const deadline = Date.now() + 2_000;
+      while (!await Bun.file(finished).exists() && Date.now() < deadline) await Bun.sleep(10);
+      expect(await Bun.file(finished).exists()).toBe(true);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 9_000);
 
 test("CI preserves failed-run artifacts without changing shard count or job guards", async () => {
   const workflow = parse(await readFile(resolve(import.meta.dir, "../../.github/workflows/quality.yml"), "utf8")) as {

@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 const ROOT = resolve(import.meta.dir, "..");
 const TEST_FILE_PROGRESS = "last-announced-test-file.json";
 const TEST_FILE_HEADER = /^(?:\.\/)?(tests\/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_][A-Za-z0-9_.-]*[_.-](?:test|spec)\.[cm]?[jt]sx?):$/u;
+const TEST_DIAGNOSTICS_DRAIN_MS = 250;
 
 export const TEST_TIMINGS_PATH = "tests/.bun-test-timings.json";
 // Native runtimes and host fixtures must not inherit leaked globals or handles
@@ -91,24 +92,34 @@ export function portableTestCommands(options: {
   ];
 }
 
-async function relayTestDiagnostics(stderr: ReadableStream<Uint8Array>, progressPath: string): Promise<boolean> {
-  const lines = createInterface({ input: Readable.from(stderr), crlfDelay: Infinity });
+async function relayTestDiagnostics(
+  stderr: ReadableStream<Uint8Array>, cwd: string, progressPath: string, signal: AbortSignal,
+): Promise<boolean> {
+  const input = Readable.fromWeb(stderr, { signal });
+  const lines = createInterface({ input, crlfDelay: Infinity });
   let progressWritten = true;
-  for await (const line of lines) {
-    const file = TEST_FILE_HEADER.exec(line)?.[1];
-    if (file && progressWritten) {
-      try {
-        const scratch = `${progressPath}.tmp`;
-        const record = { version: 1, file, announcedAt: new Date().toISOString() };
-        writeFileSync(scratch, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: "wx" });
-        renameSync(scratch, progressPath);
-      } catch {
-        console.error("[portable-tests] could not retain the last announced test file");
-        progressWritten = false;
+  try {
+    for await (const line of lines) {
+      const file = TEST_FILE_HEADER.exec(line)?.[1];
+      if (file && progressWritten) {
+        try {
+          // Nested fixtures can print Bun headers from a different checkout.
+          if (lstatSync(resolve(cwd, file), { throwIfNoEntry: false })?.isFile()) {
+            const scratch = `${progressPath}.tmp`;
+            const record = { version: 1, file, announcedAt: new Date().toISOString() };
+            writeFileSync(scratch, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: "wx" });
+            renameSync(scratch, progressPath);
+          }
+        } catch {
+          console.error("[portable-tests] could not retain the last announced test file");
+          progressWritten = false;
+        }
       }
+      // Keep failure details and file headings without expanding every passing test.
+      if (!line.startsWith("(pass) ")) process.stderr.write(`${line}\n`);
     }
-    // Keep failure details and file headings without expanding every passing test.
-    if (!line.startsWith("(pass) ")) process.stderr.write(`${line}\n`);
+  } catch (error) {
+    if (!signal.aborted || !(error instanceof Error) || error.name !== "AbortError") throw error;
   }
   return progressWritten;
 }
@@ -132,13 +143,19 @@ export async function runPortableTestCommands(
       stdout: "inherit",
       stderr: progress ? "pipe" : "inherit",
     });
-    const diagnostics = progress && child.stderr
-      ? relayTestDiagnostics(child.stderr, progress).catch(() => {
+    const stopDiagnostics = progress ? new AbortController() : undefined;
+    const diagnostics = progress && child.stderr && stopDiagnostics
+      ? relayTestDiagnostics(child.stderr, cwd, progress, stopDiagnostics.signal).catch(() => {
         console.error("[portable-tests] could not read test diagnostics");
         return false;
       })
       : true;
-    const [code, diagnosticsOkay] = await Promise.all([child.exited, diagnostics]);
+    const code = await child.exited;
+    // A fixture's descendant can retain stderr after the test process exits.
+    // Give buffered output a chance to arrive without waiting for its EOF.
+    const drain = stopDiagnostics && setTimeout(() => stopDiagnostics.abort(), TEST_DIAGNOSTICS_DRAIN_MS);
+    const diagnosticsOkay = await diagnostics;
+    clearTimeout(drain);
     if (code !== 0) return code;
     if (!diagnosticsOkay) return 1;
   }
