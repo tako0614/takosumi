@@ -857,6 +857,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       { initial: "consumed", planType: "plan", applyStatus: "failed" },
       { initial: "incomplete", planType: "plan", applyStatus: "failed" },
       { initial: "unavailable", planType: "plan", applyStatus: "failed" },
+      { initial: "ambiguous", planType: "plan", applyStatus: "failed" },
       { initial: "consumed", planType: "destroy_plan", applyStatus: "succeeded" },
       { initial: "consumed", planType: "destroy_plan", applyStatus: "failed" },
     ] as const) {
@@ -867,7 +868,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       const history: string[] = [];
       const legacyReads: string[] = [];
       const mutations: string[] = [];
-      let recovered = initial === "consumed";
+      const applyReads: string[] = [];
+      let recovered = initial === "consumed" || initial === "ambiguous";
       const capsuleId = "cap_shared_run";
       const planId = "plan_shared_run";
       const freshPlanId = "plan_shared_run_unexecuted";
@@ -889,7 +891,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           mutations.push(`${request.method()} ${path}`);
           return route.fulfill({ status: 503, json: { error: "unexpected_mutation" } });
         }
-        const displayed = [plan, freshPlan].find((run) =>
+        const displayed = [plan, freshPlan, consumedBy].find((run) =>
           path === `/api/v1/runs/${run.id}` || path.startsWith(`/api/v1/runs/${run.id}/`));
         if (displayed && path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
         if (displayed && path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
@@ -897,7 +899,10 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           runId: displayed.id, billingMode: "disabled", estimatedUsdMicros: 0,
           ratingStatus: "not_applicable", blocked: false, reasons: [],
         } } });
-        if (displayed) return route.fulfill({ json: { run: displayed } });
+        if (displayed) {
+          if (path === `/api/v1/runs/${consumedBy.id}`) applyReads.push(path);
+          return route.fulfill({ json: { run: displayed } });
+        }
         if (path === `/api/v1/capsules/${capsuleId}`) return route.fulfill({ json: { capsule: {
           id: capsuleId, workspaceId: "ws_alpha", name: "Shared Run App", environment: "production",
           status: "active", currentStateGeneration: 1, createdAt: plan.createdAt, updatedAt: plan.createdAt,
@@ -912,7 +917,10 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
               if (initial === "incomplete") return route.fulfill({ json: { runs: [], nextCursor: "older" } });
               return route.fulfill({ status: 503, json: { error: "unavailable" } });
             }
-            return route.fulfill({ json: { runs: linkedPlanId === planId ? [consumedBy] : [] } });
+            const runs = linkedPlanId !== planId ? [] : initial === "ambiguous"
+              ? [consumedBy, { ...consumedBy, id: "apply_another_shared_run" }]
+              : [consumedBy];
+            return route.fulfill({ json: { runs } });
           }
           // The old bounded history reader cannot reach the consuming Apply:
           // both first pages contain only newer, unrelated Runs.
@@ -951,10 +959,28 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Run destructive changes anyway", exact: true })).toHaveCount(0);
       expect(mutations).toEqual([]);
+      const viewExecution = page.getByRole("link", { name: "View execution", exact: true });
+      const historyHint = page.getByText("Check the app's history for the result.", { exact: true });
+      if (initial === "ambiguous") {
+        await expect(viewExecution).toHaveCount(0);
+        await expect(historyHint).toBeVisible();
+      } else {
+        const applyPath = `/runs/${consumedBy.id}`;
+        await expect(viewExecution).toHaveAttribute("href", applyPath);
+        await expect(historyHint).toHaveCount(0);
+        expect(applyReads).toEqual([]);
+        if (initial === "consumed") {
+          await viewExecution.click();
+          await expect(page).toHaveURL(new RegExp(`${applyPath}$`));
+          await expect.poll(() => applyReads).toEqual([`/api/v1${applyPath}`]);
+          await expect(viewExecution).toHaveCount(0);
+        }
+      }
       if (planType === "plan" && initial === "consumed") {
         const beforeFresh = history.length;
         await page.goto(`/runs/${freshPlanId}`, { waitUntil: "domcontentloaded" });
         await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toBeEnabled();
+        await expect(viewExecution).toHaveCount(0);
         expect(history.length).toBeGreaterThan(beforeFresh);
         for (const query of history.slice(beforeFresh)) {
           const params = new URLSearchParams(query);
@@ -963,6 +989,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         }
         expect(mutations).toEqual([]);
       }
+      expect(mutations).toEqual([]);
       expect(errors).toEqual([]);
     });
     }

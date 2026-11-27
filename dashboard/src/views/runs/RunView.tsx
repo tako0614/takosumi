@@ -51,6 +51,7 @@ import {
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
   listPlanApplyRuns,
+  matchesReviewedApplyRun,
   openRunStream,
   type ProviderConnection,
   type ProviderResolution,
@@ -1168,6 +1169,17 @@ function Inner(props: { readonly session: SessionRecord }) {
     if (siblings === undefined) return false;
     return !awaitsDeployApproval(r, siblings);
   };
+  const applyRunHref = (id: string): string => {
+    const path = `/runs/${encodeURIComponent(id)}`;
+    return appendAppHandoff(path, appHandoff) ?? path;
+  };
+  const linkedApplyHref = (plan: Run): string | undefined => {
+    if (!deployApprovalConsumed(plan) || unconfirmedApply()) return;
+    const siblings = readyOrUndefined(siblingRuns);
+    const linked = siblings?.length === 1 ? siblings[0] : undefined;
+    if (!linked || !matchesReviewedApplyRun(plan, linked) || !/^[A-Za-z0-9_-]+$/u.test(linked.id)) return;
+    return applyRunHref(linked.id);
+  };
   // The sibling ledger or the reviewed base state is still being checked:
   // isDeployableRun stays conservatively false until it resolves, so the deploy
   // button is withheld — don't show a "ready to deploy" line during this
@@ -1233,8 +1245,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     clearWorkspaceProjectionCaches(attempt.plan.workspaceId);
     const applyRunId = extractRunId(envelope);
     if (applyRunId && applyRunId !== attempt.plan.id) {
-      const href = `/runs/${encodeURIComponent(applyRunId)}`;
-      navigate(appendAppHandoff(href, appHandoff) ?? href);
+      navigate(applyRunHref(applyRunId));
       return;
     }
     await Promise.all([refetchRun(), refetchLogs()]);
@@ -1616,7 +1627,11 @@ function Inner(props: { readonly session: SessionRecord }) {
             return { kind: "error", text: t("run.summary.approvalUnavailable") };
           }
           if (deployApprovalConsumed(r)) {
-            return { kind: "ok", text: t("run.summary.alreadyApplied") };
+            return {
+              kind: "ok",
+              text: t("run.summary.alreadyApplied"),
+              sub: linkedApplyHref(r) ? undefined : t("run.summary.checkExecutionHistory"),
+            };
           }
           // Ledger still loading: the deploy button is withheld, so show a
           // neutral 確認中 line instead of "ready to deploy" copy with no button.
@@ -1968,6 +1983,9 @@ function Inner(props: { readonly session: SessionRecord }) {
 
                   {/* primary action */}
                   <div class="wa-form-actions">
+                    <Show when={linkedApplyHref(r())}>
+                      {(href) => <Button variant="secondary" href={href()}>{t("run.viewExecution")}</Button>}
+                    </Show>
                     <Show when={(canApproveRun(r()) || (isDeployApprovalCandidate(r()) && !deployApprovalConsumed(r()))) &&
                       heldUninstallApp(r())}>
                       {(id) => (
