@@ -217,7 +217,8 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
             platformContributionLabel(contribution, intlLocale());
           const description = () =>
             platformContributionDescription(contribution, intlLocale());
-          const workspace = () => !props.workspaceId && isHostedBillingLink(contribution)
+          const accountHostedLink = () => !props.workspaceId && isHostedBillingLink(contribution);
+          const workspace = () => accountHostedLink()
             ? hostedBillingEnabled() && !hostedBillingWorkspace.loading && hostedBillingWorkspace()
             : !billingWorkspace.error && billingWorkspace();
           return (
@@ -245,7 +246,12 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
                   </Match>
                   <Match when>
                     <Card>
-                      <CardHeader title={label()} subtitle={description()} />
+                      <Show when={!accountHostedLink()}>
+                        <CardHeader title={label()} subtitle={description()} />
+                      </Show>
+                      <Show when={accountHostedLink() && description()}>
+                        {(details) => <p class="tg-card-subtitle">{details()}</p>}
+                      </Show>
                       <a
                         class="btn btn-secondary"
                         href={platformContributionHref(
