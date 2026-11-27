@@ -64,6 +64,7 @@ function Inner() {
             <Search size={18} aria-hidden="true" />
             <Input
               ref={searchInput}
+              name="homeSearch"
               type="search"
               maxLength={200}
               aria-label={t("apps.search")}

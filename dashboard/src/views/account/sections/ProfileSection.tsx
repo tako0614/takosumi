@@ -133,6 +133,7 @@ export default function ProfileSection(props: {
           <label class="tg-settings-row">
             <span class="tg-settings-label">{t("account.language.title")}</span>
             <Select
+              name="language"
               class="tg-settings-select"
               value={locale()}
               aria-label={t("account.language.title")}
@@ -148,6 +149,7 @@ export default function ProfileSection(props: {
           <label class="tg-settings-row">
             <span class="tg-settings-label">{t("account.theme.title")}</span>
             <Select
+              name="theme"
               class="tg-settings-select"
               value={themePreference()}
               aria-label={t("account.theme.title")}

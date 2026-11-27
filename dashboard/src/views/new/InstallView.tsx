@@ -24,7 +24,7 @@ import { StoreBrowser, type StoreCatalogCache } from "../store/StoreBrowser.tsx"
 import { StoreGallery, StoreOfferDetails, StoreRating } from "../store/StoreListingDetails.tsx";
 import { tcsProviderLabel } from "../store/store-labels.ts";
 import { buildNewQuery } from "../store/store-link.ts";
-import { locale, t } from "../../i18n/index.ts";
+import { locale, setDocumentTitle, t } from "../../i18n/index.ts";
 import { listConnections, listInstalledApps } from "../../lib/control-api.ts";
 import { capsuleNameFromUrl, GIT_INSTALL_ENTRY, hasInstallPrefillParams, parseInstallPrefill } from "../../lib/install-link.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
@@ -182,6 +182,9 @@ function StorePage(props: {
   readonly catalogCache: StoreCatalogCache;
 }) {
   const navigate = useNavigate();
+  createEffect(() => {
+    setDocumentTitle(t("installStore.title"));
+  });
   // Selecting a listing reflects it into the URL, so back and share work.
   const choose = (listing: TcsListing) => {
     pickedListing = listing;
@@ -224,8 +227,14 @@ function GitInstallPage() {
   const navigate = useNavigate();
   const [gitUrl, setGitUrl] = createSignal("");
   const [invalid, setInvalid] = createSignal(false);
+  createEffect(() => {
+    setDocumentTitle(t("installStore.fromGit"));
+  });
   return (
     <div class="iv-page iv-browse-page iv-git-entry">
+      <a class="iv-back-link" href="/new">
+        <ArrowLeft size={18} aria-hidden="true" />{t("installStore.back")}
+      </a>
       <header class="iv-hero iv-page-heading"><h1>{t("installStore.fromGit")}</h1></header>
       <form class="iv-form" onSubmit={(event) => {
         event.preventDefault();
@@ -238,6 +247,7 @@ function GitInstallPage() {
       }}>
         <FormField label={t("installStore.sourceUrl")} error={invalid() ? t("installStore.invalidSource") : undefined}>
           <Input
+            name="gitUrl"
             value={gitUrl()}
             onInput={(event) => { setGitUrl(event.currentTarget.value); setInvalid(false); }}
             placeholder="https://github.com/example/service.git"
@@ -511,6 +521,10 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
       if (completionRead === controller) completionRead = undefined;
     }
   };
+
+  createEffect(() => {
+    setDocumentTitle(title() || t("installStore.title"));
+  });
 
   const stage = () => attempt.view().stage;
   // A Plan that failed after the sheet stays on the screen with the answers.

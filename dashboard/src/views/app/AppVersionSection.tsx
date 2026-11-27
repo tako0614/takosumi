@@ -146,6 +146,7 @@ export default function AppVersionSection(props: {
       <div class="ap-subsection">
         <h3>{t("app.version.autoTitle")}</h3>
         <Checkbox
+          name="autoUpdate"
           checked={props.version.autoUpdate === true}
           disabled={props.autoUpdateBusy}
           onChange={(event) => {
@@ -227,6 +228,7 @@ export default function AppVersionSection(props: {
         <h3>{t("app.version.pinTitle")}</h3>
         <FormField label={t("app.version.pinLabel")} hint={t("app.version.pinHint")}>
           <Input
+            name="versionRef"
             value={requestedRef()}
             placeholder={props.version.current?.ref ?? props.version.repository?.defaultRef}
             spellcheck={false}

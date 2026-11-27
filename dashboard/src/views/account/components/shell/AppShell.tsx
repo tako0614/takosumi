@@ -102,7 +102,7 @@ export default function AppShell(props: Props) {
           <RouteErrorBoundary>
             <Suspense
               fallback={
-                <div class="route-loading" role="status">
+                <div class="route-loading">
                   <Spinner size={22} />
                 </div>
               }

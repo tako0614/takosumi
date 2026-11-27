@@ -14,7 +14,15 @@
 .iv-advanced summary { min-height: 2.75rem; cursor: pointer; color: var(--tg-fg-muted); font-weight: 650; }
 .iv-page.iv-git-entry { width: min(100%, 38rem); }
 .iv-git-entry .iv-form > .tg-btn { margin-top: 0; }
-.iv-git-example { margin: var(--tg-s-5) 0 0; }
+.iv-git-example { margin: var(--tg-s-4) 0 0; }
+.iv-git-example a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--tg-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .iv-form, .iv-fields { display: grid; gap: var(--tg-s-4); }
 .iv-form > .tg-btn, .iv-workbench > .tg-btn:last-child { justify-self: start; margin-top: var(--tg-s-5); white-space: nowrap; }
 .iv-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); margin-top: var(--tg-s-5); }

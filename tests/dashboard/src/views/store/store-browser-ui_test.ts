@@ -184,6 +184,14 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).not.toContain("ストア全体を検索");
   });
 
+  test("provides search clear button, Escape shortcut, and empty-result filter recovery", () => {
+    expect(storeBrowserSource).toContain('class="tcs-search-clear"');
+    expect(storeBrowserSource).toContain('aria-label={s("clearSearch", props.locale)}');
+    expect(storeBrowserSource).toContain('if (e.key === "Escape" && searchInput())');
+    expect(storeBrowserSource).toContain("onClick={clearFilters}");
+    expect(storeBrowserCss).toContain(".tcs-search-clear");
+  });
+
   test("the invalid-server alert is associated with the URL input", () => {
     expect(storeBrowserSource).toContain(
       "const serverErrorId = createUniqueId()",

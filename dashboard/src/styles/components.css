@@ -775,6 +775,9 @@
   color: inherit;
   font-family: var(--tg-font-display);
 }
+a.wordmark {
+  min-height: var(--tg-control-height);
+}
 .takosumi-brand-mark {
   display: block;
   object-fit: contain;

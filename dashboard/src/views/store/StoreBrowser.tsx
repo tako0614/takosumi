@@ -30,7 +30,7 @@ import {
   removeTcsServer,
 } from "../../lib/tcs-servers.ts";
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
-import { Search, SlidersHorizontal } from "lucide-solid";
+import { Search, SlidersHorizontal, X } from "lucide-solid";
 import { openModalDialog } from "../../lib/modal-dialog.ts";
 import AppFace from "../../components/AppFace.tsx";
 import { matchingInstalledApps, type InstalledAppSummary } from "takosumi-contract";
@@ -43,6 +43,7 @@ const STR = {
     en: "Find apps to install",
   },
   search: { ja: "アプリを検索…", en: "Search apps…" },
+  clearSearch: { ja: "検索をクリア", en: "Clear search" },
   sortUpdated: { ja: "更新順", en: "Recently updated" },
   sortCreated: { ja: "作成順", en: "Recently added" },
   storeFilter: { ja: "表示ストア", en: "Store" },
@@ -256,6 +257,16 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     if (!stillPresent) setActiveStore("");
   });
 
+  let searchEl: HTMLInputElement | undefined;
+  const clearSearch = () => {
+    setSearchInput("");
+    searchEl?.focus();
+  };
+  const clearFilters = () => {
+    setSearchInput("");
+    setActiveStore("");
+    searchEl?.focus();
+  };
   const onSearch = (e: Event) => {
     e.preventDefault();
   };
@@ -423,13 +434,30 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         <form class="tcs-search" role="search" onSubmit={onSearch}>
           <Search size={17} aria-hidden="true" />
           <input
+            ref={searchEl}
             name="storeSearch"
             type="search"
             value={searchInput()}
             onInput={(e) => setSearchInput(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && searchInput()) {
+                e.preventDefault();
+                clearSearch();
+              }
+            }}
             placeholder={s("search", props.locale)}
             aria-label={s("search", props.locale)}
           />
+          <Show when={searchInput()}>
+            <button
+              type="button"
+              class="tcs-search-clear"
+              aria-label={s("clearSearch", props.locale)}
+              onClick={clearSearch}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </Show>
         </form>
         <Show when={showSortControl() || showSourceControls() || storeChoices().length > 1}>
           <button
@@ -619,13 +647,24 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                       </p>
                     }
                   >
-                    <p class="tcs-empty">
+                    <div class="tcs-empty">
                       {/* With unfetched pages left, a flat "no matches" is a
                           lie — the match may simply not be loaded yet. */}
-                      {agg().done
-                        ? s("none", props.locale)
-                        : s("noneUnfetched", props.locale)}
-                    </p>
+                      <p>
+                        {agg().done
+                          ? s("none", props.locale)
+                          : s("noneUnfetched", props.locale)}
+                      </p>
+                      <Show when={searchInput().trim() || activeStore()}>
+                        <button
+                          type="button"
+                          class="tcs-btn"
+                          onClick={clearFilters}
+                        >
+                          {s("clearSearch", props.locale)}
+                        </button>
+                      </Show>
+                    </div>
                   </Show>
                 }
               >

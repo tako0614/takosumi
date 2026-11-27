@@ -53,7 +53,7 @@ export default function AppSharingSection(props: {
   return (
     <AppSection id="sharing" title={t("app.sharing.title")} testId="app-sharing">
         <Show when={sharing.loading && !members()}>
-          <span role="status"><Spinner size={18} /> {t("common.loading")}</span>
+          <span role="status"><Spinner size={18} decorative /> {t("common.loading")}</span>
         </Show>
         <Show when={sharing.error}>
           <Toast tone="error">{friendlyError(sharing.error, t).message}<Button variant="secondary" onClick={() => void refetch()}>{t("common.retry")}</Button></Toast>

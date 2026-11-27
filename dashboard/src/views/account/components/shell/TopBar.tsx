@@ -63,13 +63,14 @@ export default function TopBar() {
           <A
             href="/notifications"
             class="topbar-icon-btn topbar-bell"
+            aria-current={loc.pathname === "/notifications" ? "page" : undefined}
             aria-label={
               badge() > 0
                 ? t("shell.notificationsAria", { n: badge() })
                 : t("nav.notifications")
             }
           >
-            <Bell size={18} />
+            <Bell size={18} aria-hidden="true" />
             <Show when={badge() > 0}>
               <span class="topbar-badge" aria-hidden="true">
                 {badge() > 9 ? "9+" : badge()}

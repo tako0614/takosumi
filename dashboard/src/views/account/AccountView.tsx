@@ -11,7 +11,7 @@ import ProfileSection from "./sections/ProfileSection.tsx";
 import TakosumiApiKeysCard from "./components/TakosumiApiKeysCard.tsx";
 import NotificationDevicesCard from "./components/NotificationDevicesCard.tsx";
 import BillingTab from "../workspace/tabs/BillingTab.tsx";
-import { type MessageKey, t } from "../../i18n/index.ts";
+import { type MessageKey, setDocumentTitle, t } from "../../i18n/index.ts";
 
 export type AccountSection = "me" | "usage" | "cli" | "devices";
 
@@ -91,6 +91,9 @@ function Inner(props: { readonly session: SessionRecord }) {
     const label = ACCOUNT_SECTIONS.find((item) => item.id === current)?.labelKey;
     return current !== "me" && label ? t(label) : t("account.title");
   };
+  createEffect(() => {
+    setDocumentTitle(title());
+  });
 
   return (
     <Show when={section()} fallback={<Navigate href="/account" />}>

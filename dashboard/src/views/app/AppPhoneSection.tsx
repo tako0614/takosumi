@@ -486,6 +486,7 @@ function PhoneSection(props: {
               <label class="ap-phone-check">
                 <input
                   type="checkbox"
+                  name="rememberOpenChoice"
                   checked={remember()}
                   onChange={(event) => setRemember(event.currentTarget.checked)}
                 />

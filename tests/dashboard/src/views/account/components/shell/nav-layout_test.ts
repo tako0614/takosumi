@@ -128,8 +128,11 @@ describe("dashboard shell navigation layout", () => {
   test("top bar keeps the bell and profile without a workspace selector", () => {
     expect(topBarSource).not.toContain('href="/new"');
     expect(topBarSource).toContain('href="/notifications"');
+    expect(topBarSource).toContain('aria-current={loc.pathname === "/notifications" ? "page" : undefined}');
+    expect(topBarSource).toContain('<Bell size={18} aria-hidden="true" />');
     expect(topBarSource).toContain("<UserMenu />");
     expect(topBarSource).toContain("WorkspaceSwitcher");
+    expect(shellCssSource).toContain('.topbar-icon-btn[aria-current="page"]');
     const switcher = read("views/account/components/shell/WorkspaceSwitcher.tsx");
     expect(switcher).toContain("!await appOwnershipAvailable()");
     expect(switcher).toContain("legacy() === true");
@@ -143,6 +146,8 @@ describe("dashboard shell navigation layout", () => {
     expect(userMenuSource).not.toContain('href="/settings');
     expect(userMenuSource).not.toContain('href="/connections"');
     expect(userMenuSource).not.toContain('href="/advanced');
+    expect(userMenuSource).toContain("aria-controls={menuId}");
+    expect(userMenuSource).toContain("onFocusOut={");
     // Sign-out is the last, plain item.
     expect(userMenuSource).not.toContain("user-menu-danger");
     expect(userMenuSource.lastIndexOf("onClick={signOut}")).toBeGreaterThan(

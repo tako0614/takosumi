@@ -7,6 +7,8 @@ interface Props {
   class?: string;
   /** Accessible label (defaults to a generic loading announcement). */
   label?: string;
+  /** True when adjacent text inside a live region already announces loading. */
+  decorative?: boolean;
 }
 
 /** Spinning loader icon (lucide Loader2 + CSS rotation via `.tg-spinner`). */
@@ -14,10 +16,11 @@ export default function Spinner(props: Props): JSX.Element {
   return (
     <span
       class={`tg-spinner ${props.class ?? ""}`}
-      role="status"
-      aria-label={props.label ?? t("common.loading")}
+      role={props.decorative ? undefined : "status"}
+      aria-label={props.decorative ? undefined : (props.label ?? t("common.loading"))}
+      aria-hidden={props.decorative ? "true" : undefined}
     >
-      <Loader2 size={props.size ?? 18} />
+      <Loader2 size={props.size ?? 18} aria-hidden="true" />
     </span>
   );
 }
