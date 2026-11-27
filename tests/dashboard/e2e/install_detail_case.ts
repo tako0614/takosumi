@@ -355,6 +355,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
             id: "tako/service", source: { git, path: changedListing ? "deploy/replacement" : originalStoreModule },
             provider: changedListing ? "aws" : "cloudflare", suggestedName: "cloudflare-service",
             name: { en: changedListing ? "Updated Store Service" : "Store Service" }, createdAt: now, updatedAt: now,
+            badge: { en: changedListing ? "Replacement listing note" : "Original listing note" },
           } }));
           await page.route(
             (url) => url.pathname === "/api/v1/source-ref-resolutions" || url.pathname.endsWith("/source-ref-resolutions/stable-semver"),
@@ -412,6 +413,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         await expect(page).toHaveURL(new RegExp(`installPlan=${acceptedIds[0]}`, "u"));
         expect(f.mutations).not.toContain(applyMutation);
         if (entry === "Store") {
+          await expect(page.getByText("Original listing note", { exact: true })).toHaveCount(0);
           await page.getByText("Source and version", { exact: true }).click();
           await expect(page.getByTestId("install-provenance")).toContainText(`v1.0.0 · ${sourceCommit.slice(0, 7)}`);
 
@@ -423,6 +425,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
           const provenance = page.getByTestId("install-provenance");
           await expect(provenance).toContainText(`Module path ${originalStoreModule}`);
           await expect(provenance).not.toContainText(/deploy\/replacement|Store connection hint|AWS/u);
+          await expect(page.getByText(/^(?:Original|Replacement) listing note$/u)).toHaveCount(0);
           expect(keys).toHaveLength(submissions);
           expect(resolutions).toBe(1);
           changedListing = false;
@@ -446,7 +449,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         suggestedName: "store-service",
         name: { ja: "ストアサービス", en: "Store Service" },
         description: { ja: "サービスの説明", en: "About this service" },
-        badge: { ja: "公式", en: "Official" },
+        badge: { ja: "Cloudflare接続が必要", en: " About this service " },
         publisher: { handle: "example", displayName: "Example" },
         rating: { average: 4.5, count: 2 },
         gallery: [{ kind: "image", url: "/media/screen.svg", width: 640, height: 360, alt: { ja: "画面", en: "Service screen" } }],
@@ -478,6 +481,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
           return route.fulfill({ json: {
             id: "tako/minimal", source: { git: "https://github.com/example/minimal.git" },
             suggestedName: "minimal", name: { en: "Minimal Store Service" }, createdAt: now, updatedAt: now,
+            badge: { ja: "", en: "  " },
           } });
         }
         return route.fulfill({ json: listing });
@@ -485,8 +489,17 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
 
       await page.goto(`/new?tcsBase=${encodeURIComponent(store)}&tcsListing=tako%2Fservice`);
       await expect(page.getByRole("heading", { name: "Store Service" })).toBeVisible();
-      await expect(page.getByTestId("install-app-header").getByText("About this service")).toBeVisible();
+      const header = page.getByTestId("install-app-header");
+      await expect(header.getByText("About this service")).toBeVisible();
       await expect(page.getByText("About this service", { exact: true })).toHaveCount(1);
+      await expect(page.getByText("Cloudflare接続が必要", { exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "User menu", exact: true }).click();
+      await page.getByRole("button", { name: "日本語", exact: true }).click();
+      await expect(header.getByText("Cloudflare接続が必要", { exact: true })).toBeVisible();
+      await expect(page.getByText("Cloudflare接続が必要", { exact: true })).toHaveCount(1);
+      await expect(page.getByText("About this service", { exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "English", exact: true }).click();
+      await page.getByRole("button", { name: "User menu", exact: true }).click();
       const screenshot = page.getByRole("button", { name: "Service screen" });
       await expect(screenshot).toBeVisible();
       await expect.poll(() => screenshot.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
@@ -527,6 +540,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
 
       await page.goto(`/new?tcsBase=${encodeURIComponent(store)}&tcsListing=tako%2Fminimal`);
       await expect(page.getByRole("heading", { name: "Minimal Store Service" })).toBeVisible();
+      await expect(header.locator("p")).toHaveCount(0);
       await openProvenance();
       await expect(provenance).not.toContainText(/Module path|Source path|Store connection hint/u);
 
@@ -534,6 +548,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       gitUrl.searchParams.set("sourcePath", "apps/service");
       gitUrl.searchParams.set("path", "deploy/live");
       await page.goto(`${gitUrl.pathname}${gitUrl.search}`);
+      await expect(header.locator("p")).toHaveCount(0);
       await openProvenance();
       await expect(provenance).toContainText("Source path apps/service");
       await expect(provenance).toContainText("Module path deploy/live");

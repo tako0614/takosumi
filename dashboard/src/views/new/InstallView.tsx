@@ -112,8 +112,8 @@ async function readListing(handoff: StoreHandoff, expectedGit?: string): Promise
     if (!listing || listing.id !== handoff.listingId ||
       !matchesStoreRepository(listing, expectedGit ?? picked?.source.url)) return null;
     const source = picked?.source ?? listing.source;
-    const provider = source.path === listing.source.path ? listing.provider : picked?.provider;
-    return { ...listing, source, provider, primaryServer: handoff.base };
+    const moduleListing = picked && source.path !== listing.source.path ? picked : listing;
+    return { ...listing, source, provider: moduleListing.provider, badge: moduleListing.badge, primaryServer: handoff.base };
   } catch (error) {
     if (picked) return picked;
     throw error;
@@ -404,10 +404,16 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     const current = provenancePlan();
     return current ? current.options.modulePath : listed()?.source.path ?? prefill()?.path;
   };
+  const candidateListing = () => !attemptId() && attempt.view().stage === "candidate" ? listed() : undefined;
   const listingProvider = () => {
-    if (attemptId() || attempt.view().stage !== "candidate") return undefined;
-    const provider = listed()?.provider;
+    const provider = candidateListing()?.provider;
     return typeof provider === "string" && provider.trim() ? tcsProviderLabel(provider) : undefined;
+  };
+  const listingBadge = () => {
+    const value = candidateListing()?.badge?.[locale()];
+    if (typeof value !== "string") return undefined;
+    const text = value.trim();
+    return text && text !== title() && text !== description() ? text : undefined;
   };
   const version = () => {
     const current = provenancePlan();
@@ -516,6 +522,7 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
             <Show when={publisher()}>{(name) => <span class="iv-app-publisher">{name()}</span>}</Show>
             <Show when={fromStore()}><StoreRating rating={listed()?.rating} locale={locale()} showEmpty /></Show>
             <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
+            <Show when={listingBadge()}>{(text) => <p>{text()}</p>}</Show>
           </div>
         </header>
 
