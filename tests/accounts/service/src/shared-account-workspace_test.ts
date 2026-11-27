@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import { Miniflare } from "miniflare";
 import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import {
@@ -12,6 +13,13 @@ import {
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import type { D1Database } from "../../../../worker/src/bindings.ts";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../../worker/src/d1_opentofu_store.ts";
+import { acquireControlD1MaintenanceFence, releaseControlD1MaintenanceFence } from "../../../../worker/src/d1_schema_maintenance.ts";
+import { workerdD1Database, workerdD1Module } from "../../../helpers/deploy-control/workerd_d1.ts";
 
 const subject: TakosumiSubject = "tsub_shared";
 const other: TakosumiSubject = "tsub_other";
@@ -226,6 +234,101 @@ test("billing membership revocation during resolver wait prevents returning auth
   release();
   await expect(pending).rejects.toMatchObject({ status: 403 });
 });
+
+test("billing entry reads Workspace and member together before and after resolution on predeployed D1", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [workerdD1Module("billing-workspace-membership.mjs")],
+    d1Databases: { CONTROL: "billing-workspace-membership" },
+  });
+  try {
+    const native = workerdD1Database(runtime);
+    await ensureD1OpenTofuLedgerSchema(native);
+    const fenceInput = {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    } as const;
+    const fence = await acquireControlD1MaintenanceFence(native, fenceInput, "2026-08-15T00:00:00.000Z");
+    await releaseControlD1MaintenanceFence(native, fence, "2026-08-15T00:00:01.000Z");
+
+    let nextId = 0;
+    const writer = new WorkspacesService({
+      store: new CloudflareD1OpenTofuControlStore(native, { schemaMode: "predeployed" }),
+      newId: (prefix) => `${prefix}_billing_${++nextId}`,
+    });
+    const workspace = await writer.ensurePersonalWorkspaceForSharedAccount(subject, "snapshot-owner");
+    const owner = (await writer.getWorkspaceMember(workspace.id, subject))!;
+    const viewer: WorkspaceMember = { ...owner, id: "wsm_billing_viewer", accountId: other, roles: ["viewer"] };
+    const writeStore = new CloudflareD1OpenTofuControlStore(native, { schemaMode: "predeployed" });
+    await writeStore.putWorkspaceMember(viewer);
+
+    const queries: string[] = [];
+    const observed: D1Database = {
+      prepare(query) {
+        queries.push(query);
+        return native.prepare(query);
+      },
+      batch() { throw new Error("Billing membership should use direct reads."); },
+    };
+    const control = new WorkspacesService({
+      store: new CloudflareD1OpenTofuControlStore(observed, { schemaMode: "predeployed" }),
+      newId: () => { throw new Error("Billing admission must not create Workspace records."); },
+    });
+    const f = fixture();
+    let suspendDuringResolution = false;
+    let resolverCalls = 0;
+    const binding = { workspaceId: workspace.id, workspaceRef: "wrk_retained_billing", organizationId: "org_retained" };
+    const directory = createSharedAccountWorkspaceDirectory({
+      store: f.store,
+      operations: { workspaces: control, members: f.operations.members },
+      async resolveWorkspaceBilling() {
+        resolverCalls += 1;
+        if (suspendDuringResolution) await writeStore.putWorkspaceMember({ ...viewer, status: "suspended" });
+        return binding;
+      },
+    });
+
+    for (const accountId of [subject, other]) {
+      queries.length = 0;
+      expect(await directory.billingOrganization({ subject: accountId }, workspace.id, undefined, "entry-v1"))
+        .toEqual({ ...binding, displayName: workspace.displayName });
+      expect(queries).toHaveLength(2);
+      for (const query of queries) {
+        expect(query).toContain("FROM workspaces");
+        expect(query).toContain("FROM workspace_members");
+        expect(query).toContain("FROM _takosumi_control_schema_maintenance");
+      }
+    }
+
+    suspendDuringResolution = true;
+    await expect(directory.billingOrganization({ subject: other }, workspace.id, undefined, "entry-v1"))
+      .rejects.toMatchObject({ status: 403 });
+    expect(resolverCalls).toBe(3);
+
+    // A Workspace's owner field is insufficient when the canonical member is absent.
+    await native.prepare("DELETE FROM workspace_members WHERE id = ?").bind(owner.id).run();
+    await expect(directory.billingOrganization(session, workspace.id, undefined, "entry-v1"))
+      .rejects.toMatchObject({ status: 403 });
+    expect(resolverCalls).toBe(3);
+
+    await writeStore.putWorkspaceMember(viewer);
+    await native.prepare("UPDATE workspace_members SET record_json = ? WHERE id = ?")
+      .bind(JSON.stringify({ ...viewer, accountId: subject }), viewer.id).run();
+    await expect(directory.billingOrganization({ subject: other }, workspace.id, undefined, "entry-v1"))
+      .rejects.toThrow("Workspace membership evidence identity is invalid");
+    expect(resolverCalls).toBe(3);
+
+    await acquireControlD1MaintenanceFence(native, fenceInput, "2026-08-15T00:01:00.000Z");
+    await expect(directory.billingOrganization({ subject: other }, workspace.id, undefined, "entry-v1"))
+      .rejects.toThrow("maintenance_fence_active");
+    expect(resolverCalls).toBe(3);
+  } finally {
+    await runtime.dispose();
+  }
+}, 30_000);
 
 test("trusted RP context checks grant before and after owner resolver, preserving distinct existing Workspaces", async () => {
   let healthy = true;

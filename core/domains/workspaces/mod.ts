@@ -498,6 +498,22 @@ export class WorkspacesService {
     return workspace;
   }
 
+  /** Reads a Workspace with the canonical membership for the selected account. */
+  async readWorkspaceMembership(
+    workspaceId: string,
+    accountId: string,
+  ): Promise<{ readonly workspace: Workspace; readonly member: WorkspaceMember } | undefined> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    requireNonEmptyString(accountId, "accountId");
+    if (this.#store.readWorkspaceMembership) {
+      return await this.#store.readWorkspaceMembership(workspaceId, accountId);
+    }
+    const workspace = await this.#store.getWorkspace(workspaceId);
+    if (!workspace) return undefined;
+    const member = await this.#store.getWorkspaceMember(workspaceId, accountId);
+    return member ? { workspace, member } : undefined;
+  }
+
   /** Exact membership lookup for authorization hot paths. */
   async getWorkspaceMember(
     workspaceId: string,

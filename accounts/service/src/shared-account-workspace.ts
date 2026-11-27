@@ -153,23 +153,32 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
     if (await deps.store.isAccountAuthenticationFenced(subject)) rejectSession();
     return account;
   };
+  const isLiveMember = (member: WorkspaceMember | undefined, accountId: string, workspaceId: string): member is WorkspaceMember =>
+    member?.workspaceId === workspaceId && member.accountId === accountId && member.status === "active" && member.roles.some(validRole);
   const liveMember = async (accountId: string, workspaceId: string): Promise<WorkspaceMember | undefined> => {
     const member = deps.operations.members.getMember
       ? await deps.operations.members.getMember(workspaceId, accountId)
       : (await deps.operations.members.listMembers(workspaceId)).find((row) => row.accountId === accountId);
-    return member?.workspaceId === workspaceId && member.accountId === accountId &&
-      member.status === "active" && member.roles.some(validRole) ? member : undefined;
+    return isLiveMember(member, accountId, workspaceId) ? member : undefined;
   };
   const choice = (workspace: Workspace, member: WorkspaceMember): SharedAccountWorkspaceChoice => ({
     id: workspace.id, handle: workspace.handle, displayName: workspace.displayName,
     type: workspace.type, roles: member.roles.filter(validRole), owner: member.roles.includes("owner"),
   });
-  const authorized = async (accountId: string, workspaceId: string): Promise<SharedAccountWorkspaceChoice> => {
+  const authorized = async (accountId: string, workspaceId: string, projection?: "entry-v1"): Promise<SharedAccountWorkspaceChoice> => {
     if (!workspaceId || workspaceId.length > 256) throw new SharedAccountWorkspaceError("invalid_request", "Workspace id is invalid.", 400);
-    const workspace = await deps.operations.workspaces.getWorkspaceForAccount(accountId, workspaceId);
-    const member = workspace?.id === workspaceId ? await liveMember(accountId, workspaceId) : undefined;
-    if (!workspace || !member) throw new SharedAccountWorkspaceError("forbidden", "Current Workspace membership is required.", 403);
-    return choice(workspace, member);
+    const workspaces = deps.operations.workspaces;
+    if (projection === "entry-v1" && workspaces.readWorkspaceMembership) {
+      const snapshot = await workspaces.readWorkspaceMembership(workspaceId, accountId);
+      if (snapshot?.workspace.id === workspaceId && isLiveMember(snapshot.member, accountId, workspaceId)) {
+        return choice(snapshot.workspace, snapshot.member);
+      }
+    } else {
+      const workspace = await workspaces.getWorkspaceForAccount(accountId, workspaceId);
+      const member = workspace?.id === workspaceId ? await liveMember(accountId, workspaceId) : undefined;
+      if (workspace && member) return choice(workspace, member);
+    }
+    throw new SharedAccountWorkspaceError("forbidden", "Current Workspace membership is required.", 403);
   };
   const directory: SharedAccountWorkspaceDirectory = {
     async bootstrap(session, allowCreate = true) {
@@ -300,7 +309,7 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       };
       const subject = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
         const current = await currentBillingSubject();
-        await authorized(current, workspaceId);
+        await authorized(current, workspaceId, projection);
         return current;
       });
       if (!deps.resolveWorkspaceBilling) {
@@ -323,7 +332,7 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       // before that wait survives a concurrent membership revocation or merge.
       const workspace = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
         await currentBillingSubject();
-        const current = await authorized(subject, workspaceId);
+        const current = await authorized(subject, workspaceId, projection);
         if (projection === "entry-v1") await currentBillingSubject();
         return current;
       });

@@ -256,6 +256,10 @@ export interface ControlPlaneOperations {
       accountId: string,
       workspaceId: string,
     ): Promise<Workspace | undefined>;
+    readWorkspaceMembership?(
+      workspaceId: string,
+      accountId: string,
+    ): Promise<{ readonly workspace: Workspace; readonly member: WorkspaceMember } | undefined>;
     listWorkspacesByIds?(ids: readonly string[]): Promise<readonly Workspace[]>;
     getWorkspace(id: string): Promise<Workspace>;
     /**
