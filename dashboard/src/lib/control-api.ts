@@ -222,6 +222,7 @@ interface RequestOpts {
   readonly reuseRecentSharedAuthProbe?: boolean;
   readonly isCurrent?: () => boolean;
   readonly beforeDispatch?: () => void;
+  readonly onResponseStatus?: (status: number) => void;
   readonly method?: string;
   readonly body?: unknown;
   readonly signal?: AbortSignal;
@@ -288,6 +289,7 @@ export async function controlFetch<T>(
   throwIfReadRetired(opts.acceptResponseAfterAbort
     ? { isCurrent: opts.isCurrent }
     : opts);
+  opts.onResponseStatus?.(res.status);
   if (reusedProbe) requireSharedAuthReadResponse(res);
   if (res.status === 401) {
     invalidateRecentSharedAuthProbe();
@@ -335,14 +337,14 @@ export async function controlFetch<T>(
   return data as T;
 }
 
-const CONTROL_READ_TIMEOUT_MS = 30_000;
+const CONTROL_REQUEST_TIMEOUT_MS = 30_000;
 type ControlReadScope = Pick<RequestOpts, "signal" | "cache" | "isCurrent">;
 
-/** Bounds selected screen reads through response decoding and retires late responses. */
-async function withControlReadDeadline<T>(
+/** Bounds a request through response decoding and retires late responses. */
+async function withControlDeadline<T>(
   label: string,
   scope: ControlReadScope,
-  read: (scope: ControlReadScope) => Promise<T>,
+  request: (scope: ControlReadScope) => Promise<T>,
 ): Promise<T> {
   const caller = scope.signal;
   throwIfAborted(caller);
@@ -359,14 +361,14 @@ async function withControlReadDeadline<T>(
     caller?.addEventListener("abort", onAbort, { once: true });
     timer = setTimeout(() => {
       // Settle the timeout before aborting, including when fetch rejects on abort.
-      reject(new ControlApiError(0, "request_timeout", `${label} read timed out after ${CONTROL_READ_TIMEOUT_MS}ms`));
+      reject(new ControlApiError(0, "request_timeout", `${label} timed out after ${CONTROL_REQUEST_TIMEOUT_MS}ms`));
       controller.abort();
-    }, CONTROL_READ_TIMEOUT_MS);
+    }, CONTROL_REQUEST_TIMEOUT_MS);
   });
   try {
-    // Some transports and response bodies ignore abort. Race the whole read
+    // Some transports and response bodies ignore abort. Race the whole request
     // and fence controlFetch's session-expiry handling after retirement.
-    const result = await Promise.race([read(requestScope), stopped]);
+    const result = await Promise.race([request(requestScope), stopped]);
     throwIfReadRetired(requestScope);
     return result;
   } finally {
@@ -1295,7 +1297,7 @@ export async function getCapsuleConfigurationContext(
   readonly authorityGuard: string;
   readonly configurationPlanResumable?: true;
 }> {
-  const body = await withControlReadDeadline("App settings", options, (scope) => controlFetch<{
+  const body = await withControlDeadline("App settings read", options, (scope) => controlFetch<{
     capsule: Capsule;
     installConfigReAdoption: {
       readonly authorityGuard: string;
@@ -2233,7 +2235,7 @@ export async function listInstalledApps(workspaceId?: string): Promise<{
   for (let page = 0; page < INSTALLED_APP_LIST_LIMIT / INSTALLED_APP_PAGE_LIMIT; page++) {
     const path = `${BASE}/apps${query({ projection: INSTALLED_APP_PROJECTION, limit: INSTALLED_APP_PAGE_LIMIT, cursor })}`;
     try {
-      const body = await withControlReadDeadline("Installed apps", {}, (scope) =>
+      const body = await withControlDeadline("Installed apps read", {}, (scope) =>
         controlFetch<unknown>(path, { ...scope, cache: "no-store", reuseRecentSharedAuthProbe: true }),
       );
       if (page === 0 && isKnownSharedAuthRouteAbsent() && isRecord(body) &&
@@ -2434,7 +2436,7 @@ export async function getCapsuleAppWithSignal(
   signal?: AbortSignal,
   options: Pick<ControlReadScope, "isCurrent" | "cache"> & { readonly workspaceId?: string } = {},
 ): Promise<CapsuleAppView> {
-  const body = await withControlReadDeadline("App", { signal, ...options }, (scope) =>
+  const body = await withControlDeadline("App read", { signal, ...options }, (scope) =>
     controlFetch<{ app?: CapsuleAppView }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`, scope),
   );
   throwIfReadRetired({ signal, ...options });
@@ -3191,7 +3193,7 @@ export async function getRunWithOptions(
 }
 
 export async function getRun(id: string, options: Pick<RequestOpts, "cache" | "isCurrent" | "reuseRecentSharedAuthProbe"> = {}): Promise<Run> {
-  return await withControlReadDeadline("Run", options, (scope) =>
+  return await withControlDeadline("Run read", options, (scope) =>
     readRun(id, scope, options.reuseRecentSharedAuthProbe));
 }
 
@@ -3242,22 +3244,32 @@ export async function approveRun(
     observed.baseStateGeneration === plan.baseStateGeneration &&
     observed.status === "succeeded";
   const scope = { isCurrent: input.isCurrent };
+  let dispatched = false;
+  let responseStatus: number | undefined;
   try {
-    const body = await controlFetch<{ run: Run }>(
+    const body = await withControlDeadline("Plan approval", scope, (requestScope) => controlFetch<{ run: Run }>(
       `${BASE}/runs/${encodeURIComponent(plan.id)}/approve`,
-      { ...scope, method: "POST", body: input.reason ? { reason: input.reason } : {} },
-    );
+      {
+        ...requestScope,
+        method: "POST",
+        body: input.reason ? { reason: input.reason } : {},
+        beforeDispatch: () => { dispatched = true; },
+        onResponseStatus: (status) => { responseStatus = status; },
+      },
+    ));
     throwIfReadRetired(scope);
     if (matchesApprovedPlan(body?.run)) return body.run;
     throw new ControlApiError(502, "invalid_plan_approval_response", "The approval response did not match this Plan.");
   } catch (failure) {
-    const outcomeUnknown = failure instanceof ControlApiError
-      ? failure.status >= 500
-      : failure instanceof TypeError;
-    if (!outcomeUnknown) throw failure;
+    throwIfReadRetired(scope);
+    if (responseStatus !== undefined && responseStatus >= 400 && responseStatus < 500 &&
+      failure instanceof ControlApiError && failure.code === "request_timeout") {
+      // A stalled error body cannot turn a received refusal into an uncertain approval.
+      throw new ControlApiError(responseStatus, undefined, `HTTP ${responseStatus}`, undefined, true);
+    }
+    if (!dispatched || !isMutationOutcomeUnknown(failure)) throw failure;
     // The approval may have committed before the response was lost. Recover
     // only from this Plan's authoritative readback, without another POST.
-    throwIfReadRetired(scope);
     const observed = await getRun(plan.id, { ...scope, cache: "no-store" });
     throwIfReadRetired(scope);
     if (matchesApprovedPlan(observed)) return observed;
@@ -3869,7 +3881,7 @@ function readCachedAppsPage(path: string): Promise<{ nextCursor?: string } & Rec
   if (cached) return cached;
   // Bound the shared transport, so every waiter sees the same result and an
   // expired request is evicted. Each view still cancels only its own wait.
-  const request = withControlReadDeadline("Apps", {}, (scope) =>
+  const request = withControlDeadline("Apps read", {}, (scope) =>
     controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { ...scope, reuseRecentSharedAuthProbe: true }),
   ).then((body) => {
     if (appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
@@ -3912,7 +3924,7 @@ export async function listAccessibleAppsPage(
   try {
     // Keep typed searches and scoped reads out of the account-wide cache.
     body = search || owner.isCurrent
-      ? await withControlReadDeadline("Apps", { signal, ...owner }, (scope) =>
+      ? await withControlDeadline("Apps read", { signal, ...owner }, (scope) =>
         controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path, { ...scope, reuseRecentSharedAuthProbe: true }),
       )
       : await withAppReadSignal(readCachedAppsPage(path), signal);
