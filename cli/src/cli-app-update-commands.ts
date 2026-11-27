@@ -95,9 +95,9 @@ async function pause(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function client(options: CliOptions, signal: AbortSignal) {
+function client(options: CliOptions, signal: AbortSignal, onResponseStatus?: (status: number) => void) {
   return (path: string, method: "GET" | "POST" = "GET", body?: unknown, key?: string) => requestDeployControlApi({
-    path, method, ...(body !== undefined ? { body } : {}), options, auth: "accounts", signal,
+    path, method, ...(body !== undefined ? { body } : {}), options, auth: "accounts", signal, onResponseStatus,
     redirect: method === "POST" ? "error" : "follow",
     ...(key ? { extraHeaders: { "Idempotency-Key": key } } : {}),
   });
@@ -702,6 +702,7 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
   let expectedPlanIdentity: string | undefined; let locatedApplyId: string | undefined;
   let applyType: ApplyRunType = "apply";
   let applyAttempted = false;
+  let approvalResponseUnconfirmed = false;
   try {
     const parsed = argumentsFor(args, "apply");
     if (parsed.help) { io.stdout(applyHelp()); return 0; }
@@ -742,7 +743,9 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       io.stderr(JSON.stringify({ status: "applying_reviewed_plan", appId: selectedApp, plan: projection, reviewUrl: runUrl(options, plan.id) }));
       if (plan.status === "waiting_approval") {
         mutationAttempted = true;
-        await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}/approve`, "POST", {});
+        approvalResponseUnconfirmed = true;
+        const approve = client(options, signal, status => { approvalResponseUnconfirmed = status >= 500; });
+        await approve(`/api/v1/runs/${encodeURIComponent(selectedPlan)}/approve`, "POST", {});
         const approvedPlan = savedApplyPlan(runFrom(await request(`/api/v1/runs/${encodeURIComponent(selectedPlan)}`), selectedApp, selectedPlan), applyType);
         if (approvedPlan.status !== "succeeded" || approvedPlan.policyStatus !== "pass" || initialIdentity !== applyPlanIdentity(approvedPlan)) throw new Refusal("approved_plan_changed");
         plan = approvedPlan;
@@ -766,6 +769,7 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
     // Keep recovery evidence local: a late response from the aborted command
     // must not change its result while a fresh readback is being refused.
     const knownRun = lastRun;
+    const approvalWasUnconfirmed = approvalResponseUnconfirmed;
     let observedRun = knownRun; const observedApplyId = locatedApplyId; let observedPlan = lastPlan; let readbackConfirmed = false;
     if (scope && (knownRun || (mutationAttempted && observedApplyId === undefined))) {
       const recoveryScope = scope;
@@ -781,6 +785,17 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       }); readbackConfirmed = true; } catch { /* unavailable readback is not proof of no effect */ }
     }
     if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
+    if (approvalWasUnconfirmed && readbackConfirmed && !observedRun &&
+      observedPlan?.status === "succeeded" && observedPlan.policyStatus === "pass") {
+      const planOption = applyType === "destroy_apply" ? "--destroy-plan" : "--plan";
+      const recovery = isJapaneseCli()
+        ? `保存済みPlanの承認を確認しました。内容を確認し、実行する場合は同じ接続先・本人・アプリで apps apply に ${planOption} と同じPlan ID、--yes を指定してください。ほかの明示確認オプションも元の指定を使ってください。`
+        : `The saved Plan is approved. Review it and, if ready, use apps apply with the same server, account and app, ${planOption} with the same Plan ID, and --yes. Keep the original confirmation options.`;
+      write(io, options, { status: "indeterminate", appId, planRunId: observedPlan.id,
+        lastObservedPlanStatus: observedPlan.status, reviewUrl: runUrl(options, observedPlan.id),
+        code: errorCode(error), recovery });
+      return 1;
+    }
     const reason = failedPreconditionDetails(error)?.reason;
     const connectionRecoveryFailure = destroyConnectionRecoveryFailure(error);
     const refusedPlan = applyAttempted && readbackConfirmed && !observedRun &&

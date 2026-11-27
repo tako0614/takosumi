@@ -1340,14 +1340,81 @@ test("a parked Plan is approved once and reread before applying the unchanged sa
   ]);
 });
 
-test("lost approval ACK reads the exact Plan but never automatically starts Apply", async () => {
-  let approved = false;
-  const r = await invoke(applyArgs, req => {
-    if (new URL(req.url).pathname.endsWith("/approve")) { approved = true; throw Error("synthetic lost approval ACK"); }
-    return normal(req, { plan: approved ? plan : { ...plan, status: "waiting_approval" } });
+for (const [planOption, savedPlan, args, serve] of [
+  ["--plan", plan, applyArgs, normal],
+  ["--destroy-plan", destroyPlan, destroyApplyArgs, normalDestroy],
+] as const) {
+  test(`lost approval ACK for ${planOption} offers review of the approved Plan without Apply`, async () => {
+    let approved = false;
+    const r = await invoke(args, req => {
+      if (new URL(req.url).pathname.endsWith("/approve")) {
+        approved = true;
+        throw Error("synthetic lost approval ACK");
+      }
+      return serve(req, { plan: { ...savedPlan, status: approved ? "succeeded" : "waiting_approval" } });
+    });
+    expect(r.code).toBe(1);
+    expect(r.calls.map(req => `${req.method} ${new URL(req.url).pathname}`)).toEqual([
+      `GET /api/v1/runs/${savedPlan.id}`, "GET /api/v1/capsules/cap_owned/runs", "GET /api/v1/capsules/cap_owned",
+      `POST /api/v1/runs/${savedPlan.id}/approve`, `GET /api/v1/runs/${savedPlan.id}`, "GET /api/v1/capsules/cap_owned/runs",
+    ]);
+    expect(r.result).toMatchObject({
+      status: "indeterminate", planRunId: savedPlan.id, lastObservedPlanStatus: "succeeded",
+      reviewUrl: `${origin}/runs/${savedPlan.id}`,
+    });
+    expect(r.result.recovery).toContain(planOption);
+    expect(r.result.recovery).toContain("--yes");
+    expect(r.result.runId).toBeUndefined();
+
+    const resumed = await invoke(args, req => serve(req, { plan: { ...savedPlan, status: "succeeded" } }));
+    expect(resumed.code).toBe(0);
+    expect(resumed.result).toMatchObject({ status: "succeeded", planRunId: savedPlan.id });
+    expect(resumed.calls.filter(req => req.method === "POST").map(req => new URL(req.url).pathname))
+      .toEqual([`/api/v1/runs/${savedPlan.id}/apply`]);
   });
-  expect(r.code).toBe(1); expect(r.result).toMatchObject({ status: "indeterminate", lastObservedPlanStatus: "succeeded" });
-  expect(r.calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname)).toEqual([`/api/v1/runs/${plan.id}/approve`]);
+}
+
+test("approval recovery requires the same passing Plan and a complete linked Run read", async () => {
+  for (const scenario of ["waiting", "changed", "policy-denied", "history-denied", "linked",
+    "approval-refused", "refused-body-lost", "approval-acknowledged"] as const) {
+    let submitted = false;
+    let interrupted = false;
+    const r = await invoke(applyArgs, req => {
+      const path = new URL(req.url).pathname;
+      if (path.endsWith("/approve")) {
+        submitted = true;
+        if (scenario === "approval-refused") return Response.json({ error: "forbidden" }, { status: 403 });
+        if (scenario === "refused-body-lost") {
+          return new Response(new ReadableStream({
+            start: controller => controller.error(Error("synthetic lost refusal body")),
+          }), { status: 403 });
+        }
+        if (scenario === "approval-acknowledged") return Response.json({ run: plan });
+        throw Error("synthetic lost approval ACK");
+      }
+      if (submitted && !interrupted && scenario === "approval-acknowledged" && path === `/api/v1/runs/${plan.id}`) {
+        interrupted = true;
+        throw Error("synthetic read interruption after acknowledged approval");
+      }
+      if (submitted && scenario === "history-denied" && path === "/api/v1/capsules/cap_owned/runs") {
+        return Response.json({ error: "forbidden" }, { status: 403 });
+      }
+      const current = !submitted || scenario === "waiting" ? { ...plan, status: "waiting_approval" }
+        : scenario === "changed" ? { ...plan, sourceSnapshotId: "snapshot_other" }
+        : scenario === "policy-denied" ? { ...plan, policyStatus: "deny" } : plan;
+      return normal(req, { plan: current, history: { runs: submitted && scenario === "linked" ? [apply] : [] } });
+    });
+    expect(r.calls.filter(req => req.method === "POST").map(req => new URL(req.url).pathname))
+      .toEqual([`/api/v1/runs/${plan.id}/approve`]);
+    expect(r.result.reviewUrl).toBeUndefined();
+    if (scenario === "linked") {
+      expect(r.code).toBe(0);
+      expect(r.result).toMatchObject({ status: "succeeded", runId: apply.id });
+    } else {
+      expect(r.code).toBe(1);
+      expect(r.result.recovery).toContain("--observe-only");
+    }
+  }
 });
 
 test("exact retained update key survives a lost create response across manual invocations", async () => {

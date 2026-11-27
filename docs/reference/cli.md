@@ -123,6 +123,7 @@ CLIは現在appと保存Plan、全pageの履歴を照合し、既存のlinked Ap
 Apply Runの作成応答だけでは成功にしません。既定で最大120秒観測し、Runが`succeeded`になった場合だけexit 0です。
 `--timeout-ms <1..120000>`は観測budgetであり、観測終了はserverのRun取消ではありません。
 承認・Apply応答が不明な場合は別の最大5秒で同じPlanとlinked Applyを読むだけで、POSTを自動再送しません。
+承認応答を確認できず、その後の読取りで同じPlanの承認済み状態を確認できて対応するRunが見つからない場合は、保存済みPlanの `reviewUrl` を返します。内容を確認し、実行する場合は同じ接続先・本人・アプリ・Plan IDで、元の `--plan` または `--destroy-plan` と `--yes`、ほかの明示確認オプションの指定も使います。
 承認または適用で状態の競合が報告され、読み直したPlanと操作前の状態が一致し、対応するApplyが見つからない場合は `refused` を返します。
 アプリの現在の状態と `apps history` の履歴を確認し、新しいPlanを準備してレビューします。
 この再読で終端Runを照合できた場合は、通常の観測と同じ`status`、Run自身の`code`と注意書き、`runUrl`を返します。
