@@ -227,12 +227,11 @@ export async function handleCapsules(
     };
     if (segments.length === 2) {
       if (method === "GET") {
+        const projected = await publicCapsuleWithAdoptedSourceRevision(operations, capsule);
+        const { installConfigReAdoption, displayName } = await readCapsuleConfigurationPlanContext(ctx, capsule);
         return json({
-          capsule: await publicCapsuleWithAdoptedSourceRevision(
-            operations,
-            capsule,
-          ),
-          installConfigReAdoption: await readCapsuleConfigurationPlanContext(ctx, capsule),
+          capsule: displayName ? { ...projected, displayName } : projected,
+          installConfigReAdoption,
         });
       }
       if (method === "PATCH") {

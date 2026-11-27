@@ -582,6 +582,7 @@ export interface Capsule {
   /** Owning Project, when exposed by the public Capsule projection. */
   readonly projectId?: string;
   readonly name: string;
+  readonly displayName?: ContractCapsule["displayName"];
   readonly slug: string;
   readonly sourceId?: string;
   readonly installConfigId: string;

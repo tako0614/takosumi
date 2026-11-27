@@ -65,6 +65,7 @@ import {
   type ReAdoptionReceipt,
   sealInstallConfigSuccessor,
 } from "./install-config-re-adoptions.ts";
+import { installDisplayName } from "./install-names.ts";
 import {
   type ControlDispatchContext,
   publicCapsule,
@@ -89,11 +90,14 @@ interface ConfigurationEvidenceIdentity {
   readonly planCreatedBy: string;
 }
 
-/** Value-free recovery hint for the actor who committed the current settings. */
+/** App display and the value-free recovery hint from the same configuration read. */
 export async function readCapsuleConfigurationPlanContext(
   ctx: ControlDispatchContext,
   capsule: Capsule,
-): Promise<{ readonly authorityGuard: string; readonly configurationPlanResumable?: true }> {
+): Promise<{
+  readonly installConfigReAdoption: { readonly authorityGuard: string; readonly configurationPlanResumable?: true };
+  readonly displayName?: PublicCapsule["displayName"];
+}> {
   const authority = await capsuleInstallConfigReAdoptionAuthoritySnapshot(
     ctx.operations,
     capsule.id,
@@ -104,8 +108,9 @@ export async function readCapsuleConfigurationPlanContext(
       "Capsule Workspace authority changed while issuing the configuration guard.",
     );
   }
+  const sameInstallConfig = capsule.installConfigId === authority.installConfig.id;
   let resumable = false;
-  if (capsule.installConfigId === authority.installConfig.id) {
+  if (sameInstallConfig) {
     try {
       const prepared = await currentConfigurationPreparation(ctx, authority);
       if (prepared && !(await planRunIfPresent(ctx, prepared.evidence.planRunId))) {
@@ -117,9 +122,18 @@ export async function readCapsuleConfigurationPlanContext(
       // The resume POST independently requires every authority check.
     }
   }
+  const config = authority.installConfig;
+  const displayName = sameInstallConfig && authority.capsule.id === capsule.id &&
+      authority.capsule.installConfigId === capsule.installConfigId &&
+      (config.workspaceId === undefined || config.workspaceId === capsule.workspaceId)
+    ? installDisplayName(capsule.name, config)
+    : undefined;
   return {
-    authorityGuard: authority.authorityGuard,
-    ...(resumable ? { configurationPlanResumable: true } : {}),
+    installConfigReAdoption: {
+      authorityGuard: authority.authorityGuard,
+      ...(resumable ? { configurationPlanResumable: true } : {}),
+    },
+    ...(displayName ? { displayName: { ja: displayName.ja, en: displayName.en } } : {}),
   };
 }
 
