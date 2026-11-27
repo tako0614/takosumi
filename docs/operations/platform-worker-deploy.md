@@ -413,9 +413,9 @@ checkout can add just the tool files to that source. The pinned artifact digests
 verify that its built Worker and Dashboard still match the predecessor. The
 publication checks the private binding, other vars and bindings, secret-name
 set, routes, schedules, and healthy Runner. It uploads and activates one
-immutable Worker Version and checks the serving Version again. It uses the
-existing anonymous smoke; the next scheduled invocation and its result are
-verified separately.
+immutable Worker Version and checks the serving Version again. The existing
+anonymous smoke verifies the deployment. The next scheduled invocation has
+its own runtime verification.
 
 Keep the predecessor Version to stop future scheduled revocations if needed.
 Already-revoked issuer grants remain revoked. On an incomplete release, verify
