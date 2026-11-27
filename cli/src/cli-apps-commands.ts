@@ -110,6 +110,10 @@ export async function runAppInstall(args: string[], io: CliIo): Promise<number> 
   const workspaceId = optionalStringOption(options, "workspace");
   const requestedIdempotencyKey = options.idempotencyKey;
   const resumeLegacyWorkspaceId = optionalStringOption(options, "resumeLegacyWorkspace");
+  if ([workspaceId, resumeLegacyWorkspaceId].some((id) => id === "." || id === "..")) {
+    io.stderr(isJapaneseCli() ? "有効な Workspace ID を指定してください。" : "Pass a valid Workspace ID.");
+    return 2;
+  }
   if (options.resumeLegacyWorkspace !== undefined &&
       (!resumeLegacyWorkspaceId || options.workspace !== undefined || typeof requestedIdempotencyKey !== "string")) {
     io.stderr(isJapaneseCli()
@@ -185,7 +189,7 @@ export async function runAppInstall(args: string[], io: CliIo): Promise<number> 
       legacyAttemptWorkspaceId = workspaceId;
       response = await post();
     }
-    io.stdout(formatAppInstall(response, booleanOption(options, "json")));
+    io.stdout(formatAppInstall(response, booleanOption(options, "json"), legacyAttemptWorkspaceId));
     return 0;
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
@@ -198,6 +202,10 @@ export async function runAppInstall(args: string[], io: CliIo): Promise<number> 
         io.stderr(isJapaneseCli()
           ? "旧経路の試行を復旧するには、--workspace の代わりに --resume-legacy-workspace と出力された Workspace ID を指定してください。"
           : "To recover an attempt sent to a legacy Workspace, replace --workspace with --resume-legacy-workspace and the printed Workspace ID.");
+      } else if (workspaceId) {
+        io.stderr(isJapaneseCli()
+          ? "新経路の試行として再実行するには --workspace を省略してください。"
+          : "Omit --workspace when retrying this attempt to keep the original app route.");
       }
     }
     return 1;
@@ -279,14 +287,15 @@ function formatAppsList(value: unknown, json: boolean): string {
   }).join("\n");
 }
 
-function formatAppInstall(value: unknown, json: boolean): string {
+function formatAppInstall(value: unknown, json: boolean, legacyWorkspaceId?: string): string {
   const plan = isRecord(value) && isRecord(value.installPlan) ? value.installPlan : undefined;
   const id = plan?.id;
   const phase = plan?.phase;
   if (typeof id !== "string" || /^[A-Za-z0-9_-]{1,256}$/u.exec(id)?.[0] !== id ||
       typeof phase !== "string" || !Object.hasOwn(installPlanPhases, phase) ||
       (plan?.operation !== undefined && plan.operation !== "install") ||
-      (plan?.mode !== undefined && plan.mode !== "attempt")) {
+      (plan?.mode !== undefined && plan.mode !== "attempt") ||
+      (legacyWorkspaceId !== undefined && plan?.workspaceId !== legacyWorkspaceId)) {
     throw new Error(isJapaneseCli()
       ? "接続先から有効な導入の試行を確認できませんでした。"
       : "The server did not confirm an install attempt.");

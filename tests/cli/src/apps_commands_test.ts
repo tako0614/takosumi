@@ -49,7 +49,7 @@ test("apps install preserves a user idempotency key on the legacy 404 fallback",
     const url = new URL(request.url);
     paths.push(url.pathname);
     if (paths.length === 1) return new Response("route missing", { status: 404 });
-    return Response.json({ installPlan: { id: "ip_legacy", phase: "syncing_source" } }, { status: 201 });
+    return Response.json({ installPlan: { id: "ip_legacy", phase: "syncing_source", workspaceId: "ws_legacy" } }, { status: 201 });
   }) as typeof fetch;
   try {
     expect(await main([
@@ -132,6 +132,24 @@ test("an unclassified 404 cannot move the install POST into another Workspace", 
     expect(paths).toEqual(["/api/v1/install-plans"]);
     expect(stdout).toEqual([]);
     expect(stderr.join("\n")).toContain("--idempotency-key");
+    expect(stderr.join("\n")).toContain("Omit --workspace");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("apps install cannot confirm a saved attempt from a different legacy Workspace", async () => {
+  const originalFetch = globalThis.fetch;
+  const paths: string[] = [];
+  const stdout: string[] = [];
+  globalThis.fetch = (async (input) => {
+    paths.push(new URL(String(input)).pathname);
+    return Response.json({ installPlan: { id: "ip_fixture", phase: "syncing_source", workspaceId: "ws_other" } });
+  }) as typeof fetch;
+  try {
+    expect(await main(["apps", "install", "--git", "https://git.example.test/team/app.git",
+      "--resume-legacy-workspace", "ws_legacy", "--idempotency-key", "saved-key",
+      "--url", "https://takosumi.example.test", "--token", "account-pat"], { ...quietIo, stdout: (line) => stdout.push(line) })).toBe(1);
+    expect(paths).toEqual(["/api/v1/workspaces/ws_legacy/install-plans"]);
+    expect(stdout).toEqual([]);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -151,7 +169,7 @@ test.each(["app", "legacy"])("apps install stays on the selected route when the 
       requests.push({ method: request.method, path, key: request.headers.get("idempotency-key") });
       if (path === redirectPath) return Response.redirect(new URL("/moved", request.url), 307);
       if (path === directPath) return Response.json({ error: "not_found" }, { status: 404 });
-      return Response.json({ installPlan: { id: "ip_fixture", phase: "syncing_source" } }, { status: 201 });
+      return Response.json({ installPlan: { id: "ip_fixture", phase: "syncing_source", workspaceId: "ws_legacy" } }, { status: 201 });
     },
   });
   try {
@@ -571,7 +589,7 @@ for (const envelope of ["flat", "nested", "nested-with-request-id"] as const) {
         }
         return Response.json(command === "list"
           ? { installedApps: [], complete: true }
-          : { installPlan: { id: "ip_legacy", phase: "syncing_source" } });
+          : { installPlan: { id: "ip_legacy", phase: "syncing_source", workspaceId: "ws_legacy" } });
       }) as typeof fetch;
       try {
         expect(await main(["apps", command,

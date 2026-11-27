@@ -42,7 +42,7 @@ CLI は応答に有効な導入試行 ID と状態がある場合に受付を表
 `--idempotency-key=initial=app=01` では、値全体が試行キーになります。
 既存の互換動作として、`--workspace`指定時に新routeが未提供と分かる404を返した場合だけ、同じkeyと要求を旧Workspace routeへ送ります。
 旧経路へ送信する直前には、標準エラーへ `kind: "install_attempt_legacy_workspace"` と `workspaceId` を出力します。旧経路の試行の復旧には、`--workspace` の代わりに `--resume-legacy-workspace <workspaceId>` を指定し、出力された同じ `--idempotency-key` を使ってください。サーバー更新後も、指定した旧 Workspace に直接送ります。以前の CLI で受付経路が分からない場合は、再実行前にアプリと導入試行の一覧を確認してください。
-同じ経路・キー・要求は保存済み試行を返します。同じ経路とキーで異なる要求を送ると409です。
+新経路に送った試行を再実行する場合は `--workspace` を省略します。同じ経路・キー・要求は保存済み試行を返します。同じ経路とキーで異なる要求を送ると409です。
 期限切れattemptも同じkeyでは新規に置き換えません。元attemptと現在の状態を確認し、不明なまま新keyで始め直さないでください。
 
 ## アプリのGit版更新を確認・実行する

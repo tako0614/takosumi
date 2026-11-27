@@ -116,7 +116,11 @@ test("legacy resume requires a saved key and a single explicit Workspace", async
     const io = { stdout: () => {}, stderr: () => {} };
     for (const flags of [["--resume-legacy-workspace", "ws_old"],
       ["--resume-legacy-workspace", "ws_old", "--workspace", "ws_other", "--idempotency-key", "saved"],
-      ["--resume-legacy-workspace", "--idempotency-key", "saved"]]) {
+      ["--resume-legacy-workspace", "--idempotency-key", "saved"],
+      ["--resume-legacy-workspace", ".", "--idempotency-key", "saved"],
+      ["--resume-legacy-workspace", "..", "--idempotency-key", "saved"],
+      ["--workspace", "."],
+      ["--workspace", ".."]]) {
       expect(await runAppInstall([...baseArgs, ...flags], io)).toBe(2);
     }
     expect(calls).toBe(0);
