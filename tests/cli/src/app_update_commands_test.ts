@@ -124,6 +124,7 @@ test("apps update uses the Accounts revision coordinator and stops at explicit P
     expect(await main(["apps", "update", "cap_owned", "--ref", ref, "--idempotency-key", "fixed-update-key", "--url", origin,
       "--token", "synthetic-account-pat", "--json"], { stdout: s => out.push(s), stderr() {} })).toBe(0);
     expect(calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname)).toEqual(["/api/v1/capsules/cap_owned/revision-plans"]);
+    expect(calls[0]!.redirect).toBe("error");
     expect(calls[0]!.headers.get("authorization")).toBe("Bearer synthetic-account-pat");
     expect(calls[0]!.headers.get("idempotency-key")).toBe("fixed-update-key");
     expect(await calls[0]!.json()).toEqual({ ref });
@@ -145,6 +146,7 @@ test("apps recover-uninstall creates one reviewed Destroy Plan with exact shared
     planRunId: destroyPlan.id, reviewUrl: `${origin}/runs/${destroyPlan.id}` });
   expect(r.calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname))
     .toEqual(["/api/v1/capsules/cap_owned/destroy-plan"]);
+  expect(r.calls[0]!.redirect).toBe("error");
   expect(r.calls[0]!.headers.get("authorization")).toBe("Bearer synthetic-account-pat");
   expect(await r.calls[0]!.json()).toEqual({ destroyProviderConnectionReplacements: destroyPairs });
 });
@@ -916,6 +918,7 @@ test("rollback reads the StateVersion and exact saved Plan without approval or A
   expect(r.calls.map(c => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
     "GET /api/v1/state-versions/state_target", "POST /api/v1/state-versions/state_target/rollback-plan", "GET /api/v1/runs/plan_rollback",
   ]);
+  expect(r.calls.map(c => c.redirect)).toEqual(["follow", "error", "follow"]);
   expect(r.result).toMatchObject({ status: "review_required", appId: "cap_owned", stateVersionId: rollbackTarget.id,
     planRunId: rollbackPlan.id, plan: { stateVersionId: rollbackTarget.id }, reviewUrl: `${origin}/runs/${rollbackPlan.id}` });
   expect(JSON.stringify(r.result)).not.toContain("raw-canary");
@@ -1304,6 +1307,7 @@ for (const [kind, savedPlan, accepted, args, serve] of [
       `POST /api/v1/runs/${savedPlan.id}/apply`,
       `GET /api/v1/runs/${accepted.id}`,
     ]);
+    expect(r.calls[3]!.redirect).toBe("error");
   });
 }
 
@@ -1331,8 +1335,8 @@ test("a parked Plan is approved once and reread before applying the unchanged sa
     return normal(req, { plan: approved ? plan : parked });
   });
   expect(r.code).toBe(0); expect(r.result.status).toBe("succeeded");
-  expect(r.calls.filter(c => c.method === "POST").map(c => new URL(c.url).pathname)).toEqual([
-    `/api/v1/runs/${plan.id}/approve`, `/api/v1/runs/${plan.id}/apply`,
+  expect(r.calls.filter(c => c.method === "POST").map(c => [new URL(c.url).pathname, c.redirect])).toEqual([
+    [`/api/v1/runs/${plan.id}/approve`, "error"], [`/api/v1/runs/${plan.id}/apply`, "error"],
   ]);
 });
 
@@ -1382,6 +1386,7 @@ test("apps update resumes the exact existing coordinator without another create"
   expect(result.calls.map(request => [request.method, new URL(request.url).pathname])).toEqual([
     ["GET", revisionPath], ["POST", `${revisionPath}/reconcile`], ["GET", revisionRunPath],
   ]);
+  expect(result.calls[1]!.redirect).toBe("error");
   expect(result.calls.every(request => !request.headers.has("idempotency-key"))).toBe(true);
 });
 
