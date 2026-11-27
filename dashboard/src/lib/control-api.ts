@@ -3233,48 +3233,61 @@ export function openRunStream(
   return () => source.close();
 }
 
-export async function approveRun(
-  plan: Run,
-  input: { readonly reason?: string; readonly isCurrent?: () => boolean } = {},
+async function postRunDecision(
+  id: string,
+  action: "approve" | "cancel",
+  scope: Pick<RequestOpts, "isCurrent">,
+  matches: (observed: Run | undefined) => observed is Run,
+  body?: { readonly reason?: string },
 ): Promise<Run> {
-  const matchesApprovedPlan = (observed: Run | undefined): observed is Run =>
-    observed?.id === plan.id && observed.type === plan.type &&
-    observed.workspaceId === plan.workspaceId && observed.capsuleId === plan.capsuleId &&
-    observed.planDigest === plan.planDigest &&
-    observed.baseStateGeneration === plan.baseStateGeneration &&
-    observed.status === "succeeded";
-  const scope = { isCurrent: input.isCurrent };
+  const label = action === "approve" ? "Plan approval" : "Run cancellation";
   let dispatched = false;
   let responseStatus: number | undefined;
   try {
-    const body = await withControlDeadline("Plan approval", scope, (requestScope) => controlFetch<{ run: Run }>(
-      `${BASE}/runs/${encodeURIComponent(plan.id)}/approve`,
+    const result = await withControlDeadline(label, scope, (requestScope) => controlFetch<{ run: Run }>(
+      `${BASE}/runs/${encodeURIComponent(id)}/${action}`,
       {
         ...requestScope,
         method: "POST",
-        body: input.reason ? { reason: input.reason } : {},
+        body,
         beforeDispatch: () => { dispatched = true; },
         onResponseStatus: (status) => { responseStatus = status; },
       },
     ));
     throwIfReadRetired(scope);
-    if (matchesApprovedPlan(body?.run)) return body.run;
-    throw new ControlApiError(502, "invalid_plan_approval_response", "The approval response did not match this Plan.");
+    if (matches(result?.run)) return result.run;
+    throw action === "approve"
+      ? new ControlApiError(502, "invalid_plan_approval_response", "The approval response did not match this Plan.")
+      : new ControlApiError(502, "invalid_run_cancellation_response", "The cancellation response did not match this Run.");
   } catch (failure) {
     throwIfReadRetired(scope);
     if (responseStatus !== undefined && responseStatus >= 400 && responseStatus < 500 &&
       failure instanceof ControlApiError && failure.code === "request_timeout") {
-      // A stalled error body cannot turn a received refusal into an uncertain approval.
+      // Preserve the received HTTP status when decoding its body times out.
       throw new ControlApiError(responseStatus, undefined, `HTTP ${responseStatus}`, undefined, true);
     }
     if (!dispatched || !isMutationOutcomeUnknown(failure)) throw failure;
-    // The approval may have committed before the response was lost. Recover
-    // only from this Plan's authoritative readback, without another POST.
-    const observed = await getRun(plan.id, { ...scope, cache: "no-store" });
+    // An uncertain POST is settled by a fresh read of the original Run.
+    const observed = await getRun(id, { ...scope, cache: "no-store" });
     throwIfReadRetired(scope);
-    if (matchesApprovedPlan(observed)) return observed;
+    if (matches(observed)) return observed;
     throw failure;
   }
+}
+
+export async function approveRun(
+  plan: Run,
+  input: { readonly reason?: string; readonly isCurrent?: () => boolean } = {},
+): Promise<Run> {
+  return await postRunDecision(plan.id, "approve", { isCurrent: input.isCurrent },
+    (observed): observed is Run =>
+      observed?.id === plan.id && observed.type === plan.type &&
+      observed.workspaceId === plan.workspaceId && observed.capsuleId === plan.capsuleId &&
+      observed.planDigest === plan.planDigest &&
+      observed.baseStateGeneration === plan.baseStateGeneration &&
+      observed.status === "succeeded",
+    input.reason ? { reason: input.reason } : {},
+  );
 }
 
 export async function getRunLogs(
@@ -3369,30 +3382,11 @@ export async function cancelRun(
   run: Run,
   scope: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<Run> {
-  const matchesCancelledRun = (observed: Run | undefined): observed is Run =>
+  return await postRunDecision(run.id, "cancel", scope, (observed): observed is Run =>
     observed?.id === run.id && observed.type === run.type &&
     observed.workspaceId === run.workspaceId && observed.capsuleId === run.capsuleId &&
-    observed.status === "cancelled";
-  try {
-    const body = await controlFetch<{ run: Run }>(
-      `${BASE}/runs/${encodeURIComponent(run.id)}/cancel`,
-      { ...scope, method: "POST" },
-    );
-    throwIfReadRetired(scope);
-    if (matchesCancelledRun(body?.run)) return body.run;
-    throw new ControlApiError(502, "invalid_run_cancellation_response", "The cancellation response did not match this Run.");
-  } catch (failure) {
-    const outcomeUnknown = failure instanceof ControlApiError
-      ? failure.status >= 500
-      : failure instanceof TypeError;
-    if (!outcomeUnknown) throw failure;
-    // A transport failure may follow a committed cancellation.
-    throwIfReadRetired(scope);
-    const observed = await getRun(run.id, { ...scope, cache: "no-store" });
-    throwIfReadRetired(scope);
-    if (matchesCancelledRun(observed)) return observed;
-    throw failure;
-  }
+    observed.status === "cancelled",
+  );
 }
 
 // --- StateVersions ---------------------------------------------------------
