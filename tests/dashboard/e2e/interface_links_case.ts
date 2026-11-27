@@ -277,6 +277,112 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       traffic.assertNoFailures();
     });
 
+    test("leaving the app closes its link approval without a write", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const fixture = await appFixture(page, [], [link("files", {
+        linkId: "il_retired_approval", consumerCapsuleId: "cap_reader", providerCapsuleId: ID,
+        state: "pending_approval", generation: 3, canApprove: true, providerInterfaceId: "if_app_files",
+        otherApp: { capsuleId: "cap_reader", name: "Reader" },
+      })]);
+      await page.goto(`/apps/${ID}#links`);
+      await page.getByTestId("app-linked").getByRole("button", { name: /Approve link with Reader/u }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.evaluate(() => {
+        history.pushState(null, "", "/account");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
+      await expect(page).toHaveURL(/\/account$/u);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByRole("heading", { level: 1, name: "Account" })).toBeVisible();
+      expect(fixture.mutations).toEqual([]);
+    });
+
+    test("a late link candidate response cannot redirect the next page", async ({ page }) => {
+      const path = `/api/v1/capsules/${ID}/interface-links/files/candidates`;
+      await page.addInitScript((oldPath) => {
+        localStorage.setItem("tg_lang", "en");
+        const fetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+          const response = await fetch(...args);
+          if (response.status === 401 && new URL(response.url).pathname === oldPath) {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              document.documentElement.dataset.linkCandidatesSettled = "true";
+            }));
+          }
+          return response;
+        };
+      }, path);
+      const fixture = await appFixture(page, [link("files")]);
+      let requested = false;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      await page.route(`**${path}`, async (route) => {
+        requested = true;
+        await held;
+        return route.fulfill({ status: 401, json: { error: "unauthenticated" } });
+      });
+      try {
+        await page.goto(`/apps/${ID}#links`);
+        await page.getByTestId("app-linked").getByRole("button", { name: /Choose a linked app/u }).click();
+        await expect.poll(() => requested).toBe(true);
+        await page.evaluate(() => {
+          history.pushState(null, "", "/account");
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        });
+        const account = page.getByRole("heading", { level: 1, name: "Account" });
+        await expect(account).toBeVisible();
+        const settled = Promise.race([
+          page.waitForRequest((request) => request.isNavigationRequest() &&
+            new URL(request.url()).pathname === "/sign-in").then(() => "redirected"),
+          page.waitForFunction(() => document.documentElement.dataset.linkCandidatesSettled === "true").then(() => "stayed"),
+        ]);
+        release();
+        expect(await settled).toBe("stayed");
+        await expect(account).toBeVisible();
+        expect(fixture.mutations).toEqual([]);
+      } finally {
+        release();
+      }
+    });
+
+    test("an approval already sent refreshes the same app after leaving the links pane", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const linkId = "il_in_flight";
+      const fixture = await appFixture(page, [], [link("files", {
+        linkId, consumerCapsuleId: "cap_reader", providerCapsuleId: ID, state: "pending_approval",
+        generation: 3, canApprove: true, providerInterfaceId: "if_app_files",
+        otherApp: { capsuleId: "cap_reader", name: "Reader" },
+      })]);
+      const path = `/api/v1/capsules/${ID}/interface-links/${linkId}/approve`;
+      let dispatched = false;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      await page.route(`**${path}`, async (route) => {
+        dispatched = true;
+        await held;
+        return route.fallback();
+      });
+      try {
+        await page.goto(`/apps/${ID}#links`);
+        await page.getByTestId("app-linked").getByRole("button", { name: /Approve link with Reader/u }).click();
+        await page.getByRole("dialog").getByRole("button", { name: "Approve", exact: true }).click();
+        await expect.poll(() => dispatched).toBe(true);
+        await page.getByTestId("app-section-back").click();
+        await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-section", "overview");
+        const readback = page.waitForResponse((response) => response.request().method() === "GET" &&
+          new URL(response.url()).pathname === `/api/v1/capsules/${ID}/app`);
+        release();
+        expect((await readback).ok()).toBe(true);
+        await page.getByTestId("app-management").locator('[data-app-section-link="links"]').click();
+        const row = page.getByTestId("app-link-used-by").filter({ hasText: "Reader" });
+        await expect(row.getByRole("button", { name: /Revoke link with Reader/u })).toBeVisible();
+        await expect(row.getByRole("button", { name: /Approve link with Reader/u })).toHaveCount(0);
+        expect(fixture.mutations).toEqual([{ method: "POST", path, body: { expectedGeneration: 3 } }]);
+      } finally {
+        release();
+      }
+    });
+
     test("app page shows both directions, changes, selects and revokes links with removal impact", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       const errors = watchErrors(page);

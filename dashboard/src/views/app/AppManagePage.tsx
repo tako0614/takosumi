@@ -2095,8 +2095,10 @@ export default function AppManagePage(props: {
                   review={reviewPanel("settings")}
                 />
               </Show>
-              <Show when={managed() && sectionVisited("links")}>
-                <AppLinkedSection app={view()} onChanged={async () => { await refetchApp(); }} />
+              <Show when={managed() && sectionVisited("links") &&
+                JSON.stringify([capsuleId(), props.accountId, props.principalId])} keyed>
+                <AppLinkedSection app={view()} active={activeSection() === "links"}
+                  onChanged={async (scope) => { await refetchApp({ ...scope, cache: "no-store" }); }} />
               </Show>
               <Show when={managed() && resourcesVisited()}>
                 <AppCreatedSection

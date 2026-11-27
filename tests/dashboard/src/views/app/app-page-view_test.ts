@@ -68,7 +68,7 @@ describe("installed app page", () => {
 
   test("the provider decides pending links in place and the consumer sees whose approval it waits for", () => {
     expect(linked).toContain('row.canApprove === true');
-    expect(linked).toContain('decideInterfaceLink(props.app.capsuleId, row.linkId, decision, row.generation)');
+    expect(linked).toContain('decideInterfaceLink(providerCapsuleId, linkId, decision, row.generation, scope)');
     expect(linked).toContain('t("app.links.approve")');
     expect(linked).toContain('t("app.links.decline")');
     expect(linked).toContain('t("app.links.waitingFor", { name: name(row) })');

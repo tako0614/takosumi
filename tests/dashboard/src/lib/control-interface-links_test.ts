@@ -64,4 +64,16 @@ describe("app Interface link control client", () => {
     await expect(setInterfaceLink("cap_consumer", "files", { interfaceId: "if_b", expectedGeneration: 7 })).rejects.toMatchObject({ status: 409, code: "conflict" });
     expect(calls).toBe(1);
   });
+
+  test("retired link operations do not reach transport", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls += 1; return Response.json({}); }) as typeof fetch;
+    const retired = { isCurrent: () => false };
+    await expect(getInterfaceLinkCandidates("cap_consumer", "files", retired)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(setInterfaceLink("cap_consumer", "files", { interfaceId: "if_b", expectedGeneration: 7 }, retired))
+      .rejects.toMatchObject({ name: "AbortError" });
+    await expect(revokeInterfaceLink("cap_consumer", "files", 8, retired)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(decideInterfaceLink("cap_provider", "il_a", "approve", 8, retired)).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toBe(0);
+  });
 });
