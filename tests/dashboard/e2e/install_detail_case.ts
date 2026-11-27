@@ -320,12 +320,16 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
     for (const entry of ["Git", "Store", "Git with a refused replay"] as const) {
       test(`reopening the same ${entry} install after a lost creation response resumes the original attempt`, async ({ page }) => {
-        const f = await detailFixture(page, base);
+        const originalStoreModule = "deploy/original";
+        const f = await detailFixture(page, base, false, false, "not_applicable", entry === "Store"
+          ? { modules: [{ path: originalStoreModule, providers: [] }] }
+          : {});
         const git = "https://github.com/example/cloudflare-service.git";
         const store = "https://store.example.test";
         const newCommit = "a".repeat(40);
         let url = sourceUrl;
         let resolutions = 0;
+        let changedListing = false;
         const refusedReplay = entry === "Git with a refused replay";
         if (entry === "Git") {
           // A supported HTTP LAN origin has storage but no subtle crypto.
@@ -348,8 +352,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         if (entry === "Store") {
           url = `/new?tcsBase=${encodeURIComponent(store)}&tcsListing=tako%2Fservice`;
           await page.route(`${store}/**`, (route) => route.fulfill({ json: {
-            id: "tako/service", source: { git, path: "." }, suggestedName: "cloudflare-service",
-            name: { en: "Store Service" }, createdAt: now, updatedAt: now,
+            id: "tako/service", source: { git, path: changedListing ? "deploy/replacement" : originalStoreModule },
+            provider: changedListing ? "aws" : "cloudflare", suggestedName: "cloudflare-service",
+            name: { en: changedListing ? "Updated Store Service" : "Store Service" }, createdAt: now, updatedAt: now,
           } }));
           await page.route(
             (url) => url.pathname === "/api/v1/source-ref-resolutions" || url.pathname.endsWith("/source-ref-resolutions/stable-semver"),
@@ -395,7 +400,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
           await refused;
           await expect(installButton).toBeEnabled();
         }
-        await page.reload();
+        await page.reload({ waitUntil: "domcontentloaded" });
         await expect(installButton).toBeEnabled();
         const submissions = refusedReplay ? 3 : 2;
         expect(keys).toHaveLength(submissions - 1);
@@ -406,6 +411,22 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         expect(resolutions).toBe(entry === "Store" ? 1 : 0);
         await expect(page).toHaveURL(new RegExp(`installPlan=${acceptedIds[0]}`, "u"));
         expect(f.mutations).not.toContain(applyMutation);
+        if (entry === "Store") {
+          await page.getByText("Source and version", { exact: true }).click();
+          await expect(page.getByTestId("install-provenance")).toContainText(`v1.0.0 · ${sourceCommit.slice(0, 7)}`);
+
+          changedListing = true;
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await expect(page.getByRole("heading", { name: "Updated Store Service" })).toBeVisible();
+          await expect(installSheet(page)).toBeVisible();
+          await page.getByText("Source and version", { exact: true }).click();
+          const provenance = page.getByTestId("install-provenance");
+          await expect(provenance).toContainText(`Module path ${originalStoreModule}`);
+          await expect(provenance).not.toContainText(/deploy\/replacement|Store connection hint|AWS/u);
+          expect(keys).toHaveLength(submissions);
+          expect(resolutions).toBe(1);
+          changedListing = false;
+        }
 
         await page.goto(url);
         await openInstallSheet(page);
@@ -421,6 +442,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const listing = {
         id: "tako/service",
         source: { git: "https://github.com/example/store-service.git", path: "deploy/service" },
+        provider: "cloudflare",
         suggestedName: "store-service",
         name: { ja: "ストアサービス", en: "Store Service" },
         description: { ja: "サービスの説明", en: "About this service" },
@@ -433,6 +455,13 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         updatedAt: now,
       };
       const storeRequests: string[] = [];
+      const installRequests: string[] = [];
+      page.on("request", (request) => {
+        const { pathname } = new URL(request.url());
+        if (request.method() === "POST" || pathname.includes("/source-ref-resolutions")) {
+          installRequests.push(`${request.method()} ${pathname}`);
+        }
+      });
       await page.route(`${store}/**`, async (route) => {
         const url = new URL(route.request().url());
         storeRequests.push(`${route.request().method()} ${url.pathname}`);
@@ -444,6 +473,12 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         }
         if (url.pathname.endsWith("/media/screen.svg")) {
           return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="white"/></svg>' });
+        }
+        if (url.pathname.endsWith("/minimal")) {
+          return route.fulfill({ json: {
+            id: "tako/minimal", source: { git: "https://github.com/example/minimal.git" },
+            suggestedName: "minimal", name: { en: "Minimal Store Service" }, createdAt: now, updatedAt: now,
+          } });
         }
         return route.fulfill({ json: listing });
       });
@@ -465,6 +500,46 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByText("A reviewer")).toBeVisible();
       await expect(page.getByText("A useful service.")).toBeVisible();
       expect(storeRequests).toContain("GET /tcs/v2/listings/tako/service/reviews");
+
+      const provenance = page.getByTestId("install-provenance");
+      const openProvenance = () => page.getByText("Source and version", { exact: true }).click();
+      await openProvenance();
+      await expect(provenance).toContainText("github.com/example/store-service");
+      await expect(provenance).toContainText("Module path deploy/service");
+      await expect(provenance).not.toContainText("Source path");
+      await expect(provenance).toContainText("Store connection hint Cloudflare");
+      await expect(provenance).toContainText("Latest selects the newest stable tag and its commit when you start installation.");
+
+      const versions = page.getByTestId("install-source-fields");
+      const versionInput = versions.locator("input");
+      await versions.locator("summary").click();
+      await expect(versionInput).toHaveAttribute("id", "install-source-ref");
+      await expect(versionInput).toHaveAttribute("name", "ref");
+      await expect(versions.getByRole("button", { name: "Latest", exact: true })).toHaveAttribute("aria-pressed", "true");
+      await versions.getByRole("button", { name: "Development preview", exact: true }).click();
+      await expect(versionInput).toHaveValue("HEAD");
+      await expect(provenance).toContainText("HEAD");
+      await expect(provenance).not.toContainText("newest stable tag");
+      await versionInput.fill("v2.5.2");
+      await expect(provenance).toContainText("v2.5.2");
+      await versions.getByRole("button", { name: "Latest", exact: true }).click();
+      await expect(versionInput).toHaveValue("");
+
+      await page.goto(`/new?tcsBase=${encodeURIComponent(store)}&tcsListing=tako%2Fminimal`);
+      await expect(page.getByRole("heading", { name: "Minimal Store Service" })).toBeVisible();
+      await openProvenance();
+      await expect(provenance).not.toContainText(/Module path|Source path|Store connection hint/u);
+
+      const gitUrl = new URL(sourceUrl, "http://fixture.example.test");
+      gitUrl.searchParams.set("sourcePath", "apps/service");
+      gitUrl.searchParams.set("path", "deploy/live");
+      await page.goto(`${gitUrl.pathname}${gitUrl.search}`);
+      await openProvenance();
+      await expect(provenance).toContainText("Source path apps/service");
+      await expect(provenance).toContainText("Module path deploy/live");
+      await expect(provenance).toContainText(sourceCommit.slice(0, 7));
+      await expect(provenance).not.toContainText(/Store connection hint|newest stable tag/u);
+      expect(installRequests).toEqual([]);
       expect(f.mutations).toEqual([]);
     });
 

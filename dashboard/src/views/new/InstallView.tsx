@@ -22,6 +22,7 @@ import AppFace from "../../components/AppFace.tsx";
 import { Button, FormField, Input, Select, Spinner } from "../../components/ui/index.ts";
 import { StoreBrowser, type StoreCatalogCache } from "../store/StoreBrowser.tsx";
 import { StoreGallery, StoreOfferDetails, StoreRating } from "../store/StoreListingDetails.tsx";
+import { tcsProviderLabel } from "../store/store-labels.ts";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { listConnections, listInstalledApps } from "../../lib/control-api.ts";
@@ -110,7 +111,9 @@ async function readListing(handoff: StoreHandoff, expectedGit?: string): Promise
     const listing = await fetchTcsListing(handoff.base, handoff.listingId, AbortSignal.timeout(8000));
     if (!listing || listing.id !== handoff.listingId ||
       !matchesStoreRepository(listing, expectedGit ?? picked?.source.url)) return null;
-    return { ...listing, source: picked?.source ?? listing.source, primaryServer: handoff.base };
+    const source = picked?.source ?? listing.source;
+    const provider = source.path === listing.source.path ? listing.provider : picked?.provider;
+    return { ...listing, source, provider, primaryServer: handoff.base };
   } catch (error) {
     if (picked) return picked;
     throw error;
@@ -392,8 +395,22 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     const publisher = listed()?.publisher;
     return publisher?.displayName?.trim() || publisher?.handle?.trim();
   };
+  const provenancePlan = () => sourceMismatch() ? undefined : plan();
+  const provenanceSourcePath = () => {
+    const path = provenancePlan()?.source.path ?? prefill()?.sourcePath;
+    return path === "." ? undefined : path;
+  };
+  const provenanceModulePath = () => {
+    const current = provenancePlan();
+    return current ? current.options.modulePath : listed()?.source.path ?? prefill()?.path;
+  };
+  const listingProvider = () => {
+    if (attemptId() || attempt.view().stage !== "candidate") return undefined;
+    const provider = listed()?.provider;
+    return typeof provider === "string" && provider.trim() ? tcsProviderLabel(provider) : undefined;
+  };
   const version = () => {
-    const current = sourceMismatch() ? undefined : plan();
+    const current = provenancePlan();
     if (!current) return versionLabel(ref()) ?? (ref() === "HEAD" ? "HEAD" : undefined);
     const resolved = attempt.resolvedVersion();
     return resolved && resolved.commit === current.source.ref
@@ -606,9 +623,11 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
                       </Show>
                       <FormField
                         label={t("installStore.sourceRef")}
-                        hint={fromStore() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
+                        hint={fromStore() ? t("installStore.latestAtStart") : t("installStore.sourceRefHint")}
                       >
                         <Input
+                          id="install-source-ref"
+                          name="ref"
                           value={ref()}
                           placeholder={fromStore() ? t("installStore.sourceRefStable") : undefined}
                           spellcheck={false}
@@ -706,10 +725,24 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
         <Show when={gitUrl()}>
           <details class="iv-app-about">
             <summary>{t("installStore.provenance")}<ChevronDown size={16} aria-hidden="true" /></summary>
-            <p class="iv-provenance" data-testid="install-provenance">
-              <code>{repositoryLabel(gitUrl())}</code>
-              <Show when={version()}>{(text) => <> · <code>{text()}</code></>}</Show>
-            </p>
+            <div data-testid="install-provenance">
+              <p class="iv-provenance">
+                <code>{repositoryLabel(gitUrl())}</code>
+                <Show when={version()}>{(text) => <> · <code>{text()}</code></>}</Show>
+              </p>
+              <Show when={provenanceSourcePath()}>
+                {(path) => <p class="iv-provenance">{t("installStore.provenanceSourcePath")} <code>{path()}</code></p>}
+              </Show>
+              <Show when={provenanceModulePath()}>
+                {(path) => <p class="iv-provenance">{t("installStore.provenanceModulePath")} <code>{path()}</code></p>}
+              </Show>
+              <Show when={listingProvider()}>
+                {(provider) => <p class="iv-provenance">{t("installStore.provenanceStoreProvider")} <span>{provider()}</span></p>}
+              </Show>
+              <Show when={fromStore() && !ref().trim() && !provenancePlan()}>
+                <p class="iv-provenance">{t("installStore.latestAtStart")}</p>
+              </Show>
+            </div>
           </details>
         </Show>
       </article>
