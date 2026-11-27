@@ -827,12 +827,14 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           await expect.poll(() => typeof releaseCurrentState).toBe("function");
           try {
             await expect(allow).toHaveCount(0);
-            // A stuck app state read cannot strand a current Plan. Core still checks it on submission.
-            await expect(allow).toBeEnabled();
+            await expect(summary).toContainText("We couldn't check whether this change can still be applied.");
+            await expect(allow).toHaveCount(0);
           } finally {
             holdCurrentState = false;
             releaseCurrentState?.();
           }
+          await page.getByRole("button", { name: "Retry", exact: true }).click();
+          await expect(allow).toBeEnabled();
           expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
           await page.unroute("**/api/v1/**");
           continue;
@@ -1071,18 +1073,23 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       ["destroy_apply", "a completed shared Destroy offers one app return without Open"],
       ["plan", "a completed shared Plan retains a fresh approval history read"],
       ["waiting_approval", "a shared Plan awaiting approval retries current state before withholding stale approval"],
+      ["approval_read_failed", "a guarded Plan recovers an unavailable state read before approval"],
+      ["apply_read_failed", "a guarded Plan recovers an unavailable state read before Apply"],
     ] as const) {
       test(title, async ({ page }) => {
         await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         const capsuleId = "cap_partial_run";
-        const waiting = scenario === "waiting_approval";
+        const guardedWaiting = scenario === "waiting_approval";
+        const waiting = guardedWaiting || scenario === "approval_read_failed";
+        const reviewReadFailed = scenario === "approval_read_failed" || scenario === "apply_read_failed";
         const removed = scenario === "removed_apply";
         const unavailable = scenario === "unavailable_apply";
         const historical = scenario === "superseded_apply" || removed || unavailable;
-        const runType = waiting ? "plan" : historical || scenario === "apply_without_open" ? "apply" : scenario;
+        const runType = waiting || reviewReadFailed ? "plan" : historical || scenario === "apply_without_open" ? "apply" : scenario;
         let capsuleUnavailable = unavailable;
+        let reviewRead: "unavailable" | "wrong_workspace" | "current" = "unavailable";
         if (historical) await page.clock.install();
         const rawName = "app-11111111-1111-4111-8111-111111111111";
         const displayName = scenario === "apply"
@@ -1133,10 +1140,10 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         }));
         await page.route(`**${health}`, async (route) => {
           healthReads++;
-          if (waiting && healthReads === 1) {
+          if (guardedWaiting && healthReads === 1) {
             return route.fulfill({ status: 503, json: { error: { code: "oidc_unavailable" } } });
           }
-          if (waiting) await finishHealth.promise;
+          if (guardedWaiting) await finishHealth.promise;
           return route.fulfill({ json: { authenticated: true } });
         });
         let partial = true;
@@ -1157,8 +1164,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           if (path === `/api/v1/runs/${runId}`) return route.fulfill({ headers, json: { run: {
             id: runId, workspaceId: "ws_alpha", capsuleId, type: runType, status: waiting ? "waiting_approval" : "succeeded",
             ...(runType === "plan" ? { policyStatus: "pass", summary: { add: 1, change: 0, destroy: 0 } } : {}),
-            ...(waiting ? { applyExpected: {
-              planId: runId, capsuleId, currentStateVersionId: "sv_before_another_apply",
+            ...(guardedWaiting || reviewReadFailed ? { applyExpected: {
+              planId: runId, capsuleId, currentStateVersionId: guardedWaiting ? "sv_before_another_apply" : stateId,
               runnerId: "opentofu-default", sourceDigest: "sha256:source", variablesDigest: "sha256:variables",
               policyDecisionDigest: "sha256:policy", planDigest: "sha256:plan", planArtifactDigest: "sha256:artifact",
             } } : {}),
@@ -1170,13 +1177,16 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             runId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [],
           } } });
           if (path === `/api/v1/capsules/${capsuleId}`) {
-            if (capsuleUnavailable) return route.fulfill({ status: 503, json: { error: "fixture_unavailable" } });
-            if (waiting && request.headers()[marker] === "1") {
+            if (capsuleUnavailable || (reviewReadFailed && reviewRead === "unavailable")) {
+              return route.fulfill({ status: 503, json: { error: "fixture_unavailable" } });
+            }
+            if (guardedWaiting && request.headers()[marker] === "1") {
               guardedCapsule = true;
               return route.fulfill({ status: 503, json: { error: "authentication_unavailable" } });
             }
             return route.fulfill({ headers, json: { capsule: {
-              id: capsuleId, workspaceId: "ws_alpha", name: rawName, slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production",
+              id: capsuleId, workspaceId: reviewRead === "wrong_workspace" ? "ws_other" : "ws_alpha",
+              name: rawName, slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production",
               ...(displayName ? { displayName } : {}),
               status: removed || runType === "destroy_apply" ? "destroyed" : "active",
               currentStateGeneration: waiting || historical ? 2 : 1,
@@ -1225,7 +1235,27 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             .then((response) => response.finished())
           : undefined;
         await page.goto(`/runs/${runId}`, { waitUntil: "domcontentloaded" });
-        if (waiting) {
+        if (reviewReadFailed) {
+          const action = page.getByRole("button", { name: waiting ? "Approve this change" : "Allow and apply", exact: true });
+          const notice = page.getByText("We couldn't check whether this change can still be applied. Try again.", { exact: true });
+          const retry = page.getByRole("button", { name: "Retry", exact: true });
+          const capsulePath = `/api/v1/capsules/${capsuleId}`;
+          await expect(notice).toBeVisible();
+          await expect(action).toHaveCount(0);
+          reviewRead = "wrong_workspace";
+          await retry.click();
+          await expect.poll(() => requests.filter(({ path }) => path === capsulePath).length).toBe(2);
+          await expect(notice).toBeVisible();
+          await expect(action).toHaveCount(0);
+          reviewRead = "current";
+          await retry.click();
+          await expect(action).toBeEnabled();
+          await expect(notice).toHaveCount(0);
+          expect(mutations).toEqual([]);
+          expect(errors).toEqual([]);
+          return;
+        }
+        if (guardedWaiting) {
           const approval = page.getByRole("button", { name: "Approve this change", exact: true });
           const capsulePath = `/api/v1/capsules/${capsuleId}`;
           try {
