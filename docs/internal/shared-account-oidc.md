@@ -142,7 +142,8 @@ Each choice contains `id`, `handle`, `displayName`, `type`, current `roles` and
 owner field cannot override suspended/deleted membership. Menu reads do not
 create Workspaces or repair memberships. Billing lookup checks membership and
 the same current grant again after awaiting the owner port. With
-`projection=entry-v1`, the same final authorized choice supplies `displayName`.
+`projection=entry-v1`, the same final authorized choice supplies `displayName`
+after Accounts rechecks the grant following the final Workspace and membership read.
 The projection must be the sole query parameter. Missing directory or billing
 capability returns 503. Pending or ambiguous bindings fail closed.
 

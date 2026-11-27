@@ -404,7 +404,7 @@ async function directoryFixture(workspaceMutationsFrozen?: boolean) {
   function request(path:string,token:string,method="GET",body?:unknown) {
     return handler(new Request(`${issuer}/api/v1/account/shared-workspaces${path}`,{method,headers:{authorization:`Bearer ${token}`,...(body!==undefined?{"content-type":"application/json"}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})}));
   }
-  return {...f,control,handler,request,entered,billingRelease,pause:()=>{pauseBilling=true;}};
+  return {...f,control,operations,handler,request,entered,billingRelease,pause:()=>{pauseBilling=true;}};
 }
 
 test("dedicated first-party directory Bearer yields the same canonical account/Workspace for both RPs",async()=>{
@@ -475,6 +475,41 @@ test("billing entry projection refuses membership lost while resolving the billi
   expect(rejected.status).toBe(403);
   expect(await rejected.json()).toEqual({
     error: { code: "forbidden", message: "Current Workspace membership is required.", requestId: expect.any(String) },
+  });
+});
+
+test("billing entry projection rejects a grant revoked during the final membership read", async () => {
+  const f = await directoryFixture();
+  const grant = await f.grant();
+  const bootstrap = await f.request("/bootstrap", grant.access_token, "POST", {});
+  const { workspace } = await bootstrap.json() as { workspace: { id: string } };
+  const getMember = f.operations.members.getMember!;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let memberReads = 0;
+  f.operations.members.getMember = async (workspaceId, accountId) => {
+    const member = await getMember(workspaceId, accountId);
+    if (++memberReads === 2) {
+      entered.resolve();
+      await release.promise;
+    }
+    return member;
+  };
+
+  const pending = f.request(`/${workspace.id}/billing-organization?projection=entry-v1`, grant.access_token);
+  try {
+    await Promise.race([
+      entered.promise,
+      pending.then((response) => { throw new Error(`Expected final membership read, received ${response.status}`); }),
+    ]);
+    await f.store.revokeHostedOidcGrant!(claims(grant.id_token).sid as string, Date.now());
+  } finally {
+    release.resolve();
+  }
+  const response = await pending;
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual({
+    error: { code: "invalid_session", message: "A current canonical account session is required.", requestId: expect.any(String) },
   });
 });
 

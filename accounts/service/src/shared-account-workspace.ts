@@ -311,7 +311,9 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       // before that wait survives a concurrent membership revocation or merge.
       const workspace = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
         await canonicalAccount(session);
-        return authorized(account.subject, workspaceId);
+        const current = await authorized(account.subject, workspaceId);
+        if (projection === "entry-v1") await canonicalAccount(session);
+        return current;
       });
       const scope = { workspaceId, workspaceRef: binding.workspaceRef, organizationId: binding.organizationId };
       return projection === "entry-v1" ? { ...scope, displayName: workspace.displayName } : scope;
