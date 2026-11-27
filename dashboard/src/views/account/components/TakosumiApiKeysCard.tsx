@@ -34,6 +34,8 @@ import RelativeTime from "./RelativeTime.tsx";
 import { fetchFailedMessage, friendlyError } from "../../../lib/error-copy.ts";
 import { latestOrUndefined } from "../../../lib/resource-read.ts";
 import { formatDate, formatDateTime, locale, t } from "../../../i18n/index.ts";
+import { ApiError } from "../lib/http.ts";
+import { currentSessionCheck } from "../lib/session.ts";
 import {
   createTakosumiApiKey,
   listTakosumiApiKeys,
@@ -126,14 +128,29 @@ export default function TakosumiApiKeysCard() {
 
   const revoke = async (tokenId: string) => {
     if (busy()) return;
+    const sessionIsCurrent = currentSessionCheck();
     setBusy(true);
     setError(undefined);
     try {
-      await revokeTakosumiApiKey(tokenId);
+      const failure = await revokeTakosumiApiKey(tokenId).then(
+        () => undefined,
+        (cause: unknown) => ({ cause }),
+      );
+      if (!sessionIsCurrent()) return;
+      if (failure?.cause instanceof ApiError && failure.cause.status < 500) {
+        throw failure.cause;
+      }
+      if (!failure) setConfirmingRevoke(undefined);
+      // A lost response can follow a committed revocation. Read the same
+      // key's status without submitting the revocation again.
+      const refreshed = await refetch();
+      if (!sessionIsCurrent() || !failure) return;
+      if (!refreshed?.some((key) => key.id === tokenId && key.revoked_at)) {
+        throw failure.cause;
+      }
       setConfirmingRevoke(undefined);
-      await refetch();
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      if (sessionIsCurrent()) setError(friendlyError(cause, t).message);
     } finally {
       setBusy(false);
     }
