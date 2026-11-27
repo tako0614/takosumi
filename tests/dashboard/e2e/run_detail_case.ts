@@ -853,6 +853,22 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const runType = scenario === "waiting_approval" ? "plan" : scenario === "apply_without_open" ? "apply" : scenario;
         const waiting = scenario === "waiting_approval";
         const runId = `${scenario}_partial_run`;
+        const planTimings = {
+          preClaimPreparationMs: 2, claimMs: 3, resolveRunEnvironmentMs: 8,
+          providerBindingResolutionMs: 1, credentialMintMs: 0, brokerBindingResolutionMs: 0,
+          brokerPrePolicyMs: 0, brokerRuntimeInputsMs: 0, vaultMintMs: 0,
+          credentialValidationMs: 0.25, postMintPolicyAuditMs: 0, dispatchPreparationMs: 3,
+          renewalOutsideRunnerMs: 6, runnerPlanMs: 81,
+        };
+        const planTimingDiagnostic = {
+          severity: "info", code: "core_plan_elapsed_timings", message: "core Plan elapsed timings (ms)",
+        };
+        const unexpectedCredential = "synthetic-private-field-value";
+        const diagnostics = scenario === "plan" ? [
+          { ...planTimingDiagnostic, detail: JSON.stringify(planTimings) },
+          { ...planTimingDiagnostic, detail: JSON.stringify({ ...planTimings, credentialMintMs: unexpectedCredential }) },
+          { ...planTimingDiagnostic, detail: JSON.stringify({ ...planTimings, credentialPrivateValue: unexpectedCredential }) },
+        ] : [];
         const stateId = "sv_partial_run";
         const now = "2026-11-14T00:00:00Z";
         const launchUrl = "https://screens.example.test/authorized";
@@ -913,7 +929,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             createdBy: "portable-e2e", createdAt: now,
           } } });
           if (path === `/api/v1/runs/${runId}/stream`) return route.fulfill({ contentType: "text/event-stream", body: "" });
-          if (path === `/api/v1/runs/${runId}/logs`) return route.fulfill({ headers, json: { diagnostics: [], auditEvents: [] } });
+          if (path === `/api/v1/runs/${runId}/logs`) return route.fulfill({ headers, json: { diagnostics, auditEvents: [] } });
           if (path === `/api/v1/runs/${runId}/cost`) return route.fulfill({ headers, json: { cost: {
             runId, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [],
           } } });
@@ -993,6 +1009,15 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         if (runType === "plan") {
           await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
           await expect(backToApp).toHaveAttribute("href", `/apps/${capsuleId}`);
+          const detailList = page.locator(".wa-diags");
+          await page.locator("details").filter({ has: detailList }).locator("summary").click();
+          const details = detailList.locator("pre");
+          await expect(details).toHaveCount(3);
+          await expect(details.nth(0)).toHaveText(JSON.stringify(planTimings));
+          for (const index of [1, 2]) {
+            await expect(details.nth(index)).toContainText("[REDACTED]");
+            await expect(details.nth(index)).not.toContainText(unexpectedCredential);
+          }
           expect(requests.filter(({ path }) => path === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH)).toHaveLength(1);
           expect(requests.filter(({ path }) => path === health)).toHaveLength(1);
           expect(requests.filter(({ path }) => path === `/api/v1/capsules/${capsuleId}/runs`)).toEqual([
