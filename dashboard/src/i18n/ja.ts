@@ -811,6 +811,7 @@ export const ja = {
   "app.uninstall.exportSkipped": "このサーバーではデータを書き出せないため、書き出しは行っていません。",
   "app.uninstall.cancel": "アンインストールを取り消す",
   "app.uninstall.unconfirmed": "応答を確認できませんでした。次の操作の前に、このアプリの現在のアンインストール状態を確認してください。",
+  "app.uninstall.reservationChanged": "削除予約が変わったか、確認できませんでした。現在の予約を確認してから取り消してください。",
   // --- TASK-0115 Phase 3a: the server-computed app view ---------------------
   "app.state.sentence.uninstallingNow": "アンインストールしています。",
   "app.state.sentence.installReview": "インストール内容の確認を待っています。",

@@ -798,6 +798,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.exportFailed": "Exporting data before uninstalling failed. The uninstall continues.",
   "app.uninstall.exportSkipped": "This server can't export data, so nothing was exported.",
   "app.uninstall.cancel": "Cancel uninstall",
+  "app.uninstall.reservationChanged": "The uninstall reservation changed or could not be verified. Check the current reservation before cancelling.",
   "app.uninstall.unconfirmed": "The response could not be confirmed. Check this app’s current uninstall status before taking another action.",
   // --- TASK-0115 Phase 3a: the server-computed app view ---------------------
   "app.state.sentence.uninstallingNow": "Uninstalling.",

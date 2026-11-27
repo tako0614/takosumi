@@ -351,7 +351,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 115 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
+次の 116 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
 
 ### アプリの所有と個人の接続・使用量
 
@@ -403,7 +403,7 @@ PATには `appIds` を指定できます。実効権限はscopeと現在のア�
 | ロールバック (`rollback`) | 可 | 可 | `POST /state-versions/{id}/rollback-plan`、restore Runの承認 |
 | 接続の選択 (`choose_connection`) | 可 | 可 | `providerBindings` を含む `configuration-plans`。選べるのは所有者の接続とoperatorのbindable接続だけ |
 | Interface linkの変更 (`change_interface_link`) | 可 | 可 | `PUT`・`DELETE /capsules/{id}/interface-links/{key}`、提供側アプリとしての `interface-links/requests` の一覧と `approve`・`decline`、そのアプリが所有するInterfaceを誰かに渡すこと (`POST /interfaces/{id}/bindings`、`DELETE /interfaces/{id}/bindings/{bindingId}`) |
-| アンインストール (`uninstall`) | 可 | 不可 | `DELETE /capsules/{id}`、`uninstall`・`cancel-uninstall`・`abandon`・`destroy-plan`、destroy Runの承認・適用・取消、所有Sourceの `DELETE` |
+| アンインストール (`uninstall`) | 可 | 不可 | `DELETE /capsules/{id}`、`uninstall`・`cancel-uninstall`・`cancel-uninstall-reservation`・`abandon`・`destroy-plan`、destroy Runの承認・適用・取消、所有Sourceの `DELETE` |
 | 所有者の譲渡 (`transfer_ownership`) | 可 | 不可 | `ownership-transfers` |
 | メンバー管理 (`manage_members`) | 可 | 不可 | `members` の追加・削除 (メンバー本人の離脱は可) |
 
@@ -575,6 +575,7 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | DELETE   | `/api/v1/capsules/{capsuleId}`                             | 削除を予約する（即時破棄計画は `?immediate=true`） |
 | POST     | `/api/v1/capsules/{capsuleId}/uninstall`                   | 猶予付きの削除 (二段階アンインストール) を予約する |
 | POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall`            | 猶予期間中の削除予約を取り消す               |
+| POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall-reservation` | 指定した削除予約を取り消す |
 | GET      | `/api/v1/capsules/{capsuleId}/app`                         | アプリの状態・主操作・問題・画面・版・削除条件をまとめて読む |
 | GET      | `/api/v1/capsules/{capsuleId}/runs`                        | この Capsule の Run を新しい順に一覧する     |
 | GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
@@ -594,6 +595,11 @@ OAuth では `capsules:write`）を要求します。
 `POST /api/v1/capsules/{capsuleId}/cancel-uninstall` で取り消せます。破棄済み Capsule
 への再試行は `200 {capsule,alreadyDeleted:true}` です。未デプロイの Capsule は従来どおり即時
 abandon します。
+
+表示した削除予約だけを取り消すには、`POST /api/v1/capsules/{capsuleId}/cancel-uninstall-reservation`
+へ JSON 本文 `{"expectedUninstallId":"<予約ID>"}` を送ります。予約 ID は Capsule の `uninstall.id` または
+アプリ詳細の `uninstall.scheduled.id` から取得します。予約が変わっていた場合は
+`409` と `capsule_uninstall_reservation_changed` を返し、現在の予約は保持します。
 
 旧来の即時 Plan 作成は `DELETE /api/v1/capsules/{capsuleId}?immediate=true` で明示します。
 これは `202 {run}` を返して破棄 Plan を作るだけです。リソースを破棄するには owner による

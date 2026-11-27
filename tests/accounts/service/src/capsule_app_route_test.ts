@@ -341,6 +341,7 @@ test("scheduling an uninstall turns the app into a cancellable grace period with
       mode: "scheduled",
       graceDays: 7,
       scheduled: {
+        id: capsule.uninstall.id,
         phase: "scheduled",
         requestedAt: capsule.uninstall.requestedAt,
         deleteAfter: capsule.uninstall.scheduledDestroyAt,

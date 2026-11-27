@@ -458,6 +458,7 @@ export interface ControlPlaneOperations {
       id: string,
       options?: {
         readonly actor?: string;
+        readonly expectedUninstallId?: string;
         readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       },
     ): Promise<Capsule>;

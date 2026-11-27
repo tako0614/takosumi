@@ -316,6 +316,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "POST",
+      path: "/api/v1/capsules/{capsuleId}/cancel-uninstall-reservation",
+      summary: "Cancel the specified uninstall reservation during its grace period",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
       path: "/api/v1/capsules/{capsuleId}/plan",
       summary: "Create a Capsule plan Run",
       auth: "account-session",

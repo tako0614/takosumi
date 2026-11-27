@@ -1207,6 +1207,7 @@ function uninstallTerms(
     : undefined;
   const scheduled: CapsuleAppUninstall["scheduled"] = pending
     ? {
+        id: pending.id,
         phase: pending.phase === "destroying" ? "destroying" : "scheduled",
         requestedAt: pending.requestedAt,
         deleteAfter: pending.scheduledDestroyAt,

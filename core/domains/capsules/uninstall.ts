@@ -39,6 +39,8 @@ export const CAPSULE_UNINSTALL_REASONS = {
   notApplied: "capsule_uninstall_not_applied",
   /** A cancel arrived for a Capsule that is not uninstalled. */
   notUninstalled: "capsule_not_uninstalled",
+  /** The viewed reservation has been replaced. */
+  reservationChanged: "capsule_uninstall_reservation_changed",
   /** The finalizer already approved the teardown; it can no longer be undone. */
   destroyStarted: "capsule_uninstall_destroy_started",
   /** Plan/Apply admission refused because the Capsule is uninstalled. */

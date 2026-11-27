@@ -48,6 +48,7 @@ import {
   type CapsuleAppAction,
   type CapsuleAppProblem,
   type CapsuleAppView,
+  type CapsuleRunPage,
   type Capsule,
   ControlApiError,
   createCapsuleDestroyRecoveryPlan,
@@ -256,7 +257,7 @@ export default function AppManagePage(props: {
   };
 
   // --- the app and the server's view of it -----------------------------------
-  const [context, { refetch: refetchContext }] = createResource<Awaited<ReturnType<typeof getCapsuleConfigurationContext>>, string, AbortSignal | { readonly isCurrent: () => boolean }>(
+  const [context, { refetch: refetchContext }] = createResource<Awaited<ReturnType<typeof getCapsuleConfigurationContext>>, string, AbortSignal | { readonly signal?: AbortSignal; readonly isCurrent: () => boolean }>(
     capsuleId,
     (id, { refetching }) => getCapsuleConfigurationContext(id, refetching instanceof AbortSignal
       ? { signal: refetching }
@@ -375,9 +376,12 @@ export default function AppManagePage(props: {
   );
 
   // --- history: the app's own Runs, page by page --------------------------------
-  const [historyFirst, { refetch: refetchHistory }] = createResource(
+  const [historyFirst, { refetch: refetchHistory }] = createResource<CapsuleRunPage, string, { readonly isCurrent: () => boolean }>(
     () => versionsVisited() ? capsuleId() : null,
-    (id) => listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES }),
+    (id, { refetching }) => listCapsuleRuns(id, {
+      limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES,
+      ...(typeof refetching === "object" ? refetching : {}),
+    }),
   );
   const historyFirstValue = () => settledValue(historyFirst);
   // Older pages survive a refresh of the first page (see mergeAppHistoryPages).
@@ -1202,6 +1206,7 @@ export default function AppManagePage(props: {
     readonly before: Capsule;
     readonly accountId: string | undefined;
     readonly principalId: string | undefined;
+    readonly sessionIsCurrent: () => boolean;
     readonly epoch: number;
     readonly message?: string;
   };
@@ -1220,10 +1225,11 @@ export default function AppManagePage(props: {
   const sameUninstallScope = (operation: UninstallAttempt) => !disposed && operation.epoch === uninstallEpoch &&
     capsuleId() === operation.before.id && workspaceId() === operation.before.workspaceId &&
     props.accountId === operation.accountId && props.principalId === operation.principalId;
-  const ownsUninstall = (operation: UninstallAttempt) => sameUninstallScope(operation) && isOwner();
+  const ownsUninstall = (operation: UninstallAttempt) => sameUninstallScope(operation) &&
+    isOwner() && operation.sessionIsCurrent();
   const uninstallAttempt = (kind: UninstallAttempt["kind"], before: Capsule): UninstallAttempt => ({
     kind, before: structuredClone(before), accountId: props.accountId, principalId: props.principalId,
-    epoch: uninstallEpoch,
+    epoch: uninstallEpoch, sessionIsCurrent: currentSessionCheck(),
   });
   /** One read-only pair; it never retries a mutation or waits indefinitely. */
   const rereadUninstall = async (operation: UninstallAttempt) => {
@@ -1231,9 +1237,10 @@ export default function AppManagePage(props: {
     clearCaches();
     const controller = new AbortController();
     uninstallReadController = controller;
+    const scope = { signal: controller.signal, isCurrent: () => ownsUninstall(operation) };
     const reads = Promise.allSettled([
-      Promise.resolve().then(() => ownsUninstall(operation) ? refetchContext(controller.signal) : undefined),
-      Promise.resolve().then(() => ownsUninstall(operation) ? refetchApp(controller.signal) : undefined),
+      Promise.resolve().then(() => scope.isCurrent() ? refetchContext(scope) : undefined),
+      Promise.resolve().then(() => scope.isCurrent() ? refetchApp(scope) : undefined),
     ]);
     uninstallReadFlight = reads;
     setUninstallReadPending(true);
@@ -1335,19 +1342,28 @@ export default function AppManagePage(props: {
   const cancelUninstall = async () => {
     const inst = capsule();
     if (!inst || !isOwner() || uninstallBusy()) return;
+    const uninstallId = app()?.uninstall.scheduled?.id;
     const operation = { ...uninstallAttempt("cancel", inst), epoch: ++uninstallEpoch };
+    const scope = { isCurrent: () => ownsUninstall(operation) };
     setUninstallBusy(true);
     setUninstallError(undefined);
     setUninstallRecovery(undefined);
     try {
-      await cancelCapsuleUninstall(inst.id);
-      if (!ownsUninstall(operation)) return;
+      if (!uninstallId || inst.uninstall?.id !== uninstallId) {
+        setUninstallError(t("app.uninstall.reservationChanged"));
+        await rereadUninstall(operation);
+        return;
+      }
+      await cancelCapsuleUninstall(inst.id, uninstallId, scope);
+      if (!scope.isCurrent()) return;
       clearCaches();
-      await Promise.allSettled([refetchContext(), refetchApp(), refetchHistory()]);
+      await Promise.allSettled([refetchContext(scope), refetchApp(scope), refetchHistory(scope)]);
     } catch (cause) {
-      if (!ownsUninstall(operation)) return;
+      if (!scope.isCurrent()) return;
       if (cause instanceof ControlApiError && cause.status >= 400 && cause.status < 500) {
-        setUninstallError(friendlyError(cause, t).message);
+        setUninstallError(cause.reason === "capsule_uninstall_reservation_changed"
+          ? t("app.uninstall.reservationChanged")
+          : friendlyError(cause, t).message);
         await rereadUninstall(operation);
         return;
       }

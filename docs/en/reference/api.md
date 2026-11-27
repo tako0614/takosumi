@@ -412,7 +412,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 115
+`accounts/service/src/control-route-inventory.ts`; it currently contains 116
 public route descriptors, listed below. Accounts compositions include the same routes in `/openapi.json` and publish their count as `x-takos-public-session-endpoint-count`. Core-only processes omit the unmounted Accounts routes. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -460,7 +460,7 @@ Once an app has an ownership row (`capsules.owner_account_id`), the caller's rol
 | `rollback` | yes | yes | `POST /state-versions/{id}/rollback-plan`, approval of restore Runs |
 | `choose_connection` | yes | yes | `configuration-plans` with `providerBindings`; only the owner's connections and bindable operator connections can be chosen |
 | `change_interface_link` | yes | yes | `PUT`/`DELETE /capsules/{id}/interface-links/{key}`; as the provider app, listing `interface-links/requests` and `approve`/`decline`; granting the app's Capsule-owned Interface to someone: `POST /interfaces/{id}/bindings` and `DELETE /interfaces/{id}/bindings/{bindingId}` |
-| `uninstall` | yes | no | `DELETE /capsules/{id}`, `uninstall`, `cancel-uninstall`, `abandon`, `destroy-plan`, approve/apply/cancel of destroy Runs, owned Source `DELETE` |
+| `uninstall` | yes | no | `DELETE /capsules/{id}`, `uninstall`, `cancel-uninstall`, `cancel-uninstall-reservation`, `abandon`, `destroy-plan`, approve/apply/cancel of destroy Runs, owned Source `DELETE` |
 | `transfer_ownership` | yes | no | `ownership-transfers` |
 | `manage_members` | yes | no | adding or removing `members` (a member may leave) |
 
@@ -620,6 +620,7 @@ data and settings.
 | DELETE | `/api/v1/capsules/{capsuleId}` | Schedule deletion of an applied Capsule after a grace period; `?immediate=true` creates a destroy Plan only, which still needs review and Apply |
 | POST | `/api/v1/capsules/{capsuleId}/uninstall` | Schedule a two-stage uninstall: keep resources and data through the grace period, then export and destroy |
 | POST | `/api/v1/capsules/{capsuleId}/cancel-uninstall` | Cancel a scheduled uninstall during its grace period |
+| POST | `/api/v1/capsules/{capsuleId}/cancel-uninstall-reservation` | Cancel the specified uninstall reservation |
 | GET | `/api/v1/capsules/{capsuleId}/app` | Read the server-computed installed-app view: state, primary action, problems, screens, version and uninstall terms |
 | GET | `/api/v1/capsules/{capsuleId}/runs` | List the Capsule's Runs newest first with a keyset cursor |
 | GET | `/api/v1/capsules/{capsuleId}/outputs` | Read the Capsule's current public Output projection |
@@ -1041,6 +1042,13 @@ default in OSS); while it is pending, cancel it with
 `POST /api/v1/capsules/{capsuleId}/cancel-uninstall`. Retrying after destruction
 returns `200 {capsule,alreadyDeleted:true}`. A Capsule that has never been applied
 keeps the existing immediate abandonment behavior.
+
+To cancel only the reservation shown to the caller, send
+`{"expectedUninstallId":"<reservation-id>"}` to
+`POST /api/v1/capsules/{capsuleId}/cancel-uninstall-reservation`.
+Read the ID from `uninstall.id` on the Capsule or `uninstall.scheduled.id`
+in the app view. If the reservation changed, the API returns `409` with
+`capsule_uninstall_reservation_changed` and keeps the current reservation.
 
 To create the legacy immediate destroy Plan, explicitly call
 `DELETE /api/v1/capsules/{capsuleId}?immediate=true`. It returns `202 {run}` and

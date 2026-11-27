@@ -2449,11 +2449,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       };
       let attemptAwaitsInput = false;
       let viewUnavailable = false;
+      const uninstallReservationId = "uninstall_states_e";
       const capsule = () => ({
         id: ID, workspaceId: "ws_alpha", name: NAME, slug: "state-echo", sourceId: "src_states_e", installConfigId: "cfg_states_e",
         environment: "production",
         ...(scene === "installing" || scene === "install_stalled" || scene === "awaiting_input" || scene === "awaiting_your_input" || scene === "uninstalled" ? { currentStateGeneration: 0 } : { currentStateVersionId: "sv_states_e", currentStateGeneration: 1 }),
         status: scene === "uninstall_scheduled" ? "uninstalled" : scene === "uninstalled" ? "destroyed" : scene === "installing" || scene === "install_stalled" || scene === "awaiting_input" || scene === "awaiting_your_input" ? "pending" : "active",
+        ...(scene === "uninstall_scheduled" ? { uninstall: {
+          id: uninstallReservationId, revision: 1, phase: "scheduled", requestedAt: now,
+          scheduledDestroyAt: deleteAfter, previousStatus: "active",
+        } } : {}),
         // The version it last ran, kept on the record after uninstalling.
         ...(scene === "uninstalled"
           ? { adoptedSourceRevision: { sourceSnapshotId: "snap_states_e", ref: "v1.4.2", path: ".", resolvedCommit: PORTABLE_SOURCE_COMMIT } }
@@ -2520,7 +2525,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return appView(ID, NAME, {
               status: "uninstalled", state: "uninstall_scheduled", primaryAction: "cancel_uninstall", screens: [screen],
               problems: [...(connectionRemoved ? [connectionProblem] : []), { code: "uninstall_scheduled", severity: "warning" }],
-              uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "scheduled", requestedAt: now, deleteAfter, cancellable: true, blocked: false, preDestroyExport: { status: "skipped" } } },
+              uninstall: { mode: "scheduled", graceDays: 7, scheduled: { id: uninstallReservationId, phase: "scheduled", requestedAt: now, deleteAfter, cancellable: true, blocked: false, preDestroyExport: { status: "skipped" } } },
             });
           case "uninstall_immediate":
             return appView(ID, NAME, {
@@ -2889,7 +2894,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             links: { self: "/api/v1/revision-plans/grp_states_e", run: `/api/v1/runs/${revisionPlanRun.id}` },
           } });
         }
-        if (path === `${base}/cancel-uninstall` && request.method() === "POST") {
+        if (path === `${base}/cancel-uninstall-reservation` && request.method() === "POST") {
           scene = "incomplete";
           return route.fulfill({ json: { capsule: capsule() } });
         }
@@ -4150,7 +4155,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       expect(seenMutations).toEqual([
         `POST /api/v1/capsules/${ID}/destroy-plan`,
-        `POST /api/v1/capsules/${ID}/cancel-uninstall`,
+        `POST /api/v1/capsules/${ID}/cancel-uninstall-reservation`,
         `POST /api/v1/capsules/${ID}/destroy-plan`,
         `POST /api/v1/capsules/${ID}/destroy-plan`,
         "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",

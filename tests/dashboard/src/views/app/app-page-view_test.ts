@@ -80,7 +80,7 @@ describe("installed app page", () => {
     expect(page).toContain("getCapsuleAppWithSignal(id, info.refetching instanceof AbortSignal ? info.refetching");
     expect(page).toContain("info.refetching.signal : undefined,");
     expect(page).toContain('!(info.refetching instanceof AbortSignal) ? info.refetching : {}');
-    expect(page).toContain("listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES })");
+    expect(page).toMatch(/listCapsuleRuns\(id, \{\s+limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES,/u);
     expect(page).toContain("data-app-state={view().state}");
     expect(page).toContain("t(appStateSentence(view()))");
     // No Workspace-wide window decides anything on this page any more.
@@ -243,7 +243,7 @@ describe("installed app page", () => {
 
   test("uninstall is one implementation: grace period stated first and cancellable", () => {
     expect(page).toContain("await deleteCapsule(inst.id);");
-    expect(page).toContain("await cancelCapsuleUninstall(inst.id);");
+    expect(page).toContain("await cancelCapsuleUninstall(inst.id, uninstallId, scope);");
     expect(page).not.toContain("dependencyWarning");
     expect(page).not.toContain("dependencyCheck");
     expect(page).not.toContain("usedByApps");
