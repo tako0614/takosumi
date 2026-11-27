@@ -781,6 +781,17 @@ export async function runAppApply(args: string[], io: CliIo): Promise<number> {
       }); readbackConfirmed = true; } catch { /* unavailable readback is not proof of no effect */ }
     }
     if (readbackConfirmed && observedRun && SETTLED.has(observedRun.status)) return writeTerminalApply(io, options, appId, planId, observedRun);
+    if (mutationAttempted && !applyAttempted && readbackConfirmed && !observedRun &&
+      observedPlan?.status === "succeeded" && observedPlan.policyStatus === "pass") {
+      const planOption = applyType === "destroy_apply" ? "--destroy-plan" : "--plan";
+      const recovery = isJapaneseCli()
+        ? `保存済みPlanの承認を確認しました。内容を確認し、実行する場合は同じ接続先・本人・アプリで apps apply に ${planOption} と同じPlan ID、--yes を指定してください。`
+        : `The saved Plan is approved. Review it and, if ready, use apps apply with the same server, account and app, ${planOption} with the same Plan ID, and --yes.`;
+      write(io, options, { status: "indeterminate", appId, planRunId: observedPlan.id,
+        lastObservedPlanStatus: observedPlan.status, reviewUrl: runUrl(options, observedPlan.id),
+        code: errorCode(error), recovery });
+      return 1;
+    }
     const reason = failedPreconditionDetails(error)?.reason;
     const connectionRecoveryFailure = destroyConnectionRecoveryFailure(error);
     const refusedPlan = applyAttempted && readbackConfirmed && !observedRun &&
