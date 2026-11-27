@@ -723,20 +723,17 @@ function Inner(props: { readonly session: SessionRecord }) {
     const current = readyOrUndefined(capsule);
     return current?.scope === readScope() && current.value.id === capsuleId() ? current.value : undefined;
   };
-  const reviewedStateVersion = (r: Run): string | null | undefined => {
+  const reviewState = (r: Run): "ready" | "checking" | "unavailable" | "changed" => {
     const guard = r.applyExpected;
-    if (r.type !== "plan" || !r.capsuleId || guard?.planId !== r.id || guard.capsuleId !== r.capsuleId) return undefined;
-    return guard.currentStateVersionId;
-  };
-  const reviewStatePending = (r: Run): boolean => reviewedStateVersion(r) !== undefined && capsule.loading;
-  const reviewStateChanged = (r: Run): boolean => {
-    const expected = reviewedStateVersion(r);
+    if (r.type !== "plan" || !r.capsuleId || guard?.planId !== r.id ||
+      guard.capsuleId !== r.capsuleId || guard.currentStateVersionId === undefined) return "ready";
+    if (capsule.loading) return "checking";
     const current = capsuleLatest();
-    return expected !== undefined && current?.id === r.capsuleId && current?.workspaceId === r.workspaceId &&
-      (current.currentStateVersionId ?? null) !== expected;
+    if (!current || !r.workspaceId || current.workspaceId !== r.workspaceId) return "unavailable";
+    return (current.currentStateVersionId ?? null) === guard.currentStateVersionId ? "ready" : "changed";
   };
   const canApproveCurrentRun = (r: Run | undefined): boolean =>
-    r !== undefined && canApproveRun(r) && !reviewStatePending(r) && !reviewStateChanged(r);
+    r !== undefined && canApproveRun(r) && reviewState(r) === "ready";
   const appName = () => {
     const app = capsuleLatest();
     if (!app || app.workspaceId !== runLatest()?.workspaceId) return undefined;
@@ -1161,7 +1158,7 @@ function Inner(props: { readonly session: SessionRecord }) {
   );
   const isDeployableRun = (r: Run): boolean => {
     if (!isDeployApprovalCandidate(r) || applied() || unconfirmedApply() || stalePlan() || heldUninstallApp(r)) return false;
-    if (reviewStatePending(r) || reviewStateChanged(r)) return false;
+    if (reviewState(r) !== "ready") return false;
     // A failed or unfinished history read cannot prove approval is still open.
     if (siblingRuns.error || siblingRuns.loading) return false;
     const siblings = siblingRuns.latest;
@@ -1200,7 +1197,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     isDeployApprovalCandidate(r) &&
     !applied() &&
     !siblingRuns.error &&
-    (siblingRuns.loading || siblingRuns.latest === undefined || reviewStatePending(r));
+    (siblingRuns.loading || siblingRuns.latest === undefined || reviewState(r) === "checking");
   // A succeeded review run whose policy did NOT pass: it never becomes
   // deployable, so it must still offer a way forward (re-plan) instead of
   // dead-ending on the "blocked" line.
@@ -1273,7 +1270,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     const currentRun = runLatest();
     if (!currentRun || currentRun.id !== runId() || !currentRun.capsuleId ||
       !currentRun.workspaceId || !isReviewRun(currentRun) || unconfirmedApply() || stalePlan() || heldUninstallApp(currentRun)) return;
-    if (reviewStatePending(currentRun) || reviewStateChanged(currentRun)) return;
+    if (reviewState(currentRun) !== "ready") return;
     const attempt = { plan: currentRun, epoch: runEpoch };
     if (
       currentRun &&
@@ -1512,6 +1509,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     readonly kind: SummaryKind;
     readonly text: string;
     readonly sub?: string;
+    readonly retry?: () => unknown;
   }
 
   const summary = createMemo((): Summary | null => {
@@ -1621,10 +1619,15 @@ function Inner(props: { readonly session: SessionRecord }) {
           return { kind: "progress", text: t("run.summary.queued") };
         case "running":
           return { kind: "progress", text: t("run.summary.planning") };
-        case "waiting_approval":
-          if (reviewStatePending(r)) return { kind: "progress", text: t("run.summary.checkingDeploy") };
-          if (reviewStateChanged(r)) return { kind: "action", text: t("controlError.stateGenerationMismatch") };
+        case "waiting_approval": {
+          const state = reviewState(r);
+          if (state === "checking") return { kind: "progress", text: t("run.summary.checkingDeploy") };
+          if (state === "changed") return { kind: "action", text: t("controlError.stateGenerationMismatch") };
+          if (state === "unavailable") {
+            return { kind: "error", text: t("run.summary.approvalUnavailable"), retry: refetchCapsule };
+          }
           return { kind: "action", text: t("run.summary.waitingApproval") };
+        }
         case "succeeded": {
           if (r.policyStatus !== "pass") {
             // Not a dead end: the re-plan action renders alongside (see
@@ -1639,7 +1642,7 @@ function Inner(props: { readonly session: SessionRecord }) {
           // plan's approval (e.g. opened from history) — settle the summary
           // instead of claiming the deploy is still waiting to be run.
           if (siblingRuns.error) {
-            return { kind: "error", text: t("run.summary.approvalUnavailable") };
+            return { kind: "error", text: t("run.summary.approvalUnavailable"), retry: refetchSiblingRuns };
           }
           if (deployApprovalConsumed(r)) {
             return {
@@ -1653,8 +1656,12 @@ function Inner(props: { readonly session: SessionRecord }) {
           if (deployApprovalResolving(r)) {
             return { kind: "progress", text: t("run.summary.checkingDeploy") };
           }
-          if (reviewStateChanged(r)) {
+          const state = reviewState(r);
+          if (state === "changed") {
             return { kind: "action", text: t("controlError.stateGenerationMismatch") };
+          }
+          if (state === "unavailable") {
+            return { kind: "error", text: t("run.summary.approvalUnavailable"), retry: refetchCapsule };
           }
           // Only show the create/update/delete sub when the counts are a
           // recorded fact — a destroy reporting 削除0 (or a plan with no
@@ -1974,10 +1981,12 @@ function Inner(props: { readonly session: SessionRecord }) {
                       </div>
                     )}
                   </Show>
-                  <Show when={isDeployApprovalCandidate(r()) && siblingRuns.error}>
-                    <Button variant="secondary" type="button" onClick={() => void refetchSiblingRuns()}>
-                      {t("common.retry")}
-                    </Button>
+                  <Show when={summary()?.retry}>
+                    {(retry) => (
+                      <Button variant="secondary" type="button" onClick={() => void retry()()}>
+                        {t("common.retry")}
+                      </Button>
+                    )}
                   </Show>
                   {/* Why a policy stopped this plan or made it wait for an
                       approval: structured codes, never the recorded prose. */}

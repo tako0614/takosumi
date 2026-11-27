@@ -62,7 +62,7 @@ describe("RunView", () => {
     // A failed or unfinished ledger cannot prove approval is still open.
     expect(source).toContain("if (siblings === undefined) return false;");
     expect(source).toContain("if (siblingRuns.error || siblingRuns.loading) return false;");
-    expect(source).toContain("refetchSiblingRuns()");
+    expect(source).toContain("retry: refetchSiblingRuns");
     // A consumed approval settles the summary instead of claiming "ready".
     expect(source).toContain("deployApprovalConsumed(r)");
     expect(source).toContain('t("run.summary.alreadyApplied")');
@@ -71,7 +71,7 @@ describe("RunView", () => {
   });
 
   test("a retained Restore Run has a history message and both approval guards apply", () => {
-    expect(source).toContain('canApproveRun(r) && !reviewStatePending(r) && !reviewStateChanged(r)');
+    expect(source).toContain('canApproveRun(r) && reviewState(r) === "ready"');
     expect(source).toContain('<Show when={canApproveCurrentRun(r()) && !heldUninstallApp(r())}>');
     expect(source).toContain('if (!r || !canApproveCurrentRun(r) || approve.busy() || heldUninstallApp(r)) return;');
     expect(source).toContain('if (!ownsApply(attempt) || !canApproveCurrentRun(current) || heldUninstallApp(current)) return;');
