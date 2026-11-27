@@ -161,11 +161,12 @@ export async function listTakosumiApiKeyScopeCatalog(): Promise<
 }
 
 /** Takosumi API keys are Accounts personal access tokens. */
-export async function listTakosumiApiKeys(): Promise<
+export async function listTakosumiApiKeys(signal?: AbortSignal): Promise<
   readonly TakosumiAccountsPatMetadata[]
 > {
   const response = await apiFetch<TakosumiAccountsListPatsResponse>(
     `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}?limit=${TOKEN_PAGE_LIMIT}`,
+    { signal },
   );
   return response.tokens;
 }
@@ -183,8 +184,12 @@ export async function createTakosumiApiKey(
   );
 }
 
-export async function revokeTakosumiApiKey(tokenId: string): Promise<void> {
+export async function revokeTakosumiApiKey(
+  tokenId: string,
+  signal?: AbortSignal,
+): Promise<void> {
   await apiFetch(takosumiAccountsAccountTokenRevokePath(tokenId), {
     method: "POST",
+    signal,
   });
 }
