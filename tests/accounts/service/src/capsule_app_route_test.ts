@@ -120,6 +120,95 @@ async function fixture(options: {
   return { ledger, core, seeded, request, app, owner, stranger, interfaceStores, accounts, operations };
 }
 
+test("Capsule GET uses the App name for a direct Git install with a generated technical name", async () => {
+  const url = "https://github.com/tako0614/takosumi.git";
+  const path = "examples/opentofu-basic";
+  const h = await fixture({ sourceUrl: url });
+  const rawName = "app-11111111-1111-4111-8111-111111111111";
+  const capsule = await h.core.capsules.getCapsule(CAPSULE);
+  await h.ledger.putCapsule({ ...capsule, name: rawName });
+  await h.ledger.putInstallConfig({
+    ...h.seeded.installConfig,
+    sourceSelector: { url, path },
+    modulePath: path,
+  });
+
+  const response = await h.request("");
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  const name = { ja: "takosumi", en: "takosumi" };
+  expect(body.capsule).toMatchObject({ id: CAPSULE, name: rawName, displayName: name });
+  expect((await h.app()).displayName).toEqual(name);
+  expect(JSON.stringify(body)).not.toContain(path);
+
+  await h.ledger.putCapsule({ ...capsule, name: "my-explicit-app-name" });
+  const named = await h.request("");
+  expect(named.status).toBe(200);
+  const namedBody = await named.json();
+  expect(namedBody.capsule).toMatchObject({ id: CAPSULE, name: "my-explicit-app-name" });
+  expect(namedBody.capsule.displayName).toBeUndefined();
+  expect((await h.app()).displayName).toBeUndefined();
+});
+
+test("Capsule GET projects the current Store name through its existing authorized config read", async () => {
+  const h = await fixture();
+  const rawName = "app-11111111-1111-4111-8111-111111111111";
+  const capsule = await h.core.capsules.getCapsule(CAPSULE);
+  await h.ledger.putCapsule({ ...capsule, name: rawName });
+  const plain = await h.request("");
+  expect(plain.status).toBe(200);
+  const plainBody = await plain.json();
+  expect(plainBody.capsule.name).toBe(rawName);
+  expect(plainBody.capsule.displayName).toBeUndefined();
+
+  const name = { ja: "掲載アプリ", en: "Listed App" };
+  const config = await h.ledger.putInstallConfig({
+    ...h.seeded.installConfig,
+    store: {
+      order: 1, surface: "app", kind: "service", provider: "test", suggestedName: "listed-app", name,
+      badge: { ja: "掲載", en: "Listed" }, description: { ja: "掲載説明", en: "Catalog description" },
+    },
+    variableMapping: { internal: "fixture-config-value" },
+  });
+  let configReads = 0;
+  const getInstallConfig = h.ledger.getInstallConfig.bind(h.ledger);
+  h.ledger.getInstallConfig = (id) => {
+    configReads++;
+    return getInstallConfig(id);
+  };
+  const response = await h.request("");
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.capsule).toMatchObject({ id: CAPSULE, name: rawName, displayName: name });
+  expect(body.installConfigReAdoption).toEqual({ authorityGuard: expect.any(String) });
+  expect(JSON.stringify(body)).not.toContain("fixture-config-value");
+  expect(JSON.stringify(body)).not.toContain("Catalog description");
+  expect(configReads).toBe(1);
+  const denied = await h.request("", h.stranger);
+  expect(denied.status).toBe(403);
+  expect(await denied.text()).not.toContain(name.en);
+  expect(configReads).toBe(1);
+  expect((await h.app()).displayName).toEqual(name);
+
+  const successor = await h.ledger.putInstallConfig({ ...config, id: "cfg_replaced_while_reading" });
+  const getCapsule = h.ledger.getCapsule.bind(h.ledger);
+  let moveConfig = true;
+  h.ledger.getCapsule = async (id) => {
+    const record = await getCapsule(id);
+    if (id === CAPSULE && record && moveConfig) {
+      moveConfig = false;
+      await h.ledger.putCapsule({ ...record, installConfigId: successor.id });
+    }
+    return record;
+  };
+  const racing = await h.request("");
+  expect(racing.status).toBe(200);
+  const racingBody = await racing.json();
+  expect(racingBody.capsule.installConfigId).toBe(config.id);
+  expect(racingBody.capsule.displayName).toBeUndefined();
+  expect((await getCapsule(CAPSULE))?.installConfigId).toBe(successor.id);
+});
+
 test("destroyed Capsule GET and Workspace list survive retired Source row with a retained state cursor", async () => {
   const h = await fixture({ currentStateVersionId: "sv_retained_destroy" });
   await h.ledger.putCapsule({

@@ -329,6 +329,8 @@ export type PublicCapsule = Omit<
   | "uninstall"
 > & {
   readonly uninstall?: Omit<CapsuleUninstall, "requester">;
+  /** Localized App name derived for the authorized individual Capsule read. */
+  readonly displayName?: InstallConfigStoreText;
   /** Absent before the first successful Apply. Derived; never stored on Capsule. */
   readonly adoptedSourceRevision?: CapsuleAdoptedSourceRevision;
 };

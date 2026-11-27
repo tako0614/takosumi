@@ -115,6 +115,7 @@ import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import {
   formatDateTime,
   formatEpochDateTime,
+  locale,
   setDocumentTitle,
   t,
 } from "../../i18n/index.ts";
@@ -689,7 +690,12 @@ function Inner(props: { readonly session: SessionRecord }) {
   };
   const canApproveCurrentRun = (r: Run | undefined): boolean =>
     r !== undefined && canApproveRun(r) && !reviewStatePending(r) && !reviewStateChanged(r);
-  const appName = () => capsuleLatest()?.name;
+  const appName = () => {
+    const app = capsuleLatest();
+    if (!app || app.workspaceId !== runLatest()?.workspaceId) return undefined;
+    const name = app.displayName?.[locale()];
+    return typeof name === "string" && name.trim() ? name : app.name;
+  };
   const canRestartFailedInitialPlan = createMemo(() => {
     const r = runLatest();
     const currentCapsule = capsuleLatest();

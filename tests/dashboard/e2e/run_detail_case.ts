@@ -12,12 +12,16 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
   test.describe("App-owned Run details", () => {
     test.skip(mode !== "portable", "isolated app Run fixture only");
 
-    for (const read of ["run", "logs", "cost"] as const) {
+    for (const read of ["run", "logs", "cost", "capsule"] as const) {
       test(`a retired ${read} read cannot sign the visitor out of another Run`, async ({ page }) => {
         const first = "plan_retired_read";
         const next = "plan_replacement_read";
+        const firstCapsule = "cap_run_read_scope";
+        const replacementCapsule = read === "capsule" ? "cap_run_replacement_scope" : firstCapsule;
         const firstPath = `/api/v1/runs/${first}`;
-        const heldPath = read === "run" ? firstPath : `${firstPath}/${read}`;
+        const heldPath = read === "capsule"
+          ? `/api/v1/capsules/${firstCapsule}`
+          : read === "run" ? firstPath : `${firstPath}/${read}`;
         const nextPath = `/api/v1/runs/${next}`;
         await page.addInitScript((path) => {
           localStorage.setItem("tg_lang", "en");
@@ -46,9 +50,18 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           }
           if (pathname === firstPath || pathname === nextPath) {
             return route.fulfill({ json: { run: {
-              id: pathname === firstPath ? first : next, capsuleId: "cap_run_read_scope", workspaceId: "ws_alpha",
+              id: pathname === firstPath ? first : next, capsuleId: pathname === firstPath ? firstCapsule : replacementCapsule,
+              workspaceId: "ws_alpha",
               type: "plan", status: "failed", errorCode: "plan_failed", createdBy: "portable-e2e",
               createdAt: "2026-11-25T00:00:00Z",
+            } } });
+          }
+          if (read === "capsule" && pathname === `/api/v1/capsules/${replacementCapsule}`) {
+            return route.fulfill({ json: { capsule: {
+              id: replacementCapsule, workspaceId: "ws_alpha", name: "replacement-technical-name", slug: "replacement",
+              displayName: { en: "Replacement Store app", ja: "新しい掲載アプリ" }, installConfigId: "cfg_replacement",
+              environment: "production", status: "active", currentStateGeneration: 1,
+              createdAt: "2026-11-25T00:00:00Z", updatedAt: "2026-11-25T00:00:00Z",
             } } });
           }
           if (pathname.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
@@ -74,6 +87,9 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           release();
           expect(await settled).toBe("stayed");
           await expect(page).toHaveURL((url) => url.pathname === `/runs/${next}`);
+          if (read === "capsule") {
+            await expect(page.getByText("Replacement Store app", { exact: true })).toBeVisible();
+          }
           expect(writes).toEqual([]);
         } finally {
           release();
@@ -852,6 +868,10 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const capsuleId = "cap_partial_run";
         const runType = scenario === "waiting_approval" ? "plan" : scenario === "apply_without_open" ? "apply" : scenario;
         const waiting = scenario === "waiting_approval";
+        const rawName = "app-11111111-1111-4111-8111-111111111111";
+        const displayName = scenario === "apply"
+          ? { en: "takosumi", ja: "takosumi" }
+          : scenario === "plan" ? { en: "Listed Service", ja: "掲載アプリ" } : undefined;
         const runId = `${scenario}_partial_run`;
         const planTimings = {
           preClaimPreparationMs: 2, claimMs: 3, resolveRunEnvironmentMs: 8,
@@ -939,7 +959,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
               return route.fulfill({ status: 503, json: { error: "authentication_unavailable" } });
             }
             return route.fulfill({ headers, json: { capsule: {
-              id: capsuleId, workspaceId: "ws_alpha", name: "Partial Run App", slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production",
+              id: capsuleId, workspaceId: "ws_alpha", name: rawName, slug: "partial-run-app", installConfigId: "cfg_partial_run", environment: "production",
+              ...(displayName ? { displayName } : {}),
               status: runType === "destroy_apply" ? "destroyed" : "active",
               currentStateGeneration: waiting ? 2 : 1, currentStateVersionId: stateId, createdAt: now, updatedAt: now,
             } } });
@@ -996,6 +1017,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             expect(requests.filter(({ path }) => path === capsulePath)).toEqual([]);
             finishHealth.resolve();
             await expect(page.getByText("Another change was applied first. Review again before applying.", { exact: true })).toBeVisible();
+            await expect(page.getByText(rawName, { exact: true })).toBeVisible();
             await expect(approval).toHaveCount(0);
             expect(requests.filter(({ path }) => path === capsulePath)).toEqual([{ path: capsulePath, guarded: false }]);
             expect(healthReads).toBe(2);
@@ -1008,6 +1030,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         }
         if (runType === "plan") {
           await expect(page.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+          await expect(page.getByText("Listed Service", { exact: true })).toBeVisible();
+          await expect(page.getByText(rawName, { exact: true })).toHaveCount(0);
           await expect(backToApp).toHaveAttribute("href", `/apps/${capsuleId}`);
           const detailList = page.locator(".wa-diags");
           await page.locator("details").filter({ has: detailList }).locator("summary").click();
@@ -1046,6 +1070,8 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const warning = page.getByRole("alert").filter({ hasText: "Couldn't read its screens." });
         await expect(open).toHaveAttribute("href", launchUrl);
         await expect(warning).toBeVisible();
+        await expect(page.getByText("takosumi", { exact: true })).toBeVisible();
+        await expect(page.getByText(rawName, { exact: true })).toHaveCount(0);
         await expect(backToApp).toHaveCount(1);
         await expect(backToApp).toHaveAttribute("href", `/apps/${capsuleId}`);
         expect(requests.filter(({ path }) => path === TAKOSUMI_SHARED_DASHBOARD_SESSION_PATH)).toHaveLength(1);
@@ -1058,6 +1084,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         for (const path of normalRunReads) {
           expect(requests.filter((read) => read.path === path)).toEqual([{ path, guarded: true }]);
         }
+        expect(requests.filter(({ path }) => path.startsWith("/api/v1/capsule-configs/") || path === `/api/v1/capsules/${capsuleId}/app`)).toEqual([]);
         expect(requests.filter(({ path }) => path === `/api/v1/runs/${runId}/stream`)).toEqual([]);
         partial = false;
         await page.getByRole("button", { name: "Reload screens", exact: true }).click();
