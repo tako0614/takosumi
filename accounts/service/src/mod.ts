@@ -963,7 +963,7 @@ export function createAccountsHandler(
         if (token?.startsWith("Bearer ")) {
           const genuineSession = await store.findAccountSession(token.slice(7));
           if (!genuineSession) {
-            const grant = await resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,clients,observeClientId:(clientId) => {
+            const grant = await resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,canonicalSubjectStore:baseStore,clients,observeClientId:(clientId) => {
               sharedWorkspaceClientId = clientId;
             }});
             if (grant.ok) sharedWorkspaceCredential = "oauth-access-token";

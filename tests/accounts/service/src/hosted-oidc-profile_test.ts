@@ -7,6 +7,8 @@ import { rotateAccountSession, serializeAccountSessionCookie, requireAccountsBea
 import { HOSTED_REFRESH_ABSOLUTE_MS, HOSTED_SESSION_IDLE_MS, hostedIssuerSessionId } from "../../../../accounts/service/src/hosted-oidc-profile.ts";
 import { base64UrlEncodeBytes, sha256Text } from "../../../../accounts/service/src/encoding.ts";
 import { createSharedAccountWorkspaceDirectory } from "../../../../accounts/service/src/shared-account-workspace.ts";
+import { createWorkspaceBillingBootstrapResolver } from "../../../../accounts/service/src/workspace-billing-bootstrap.ts";
+import { resolveSharedAccountGrantSession, sharedGrantSubjectReader } from "../../../../accounts/service/src/oidc-routes.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
@@ -483,8 +485,10 @@ test("D1 hosted grant introspection uses one authority read and preserves durabl
   expect(await introspect()).toEqual({ active: false });
 });
 
-async function directoryFixture(workspaceMutationsFrozen?: boolean) {
-  const f=await fixture();
+const retainedBillingAuthority = "fixture-billing-authority";
+
+async function directoryFixture(workspaceMutationsFrozen?: boolean, options?: { store: AccountsStore; useRetainedBinding: true }) {
+  const f=await fixture(options?.store);
   const control=new InMemoryOpenTofuControlStore();let id=0;
   const service=new WorkspacesService({store:control,newId:(prefix)=>`${prefix}_directory_${++id}`});
   const operations:Pick<ControlPlaneOperations,"workspaces"|"members">={
@@ -495,15 +499,42 @@ async function directoryFixture(workspaceMutationsFrozen?: boolean) {
   const entered=new Promise<void>((resolve)=>{billingEntered=resolve;});
   const blocked=new Promise<void>((resolve)=>{billingRelease=resolve;});
   let pauseBilling=false;
-  const directory=createSharedAccountWorkspaceDirectory({store:f.store,operations,resolveWorkspaceBilling:async({workspaceId})=>{
+  let copyBillingContext = false;
+  const waitForBilling = async () => {
     if(pauseBilling){billingEntered();await blocked;}
-    return {workspaceId,workspaceRef:"wrk_retained_directory_reference",organizationId:"org_retained_ledger"};
-  },workspaceMutationsFrozen});
-  const handler=await createEphemeralAccountsHandler({issuer,store:f.store,clients:f.clients,hostedSessionPolicy:true,sharedAccountWorkspaceDirectory:directory,workspaceMutationsFrozen,allowEphemeralKeyOnHttpsIssuer:true});
+  };
+  if (options?.useRetainedBinding) {
+    operations.workspaces.billingBindings = {
+      ...service.billingBindings,
+      async get(workspaceId) {
+        const state = await service.billingBindings.get(workspaceId);
+        await waitForBilling();
+        return state;
+      },
+    };
+  }
+  const resolveWorkspaceBilling = options?.useRetainedBinding
+    ? createWorkspaceBillingBootstrapResolver({ operations, billingAuthority: retainedBillingAuthority })
+    : async ({ workspaceId }: { workspaceId: string }) => {
+      await waitForBilling();
+      return {workspaceId,workspaceRef:"wrk_retained_directory_reference",organizationId:"org_retained_ledger"};
+    };
+  const directory=createSharedAccountWorkspaceDirectory({store:f.store,operations,resolveWorkspaceBilling,workspaceMutationsFrozen});
+  const handler=await createEphemeralAccountsHandler({issuer,store:f.store,clients:f.clients,hostedSessionPolicy:true,sharedAccountWorkspaceDirectory:{
+    ...directory,
+    billingOrganization: (session, ...args) => directory.billingOrganization(copyBillingContext ? { ...session } : session, ...args),
+  },workspaceMutationsFrozen,allowEphemeralKeyOnHttpsIssuer:true});
   function request(path:string,token:string,method="GET",body?:unknown) {
     return handler(new Request(`${issuer}/api/v1/account/shared-workspaces${path}`,{method,headers:{authorization:`Bearer ${token}`,...(body!==undefined?{"content-type":"application/json"}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})}));
   }
-  return {...f,control,operations,handler,request,entered,billingRelease,pause:()=>{pauseBilling=true;}};
+  return {...f,control,operations,handler,request,entered,billingRelease,pause:()=>{pauseBilling=true;},
+    useBooleanBillingContext: () => { copyBillingContext = true; },
+    async prepareRetainedBilling(workspaceId: string) {
+      const intent = await service.billingBindings.prepare({ workspaceId, billingAuthority: retainedBillingAuthority, actorAccountId: subject });
+      return service.billingBindings.claim({ workspaceId, intentId: intent.intentId, actorAccountId: subject,
+        organizationRef: "org_retained", ownerAcknowledgementRef: "owner_retained" });
+    },
+  };
 }
 
 test("dedicated first-party directory Bearer yields the same canonical account/Workspace for both RPs",async()=>{
@@ -611,6 +642,108 @@ test("billing entry projection rejects a grant revoked during the final membersh
     error: { code: "invalid_session", message: "A current canonical account session is required.", requestId: expect.any(String) },
   });
 });
+
+test("D1 billing entry reuses each fresh grant check for canonical subject verification", async () => {
+  const db = new SqliteFakeD1();
+  const store = new D1AccountsStore(db, { sessionHashSalt: "fixture-entry-salt" });
+  const prepare = db.prepare.bind(db);
+  const reads: string[] = [];
+  db.prepare = (sql) => {
+    if (/^\s*(?:select|with)\b/iu.test(sql)) reads.push(sql);
+    return prepare(sql);
+  };
+  const grantChecks = () => reads.filter((sql) => sql.includes("AS grant_document")).length;
+  const f = await directoryFixture(undefined, { store, useRetainedBinding: true });
+  const grant = await f.grant();
+  const bootstrap = await f.request("/bootstrap", grant.access_token, "POST", {});
+  const { workspace } = await bootstrap.json() as { workspace: { id: string; displayName: string } };
+  const binding = await f.prepareRetainedBilling(workspace.id);
+  const path = `/${workspace.id}/billing-organization`;
+  const scope = { workspaceId: workspace.id, workspaceRef: binding.workspaceRef, organizationId: binding.organizationRef };
+  reads.length = 0;
+  const entry = await f.request(`${path}?projection=entry-v1`, grant.access_token);
+  expect(entry.status).toBe(200);
+  const body = await entry.json();
+  expect(body).toEqual({ ...scope, displayName: workspace.displayName });
+  expect(grantChecks()).toBe(6);
+  expect(reads).toHaveLength(19);
+
+  reads.length = 0;
+  const standard = await f.request(path, grant.access_token);
+  expect(standard.status).toBe(200);
+  expect(await standard.json()).toEqual(scope);
+  expect(grantChecks()).toBe(5);
+  expect(reads).toHaveLength(28);
+
+  f.useBooleanBillingContext();
+  reads.length = 0;
+  const original = await f.request(`${path}?projection=entry-v1`, grant.access_token);
+  expect(original.status).toBe(200);
+  expect(await original.json()).toEqual(body);
+  expect(grantChecks()).toBe(6);
+  expect(reads).toHaveLength(34);
+
+  const auth = await resolveSharedAccountGrantSession({
+    issuer, store, clients: new Map(f.clients.map((client) => [client.clientId, client])),
+    request: new Request(`${issuer}/api/v1/account/shared-workspaces${path}`, {
+      headers: { authorization: `Bearer ${grant.access_token}` },
+    }),
+  });
+  if (!auth.ok) throw new Error("Expected a valid hosted grant context");
+  expect(await sharedGrantSubjectReader(auth.session, store)?.()).toBe(subject);
+  expect(sharedGrantSubjectReader(auth.session, new D1AccountsStore(db))).toBeUndefined();
+});
+
+for (const [boundary, change] of [
+  ["binding lookup", "grant revocation"], ["final membership", "grant revocation"], ["final membership", "merge fence"],
+] as const) {
+  test(`D1 billing entry refuses ${change} during ${boundary}`, async () => {
+    const db = new SqliteFakeD1();
+    const store = new D1AccountsStore(db, { sessionHashSalt: "fixture-entry-race-salt" });
+    const f = await directoryFixture(undefined, { store, useRetainedBinding: true });
+    const grant = await f.grant();
+    const bootstrap = await f.request("/bootstrap", grant.access_token, "POST", {});
+    const { workspace } = await bootstrap.json() as { workspace: { id: string } };
+    await f.prepareRetainedBilling(workspace.id);
+    const memberEntered = Promise.withResolvers<void>();
+    const releaseMember = Promise.withResolvers<void>();
+    if (boundary === "binding lookup") f.pause();
+    else {
+      const getMember = f.operations.members.getMember!;
+      let reads = 0;
+      f.operations.members.getMember = async (workspaceId, accountId) => {
+        const member = await getMember(workspaceId, accountId);
+        if (++reads === 2) {
+          memberEntered.resolve();
+          await releaseMember.promise;
+        }
+        return member;
+      };
+    }
+    const pending = f.request(`/${workspace.id}/billing-organization?projection=entry-v1`, grant.access_token);
+    try {
+      await Promise.race([
+        boundary === "binding lookup" ? f.entered : memberEntered.promise,
+        pending.then((response) => { throw new Error(`Expected ${boundary}, received ${response.status}`); }),
+      ]);
+      if (change === "grant revocation") {
+        await store.revokeHostedOidcGrant!(claims(grant.id_token).sid as string, Date.now());
+      } else {
+        await db.prepare("INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)")
+          .bind("identity_merge_locks", subject, JSON.stringify({ operationId: "fixture_pending_merge" }), Date.now()).run();
+      }
+    } finally {
+      f.billingRelease();
+      releaseMember.resolve();
+    }
+    const response = await pending;
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: {
+      code: "invalid_session", requestId: expect.any(String), message: boundary === "binding lookup"
+        ? "A current account grant is required." : "A current canonical account session is required.",
+    } });
+  });
+}
 
 test("directory rejects spoofed IDs, legacy/PAT/Interface credentials, revoked/fenced/aliased grants and bad pagination",async()=>{
   const f=await directoryFixture();const grant=await f.grant();
