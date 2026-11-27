@@ -492,6 +492,7 @@ export const ja = {
   "apps.shared": "共有アプリ",
   "apps.search": "アプリを検索",
   "apps.clearSearch": "検索をクリア",
+  "apps.showAllApps": "すべてのアプリを表示",
   "apps.noMatches": "該当するアプリがありません。別の名前で検索してください。",
   "apps.settingsAria": "{name} の設定",
   "apps.openApp": "アプリを開く",

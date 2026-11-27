@@ -556,7 +556,7 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
             <Show when={publisher()}>{(name) => <span class="iv-app-publisher">{name()}</span>}</Show>
             <Show when={fromStore()}><StoreRating rating={listed()?.rating} locale={locale()} showEmpty /></Show>
             <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
-            <Show when={listingBadge()}>{(text) => <p>{text()}</p>}</Show>
+            <Show when={listingBadge()}>{(text) => <p class="iv-app-badge">{text()}</p>}</Show>
           </div>
         </header>
 
