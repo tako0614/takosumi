@@ -28,6 +28,9 @@ export function isLikelyStaleAssetError(value: unknown): boolean {
  */
 export function reloadForStaleAsset(value: unknown): boolean {
   if (typeof window === "undefined") return false;
+  // An offline chunk failure cannot be fixed by loading a new document.
+  // Preserve the current page so the user can recover once connected again.
+  if (window.navigator.onLine === false) return false;
   if (!isLikelyStaleAssetError(value)) return false;
   try {
     if (!claimReloadSlot(window.location.href, Date.now())) return false;
