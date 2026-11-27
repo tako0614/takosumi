@@ -32,6 +32,7 @@ import {
   desc,
   eq,
   exists,
+  getTableColumns,
   gt,
   inArray,
   isNull,
@@ -6091,6 +6092,30 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await ensureWorkspaceBillingD1SchemaReady(this.db);
     const row = await this.#orm.select().from(schema.workspaceBillingBindings).where(eq(schema.workspaceBillingBindings.workspaceId, workspaceId)).get();
     return row ? this.#decodeWorkspaceBillingBinding(row) : undefined;
+  }
+
+  async readWorkspaceBillingBindingRecords(workspaceId: string): Promise<{
+    readonly intent?: StoredWorkspaceBillingBindingIntent;
+    readonly binding?: WorkspaceBillingBinding;
+  }> {
+    await this.#ensureSchema();
+    await ensureWorkspaceBillingD1SchemaReady(this.db);
+    // Anchor both lookups on the requested ID so an orphan acknowledgement
+    // is visible to the domain's consistency check.
+    const row = await this.#orm
+      .select({
+        intent: getTableColumns(schema.workspaceBillingIntents),
+        binding: getTableColumns(schema.workspaceBillingBindings),
+      })
+      .from(sql`(select ${workspaceId} as workspace_id) as requested`)
+      .leftJoin(schema.workspaceBillingIntents, sql`${schema.workspaceBillingIntents.workspaceId} = requested.workspace_id`)
+      .leftJoin(schema.workspaceBillingBindings, sql`${schema.workspaceBillingBindings.workspaceId} = requested.workspace_id`)
+      .get();
+    if (!row) throw new TypeError("Workspace billing records read returned no row");
+    return {
+      ...(row.intent ? { intent: this.#decodeWorkspaceBillingIntent(row.intent) } : {}),
+      ...(row.binding ? { binding: this.#decodeWorkspaceBillingBinding(row.binding) } : {}),
+    };
   }
 
   #decodeWorkspaceBillingIntent(row: typeof schema.workspaceBillingIntents.$inferSelect): StoredWorkspaceBillingBindingIntent {

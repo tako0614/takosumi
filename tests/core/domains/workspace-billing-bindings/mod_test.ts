@@ -234,9 +234,10 @@ test("ordinary predeployed runtime bridges exact v71/v72 without DDL while bindi
     expect((await ordinary.getWorkspace(workspace.id)).displayName).toBe(updated.displayName);
     await expect(verifyD1OpenTofuLedgerSchemaPredeployed(tracked)).rejects.toThrow("verification failed");
     await expect(ordinary.billingBindings.get(workspace.id)).rejects.toThrow("verification failed");
+    await expect(ordinary.billingBindings.get("missing_workspace")).rejects.toMatchObject({code:"not_found"});
     expect(queries.some((query)=>/^\s*(CREATE|ALTER|DROP)\b/i.test(query))).toBe(false);
     expect((await native.prepare(`select type,name,sql from sqlite_master where name='_cf_METADATA'`).all()).results).toEqual(originalManaged.results);
-    expect(queries.some((query)=>/from ["`]?workspace_billing_(bindings|intents)/i.test(query))).toBe(false);
+    expect(queries.some((query)=>/\b(?:from|join) ["`]?workspace_billing_(bindings|intents)/i.test(query))).toBe(false);
     const tables = await native.prepare("select name from sqlite_master where name in ('workspace_billing_intents','workspace_billing_bindings')").all();
     expect(tables.results).toEqual([]);
     // Exact operator-side additive migration on this isolated fixture; the
@@ -244,9 +245,31 @@ test("ordinary predeployed runtime bridges exact v71/v72 without DDL while bindi
     await ensureD1OpenTofuLedgerSchema(native);
     expect((await native.prepare("select version,name,checksum,applied_at from schema_migrations where version <= 71 order by version").all()).results).toEqual(originalLedger.results);
     await verifyD1OpenTofuLedgerSchemaPredeployed(tracked);
+    expect(await ordinary.billingBindings.get(workspace.id)).toEqual({});
     const intent = await ordinary.billingBindings.prepare({workspaceId:workspace.id,billingAuthority:authority,actorAccountId:account});
+    expect(await ordinary.billingBindings.get(workspace.id)).toEqual({intent});
     const binding = await ordinary.billingBindings.claim({workspaceId:workspace.id,intentId:intent.intentId,actorAccountId:account,organizationRef:"org_bridge72",ownerAcknowledgementRef:"ack_bridge72"});
-    expect((await ordinary.billingBindings.get(workspace.id)).binding).toEqual(binding);
+
+    // Compare with the original Workspace check followed by two reads on the
+    // same warmed binding, including D1's maintenance queries.
+    const separateStart = queries.length;
+    await store.getWorkspace(workspace.id);
+    await Promise.all([
+      store.getWorkspaceBillingBindingIntent(workspace.id),
+      store.getWorkspaceBillingBinding(workspace.id),
+    ]);
+    const separateReads = queries.length - separateStart;
+    const coReadStart = queries.length;
+    expect(await ordinary.billingBindings.get(workspace.id)).toEqual({intent,binding});
+    expect(queries.length - coReadStart).toBe(separateReads - 2);
+    const retainedReads = queries.slice(coReadStart).filter(query => /workspace_billing_(bindings|intents)/i.test(query));
+    expect(retainedReads).toHaveLength(1);
+    expect(retainedReads[0]).toMatch(/workspace_billing_intents.*workspace_billing_bindings/i);
+
+    // Bypass only the service to model a damaged fixture, leaving the
+    // acknowledgement in place when its intent is missing.
+    await native.prepare("delete from workspace_billing_intents where workspace_id=?").bind(workspace.id).run();
+    await expect(ordinary.billingBindings.get(workspace.id)).rejects.toMatchObject({code:"failed_precondition"});
     expect(queries.some((query)=>/^\s*(CREATE|ALTER|DROP)\b/i.test(query))).toBe(false);
   } finally { await runtime.dispose(); }
 },30_000);

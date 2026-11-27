@@ -46,9 +46,15 @@ export class WorkspaceBillingBindingsService {
     requireNonEmptyString(workspaceId, "workspaceId");
     const workspace = await this.#store.getWorkspace(workspaceId);
     if (!workspace) throw new OpenTofuControllerError("not_found", "Workspace does not exist.");
-    const [intent, binding] = await Promise.all([
-      this.#store.getWorkspaceBillingBindingIntent(workspaceId), this.#store.getWorkspaceBillingBinding(workspaceId),
-    ]);
+    let intent: StoredWorkspaceBillingBindingIntent | undefined;
+    let binding: WorkspaceBillingBinding | undefined;
+    if (this.#store.readWorkspaceBillingBindingRecords) {
+      ({ intent, binding } = await this.#store.readWorkspaceBillingBindingRecords(workspaceId));
+    } else {
+      [intent, binding] = await Promise.all([
+        this.#store.getWorkspaceBillingBindingIntent(workspaceId), this.#store.getWorkspaceBillingBinding(workspaceId),
+      ]);
+    }
     if (intent && (intent.workspaceCreatedAt !== workspace.createdAt ||
       intent.originalWorkspace.ownerUserId !== workspace.ownerUserId || intent.originalWorkspace.type !== workspace.type ||
       intent.originalWorkspace.handle !== workspace.handle)) {
