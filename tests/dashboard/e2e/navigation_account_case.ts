@@ -591,6 +591,74 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
+    for (const scenario of ["committed", "uncommitted", "account switched"] as const) {
+      test(`API key revocation reads back after a lost response (${scenario})`, async ({ page }) => {
+        const errors = collectPageErrors(page);
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+        const fixture = await accountFixture(page);
+        const token = {
+          id: "pat_cli",
+          subject: "sub_portable_e2e",
+          name: "開発用 CLI",
+          prefix: "tks_8f2a",
+          scopes: ["read"],
+          created_at: "2026-10-01T00:00:00.000Z",
+        };
+        let listReads = 0;
+        let revokeRequests = 0;
+        await page.route((url) => url.pathname === "/api/v1/account/tokens", (route) => {
+          expect(route.request().method()).toBe("GET");
+          listReads += 1;
+          const switched = revokeRequests > 0 && scenario === "account switched";
+          const shownToken = switched
+            ? { ...token, subject: "sub_other_account", name: "別アカウントのキー" }
+            : token;
+          const revoked = revokeRequests > 0 && scenario !== "uncommitted";
+          return route.fulfill({
+            json: {
+              tokens: [
+                { ...shownToken, ...(revoked ? { revoked_at: "2026-10-02T00:00:00.000Z" } : {}) },
+                { ...shownToken, id: "pat_other", name: "別のキー", revoked_at: "2026-10-02T00:00:00.000Z" },
+              ],
+              next_cursor: null,
+            },
+          });
+        });
+        await page.route("**/api/v1/account/tokens/pat_cli/revoke", (route) => {
+          expect(route.request().method()).toBe("POST");
+          revokeRequests += 1;
+          return route.abort("failed");
+        });
+
+        await page.goto("/account/cli", { waitUntil: "domcontentloaded" });
+        const row = page.getByRole("listitem").filter({ hasText: token.name });
+        const revoke = row.getByRole("button", { name: "無効にする", exact: true });
+        const error = page.getByText(/API キーの操作を完了できませんでした/u);
+        await expect(row.getByText("有効", { exact: true })).toBeVisible();
+        await revoke.click();
+        await expect(row.getByRole("group")).toBeVisible();
+        await revoke.click();
+
+        if (scenario === "committed") {
+          await expect(row.getByText("無効", { exact: true })).toBeVisible();
+          await expect(revoke).toHaveCount(0);
+          await expect(error).toHaveCount(0);
+        } else if (scenario === "uncommitted") {
+          await expect(error).toBeVisible();
+          await expect(row.getByText("有効", { exact: true })).toBeVisible();
+          await expect(revoke).toBeEnabled();
+        } else {
+          await expect(error).toBeVisible();
+          await expect(row).toHaveCount(0);
+          await expect(page.getByText("別アカウントのキー", { exact: true })).toHaveCount(0);
+        }
+        expect(listReads).toBe(2);
+        expect(revokeRequests).toBe(1);
+        expect(fixture.mutations).toEqual([]);
+        expect(errors).toEqual([]);
+      });
+    }
+
     test("old URLs land where the behavior lives now", async ({ page }) => {
       const errors = collectPageErrors(page);
       await accountFixture(page);

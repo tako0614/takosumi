@@ -10,6 +10,7 @@ import {
   createSignal,
   For,
   Match,
+  onCleanup,
   Show,
   Switch,
 } from "solid-js";
@@ -34,6 +35,8 @@ import RelativeTime from "./RelativeTime.tsx";
 import { fetchFailedMessage, friendlyError } from "../../../lib/error-copy.ts";
 import { latestOrUndefined } from "../../../lib/resource-read.ts";
 import { formatDate, formatDateTime, locale, t } from "../../../i18n/index.ts";
+import { ApiError } from "../lib/http.ts";
+import { currentSessionCheck } from "../lib/session.ts";
 import {
   createTakosumiApiKey,
   listTakosumiApiKeys,
@@ -47,8 +50,19 @@ const CORE_ACCOUNT_KEY_SCOPES: ReadonlySet<TakosumiAccountsPatScope> = new Set([
   "write",
 ]);
 
-export default function TakosumiApiKeysCard() {
-  const [keys, { refetch }] = createResource(listTakosumiApiKeys);
+export default function TakosumiApiKeysCard(props: { readonly subject: string }) {
+  // AccountView is keyed by the authenticated session owner.
+  const subject = props.subject;
+  const requests = new AbortController();
+  onCleanup(() => requests.abort());
+  const [keys, { refetch }] = createResource(async () => {
+    const sessionIsCurrent = currentSessionCheck();
+    const rows = await listTakosumiApiKeys(requests.signal);
+    if (!sessionIsCurrent() || rows.some((key) => key.subject !== subject)) {
+      throw new ApiError(0, "session_changed", "Session changed while loading API keys.");
+    }
+    return rows;
+  });
   const [scopeCatalog, { refetch: refetchScopeCatalog }] = createResource(
     listTakosumiApiKeyScopeCatalog,
   );
@@ -126,14 +140,31 @@ export default function TakosumiApiKeysCard() {
 
   const revoke = async (tokenId: string) => {
     if (busy()) return;
+    const sessionIsCurrent = currentSessionCheck();
     setBusy(true);
     setError(undefined);
     try {
-      await revokeTakosumiApiKey(tokenId);
+      const failure = await revokeTakosumiApiKey(tokenId, requests.signal).then(
+        () => undefined,
+        (cause: unknown) => ({ cause }),
+      );
+      if (requests.signal.aborted || !sessionIsCurrent()) return;
+      if (failure?.cause instanceof ApiError && failure.cause.status < 500) {
+        throw failure.cause;
+      }
+      if (!failure) setConfirmingRevoke(undefined);
+      // A lost response can follow a committed revocation. Read the same
+      // key's status without submitting the revocation again.
+      const refreshed = await refetch();
+      if (requests.signal.aborted || !sessionIsCurrent() || !failure) return;
+      if (!refreshed?.some((key) => key.id === tokenId && key.revoked_at)) {
+        throw failure.cause;
+      }
       setConfirmingRevoke(undefined);
-      await refetch();
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      if (!requests.signal.aborted && sessionIsCurrent()) {
+        setError(friendlyError(cause, t).message);
+      }
     } finally {
       setBusy(false);
     }

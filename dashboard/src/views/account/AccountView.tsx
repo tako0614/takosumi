@@ -131,7 +131,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                 <BillingTab />
               </Match>
               <Match when={current() === "cli"}>
-                <TakosumiApiKeysCard />
+                <TakosumiApiKeysCard subject={props.session.subject} />
               </Match>
               <Match when={current() === "devices"}>
                 <NotificationDevicesCard />
