@@ -90,7 +90,6 @@ async function dashboardBootstrap(
   ctx: ControlDispatchContext,
 ): Promise<Response> {
   const { operations, store, session, url } = ctx;
-  const sessionSubject = session.subject;
   // The Workspace inventory is opt-in (TASK-0118 9.1): the dashboard asks for
   // it explicitly while its compatibility views still exist.
   const includeWorkspaces =
@@ -150,17 +149,24 @@ async function dashboardBootstrap(
           selectedWorkspaceId,
         )
       : undefined);
+  return dashboardBootstrapResponse(session.subject, {
+    ...(includeWorkspaces && workspaceList
+      ? {
+          workspaces: workspaceList.workspaces,
+          workspaceList: workspaceList.meta,
+        }
+      : {}),
+    ...(notifications ? { notifications } : {}),
+  });
+}
+
+/** Format the dashboard projection for an already authenticated subject. */
+export function dashboardBootstrapResponse(
+  subject: string,
+  projection: Omit<DashboardBootstrapResponse, "session"> = {},
+): Response {
   return json(
-    {
-      session: { subject: sessionSubject },
-      ...(includeWorkspaces && workspaceList
-        ? {
-            workspaces: workspaceList.workspaces,
-            workspaceList: workspaceList.meta,
-          }
-        : {}),
-      ...(notifications ? { notifications } : {}),
-    } satisfies DashboardBootstrapResponse,
+    { session: { subject }, ...projection } satisfies DashboardBootstrapResponse,
     200,
     { "cache-control": "no-store" },
   );

@@ -58,7 +58,7 @@ import {
   handleConnections,
   completeConnectionOAuth,
 } from "./control/connections.ts";
-import { handleDashboard } from "./control/dashboard.ts";
+import { dashboardBootstrapResponse, handleDashboard } from "./control/dashboard.ts";
 import {
   accountWorkspaceInventoryForbiddenResponse,
   handleAccountWorkspaceViews,
@@ -485,6 +485,8 @@ export async function handleAuthenticatedControlRoute(
     readonly workspaceId?: string;
     readonly requireCurrentMembership?: true;
     readonly reauthorizeBearer?: () => Promise<ControlCredentialRecheck>;
+    /** The reserved initial shared browser route requests only its session. */
+    readonly initialDashboardSession?: true;
     /** Which composition entry authenticated the subject (telemetry only). */
     readonly entry?: Exclude<LegacyWorkspaceEntry, "public">;
   },
@@ -492,6 +494,17 @@ export async function handleAuthenticatedControlRoute(
   const { request, url } = context;
   if (!isApiV1Path(url.pathname)) return undefined;
   const timings = serverTimingBucketForPath(url.pathname);
+  // Only the exact session projection is independent of Control. Workspace,
+  // notification and app reads still use their own authenticated operations.
+  if (context.initialDashboardSession && context.entry === "shared_auth" &&
+    context.credential === "session" && context.workspaceId === undefined &&
+    request.method === "GET" && url.pathname === "/api/v1/dashboard/bootstrap" &&
+    url.search === "?includeWorkspaces=false") {
+    context.assertActive?.();
+    const response = await measureServerTiming(timings, "tk_dashboard", () =>
+      dashboardBootstrapResponse(context.subject));
+    return appendServerTiming(response, timings);
+  }
   return await dispatchAuthenticatedControlRoute(
     {
       ...context,
