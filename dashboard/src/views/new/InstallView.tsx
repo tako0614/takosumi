@@ -86,6 +86,11 @@ let pickedListing: TcsListing | undefined;
 
 type StoreHandoff = NonNullable<ReturnType<typeof storeHandoff>>;
 
+interface StoreListingRead {
+  readonly listing: TcsListing;
+  readonly detailBadge?: TcsListing["badge"];
+}
+
 function matchesStoreRepository(listing: TcsListing, expectedGit?: string): boolean {
   if (!expectedGit) return true;
   try {
@@ -103,7 +108,7 @@ function cachedListing(handoff: StoreHandoff, expectedGit?: string): TcsListing 
     : undefined;
 }
 
-async function readListing(handoff: StoreHandoff, expectedGit?: string): Promise<TcsListing | null> {
+async function readListing(handoff: StoreHandoff, expectedGit?: string): Promise<StoreListingRead | null> {
   // A product can be repointed after the card or a shared link was made.
   // Don't replace that link's Git source with the new one.
   const picked = cachedListing(handoff, expectedGit);
@@ -112,10 +117,15 @@ async function readListing(handoff: StoreHandoff, expectedGit?: string): Promise
     if (!listing || listing.id !== handoff.listingId ||
       !matchesStoreRepository(listing, expectedGit ?? picked?.source.url)) return null;
     const source = picked?.source ?? listing.source;
-    const provider = source.path === listing.source.path ? listing.provider : picked?.provider;
-    return { ...listing, source, provider, primaryServer: handoff.base };
+    const sameModule = source.path === listing.source.path;
+    const provider = sameModule ? listing.provider : picked?.provider;
+    return {
+      listing: { ...listing, source, provider, primaryServer: handoff.base },
+      // A cached catalog card may have been attributed to a different Store.
+      detailBadge: sameModule ? listing.badge : undefined,
+    };
   } catch (error) {
-    if (picked) return picked;
+    if (picked) return { listing: picked };
     throw error;
   }
 }
@@ -324,8 +334,9 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     if (!source || listing.error) return undefined;
     const fetched = listing.latest;
     if (fetched === null) return null;
-    return fetched?.id === source.listingId && fetched.primaryServer === source.base &&
-        matchesStoreRepository(fetched, storeGit())
+    const item = fetched?.listing;
+    return item?.id === source.listingId && item.primaryServer === source.base &&
+        matchesStoreRepository(item, storeGit())
       ? fetched
       : undefined;
   };
@@ -333,7 +344,7 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     const source = store();
     const fetched = resolvedListing();
     // Null means the Store removed or repointed the listing.
-    return fetched === null || !source ? undefined : fetched ?? cachedListing(source, storeGit());
+    return fetched === null || !source ? undefined : fetched?.listing ?? cachedListing(source, storeGit());
   };
   const listingFailed = (): boolean => Boolean(listing.error || (store() && listing.state === "ready" && listing.latest === null));
   const selectedGitUrl = () => listed()?.source.url ?? prefill()?.git;
@@ -404,10 +415,19 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     const current = provenancePlan();
     return current ? current.options.modulePath : listed()?.source.path ?? prefill()?.path;
   };
+  const isListingCandidate = () => !attemptId() && attempt.view().stage === "candidate";
   const listingProvider = () => {
-    if (attemptId() || attempt.view().stage !== "candidate") return undefined;
-    const provider = listed()?.provider;
+    const provider = isListingCandidate() ? listed()?.provider : undefined;
     return typeof provider === "string" && provider.trim() ? tcsProviderLabel(provider) : undefined;
+  };
+  const listingBadge = () => {
+    if (!isListingCandidate() || listing.loading || (prefill()?.sourcePath ?? ".") !== ".") return undefined;
+    const detail = resolvedListing();
+    if (!detail || (detail.listing.source.path ?? ".") !== (provenanceModulePath() || ".")) return undefined;
+    const value = detail.detailBadge?.[locale()];
+    if (typeof value !== "string") return undefined;
+    const text = value.trim();
+    return text && text !== title() && text !== description() ? text : undefined;
   };
   const version = () => {
     const current = provenancePlan();
@@ -516,6 +536,7 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
             <Show when={publisher()}>{(name) => <span class="iv-app-publisher">{name()}</span>}</Show>
             <Show when={fromStore()}><StoreRating rating={listed()?.rating} locale={locale()} showEmpty /></Show>
             <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
+            <Show when={listingBadge()}>{(text) => <p>{text()}</p>}</Show>
           </div>
         </header>
 
