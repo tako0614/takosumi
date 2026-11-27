@@ -1935,6 +1935,56 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
+  test("an offline route chunk preserves the dashboard until an online reload", async ({
+    page,
+    context,
+  }) => {
+    test.skip(mode !== "portable", "route chunk interruptions are portable-only");
+    const errors = pageErrors(page);
+    await gotoDashboardDocument(page, "/");
+    await expect(
+      page.getByTestId("home-app").filter({ hasText: expectations.appName }).first(),
+    ).toBeVisible();
+
+    const documentRequests: string[] = [];
+    // Keep the route's stylesheet available, so the boundary receives the
+    // JavaScript import failure instead of a Vite CSS-preload error.
+    await page.route("**/assets/*.css", async (route) =>
+      route.fulfill({ response: await route.fetch() }),
+    );
+    page.on("request", (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        documentRequests.push(routePath(request.url()));
+      }
+    });
+    await context.setOffline(true);
+    expect(await page.evaluate(() => navigator.onLine)).toBe(false);
+    const failedChunk = page.waitForEvent("requestfailed", (request) =>
+      /^\/assets\/AccountView-.*\.js$/u.test(routePath(request.url())),
+    );
+    const accountLink = page.locator('a[href="/account"]').first();
+    await accountLink.evaluate((link: HTMLAnchorElement) => link.click());
+    await failedChunk;
+
+    const card = page.getByRole("alert").filter({
+      has: page.getByRole("heading", {
+        name: /This page couldn't be shown|この画面を表示できませんでした/u,
+      }),
+    });
+    await expect(card).toBeVisible();
+    await expect(homeLink(page)).toBeVisible();
+    expect(await page.evaluate(() =>
+      sessionStorage.getItem("takosumi.dashboard.stale-asset-reload@v1"),
+    )).toBeNull();
+    expect(documentRequests).toEqual([]);
+
+    await context.setOffline(false);
+    await card.getByRole("button", { name: /^(Reload|再読み込み)$/u }).click();
+    await expect(page.getByRole("heading", { name: /^(Account|アカウント)$/u })).toBeVisible();
+    expect(documentRequests).toEqual(["/account"]);
+    await assertNoPageErrors(errors);
+  });
+
   test("a failed app-access read is visible and does not use a Workspace error state", async ({
     page,
   }) => {
