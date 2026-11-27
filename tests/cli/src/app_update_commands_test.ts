@@ -1375,13 +1375,26 @@ for (const [planOption, savedPlan, args, serve] of [
 }
 
 test("approval recovery requires the same passing Plan and a complete linked Run read", async () => {
-  for (const scenario of ["waiting", "changed", "policy-denied", "history-denied", "linked"] as const) {
+  for (const scenario of ["waiting", "changed", "policy-denied", "history-denied", "linked",
+    "approval-refused", "refused-body-lost", "approval-acknowledged"] as const) {
     let submitted = false;
+    let interrupted = false;
     const r = await invoke(applyArgs, req => {
       const path = new URL(req.url).pathname;
       if (path.endsWith("/approve")) {
         submitted = true;
+        if (scenario === "approval-refused") return Response.json({ error: "forbidden" }, { status: 403 });
+        if (scenario === "refused-body-lost") {
+          return new Response(new ReadableStream({
+            start: controller => controller.error(Error("synthetic lost refusal body")),
+          }), { status: 403 });
+        }
+        if (scenario === "approval-acknowledged") return Response.json({ run: plan });
         throw Error("synthetic lost approval ACK");
+      }
+      if (submitted && !interrupted && scenario === "approval-acknowledged" && path === `/api/v1/runs/${plan.id}`) {
+        interrupted = true;
+        throw Error("synthetic read interruption after acknowledged approval");
       }
       if (submitted && scenario === "history-denied" && path === "/api/v1/capsules/cap_owned/runs") {
         return Response.json({ error: "forbidden" }, { status: 403 });
