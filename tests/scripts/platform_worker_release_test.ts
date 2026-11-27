@@ -513,7 +513,9 @@ async function exerciseCodeLane(options: {
     "already-present" | "predecessor-secret" | "wrong-entry" | "wrong-dashboard" | "changed-bundle" | "bundle-changed-before-upload" |
     "dependency-changed" | "dependency-split" | "dependency-malformed" | "dependency-changed-before-upload" |
     "dependency-changed-after-upload" | "dependency-changed-after-activation" |
-    "unserved-secret-version" | "intervening-secret-version";
+    "unserved-secret-version" | "intervening-secret-version" |
+    "late-secret-version-before-upload" | "late-secret-version-before-activation";
+  readonly hostedHistoryCustodyDrift?: "config" | "assets" | "bundle";
   readonly loginSmokeFails?: boolean;
   readonly unrelatedBindingDrift?: boolean;
   readonly bindingReplacedBySecret?: string;
@@ -663,11 +665,18 @@ async function exerciseCodeLane(options: {
   let uploadConfigSource = "";
   let activationConfigSource = "";
   let dryRunEntry = "";
+  let dryRunAsset = "";
+  let lateSecretVersion = false;
   const command: PlatformReleaseCommand = async (argv) => {
     if (argv[1] === "versions" && argv[2] === "upload" && argv.includes("--dry-run")) {
       const output = argv[argv.indexOf("--outdir") + 1]!;
       dryRunEntry = join(output, "index.js");
       writeFileSync(dryRunEntry, maintenance === "changed-bundle" ? "other sealed Worker" : CODE_BUNDLE);
+      if (options.hostedHistoryCustodyDrift === "assets") {
+        const dryRunConfig = readFileSync(argv[argv.indexOf("--config") + 1]!, "utf8");
+        const { assets } = Bun.TOML.parse(dryRunConfig) as { assets: { directory: string } };
+        dryRunAsset = join(assets.directory, "index.html");
+      }
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     if (argv[1] === "versions" && argv[2] === "upload") {
@@ -832,12 +841,22 @@ async function exerciseCodeLane(options: {
         },
         nativeRead: async (path) => {
           if (pinnedActivation && path === "/workers/scripts/takosumi-staging/versions?page=1&per_page=2") {
+            if (options.hostedHistoryCustodyDrift === "config") {
+              writeFileSync(configPath, source + "\n# changed during upload history read\n");
+            } else if (options.hostedHistoryCustodyDrift === "assets") {
+              chmodSync(dryRunAsset, 0o600);
+              writeFileSync(dryRunAsset, "changed during upload history read");
+            } else if (options.hostedHistoryCustodyDrift === "bundle") {
+              writeFileSync(dryRunEntry, "changed during upload history read");
+            }
             const ids = [CODE_PREDECESSOR_ID];
             if (pinnedActivation === "unserved-secret-version" ||
               (pinnedActivation === "intervening-secret-version" && uploadCount > 0)) {
               ids.push(STATUS_VERSION_ID);
             }
             if (uploadCount > 0) ids.push(CODE_DEPLOYED_ID);
+            // Only immutable Version identity changes; serving and secret-name reads stay the same.
+            if (lateSecretVersion) ids.push(STATUS_VERSION_ID);
             return { result: { items: ids.map((id, index) => ({ id, number: 42 + index })).reverse().slice(0, 2) }, resultInfo: { page: 1 } };
           }
           if (options.apiKeys && path === "/workers/scripts/takosumi-auth-staging/deployments") {
@@ -850,6 +869,10 @@ async function exerciseCodeLane(options: {
             hostedReadPhases.push(phase);
             if (maintenance === "bundle-changed-before-upload" && phase === "before-upload") {
               writeFileSync(dryRunEntry, "changed during dependency read");
+            }
+            if ((maintenance === "late-secret-version-before-upload" && phase === "before-upload") ||
+              (maintenance === "late-secret-version-before-activation" && phase === "before-activate")) {
+              lateSecretVersion = true;
             }
             if (maintenance === "dependency-malformed") return { result: { deployments: [] }, resultInfo: null };
             const changed = maintenance === "dependency-changed" ||
@@ -1865,6 +1888,30 @@ test("Hosted auth maintenance refuses a sealed entry changed during preflight", 
   const result = await exerciseCodeLane({ hostedMaintenance: "bundle-changed-before-upload" });
   expect(result.error).toMatchObject({ message: "platform_worker_hosted_auth_maintenance_activation_artifact_changed" });
   expect(result).toMatchObject({ buildCount: 1, uploadCount: 0, activationCount: 0 });
+});
+
+test("Hosted auth maintenance refuses a late secret-only Version before upload", async () => {
+  const beforeUpload = await exerciseCodeLane({ hostedMaintenance: "late-secret-version-before-upload" });
+  expect(beforeUpload.error).toMatchObject({ message: "platform_worker_hosted_auth_maintenance_activation_secret_predecessor_changed" });
+  expect(beforeUpload).toMatchObject({ uploadCount: 0, activationCount: 0, results: [] });
+});
+
+test("Hosted auth maintenance refuses a late secret-only Version before activation", async () => {
+  const beforeActivation = await exerciseCodeLane({ hostedMaintenance: "late-secret-version-before-activation" });
+  expect(beforeActivation.error).toMatchObject({
+    message: "platform_worker_code_release_incomplete",
+    cause: expect.objectContaining({ message: "platform_worker_hosted_auth_maintenance_activation_secret_predecessor_changed" }),
+  });
+  expect(beforeActivation).toMatchObject({ uploadCount: 1, activationCount: 0 });
+  expect(beforeActivation.results[0]).toMatchObject({ status: "incomplete", mutation: "upload" });
+});
+
+test("Hosted auth maintenance checks local configuration and artifacts after reading upload history", async () => {
+  for (const hostedHistoryCustodyDrift of ["config", "assets", "bundle"] as const) {
+    const result = await exerciseCodeLane({ hostedMaintenance: "transition", hostedHistoryCustodyDrift });
+    expect(result.error).toBeDefined();
+    expect(result).toMatchObject({ uploadCount: 0, activationCount: 0, results: [] });
+  }
 });
 
 test("login admission refuses missing composition, partial predecessors and unrelated drift before upload", async () => {

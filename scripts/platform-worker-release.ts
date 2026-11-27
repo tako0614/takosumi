@@ -2615,6 +2615,13 @@ async function runPlatformWorkerCodePublication(
     }
     artifacts = { entryDigest, dashboardDigest: dashboard.digest };
 
+    const assertLocalReleaseInputsUnchanged = () => {
+      assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
+      initialConfig.assertUnchanged();
+      finalConfig!.assertUnchanged();
+      retainSourceProvenance();
+      assertAssetsUnchanged();
+    };
     const assertPredecessorUnchanged = async () => {
       const immediate = await readAuthority(initialConfig.path, predecessorSource, true);
       assertPlatformWorkerCodeAuthorityUnchanged(baseline, immediate, true);
@@ -2625,11 +2632,7 @@ async function runPlatformWorkerCodePublication(
         throw new Error(activationError("source_drift"));
       }
       await assertActivationDependency();
-      assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
-      initialConfig.assertUnchanged();
-      finalConfig!.assertUnchanged();
-      retainSourceProvenance();
-      assertAssetsUnchanged();
+      if (!hostedMaintenance) assertLocalReleaseInputsUnchanged();
       if (activation && await readServingVersion(initialConfig.path, command) !== baseline.versionId) {
         throw new Error(activationError("predecessor_changed"));
       }
@@ -2648,13 +2651,18 @@ async function runPlatformWorkerCodePublication(
       releaseTag = resume.tag;
       deployedVersionId = resume.version;
     } else {
-      await assertActivationUploadHistory();
+      if (!hostedMaintenance) await assertActivationUploadHistory();
       await assertPredecessorUnchanged();
       const nonce = (runtime.nonce ?? (() => randomBytes(16).toString("hex")))();
       if (!/^[0-9a-f]{32}$/u.test(nonce)) {
         throw new Error("platform_worker_code_nonce_invalid");
       }
       releaseTag = `tks-stg-code-${nonce}`;
+      // Hosted inherits from the latest upload, so Version history must be the final provider read.
+      if (hostedMaintenance) {
+        await assertActivationUploadHistory();
+        assertLocalReleaseInputsUnchanged();
+      }
       assertBundleUnchanged();
       mutation = "upload";
       const upload = await command(
@@ -2705,13 +2713,18 @@ async function runPlatformWorkerCodePublication(
     assertPlatformWorkerCodeStableVersion(baseline.version, uploaded);
     candidateVersionId = deployedVersionId;
     // Resume and delayed upload readback can outlive the preceding authority check.
-    await assertActivationUploadHistory(deployedVersionId);
+    if (!hostedMaintenance) await assertActivationUploadHistory(deployedVersionId);
     if (resume || activation || candidate.retried) await assertPredecessorUnchanged();
 
     activationConfig = createPlatformWorkerCodeActivationConfig(
       workerName,
       platformContainerAccountIdFromConfig(initialConfig.path),
     );
+    if (hostedMaintenance) {
+      await assertActivationUploadHistory(deployedVersionId);
+      assertLocalReleaseInputsUnchanged();
+      activationConfig.assertUnchanged();
+    }
     assertBundleUnchanged();
     mutation = "activate";
     await command(
