@@ -171,7 +171,7 @@ test("malformed shards and partial timing refresh fail closed", () => {
 test("private shard measurements preserve the immutable timing input and original guards", () => {
   const output = join(tmpdir(), "takosumi-private-measurements", "timings.json");
   expect(portableTestCommands({ shard: "2/6", timingsOutput: output })).toEqual([
-    [...PORTABLE_TEST_COMMAND, "--shard=2/6", `--timings=${output}`,
+    [...PORTABLE_TEST_COMMAND.filter((arg) => arg !== "--only-failures"), "--shard=2/6", `--timings=${output}`,
       `--timings=${TEST_TIMINGS_PATH}`, "--update-timings"],
   ]);
   expect(() => portableTestCommands({ timingsOutput: output })).toThrow("requires a shard");
@@ -195,6 +195,12 @@ test("private output refuses existing entries, nonprivate parents and checkout a
     await writeFile(join(root, "provenance.json"), "old receipt");
     expect(() => preparePrivateTimingOutput(output)).toThrow("already exist");
     await rm(join(root, "provenance.json"));
+    for (const name of ["last-announced-test-file.json", "last-announced-test-file.json.tmp"]) {
+      const staleProgress = join(root, name);
+      await symlink(join(root, "missing"), staleProgress);
+      expect(() => preparePrivateTimingOutput(output)).toThrow("already exist");
+      await rm(staleProgress);
+    }
     await chmod(root, 0o755);
     expect(() => preparePrivateTimingOutput(output)).toThrow("0700");
     await chmod(root, 0o700);
@@ -236,6 +242,106 @@ test("command execution preserves the original nonzero and stops later commands"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test.each(["plain", "GitHub Actions"] as const)("%s Bun reporter leaves a private file checkpoint during beforeAll", async (reporter) => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-shard-file-progress-"));
+  const actions = process.env.GITHUB_ACTIONS;
+  if (reporter === "GitHub Actions") process.env.GITHUB_ACTIONS = "true";
+  else delete process.env.GITHUB_ACTIONS;
+  try {
+    const tests = join(root, "tests");
+    const artifacts = join(root, "artifacts");
+    await mkdir(tests);
+    await mkdir(artifacts, { mode: 0o700 });
+    await writeFile(join(tests, "paused_test.ts"), `
+      import { beforeAll, test } from "bun:test";
+      beforeAll(async () => {
+        const released = Bun.file("release");
+        const deadline = Date.now() + 8_000;
+        while (!await released.exists()) {
+          if (Date.now() >= deadline) throw new Error("fixture release missing");
+          await Bun.sleep(10);
+        }
+      });
+      test("fixture failure after release", () => {
+        console.error("tests/nested_fixture_test.ts:");
+        throw new Error("isolated fixture failure");
+      });
+    `);
+    const output = preparePrivateTimingOutput(join(artifacts, "timings.json"));
+    const checkpoint = join(artifacts, "last-announced-test-file.json");
+    let exited = false;
+    const running = runPortableTestCommands(
+      [[process.execPath, "test", "--isolate", "./tests"]],
+      root,
+      output,
+    ).then((status) => { exited = true; return status; });
+    try {
+      const deadline = Date.now() + 4_000;
+      while (!exited && !await Bun.file(checkpoint).exists() && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
+      expect(exited).toBe(false);
+      expect(JSON.parse(await readFile(checkpoint, "utf8"))).toEqual({
+        version: 1,
+        file: "tests/paused_test.ts",
+        announcedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      });
+      expect((await stat(checkpoint)).mode & 0o777).toBe(0o600);
+      expect(await Bun.file(output).exists()).toBe(false);
+    } finally {
+      await writeFile(join(root, "release"), "");
+      expect(await running).toBe(1);
+    }
+    expect(JSON.parse(await readFile(checkpoint, "utf8")).file).toBe("tests/paused_test.ts");
+  } finally {
+    if (actions === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = actions;
+    await rm(root, { recursive: true, force: true });
+  }
+}, 12_000);
+
+test("test exit is retained when a fixture descendant still has the diagnostics pipe", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-shard-retained-pipe-"));
+  try {
+    await mkdir(join(root, "tests"));
+    const holdStderr = `
+      const release = Bun.file("release");
+      const end = Date.now() + 6_000;
+      while (!await release.exists() && Date.now() < end) await Bun.sleep(10);
+      await Bun.write("descendant-finished", "");
+    `;
+    await writeFile(join(root, "tests/retained_pipe_test.ts"), `
+      import { spawn } from "node:child_process";
+      import { test } from "bun:test";
+      test("fixture with a retained pipe", () => {
+        spawn(process.execPath, ["--eval", ${JSON.stringify(holdStderr)}], {
+          detached: true, stdio: ["ignore", "ignore", "inherit"],
+        }).unref();
+        process.exit(23);
+      });
+    `);
+    const output = preparePrivateTimingOutput(join(root, "timings.json"));
+    const running = runPortableTestCommands(
+      [[process.execPath, "test", "--isolate", "./tests"]],
+      root,
+      output,
+    );
+    try {
+      const status = await Promise.race([running, Bun.sleep(2_000).then(() => "still waiting for stderr")]);
+      expect(status).toBe(23);
+    } finally {
+      await writeFile(join(root, "release"), "");
+      await running;
+      const finished = join(root, "descendant-finished");
+      const deadline = Date.now() + 2_000;
+      while (!await Bun.file(finished).exists() && Date.now() < deadline) await Bun.sleep(10);
+      expect(await Bun.file(finished).exists()).toBe(true);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 9_000);
 
 test("CI preserves failed-run artifacts without changing shard count or job guards", async () => {
   const workflow = parse(await readFile(resolve(import.meta.dir, "../../.github/workflows/quality.yml"), "utf8")) as {

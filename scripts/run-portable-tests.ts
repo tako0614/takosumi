@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
 
 const ROOT = resolve(import.meta.dir, "..");
+const TEST_FILE_PROGRESS = "last-announced-test-file.json";
+const TEST_FILE_HEADER = /^(?:\.\/)?(tests\/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_][A-Za-z0-9_.-]*[_.-](?:test|spec)\.[cm]?[jt]sx?):$/u;
+const TEST_DIAGNOSTICS_DRAIN_MS = 250;
 
 export const TEST_TIMINGS_PATH = "tests/.bun-test-timings.json";
 // Native runtimes and host fixtures must not inherit leaked globals or handles
@@ -33,7 +38,9 @@ export function preparePrivateTimingOutput(path: string): string {
     throw new Error("private timing output requires an owned 0700 directory");
   }
   outsideCheckout(join(realpathSync(parent), basename(output)));
-  for (const target of [output, join(parent, "provenance.json")]) {
+  for (const target of [
+    output, join(parent, "provenance.json"), join(parent, TEST_FILE_PROGRESS), join(parent, `${TEST_FILE_PROGRESS}.tmp`),
+  ]) {
     try {
       lstatSync(target);
     } catch (error) {
@@ -69,10 +76,14 @@ export function portableTestCommands(options: {
     if (!shard) throw new Error("private timing output requires a shard");
     outsideCheckout(output);
   }
+  // Bun's normal reporter announces each file before its hooks run.
+  const command = output === undefined
+    ? PORTABLE_TEST_COMMAND
+    : PORTABLE_TEST_COMMAND.filter((arg) => arg !== "--only-failures");
   return [
     ...(index === 1 ? [["bun", "run", "test:workerd"]] : []),
     [
-      ...PORTABLE_TEST_COMMAND,
+      ...command,
       ...(shard ? [`--shard=${shard}`] : []),
       ...(output !== undefined ? [`--timings=${output}`] : []),
       ...(shard || options.updateTimings ? [`--timings=${TEST_TIMINGS_PATH}`] : []),
@@ -81,22 +92,74 @@ export function portableTestCommands(options: {
   ];
 }
 
+async function relayTestDiagnostics(
+  stderr: ReadableStream<Uint8Array>, cwd: string, progressPath: string, signal: AbortSignal,
+): Promise<boolean> {
+  const input = Readable.fromWeb(stderr, { signal });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let progressWritten = true;
+  try {
+    for await (const line of lines) {
+      // On GitHub Actions Bun uses a group command for the same file heading.
+      const heading = line.startsWith("::group::") ? line.slice("::group::".length) : line;
+      const file = TEST_FILE_HEADER.exec(heading)?.[1];
+      if (file && progressWritten) {
+        try {
+          // Nested fixtures can print Bun headers from a different checkout.
+          if (lstatSync(resolve(cwd, file), { throwIfNoEntry: false })?.isFile()) {
+            const scratch = `${progressPath}.tmp`;
+            const record = { version: 1, file, announcedAt: new Date().toISOString() };
+            writeFileSync(scratch, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: "wx" });
+            renameSync(scratch, progressPath);
+          }
+        } catch {
+          console.error("[portable-tests] could not retain the last announced test file");
+          progressWritten = false;
+        }
+      }
+      // Keep failure details and file headings without expanding every passing test.
+      if (!line.startsWith("(pass) ")) process.stderr.write(`${line}\n`);
+    }
+  } catch (error) {
+    if (!signal.aborted || !(error instanceof Error) || error.name !== "AbortError") throw error;
+  }
+  return progressWritten;
+}
+
 export async function runPortableTestCommands(
-  commands: readonly (readonly string[])[], cwd = ROOT,
+  commands: readonly (readonly string[])[], cwd = ROOT, timingsOutput?: string,
 ): Promise<number> {
   for (const command of commands) {
     console.error(`[portable-tests] ${command.join(" ")}`);
+    const progress = timingsOutput && command[1] === "test"
+      ? join(dirname(timingsOutput), TEST_FILE_PROGRESS) : undefined;
     const child = Bun.spawn([...command], {
       cwd,
       // Synthetic Workers need the local Request.cf fallback, not a network
       // request during each Miniflare startup.
-      env: { ...process.env, CLOUDFLARE_CF_FETCH_ENABLED: "false" },
+      env: {
+        ...process.env, CLOUDFLARE_CF_FETCH_ENABLED: "false",
+        ...(progress ? { NO_COLOR: "1", FORCE_COLOR: "0" } : {}),
+      },
       stdin: "inherit",
       stdout: "inherit",
-      stderr: "inherit",
+      stderr: progress ? "pipe" : "inherit",
     });
+    const stopDiagnostics = progress ? new AbortController() : undefined;
+    const diagnostics = progress && child.stderr && stopDiagnostics
+      ? relayTestDiagnostics(child.stderr, cwd, progress, stopDiagnostics.signal).catch(() => {
+        console.error("[portable-tests] could not read test diagnostics");
+        return false;
+      })
+      : true;
     const code = await child.exited;
+    // A fixture's descendant can retain stderr after the test process exits.
+    // Give buffered output a chance to arrive without waiting for its EOF.
+    const drain = stopDiagnostics && setTimeout(() => stopDiagnostics.abort(), TEST_DIAGNOSTICS_DRAIN_MS);
+    const diagnosticsOkay = await diagnostics;
+    clearTimeout(drain);
     if (code !== 0) return code;
+    if (!diagnosticsOkay) return 1;
   }
   return 0;
 }
@@ -147,7 +210,7 @@ if (import.meta.main) {
     });
     const inputSha256 = output === undefined ? undefined : digest(resolve(ROOT, TEST_TIMINGS_PATH));
     if (output !== undefined) preparePrivateTimingOutput(output);
-    let code = await runPortableTestCommands(commands);
+    let code = await runPortableTestCommands(commands, ROOT, output);
     if (output !== undefined) {
       try {
         writeTimingProvenance(output, shard!, inputSha256!, code, commands);
