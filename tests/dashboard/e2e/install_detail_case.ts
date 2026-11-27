@@ -558,6 +558,80 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations).toEqual([]);
     });
 
+    test("Store badge requires the selected Store detail to match the candidate module", async ({ page }) => {
+      const f = await detailFixture(page, base);
+      const primaryStore = "https://primary-store.example.test";
+      const selectedStore = "https://selected-store.example.test";
+      await page.addInitScript((stores) => localStorage.setItem("tcs.stores", JSON.stringify(stores)), [primaryStore, selectedStore]);
+      const primary = {
+        id: "example/service", source: { git: "https://github.com/example/service.git", path: "deploy/primary" },
+        suggestedName: "service", name: { en: "Primary catalog card" }, provider: "cloudflare",
+        description: { en: "An app from two Stores" },
+        badge: { en: "Primary Store note" }, createdAt: now, updatedAt: now,
+      };
+      const selected = {
+        ...primary, source: { ...primary.source, path: "deploy/selected" },
+        name: { en: "Selected Store detail" }, provider: "aws",
+        badge: { en: "Selected Store note" }, updatedAt: "2026-10-26T01:00:00.000Z",
+      };
+      await page.route(`${primaryStore}/tcs/v2/listings?**`, (route) => route.fulfill({ json: { items: [primary] } }));
+      await page.route(`${selectedStore}/tcs/v2/listings?**`, (route) => route.fulfill({ json: { items: [selected] } }));
+      await page.route(`${selectedStore}/tcs/v2/listings/example/service/reviews**`, (route) => route.fulfill({ json: { items: [] } }));
+      const detailPath = `${selectedStore}/tcs/v2/listings/example/service`;
+      const reading = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let detail: "different-module" | "same-module" | "unavailable" = "different-module";
+      await page.route(detailPath, async (route) => {
+        if (detail === "unavailable") return route.fulfill({ status: 503 });
+        if (detail === "same-module") return route.fulfill({ json: { ...selected, source: primary.source } });
+        reading.resolve();
+        await release.promise;
+        return route.fulfill({ json: selected });
+      });
+
+      async function chooseSelectedStore() {
+        await page.goto("/new", { waitUntil: "domcontentloaded" });
+        await page.getByRole("button", { name: "Display options", exact: true }).click();
+        await page.getByRole("combobox", { name: "Store", exact: true }).selectOption(selectedStore);
+        await page.getByRole("button", { name: "Primary catalog card", exact: true }).click();
+      }
+      const header = page.getByTestId("install-app-header");
+      const primaryNote = header.getByText("Primary Store note", { exact: true });
+      const selectedNote = header.getByText("Selected Store note", { exact: true });
+      const mismatchedDetail = page.waitForResponse((response) => response.url() === detailPath && response.status() === 200);
+      let pendingPrimaryNotes: number;
+      try {
+        await chooseSelectedStore();
+        await reading.promise;
+        pendingPrimaryNotes = await primaryNote.count();
+      } finally {
+        release.resolve();
+      }
+      await mismatchedDetail;
+      await expect(page).toHaveURL((url) => url.searchParams.get("tcsBase") === selectedStore);
+      await expect(header.getByRole("heading", { name: "Selected Store detail", exact: true })).toBeVisible();
+      await expect(primaryNote).toHaveCount(0);
+      await expect(selectedNote).toHaveCount(0);
+      expect(pendingPrimaryNotes).toBe(0);
+      await page.getByText("Source and version", { exact: true }).click();
+      await expect(page.getByTestId("install-provenance")).toContainText("Module path deploy/primary");
+      await expect(page.getByTestId("install-provenance")).toContainText("Store connection hint Cloudflare");
+
+      detail = "same-module";
+      await chooseSelectedStore();
+      await expect(selectedNote).toBeVisible();
+      await expect(primaryNote).toHaveCount(0);
+
+      detail = "unavailable";
+      const failedDetail = page.waitForResponse((response) => response.url() === detailPath && response.status() === 503);
+      await chooseSelectedStore();
+      await failedDetail;
+      await expect(page.getByTestId("install-start").getByRole("button", { name: "Install", exact: true })).toBeEnabled();
+      await expect(primaryNote).toHaveCount(0);
+      await expect(selectedNote).toHaveCount(0);
+      expect(f.mutations).toEqual([]);
+    });
+
     test("a late install response cannot take over a different app's page", async ({ page }) => {
       const f = await detailFixture(page, base, false, false, "not_applicable", { holdSourceReading: () => true });
       const otherGit = "https://github.com/example/other-service.git";
