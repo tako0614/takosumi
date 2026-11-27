@@ -77,6 +77,17 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
   const [error, setError] = createSignal<string>();
   const [confirmingRevoke, setConfirmingRevoke] = createSignal<string>();
   const [formOpen, setFormOpen] = createSignal(false);
+  let createTriggerRef: HTMLButtonElement | undefined;
+  let nameInputRef: HTMLInputElement | undefined;
+  const openCreateForm = () => {
+    setFormOpen(true);
+    setCreated(undefined);
+    requestAnimationFrame(() => nameInputRef?.focus());
+  };
+  const closeCreateForm = () => {
+    setFormOpen(false);
+    requestAnimationFrame(() => createTriggerRef?.focus());
+  };
   const scopeCatalogEntries = createMemo(
     (): readonly TakosumiAccountsPatScopeCatalogEntry[] =>
       scopeCatalog.error ? [] : (scopeCatalog.latest?.scopes ?? []),
@@ -190,13 +201,11 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
           <p class="tg-settings-note">{t("account.apiKeys.subtitle")}</p>
           <Show when={!formOpen()}>
             <Button
+              ref={createTriggerRef}
               variant="primary"
               size="sm"
               icon={<Plus size={15} />}
-              onClick={() => {
-                setFormOpen(true);
-                setCreated(undefined);
-              }}
+              onClick={openCreateForm}
             >
               {t("account.apiKeys.create")}
             </Button>
@@ -257,6 +266,8 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
             <p class="acct-help">{t("account.apiKeys.secretOnce")}</p>
             <FormField label={t("account.apiKeys.name")} required>
               <Input
+                ref={nameInputRef}
+                name="apiKeyName"
                 value={name()}
                 maxlength={80}
                 placeholder={t("account.apiKeys.namePlaceholder")}
@@ -265,6 +276,7 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
             </FormField>
             <FormField label={t("account.apiKeys.expiresLabel")}>
               <Select
+                name="apiKeyExpiration"
                 value={expirationDays()}
                 onInput={(event) =>
                   setExpirationDays(Number(event.currentTarget.value))
@@ -346,7 +358,7 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
               <Button
                 variant="ghost"
                 type="button"
-                onClick={() => setFormOpen(false)}
+                onClick={closeCreateForm}
               >
                 {t("common.cancel")}
               </Button>

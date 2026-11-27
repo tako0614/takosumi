@@ -44,6 +44,8 @@ const STR = {
   },
   search: { ja: "アプリを検索…", en: "Search apps…" },
   clearSearch: { ja: "検索をクリア", en: "Clear search" },
+  clearFilters: { ja: "絞り込みを解除", en: "Clear filters" },
+  clearStoreFilterAria: { ja: "ストアの絞り込みを解除: {store}", en: "Remove store filter: {store}" },
   sortUpdated: { ja: "更新順", en: "Recently updated" },
   sortCreated: { ja: "作成順", en: "Recently added" },
   storeFilter: { ja: "表示ストア", en: "Store" },
@@ -258,6 +260,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   });
 
   let searchEl: HTMLInputElement | undefined;
+  let optionsTriggerEl: HTMLButtonElement | undefined;
   const clearSearch = () => {
     setSearchInput("");
     searchEl?.focus();
@@ -266,6 +269,12 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     setSearchInput("");
     setActiveStore("");
     searchEl?.focus();
+  };
+  const activeStoreLabel = () => {
+    const base = activeStore();
+    if (!base) return "";
+    const status = agg().status.find((st) => st.base === base);
+    return status?.isDefault ? s("defaultStore", props.locale) : base;
   };
   const onSearch = (e: Event) => {
     e.preventDefault();
@@ -462,17 +471,41 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         </form>
         <Show when={showSortControl() || showSourceControls() || storeChoices().length > 1}>
           <button
+            ref={optionsTriggerEl}
             type="button"
             class="tcs-btn tcs-display-options"
             aria-expanded={optionsOpen()}
             aria-controls={displayOptionsId}
             onClick={() => setOptionsOpen((open) => !open)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && optionsOpen()) {
+                e.preventDefault();
+                setOptionsOpen(false);
+              }
+            }}
           >
             <SlidersHorizontal size={16} aria-hidden="true" />
             {s(activeStore() ? "filteredOptions" : "displayOptions", props.locale)}
           </button>
         </Show>
       </div>
+
+      <Show when={activeStore()}>
+        <div class="tcs-active-filters">
+          <button
+            type="button"
+            class="tcs-active-chip"
+            aria-label={s("clearStoreFilterAria", props.locale).replace("{store}", activeStoreLabel())}
+            onClick={() => {
+              setActiveStore("");
+              optionsTriggerEl?.focus();
+            }}
+          >
+            <span class="tcs-active-chip-label">{s("storeFilter", props.locale)}: {activeStoreLabel()}</span>
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      </Show>
 
       {/* Persistently-mounted polite live region: search / sort / load
           outcomes are otherwise conveyed only by the grid repainting. */}
@@ -487,7 +520,18 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               )}
       </p>
 
-      <div id={displayOptionsId} class="tcs-options-panel" hidden={!optionsOpen()}>
+      <div
+        id={displayOptionsId}
+        class="tcs-options-panel"
+        hidden={!optionsOpen()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && optionsOpen()) {
+            e.preventDefault();
+            setOptionsOpen(false);
+            optionsTriggerEl?.focus();
+          }
+        }}
+      >
         <div class="tcs-options-row">
           <Show when={showSortControl()}>
             <label class="tcs-select-label">
@@ -662,7 +706,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                           class="tcs-btn"
                           onClick={clearFilters}
                         >
-                          {s("clearSearch", props.locale)}
+                          {s(activeStore() ? "clearFilters" : "clearSearch", props.locale)}
                         </button>
                       </Show>
                     </div>

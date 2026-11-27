@@ -193,6 +193,19 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
   const [oauthBusy, setOauthBusy] = createSignal(false);
   const [oauthFailure, setOauthFailure] = createSignal(false);
   const [manualCredentials, setManualCredentials] = createSignal(false);
+  let formContainerRef: HTMLDivElement | undefined;
+  let wasOpen = props.open !== false;
+  createEffect(() => {
+    const isOpen = props.open !== false;
+    if (isOpen && !wasOpen) {
+      requestAnimationFrame(() => {
+        if (disposed || !formContainerRef) return;
+        if (formContainerRef.contains(document.activeElement)) return;
+        formContainerRef.querySelector<HTMLElement>("#connection-provider, #connection-display-name, input, select")?.focus();
+      });
+    }
+    wasOpen = isOpen;
+  });
   let oauthController: AbortController | undefined;
   let oauthPopup: Window | null = null;
   const cancelOAuth = () => {
@@ -393,7 +406,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
             </Show>
           }
         />
-        <div class="wc-form">
+        <div class="wc-form" ref={formContainerRef}>
           <Show
             when={
               !isGenericEnvProvider() &&

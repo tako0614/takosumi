@@ -184,15 +184,19 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).not.toContain("ストア全体を検索");
   });
 
-  test("provides search clear button, Escape shortcut, and empty-result filter recovery", () => {
+  test("provides search clear button, Escape shortcut, active filter chip, and empty-result filter recovery", () => {
     expect(storeBrowserSource).toContain('class="tcs-search-clear"');
     expect(storeBrowserSource).toContain('aria-label={s("clearSearch", props.locale)}');
     expect(storeBrowserSource).toContain(
       'if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && searchInput())',
     );
     expect(storeBrowserSource).toContain("e.stopPropagation();");
+    expect(storeBrowserSource).toContain('class="tcs-active-chip"');
+    expect(storeBrowserSource).toContain("optionsTriggerEl?.focus()");
     expect(storeBrowserSource).toContain("onClick={clearFilters}");
+    expect(storeBrowserSource).toContain('s(activeStore() ? "clearFilters" : "clearSearch", props.locale)');
     expect(storeBrowserCss).toContain(".tcs-search-clear");
+    expect(storeBrowserCss).toContain(".tcs-active-chip");
   });
 
   test("the invalid-server alert is associated with the URL input", () => {
@@ -217,7 +221,7 @@ describe("StoreBrowser install UI", () => {
     // plain text. Neither the discovery grid nor the install inputs take it.
     expect(storeHostSource).toContain("detailBadge: sameModule ? listing.badge : undefined");
     expect(storeHostSource).toContain("const value = detail.detailBadge?.[locale()];");
-    expect(storeHostSource).toContain("<Show when={listingBadge()}>{(text) => <p>{text()}</p>}</Show>");
+    expect(storeHostSource).toContain('<Show when={listingBadge()}>{(text) => <p class="iv-app-badge">{text()}</p>}</Show>');
     expect(storeHostSource.match(/\bdetailBadge\b/gu)).toHaveLength(3);
     expect(storeHostSource.match(/\blistingBadge\b/gu)).toHaveLength(2);
     expect(storeBrowserSource).not.toContain("listingBadge");

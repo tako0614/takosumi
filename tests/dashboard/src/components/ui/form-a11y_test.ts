@@ -52,5 +52,21 @@ describe("dashboard form, spinner, title, and touch-target accessibility", () =>
     expect(componentsCss).toContain("a.wordmark {\n  min-height: var(--tg-control-height);\n}");
     expect(appPageCss).toMatch(/\.ap-history-link\s*\{[^}]*min-height:\s*44px;/u);
     expect(installViewCss).toMatch(/\.iv-git-example a\s*\{[^}]*min-height:\s*44px;/u);
+    expect(installViewCss).toContain(".iv-app-intro p.iv-app-badge");
+  });
+
+  test("Wave 2 ergonomics: Home empty search recovery, RunView title & diagnostic copy, API key focus handoff, WorkspaceSwitcher retry target", () => {
+    const runViewSource = read("views/runs/RunView.tsx");
+    const apiKeysSource = read("views/account/components/TakosumiApiKeysCard.tsx");
+    const shellCss = read("styles/shell.css");
+    expect(appListSource).toContain('class="av-search-empty-wrap"');
+    expect(appListSource).toContain("!event.isComposing && event.keyCode !== 229");
+    expect(runViewSource).toContain("function DiagnosticPre(");
+    expect(runViewSource).toContain('class="wa-pre-copy"');
+    expect(runViewSource).toContain('parts.join(" · ")');
+    expect(apiKeysSource).toContain("requestAnimationFrame(() => nameInputRef?.focus())");
+    expect(apiKeysSource).toContain("requestAnimationFrame(() => createTriggerRef?.focus())");
+    expect(shellCss).toMatch(/\.workspace-switcher-retry\s*\{[^}]*min-height:\s*36px;/u);
+    expect(shellCss).toContain(".app-shell a:not(.tg-btn)");
   });
 });

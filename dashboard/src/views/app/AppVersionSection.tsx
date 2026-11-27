@@ -43,6 +43,7 @@ export default function AppVersionSection(props: {
 }): JSX.Element {
   const [requestedRef, setRequestedRef] = createSignal("");
   const [showAllPrevious, setShowAllPrevious] = createSignal(false);
+  let previousListRef: HTMLUListElement | undefined;
   const current = () => versionLabel(props.version.current?.ref, props.version.current?.commit);
   // Freshness only reflects a newer commit of the same tracked source ref.
   const updateAvailable = () => props.version.updateAvailable || props.version.stale;
@@ -176,7 +177,13 @@ export default function AppVersionSection(props: {
               when={previous().length > 0}
               fallback={<p class="ap-muted">{t("app.version.previousEmpty")}</p>}
             >
-              <ul class="ap-list" data-testid="app-previous-versions">
+              <ul
+                class="ap-list"
+                data-testid="app-previous-versions"
+                ref={(el) => {
+                  previousListRef = el;
+                }}
+              >
                 <For each={shownPrevious()}>
                   {(version) => {
                     const label = () => props.versionLabels.get(version.id);
@@ -208,7 +215,18 @@ export default function AppVersionSection(props: {
                 </For>
               </ul>
               <Show when={!showAllPrevious() && previous().length > PREVIOUS_VERSIONS_SHOWN}>
-                <Button variant="ghost" size="sm" type="button" onClick={() => setShowAllPrevious(true)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => {
+                    setShowAllPrevious(true);
+                    requestAnimationFrame(() => {
+                      const rows = previousListRef?.querySelectorAll<HTMLButtonElement>("li button");
+                      rows?.[PREVIOUS_VERSIONS_SHOWN]?.focus();
+                    });
+                  }}
+                >
                   {t("app.version.previousMore", { n: previous().length - PREVIOUS_VERSIONS_SHOWN })}
                 </Button>
               </Show>

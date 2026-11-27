@@ -14,12 +14,12 @@
   color: var(--tg-fg);
   line-height: var(--tg-lh-body);
 }
-.app-shell a {
+.app-shell a:not(.tg-btn) {
   color: inherit;
   text-decoration: none;
   transition: color 120ms ease;
 }
-.app-shell a:hover {
+.app-shell a:not(.tg-btn):hover {
   /* AA-safe red leaf (raw --tg-accent fails AA as small text in light and on
      --tg-bg-hi in dark). */
   color: var(--tg-accent-text);
@@ -311,8 +311,8 @@
   border-radius: var(--tg-r-full);
   color: var(--tg-fg);
   font-size: var(--tg-fs-xs);
-  padding: 2px var(--tg-s-2);
-  min-height: 28px;
+  padding: var(--tg-s-1) var(--tg-s-3);
+  min-height: 36px;
   cursor: pointer;
 }
 .workspace-switcher-retry:hover {
@@ -557,6 +557,9 @@
   .user-menu-lang-btn {
     min-height: var(--tg-control-height);
     padding: 4px 12px;
+  }
+  .workspace-switcher-retry {
+    min-height: var(--tg-control-height);
   }
 }
 /* ===== Mobile bottom tabs ===== */

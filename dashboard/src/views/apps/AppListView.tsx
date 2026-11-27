@@ -71,7 +71,12 @@ function Inner() {
               placeholder={t("apps.search")}
               value={query()}
               onInput={(event) => setQuery(event.currentTarget.value)}
-              onKeyDown={(event) => { if (event.key === "Escape") clearSearch(); }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229 && query()) {
+                  event.preventDefault();
+                  clearSearch();
+                }
+              }}
             />
             <Show when={query() && !home.error}>
               <button type="button" aria-label={t("apps.clearSearch")} onClick={clearSearch}>
@@ -106,7 +111,12 @@ function Inner() {
                 </Toast>
               </Show>
               <Show when={term() && !matches().length && searchComplete()}>
-                <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
+                <div class="av-search-empty-wrap">
+                  <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
+                  <Button variant="secondary" size="sm" type="button" onClick={clearSearch}>
+                    {t("apps.clearSearch")}
+                  </Button>
+                </div>
               </Show>
               <HomeAppGrid
                 apps={matches()} labelId={titleId}

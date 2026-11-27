@@ -27,7 +27,7 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
-import { Activity, ExternalLink } from "lucide-solid";
+import { Activity, Check, Copy, ExternalLink } from "lucide-solid";
 import { redactString } from "takosumi-contract/redaction";
 import Page from "../account/components/auth/Page.tsx";
 import { currentSessionCheck, type SessionRecord } from "../account/lib/session.ts";
@@ -314,6 +314,44 @@ function accessIssueDiagnostic(issue: AccessIssueKind): {
   }
 }
 
+function DiagnosticPre(props: { readonly text: string }) {
+  const [copied, setCopied] = createSignal(false);
+  let resetTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => {
+    if (resetTimer !== undefined) clearTimeout(resetTimer);
+  });
+  const copy = async () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(props.text);
+      setCopied(true);
+      if (resetTimer !== undefined) clearTimeout(resetTimer);
+      resetTimer = setTimeout(() => setCopied(false), 2_000);
+    } catch {
+      // Clipboard may be unavailable in restricted contexts; leave text selectable.
+    }
+  };
+  return (
+    <div class="wa-pre-block">
+      <div class="wa-pre-bar">
+        <button
+          type="button"
+          class="wa-pre-copy"
+          onClick={() => void copy()}
+        >
+          <Show when={copied()} fallback={<Copy size={14} aria-hidden="true" />}>
+            <Check size={14} aria-hidden="true" />
+          </Show>
+          <span aria-live="polite">
+            {copied() ? t("account.apiKeys.copied") : t("account.apiKeys.copy")}
+          </span>
+        </button>
+      </div>
+      <pre class="wa-pre">{props.text}</pre>
+    </div>
+  );
+}
+
 function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
   const accessIssue = () => accessIssueFromErrorCode(props.diagnostic.code);
   const message = () =>
@@ -340,10 +378,10 @@ function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
         when={rawMultilineMessage()}
         fallback={<span class="wa-diag-msg">{message()}</span>}
       >
-        <pre class="wa-pre">{message()}</pre>
+        <DiagnosticPre text={message()} />
       </Show>
       <Show when={detail()}>
-        {(text) => <pre class="wa-pre">{text()}</pre>}
+        {(text) => <DiagnosticPre text={text()} />}
       </Show>
     </li>
   );
@@ -849,7 +887,11 @@ function Inner(props: { readonly session: SessionRecord }) {
           : r?.type === "plan"
             ? "run.title.plan"
             : "run.title.other";
-    setDocumentTitle(t(titleKey as Parameters<typeof t>[0]));
+    const baseTitle = t(titleKey as Parameters<typeof t>[0]);
+    const name = appName();
+    const status = r ? runStatusLabel(r.status) : undefined;
+    const parts = [name, baseTitle, status].filter(Boolean);
+    setDocumentTitle(parts.length > 0 ? parts.join(" · ") : baseTitle);
   });
 
   const [lastLauncherCacheClearKey, setLastLauncherCacheClearKey] =
