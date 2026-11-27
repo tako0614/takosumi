@@ -7,7 +7,7 @@ import {
   isDeployApprovalCandidate,
   isReviewRun,
 } from "../../../../dashboard/src/lib/run-approval.ts";
-import { approveRun, type Run } from "../../../../dashboard/src/lib/control-api.ts";
+import { approveRun, cancelRun, type Run } from "../../../../dashboard/src/lib/control-api.ts";
 import {
   clearSharedAuthSessionPreflight,
   probeInitialSharedAuthSession,
@@ -132,15 +132,20 @@ describe("shared deploy-approval predicate (run list ↔ run view)", () => {
   });
 });
 
-describe("readback after approving a reviewed Plan", () => {
+describe("readback after a Run decision", () => {
   const reviewed = planRun({ status: "waiting_approval", planDigest: "sha256:reviewed", baseStateGeneration: 1 });
   const approved = { ...reviewed, status: "succeeded" } as const;
   const approvalPath = "/api/v1/runs/run_plan/approve";
   const runPath = "/api/v1/runs/run_plan";
 
-  test.each(["no response", "accepted body stalled", "refused body stalled"] as const)(
-    "approval deadline settles %s and only reads when warranted",
-    async (scenario) => {
+  test.each([
+    ["approve", "no response"], ["approve", "accepted body stalled"], ["approve", "refused body stalled"],
+    ["cancel", "no response"], ["cancel", "accepted body stalled"], ["cancel", "refused body stalled"],
+  ] as const)(
+    "%s deadline settles %s and only reads when warranted",
+    async (action, scenario) => {
+      const decisionPath = `${runPath}/${action}`;
+      const settled = action === "approve" ? approved : { ...reviewed, status: "cancelled" };
       jest.useFakeTimers();
       try {
         const calls: { method: string; path: string; signal?: AbortSignal | null }[] = [];
@@ -149,9 +154,9 @@ describe("readback after approving a reviewed Plan", () => {
           calls.push({ method: init?.method ?? "GET", path, signal: init?.signal });
           if (path === runPath) {
             expect(init?.cache).toBe("no-store");
-            return Response.json({ run: approved });
+            return Response.json({ run: settled });
           }
-          expect(path).toBe(approvalPath);
+          expect(path).toBe(decisionPath);
           if (scenario === "no response") return new Promise<Response>(() => {});
           return new Response(new ReadableStream(), {
             status: scenario === "refused body stalled" ? 403 : 200,
@@ -159,7 +164,8 @@ describe("readback after approving a reviewed Plan", () => {
           });
         }) as typeof fetch;
         let outcome: { run: Run } | { failure: unknown } | undefined;
-        void approveRun(reviewed).then(
+        const decision = action === "approve" ? approveRun(reviewed) : cancelRun(reviewed);
+        void decision.then(
           (run) => { outcome = { run }; },
           (failure) => { outcome = { failure }; },
         );
@@ -170,11 +176,11 @@ describe("readback after approving a reviewed Plan", () => {
         await new Promise<void>((resolve) => { realSetImmediate(resolve); });
         if (scenario === "refused body stalled") {
           expect(outcome).toMatchObject({ failure: { status: 403 } });
-          expect(calls.map(({ method, path }) => [method, path])).toEqual([["POST", approvalPath]]);
+          expect(calls.map(({ method, path }) => [method, path])).toEqual([["POST", decisionPath]]);
         } else {
-          expect(outcome).toEqual({ run: approved });
+          expect(outcome).toEqual({ run: settled });
           expect(calls.map(({ method, path }) => [method, path])).toEqual([
-            ["POST", approvalPath], ["GET", runPath],
+            ["POST", decisionPath], ["GET", runPath],
           ]);
         }
         expect(calls[0]?.signal?.aborted).toBe(true);

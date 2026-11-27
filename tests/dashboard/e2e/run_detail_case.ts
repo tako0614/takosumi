@@ -365,16 +365,22 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       expect(mutations).toEqual([`POST /api/v1/runs/${target}/cancel`]);
     });
 
-    for (const scenario of ["committed", "uncommitted", "foreign-read", "retired-401"] as const) {
+    for (const scenario of ["committed", "deadline", "uncommitted", "foreign-read", "retired-401"] as const) {
       test(`Run cancellation reconciles only its original screen (${scenario})`, async ({ page }) => {
         const id = "apply_cancel_witness";
         const nextId = "apply_cancel_replacement";
         const path = `/api/v1/runs/${id}`;
         const cancelPath = `${path}/cancel`;
-        await page.addInitScript((cancelPath) => {
+        await page.addInitScript(({ cancelPath, path }) => {
           localStorage.setItem("tg_lang", "en");
           const fetch = window.fetch.bind(window);
+          let requested = false;
           window.fetch = async (...args) => {
+            const [input, init] = args;
+            if (input === cancelPath && init?.method === "POST") requested = true;
+            if (requested && input === path && init?.method === "GET" && init.cache === "no-store") {
+              document.documentElement.dataset.cancelReadback = "true";
+            }
             const response = await fetch(...args);
             if (response.status === 401 && new URL(response.url).pathname === cancelPath) {
               requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -383,7 +389,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             }
             return response;
           };
-        }, cancelPath);
+        }, { cancelPath, path });
         if (scenario !== "retired-401") {
           await page.clock.install();
           await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
@@ -409,13 +415,17 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
               await held;
               return route.fulfill({ status: 401, json: { error: "invalid_token" } });
             }
+            if (scenario === "deadline") {
+              await held;
+              return route.fulfill({ json: { run: { ...run, status: "cancelled" } } });
+            }
             return route.abort("failed");
           }
           if (pathname === path) {
             reads += 1;
             const observed = dispatched && scenario === "foreign-read"
               ? { ...run, capsuleId: "cap_unrelated", status: "cancelled" }
-              : dispatched && scenario === "committed" ? { ...run, status: "cancelled" } : run;
+              : dispatched && (scenario === "committed" || scenario === "deadline") ? { ...run, status: "cancelled" } : run;
             return route.fulfill({ json: { run: observed } });
           }
           if (pathname === `/api/v1/runs/${nextId}`) return route.fulfill({ json: { run: successor } });
@@ -460,7 +470,13 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
             expect(await completed).toBe("stayed");
             await expect(replacement).toHaveAttribute("href", `/apps/${successor.capsuleId}`);
           } else {
-            if (scenario === "committed") {
+            if (scenario === "deadline") {
+              await expect.poll(() => dispatched).toBe(true);
+              expect(await page.locator("html").getAttribute("data-cancel-readback")).toBeNull();
+              await page.clock.fastForward(30_000);
+              await expect(page.locator("html")).toHaveAttribute("data-cancel-readback", "true");
+            }
+            if (scenario === "committed" || scenario === "deadline") {
               await expect(summary).toContainText("This run was cancelled.");
               await expect(action).toHaveCount(0);
               await expect(failure).toHaveCount(0);
@@ -469,7 +485,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
               await expect(summary).not.toContainText("This run was cancelled.");
               await expect(action).toBeEnabled();
             }
-            expect(reads).toBe(readsBefore + 1);
+            if (scenario !== "deadline") expect(reads).toBe(readsBefore + 1);
           }
           expect(writes).toEqual([`POST ${cancelPath}`]);
         } finally {
