@@ -5,9 +5,30 @@
  * sidebar / top-bar data fetches never fire for signed-out visitors.
  */
 import type { RouteSectionProps } from "@solidjs/router";
+import type { JSX } from "solid-js";
 import AppShell from "./AppShell.tsx";
 import AuthGuard from "../auth/AuthGuard.tsx";
+import MobileTabs from "./MobileTabs.tsx";
+import PrimaryNavigation from "./Sidebar.tsx";
+
+function sessionRecoveryLayout(body: JSX.Element): JSX.Element {
+  return (
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <PrimaryNavigation />
+        </div>
+      </header>
+      <div class="app-shell-main">{body}</div>
+      <MobileTabs />
+    </div>
+  );
+}
 
 export default function ShellLayout(props: RouteSectionProps) {
-  return <AuthGuard>{() => <AppShell>{props.children}</AppShell>}</AuthGuard>;
+  return (
+    <AuthGuard transportRecoveryLayout={sessionRecoveryLayout}>
+      {() => <AppShell>{props.children}</AppShell>}
+    </AuthGuard>
+  );
 }

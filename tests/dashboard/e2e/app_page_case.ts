@@ -114,6 +114,74 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
   test.describe("Installed app page", () => {
     test.skip(mode !== "portable", "deterministic app page fixture; not production evidence");
 
+    for (const revoked of [false, true]) {
+      test(`an interrupted session check preserves navigation before ${revoked ? "sign-in" : "settings recovery"}`, async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+        const start = Date.now();
+        await page.clock.setFixedTime(start);
+        let connectionLost = false;
+        let signedOut = false;
+        const mutations: string[] = [];
+        const documents: string[] = [];
+        const appSettings = `/apps/${CAPSULE_ID}#settings`;
+        const healthPath = "/auth/oidc/session";
+
+        await page.route(`**${healthPath}`, (route) => connectionLost
+          ? route.abort("internetdisconnected")
+          : route.fulfill({ status: signedOut ? 401 : 200, json: { authenticated: !signedOut } }));
+        await page.route("**/api/v1/**", async (route) => {
+          const request = route.request();
+          if (request.method() !== "GET") mutations.push(request.method());
+          if (signedOut && new URL(request.url()).pathname === "/api/v1/dashboard/bootstrap") {
+            return route.fulfill({ status: 401, json: { error: "invalid_token" } });
+          }
+          const response = await route.fetch();
+          return route.fulfill({ response, headers: {
+            ...response.headers(), "x-takosumi-shared-auth-read": "1",
+          } });
+        });
+
+        await page.goto(appSettings, { waitUntil: "domcontentloaded" });
+        await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-section", "settings");
+        const menu = page.locator(".sidebar-nav");
+        await menu.getByRole("link", { name: "Home", exact: true }).click();
+        const settings = page.getByRole("link", { name: `Settings for ${PORTABLE_EXPECTATIONS.appName}` });
+        await expect(settings).toBeVisible();
+
+        page.on("request", (request) => {
+          if (request.isNavigationRequest()) documents.push(new URL(request.url()).pathname);
+        });
+        await page.clock.setFixedTime(start + 31_000);
+        connectionLost = true;
+        const failedHealth = page.waitForEvent("requestfailed", (request) =>
+          new URL(request.url()).pathname === healthPath);
+        await settings.evaluate((link: HTMLAnchorElement) => link.click());
+        await failedHealth;
+        const retry = page.getByRole("button", { name: "Retry", exact: true });
+        await expect(retry).toBeVisible();
+        await expect(menu).toBeVisible();
+        await expect(page.getByTestId("app-management")).toHaveCount(0);
+        await expect(page.locator(".topbar-actions")).toHaveCount(0);
+        expect(documents).toEqual([]);
+
+        connectionLost = false;
+        signedOut = revoked;
+        await retry.click();
+        if (revoked) {
+          await expect(page).toHaveURL(/\/sign-in\?return=/u);
+          expect(new URL(page.url()).searchParams.get("return")).toBe(appSettings);
+          await expect(menu).toHaveCount(0);
+          await expect(page.getByTestId("app-management")).toHaveCount(0);
+          expect(documents).toEqual(["/sign-in"]);
+        } else {
+          await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-section", "settings");
+          await expect(menu).toBeVisible();
+          expect(documents).toEqual([]);
+        }
+        expect(mutations).toEqual([]);
+      });
+    }
+
     test("a stalled app read offers Retry and opens the app with reads only", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       await page.clock.install();
