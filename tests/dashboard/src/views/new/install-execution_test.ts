@@ -338,7 +338,11 @@ test("a review that cannot continue can always close", () => {
   // First read failed: Retry and Close.
   const firstRead = source.slice(source.indexOf("<Show when={run.error && !runLatest()}>"), source.indexOf("<Show when={runLatest()}>"));
   expect(firstRead).toContain("{closeButton()}");
-  // An unknown Apply outcome is held (no retry) but closable.
+  // An indeterminate Apply can be reconciled by reading history or closed.
   expect(source).toContain("<Show when={applyUnconfirmed() || stalePlan()}>{closeButton()}</Show>");
-  expect(source).toContain('setError(t("installStore.applyUnconfirmed"));');
+  const holdStart = source.indexOf('if (cause instanceof ControlApiIndeterminateError && cause.operation === "apply") {');
+  expect(holdStart).toBeGreaterThan(-1);
+  const hold = source.slice(holdStart, source.indexOf("} else {", holdStart));
+  expect(hold).toContain('setError(t("run.applyUnconfirmed"));');
+  expect(hold).toContain("await recoverApply(attempt);");
 });
