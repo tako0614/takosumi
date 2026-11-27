@@ -412,7 +412,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 115
+`accounts/service/src/control-route-inventory.ts`; it currently contains 116
 public route descriptors, listed below. Accounts compositions include the same routes in `/openapi.json` and publish their count as `x-takos-public-session-endpoint-count`. Core-only processes omit the unmounted Accounts routes. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -460,7 +460,7 @@ Once an app has an ownership row (`capsules.owner_account_id`), the caller's rol
 | `rollback` | yes | yes | `POST /state-versions/{id}/rollback-plan`, approval of restore Runs |
 | `choose_connection` | yes | yes | `configuration-plans` with `providerBindings`; only the owner's connections and bindable operator connections can be chosen |
 | `change_interface_link` | yes | yes | `PUT`/`DELETE /capsules/{id}/interface-links/{key}`; as the provider app, listing `interface-links/requests` and `approve`/`decline`; granting the app's Capsule-owned Interface to someone: `POST /interfaces/{id}/bindings` and `DELETE /interfaces/{id}/bindings/{bindingId}` |
-| `uninstall` | yes | no | `DELETE /capsules/{id}`, `uninstall`, `cancel-uninstall`, `abandon`, `destroy-plan`, approve/apply/cancel of destroy Runs, owned Source `DELETE` |
+| `uninstall` | yes | no | `DELETE /capsules/{id}`, `uninstall`, `cancel-uninstall`, `cancel-uninstall-reservation`, `abandon`, `destroy-plan`, approve/apply/cancel of destroy Runs, owned Source `DELETE` |
 | `transfer_ownership` | yes | no | `ownership-transfers` |
 | `manage_members` | yes | no | adding or removing `members` (a member may leave) |
 
