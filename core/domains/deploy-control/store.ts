@@ -4035,6 +4035,11 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   /** Immutable retained rows have no delete/relink API or Workspace-cascade ownership. */
   getWorkspaceBillingBindingIntent(workspaceId: string): Promise<StoredWorkspaceBillingBindingIntent | undefined>;
   getWorkspaceBillingBinding(workspaceId: string): Promise<WorkspaceBillingBinding | undefined>;
+  /** Co-read the retained intent and acknowledgement in one storage snapshot. */
+  readWorkspaceBillingBindingRecords?(workspaceId: string): Promise<{
+    readonly intent?: StoredWorkspaceBillingBindingIntent;
+    readonly binding?: WorkspaceBillingBinding;
+  }>;
   prepareWorkspaceBillingBinding(intent: StoredWorkspaceBillingBindingIntent): Promise<WorkspaceBillingBindingMutationResult<StoredWorkspaceBillingBindingIntent>>;
   claimWorkspaceBillingBinding(input: WorkspaceBillingBindingClaimInput): Promise<WorkspaceBillingBindingMutationResult<WorkspaceBillingBinding>>;
   getWorkspaceMember(
