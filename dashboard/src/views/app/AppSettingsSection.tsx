@@ -557,7 +557,7 @@ export default function AppSettingsSection(props: {
                         <div class="iv-inline-connect" id={formId}>
                           {/* The form reads the setup catalog; suspend here,
                               not the whole page. */}
-                          <Suspense fallback={<div role="status"><Spinner size={18} />{t("common.loading")}</div>}>
+                          <Suspense fallback={<div role="status"><Spinner size={18} decorative />{t("common.loading")}</div>}>
                             <ConnectionCreateForm
                               workspaceId={props.workspaceId}
                               initialProviderSource={row().provider}

@@ -417,6 +417,10 @@
   background: var(--tg-bg-subtle);
   color: var(--tg-fg);
 }
+.topbar-icon-btn[aria-current="page"] {
+  background: var(--tg-bg-subtle);
+  color: var(--tg-accent-text);
+}
 .topbar-user {
   display: inline-flex;
   align-items: center;

@@ -227,6 +227,11 @@ describe("attempt-driven install page", () => {
     expect(view).toContain('class="iv-catalogue iv-catalogue-browse"');
     expect(view).toContain('href={GIT_INSTALL_ENTRY}');
     expect(view).toContain('label={t("installStore.sourceUrl")}');
+    expect(view).toContain('name="gitUrl"');
+    expect(view).toContain("setDocumentTitle(t(\"installStore.fromGit\"))");
+    expect(view).toContain("setDocumentTitle(title() || t(\"installStore.title\"))");
+    const gitEntry = between(view, "function GitInstallPage()", "// --- One app, not installed yet");
+    expect(gitEntry).toContain('<a class="iv-back-link" href="/new">');
     // Selecting a listing reflects it into the URL so back and share work.
     expect(view).toContain("navigate(`/new?${buildNewQuery(listing)}`);");
   });

@@ -373,7 +373,7 @@ function PlanReview(props: {
       <Show when={!entry.error}>
       <Show
         when={!entry.loading}
-        fallback={<div class="iv-status" role="status"><Spinner size={18} /><span>{t("common.loading")}</span></div>}
+        fallback={<div class="iv-status" role="status"><Spinner size={18} decorative /><span>{t("common.loading")}</span></div>}
       >
         <Show when={!resolved()?.existing} fallback={
           <Show when={resolved()?.existing === "manage" ? resolved()?.app : undefined}>
@@ -672,7 +672,7 @@ export function InstallScreen(props: {
         <Show when={open()}>
           <div class="iv-inline-connect" id={formId(requirement())}>
             {/* The form reads the setup catalog; suspend here, not the page. */}
-            <Suspense fallback={<div role="status"><Spinner size={18} />{t("common.loading")}</div>}>
+            <Suspense fallback={<div role="status"><Spinner size={18} decorative />{t("common.loading")}</div>}>
               <div>
                 <ConnectionCreateForm
                   workspaceId={props.workspaceId}

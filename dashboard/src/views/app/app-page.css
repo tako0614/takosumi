@@ -151,7 +151,18 @@
 .ap-history { display: grid; margin: 0; padding: 0; list-style: none; }
 .ap-history-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2) var(--tg-s-3); padding: var(--tg-s-3) 0; border-bottom: 1px solid var(--tg-line); min-width: 0; }
 .ap-history-row:last-child { border-bottom: 0; }
-.ap-history-link { display: inline-flex; align-items: center; gap: var(--tg-s-1); font-size: var(--tg-fs-sm); white-space: nowrap; }
+.ap-history-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-1);
+  min-height: 44px;
+  padding-inline: var(--tg-s-2);
+  margin-inline-end: calc(-1 * var(--tg-s-2));
+  border-radius: var(--tg-r-sm);
+  font-size: var(--tg-fs-sm);
+  white-space: nowrap;
+}
+.ap-history-link:hover { background: var(--tg-bg-subtle); }
 .ap-history-reasons { margin-top: var(--tg-s-1); }
 
 /* Uninstall impact. */

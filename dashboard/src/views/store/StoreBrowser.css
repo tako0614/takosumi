@@ -38,7 +38,32 @@
   font: inherit;
 }
 .tcs-search > svg { position: absolute; inset-inline-start: 12px; top: 50%; transform: translateY(-50%); color: var(--c-muted); pointer-events: none; }
-.tcs-search input { min-height: 44px; padding-inline-start: 38px; }
+.tcs-search input { min-height: 44px; padding-inline-start: 38px; padding-inline-end: 44px; }
+.tcs-search input::-webkit-search-cancel-button { display: none; }
+.tcs-search-clear {
+  position: absolute;
+  inset-inline-end: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--tg-r-md, 10px);
+  background: transparent;
+  color: var(--c-muted);
+  cursor: pointer;
+}
+.tcs-search-clear:hover,
+.tcs-search-clear:active {
+  color: var(--c-fg);
+  background: var(--c-panel2);
+}
+.tcs-search-clear:focus-visible {
+  outline: 2px solid var(--tg-accent, var(--c-accent));
+  outline-offset: 2px;
+}
 .tcs-controls .tcs-display-options { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; background: transparent; }
 .tcs-display-options[aria-expanded="true"] { background: var(--c-panel2); }
 .tcs-options-panel { margin-bottom: 1rem; padding: 12px; background: var(--c-panel); border: 1px solid var(--c-border); border-radius: var(--tg-r-md, 10px); }
@@ -328,6 +353,9 @@
   color: var(--c-muted);
   text-align: center;
   padding: var(--tg-s-6, 32px) 0;
+}
+.tcs-empty p {
+  margin: 0;
 }
 .tcs-partial {
   display: flex;

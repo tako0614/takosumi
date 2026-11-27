@@ -3,7 +3,7 @@
  * same one the primary nav carries), docs, language and theme, and sign-out
  * as the last, plain item.
  */
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, createUniqueId, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { HelpCircle, LogOut, UserCircle2 } from "lucide-solid";
 import {
@@ -37,6 +37,7 @@ export default function UserMenu() {
   const [signingOut, setSigningOut] = createSignal(false);
   const [signOutUnavailable, setSignOutUnavailable] = createSignal(false);
   const nav = useNavigate();
+  const menuId = createUniqueId();
   let containerRef: HTMLDivElement | undefined;
   let triggerRef: HTMLButtonElement | undefined;
 
@@ -105,7 +106,15 @@ export default function UserMenu() {
   };
 
   return (
-    <div class="user-menu" ref={containerRef}>
+    <div
+      class="user-menu"
+      ref={containerRef}
+      onFocusOut={(e) => {
+        if (!open() || !containerRef) return;
+        const next = e.relatedTarget as Node | null;
+        if (next && !containerRef.contains(next)) setOpen(false);
+      }}
+    >
       <button
         type="button"
         class="topbar-user"
@@ -113,6 +122,7 @@ export default function UserMenu() {
         // No haspopup hint: the popup is a role="group" of links/controls,
         // not a role="menu"; aria-expanded alone matches the real semantics.
         aria-expanded={open()}
+        aria-controls={open() ? menuId : undefined}
         ref={triggerRef}
         onClick={() => setOpen(!open())}
       >
@@ -120,6 +130,7 @@ export default function UserMenu() {
       </button>
       <Show when={open()}>
         <div
+          id={menuId}
           class="user-menu-pop"
           role="group"
           aria-label={t("shell.userMenu")}
@@ -135,7 +146,7 @@ export default function UserMenu() {
             href="/account"
             onClick={() => setOpen(false)}
           >
-            <UserCircle2 size={16} /> {t("nav.account")}
+            <UserCircle2 size={16} aria-hidden="true" /> {t("nav.account")}
           </a>
           <a
             class="user-menu-item"
@@ -144,7 +155,7 @@ export default function UserMenu() {
             rel="external noopener"
             onClick={() => setOpen(false)}
           >
-            <HelpCircle size={16} /> {t("nav.docs")}
+            <HelpCircle size={16} aria-hidden="true" /> {t("nav.docs")}
           </a>
           <div
             class="user-menu-lang"
@@ -197,7 +208,7 @@ export default function UserMenu() {
             <p role="alert">{t("account.signOut.unavailable")}</p>
           </Show>
           <button class="user-menu-item" type="button" disabled={signingOut()} onClick={signOut}>
-            <LogOut size={16} /> {t("shell.signOut")}
+            <LogOut size={16} aria-hidden="true" /> {t("shell.signOut")}
           </button>
         </div>
       </Show>

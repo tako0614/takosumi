@@ -30,7 +30,7 @@ export default function PrimaryNavigation() {
       </div>
       <Show when={takosEmbedded()}>
         <a href="/" class="sidebar-link sidebar-link-back" aria-label={t("nav.backToTakos")}>
-          <ArrowLeft size={18} />
+          <ArrowLeft size={18} aria-hidden="true" />
           <span class="sidebar-link-label">{t("nav.backToTakos")}</span>
         </a>
       </Show>

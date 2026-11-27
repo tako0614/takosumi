@@ -24,6 +24,7 @@ interface FieldProps {
 
 /** Field wrapper: label (+required marker) + control + hint/error. */
 export function FormField(props: FieldProps): JSX.Element {
+  const hintId = createUniqueId();
   const errorId = createUniqueId();
   // Names the role="group" wrapper from its own visible label (a bare
   // role="group" is announced without a name). Self-contained: any caller that
@@ -51,10 +52,14 @@ export function FormField(props: FieldProps): JSX.Element {
   createEffect(() => {
     const el = control();
     if (!el) return;
-    if (props.error) el.setAttribute("aria-describedby", errorId);
-    else if (el.getAttribute("aria-describedby") === errorId) {
-      el.removeAttribute("aria-describedby");
-    }
+    const owned = new Set([hintId, errorId]);
+    const existing = (el.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .filter((token) => token && !owned.has(token));
+    if (props.error) existing.push(errorId);
+    else if (props.hint) existing.push(hintId);
+    if (existing.length > 0) el.setAttribute("aria-describedby", existing.join(" "));
+    else el.removeAttribute("aria-describedby");
   });
   // `aria-invalid` belongs with the error message that FormField itself
   // renders. Leaving it to each call site's `invalid` prop made correctness
@@ -80,7 +85,7 @@ export function FormField(props: FieldProps): JSX.Element {
       </Show>
       {resolved()}
       <Show when={props.hint && !props.error}>
-        <span class="tg-field-hint">{props.hint}</span>
+        <span class="tg-field-hint" id={hintId}>{props.hint}</span>
       </Show>
       <Show when={props.error}>
         <span class="tg-field-error" id={errorId} role="alert">
@@ -107,10 +112,13 @@ interface InputProps extends JSX.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export function Input(props: InputProps): JSX.Element {
-  const [local, rest] = splitProps(props, ["invalid", "class"]);
+  const fallbackId = createUniqueId();
+  const [local, rest] = splitProps(props, ["invalid", "class", "id"]);
+  const resolvedId = () => local.id ?? (rest.name ? undefined : fallbackId);
   return (
     <input
       {...rest}
+      id={resolvedId()}
       class={`tg-input ${local.invalid ? "tg-input-invalid" : ""} ${local.class ?? ""}`}
       aria-invalid={local.invalid ? "true" : undefined}
     />
@@ -122,10 +130,13 @@ interface SelectProps extends JSX.SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 export function Select(props: SelectProps): JSX.Element {
-  const [local, rest] = splitProps(props, ["invalid", "class", "children"]);
+  const fallbackId = createUniqueId();
+  const [local, rest] = splitProps(props, ["invalid", "class", "children", "id"]);
+  const resolvedId = () => local.id ?? (rest.name ? undefined : fallbackId);
   return (
     <select
       {...rest}
+      id={resolvedId()}
       class={`tg-select ${local.invalid ? "tg-select-invalid" : ""} ${local.class ?? ""}`}
       aria-invalid={local.invalid ? "true" : undefined}
     >
@@ -139,10 +150,13 @@ interface TextareaProps extends JSX.TextareaHTMLAttributes<HTMLTextAreaElement> 
 }
 
 export function Textarea(props: TextareaProps): JSX.Element {
-  const [local, rest] = splitProps(props, ["invalid", "class"]);
+  const fallbackId = createUniqueId();
+  const [local, rest] = splitProps(props, ["invalid", "class", "id"]);
+  const resolvedId = () => local.id ?? (rest.name ? undefined : fallbackId);
   return (
     <textarea
       {...rest}
+      id={resolvedId()}
       class={`tg-textarea ${local.invalid ? "tg-textarea-invalid" : ""} ${local.class ?? ""}`}
       aria-invalid={local.invalid ? "true" : undefined}
     />
@@ -154,10 +168,12 @@ interface CheckboxProps extends JSX.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export function Checkbox(props: CheckboxProps): JSX.Element {
-  const [local, rest] = splitProps(props, ["label", "class"]);
+  const fallbackId = createUniqueId();
+  const [local, rest] = splitProps(props, ["label", "class", "id"]);
+  const resolvedId = () => local.id ?? (rest.name ? undefined : fallbackId);
   return (
     <label class={`tg-checkbox ${local.class ?? ""}`}>
-      <input type="checkbox" {...rest} />
+      <input type="checkbox" {...rest} id={resolvedId()} />
       <span>{local.label}</span>
     </label>
   );
