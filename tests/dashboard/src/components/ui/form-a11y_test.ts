@@ -60,6 +60,7 @@ describe("dashboard form, spinner, title, and touch-target accessibility", () =>
     const apiKeysSource = read("views/account/components/TakosumiApiKeysCard.tsx");
     const shellCss = read("styles/shell.css");
     expect(appListSource).toContain('class="av-search-empty-wrap"');
+    expect(appListSource).toContain('t("apps.showAllApps")');
     expect(appListSource).toContain("!event.isComposing && event.keyCode !== 229");
     expect(runViewSource).toContain("function DiagnosticPre(");
     expect(runViewSource).toContain('class="wa-pre-copy"');

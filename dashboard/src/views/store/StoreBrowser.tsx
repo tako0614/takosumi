@@ -480,6 +480,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             onKeyDown={(e) => {
               if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && optionsOpen()) {
                 e.preventDefault();
+                e.stopPropagation();
                 setOptionsOpen(false);
               }
             }}
@@ -527,6 +528,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         onKeyDown={(e) => {
           if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && optionsOpen()) {
             e.preventDefault();
+            e.stopPropagation();
             setOptionsOpen(false);
             optionsTriggerEl?.focus();
           }

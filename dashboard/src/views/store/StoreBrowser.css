@@ -99,6 +99,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tcs-active-chip svg {
+  flex: none;
+}
+@media (pointer: coarse) {
+  .tcs-active-chip {
+    min-height: 44px;
+  }
+}
 .tcs-controls .tcs-display-options { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; background: transparent; }
 .tcs-display-options[aria-expanded="true"] { background: var(--c-panel2); }
 .tcs-options-panel { margin-bottom: 1rem; padding: 12px; background: var(--c-panel); border: 1px solid var(--c-border); border-radius: var(--tg-r-md, 10px); }

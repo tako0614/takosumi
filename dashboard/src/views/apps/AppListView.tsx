@@ -74,6 +74,7 @@ function Inner() {
               onKeyDown={(event) => {
                 if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229 && query()) {
                   event.preventDefault();
+                  event.stopPropagation();
                   clearSearch();
                 }
               }}
@@ -114,7 +115,7 @@ function Inner() {
                 <div class="av-search-empty-wrap">
                   <p class="av-search-empty" role="status">{t("apps.noMatches")}</p>
                   <Button variant="secondary" size="sm" type="button" onClick={clearSearch}>
-                    {t("apps.clearSearch")}
+                    {t("apps.showAllApps")}
                   </Button>
                 </div>
               </Show>

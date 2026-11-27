@@ -78,6 +78,7 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
   const [confirmingRevoke, setConfirmingRevoke] = createSignal<string>();
   const [formOpen, setFormOpen] = createSignal(false);
   let createTriggerRef: HTMLButtonElement | undefined;
+  let createdCopyRef: HTMLButtonElement | undefined;
   let nameInputRef: HTMLInputElement | undefined;
   const openCreateForm = () => {
     setFormOpen(true);
@@ -141,6 +142,7 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
       setName("");
       setScopes([]);
       setFormOpen(false);
+      requestAnimationFrame(() => (createdCopyRef ?? createTriggerRef)?.focus());
       await refetch();
     } catch (cause) {
       setError(friendlyError(cause, t).message);
@@ -234,6 +236,7 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
               <code>{result().token}</code>
               <div class="wc-form-actions">
                 <Button
+                  ref={createdCopyRef}
                   variant="primary"
                   size="sm"
                   icon={copied() ? <Check size={14} /> : <Copy size={14} />}

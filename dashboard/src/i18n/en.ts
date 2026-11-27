@@ -480,6 +480,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.shared": "Shared app",
   "apps.search": "Search your apps",
   "apps.clearSearch": "Clear search",
+  "apps.showAllApps": "Show all apps",
   "apps.noMatches": "No matching apps. Try another name.",
   "apps.settingsAria": "Settings for {name}",
   "apps.openApp": "Open app",

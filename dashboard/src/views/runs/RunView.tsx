@@ -316,17 +316,22 @@ function accessIssueDiagnostic(issue: AccessIssueKind): {
 
 function DiagnosticPre(props: { readonly text: string }) {
   const [copied, setCopied] = createSignal(false);
+  let disposed = false;
   let resetTimer: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => {
+    disposed = true;
     if (resetTimer !== undefined) clearTimeout(resetTimer);
   });
   const copy = async () => {
     if (typeof navigator === "undefined" || !navigator.clipboard) return;
     try {
       await navigator.clipboard.writeText(props.text);
+      if (disposed) return;
       setCopied(true);
       if (resetTimer !== undefined) clearTimeout(resetTimer);
-      resetTimer = setTimeout(() => setCopied(false), 2_000);
+      resetTimer = setTimeout(() => {
+        if (!disposed) setCopied(false);
+      }, 2_000);
     } catch {
       // Clipboard may be unavailable in restricted contexts; leave text selectable.
     }
@@ -342,10 +347,13 @@ function DiagnosticPre(props: { readonly text: string }) {
           <Show when={copied()} fallback={<Copy size={14} aria-hidden="true" />}>
             <Check size={14} aria-hidden="true" />
           </Show>
-          <span aria-live="polite">
+          <span>
             {copied() ? t("account.apiKeys.copied") : t("account.apiKeys.copy")}
           </span>
         </button>
+        <span class="sr-only" aria-live="polite">
+          {copied() ? t("account.apiKeys.copied") : ""}
+        </span>
       </div>
       <pre class="wa-pre">{props.text}</pre>
     </div>
