@@ -2127,12 +2127,15 @@ export async function runPlatformWorkerLoginAdmissionRelease(
   return runPlatformWorkerCodePublication(argv, environment, runtime, "login-admission");
 }
 
-type ApiKeyActivation = Readonly<{
+type PinnedPlatformActivation = Readonly<{
+  kind: "api-key" | "hosted-auth-maintenance";
   predecessor: string;
-  issuerVersion: string;
+  dependencyVersion: string;
   entryDigest: string;
   dashboardDigest: string;
 }>;
+
+const hostedAuthMaintenanceFlag = "TAKOSUMI_HOSTED_AUTH_MAINTENANCE_ENABLED";
 
 /** Exact already-deployed code, with only the staging shared API-key switch added. */
 export async function runPlatformWorkerApiKeyActivation(
@@ -2140,9 +2143,37 @@ export async function runPlatformWorkerApiKeyActivation(
   environment: PlatformEnvironment = "staging",
   runtime: PlatformWorkerCodeRuntime = {},
 ): Promise<void> {
+  const { config, ...pins } = parsePinnedPlatformActivationArgs(
+    argv, environment, "--issuer-version", "platform_worker_api_key_activation_arguments_invalid",
+  );
+  return runPlatformWorkerCodePublication(
+    ["apply", "--config", config], environment, runtime, { kind: "api-key", ...pins },
+  );
+}
+
+/** Exact already-deployed code, with only the staging Hosted maintenance switch added. */
+export async function runPlatformWorkerHostedAuthMaintenanceActivation(
+  argv: readonly string[],
+  environment: PlatformEnvironment = "staging",
+  runtime: PlatformWorkerCodeRuntime = {},
+): Promise<void> {
+  const { config, ...pins } = parsePinnedPlatformActivationArgs(
+    argv, environment, "--hosted-version", "platform_worker_hosted_auth_maintenance_activation_arguments_invalid",
+  );
+  return runPlatformWorkerCodePublication(
+    ["apply", "--config", config], environment, runtime, { kind: "hosted-auth-maintenance", ...pins },
+  );
+}
+
+function parsePinnedPlatformActivationArgs(
+  argv: readonly string[],
+  environment: PlatformEnvironment,
+  dependencyFlag: "--issuer-version" | "--hosted-version",
+  errorCode: string,
+): Omit<PinnedPlatformActivation, "kind"> & { readonly config: string } {
   const [action, ...args] = argv;
   const options = new Map<string, string>();
-  const invalid = () => new Error("platform_worker_api_key_activation_arguments_invalid");
+  const invalid = () => new Error(errorCode);
   if (action !== "apply" || environment !== "staging" || args.length !== 10) throw invalid();
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index]!;
@@ -2151,21 +2182,24 @@ export async function runPlatformWorkerApiKeyActivation(
   }
   const config = options.get("--config") ?? "";
   const predecessor = options.get("--predecessor") ?? "";
-  const issuerVersion = options.get("--issuer-version") ?? "";
+  const dependencyVersion = options.get(dependencyFlag) ?? "";
   const entryDigest = options.get("--entry-digest") ?? "";
   const dashboardDigest = options.get("--dashboard-digest") ?? "";
   const versionId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
-  if (!isAbsolute(config) || !versionId.test(predecessor) || !versionId.test(issuerVersion) ||
+  if (!isAbsolute(config) || !versionId.test(predecessor) || !versionId.test(dependencyVersion) ||
     !SHA256.test(entryDigest) || !SHA256.test(dashboardDigest)) throw invalid();
-  return runPlatformWorkerCodePublication(
-    ["apply", "--config", config], environment, runtime,
-    { predecessor, issuerVersion, entryDigest, dashboardDigest },
-  );
+  return { config, predecessor, dependencyVersion, entryDigest, dashboardDigest };
 }
 
-function platformApiKeyActivationPredecessorSource(source: string): string {
-  const name = "TAKOSUMI_SHARED_AUTH_API_KEYS";
-  const invalid = () => new Error("platform_worker_api_key_activation_config_invalid");
+function platformPinnedActivationPredecessorSource(
+  source: string,
+  kind: PinnedPlatformActivation["kind"],
+  errorCode: string,
+): string {
+  const apiKey = kind === "api-key";
+  const name = apiKey ? "TAKOSUMI_SHARED_AUTH_API_KEYS" : hostedAuthMaintenanceFlag;
+  const value = apiKey ? "enabled" : "1";
+  const invalid = () => new Error(errorCode);
   const parse = (text: string): unknown => {
     try { return Bun.TOML.parse(text); } catch { throw invalid(); }
   };
@@ -2174,10 +2208,14 @@ function platformApiKeyActivationPredecessorSource(source: string): string {
   if (!record(config) || !record(config.vars) || config.vars.TAKOSUMI_ENVIRONMENT !== "staging" ||
     config.vars.TAKOSUMI_SHARED_AUTH_PROFILE !== "shared-account" ||
     config.vars.TAKOSUMI_SHARED_AUTH_ORIGIN !== origin ||
-    config.vars.TAKOSUMI_ACCOUNTS_ISSUER !== origin || config.vars[name] !== "enabled") {
+    (apiKey && config.vars.TAKOSUMI_ACCOUNTS_ISSUER !== origin) || config.vars[name] !== value) {
     throw invalid();
   }
-  const lines = /^TAKOSUMI_SHARED_AUTH_API_KEYS[ \t]*=[ \t]*"enabled"[ \t]*\r?\n/gmu;
+  if (!apiKey && (!record(config.triggers) || !Array.isArray(config.triggers.crons) ||
+    !config.triggers.crons.includes("*/5 * * * *"))) {
+    throw invalid();
+  }
+  const lines = new RegExp(`^${name}[ \\t]*=[ \\t]*"${value}"[ \\t]*\\r?\\n`, "gmu");
   if (Array.from(source.matchAll(lines)).length !== 1) throw invalid();
   const before = source.replace(lines, "");
   const vars = { ...config.vars };
@@ -2202,7 +2240,8 @@ async function verifyPlatformApiKeyIssuer(version: string): Promise<void> {
 }
 
 const apiKeyIssuerDeployments = `/workers/scripts/${AUTH_STAGING_WORKER}/deployments`;
-const apiKeyProductVersions = "/workers/scripts/takosumi-staging/versions?page=1&per_page=2";
+const hostedAuthMaintenanceDeployments = "/workers/scripts/takosumi-hosted-staging/deployments";
+const pinnedPlatformActivationVersions = "/workers/scripts/takosumi-staging/versions?page=1&per_page=2";
 
 function parseStagingCodeVersionArgs(args: readonly string[], action: "resume" | "confirm") {
   const extraFlag = action === "resume" ? "--predecessor" : "--entry-digest";
@@ -2369,12 +2408,17 @@ async function runPlatformWorkerCodePublication(
   argv: readonly string[],
   environment: PlatformEnvironment,
   runtime: PlatformWorkerCodeRuntime,
-  transition?: "login-admission" | ApiKeyActivation,
+  transition?: "login-admission" | PinnedPlatformActivation,
 ): Promise<void> {
   const addLoginAdmission = transition === "login-admission";
-  const apiKey = typeof transition === "object" ? transition : undefined;
-  const resultKind = addLoginAdmission ? "takosumi.platform-worker-staging-login-admission@v1"
-    : apiKey ? "takosumi.platform-worker-staging-api-keys@v1" : "takosumi.platform-worker-staging-code@v1";
+  const activation = typeof transition === "object" ? transition : undefined;
+  const hostedMaintenance = activation?.kind === "hosted-auth-maintenance";
+  const resultKind = hostedMaintenance ? "takosumi.platform-worker-staging-hosted-auth-maintenance@v1"
+    : activation ? "takosumi.platform-worker-staging-api-keys@v1"
+    : addLoginAdmission ? "takosumi.platform-worker-staging-login-admission@v1" : "takosumi.platform-worker-staging-code@v1";
+  const activationError = (reason: string) => `platform_worker_${
+    hostedMaintenance ? "hosted_auth_maintenance" : "api_key"
+  }_activation_${reason}`;
   if (environment !== "staging" ||
     (argv[0] !== "apply" && (argv[0] !== "resume" || transition))) {
     throw new Error("platform_worker_code_action_invalid");
@@ -2398,7 +2442,9 @@ async function runPlatformWorkerCodePublication(
   const requiresLoginAdmission = assertPlatformLoginAdmission(configSource);
   const predecessorSource = addLoginAdmission
     ? platformLoginAdmissionPredecessorSource(configSource, platformTargetForEnvironment(environment).origin)
-    : apiKey ? platformApiKeyActivationPredecessorSource(configSource) : configSource;
+    : activation
+    ? platformPinnedActivationPredecessorSource(configSource, activation.kind, activationError("config_invalid"))
+    : configSource;
   const assertSource = () => {
     if (runtime.assertSelectedSource) return runtime.assertSelectedSource(parsed.config);
     if (resume) return assertStagingCodeResumeSource(parsed.config);
@@ -2414,12 +2460,12 @@ async function runPlatformWorkerCodePublication(
     if (sourceProvenance && !platformWorkerCodeEqual(sourceProvenance, readCleanSource())) {
       sourceProvenance = undefined;
     }
-    if (apiKey && !runtime.assertSelectedSource && !sourceProvenance) {
-      throw new Error("platform_worker_api_key_activation_source_drift");
+    if (activation && !runtime.assertSelectedSource && !sourceProvenance) {
+      throw new Error(activationError("source_drift"));
     }
   };
-  if (apiKey && !runtime.assertSelectedSource && !sourceProvenance) {
-    throw new Error("platform_worker_api_key_activation_source_drift");
+  if (activation && !runtime.assertSelectedSource && !sourceProvenance) {
+    throw new Error(activationError("source_drift"));
   }
 
   const initialConfig = createPlatformDryRunConfig(
@@ -2449,16 +2495,18 @@ async function runPlatformWorkerCodePublication(
         platformContainerAccountIdFromConfig(initialConfig.path),
         workerName,
         command,
-        !!apiKey,
+        activation?.kind,
       ));
-    const assertApiKeyIssuer = async () => {
-      if (!apiKey) return;
-      await (runtime.apiKeyIssuerReadback ?? verifyPlatformApiKeyIssuer)(apiKey.issuerVersion);
-      const { result: live } = await nativeRead(apiKeyIssuerDeployments);
+    const assertActivationDependency = async () => {
+      if (!activation) return;
+      if (activation.kind === "api-key") {
+        await (runtime.apiKeyIssuerReadback ?? verifyPlatformApiKeyIssuer)(activation.dependencyVersion);
+      }
+      const { result: live } = await nativeRead(hostedMaintenance ? hostedAuthMaintenanceDeployments : apiKeyIssuerDeployments);
       if (!record(live) || !Array.isArray(live.deployments) ||
         !record(live.deployments[0]) ||
-        parseServingVersion(JSON.stringify(live.deployments[0])) !== apiKey.issuerVersion) {
-        throw new Error("platform_worker_api_key_activation_issuer_changed");
+        parseServingVersion(JSON.stringify(live.deployments[0])) !== activation.dependencyVersion) {
+        throw new Error(activationError(hostedMaintenance ? "hosted_changed" : "issuer_changed"));
       }
     };
     const readAuthority = (
@@ -2475,8 +2523,8 @@ async function runPlatformWorkerCodePublication(
         command,
         nativeRead,
         servingVersion,
-        priorPins && apiKey
-          ? [apiKey.entryDigest, apiKey.entryDigest, runnerImage.slice(runnerImage.lastIndexOf("@") + 1)]
+        priorPins && activation
+          ? [activation.entryDigest, activation.entryDigest, runnerImage.slice(runnerImage.lastIndexOf("@") + 1)]
           : undefined,
       );
     const baseline = await readAuthority(initialConfig.path, predecessorSource, true);
@@ -2484,10 +2532,11 @@ async function runPlatformWorkerCodePublication(
     if (resume && predecessorVersionId !== resume.expected) {
       throw new Error("platform_worker_code_resume_predecessor_changed");
     }
-    if (apiKey && predecessorVersionId !== apiKey.predecessor) {
-      throw new Error("platform_worker_api_key_activation_predecessor_changed");
+    if (activation && (predecessorVersionId !== activation.predecessor ||
+      (hostedMaintenance && baseline.secrets.includes(hostedAuthMaintenanceFlag)))) {
+      throw new Error(activationError("predecessor_changed"));
     }
-    await assertApiKeyIssuer();
+    await assertActivationDependency();
     assertPlatformContainerComplete(baseline.container, runnerImage);
 
     await (runtime.runScopedGate ??
@@ -2496,9 +2545,9 @@ async function runPlatformWorkerCodePublication(
       ((selected) => buildPlatformDashboardOnce(selected, command, root)))(
       environment,
     );
-    if (apiKey) {
-      if (dashboard.digest !== apiKey.dashboardDigest) {
-        throw new Error("platform_worker_api_key_activation_artifact_changed");
+    if (activation) {
+      if (dashboard.digest !== activation.dashboardDigest) {
+        throw new Error(activationError("artifact_changed"));
       }
       assetsCustody = createGlobalTransientDirectory("takosumi-code-asset-custody-");
     }
@@ -2508,7 +2557,7 @@ async function runPlatformWorkerCodePublication(
       const identity = physicalTreeIdentitySeal(uploadAssets);
       assertAssetsUnchanged = () => {
         if (!platformWorkerCodeEqual(identity, physicalTreeIdentitySeal(uploadAssets))) {
-          throw new Error("platform_worker_api_key_activation_artifact_changed");
+          throw new Error(activationError("artifact_changed"));
         }
       };
     }
@@ -2538,14 +2587,21 @@ async function runPlatformWorkerCodePublication(
       resolve(root, "deploy/platform/entry-worker.ts"),
       uploadAssets,
     );
-    finalOutput = createGlobalTransientDirectory("takosumi-code-sealed-");
+    const bundleOutput = createGlobalTransientDirectory("takosumi-code-sealed-");
+    finalOutput = bundleOutput;
     const finalSeal = await buildPlatformWorkerCodeDryRunSeal(
       finalConfig.path,
-      finalOutput,
+      bundleOutput,
       command,
       root,
     );
-    const finalEntry = platformWorkerCodeEntrypoint(finalSeal, finalOutput);
+    const bundleIdentity = hostedMaintenance ? physicalTreeIdentitySeal(bundleOutput) : undefined;
+    const assertBundleUnchanged = () => {
+      if (bundleIdentity && !platformWorkerCodeEqual(bundleIdentity, physicalTreeIdentitySeal(bundleOutput))) {
+        throw new Error(activationError("artifact_changed"));
+      }
+    };
+    const finalEntry = platformWorkerCodeEntrypoint(finalSeal, bundleOutput);
     const finalBytes = readStablePhysicalBytes(
       finalEntry,
       "platform_worker_code_bundle_invalid",
@@ -2554,49 +2610,60 @@ async function runPlatformWorkerCodePublication(
     if (entryDigest !== pins.controllerArtifactDigest) {
       throw new Error("platform_worker_code_bundle_digest_drift");
     }
-    if (apiKey && entryDigest !== apiKey.entryDigest) {
-      throw new Error("platform_worker_api_key_activation_artifact_changed");
+    if (activation && entryDigest !== activation.entryDigest) {
+      throw new Error(activationError("artifact_changed"));
     }
     artifacts = { entryDigest, dashboardDigest: dashboard.digest };
 
+    const assertLocalReleaseInputsUnchanged = () => {
+      assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
+      initialConfig.assertUnchanged();
+      finalConfig!.assertUnchanged();
+      retainSourceProvenance();
+      assertAssetsUnchanged();
+    };
     const assertPredecessorUnchanged = async () => {
       const immediate = await readAuthority(initialConfig.path, predecessorSource, true);
       assertPlatformWorkerCodeAuthorityUnchanged(baseline, immediate, true);
       if (resume && assertSource() !== sourceFence) {
         throw new Error("platform_worker_code_resume_source_drift");
       }
-      if (apiKey && assertSource() !== sourceFence) {
-        throw new Error("platform_worker_api_key_activation_source_drift");
+      if (activation && assertSource() !== sourceFence) {
+        throw new Error(activationError("source_drift"));
       }
-      await assertApiKeyIssuer();
-      assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
-      initialConfig.assertUnchanged();
-      finalConfig!.assertUnchanged();
-      retainSourceProvenance();
-      assertAssetsUnchanged();
-      if (apiKey && await readServingVersion(initialConfig.path, command) !== baseline.versionId) {
-        throw new Error("platform_worker_api_key_activation_predecessor_changed");
+      await assertActivationDependency();
+      if (!hostedMaintenance) assertLocalReleaseInputsUnchanged();
+      if (activation && await readServingVersion(initialConfig.path, command) !== baseline.versionId) {
+        throw new Error(activationError("predecessor_changed"));
       }
     };
 
     const releaseMessage = `takosumi-platform-staging-code ${entryDigest}`;
-    const assertApiKeyUploadHistory = async (candidate?: string) => {
-      if (!apiKey) return;
-      const { result: versions } = await nativeRead(apiKeyProductVersions);
-      assertApiKeyActivationUploadHistory(versions, apiKey.predecessor, candidate);
+    const assertActivationUploadHistory = async (candidate?: string) => {
+      if (!activation) return;
+      const { result: versions } = await nativeRead(pinnedPlatformActivationVersions);
+      assertPinnedPlatformActivationUploadHistory(
+        versions, activation.predecessor, candidate, activationError("secret_predecessor_changed"),
+      );
     };
     let deployedVersionId: string;
     if (resume) {
       releaseTag = resume.tag;
       deployedVersionId = resume.version;
     } else {
-      await assertApiKeyUploadHistory();
+      if (!hostedMaintenance) await assertActivationUploadHistory();
       await assertPredecessorUnchanged();
       const nonce = (runtime.nonce ?? (() => randomBytes(16).toString("hex")))();
       if (!/^[0-9a-f]{32}$/u.test(nonce)) {
         throw new Error("platform_worker_code_nonce_invalid");
       }
       releaseTag = `tks-stg-code-${nonce}`;
+      // Hosted inherits from the latest upload, so Version history must be the final provider read.
+      if (hostedMaintenance) {
+        await assertActivationUploadHistory();
+        assertLocalReleaseInputsUnchanged();
+      }
+      assertBundleUnchanged();
       mutation = "upload";
       const upload = await command(
         [
@@ -2646,13 +2713,19 @@ async function runPlatformWorkerCodePublication(
     assertPlatformWorkerCodeStableVersion(baseline.version, uploaded);
     candidateVersionId = deployedVersionId;
     // Resume and delayed upload readback can outlive the preceding authority check.
-    await assertApiKeyUploadHistory(deployedVersionId);
-    if (resume || apiKey || candidate.retried) await assertPredecessorUnchanged();
+    if (!hostedMaintenance) await assertActivationUploadHistory(deployedVersionId);
+    if (resume || activation || candidate.retried) await assertPredecessorUnchanged();
 
     activationConfig = createPlatformWorkerCodeActivationConfig(
       workerName,
       platformContainerAccountIdFromConfig(initialConfig.path),
     );
+    if (hostedMaintenance) {
+      await assertActivationUploadHistory(deployedVersionId);
+      assertLocalReleaseInputsUnchanged();
+      activationConfig.assertUnchanged();
+    }
+    assertBundleUnchanged();
     mutation = "activate";
     await command(
       [
@@ -2698,13 +2771,14 @@ async function runPlatformWorkerCodePublication(
     }
     assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
     activationConfig.assertUnchanged();
-    await readPlatformWorkerCodePublicEndpoints(environment, deployedVersionId, requiresLoginAdmission, runtime);
-    await assertApiKeyIssuer();
+    await readPlatformWorkerCodePublicEndpoints(environment, deployedVersionId, requiresLoginAdmission && !hostedMaintenance, runtime);
+    await assertActivationDependency();
     assertAssetsUnchanged();
     retainSourceProvenance();
-    if (apiKey && await readServingVersion(finalConfig.path, command) !== deployedVersionId) {
+    if (activation && await readServingVersion(finalConfig.path, command) !== deployedVersionId) {
       throw new Error("platform_worker_release_concurrent_version");
     }
+    assertBundleUnchanged();
     process.stdout.write(
       `${JSON.stringify({
         kind: resultKind,
@@ -2714,6 +2788,7 @@ async function runPlatformWorkerCodePublication(
         releaseTag,
         entryDigest,
         dashboardDigest: dashboard.digest,
+        ...(hostedMaintenance ? { hostedVersionId: activation.dependencyVersion } : {}),
         ...(sourceProvenance ? { sourceProvenance } : {}),
         ...(resume ? { resumedUpload: true } : {}),
         historicalRollbackOwner: "takosumi-platform-staging",
@@ -2729,6 +2804,7 @@ async function runPlatformWorkerCodePublication(
         releaseTag,
         mutation,
         ...artifacts,
+        ...(hostedMaintenance ? { expectedHostedVersionId: activation.dependencyVersion } : {}),
         candidateVersionId,
         observedServingVersionId,
         authorityDrift: error instanceof PlatformWorkerCodeAuthorityDriftError
@@ -2757,8 +2833,10 @@ async function runPlatformWorkerCodePublication(
 }
 
 /** Wrangler inherits secrets from the prior upload. Refuse any intervening Version. */
-function assertApiKeyActivationUploadHistory(history: unknown, predecessor: string, candidate?: string): void {
-  const invalid = () => new Error("platform_worker_api_key_activation_secret_predecessor_changed");
+function assertPinnedPlatformActivationUploadHistory(
+  history: unknown, predecessor: string, candidate: string | undefined, errorCode: string,
+): void {
+  const invalid = () => new Error(errorCode);
   if (!record(history) || !Array.isArray(history.items) || history.items.length < 1 || history.items.length > 2) {
     throw invalid();
   }
@@ -6937,7 +7015,7 @@ async function platformWorkerCodeNativeReader(
   accountId: string,
   workerName: string,
   command: PlatformReleaseCommand,
-  readApiKeyIssuer = false,
+  activation?: PinnedPlatformActivation["kind"],
 ): Promise<PlatformWorkerCodeNativeRead> {
   const encoded = encodeURIComponent(workerName);
   const paths = new Set([
@@ -6947,9 +7025,9 @@ async function platformWorkerCodeNativeReader(
     `/workers/scripts/${encoded}/schedules`,
     `/workers/domains?service=${encoded}&environment=production`,
   ]);
-  if (readApiKeyIssuer) {
-    paths.add(apiKeyIssuerDeployments);
-    paths.add(apiKeyProductVersions);
+  if (activation) {
+    paths.add(activation === "api-key" ? apiKeyIssuerDeployments : hostedAuthMaintenanceDeployments);
+    paths.add(pinnedPlatformActivationVersions);
   }
   return platformNativeReader(
     configPath,

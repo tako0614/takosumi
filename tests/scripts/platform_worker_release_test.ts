@@ -27,6 +27,7 @@ import {
   readPlatformContainer,
   remoteBranchContainsCommit,
   runPlatformWorkerApiKeyActivation,
+  runPlatformWorkerHostedAuthMaintenanceActivation,
   runPlatformWorkerCodeRelease,
   runPlatformWorkerLoginAdmissionRelease,
   selectRecoveredVersion,
@@ -508,6 +509,13 @@ async function exerciseCodeLane(options: {
   readonly apiKeys?: "transition" | "routine" | "wrong-predecessor" | "wrong-entry" | "wrong-dashboard" |
     "issuer-changed" | "issuer-split" | "issuer-changed-after-upload" | "product-changed-after-upload" |
     "workspace-assets-changed" | "unserved-secret-version" | "intervening-secret-version";
+  readonly hostedMaintenance?: "transition" | "routine" | "wrong-flag" | "missing-cron" |
+    "already-present" | "predecessor-secret" | "wrong-entry" | "wrong-dashboard" | "changed-bundle" | "bundle-changed-before-upload" |
+    "dependency-changed" | "dependency-split" | "dependency-malformed" | "dependency-changed-before-upload" |
+    "dependency-changed-after-upload" | "dependency-changed-after-activation" |
+    "unserved-secret-version" | "intervening-secret-version" |
+    "late-secret-version-before-upload" | "late-secret-version-before-activation";
+  readonly hostedHistoryCustodyDrift?: "config" | "assets" | "bundle";
   readonly loginSmokeFails?: boolean;
   readonly unrelatedBindingDrift?: boolean;
   readonly bindingReplacedBySecret?: string;
@@ -516,10 +524,12 @@ async function exerciseCodeLane(options: {
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-code-lane-test-"));
   const configPath = join(directory, "wrangler.toml");
-  const codeRoot = options.codeSource || options.apiKeys ? join(directory, "source") : root;
+  const maintenance = options.hostedMaintenance;
+  const pinnedActivation = options.apiKeys || maintenance;
+  const codeRoot = options.codeSource || pinnedActivation ? join(directory, "source") : root;
   const claimPath = join(codeRoot, "source.ts");
   const dashboardPath = join(codeRoot, "dashboard/dist");
-  if (options.apiKeys) {
+  if (pinnedActivation) {
     mkdirSync(dashboardPath, { recursive: true });
     writeFileSync(join(dashboardPath, "index.html"), "sealed dashboard");
   }
@@ -571,8 +581,14 @@ async function exerciseCodeLane(options: {
   const sharedSource = codeConfigSource().replace("[vars]\n", '[vars]\nTAKOSUMI_SHARED_AUTH_PROFILE = "shared-account"\nTAKOSUMI_SHARED_AUTH_ORIGIN = "https://app-staging.takosumi.com"\n');
   const rateSource = '\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_GLOBAL_RATE_LIMITER"\nnamespace_id = "2026111401"\n[ratelimits.simple]\nlimit = 60\nperiod = 60\n\n[[ratelimits]]\nname = "HOSTED_OIDC_LOGIN_IP_RATE_LIMITER"\nnamespace_id = "2026111402"\n[ratelimits.simple]\nlimit = 10\nperiod = 60\n';
   const apiKeyBaseline = sharedSource.replace("[vars]\n", '[vars]\nTAKOSUMI_ACCOUNTS_ISSUER = "https://app-staging.takosumi.com"\n') + rateSource;
-  const source = options.apiKeys
-    ? apiKeyBaseline.replace("[vars]\n", '[vars]\nTAKOSUMI_SHARED_AUTH_API_KEYS = "enabled"\n')
+  const apiKeyConfigured = apiKeyBaseline.replace("[vars]\n", '[vars]\nTAKOSUMI_SHARED_AUTH_API_KEYS = "enabled"\n');
+  const maintenanceBaseline = maintenance === "missing-cron"
+    ? apiKeyConfigured.replace(', "*/5 * * * *"', "") : apiKeyConfigured;
+  const maintenanceFlag = "TAKOSUMI_HOSTED_AUTH_MAINTENANCE_ENABLED";
+  const source = maintenance
+    ? maintenanceBaseline.replace("[vars]\n", `[vars]\n${maintenanceFlag} = "${maintenance === "wrong-flag" ? "0" : "1"}"\n`)
+    : options.apiKeys
+    ? apiKeyConfigured
     : options.loginAdmission
     ? sharedSource + (options.loginAdmission === "missing" ? "" : rateSource)
     : codeConfigSource();
@@ -581,7 +597,9 @@ async function exerciseCodeLane(options: {
   const finalSource = injectPlatformExecutionEvidencePins(source, pins);
   const tag = `tks-stg-code-${"1".repeat(32)}`;
   const message = `takosumi-platform-staging-code ${pins.controllerArtifactDigest}`;
-  const predecessorSource = options.apiKeys ? injectPlatformExecutionEvidencePins(apiKeyBaseline, pins)
+  const predecessorSource = maintenance
+    ? injectPlatformExecutionEvidencePins(maintenance === "already-present" ? source : maintenanceBaseline, pins)
+    : options.apiKeys ? injectPlatformExecutionEvidencePins(apiKeyBaseline, pins)
     : options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "already-present" ? sharedSource : source;
   const predecessor = JSON.parse(codeVersionSource(predecessorSource, CODE_PREDECESSOR_ID, {
     tag: "predecessor",
@@ -602,11 +620,15 @@ async function exerciseCodeLane(options: {
     if (!pin) throw new Error("test execution pin missing");
     pin.text = `sha256:${"0".repeat(64)}`;
   }
-  if (options.apiKeys || (options.loginAdmission && options.loginAdmission !== "missing")) deployed.resources.bindings.push(...rateBindings);
-  if (options.apiKeys || options.loginAdmission === "normal" || options.loginAdmission === "already-present") predecessor.resources.bindings.push(...rateBindings);
+  if (pinnedActivation || (options.loginAdmission && options.loginAdmission !== "missing")) deployed.resources.bindings.push(...rateBindings);
+  if (pinnedActivation || options.loginAdmission === "normal" || options.loginAdmission === "already-present") predecessor.resources.bindings.push(...rateBindings);
   if (options.loginAdmission === "partial") predecessor.resources.bindings.push(rateBindings[0]);
   if (options.unrelatedBindingDrift) predecessor.resources.bindings.find((binding: { name: string }) => binding.name === "HOSTED").service = "foreign-service";
   const listedSecrets: string[] = [...CODE_SECRETS];
+  if (maintenance === "predecessor-secret") {
+    predecessor.resources.bindings.push({ name: maintenanceFlag, type: "secret_text" });
+    listedSecrets.push(maintenanceFlag);
+  }
   if (options.bindingReplacedBySecret) {
     const name = options.bindingReplacedBySecret;
     for (const version of [predecessor, deployed]) {
@@ -635,23 +657,33 @@ async function exerciseCodeLane(options: {
   let publicReadbackCount = 0;
   let loginSmokeCount = 0;
   let issuerReadCount = 0;
+  const hostedReadPhases: string[] = [];
   let uploadedDashboard: string | undefined;
   let topologySnapshot = 0;
   let uploadArgs: readonly string[] = [];
   let activationArgs: readonly string[] = [];
   let uploadConfigSource = "";
   let activationConfigSource = "";
+  let dryRunEntry = "";
+  let dryRunAsset = "";
+  let lateSecretVersion = false;
   const command: PlatformReleaseCommand = async (argv) => {
     if (argv[1] === "versions" && argv[2] === "upload" && argv.includes("--dry-run")) {
       const output = argv[argv.indexOf("--outdir") + 1]!;
-      writeFileSync(join(output, "index.js"), CODE_BUNDLE);
+      dryRunEntry = join(output, "index.js");
+      writeFileSync(dryRunEntry, maintenance === "changed-bundle" ? "other sealed Worker" : CODE_BUNDLE);
+      if (options.hostedHistoryCustodyDrift === "assets") {
+        const dryRunConfig = readFileSync(argv[argv.indexOf("--config") + 1]!, "utf8");
+        const { assets } = Bun.TOML.parse(dryRunConfig) as { assets: { directory: string } };
+        dryRunAsset = join(assets.directory, "index.html");
+      }
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     if (argv[1] === "versions" && argv[2] === "upload") {
       uploadCount += 1;
       uploadArgs = argv;
       uploadConfigSource = readFileSync(argv[argv.indexOf("--config") + 1]!, "utf8");
-      if (options.apiKeys) {
+      if (pinnedActivation) {
         const config = Bun.TOML.parse(uploadConfigSource) as { assets: { directory: string } };
         uploadedDashboard = readFileSync(join(config.assets.directory, "index.html"), "utf8");
       }
@@ -756,7 +788,9 @@ async function exerciseCodeLane(options: {
   const runnerReads: string[] = [];
   try {
     const apiKeyTransition = options.apiKeys && options.apiKeys !== "routine";
-    await (apiKeyTransition ? runPlatformWorkerApiKeyActivation
+    const maintenanceTransition = maintenance && maintenance !== "routine";
+    await (maintenanceTransition ? runPlatformWorkerHostedAuthMaintenanceActivation
+      : apiKeyTransition ? runPlatformWorkerApiKeyActivation
       : options.loginAdmission && options.loginAdmission !== "normal" && options.loginAdmission !== "missing" ? runPlatformWorkerLoginAdmissionRelease : runPlatformWorkerCodeRelease)(
       options.confirm
         ? [
@@ -770,6 +804,12 @@ async function exerciseCodeLane(options: {
           "--version", options.resume === "wrong-version" ? STATUS_VERSION_ID : CODE_DEPLOYED_ID,
           "--tag", options.resume === "wrong-tag" ? `tks-stg-code-${"2".repeat(32)}` : tag,
           "--predecessor", options.resume === "wrong-predecessor" ? STATUS_VERSION_ID : CODE_PREDECESSOR_ID,
+        ]
+        : maintenanceTransition
+        ? ["apply", "--config", configPath, "--predecessor", CODE_PREDECESSOR_ID, "--hosted-version", STATUS_VERSION_ID,
+          "--entry-digest", maintenance === "wrong-entry" ? `sha256:${"0".repeat(64)}` : pins.controllerArtifactDigest,
+          "--dashboard-digest", maintenance === "wrong-dashboard"
+            ? `sha256:${"0".repeat(64)}` : dashboardAssetTreeSeal(dashboardPath).digest,
         ]
         : apiKeyTransition
         ? ["apply", "--config", configPath,
@@ -792,7 +832,7 @@ async function exerciseCodeLane(options: {
         buildDashboard: async () => {
           buildCount += 1;
           if (options.codeSource === "during-build") writeFileSync(claimPath, "// changed during build\n");
-          if (options.apiKeys) return dashboardAssetTreeSeal(dashboardPath);
+          if (pinnedActivation) return dashboardAssetTreeSeal(dashboardPath);
           return { digest: `sha256:${"d".repeat(64)}`, entries: [] };
         },
         runScopedGate: async () => {
@@ -800,19 +840,49 @@ async function exerciseCodeLane(options: {
           if (options.scopedGateFails) throw new Error("synthetic Worker build unavailable");
         },
         nativeRead: async (path) => {
-          if (options.apiKeys && path === "/workers/scripts/takosumi-staging/versions?page=1&per_page=2") {
+          if (pinnedActivation && path === "/workers/scripts/takosumi-staging/versions?page=1&per_page=2") {
+            if (options.hostedHistoryCustodyDrift === "config") {
+              writeFileSync(configPath, source + "\n# changed during upload history read\n");
+            } else if (options.hostedHistoryCustodyDrift === "assets") {
+              chmodSync(dryRunAsset, 0o600);
+              writeFileSync(dryRunAsset, "changed during upload history read");
+            } else if (options.hostedHistoryCustodyDrift === "bundle") {
+              writeFileSync(dryRunEntry, "changed during upload history read");
+            }
             const ids = [CODE_PREDECESSOR_ID];
-            if (options.apiKeys === "unserved-secret-version" ||
-              (options.apiKeys === "intervening-secret-version" && uploadCount > 0)) {
+            if (pinnedActivation === "unserved-secret-version" ||
+              (pinnedActivation === "intervening-secret-version" && uploadCount > 0)) {
               ids.push(STATUS_VERSION_ID);
             }
             if (uploadCount > 0) ids.push(CODE_DEPLOYED_ID);
+            // Only immutable Version identity changes; serving and secret-name reads stay the same.
+            if (lateSecretVersion) ids.push(STATUS_VERSION_ID);
             return { result: { items: ids.map((id, index) => ({ id, number: 42 + index })).reverse().slice(0, 2) }, resultInfo: { page: 1 } };
           }
           if (options.apiKeys && path === "/workers/scripts/takosumi-auth-staging/deployments") {
             return { result: { deployments: [{ versions: options.apiKeys === "issuer-split"
               ? [{ version_id: STATUS_VERSION_ID, percentage: 50 }, { version_id: CODE_PREDECESSOR_ID, percentage: 50 }]
               : [{ version_id: STATUS_VERSION_ID, percentage: 100 }] }] }, resultInfo: null };
+          }
+          if (maintenance && path === "/workers/scripts/takosumi-hosted-staging/deployments") {
+            const phase = activated ? "after-activate" : uploadCount ? "before-activate" : buildCount ? "before-upload" : "before-build";
+            hostedReadPhases.push(phase);
+            if (maintenance === "bundle-changed-before-upload" && phase === "before-upload") {
+              writeFileSync(dryRunEntry, "changed during dependency read");
+            }
+            if ((maintenance === "late-secret-version-before-upload" && phase === "before-upload") ||
+              (maintenance === "late-secret-version-before-activation" && phase === "before-activate")) {
+              lateSecretVersion = true;
+            }
+            if (maintenance === "dependency-malformed") return { result: { deployments: [] }, resultInfo: null };
+            const changed = maintenance === "dependency-changed" ||
+              (maintenance === "dependency-changed-before-upload" && phase === "before-upload") ||
+              (maintenance === "dependency-changed-after-upload" && phase === "before-activate") ||
+              (maintenance === "dependency-changed-after-activation" && phase === "after-activate");
+            const versions = maintenance === "dependency-split"
+              ? [{ version_id: STATUS_VERSION_ID, percentage: 50 }, { version_id: CODE_PREDECESSOR_ID, percentage: 50 }]
+              : [{ version_id: changed ? CODE_PREDECESSOR_ID : STATUS_VERSION_ID, percentage: 100 }];
+            return { result: { deployments: [{ versions }] }, resultInfo: null };
           }
           if (path === "/workers/scripts") topologySnapshot += 1;
           if (options.topologyDriftAt === topologySnapshot) {
@@ -966,6 +1036,7 @@ async function exerciseCodeLane(options: {
     gateCount,
     loginSmokeCount,
     issuerReadCount,
+    hostedReadPhases,
     uploadedDashboard,
     sourceCheckCount,
     operationOrder,
@@ -1738,6 +1809,109 @@ test("shared staging API-key activation fences the prior Version, issuer, unrela
   const intervening = await exerciseCodeLane({ apiKeys: "intervening-secret-version" });
   expect(intervening).toMatchObject({ uploadCount: 1, activationCount: 0, issuerReadCount: 2 });
   expect(intervening.results[0]).toMatchObject({ status: "incomplete", mutation: "upload" });
+});
+
+test("Hosted auth maintenance activates one exact staged Version and checks Hosted before each write", async () => {
+  const result = await exerciseCodeLane({ hostedMaintenance: "transition" });
+  expect(result).toMatchObject({
+    error: undefined, uploadCount: 1, activationCount: 1, publicReadbackCount: 1,
+    issuerReadCount: 0, loginSmokeCount: 0, uploadedDashboard: "sealed dashboard",
+    hostedReadPhases: ["before-build", "before-upload", "before-activate", "after-activate"],
+  });
+  const uploaded = Bun.TOML.parse(result.uploadConfigSource) as {
+    vars: Record<string, unknown>; triggers: { crons: string[] };
+  };
+  expect(uploaded.vars).toMatchObject({
+    TAKOSUMI_HOSTED_AUTH_MAINTENANCE_ENABLED: "1",
+    TAKOSUMI_SHARED_AUTH_API_KEYS: "enabled",
+  });
+  expect(uploaded.triggers.crons).toEqual(["* * * * *", "*/5 * * * *"]);
+  expect(result.activationArgs).toContain(`${CODE_DEPLOYED_ID}@100%`);
+  expect(result.activationArgs).not.toContain("--containers-rollout");
+  expect(result.results).toEqual([expect.objectContaining({
+    kind: "takosumi.platform-worker-staging-hosted-auth-maintenance@v1", status: "ready",
+    predecessorVersionId: CODE_PREDECESSOR_ID, deployedVersionId: CODE_DEPLOYED_ID, hostedVersionId: STATUS_VERSION_ID,
+  })]);
+});
+
+test("Hosted auth maintenance refuses inexact staging inputs before provider mutation", async () => {
+  const args = [
+    "apply", "--config", "/configuration/wrangler.toml", "--predecessor", CODE_PREDECESSOR_ID,
+    "--hosted-version", STATUS_VERSION_ID, "--entry-digest", `sha256:${"d".repeat(64)}`,
+    "--dashboard-digest", `sha256:${"e".repeat(64)}`,
+  ];
+  for (const [arguments_, environment] of [
+    [args, "production"], [args.map((arg) => arg === "--hosted-version" ? "--issuer-version" : arg), "staging"],
+    [["resume", ...args.slice(1)], "staging"],
+  ] as const) {
+    await expect(runPlatformWorkerHostedAuthMaintenanceActivation(arguments_, environment))
+      .rejects.toThrow("platform_worker_hosted_auth_maintenance_activation_arguments_invalid");
+  }
+  for (const options of [
+    { hostedMaintenance: "routine" }, { hostedMaintenance: "wrong-flag" }, { hostedMaintenance: "missing-cron" },
+    { hostedMaintenance: "already-present" }, { hostedMaintenance: "predecessor-secret" },
+    { hostedMaintenance: "wrong-entry" }, { hostedMaintenance: "wrong-dashboard" }, { hostedMaintenance: "changed-bundle" },
+    { hostedMaintenance: "unserved-secret-version" }, { hostedMaintenance: "transition", unrelatedBindingDrift: true },
+  ] as const) {
+    const result = await exerciseCodeLane(options);
+    expect(result.error).toBeDefined();
+    expect(result).toMatchObject({ uploadCount: 0, activationCount: 0, results: [] });
+  }
+});
+
+test("Hosted auth maintenance fails closed when the selected Hosted service is ambiguous or changes", async () => {
+  for (const hostedMaintenance of ["dependency-changed", "dependency-split", "dependency-malformed"] as const) {
+    const result = await exerciseCodeLane({ hostedMaintenance });
+    expect(result.error).toBeDefined();
+    expect(result).toMatchObject({ gateCount: 0, buildCount: 0, uploadCount: 0, activationCount: 0 });
+  }
+  const beforeUpload = await exerciseCodeLane({ hostedMaintenance: "dependency-changed-before-upload" });
+  expect(beforeUpload.error).toBeDefined();
+  expect(beforeUpload).toMatchObject({
+    buildCount: 1, uploadCount: 0, activationCount: 0, hostedReadPhases: ["before-build", "before-upload"],
+  });
+  for (const hostedMaintenance of ["dependency-changed-after-upload", "intervening-secret-version"] as const) {
+    const afterUpload = await exerciseCodeLane({ hostedMaintenance });
+    expect(afterUpload.error).toBeDefined();
+    expect(afterUpload).toMatchObject({ uploadCount: 1, activationCount: 0 });
+    expect(afterUpload.results[0]).toMatchObject({ status: "incomplete", mutation: "upload" });
+  }
+  const afterActivation = await exerciseCodeLane({ hostedMaintenance: "dependency-changed-after-activation" });
+  expect(afterActivation.error).toBeDefined();
+  expect(afterActivation).toMatchObject({ uploadCount: 1, activationCount: 1, publicReadbackCount: 1 });
+  expect(afterActivation.results[0]).toMatchObject({
+    status: "incomplete", mutation: "activate", expectedHostedVersionId: STATUS_VERSION_ID,
+  });
+});
+
+test("Hosted auth maintenance refuses a sealed entry changed during preflight", async () => {
+  const result = await exerciseCodeLane({ hostedMaintenance: "bundle-changed-before-upload" });
+  expect(result.error).toMatchObject({ message: "platform_worker_hosted_auth_maintenance_activation_artifact_changed" });
+  expect(result).toMatchObject({ buildCount: 1, uploadCount: 0, activationCount: 0 });
+});
+
+test("Hosted auth maintenance refuses a late secret-only Version before upload", async () => {
+  const beforeUpload = await exerciseCodeLane({ hostedMaintenance: "late-secret-version-before-upload" });
+  expect(beforeUpload.error).toMatchObject({ message: "platform_worker_hosted_auth_maintenance_activation_secret_predecessor_changed" });
+  expect(beforeUpload).toMatchObject({ uploadCount: 0, activationCount: 0, results: [] });
+});
+
+test("Hosted auth maintenance refuses a late secret-only Version before activation", async () => {
+  const beforeActivation = await exerciseCodeLane({ hostedMaintenance: "late-secret-version-before-activation" });
+  expect(beforeActivation.error).toMatchObject({
+    message: "platform_worker_code_release_incomplete",
+    cause: expect.objectContaining({ message: "platform_worker_hosted_auth_maintenance_activation_secret_predecessor_changed" }),
+  });
+  expect(beforeActivation).toMatchObject({ uploadCount: 1, activationCount: 0 });
+  expect(beforeActivation.results[0]).toMatchObject({ status: "incomplete", mutation: "upload" });
+});
+
+test("Hosted auth maintenance checks local configuration and artifacts after reading upload history", async () => {
+  for (const hostedHistoryCustodyDrift of ["config", "assets", "bundle"] as const) {
+    const result = await exerciseCodeLane({ hostedMaintenance: "transition", hostedHistoryCustodyDrift });
+    expect(result.error).toBeDefined();
+    expect(result).toMatchObject({ uploadCount: 0, activationCount: 0, results: [] });
+  }
 });
 
 test("login admission refuses missing composition, partial predecessors and unrelated drift before upload", async () => {
