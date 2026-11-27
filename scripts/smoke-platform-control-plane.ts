@@ -618,16 +618,17 @@ class ApplyStartIndeterminateError extends Error {
     readonly planRunId: string,
     readonly runType: ApplyRunIdentity["type"],
     readonly reason: "run_authority_unavailable" | "no_exact_run" | "ambiguous_exact_runs",
+    acknowledgement: string,
   ) {
     const detail = reason === "run_authority_unavailable"
       ? "the Workspace Run authority could not be read"
       : reason === "ambiguous_exact_runs"
         ? "the Workspace Run authority returned multiple exact matches"
         : "the Workspace Run authority returned no exact match";
-    const action = runType === "destroy_apply" ? "Destroy Apply" : "Apply";
-    super(
-      `${action} POST acknowledgement was lost and no exact ${action}Run could be reconciled for plan ${planRunId}: ${detail}`,
-    );
+    const outcome = runType === "destroy_apply"
+      ? "No exact Destroy Apply Run could be reconciled"
+      : "Apply POST acknowledgement was lost and no exact ApplyRun could be reconciled";
+    super(`${outcome} for plan ${planRunId}: ${detail}. Initial response: ${acknowledgement}`);
     this.name = "ApplyStartIndeterminateError";
   }
 }
@@ -2446,27 +2447,29 @@ async function startApplyRunWithReconciliation(
   options: PlatformControlPlaneSmokeOptions,
   input: ApplyRunIdentity,
 ): Promise<RunRecord> {
+  let acknowledgement = "the response did not contain the expected Run";
   try {
-    const response = await requestJson<{ readonly run?: RunRecord }>({
+    const response = await requestJson({
       baseUrl: options.url,
       token: options.accountSessionToken,
       method: "POST",
       path: `${API_PREFIX}/runs/${encodeURIComponent(input.planRunId)}/apply`,
       body: input.type === "destroy_apply" ? { confirmDestructive: true } : {},
     });
-    if (isExactApplyRun(response.run, input)) {
+    if (isRecord(response) && isExactApplyRun(response.run, input)) {
       return response.run;
     }
     // A malformed or truncated success response is also a lost
     // acknowledgement: the server may already own a live mutation.
-  } catch {
+  } catch (error) {
     // Reconcile below through the public Workspace Run authority. Never retry
     // this mutation POST because a concurrent queued Apply may already exist.
+    acknowledgement = errorMessage(error);
   }
 
-  let response: { readonly runs?: readonly unknown[] };
+  let response: unknown;
   try {
-    response = await requestJson<{ readonly runs?: readonly unknown[] }>({
+    response = await requestJson({
       baseUrl: options.url,
       token: options.accountSessionToken,
       path: `${API_PREFIX}/workspaces/${encodeURIComponent(
@@ -2478,13 +2481,15 @@ async function startApplyRunWithReconciliation(
       input.planRunId,
       input.type,
       "run_authority_unavailable",
+      acknowledgement,
     );
   }
-  if (!Array.isArray(response.runs)) {
+  if (!isRecord(response) || !Array.isArray(response.runs)) {
     throw new ApplyStartIndeterminateError(
       input.planRunId,
       input.type,
       "run_authority_unavailable",
+      acknowledgement,
     );
   }
   const matches = response.runs.filter(
@@ -2495,6 +2500,7 @@ async function startApplyRunWithReconciliation(
       input.planRunId,
       input.type,
       "no_exact_run",
+      acknowledgement,
     );
   }
   if (matches.length !== 1) {
@@ -2502,6 +2508,7 @@ async function startApplyRunWithReconciliation(
       input.planRunId,
       input.type,
       "ambiguous_exact_runs",
+      acknowledgement,
     );
   }
   return matches[0]!;

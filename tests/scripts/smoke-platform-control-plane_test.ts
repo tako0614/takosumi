@@ -4152,7 +4152,7 @@ async function runConfiguredPublicUrlLifecycleFixture(
     readonly applyAcknowledgement?: "transport-loss" | "timeout";
     readonly reconcileApply?: boolean;
     readonly ambiguousApplyReconciliation?: boolean;
-    readonly destroyApplyAcknowledgement?: "lost" | "missing" | "ambiguous";
+    readonly destroyApplyAcknowledgement?: "lost" | "missing" | "ambiguous" | "unavailable";
     readonly temporaryConnection?: boolean;
     readonly connectionListMode?: "personal" | "missing" | "forbidden" | "workspace";
     readonly explicitProviderBindings?: boolean;
@@ -4504,6 +4504,9 @@ async function runConfiguredPublicUrlLifecycleFixture(
         path === `/api/v1/workspaces/${workspaceId}/runs`
       ) {
         if (behavior.destroyApplyAcknowledgement) {
+          if (behavior.destroyApplyAcknowledgement === "unavailable") {
+            return Response.json(null);
+          }
           const destroy = runs.destroyApply;
           return Response.json({
             runs: [
@@ -4612,6 +4615,9 @@ async function runConfiguredPublicUrlLifecycleFixture(
         return Response.json({});
       }
       if (method === "POST" && path === `/api/v1/runs/${runs.destroyPlan.id}/apply`) {
+        if (behavior.destroyApplyAcknowledgement === "unavailable") {
+          return new Response(null, { status: 403 });
+        }
         destroyed = !behavior.destroyApplyFails;
         if (behavior.destroyApplyAcknowledgement) {
           throw new Error("fixture process lost the Destroy Apply acknowledgement");
@@ -5173,6 +5179,7 @@ test("platform smoke reads back a lost Destroy Apply acknowledgement without a s
     { destroyApplyAcknowledgement: "lost" },
     { destroyApplyAcknowledgement: "missing" },
     { destroyApplyAcknowledgement: "ambiguous", failReadyCheckBeforeDestroy: true },
+    { destroyApplyAcknowledgement: "unavailable" },
   ] as const;
   for (const behavior of cases) {
     const fixture = await runConfiguredPublicUrlLifecycleFixture(
@@ -5214,6 +5221,10 @@ test("platform smoke reads back a lost Destroy Apply acknowledgement without a s
       expect(result.failureCleanup?.destroySucceeded).toBeUndefined();
       expect(result.nextAction).toContain(runs.destroyPlan.id);
       expect(result.nextAction).toContain("without resending the POST");
+      if (behavior.destroyApplyAcknowledgement === "unavailable") {
+        expect(result.error).toContain("Workspace Run authority could not be read");
+        expect(result.error).toContain("failed (403)");
+      }
       expect(controlPlaneRequests.some(({ method, path }) =>
         method === "GET" && path === `/api/v1/runs/${runs.destroyApply.id}`
       )).toBe(false);
