@@ -1068,11 +1068,15 @@ function Inner(props: { readonly session: SessionRecord }) {
   const cancel = createAction(async (attempt: ApplyAttempt) => {
     const current = runLatest();
     if (!ownsApply(attempt) || !current || !canCancelRun(current)) return;
+    const { isCurrent: ownsRead } = readOptions();
+    const isCurrent = () => ownsRead() && ownsApply(attempt);
     try {
-      await cancelRun(attempt.plan.id);
-      if (ownsApply(attempt)) await refetchRun();
+      const cancelled = await cancelRun(current, { isCurrent });
+      if (!isCurrent()) return;
+      mutateRun(cancelled);
+      await Promise.all([run.loading || run.error ? refetchRun() : undefined, refetchLogs()]);
     } catch (cause) {
-      if (ownsApply(attempt)) throw cause;
+      if (isCurrent()) throw cause;
     }
   });
 
@@ -2139,7 +2143,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                       </p>
                     )}
                   </Show>
-                  <Show when={cancel.error()}>
+                  <Show when={r().status !== "cancelled" && cancel.error()}>
                     {(m) => (
                       <p class="wa-error" role="alert">
                         {m()}
