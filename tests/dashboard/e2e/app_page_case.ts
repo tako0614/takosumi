@@ -1332,7 +1332,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
     for (const stale of [false, true]) test(stale
       ? "an embedded stale Update closes and creates a fresh review on request"
-      : "an embedded Update recovers its accepted Apply after lost responses without another mutation", async ({ page }) => {
+      : "an embedded Update recovers its accepted Apply after a lost response without another mutation", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const now = "2026-11-17T00:00:00.000Z";
@@ -1373,7 +1373,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           return route.abort("failed");
         }
         if (path === `/api/v1/capsules/${CAPSULE_ID}/runs`) {
-          if (attempts >= 2 && url.searchParams.getAll("type").join() === "apply") {
+          if (effects === 1 && url.searchParams.getAll("type").join() === "apply" &&
+            url.searchParams.get("planRunId") === planId) {
             historyReads += 1;
             return route.fulfill({ json: { runs: [apply] } });
           }
@@ -1428,7 +1429,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         expect(errors).toEqual([]);
         return;
       }
-      await expect.poll(() => attempts).toBe(2);
+      await expect.poll(() => attempts).toBe(1);
       await expect.poll(() => historyReads).toBe(1);
       await expect.poll(() => applyReads).toBe(2);
       await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toHaveCount(0);
@@ -1437,7 +1438,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(review).toContainText("The update couldn't finish");
       await expect(review.locator(`a[href="/runs/${applyId}"]`)).toBeVisible();
       expect(effects).toBe(1);
-      expect(mutations).toEqual([`POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`, `POST /api/v1/runs/${planId}/apply`, `POST /api/v1/runs/${planId}/apply`]);
+      expect(mutations).toEqual([
+        `POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`,
+        `POST /api/v1/runs/${planId}/apply`,
+      ]);
       await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#version$`, "u"));
       expect(errors).toEqual([]);
     });
