@@ -1950,6 +1950,20 @@ export interface ScheduleCapsuleUninstallResult {
   readonly alreadyDeleted?: boolean;
 }
 
+/** Retire an unanswered reservation write so the caller can reread the app. */
+async function submitUninstallReservation<T>(label: string, path: string, options: RequestOpts): Promise<T> {
+  let responseStatus: number | undefined;
+  try {
+    return await withControlDeadline(label, options, (scope) => controlFetch<T>(path, {
+      ...options,
+      ...scope,
+      onResponseStatus: (status) => { responseStatus = status; },
+    }));
+  } catch (failure) {
+    throw clientRejectionOnDeadline(responseStatus, failure) ?? failure;
+  }
+}
+
 /**
  * Stage one of the two-stage uninstall: the service and its data stay until
  * the grace period ends, and the owner can cancel until then. Teardown then
@@ -1970,7 +1984,8 @@ export async function cancelCapsuleUninstall(
   expectedUninstallId: string,
   options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<Capsule> {
-  const body = await controlFetch<{ capsule: Capsule }>(
+  const body = await submitUninstallReservation<{ capsule: Capsule }>(
+    "Cancel uninstall reservation",
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/cancel-uninstall-reservation`,
     { ...options, method: "POST", body: { expectedUninstallId } },
   );
@@ -2048,16 +2063,15 @@ export async function deleteCapsule(
   const immediate = options.immediate === undefined
     ? ""
     : `?immediate=${options.immediate}`;
-  return await controlFetch<DeleteCapsuleResult>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}${immediate}`,
-    {
-      method: "DELETE",
-      isCurrent: options.isCurrent,
-      ...(options.immediate === true && options.idempotencyKey
-        ? { headers: { "idempotency-key": options.idempotencyKey } }
-        : {}),
-    },
-  );
+  const path = `${BASE}/capsules/${encodeURIComponent(capsuleId)}${immediate}`;
+  const request = { method: "DELETE", isCurrent: options.isCurrent };
+  if (options.immediate !== true) {
+    return await submitUninstallReservation<DeleteCapsuleResult>("Schedule uninstall", path, request);
+  }
+  return await controlFetch<DeleteCapsuleResult>(path, {
+    ...request,
+    ...(options.idempotencyKey ? { headers: { "idempotency-key": options.idempotencyKey } } : {}),
+  });
 }
 
 export async function getCapsuleProviderBindingSet(

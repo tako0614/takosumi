@@ -1337,7 +1337,7 @@ export default function AppManagePage(props: {
     setUninstallError(undefined);
     setUninstallRecovery(undefined);
     try {
-      const result = await deleteCapsule(inst.id);
+      const result = await deleteCapsule(inst.id, { isCurrent: () => ownsUninstall(operation) });
       if (!ownsUninstall(operation)) return;
       if (result.capsule?.status === "destroyed" || result.abandoned) {
         leaveRemovedApp();
