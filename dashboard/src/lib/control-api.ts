@@ -2582,12 +2582,36 @@ export function decideInterfaceLink(
  */
 export async function advanceGitInstallPlan(
   installPlanId: string,
-  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence; readonly isCurrent?: () => boolean } = {},
+  options: {
+    readonly expectedCapsuleId: string;
+    readonly timeoutMs?: number;
+    readonly pollCadence?: GitPlanPollCadence;
+    readonly isCurrent?: () => boolean;
+  },
 ): Promise<GitInstallPlanResponse> {
   const cadence = resolveGitPlanPollCadence(options.pollCadence);
   return await withGitPlanDeadline("install", options.timeoutMs, async (signal) => {
     const requestScope = { signal, isCurrent: options.isCurrent };
-    const first = await reconcileGitInstallPlan(installPlanId, requestScope);
+    const reconcile = async (): Promise<GitInstallPlanResponse> => {
+      try {
+        return await reconcileGitInstallPlan(installPlanId, { ...requestScope, boundResponse: true });
+      } catch (failure) {
+        const peerReconcile = failure instanceof ControlApiError && failure.status === 409 &&
+          (failure.code === "reconcile_in_progress" || failure.code === "reconcile_conflict");
+        if (isAbortError(failure) || (!peerReconcile && !isMutationOutcomeUnknown(failure))) throw failure;
+        // Read the exact attempt after an uncertain outcome. Only a settled
+        // review is recovered here; a pending attempt still needs Continue.
+        const saved = await getGitInstallPlan(installPlanId, requestScope);
+        const plan = saved?.installPlan;
+        if (plan?.id === installPlanId && plan.operation === "install" &&
+          plan.capsuleId === options.expectedCapsuleId && plan.phase === "reviewable" &&
+          saved.nextAction === "review_run" && typeof plan.planRunId === "string" && plan.planRunId.length > 0 &&
+          saved.userAction?.kind === "review_run" && saved.userAction.planRunId === plan.planRunId &&
+          saved.userAction.capsuleId === options.expectedCapsuleId) return saved;
+        throw failure;
+      }
+    };
+    const first = await reconcile();
     throwIfAborted(signal);
     throwIfReadRetired(requestScope);
     const response = await driveGitPlanReconcile<GitInstallPlanResponse>({
@@ -2598,7 +2622,7 @@ export async function advanceGitInstallPlan(
       initial: first,
       nextAction: (current) => current.nextAction,
       progress: gitPlanProgressSignature,
-      reconcile: () => reconcileGitInstallPlan(installPlanId, requestScope),
+      reconcile,
     });
     throwIfReadRetired(requestScope);
     return response;

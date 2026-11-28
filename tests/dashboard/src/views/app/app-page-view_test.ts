@@ -294,7 +294,7 @@ describe("installed app page", () => {
   test("continuing an install advances the attempt that owns the app instead of planning beside it", () => {
     const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const continueRevision ="));
     expect(continueInstall).toContain("const attempt = app()?.progress.installPlanId;");
-    expect(continueInstall).toContain("await advanceGitInstallPlan(attempt, { isCurrent })");
+    expect(continueInstall).toContain("await advanceGitInstallPlan(attempt, { isCurrent, expectedCapsuleId: capsuleId() })");
     // An install that waits for the person continues on its own install page,
     // which only whoever started it can answer.
     expect(continueInstall).toContain("navigate(installAttemptHref(attempt));");

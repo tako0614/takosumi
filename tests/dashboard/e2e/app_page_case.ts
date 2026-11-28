@@ -2534,7 +2534,22 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const refreshInitialReplacement = scenario === "refreshInitialReplacement";
       const noReplacement = scenario === "noReplacement" || refreshInitialReplacement || reverifyReplacement;
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
-      if (scenario === "states") await page.clock.install();
+      const installAttemptPath = "/api/v1/install-plans/gip_00000000005ea7e5";
+      const installReconcilePath = `${installAttemptPath}/reconcile`;
+      if (scenario === "states") {
+        await page.clock.install();
+        await page.addInitScript((path) => {
+          const send = window.fetch.bind(window);
+          window.fetch = async (input, init) => {
+            const response = await send(input, init);
+            if (document.documentElement.dataset.holdInstallProgress === "true" &&
+              init?.method === "POST" && new URL(response.url).pathname === path && response.ok) {
+              Object.defineProperty(response, "json", { value: () => new Promise(() => {}) });
+            }
+            return response;
+          };
+        }, installReconcilePath);
+      }
       if (replacementExpiresBeforeReview) {
         await page.clock.setFixedTime(new Date("2026-11-25T12:00:00.000Z"));
       }
@@ -2586,6 +2601,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         ...connectionProblem, connectionId: "conn_unused", connectionStatus: "expired" as const,
       };
       let attemptAwaitsInput = false;
+      let installReviewSaved = false;
       let viewUnavailable = false;
       const uninstallReservationId = "uninstall_states_e";
       const capsule = () => ({
@@ -3014,14 +3030,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             links: { self: "/api/v1/install-plans/gip_00000000005ea7e5" },
           } });
         }
-        if (path === "/api/v1/install-plans/gip_00000000005ea7e5/reconcile" && request.method() === "POST") {
+        if ((path === installReconcilePath && request.method() === "POST") ||
+          (path === installAttemptPath && request.method() === "GET" && installReviewSaved)) {
+          installReviewSaved = true;
           return route.fulfill({ json: {
             installPlan: {
-              id: "gip_00000000005ea7e5", workspaceId: "ws_alpha", phase: "reviewable", generation: 3,
+              id: "gip_00000000005ea7e5", workspaceId: "ws_alpha", operation: "install", phase: "reviewable", generation: 3,
               capsuleId: ID, planRunId: installPlan.id, createdAt: now, updatedAt: now,
             },
             nextAction: "review_run",
-            userAction: { kind: "review_run", planRunId: installPlan.id },
+            userAction: { kind: "review_run", planRunId: installPlan.id, capsuleId: ID },
             links: { self: "/api/v1/install-plans/gip_00000000005ea7e5", run: `/api/v1/runs/${installPlan.id}` },
           } });
         }
@@ -4198,12 +4216,21 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(seenMutations).toEqual(mutationsBeforeApprovalWindow);
       await expect(problems.getByTestId("app-review").getByRole("button", { name: "Install", exact: true })).toBeEnabled();
 
-      // A stalled install is continued through the attempt that owns it, not
-      // by planning beside it.
+      // Recover the Plan of this attempt when its reconcile response stalls.
       scene = "install_stalled";
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(app).toHaveAttribute("data-app-state", "needs_attention");
+      await page.evaluate(() => { document.documentElement.dataset.holdInstallProgress = "true"; });
+      const stored = page.waitForResponse((response) =>
+        response.request().method() === "POST" && new URL(response.url()).pathname === installReconcilePath && response.ok());
       await header.getByRole("button", { name: "Continue installing", exact: true }).click();
+      // Let transport finish before advancing the clock. Only decoding is held.
+      expect(await (await stored).finished()).toBeNull();
+      const recovered = page.waitForResponse((response) =>
+        response.request().method() === "GET" && new URL(response.url()).pathname === installAttemptPath && response.ok(),
+        { timeout: 7_500 });
+      await page.clock.fastForward(30_001);
+      expect((await (await recovered).json()).installPlan.planRunId).toBe(installPlan.id);
       await expect(problems.getByTestId("app-review").getByRole("button", { name: "Install", exact: true })).toBeEnabled();
 
       // An install that waits for the person continues on its own install
