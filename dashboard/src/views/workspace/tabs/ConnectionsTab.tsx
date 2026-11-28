@@ -185,11 +185,15 @@ export default function ConnectionsTab(props: {
     credentialRecipes.error ? [] : (credentialRecipes.latest?.recipes ?? []);
   const providerLabel = (connection: ProviderConnection) =>
     providerConnectionProviderLabel(connection, installedCredentialRecipes(), locale());
-  const [lastCreatedConnectionName, setLastCreatedConnectionName] =
+  const [createdConnectionName, setLastCreatedConnectionName] =
     createSignal<string | null>(null);
-  const [lastCreatedConnectionId, setLastCreatedConnectionId] = createSignal<
+  const [createdConnectionId, setLastCreatedConnectionId] = createSignal<
     string | null
   >(null);
+  const [createdConnectionOwner, setCreatedConnectionOwner] =
+    createSignal<() => boolean>();
+  const lastCreatedConnectionId = () => createdConnectionOwner()?.() ? createdConnectionId() : null;
+  const lastCreatedConnectionName = () => createdConnectionOwner()?.() ? createdConnectionName() : null;
   const [lastCreatedVerifiedHint, setLastCreatedVerifiedHint] =
     createSignal(false);
   const [reverifiedUninstallConnectionIds, setReverifiedUninstallConnectionIds] =
@@ -230,25 +234,27 @@ export default function ConnectionsTab(props: {
   const hasProviderConnections = () => providerConnectionRows().length > 0;
   const shouldShowCreateForm = () => createFormOpen();
 
-  const refreshConnections = async () => {
-    await refetchProviderConnections();
-    if (!disposed) props.onChanged?.();
+  const refreshConnections = async (isCurrent?: () => boolean) => {
+    await refetchProviderConnections(isCurrent);
+    if (!disposed && (isCurrent?.() ?? true)) props.onChanged?.();
   };
   const appNames = (apps: readonly ConnectionAppRef[]) =>
     apps.map((app) => app.name).join(locale() === "ja" ? "、" : ", ");
 
   const afterConnectionCreated = async (connection: ProviderConnection) => {
+    const isCurrent = currentConnectionOwner();
     const workspace = await appOwnershipAvailable() ? undefined : workspaceId() ?? (currentWorkspaceId() || undefined);
     const matchesScope = workspace
       ? connection.workspaceId === workspace
       : connection.scope !== "operator";
-    if (disposed || !matchesScope) return;
+    if (!isCurrent() || !matchesScope) return;
     // Never show a raw conn_… id in the toast — fall back to the provider name.
     setLastCreatedConnectionName(providerConnectionDisplayName(connection) || providerLabel(connection));
     setLastCreatedConnectionId(connection.id);
+    setCreatedConnectionOwner(() => isCurrent);
     setLastCreatedVerifiedHint(false);
-    await refreshConnections();
-    if (!installReturn) closeCreateForm();
+    await refreshConnections(isCurrent);
+    if (isCurrent() && !installReturn) closeCreateForm();
   };
   const installReturnHref = installReturn
     ? installReturnPathFromContext(installReturn)
@@ -276,6 +282,7 @@ export default function ConnectionsTab(props: {
       const connectionId = params.get("connection_id");
       if (connectionId && !/[\r\n\0]/u.test(connectionId)) {
         setLastCreatedConnectionId(connectionId);
+        setCreatedConnectionOwner(() => currentConnectionOwner());
       }
       setLastCreatedVerifiedHint(
         params.get("connection_status") === "verified",
@@ -336,7 +343,17 @@ export default function ConnectionsTab(props: {
     });
   };
 
+  function currentConnectionOwner(): () => boolean {
+    const scope = connectionListScope();
+    const sessionIsCurrent = currentSessionCheck();
+    return () => !disposed && sessionIsCurrent() && connectionListScope() === scope;
+  }
+
   const runTest = async (id: string) => {
+    if (disposed || testBusy(id) ||
+      (!providerConnectionForConnectionId(id) &&
+        !(lastCreatedConnectionId() === id && lastCreatedConnectionName()))) return;
+    const isCurrent = currentConnectionOwner();
     const fromUninstall = inUninstallReturnContext();
     setReverifiedUninstallConnectionIds((ids) => {
       if (!ids.has(id)) return ids;
@@ -347,14 +364,22 @@ export default function ConnectionsTab(props: {
     setTestBusy(id, true);
     setTestError(id, null);
     try {
-      const result = (await testConnection(id)) as
-        { readonly status?: string; readonly detail?: string } | undefined;
-      await refreshConnections();
+      const result = await testConnection(id, { signal: requests.signal, isCurrent });
+      if (!isCurrent()) return;
+      if (result.status === "unconfirmed") {
+        setTestError(id, { message: t("conn.test.unconfirmed") });
+        // A fresh list shows the current status, but does not acknowledge
+        // this verification or complete an uninstall handoff.
+        await refreshConnections(isCurrent).catch(() => {});
+        return;
+      }
+      await refreshConnections(isCurrent);
+      if (!isCurrent()) return;
       // The verified hint belongs to the LAST-CREATED connection only: testing
       // some other row must not flip lastCreatedReady() (and with it the
       // install-return offer) for a connection that was never verified.
       const isLastCreated = lastCreatedConnectionId() === id;
-      if (result?.status && result.status !== "verified") {
+      if (result.status !== "verified") {
         if (isLastCreated) setLastCreatedVerifiedHint(false);
         // The primary sentence stays localized (the backend enum is mapped
         // through providerConnectionStatusLabel); the raw server detail is
@@ -365,13 +390,14 @@ export default function ConnectionsTab(props: {
           }),
           detail: result.detail,
         });
-      } else if (result?.status === "verified") {
+      } else {
         if (isLastCreated) setLastCreatedVerifiedHint(true);
         if (!disposed && fromUninstall && inUninstallReturnContext()) {
           setReverifiedUninstallConnectionIds((ids) => new Set(ids).add(id));
         }
       }
     } catch (e) {
+      if (!isCurrent()) return;
       // Raw server / exception text (English internals, HTTP status) never
       // becomes the headline — friendlyError localizes it and the raw text
       // rides along as folded detail only.
@@ -433,7 +459,7 @@ export default function ConnectionsTab(props: {
     // the verified result attached to the original app's return context.
     if (!inUninstallReturnContext() || providerConnections.state !== "ready") return;
     const ready = (id: string | null | undefined) => {
-      if (!id || testBusy(id)) return false;
+      if (!id || testBusy(id) || testError(id)) return false;
       const connection = providerConnectionForConnectionId(id);
       return connection !== undefined && isUninstallReplacementReady(connection);
     };
@@ -442,7 +468,7 @@ export default function ConnectionsTab(props: {
   };
   const lastCreatedReady = () =>
     lastCreatedProviderConnection()?.status === "verified" ||
-    lastCreatedVerifiedHint();
+    (lastCreatedConnectionId() !== null && lastCreatedVerifiedHint());
   const shouldOfferInstallReturn = () =>
     !lastCreatedConnectionId() || lastCreatedReady();
   const confirmRemoveProviderConnection = async (

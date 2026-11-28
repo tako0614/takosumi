@@ -17,11 +17,13 @@ import {
   type JSX,
   Match,
   on,
+  onCleanup,
   Show,
   Suspense,
   Switch,
 } from "solid-js";
 import { useBeforeLeave } from "@solidjs/router";
+import { currentSessionCheck } from "../account/lib/session.ts";
 import { PlugZap } from "lucide-solid";
 import {
   installExperienceArtifact,
@@ -201,6 +203,8 @@ export default function AppSettingsSection(props: {
   readonly review: JSX.Element;
 }): JSX.Element {
   const { confirm } = useConfirmDialog();
+  let disposed = false;
+  onCleanup(() => { disposed = true; });
   const [rows, setRows] = createSignal<ProviderBinding[]>([]);
   const [bindingsDirty, setBindingsDirty] = createSignal(false);
   const [variableRows, setVariableRows] = createSignal<ConfigVariableRow[]>([]);
@@ -368,14 +372,25 @@ export default function AppSettingsSection(props: {
   // Typed credentials are tested once after saving, as on the connections
   // screen. OAuth connections arrive verified and skip the test.
   const verifyConnection = async (index: number, connectionId: string) => {
+    const { capsuleId, workspaceId, capsuleInstallConfigId } = props;
+    const row = rows()[index];
+    const sessionIsCurrent = currentSessionCheck();
+    const isCurrent = () => !disposed && sessionIsCurrent() && props.capsuleId === capsuleId &&
+      props.workspaceId === workspaceId && props.capsuleInstallConfigId === capsuleInstallConfigId &&
+      rows()[index] === row;
+    if (!isCurrent()) return;
     try {
-      const result = (await testConnection(connectionId)) as { readonly status?: string } | undefined;
-      if (result?.status && result.status !== "verified") {
+      const result = await testConnection(connectionId, { isCurrent });
+      if (!isCurrent()) return;
+      if (result.status === "unconfirmed") {
+        setConnectionMessage(index, t("conn.test.unconfirmed"));
+      } else if (result.status !== "verified") {
         setConnectionMessage(index, t("conn.test.notReady", {
           status: providerConnectionStatusLabel(result.status),
         }));
       }
     } catch (cause) {
+      if (!isCurrent()) return;
       setConnectionMessage(index, friendlyError(cause, t).message);
     }
     props.onConnectionsChanged();

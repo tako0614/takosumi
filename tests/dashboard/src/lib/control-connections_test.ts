@@ -8,6 +8,7 @@ import {
   listReleaseOwnedProviderConnectionsWithSignal,
   appOwnershipAvailable,
   resetAppOwnershipCache,
+  testConnection,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
@@ -33,6 +34,23 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 beforeEach(() => { resetAppOwnershipCache(); });
+
+describe("connection verification client", () => {
+  test("the POST's response must contain an actual verification status", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(`${init?.method} ${String(input)}`);
+      return Response.json({ connection: { status: "verified" } });
+    }) as typeof fetch;
+    await expect(testConnection("conn_one")).resolves.toEqual({ status: "unconfirmed" });
+    expect(calls).toEqual(["POST /api/v1/connections/conn_one/test"]);
+  });
+
+  test("retiring the verification owner before dispatch sends no POST", async () => {
+    globalThis.fetch = (async () => { throw new Error("Unexpected request."); }) as typeof fetch;
+    await expect(testConnection("conn_one", { isCurrent: () => false })).rejects.toHaveProperty("name", "AbortError");
+  });
+});
 
 describe("connection list clients", () => {
   test("lists personal connections without a workspace", async () => {

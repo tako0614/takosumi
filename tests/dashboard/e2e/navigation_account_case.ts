@@ -645,6 +645,71 @@ export function registerNavigationAccountCases(mode: string): void {
       });
     }
 
+    for (const scenario of ["stalled success body", "lost response", "refused", "acknowledged"] as const) {
+      test(`connection test settles without repeating the POST (${scenario})`, async ({ page }) => {
+        const errors = collectPageErrors(page);
+        await page.addInitScript(() => {
+          localStorage.setItem("tg_lang", "ja");
+          const send = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const response = await send(...args);
+            if (response.headers.has("x-fixture-held-verification-body")) {
+              Object.defineProperty(response, "json", {
+                value: () => {
+                  document.documentElement.dataset.verificationBodyHeld = "true";
+                  return new Promise(() => {});
+                },
+              });
+            }
+            return response;
+          };
+        });
+        const fixture = await accountFixture(page);
+        let reads = 0;
+        let posts = 0;
+        await page.route((url) => url.pathname === "/api/v1/connections", (route) => {
+          expect(route.request().method()).toBe("GET");
+          reads += 1;
+          const status = posts && (scenario === "stalled success body" || scenario === "acknowledged")
+            ? "verified" : "pending";
+          return route.fulfill({ json: { connections: [{ ...DIRECT, status }, OPERATOR] } });
+        });
+        await page.route(`**/api/v1/connections/${DIRECT.id}/test`, (route) => {
+          expect(route.request().method()).toBe("POST");
+          posts += 1;
+          if (scenario === "lost response") return route.abort("failed");
+          if (scenario === "refused") return route.fulfill({ status: 403, json: { error: "forbidden" } });
+          return route.fulfill({ json: { status: "verified" },
+            ...(scenario === "stalled success body" ? { headers: { "x-fixture-held-verification-body": "1" } } : {}) });
+        });
+        await page.goto("/connections", { waitUntil: "domcontentloaded" });
+        const connection = page.locator(".conn-details").filter({ hasText: DIRECT.displayName });
+        await connection.locator("summary").click();
+        const verify = connection.getByRole("button", { name: "接続を確認", exact: true });
+        if (scenario === "stalled success body") await page.clock.install();
+        await verify.click();
+        await expect.poll(() => posts).toBe(1);
+        if (scenario === "stalled success body") {
+          await expect(page.locator("html")).toHaveAttribute("data-verification-body-held", "true");
+          await page.clock.fastForward(30_001);
+        }
+        const uncertain = page.getByText(/接続の確認結果を取得できませんでした/u);
+        if (scenario === "stalled success body" || scenario === "lost response") {
+          await expect(uncertain).toBeVisible({ timeout: 2_000 });
+        } else {
+          await expect(uncertain).toHaveCount(0);
+          if (scenario === "refused") await expect(page.getByRole("alert")).toBeVisible();
+        }
+        await expect(verify).toBeEnabled({ timeout: 2_000 });
+        await expect.poll(() => reads).toBe(scenario === "refused" ? 1 : 2);
+        const verified = scenario === "stalled success body" || scenario === "acknowledged";
+        await expect(connection.getByText("確認済み", { exact: true }).first()).toHaveCount(verified ? 1 : 0);
+        expect(posts).toBe(1);
+        expect(fixture.mutations).toEqual([]);
+        expect(errors).toEqual([]);
+      });
+    }
+
     test("アカウント has only personal profile, usage, CLI and notification device sections", async ({ page }) => {
       const errors = collectPageErrors(page);
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
