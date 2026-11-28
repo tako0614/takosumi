@@ -1522,14 +1522,14 @@ export async function listOpenGitInstallAttempts(
 /** Advances exactly one durable install coordinator phase. */
 export async function reconcileGitInstallPlan(
   installPlanId: string,
-  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
+  options: Pick<RequestOpts, "signal" | "isCurrent"> & { readonly boundResponse?: boolean } = {},
 ): Promise<GitInstallPlanResponse> {
+  const path = `${BASE}/install-plans/${encodeURIComponent(installPlanId)}/reconcile`;
+  const request = { method: "POST", signal: options.signal, isCurrent: options.isCurrent };
+  if (options.boundResponse) return await submitBoundedControlWrite<GitInstallPlanResponse>("Install progress", path, request);
   throwIfAborted(options.signal);
   throwIfReadRetired(options);
-  return await controlFetch<GitInstallPlanResponse>(
-    `${BASE}/install-plans/${encodeURIComponent(installPlanId)}/reconcile`,
-    { method: "POST", signal: options.signal, isCurrent: options.isCurrent },
-  );
+  return await controlFetch<GitInstallPlanResponse>(path, request);
 }
 
 /** Read one acknowledged coordinator without advancing or claiming it. */

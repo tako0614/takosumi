@@ -781,7 +781,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
           try {
             next = observing
               ? await read()
-              : await reconcileGitInstallPlan(before.installPlan.id, scope);
+              : await reconcileGitInstallPlan(before.installPlan.id, { ...scope, boundResponse: true });
           } catch (cause) {
             if (controller.signal.aborted || isAbort(cause)) break;
             failed = cause;
@@ -794,6 +794,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
           const progressed = progressSignature(after) !== progressSignature(before);
           const busyWait = reconcileBusyWaitMs(failed);
           const busyObserved = busyWait !== undefined && next === held && next !== undefined;
+          const reconcileTimedOut = !observing && errorCode(failed) === "request_timeout";
           if (progressed) {
             stalled = 0;
             lastProgressAt = now();
@@ -803,12 +804,15 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
             // A busy response proves another reconcile holds the command.
             // Follow the saved attempt until it moves or the wait hint ends.
             if (busyObserved) observeUntil = now() + busyWait;
+            // The command may still finish. Read until it advances or the
+            // existing stall limit returns control to the person.
+            else if (reconcileTimedOut) observeUntil = lastProgressAt + STALL_LIMIT_MS;
             else if (observeUntil !== undefined && next === held && next && now() >= observeUntil) {
               observeUntil = undefined;
             }
           }
           const retryable = !observing && after.userAction.kind === "retry" && !after.userAction.restart;
-          failures = !progressed && !busyObserved && (failed !== undefined || retryable) ? failures + 1 : 0;
+          failures = !progressed && !busyObserved && !reconcileTimedOut && (failed !== undefined || retryable) ? failures + 1 : 0;
           if (failures >= MAX_RECONCILE_FAILURES) {
             if (failed !== undefined) setError(installErrorMessage(failed));
             break;

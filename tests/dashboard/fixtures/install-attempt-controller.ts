@@ -946,6 +946,33 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
+  test("a reconcile timeout reads the existing attempt without resending an unconfirmed command", async () => {
+    let writes = 0;
+    reset({
+      createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, 0),
+      reconcileGitInstallPlan: async () => {
+        writes += 1;
+        if (writes === 1) throw new api.ControlApiError(0, "request_timeout", "response timed out");
+        return respond(inputs(), 2);
+      },
+      getGitInstallPlan: async () => respond({ kind: "wait", phase: "syncing_source" }, 1),
+    });
+    const page = mount();
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => !page.attempt.driving(), "the read-only follow ends");
+    expect(writes).toBe(1);
+    const reads = calls.filter(({ name }) => name === "getGitInstallPlan").map(({ args }) => args[0]);
+    expect(reads.length).toBeGreaterThan(1);
+    expect(new Set(reads)).toEqual(new Set([ID]));
+    expect(page.clock.now).toBeGreaterThanOrEqual(120_000);
+    expect(page.attempt.view()).toMatchObject({ stage: "paused", primary: "continue" });
+    page.attempt.resume();
+    await until(() => page.attempt.view().stage === "provide_inputs", "Continue follows the same attempt");
+    expect(writes).toBe(2);
+    expect(calls.filter(({ name }) => name === "createGitInstallAttempt")).toHaveLength(1);
+    page.dispose();
+  });
+
   test("observing the completed phase clears the failure streak after a lost response", async () => {
     let writes = 0;
     const phases = ["compiling_install", "analyzing_compatibility", "creating_capsule"] as const;

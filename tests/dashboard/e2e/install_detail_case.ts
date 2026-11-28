@@ -1308,6 +1308,44 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.attempts.latest()?.planRunId).toBe(planId);
       expect(f.mutations.filter((entry) => /\/(approve|apply)$/u.test(entry))).toEqual([]);
     });
+    test("a stalled reconcile response recovers the saved Plan without another reconcile", async ({ page }) => {
+      await page.clock.install();
+      const f = await detailFixture(page, base);
+      await page.addInitScript(() => {
+        const send = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const response = await send(input, init);
+          const path = new URL(response.url).pathname;
+          if (init?.method === "POST" && path.endsWith("/reconcile") && response.ok &&
+            (await response.clone().json()).installPlan.planRunId) {
+            // The coordinator saved its Plan, but the page can't decode the reply.
+            Object.defineProperty(response, "json", { value: () => new Promise(() => {}) });
+          }
+          return response;
+        };
+      });
+      const saved = page.waitForResponse(async (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname.endsWith("/reconcile") &&
+        response.ok() && Boolean((await response.json()).installPlan.planRunId));
+      await page.goto(sourceUrl);
+      await openInstallSheet(page);
+      const reply = await saved;
+      const attemptPath = new URL(reply.url()).pathname.replace(/\/reconcile$/u, "");
+      const reconciles = f.attempts.log.reconciles;
+      const reread = page.waitForResponse((response) =>
+        response.request().method() === "GET" &&
+        new URL(response.url()).pathname === attemptPath && response.ok(), { timeout: 7_500 });
+      await page.clock.fastForward(30_001);
+      const held = await (await reread).json();
+      expect(held.installPlan.planRunId).toBe(planId);
+      expect(held.installPlan.id).toBe(new URL(page.url()).searchParams.get("installPlan"));
+      await waitForPlan(page);
+      expect(f.attempts.log.reconciles).toBe(reconciles);
+      expect(f.attempts.log.creates).toHaveLength(1);
+      expect(f.mutations.filter((entry) => entry.startsWith("PATCH "))).toEqual([`PATCH ${attemptPath}`]);
+      expect(f.mutations.filter((entry) => /\/(approve|apply)$/u.test(entry))).toEqual([]);
+    });
     test("a stalled screen lookup ends without offering to open an unverified app", async ({ page }) => {
       await page.clock.install();
       const f = await detailFixture(page, base);
