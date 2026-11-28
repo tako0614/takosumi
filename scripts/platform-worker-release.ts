@@ -2077,6 +2077,7 @@ export type PlatformWorkerCodeRuntime = Readonly<{
   nativeRead?: PlatformWorkerCodeNativeRead;
   waitForVersionViewRetry?: (milliseconds: number) => Promise<void>;
   waitForServingVersionRetry?: (milliseconds: number) => Promise<void>;
+  waitForRunnerStartupRetry?: (milliseconds: number) => Promise<void>;
   publicReadback?: (
     environment: PlatformEnvironment,
     versionId: string,
@@ -2527,8 +2528,22 @@ async function runPlatformWorkerCodePublication(
           ? [activation.entryDigest, activation.entryDigest, runnerImage.slice(runnerImage.lastIndexOf("@") + 1)]
           : undefined,
       );
-    const baseline = await readAuthority(initialConfig.path, predecessorSource, true);
+    let baseline = await readAuthority(initialConfig.path, predecessorSource, true);
     predecessorVersionId = baseline.versionId;
+    if (!transition && !resume && isPlatformCodeRunnerStarting(baseline.container, runnerImage)) {
+      const ready = await waitForPlatformCodeRunnerStartup(
+        initialConfig.path,
+        baseline.container,
+        runnerImage,
+        runtime.command,
+        runtime.waitForRunnerStartupRetry ?? Bun.sleep,
+      );
+      const current = await readAuthority(initialConfig.path, predecessorSource, true);
+      assertPlatformWorkerCodeAuthorityUnchanged({ ...baseline, container: ready }, current, true);
+      assertPlatformWorkerCodeInputUnchanged(parsed.config, configBytes);
+      if (assertSource() !== sourceFence) throw new Error("platform_worker_code_startup_source_drift");
+      baseline = current;
+    }
     if (resume && predecessorVersionId !== resume.expected) {
       throw new Error("platform_worker_code_resume_predecessor_changed");
     }
@@ -2973,6 +2988,52 @@ function platformContainerDriftFields(
     ...health.filter((field) => !Object.is(baseline.health[field], current.health[field]))
       .map((field) => `health.${field}`),
   ];
+}
+
+function isPlatformCodeRunnerStarting(container: PlatformContainerState, image: string): boolean {
+  const { failed, starting, scheduling, errorCount } = container.health;
+  return container.image === image &&
+    (container.state === "active" || container.state === "ready" || container.state === "provisioning") &&
+    !container.hasActiveRollout && failed === 0 && errorCount === 0 &&
+    (starting > 0 || scheduling > 0);
+}
+
+/** Wait before any build, and only while the original Runner is starting. */
+async function waitForPlatformCodeRunnerStartup(
+  configPath: string,
+  original: PlatformContainerState,
+  image: string,
+  command: PlatformReleaseCommand | undefined,
+  wait: (milliseconds: number) => Promise<void>,
+): Promise<PlatformContainerState> {
+  const deadline = performance.now() + 120_000;
+  const deadlineError = () => new Error("platform_worker_code_runner_startup_timeout");
+  const read: PlatformReleaseCommand = (argv, stdin, cwd, environment) => {
+    const remaining = Math.ceil(deadline - performance.now());
+    if (remaining <= 0) throw deadlineError();
+    return command
+      ? command(argv, stdin, cwd, environment)
+      : runPlatformStartupRead(argv, remaining, cwd, environment);
+  };
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) break;
+    await wait(Math.min(15_000, remaining));
+    if (performance.now() >= deadline) break;
+    // Require the ordinary list/detail pair to agree during startup; a
+    // rollout bridge is not evidence that the original Runner merely started.
+    const summary = await readPlatformContainerSummary(configPath, original.name, read);
+    if (summary.id !== original.id || summary.version !== original.version || summary.image !== image) {
+      throw new Error("platform_worker_code_startup_runner_drift");
+    }
+    const detail = await readPlatformContainerInfo(configPath, original.id, read);
+    const current = parsePlatformContainerDetail(summary, detail);
+    if (performance.now() >= deadline) break;
+    if (isPlatformCodeRunnerStarting(current, image)) continue;
+    assertPlatformContainerComplete(current, image);
+    return current;
+  }
+  throw deadlineError();
 }
 
 function assertPlatformWorkerCodeInputUnchanged(
@@ -8473,18 +8534,32 @@ function rewritePrivate(path: string, bytes: Uint8Array): void {
   syncDirectory(dirname(path));
 }
 
+/** The startup poll has no stdin and shares one countdown across provider reads. */
+export function runPlatformStartupRead(
+  argv: readonly string[],
+  timeoutMs: number,
+  cwd?: string,
+  environment?: Record<string, string>,
+): Promise<CommandResult> {
+  return requiredCommand(argv, undefined, cwd, environment, timeoutMs);
+}
+
 async function requiredCommand(
   argv: readonly string[],
   stdin?: Uint8Array,
   cwd = ROOT,
   environment = childEnvironment(),
+  timeoutMs?: number,
 ): Promise<CommandResult> {
+  const pipeDeadline = timeoutMs === undefined ? undefined : new AbortController();
+  const separateGroup = pipeDeadline !== undefined && process.platform !== "win32";
   const child = Bun.spawn([...argv], {
     cwd,
     stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
     env: environment,
+    detached: separateGroup,
   });
   if (stdin !== undefined) {
     if (!child.stdin)
@@ -8495,12 +8570,32 @@ async function requiredCommand(
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
+    pipeDeadline?.abort();
+    // The Wrangler launcher forwards SIGTERM but not SIGKILL. Stop its
+    // process group, and release our pipe readers even if a child kept a pipe.
+    if (separateGroup) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+        return;
+      } catch {
+        // The group may already have exited.
+      }
+    }
     child.kill("SIGKILL");
-  }, COMMAND_TIMEOUT_MS);
+  }, timeoutMs ?? COMMAND_TIMEOUT_MS);
+  const readOutput = (stream: ReadableStream<Uint8Array>) => {
+    const body = pipeDeadline
+      ? stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>(), { signal: pipeDeadline.signal })
+      : stream;
+    return new Response(body).arrayBuffer().catch((error: unknown) => {
+      if (pipeDeadline?.signal.aborted) return new ArrayBuffer(0);
+      throw error;
+    });
+  };
   const [exitCode, stdoutBuffer, stderrBuffer] = await Promise.all([
     child.exited,
-    new Response(child.stdout).arrayBuffer(),
-    new Response(child.stderr).arrayBuffer(),
+    readOutput(child.stdout),
+    readOutput(child.stderr),
   ]).finally(() => clearTimeout(timer));
   const stdoutBytes = new Uint8Array(stdoutBuffer);
   const stderrBytes = new Uint8Array(stderrBuffer);

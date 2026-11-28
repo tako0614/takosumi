@@ -30,6 +30,7 @@ import {
   runPlatformWorkerHostedAuthMaintenanceActivation,
   runPlatformWorkerCodeRelease,
   runPlatformWorkerLoginAdmissionRelease,
+  runPlatformStartupRead,
   selectRecoveredVersion,
   secretNames,
   type PlatformReleaseCommand,
@@ -155,17 +156,21 @@ function statusVersionSource(
 }
 
 function statusContainerSource(options: {
+  readonly state?: string;
   readonly image?: string;
   readonly failed?: number;
+  readonly starting?: number;
+  readonly scheduling?: number;
+  readonly version?: number;
   readonly activeRolloutId?: string | null;
 } = {}) {
   const image = options.image ?? STATUS_CONTAINER_IMAGE;
   const summary = {
     id: STATUS_CONTAINER_ID,
     name: "takosumi-staging-opentofurunnerobject",
-    state: "ready",
+    state: options.state ?? "ready",
     image,
-    version: 4,
+    version: options.version ?? 4,
   };
   const detail = {
     ...summary,
@@ -174,8 +179,8 @@ function statusContainerSource(options: {
     health: {
       instances: {
         failed: options.failed ?? 0,
-        starting: 0,
-        scheduling: 0,
+        starting: options.starting ?? 0,
+        scheduling: options.scheduling ?? 0,
       },
       errors: [],
     },
@@ -490,6 +495,8 @@ function codeNativeRead(
 }
 
 async function exerciseCodeLane(options: {
+  readonly startupRunner?: readonly NonNullable<Parameters<typeof statusContainerSource>[0]>[];
+  readonly startupConfigChanges?: boolean;
   readonly topologyDriftAt?: number;
   readonly routeDrift?: CodeRouteDrift;
   readonly containerDrift?: boolean;
@@ -650,6 +657,12 @@ async function exerciseCodeLane(options: {
   let sourceCheckCount = 0;
   const operationOrder: string[] = [];
   const readbackWaits: number[] = [];
+  const startupWaits: number[] = [];
+  let runnerSnapshots = 0;
+  const readRunnerSnapshot = () => {
+    const states = options.startupRunner;
+    return states?.length ? statusContainerSource(states[Math.min(runnerSnapshots, states.length - 1)]) : container;
+  };
   const candidateReadWaits: number[] = [];
   const candidateReads: string[] = [];
   let postActivationReadCount = 0;
@@ -760,13 +773,14 @@ async function exerciseCodeLane(options: {
       };
     }
     if (argv[1] === "containers" && argv[2] === "list") {
-      return { exitCode: 0, stdout: JSON.stringify([container.summary]), stderr: "" };
+      return { exitCode: 0, stdout: JSON.stringify([readRunnerSnapshot().summary]), stderr: "" };
     }
     if (argv[1] === "containers" && argv[2] === "info") {
       const detail = (activated && options.containerFailsAfterActivation) ||
           (uploadCount > 0 && options.containerFailsAfterUpload)
         ? statusContainerSource({ failed: 1 }).detail
-        : container.detail;
+        : readRunnerSnapshot().detail;
+      runnerSnapshots += 1;
       return { exitCode: 0, stdout: JSON.stringify(detail), stderr: "" };
     }
     throw new Error(`unexpected command: ${argv.slice(1).join(" ")}`);
@@ -897,6 +911,10 @@ async function exerciseCodeLane(options: {
         },
         waitForServingVersionRetry: async (milliseconds: number) => {
           readbackWaits.push(milliseconds);
+        },
+        waitForRunnerStartupRetry: async (milliseconds: number) => {
+          startupWaits.push(milliseconds);
+          if (options.startupConfigChanges) writeFileSync(configPath, source + "\n# changed during startup\n");
         },
         waitForVersionViewRetry: async (milliseconds: number) => {
           candidateReadWaits.push(milliseconds);
@@ -1043,6 +1061,7 @@ async function exerciseCodeLane(options: {
     candidateReads,
     candidateReadWaits,
     readbackWaits,
+    startupWaits,
     postActivationReadCount,
     publicReadbackCount,
     topologySnapshot,
@@ -1056,6 +1075,88 @@ async function exerciseCodeLane(options: {
     runnerReads,
   };
 }
+
+test("routine staging waits for the same starting Runner before its single build and upload", async () => {
+  const result = await exerciseCodeLane({ startupRunner: [
+    { state: "provisioning", scheduling: 1 },
+    { state: "provisioning", starting: 1 },
+    {},
+  ] });
+  expect(result.error).toBeUndefined();
+  expect(result.startupWaits).toEqual([15_000, 15_000]);
+  expect(result.gateCount).toBe(1);
+  expect(result.buildCount).toBe(1);
+  expect(result.uploadCount).toBe(1);
+  expect(result.activationCount).toBe(1);
+  expect(result.results).toMatchObject([{ status: "ready" }]);
+});
+
+test("routine staging startup exits before build when the selected Runner, timing, or Worker authority changes", async () => {
+  const starting = { state: "provisioning", starting: 1 };
+  const cases = [
+    { startupRunner: [starting, { ...starting, version: 5 }], outcome: "platform_worker_code_startup_runner_drift" },
+    { startupRunner: [starting, { ...starting, failed: 1 }], outcome: "platform_worker_release_container_not_ready" },
+    {
+      startupRunner: [starting, { ...starting, activeRolloutId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }],
+      outcome: "platform_worker_release_container_not_ready",
+    },
+    { startupRunner: [starting], expectedWaits: 8, outcome: "platform_worker_code_runner_startup_timeout" },
+    { startupRunner: [starting, {}], topologyDriftAt: 2, outcome: "platform_worker_code_authority_drift" },
+    { startupRunner: [starting, {}], startupConfigChanges: true, outcome: "platform_worker_code_config_drift" },
+    {
+      startupRunner: [{ ...starting, image: PROVED_RUNNER_IMAGE }], expectedWaits: 0,
+      outcome: "platform_worker_release_container_not_ready",
+    },
+    {
+      startupRunner: [starting, {}], resume: "valid" as const, expectedWaits: 0,
+      outcome: "platform_worker_release_container_not_ready",
+    },
+  ] satisfies (Parameters<typeof exerciseCodeLane>[0] & { expectedWaits?: number; outcome: string })[];
+  for (const { expectedWaits = 1, outcome, ...options } of cases) {
+    const result = await exerciseCodeLane(options);
+    expect(String(result.error)).toBe(`Error: ${outcome}`);
+    expect(result.startupWaits).toHaveLength(expectedWaits);
+    expect([result.gateCount, result.buildCount, result.uploadCount, result.activationCount]).toEqual([0, 0, 0, 0]);
+    expect(result.results).toEqual([]);
+  }
+});
+
+test.skipIf(process.platform === "win32")("the startup read deadline settles with an inherited Wrangler-style output pipe", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "takosumi-runner-startup-process-"));
+  const pidFile = join(scratch, "descendant.pid");
+  // This launcher makes a child that inherits its output, as Wrangler does.
+  const launcher = `
+    import { spawn } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], {
+      stdio: ["ignore", "inherit", "inherit", "ipc"],
+    });
+    writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+    setInterval(() => {}, 1000);
+  `;
+  const result = runPlatformStartupRead([process.execPath, "-e", launcher], 500, scratch)
+    .then(() => undefined, (error: unknown) => error);
+  let alarm: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      result,
+      new Promise<string>((done) => { alarm = setTimeout(() => done("still pending"), 1_600); }),
+    ]);
+    expect(outcome).toBeInstanceOf(PlatformCommandError);
+    expect(outcome).toMatchObject({ timedOut: true });
+    expect(Number(readFileSync(pidFile, "utf8"))).toBeGreaterThan(0);
+  } finally {
+    clearTimeout(alarm);
+    try {
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      if (Number.isSafeInteger(pid) && pid > 0) process.kill(pid, "SIGKILL");
+    } catch {
+      // The fixture's descendant may already have exited.
+    }
+    await result;
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
 
 test("staging code stops at a failed Worker build before building assets or uploading", async () => {
   const result = await exerciseCodeLane({ scopedGateFails: true });
