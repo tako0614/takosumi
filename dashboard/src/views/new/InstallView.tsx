@@ -134,6 +134,12 @@ const SCREEN_READ_ATTEMPTS = 10;
 const SCREEN_READ_DELAY_MS = 3_000;
 const SCREEN_READ_BUDGET_MS = SCREEN_READ_ATTEMPTS * SCREEN_READ_DELAY_MS;
 
+interface InstallCompletionTarget {
+  readonly attemptId: string;
+  readonly capsuleId: string;
+  readonly workspaceId?: string;
+}
+
 export default function InstallView() {
   return (
     <Page title={t("installStore.title")}>
@@ -292,11 +298,9 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     setRef(prefill()?.ref ?? "");
     setSourceAuth("");
   }, { defer: true }));
-  const [completed, setCompleted] = createSignal<{
-    readonly capsuleId: string;
+  const [completed, setCompleted] = createSignal<InstallCompletionTarget & {
+    readonly screen: "reading" | "empty" | "unavailable" | "ready";
     readonly url?: string;
-    /** The bounded read for the app's screen is over (with or without one). */
-    readonly settled?: boolean;
   }>();
   let disposed = false;
   let completionRead: AbortController | undefined;
@@ -469,53 +473,76 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     );
   };
 
-  /**
-   * The install finished on this screen: offer 「開く」 once the app's screen
-   * is known (an app that sent the person here gets them back with it), and
-   * the app's own page.
-   */
-  const finish = async (capsuleId: string) => {
-    const id = attemptId();
-    const current = attempt.response();
-    if (!id || current?.installPlan.id !== id || current.userAction.kind !== "review_run" ||
-        current.userAction.capsuleId !== capsuleId || sourceMismatch() || completed()?.capsuleId === capsuleId) return;
-    const workspaceId = current.installPlan.workspaceId || undefined;
-    clearCapsuleListCache(workspaceId);
-    attempt.finish();
-    setCompleted({ capsuleId });
+  const readCompletionScreen = async (target: InstallCompletionTarget, tries: number) => {
+    const ownsTarget = () => {
+      const current = attempt.response();
+      return !disposed && !sourceMismatch() && attemptId() === target.attemptId &&
+        current?.installPlan.id === target.attemptId && current.userAction.kind === "review_run" &&
+        current.userAction.capsuleId === target.capsuleId;
+    };
+    if (!ownsTarget()) return;
     completionRead?.abort();
     const controller = new AbortController();
     completionRead = controller;
-    const isCurrent = () => !disposed && completionRead === controller && attemptId() === id;
+    setCompleted({ ...target, screen: "reading" });
+    const isCurrent = () => completionRead === controller && ownsTarget();
     const isReading = () => isCurrent() && !controller.signal.aborted;
+    let outcome: "empty" | "unavailable" = "unavailable";
     // Bound the entire lookup, including a single stalled request or response body.
     const deadline = setTimeout(() => {
-      if (isCurrent()) setCompleted({ capsuleId, settled: true });
+      if (isCurrent()) setCompleted({ ...target, screen: outcome });
       controller.abort();
     }, SCREEN_READ_BUDGET_MS);
     controller.signal.addEventListener("abort", () => clearTimeout(deadline), { once: true });
     try {
-      for (let index = 0; index < SCREEN_READ_ATTEMPTS; index += 1) {
+      for (let index = 0; index < tries; index += 1) {
+        outcome = "unavailable";
         try {
-          const screens = await listAuthorizedUiSurfaces(workspaceId, { capsuleId, signal: controller.signal, isCurrent });
+          let incomplete = false;
+          const screens = await listAuthorizedUiSurfaces(target.workspaceId, {
+            capsuleId: target.capsuleId, signal: controller.signal, isCurrent,
+            onIncomplete: () => { incomplete = true; },
+          });
           if (!isReading()) return;
           const url = screens[0]?.url;
           if (url) {
-            setCompleted({ capsuleId, url, settled: true });
+            setCompleted({ ...target, url, screen: "ready" });
             return;
           }
+          if (!incomplete) outcome = "empty";
         } catch {
           if (!isReading()) return;
           // Retried within the bounded read; never shown as a launchable screen.
         }
-        await new Promise((resolve) => setTimeout(resolve, SCREEN_READ_DELAY_MS));
-        if (!isReading()) return;
+        if (index + 1 < tries) {
+          await new Promise((resolve) => setTimeout(resolve, SCREEN_READ_DELAY_MS));
+          if (!isReading()) return;
+        }
       }
-      setCompleted({ capsuleId, settled: true });
+      setCompleted({ ...target, screen: outcome });
     } finally {
       clearTimeout(deadline);
       if (completionRead === controller) completionRead = undefined;
     }
+  };
+
+  /** Offer the authorized screen of the completed app and its management page. */
+  const finish = (capsuleId: string) => {
+    const id = attemptId();
+    const current = attempt.response();
+    const done = completed();
+    if (!id || current?.installPlan.id !== id || current.userAction.kind !== "review_run" ||
+        current.userAction.capsuleId !== capsuleId || sourceMismatch() ||
+        (done?.attemptId === id && done.capsuleId === capsuleId)) return;
+    const workspaceId = current.installPlan.workspaceId || undefined;
+    clearCapsuleListCache(workspaceId);
+    attempt.finish();
+    void readCompletionScreen({ attemptId: id, capsuleId, workspaceId }, SCREEN_READ_ATTEMPTS);
+  };
+
+  const reloadCompletionScreen = () => {
+    const done = completed();
+    if (done?.screen === "unavailable") void readCompletionScreen(done, 1);
   };
 
   createEffect(() => {
@@ -708,12 +735,15 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
           {(done) => (<>
             <section class="iv-workbench iv-centered" role="status" data-testid="install-complete">
               <h2 data-stage-heading tabindex="-1">{t("installStore.completeTitle")}</h2>
-              <p>{handoff() ? t("installStore.completeHint") : t("installStore.completeOpenHint")}</p>
+              <Show when={done().screen !== "empty"}>
+                <p>{done().screen === "unavailable" ? t("app.incomplete.screens") :
+                  handoff() ? t("installStore.completeHint") : t("installStore.completeOpenHint")}</p>
+              </Show>
               <div class="iv-action-row">
                 <Show
                   when={handoff()}
                   fallback={
-                    <Show when={done().url} fallback={<Show when={!done().settled}><Spinner size={18} /></Show>}>
+                    <Show when={done().url} fallback={<Show when={done().screen === "reading"}><Spinner size={18} /></Show>}>
                       {(url) => (
                         <Button
                           href={url()}
@@ -729,7 +759,7 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
                   }
                 >
                   <Show when={createAppHandoffConnectHref(handoff(), done().url)} fallback={
-                    <Show when={!done().settled}><Spinner size={18} /></Show>
+                    <Show when={done().screen === "reading"}><Spinner size={18} /></Show>
                   }>
                     {(href) => (
                       <Button href={href()} variant="primary">
@@ -738,9 +768,14 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
                     )}
                   </Show>
                 </Show>
+                <Show when={done().screen === "unavailable"}>
+                  <Button type="button" variant="secondary" onClick={reloadCompletionScreen}>
+                    {t("app.open.reload")}
+                  </Button>
+                </Show>
                 <Button
                   href={appPageHref(done().capsuleId)}
-                  variant={done().settled && !done().url ? "primary" : "secondary"}
+                  variant={done().screen !== "reading" && !done().url ? "primary" : "secondary"}
                 >
                   {t("installStore.manageApp")}
                 </Button>
