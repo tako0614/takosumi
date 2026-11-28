@@ -1483,10 +1483,12 @@ export async function createGitInstallAttempt(
 export async function answerGitInstallAttempt(
   installPlanId: string,
   answer: PatchGitInstallPlanRequest,
+  options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
-  return await controlFetch<GitInstallPlanResponse>(
+  return await submitBoundedControlWrite<GitInstallPlanResponse>(
+    "Install answer",
     `${BASE}/install-plans/${encodeURIComponent(installPlanId)}`,
-    { method: "PATCH", body: answer },
+    { ...options, method: "PATCH", body: answer },
   );
 }
 
@@ -1535,11 +1537,8 @@ export async function getGitInstallPlan(
   installPlanId: string,
   options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitInstallPlanResponse> {
-  throwIfAborted(options.signal);
-  return await controlFetch<GitInstallPlanResponse>(
-    `${BASE}/install-plans/${encodeURIComponent(installPlanId)}`,
-    options,
-  );
+  return await withControlDeadline("Install attempt read", options, (scope) =>
+    controlFetch<GitInstallPlanResponse>(`${BASE}/install-plans/${encodeURIComponent(installPlanId)}`, scope));
 }
 
 /** Starts the durable Capsule-local Git revision coordinator. */
@@ -1950,8 +1949,8 @@ export interface ScheduleCapsuleUninstallResult {
   readonly alreadyDeleted?: boolean;
 }
 
-/** Retire an unanswered reservation write so the caller can reread the app. */
-async function submitUninstallReservation<T>(label: string, path: string, options: RequestOpts): Promise<T> {
+/** Bound the write and preserve a client rejection even if its body stalls. */
+async function submitBoundedControlWrite<T>(label: string, path: string, options: RequestOpts): Promise<T> {
   let responseStatus: number | undefined;
   try {
     return await withControlDeadline(label, options, (scope) => controlFetch<T>(path, {
@@ -1984,7 +1983,7 @@ export async function cancelCapsuleUninstall(
   expectedUninstallId: string,
   options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<Capsule> {
-  const body = await submitUninstallReservation<{ capsule: Capsule }>(
+  const body = await submitBoundedControlWrite<{ capsule: Capsule }>(
     "Cancel uninstall reservation",
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/cancel-uninstall-reservation`,
     { ...options, method: "POST", body: { expectedUninstallId } },
@@ -2066,7 +2065,7 @@ export async function deleteCapsule(
   const path = `${BASE}/capsules/${encodeURIComponent(capsuleId)}${immediate}`;
   const request = { method: "DELETE", isCurrent: options.isCurrent };
   if (options.immediate !== true) {
-    return await submitUninstallReservation<DeleteCapsuleResult>("Schedule uninstall", path, request);
+    return await submitBoundedControlWrite<DeleteCapsuleResult>("Schedule uninstall", path, request);
   }
   return await controlFetch<DeleteCapsuleResult>(path, {
     ...request,

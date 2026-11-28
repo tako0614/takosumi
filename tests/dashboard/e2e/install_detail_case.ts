@@ -1263,6 +1263,51 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         release.resolve();
       }
     });
+    test("a stalled input confirmation reads the same attempt and shows its Plan once", async ({ page }) => {
+      await page.clock.install();
+      const f = await detailFixture(page, base);
+      await page.addInitScript(() => {
+        const send = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+          const response = await send(input, init);
+          if (init?.method === "PATCH" &&
+            /^\/api\/v1\/install-plans\/[^/]+$/u.test(url.pathname) &&
+            typeof init.body === "string" && JSON.parse(init.body).continue === true) {
+            // The fixture has stored the answer. Withhold the response body.
+            Object.defineProperty(response, "json", { value: () => new Promise(() => {}) });
+          }
+          return response;
+        };
+      });
+      const reads: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() === "GET") reads.push(new URL(request.url()).pathname);
+      });
+      const saved = page.waitForResponse((response) =>
+        response.request().method() === "PATCH" &&
+        new URL(response.url()).pathname.startsWith("/api/v1/install-plans/") &&
+        response.request().postDataJSON().continue === true && response.ok());
+      await page.goto(sourceUrl);
+      await openInstallSheet(page);
+      const reply = await saved;
+      const attemptPath = new URL(reply.url()).pathname;
+      const reread = page.waitForResponse((response) =>
+        response.request().method() === "GET" &&
+        new URL(response.url()).pathname === attemptPath && response.ok(), { timeout: 7_500 });
+      await page.clock.fastForward(30_001);
+      await reread;
+      await waitForPlan(page);
+      expect(attemptPath).toBe(`/api/v1/install-plans/${new URL(page.url()).searchParams.get("installPlan")}`);
+      expect(f.mutations.filter((entry) => entry === attemptPost)).toHaveLength(1);
+      expect(f.mutations.filter((entry) => entry === `PATCH ${attemptPath}`)).toHaveLength(1);
+      expect(f.mutations.filter((entry) => entry.endsWith("/reconcile")).every((entry) =>
+        entry === `POST ${attemptPath}/reconcile`)).toBe(true);
+      expect(reads.filter((path) => path === attemptPath)).toHaveLength(1);
+      expect(reads).toContain(`/api/v1/runs/${planId}`);
+      expect(f.attempts.latest()?.planRunId).toBe(planId);
+      expect(f.mutations.filter((entry) => /\/(approve|apply)$/u.test(entry))).toEqual([]);
+    });
     test("a stalled screen lookup ends without offering to open an unverified app", async ({ page }) => {
       await page.clock.install();
       const f = await detailFixture(page, base);
