@@ -263,6 +263,16 @@ not write those routes or silently adopt them into config. A malformed route,
 a route for another script, an unknown shape, or drift refuses; config-owned
 custom domains, schedules, and settings must still match the realized config.
 
+When the pinned runner Container is already starting or scheduling instances
+at the first read, routine `apply` waits up to two minutes before building.
+This applies only to the same Container and application version with no active
+rollout, instance failures, or provider errors. Once it is healthy, the lane
+reads the serving Version, bindings, secret names, topology, and Container
+again and checks them against the original selection. Runner or authority
+drift, failure, and startup timeout stop the command before build or upload.
+Read-only status, upload resume, and configuration transitions keep their
+existing readiness checks.
+
 Cloudflare's script listing carries `containers` only for a Container-bearing
 Worker: one `{ class_name }` entry per Durable Object class with a Container
 attached. An absent key or `null` means no attachment. The lane accepts that
