@@ -1373,6 +1373,8 @@ export const ja = {
   "account.apiKeys.created": "API キーを作成しました",
   "account.apiKeys.createdHint":
     "この値は再表示できません。今すぐ安全な場所へ保存してください。",
+  "account.apiKeys.issuanceUnconfirmed":
+    "キーの発行結果を確認できませんでした。「あなたのキー」を確認し、値を保存できなかった新しいキーがあれば、作り直す前に無効にしてください。",
   "account.apiKeys.copy": "コピー",
   "account.apiKeys.copied": "コピーしました",
   "account.apiKeys.copyFailed":

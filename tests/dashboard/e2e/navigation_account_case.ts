@@ -591,6 +591,103 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
+    for (const scenario of [
+      "lost response", "stalled response", "truncated receipt", "redirected response", "foreign receipt", "denied",
+      "confirmed",
+    ] as const) {
+      test(`API key issuance handles its one-time receipt (${scenario})`, async ({ page }) => {
+        const errors = collectPageErrors(page);
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+        const fixture = await accountFixture(page);
+        const key = {
+          id: "pat_new",
+          subject: "sub_portable_e2e",
+          name: "新しい CLI キー",
+          prefix: "tks_fixture",
+          scopes: ["read"],
+          created_at: "2026-10-01T00:00:00.000Z",
+        };
+        const secret = "one-time-token-fixture";
+        if (scenario === "stalled response") {
+          await page.addInitScript(() => {
+            const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+            AbortSignal.timeout = (ms) => nativeTimeout(ms === 30_000 ? 100 : ms);
+          });
+        }
+        let listReads = 0;
+        let issueRequests = 0;
+        let stalled: Route | undefined;
+        await page.route((url) => url.pathname === "/api/v1/account/tokens", (route) => {
+          if (route.request().method() === "GET") {
+            listReads += 1;
+            const saved = issueRequests > 0 && scenario !== "denied" && scenario !== "foreign receipt";
+            void stalled?.abort("failed").catch(() => undefined);
+            return route.fulfill({ json: { tokens: saved ? [key] : [], next_cursor: null } });
+          }
+          expect(route.request().method()).toBe("POST");
+          expect(route.request().postDataJSON()).toMatchObject({ name: key.name, scopes: key.scopes });
+          issueRequests += 1;
+          if (scenario === "lost response") return route.abort("failed");
+          if (scenario === "stalled response") {
+            stalled = route;
+            return;
+          }
+          if (scenario === "truncated receipt") {
+            return route.fulfill({ status: 201, contentType: "application/json", body: '{"token":' });
+          }
+          if (scenario === "redirected response" && issueRequests === 1) {
+            return route.fulfill({ status: 307, headers: { location: "/api/v1/account/tokens?fixture_redirect=1" } });
+          }
+          if (scenario === "denied") {
+            return route.fulfill({ status: 403, json: { error: "forbidden" } });
+          }
+          return route.fulfill({
+            status: 201,
+            json: {
+              token: secret,
+              token_record: scenario === "foreign receipt" ? { ...key, subject: "sub_other_account" } : key,
+            },
+          });
+        });
+
+        await page.goto("/account/cli", { waitUntil: "domcontentloaded" });
+        await expect(page.getByText("まだキーはありません。")).toBeVisible();
+        await page.getByRole("button", { name: "キーを作成" }).click();
+        const name = page.getByRole("textbox", { name: /キーの名前/u });
+        await name.fill(key.name);
+        await page.getByRole("checkbox", { name: /^読み取り/u }).check();
+        await page.getByRole("button", { name: "作成", exact: true }).click();
+
+        const notice = page.getByText(/キーの発行結果を確認できませんでした/u);
+        const shownSecret = page.getByText(secret, { exact: true });
+        const row = page.getByRole("listitem").filter({ hasText: key.name });
+        if (scenario === "denied") {
+          await expect(page.getByText(/API キーの操作を完了できませんでした/u)).toBeVisible();
+          await expect(name).toBeVisible();
+          await expect(notice).toHaveCount(0);
+          expect(listReads).toBe(1);
+        } else {
+          await expect(name).toHaveCount(0);
+          if (scenario === "confirmed") {
+            await expect(shownSecret).toBeVisible();
+            await expect(notice).toHaveCount(0);
+          } else {
+            await expect(notice).toBeVisible();
+          }
+          await expect.poll(() => listReads).toBe(2);
+        }
+        if (scenario !== "denied" && scenario !== "foreign receipt") {
+          await expect(row.getByRole("button", { name: "無効にする", exact: true })).toBeEnabled();
+        } else {
+          await expect(row).toHaveCount(0);
+        }
+        if (scenario !== "confirmed") await expect(shownSecret).toHaveCount(0);
+        expect(issueRequests).toBe(1);
+        expect(fixture.mutations).toEqual([]);
+        expect(errors).toEqual([]);
+      });
+    }
+
     for (const scenario of ["committed", "uncommitted", "account switched"] as const) {
       test(`API key revocation reads back after a lost response (${scenario})`, async ({ page }) => {
         const errors = collectPageErrors(page);

@@ -71,7 +71,8 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
   const [scopes, setScopes] =
     createSignal<readonly TakosumiAccountsPatScope[]>([]);
   const [created, setCreated] =
-    createSignal<TakosumiAccountsCreatePatResponse>();
+    createSignal<Pick<TakosumiAccountsCreatePatResponse, "token">>();
+  const [issuanceUnconfirmed, setIssuanceUnconfirmed] = createSignal(false);
   const [copied, setCopied] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
@@ -124,8 +125,10 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
     ) {
       return;
     }
+    const sessionIsCurrent = currentSessionCheck();
     setBusy(true);
     setError(undefined);
+    setIssuanceUnconfirmed(false);
     setCopied(false);
     try {
       const result = await createTakosumiApiKey(
@@ -137,15 +140,26 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
           ).toISOString(),
         },
         scopeCatalogEntries(),
+        subject,
+        requests.signal,
       );
-      setCreated(result);
-      setName("");
-      setScopes([]);
-      setFormOpen(false);
-      requestAnimationFrame(() => (createdCopyRef ?? createTriggerRef)?.focus());
-      await refetch();
+      if (requests.signal.aborted || !sessionIsCurrent()) return;
+      if (result) {
+        setCreated(result);
+        setName("");
+        setScopes([]);
+        setFormOpen(false);
+        requestAnimationFrame(() => (createdCopyRef ?? createTriggerRef)?.focus());
+      } else {
+        setIssuanceUnconfirmed(true);
+        closeCreateForm();
+      }
+      // Read metadata once; the list cannot recover the secret or identify which request created a row.
+      void refetch();
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      if (!requests.signal.aborted && sessionIsCurrent()) {
+        setError(friendlyError(cause, t).message);
+      }
     } finally {
       setBusy(false);
     }
@@ -224,6 +238,12 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
               {t("account.apiKeys.error", { message: message() })}
             </Toast>
           )}
+        </Show>
+
+        <Show when={issuanceUnconfirmed()}>
+          <Toast tone="neutral" onDismiss={() => setIssuanceUnconfirmed(false)}>
+            {t("account.apiKeys.issuanceUnconfirmed")}
+          </Toast>
         </Show>
 
         <Show when={created()}>
@@ -361,6 +381,7 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
               <Button
                 variant="ghost"
                 type="button"
+                disabled={busy()}
                 onClick={closeCreateForm}
               >
                 {t("common.cancel")}
