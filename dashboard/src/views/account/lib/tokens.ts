@@ -12,9 +12,11 @@ import {
   type TakosumiAccountsPatScopeCatalogEntry,
   type TakosumiAccountsPatScopeCatalogResponse,
 } from "@takosjp/takosumi-accounts-contract";
-import { apiFetch } from "./http.ts";
+import { SharedAuthSessionPreflightError } from "../../../lib/shared-auth-session-preflight.ts";
+import { ApiError, apiFetch } from "./http.ts";
 
 const TOKEN_PAGE_LIMIT = 200;
+const KEY_ISSUANCE_TIMEOUT_MS = 30_000;
 
 export type CreateTakosumiApiKeyInput = Omit<
   TakosumiAccountsCreatePatRequest,
@@ -174,14 +176,34 @@ export async function listTakosumiApiKeys(signal?: AbortSignal): Promise<
 export async function createTakosumiApiKey(
   input: CreateTakosumiApiKeyInput,
   catalog: readonly TakosumiAccountsPatScopeCatalogEntry[],
-): Promise<TakosumiAccountsCreatePatResponse> {
-  return await apiFetch<TakosumiAccountsCreatePatResponse>(
-    TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
-    {
+  subject: string,
+  signal: AbortSignal,
+): Promise<Pick<TakosumiAccountsCreatePatResponse, "token"> | undefined> {
+  const body = buildSelfServiceTakosumiApiKeyRequest(input, catalog);
+  let response: unknown;
+  try {
+    response = await apiFetch<unknown>(TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH, {
       method: "POST",
-      body: buildSelfServiceTakosumiApiKeyRequest(input, catalog),
-    },
-  );
+      body,
+      signal,
+      timeoutMs: KEY_ISSUANCE_TIMEOUT_MS,
+      redirect: "error",
+    });
+  } catch (error) {
+    if (
+      signal.aborted || error instanceof SharedAuthSessionPreflightError ||
+      (error instanceof ApiError && error.status >= 400 && error.status < 500 &&
+        error.status !== 408)
+    ) throw error;
+    // The request may be committed even if the one-time secret never arrived.
+    return undefined;
+  }
+  if (
+    !isRecord(response) || typeof response.token !== "string" || !response.token.trim() ||
+    !isRecord(response.token_record) || response.token_record.subject !== subject ||
+    typeof response.token_record.id !== "string" || !response.token_record.id.trim()
+  ) return undefined;
+  return { token: response.token };
 }
 
 export async function revokeTakosumiApiKey(

@@ -1379,6 +1379,8 @@ export const en: Record<keyof typeof ja, string> = {
   "account.apiKeys.created": "API key created",
   "account.apiKeys.createdHint":
     "This value cannot be shown again. Save it somewhere secure now.",
+  "account.apiKeys.issuanceUnconfirmed":
+    "We couldn't confirm whether the key was created. Check Your keys, and revoke any new key whose value you couldn't save before creating a replacement.",
   "account.apiKeys.copy": "Copy",
   "account.apiKeys.copied": "Copied",
   "account.apiKeys.copyFailed":

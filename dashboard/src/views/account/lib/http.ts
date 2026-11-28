@@ -48,6 +48,8 @@ export interface RequestOpts {
   readonly headers?: Record<string, string>;
   readonly auth?: boolean; // default true; pass false for /healthz etc.
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number; // HTTP request and response body, after preflight
+  readonly redirect?: RequestRedirect;
 }
 
 export async function apiFetch<T>(
@@ -74,14 +76,21 @@ export async function apiFetch<T>(
     if (preflight) await preflight;
   }
   throwIfSharedAuthCallerAborted(opts.signal);
+  let signal = opts.signal;
+  if (opts.timeoutMs !== undefined) {
+    const timeout = AbortSignal.timeout(opts.timeoutMs);
+    signal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  }
   const sessionIsCurrent = auth ? currentSessionCheck() : undefined;
   const res = await fetch(path, {
     method: opts.method ?? "GET",
     headers,
     body,
     credentials: "include",
-    signal: opts.signal,
+    signal,
+    redirect: opts.redirect,
   });
+  throwIfSharedAuthCallerAborted(signal);
 
   if (res.status === 401 && sessionIsCurrent) {
     if (sessionIsCurrent()) {
