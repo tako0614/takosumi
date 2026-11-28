@@ -698,12 +698,17 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       });
     }
 
-    for (const scenario of ["saved", "unsaved", "refused", "retired", "overlapping read"] as const) {
+    for (const scenario of [
+      "saved", "unsaved", "refused", "retired", "overlapping read", "stalled opt-out saved", "stalled opt-out unsaved",
+    ] as const) {
       test(`automatic update setting confirms its saved value (${scenario})`, async ({ page }) => {
         const capsulePath = `/api/v1/capsules/${CAPSULE_ID}`;
         const replacement = PORTABLE_CAPSULES.ws_beta[0];
         const overlapping = scenario === "overlapping read";
-        if (overlapping) await page.clock.install();
+        const stalled = scenario === "stalled opt-out saved" || scenario === "stalled opt-out unsaved";
+        const willSave = scenario === "saved" || overlapping || scenario === "stalled opt-out saved";
+        const requestedValue = !stalled;
+        if (overlapping || stalled) await page.clock.install();
         await page.addInitScript((path) => {
           localStorage.setItem("tg_lang", "en");
           const fetch = window.fetch.bind(window);
@@ -719,8 +724,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }, capsulePath);
         let release!: () => void;
         const held = new Promise<void>((resolve) => { release = resolve; });
+        let stalledRequest: Route | undefined;
         let readsBeforeWrite = 0;
-        let persisted = false;
+        let savedAutoUpdate = !requestedValue;
         let appReadsAfterWrite = 0;
         const writes: { method: string; path: string; body: unknown }[] = [];
         await page.route("**/api/v1/**", async (route) => {
@@ -734,18 +740,23 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               await held;
               return route.fulfill({ status: 401, json: { error: "unauthenticated" } });
             }
-            persisted = scenario === "saved" || overlapping;
+            if (willSave) savedAutoUpdate = requestedValue;
+            if (stalled) {
+              stalledRequest = route;
+              return;
+            }
             return route.abort("failed");
           }
           if (path === `${capsulePath}/app`) {
             const written = writes.length > 0;
+            const observedAutoUpdate = savedAutoUpdate;
             if (written) appReadsAfterWrite += 1;
             else if (++readsBeforeWrite === 2 && overlapping) await held;
             return route.fulfill({ json: {
               app: appView(CAPSULE_ID, PORTABLE_EXPECTATIONS.appName, {
                 progress: { revisionPreparing: overlapping && !written },
                 version: {
-                  updateAvailable: false, stale: false, autoUpdate: written && persisted,
+                  updateAvailable: false, stale: false, autoUpdate: observedAutoUpdate,
                   current: { ref: "main", commit: written ? "2222222" : "1111111" },
                 },
               }),
@@ -762,12 +773,17 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           await page.goto(`/apps/${CAPSULE_ID}#version`, { waitUntil: "domcontentloaded" });
           const checkbox = page.getByRole("checkbox", { name: "Update automatically when a newer version is found" });
           const feedback = page.getByTestId("app-version").getByRole("alert");
-          await expect(checkbox).not.toBeChecked();
+          await expect(checkbox).toBeChecked({ checked: !requestedValue });
           if (overlapping) {
             await page.clock.fastForward(16_000);
             await expect.poll(() => readsBeforeWrite).toBe(2);
           }
           await checkbox.click();
+          if (stalled) {
+            await expect.poll(() => Boolean(stalledRequest)).toBe(true);
+            await expect(checkbox).toBeDisabled();
+            await page.clock.fastForward(30_001);
+          }
 
           if (scenario === "retired") {
             await expect.poll(() => writes.length).toBe(1);
@@ -785,9 +801,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             expect(await settled).toBe("stayed");
             await expect(page.getByRole("heading", { level: 1, name: replacement.name })).toBeVisible();
             await expect(feedback).toHaveCount(0);
-          } else if (scenario === "saved" || overlapping) {
+          } else if (willSave) {
             await expect.poll(() => appReadsAfterWrite).toBe(1);
-            await expect(checkbox).toBeChecked();
+            await expect(checkbox).toBeChecked({ checked: requestedValue });
             await expect(checkbox).toBeEnabled();
             await expect(feedback).toHaveCount(0);
             if (overlapping) {
@@ -802,13 +818,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             }
           } else {
             await expect(feedback).toBeVisible();
-            await expect(checkbox).not.toBeChecked();
+            await expect(checkbox).toBeChecked({ checked: !requestedValue });
             await expect(checkbox).toBeEnabled();
           }
           expect(appReadsAfterWrite).toBe(scenario === "refused" || scenario === "retired" ? 0 : 1);
-          expect(writes).toEqual([{ method: "PATCH", path: capsulePath, body: { autoUpdate: true } }]);
+          expect(writes).toEqual([{ method: "PATCH", path: capsulePath, body: { autoUpdate: requestedValue } }]);
         } finally {
           release();
+          await stalledRequest?.abort("failed").catch(() => undefined);
         }
       });
     }
