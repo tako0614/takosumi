@@ -52,19 +52,25 @@ function response(status: number, code: string, allow?: string): Response {
   });
 }
 
-const confirmationText = {
+const billingViewText = {
   en: {
     title: "Continue to billing",
     ready: "Your billing view is ready.",
     open: "Open billing in Takoserver Console",
+    unconfirmed: "Could not confirm the billing view",
+    check: "Return to billing to check the current view.",
+    returnToBilling: "Return to billing",
   },
   ja: {
     title: "請求画面へ進む",
     ready: "請求画面を開く準備ができました。",
     open: "Takoserver Consoleで請求を開く",
+    unconfirmed: "請求画面の準備状況を確認できませんでした",
+    check: "請求画面に戻って、現在の状態を確認してください。",
+    returnToBilling: "請求画面に戻る",
   },
 };
-type BillingLanguage = keyof typeof confirmationText;
+type BillingLanguage = keyof typeof billingViewText;
 
 // The Hosted 303 has no representation language. Match the language order
 // used by the Hosted billing document for the same forwarded preference.
@@ -108,9 +114,26 @@ function viewNavigationConfirmation(result: Response, locale: BillingLanguage): 
   headers.set("referrer-policy", "no-referrer");
   headers.set("content-security-policy", "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
   headers.set("x-content-type-options", "nosniff");
-  const text = confirmationText[locale];
+  const text = billingViewText[locale];
   return new Response(`<!doctype html><html lang="${locale}"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>${text.title}</title><main><h1>${text.title}</h1><p>${text.ready}</p><a href="${escaped}" referrerpolicy="no-referrer">${text.open}</a></main></html>`, {
     status: 200, headers,
+  });
+}
+
+function viewNavigationRecovery(workspaceId: string, locale: BillingLanguage): Response {
+  const href = `${basePath}?workspaceId=${encodeURIComponent(workspaceId)}&amp;lang=${locale}`;
+  const text = billingViewText[locale];
+  const html = `<!doctype html><html lang="${locale}"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>${text.unconfirmed}</title><main><h1>${text.unconfirmed}</h1><p>${text.check}</p><a href="${href}">${text.returnToBilling}</a></main></html>`;
+  return new Response(html, {
+    status: 503,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "content-language": locale,
+      "cache-control": "private, no-store",
+      "referrer-policy": "no-referrer",
+      "content-security-policy": "default-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 
@@ -232,9 +255,9 @@ export async function handlePlatformBrowserBillingRequest(
   }
   if (signal.aborted) return response(400, "invalid_billing_request");
 
+  const contentType = headers.get("content-type")?.split(";")[0];
   let body: Uint8Array<ArrayBuffer> | undefined;
   if (method === "POST") {
-    const contentType = headers.get("content-type")?.split(";")[0];
     if (language !== null && contentType !== "application/x-www-form-urlencoded") {
       return response(400, "invalid_billing_request");
     }
@@ -287,20 +310,31 @@ export async function handlePlatformBrowserBillingRequest(
   }
   const acceptLanguage = baseView ? language ?? headers.get("accept-language") : null;
   if (acceptLanguage !== null) privateHeaders.set("accept-language", acceptLanguage);
+  const recoveryWorkspace = baseView && method === "POST" &&
+    contentType === "application/x-www-form-urlencoded" &&
+    headers.get("accept")?.split(",").some((type) => type.trim() === "text/html") &&
+    exactViewWorkspace(selectedWorkspace) ? selectedWorkspace : undefined;
+  const dispatchUnavailable = () => recoveryWorkspace === undefined
+    ? response(503, "billing_unavailable")
+    : viewNavigationRecovery(recoveryWorkspace, billingLanguageFromHeader(acceptLanguage));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const dispatchDeadline = Symbol();
+  let awaitingDispatch = false;
   try {
-    const result = await measureServerTiming(timings, "tk_billing_rpc", () =>
-      Promise.race([
-        dispatch(new Request(dashboardUrl, { method, headers: privateHeaders, body, redirect: "manual" }),
-          Object.freeze({ authKind: "session", subject: identity.accountId })),
+    const result = await measureServerTiming(timings, "tk_billing_rpc", () => {
+      const privateRequest = new Request(dashboardUrl, { method, headers: privateHeaders, body, redirect: "manual" });
+      awaitingDispatch = true;
+      return Promise.race([
+        dispatch(privateRequest, Object.freeze({ authKind: "session", subject: identity.accountId })),
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(dispatchDeadline),
             baseView ? viewDispatchTimeoutMs : financialDispatchTimeoutMs);
         }),
-      ]));
+      ]);
+    });
+    awaitingDispatch = false;
     if (!(result instanceof Response)) {
-      return failed("dispatch-nonresponse", response(503, "billing_unavailable"));
+      return failed("dispatch-nonresponse", dispatchUnavailable());
     }
     let selectedResult = result;
     if (baseView && method === "POST" && result.status === 303) {
@@ -322,7 +356,7 @@ export async function handlePlatformBrowserBillingRequest(
   } catch (error) {
     // A lost response never retries or creates a new operation/reference.
     return failed(error === dispatchDeadline ? "dispatch-timeout" : "dispatch-rejected",
-      response(503, "billing_unavailable"));
+      awaitingDispatch ? dispatchUnavailable() : response(503, "billing_unavailable"));
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

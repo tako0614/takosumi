@@ -537,9 +537,13 @@ staging failure-phase header and a request-local log join, including for POST;
 the join carries no account or Workspace identity and is not financial authority.
 An expired wait does not prove that the receiver failed to save the original.
 Retain the original reservation and use its supported GET recovery, rather than
-resending the view POST. Qualify an actual fresh-session navigation and successful
-receiver completion with margin inside this finite budget before calling the
-selected live journey ready; a canceled RPC duration is not a completion sample.
+resending the view POST. An authenticated base-view browser form with an
+unconfirmed dispatch receives a localized, private 503 page with an explicit GET
+link to the same Workspace and language. Responses received from Hosted retain
+their existing handling, including any original recovery selector. Qualify a
+fresh-session navigation and successful receiver completion with margin inside
+this finite budget before calling the selected live journey ready. A canceled
+RPC duration cannot establish completion.
 
 After successful base-view POST capture, the bridge presents a private, no-store
 confirmation document with an explicit HTTPS link to the receiver's saved Console
