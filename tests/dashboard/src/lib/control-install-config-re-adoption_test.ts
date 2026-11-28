@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, jest, test } from "bun:test";
 import { createCapsuleInstallConfigReAdoption, getCapsuleInstallConfigReAdoptionContext } from "../../../../dashboard/src/lib/control-api.ts";
 import type { CreateCapsuleInstallConfigReAdoptionRequest } from "takosumi-contract";
 import { reAdoptionContext } from "../../fixtures/re-adoption-context.ts";
@@ -54,6 +54,38 @@ test("stale or refused re-adoption retains the server error without another muta
     globalThis.fetch = (async () => { calls += 1; return json({ error: { code, message: "fixture refusal" } }, status); }) as typeof fetch;
     await expect(createCapsuleInstallConfigReAdoption("capsule_a", request, "fixture-re-adopt-key")).rejects.toMatchObject({ status, code });
     expect(calls).toBe(1);
+  }
+});
+
+test.each(["read", "submit"] as const)("re-adoption %s bounds an incomplete JSON body", async (operation) => {
+  jest.useFakeTimers();
+  const calls: Array<AbortSignal | undefined | null> = [];
+  let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, options?: RequestInit) => {
+    calls.push(options?.signal);
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        stream = controller;
+        controller.enqueue(new TextEncoder().encode("{"));
+      },
+    }), { headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const pending: Promise<unknown> = operation === "read"
+      ? getCapsuleInstallConfigReAdoptionContext("capsule_a", "revision_failed")
+      : createCapsuleInstallConfigReAdoption("capsule_a", request, "fixture-key");
+    const outcome = pending.catch((cause: unknown) => cause);
+    expect(calls).toHaveLength(1);
+    expect(jest.getTimerCount()).toBe(1);
+    await Promise.resolve();
+    jest.advanceTimersByTime(30_000);
+    expect(await outcome).toMatchObject({ status: 0, code: "request_timeout" });
+    expect(calls[0]?.aborted).toBe(true);
+    expect(calls).toHaveLength(1);
+  } finally {
+    stream?.close();
+    jest.clearAllTimers();
+    jest.useRealTimers();
   }
 });
 

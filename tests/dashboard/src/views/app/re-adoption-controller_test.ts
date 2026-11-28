@@ -110,6 +110,7 @@ test("actual form drops a late context for another person and never automaticall
     state.scope.principalId = "person_b";
     release(); await read;
     expect(state.controller.context()).toBeUndefined();
+    expect(state.controller.canRead()).toBe(true);
     await state.controller.submit();
     expect(calls).toBe(1);
   } finally { state.dispose(); }
@@ -128,6 +129,16 @@ test("only a structured failed same-app source revision can open the input conte
     { message: "revision_failed" },
   ]) expect(reAdoptionRevisionFromError(new ControlApiError(409, "plan_run_failed", "fixture", bad), "capsule_a", "source_a")).toBeUndefined();
   expect(reAdoptionRevisionFromError(new Error("revision_failed"), "capsule_a", "source_a")).toBeUndefined();
+});
+
+test("an up-to-date notice opens target inputs only with retained compatibility evidence", () => {
+  const body = { ...failedTarget(), nextAction: "none" };
+  const error = (compatibilityReportId?: string) => new ControlApiError(
+    409, "revision_already_current", "fixture",
+    { ...body, revisionPlan: { ...body.revisionPlan, compatibilityReportId } },
+  );
+  expect(reAdoptionRevisionFromError(error(), "capsule_a", "source_a")).toBeUndefined();
+  expect(reAdoptionRevisionFromError(error("report_applied"), "capsule_a", "source_a")).toBe("revision_failed");
 });
 
 test("actual form permits reread only for closed no-rebind outcomes and retains uncertain answers", async () => {

@@ -46,6 +46,7 @@ import {
   type ControlDispatchContext,
 } from "./shared.ts";
 import { requireResourceAccess } from "./app-authorization.ts";
+import { declaredRepositoryManifestModulePath } from "./repo-owned-install-config.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_DIAGNOSTIC_CODE = 64;
@@ -600,11 +601,9 @@ async function advanceRevisionSource(
   } else {
     // An exact commit the app already runs successfully, from the same ref
     // and subtree, cannot have a newer version: answer without syncing it.
-    if (
-      IMMUTABLE_COMMIT.test(plan.revision.targetRef) &&
-      await runsAdoptedRevision(plan, identity, plan.revision.targetRef, operations)
-    ) {
-      return failedPlan(plan, ALREADY_CURRENT);
+    if (IMMUTABLE_COMMIT.test(plan.revision.targetRef)) {
+      const applied = await successfulApplyForTarget(plan, identity, plan.revision.targetRef, operations);
+      if (applied) return await alreadyCurrentRevision(plan, identity, applied, operations);
     }
     sync = await createRevisionSourceSync(plan, evidence, operations);
   }
@@ -627,11 +626,18 @@ async function advanceRevisionSource(
   // A branch or tag that still resolves to the applied commit has nothing
   // newer. A different ref to the same commit is a lane change and is
   // planned like any other version.
-  if (await runsAdoptedRevision(plan, identity, snapshot.resolvedCommit, operations)) {
-    return failedPlan(
+  const applied = await successfulApplyForTarget(plan, identity, snapshot.resolvedCommit, operations);
+  if (applied) {
+    const current = await alreadyCurrentRevision(
       progressed(plan, { sourceSyncRunId: sync.id, sourceSnapshotId: snapshot.id }),
-      ALREADY_CURRENT,
+      identity,
+      applied,
+      operations,
+      snapshot,
     );
+    if (current.compatibilityReportId || !hasUnadoptedRepositoryModule(identity, snapshot)) return current;
+    // An intervening sync can give the same Git commit a new Snapshot ID.
+    // Analyze this exact Snapshot before offering its inputs, but do not Plan it.
   }
   const compatibility = await revisionCompatibilityEvidence(plan, snapshot);
   return progressed(plan, {
@@ -738,6 +744,13 @@ async function analyzeRevisionCompatibility(
     modulePath: identity.modulePath,
     evidence,
   });
+  if (hasUnadoptedRepositoryModule(identity, snapshot) &&
+    await successfulApplyForTarget(plan, identity, snapshot.resolvedCommit, operations)) {
+    return failedPlan(
+      compatibility.report.level === "ready" ? plan : { ...plan, compatibilityReportId: undefined },
+      ALREADY_CURRENT,
+    );
+  }
   const compatibilityPolicy = evaluateCompatibilityReportAgainstPolicy(
     compatibility.report,
     identity.installConfig.policy,
@@ -811,6 +824,11 @@ interface RevisionIdentity {
   readonly modulePath: string;
   /** The Source revision of the applied state, when the Capsule has one. */
   readonly adopted?: CapsuleAdoptedSourceRevision;
+}
+
+function hasUnadoptedRepositoryModule(identity: RevisionIdentity, snapshot: SourceSnapshot): boolean {
+  return identity.installConfig.installExperience?.repositoryInstallUx?.status !== "accepted" &&
+    Boolean(declaredRepositoryManifestModulePath(snapshot, identity.modulePath));
 }
 
 async function assertRevisionIdentity(
@@ -911,27 +929,26 @@ async function assertRevisionIdentity(
 }
 
 /**
- * Whether the app already runs the target: it is exactly the applied Source
- * revision, and that state came from an Apply that succeeded on a Capsule
+ * Find the successful Apply of the exact target on a Capsule
  * that is not in error. A provider failure can persist state (the current
  * StateVersion advances while the Capsule is `error`), and a restored or
  * recovered state has no successful Apply of its own; retrying either must
  * plan again rather than report that nothing changed. An explicit re-adoption
  * also needs a Plan while the app still runs the state it had at re-adoption.
  */
-async function runsAdoptedRevision(
+async function successfulApplyForTarget(
   plan: StoredGitRevisionPlan,
   identity: RevisionIdentity,
   resolvedCommit: string,
   operations: ControlPlaneOperations,
-): Promise<boolean> {
+): Promise<Run | undefined> {
   const { capsule } = identity;
   if (
     !isAdoptedRevision(plan, identity.adopted, resolvedCommit) ||
     capsule.status === "error" ||
     !capsule.currentStateVersionId
   ) {
-    return false;
+    return undefined;
   }
   const reAdoption = identity.installConfig.internal?.reAdoption;
   if (
@@ -939,7 +956,7 @@ async function runsAdoptedRevision(
     reAdoption.previousStateVersionId === capsule.currentStateVersionId &&
     reAdoption.previousStateGeneration === capsule.currentStateGeneration
   ) {
-    return false;
+    return undefined;
   }
   const { stateVersion } = await operations.getStateVersion(
     capsule.currentStateVersionId,
@@ -948,23 +965,63 @@ async function runsAdoptedRevision(
     stateVersion.id !== capsule.currentStateVersionId ||
     stateVersion.capsuleId !== capsule.id
   ) {
-    return false;
+    return undefined;
   }
   let run: Run;
   try {
     run = await operations.getRun(stateVersion.createdByRunId);
   } catch (error) {
     if (error instanceof OpenTofuControllerError && error.code === "not_found") {
-      return false;
+      return undefined;
     }
     throw error;
   }
-  return (
-    run.id === stateVersion.createdByRunId &&
-    run.capsuleId === capsule.id &&
-    run.type === "apply" &&
-    run.status === "succeeded"
-  );
+  return run.id === stateVersion.createdByRunId &&
+      run.capsuleId === capsule.id &&
+      run.type === "apply" &&
+      run.status === "succeeded"
+    ? run : undefined;
+}
+
+/** A legacy configuration can have unadopted repository inputs on the version it already runs. */
+async function alreadyCurrentRevision(
+  plan: StoredGitRevisionPlan,
+  identity: RevisionIdentity,
+  applied: Run,
+  operations: ControlPlaneOperations,
+  syncedSnapshot?: SourceSnapshot,
+): Promise<StoredGitRevisionPlan> {
+  const { adopted, installConfig, modulePath } = identity;
+  const snapshotId = applied.sourceSnapshotId;
+  const reportId = applied.compatibilityReportId;
+  const current = failedPlan(plan, ALREADY_CURRENT);
+  if (!adopted || !snapshotId || !reportId || applied.workspaceId !== plan.workspaceId ||
+    adopted.sourceSnapshotId !== snapshotId ||
+    (syncedSnapshot && syncedSnapshot.id !== snapshotId) ||
+    installConfig.installExperience?.repositoryInstallUx?.status === "accepted") return current;
+
+  // Retain only matching read-only evidence from the current Apply. Review
+  // and adoption still require the ordinary context and mutation guards.
+  try {
+    const snapshot = syncedSnapshot ?? await operations.getSourceSnapshot(snapshotId);
+    if (snapshot.id !== snapshotId || snapshot.workspaceId !== plan.workspaceId ||
+      snapshot.sourceId !== plan.sourceId || snapshot.origin !== "git" ||
+      normalizeInstallConfigSourceUrl(snapshot.url) !== plan.source.url ||
+      snapshot.path !== plan.source.path || !sameGitName(snapshot.ref, plan.revision.targetRef) ||
+      !sameGitName(snapshot.resolvedCommit, adopted.resolvedCommit) ||
+      !hasUnadoptedRepositoryModule(identity, snapshot)) return current;
+
+    const { report } = await operations.getCompatibilityReport(reportId);
+    if (report.id !== reportId || report.sourceId !== plan.sourceId || report.sourceSnapshotId !== snapshot.id ||
+      (report.capsuleId !== undefined && report.capsuleId !== plan.capsuleId) ||
+      normalizeCompatibilityReportModulePath(report.modulePath) !== modulePath || report.level !== "ready") {
+      return current;
+    }
+    return { ...current, sourceSnapshotId: snapshot.id, compatibilityReportId: report.id };
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError && error.code === "not_found") return current;
+    throw error;
+  }
 }
 
 /**

@@ -61,12 +61,12 @@ test("explicit re-adoption recovery freezes the answer and keeps separate mutati
   expect(calls.some(call => /\/(apply|approve)$/.test(call.path))).toBe(false);
 });
 
-test("a changed person or selection after adoption cannot dispatch its Plan", async () => {
+test("a changed person or selection retires the adoption response before dispatching a Plan", async () => {
   let current = true, calls = 0;
   globalThis.fetch = (async () => { calls += 1; current = false; return json(receipt()); }) as typeof fetch;
   const operation = createReAdoptionPlanSubmission(selection(), () => current);
-  await expect(operation.submit()).rejects.toMatchObject({ code: "re_adoption_context_changed" });
-  expect(operation.adoptionAcknowledged()).toBe(true);
+  await expect(operation.submit()).rejects.toMatchObject({ name: "AbortError" });
+  expect(operation.adoptionAcknowledged()).toBe(false);
   await expect(operation.submit()).rejects.toMatchObject({ code: "re_adoption_context_changed" });
   expect(calls).toBe(1);
 });
