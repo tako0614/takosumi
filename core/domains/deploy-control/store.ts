@@ -1038,6 +1038,8 @@ export interface CapsuleApplyRunAdmissionFence {
   readonly currentStateGeneration: number;
   /** An unattended update requires the current explicit opt-in at admission. */
   readonly requireAutoUpdate?: true;
+  /** New automatic admissions must still own the pending Plan reservation. */
+  readonly requireReservedAutoApply?: true;
   /** Exact live request authorizing a finalizer-created destroy Plan. */
   readonly uninstall?: {
     readonly id: string;
@@ -1087,6 +1089,8 @@ function isCapsuleApplyRunAdmissionFenceShape(
     Number.isSafeInteger(fence.currentStateGeneration) &&
     (fence.currentStateGeneration as number) >= 0 &&
     (fence.requireAutoUpdate === undefined || fence.requireAutoUpdate === true) &&
+    (fence.requireReservedAutoApply === undefined ||
+      (fence.requireReservedAutoApply === true && fence.requireAutoUpdate === true)) &&
     (uninstall === undefined ||
       (fence.status === "uninstalled" &&
         typeof uninstall === "object" && uninstall !== null &&
@@ -1153,6 +1157,20 @@ export function capsuleApplyRunAdmissionFenceMatchesRun(
       ? 1
       : guard.capsuleExecutionAuthorityEpoch) ===
       expectedCapsule.executionAuthorityEpoch;
+}
+
+/** An already settled reservation cannot authorize a new ApplyRun. */
+export function reservedAutoApplyMatches(
+  run: ApplyRun,
+  plan: PlanRun | undefined,
+  expected: CapsuleApplyRunAdmissionFence,
+): boolean {
+  return expected.requireReservedAutoApply !== true || (
+    plan?.pendingAutoApplyRunId === run.id && plan.status === "succeeded" &&
+      plan.id === run.planRunId && plan.workspaceId === run.workspaceId &&
+      plan.capsuleId === run.capsuleId && plan.operation === run.operation &&
+      plan.appliedApplyRunId === undefined
+  );
 }
 
 /** Pure current-row matcher for the Capsule admission fence. */
@@ -2843,12 +2861,12 @@ export interface TransitionRunInput {
   readonly expectHeartbeatAt?: number | null;
   readonly expectStartedAt?: number | string | null;
   /**
-   * Exact observed terminal ApplyRun for a finalizer's same-status write.
+   * Exact observed terminal Run for a same-status Apply finalizer or Plan continuation settlement.
    * Requires a lease-free row and matching indexed identity/status/heartbeat;
    * cannot be combined with execution lease or heartbeat mutation options.
    * Ordinary progress transitions intentionally do not use this fence.
    */
-  readonly expectExactRun?: ApplyRun;
+  readonly expectExactRun?: ApplyRun | PlanRun;
   /** Private drain convergence; never grants execution or recaptures admission. */
   readonly expectDrainSettlement?: {
     readonly management: FreezeWorkspaceManagementExpectation;
@@ -3062,6 +3080,25 @@ export function runDrainSettlementMatches(
 export function assertExactRunTransitionInput(input: TransitionRunInput): void {
   const expected = input.expectExactRun;
   if (expected === undefined) return;
+  if (input.kind === "plan") {
+    if (!expected || typeof expected !== "object" ||
+        !isPlanRunRecord(expected) || !isPlanRunRecord(input.run) ||
+        expected.id !== input.id || expected.status !== "succeeded" ||
+        expected.operation !== "update" || expected.autoApplyRequested !== true ||
+        typeof expected.pendingAutoApplyRunId !== "string" || !expected.pendingAutoApplyRunId ||
+        input.expectFrom.length !== 1 || input.expectFrom[0] !== "succeeded" ||
+        input.setLeaseToken !== undefined || input.clearLeaseToken === true ||
+        input.expectLeaseToken !== undefined || input.heartbeatAt !== undefined ||
+        input.clearHeartbeat === true || input.expectHeartbeatAt !== undefined ||
+        input.expectStartedAt !== undefined) {
+      throw new TypeError("Exact Plan continuation settlement requires the succeeded pending Plan");
+    }
+    if (stableStringify(withoutPendingAutoApply(publicStoredRun(expected))) !==
+        stableStringify(publicStoredRun(input.run))) {
+      throw new TypeError("Exact Plan continuation settlement may only clear its reservation");
+    }
+    return;
+  }
   if (
     !expected || typeof expected !== "object" ||
     input.kind !== "apply" ||
@@ -3434,6 +3471,11 @@ export function sourceSyncRunManagementAuthority(
   run: SourceSyncRun,
 ): WorkspaceManagementAuthority | undefined {
   return runManagementAuthority(run);
+}
+
+export function withoutPendingAutoApply(run: PlanRun): PlanRun {
+  const { pendingAutoApplyRunId: _pending, ...settled } = run;
+  return settled;
 }
 
 /** Project only Run records; unrelated stored JSON documents are untouched. */
@@ -5143,8 +5185,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
       }
       const storedPlan = this.#runs.get(run.planRunId);
-      if (!appApplyAdmission(this.#capsuleForAppAdmission(run.capsuleId),
-        storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined, run)) {
+      const plan = storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined;
+      if (!reservedAutoApplyMatches(run, plan, expectedCapsule) ||
+          !appApplyAdmission(this.#capsuleForAppAdmission(run.capsuleId), plan, run)) {
         throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
       }
     }
@@ -7674,8 +7717,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         ? mergeRunAuditEvents(input.applyRunTerminal, currentApplyRun)
         : input.applyRunTerminal,
       currentApplyRun);
-    const planRunApplied = input.planRunApplied && preserveStoredRunManagementAuthority(
-      input.planRunApplied, this.#runs.get(input.planRunApplied.id));
+    const currentPlan = input.planRunApplied && this.#runs.get(input.planRunApplied.id);
+    const pendingAutoApplyRunId = currentPlan && isPlanRunRecord(currentPlan)
+      ? currentPlan.pendingAutoApplyRunId : undefined;
+    const planRunApplied = input.planRunApplied && preserveStoredRunManagementAuthority({
+      ...withoutPendingAutoApply(input.planRunApplied),
+      ...(pendingAutoApplyRunId === undefined ? {} : { pendingAutoApplyRunId }),
+    }, currentPlan);
     if (input.stateVersion) {
       this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
     }

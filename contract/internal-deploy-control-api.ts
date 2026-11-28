@@ -311,6 +311,8 @@ export interface PlanRun {
    * drift-check runs.
    */
   readonly autoApplyRequested?: boolean;
+  /** Private Apply identity reserved when a clean automatic Plan succeeds. */
+  readonly pendingAutoApplyRunId?: string;
   /**
    * Internal refresh-only execution evidence. The Run remains an ordinary
    * plan/apply pair; the runner adds `tofu plan -refresh-only`, so applying the
@@ -451,7 +453,7 @@ export interface PlanRunCapsuleContext {
 
 export type PublicPlanRun = Omit<
   PlanRun,
-  "executionInputsDigest" | "providerLockArtifact"
+  "executionInputsDigest" | "providerLockArtifact" | "pendingAutoApplyRunId"
 >;
 
 export interface PlanRunSummary {

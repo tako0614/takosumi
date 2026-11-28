@@ -305,6 +305,8 @@ import {
   assertCapsuleApplyRunAdmissionFenceInput,
   capsuleApplyRunAdmissionFenceMatchesRun,
   capsuleApplyRunAdmissionFenceMatchesCurrent,
+  reservedAutoApplyMatches,
+  withoutPendingAutoApply,
   capsuleRuntimeSafetyFromRun,
   capsuleUsageTotalsFromGroups,
   PLAN_RUN_LOOKUP_BATCH_SIZE,
@@ -2524,8 +2526,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         const storedPlan = planRows.rows[0]
           ? parseJson(planRows.rows[0].runJson) as StoredRunRecord
           : undefined;
-        if (!appApplyAdmission(pgCapsuleForAppAdmission(persistedCapsule, capsuleRow),
-          storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined, run)) {
+        const plan = storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined;
+        if (!reservedAutoApplyMatches(run, plan, expectedCapsule) ||
+            !appApplyAdmission(pgCapsuleForAppAdmission(persistedCapsule, capsuleRow), plan, run)) {
           throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
         }
       }
@@ -2957,7 +2960,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                   eq(pgSchema.runs.status, input.expectExactRun.status),
                   eq(
                     pgSchema.runs.kind,
-                    input.expectExactRun.operation === "destroy" ? "destroy_apply" : "apply",
+                    input.kind === "plan" ? "plan"
+                      : input.expectExactRun.operation === "destroy" ? "destroy_apply" : "apply",
                   ),
                   input.expectExactRun.capsuleId === undefined
                     ? isNull(pgSchema.runs.capsuleId)
@@ -13255,7 +13259,15 @@ async function pgUpsertRun(
   kind: string,
   run: PlanRun | ApplyRun,
 ): Promise<void> {
-  const publicRun = publicStoredRun(run);
+  const plan = isPlanRunRecord(run);
+  const publicRun = publicStoredRun(plan ? withoutPendingAutoApply(run) : run);
+  const merged = runJsonPreservingAuditEvents(publicRun);
+  // An Apply may have captured its Plan before its reservation was cleared.
+  const runJson = plan ? sql`${merged} || CASE
+    WHEN ${pgSchema.runs.runJson} ? 'pendingAutoApplyRunId'
+    THEN jsonb_build_object('pendingAutoApplyRunId', ${pgSchema.runs.runJson} -> 'pendingAutoApplyRunId')
+    ELSE '{}'::jsonb
+  END` : merged;
   const values = {
     id: publicRun.id,
     kind,
@@ -13282,7 +13294,7 @@ async function pgUpsertRun(
         leaseToken: values.leaseToken,
         heartbeatAt: values.heartbeatAt,
         createdAt: values.createdAt,
-        runJson: runJsonPreservingAuditEvents(publicRun),
+        runJson,
       },
       setWhere: and(
         eq(pgSchema.runs.kind, kind),
