@@ -894,19 +894,37 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           await page.reload({ waitUntil: "domcontentloaded" });
           await expect(approve).toBeEnabled();
           expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
+
+          const reviewReadTimeoutMs = 5_000;
+          await page.clock.install();
+          await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
+          await page.addInitScript((reviewTimeout) => {
+            const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+            // Playwright's clock does not advance Chromium's native abort timeout.
+            AbortSignal.timeout = (delay) => {
+              if (delay !== reviewTimeout) return nativeTimeout(delay);
+              const controller = new AbortController();
+              setTimeout(() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")), delay);
+              return controller.signal;
+            };
+          }, reviewReadTimeoutMs);
           planStatus = "succeeded";
           holdCurrentState = true;
           releaseCurrentState = undefined;
           await page.reload({ waitUntil: "domcontentloaded" });
           await expect.poll(() => typeof releaseCurrentState).toBe("function");
           try {
+            await page.clock.runFor(reviewReadTimeoutMs - 1);
+            await expect(summary).toContainText("Checking it is ready to apply…");
             await expect(allow).toHaveCount(0);
+            await page.clock.runFor(1);
             await expect(summary).toContainText("We couldn't check whether this change can still be applied.");
             await expect(allow).toHaveCount(0);
           } finally {
             holdCurrentState = false;
             releaseCurrentState?.();
           }
+          await page.clock.resume();
           await page.getByRole("button", { name: "Retry", exact: true }).click();
           await expect(allow).toBeEnabled();
           expect(mutations).toEqual([`POST /api/v1/runs/${planId}/apply`]);
