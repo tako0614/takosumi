@@ -1371,7 +1371,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.filter((entry) => entry.startsWith("PATCH "))).toEqual([`PATCH ${attemptPath}`]);
       expect(f.mutations.filter((entry) => /\/(approve|apply)$/u.test(entry))).toEqual([]);
     });
-    test("a stalled screen lookup ends without offering to open an unverified app", async ({ page }) => {
+    test("a stalled completion screen can reload just the installed app's screens", async ({ page }) => {
       await page.clock.install();
       const f = await detailFixture(page, base);
       const isScreenRead = (url: URL) =>
@@ -1381,8 +1381,14 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       let reads = 0;
       await page.route(isScreenRead, async (route) => {
         reads += 1;
-        started.resolve();
-        await release.promise;
+        if (reads === 1) {
+          started.resolve();
+          await release.promise;
+        } else if (reads === 2) {
+          return route.fulfill({ json: { interfaces: [], incomplete: true } });
+        } else if (reads === 3) {
+          return route.fulfill({ status: 503, json: { error: "fixture_screen_unavailable" } });
+        }
         await route.fallback();
       });
       try {
@@ -1407,10 +1413,53 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         await page.clock.fastForward(10_000);
         await expect(complete.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
         expect(reads).toBe(1);
+        const reload = complete.getByRole("button", { name: "Reload screens", exact: true });
+        await expect(reload).toBeVisible();
+        for (const total of [2, 3]) {
+          await reload.click();
+          await expect.poll(() => reads).toBe(total);
+          await expect(reload).toBeVisible();
+          await expect(complete.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+        }
+        await reload.click();
+        await expect(complete.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "https://apps.example.test/inline-app");
+        await expect(reload).toHaveCount(0);
+        expect(reads).toBe(4);
         expect(f.mutations).toEqual(mutations);
       } finally {
         release.resolve();
       }
+    });
+
+    test("a complete empty screen list leaves only app management after installation", async ({ page }) => {
+      await page.clock.install();
+      const fixture = await detailFixture(page, base);
+      const isScreenRead = (url: URL) =>
+        url.pathname === "/api/v1/ui-surfaces" && url.searchParams.get("capsuleId") === capId;
+      await page.route(isScreenRead, (route) => route.fulfill({ json: { interfaces: [] } }));
+
+      await page.goto(sourceUrl);
+      await openInstallSheet(page);
+      const review = await waitForPlan(page);
+      await review.getByRole("button", { name: "Install", exact: true }).click();
+      await expect.poll(() => fixture.mutations.filter((mutation) => mutation === applyMutation).length).toBe(1);
+      const mutations = [...fixture.mutations];
+      const reply = () => page.waitForResponse((response) => isScreenRead(new URL(response.url())));
+      let screenRead = reply();
+      fixture.finish();
+      for (let index = 0; index < 10; index += 1) {
+        await (await screenRead).finished();
+        if (index < 9) {
+          screenRead = reply();
+          await page.clock.runFor(3_100);
+        }
+      }
+      const complete = page.getByTestId("install-complete");
+      await expect(complete.getByRole("link", { name: "Manage app", exact: true })).toHaveAttribute("href", `/apps/${capId}`);
+      await expect(complete.getByRole("status", { name: "Loading…" })).toHaveCount(0);
+      await expect(complete.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+      await expect(complete.getByRole("button", { name: "Reload screens", exact: true })).toHaveCount(0);
+      expect(fixture.mutations).toEqual(mutations);
     });
     test("a change after the Plan marks it out of date and prepares the install again with the same answers", async ({ page }) => {
       await page.clock.install();
