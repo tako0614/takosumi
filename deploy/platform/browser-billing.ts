@@ -52,7 +52,39 @@ function response(status: number, code: string, allow?: string): Response {
   });
 }
 
-function viewNavigationConfirmation(result: Response): Response | null {
+const confirmationText = {
+  en: {
+    title: "Continue to billing",
+    ready: "Your billing view is ready.",
+    open: "Open billing in Takoserver Console",
+  },
+  ja: {
+    title: "請求画面へ進む",
+    ready: "請求画面を開く準備ができました。",
+    open: "Takoserver Consoleで請求を開く",
+  },
+};
+type BillingLanguage = keyof typeof confirmationText;
+
+// The Hosted 303 has no representation language. Match the language order
+// used by the Hosted billing document for the same forwarded preference.
+function billingLanguageFromHeader(value: string | null): BillingLanguage {
+  let selected: BillingLanguage = "en";
+  let bestWeight = 0;
+  for (const range of value?.toLowerCase().split(",") ?? []) {
+    const [tag, weight] = range.trim().split(";");
+    const language = tag?.trim().split("-", 1)[0];
+    if (language !== "ja" && language !== "en") continue;
+    const quality = weight === undefined ? 1 : Number(/^q=(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/u.exec(weight.trim())?.[1]);
+    if (quality > bestWeight) {
+      selected = language;
+      bestWeight = quality;
+    }
+  }
+  return selected;
+}
+
+function viewNavigationConfirmation(result: Response, locale: BillingLanguage): Response | null {
   const location = result.headers.get("location");
   if (!location || location.length > 4096) return null;
   try {
@@ -71,11 +103,13 @@ function viewNavigationConfirmation(result: Response): Response | null {
   const headers = new Headers(result.headers);
   for (const name of ["location", "content-length", "content-encoding", "content-disposition", "refresh", "link"]) headers.delete(name);
   headers.set("content-type", "text/html; charset=utf-8");
+  headers.set("content-language", locale);
   headers.set("cache-control", "private, no-store");
   headers.set("referrer-policy", "no-referrer");
   headers.set("content-security-policy", "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
   headers.set("x-content-type-options", "nosniff");
-  return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Continue to billing</title><main><h1>Continue to billing</h1><p>Your billing view is ready.</p><a href="${escaped}" referrerpolicy="no-referrer">Open billing in Takoserver Console</a></main></html>`, {
+  const text = confirmationText[locale];
+  return new Response(`<!doctype html><html lang="${locale}"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>${text.title}</title><main><h1>${text.title}</h1><p>${text.ready}</p><a href="${escaped}" referrerpolicy="no-referrer">${text.open}</a></main></html>`, {
     status: 200, headers,
   });
 }
@@ -270,7 +304,7 @@ export async function handlePlatformBrowserBillingRequest(
     }
     let selectedResult = result;
     if (baseView && method === "POST" && result.status === 303) {
-      const confirmation = viewNavigationConfirmation(result);
+      const confirmation = viewNavigationConfirmation(result, billingLanguageFromHeader(acceptLanguage));
       if (!confirmation) return failed("dispatch-invalid-redirect", response(503, "billing_unavailable"));
       selectedResult = confirmation;
     }

@@ -872,6 +872,34 @@ test("base POST keeps strict form CSP and exposes one escaped explicit Console G
   expect(f.seen.auth).toHaveLength(1);
 });
 
+test("base POST gives the Console confirmation the same language as the billing view", async () => {
+  const query = "?workspaceId=ws_selected";
+  const destination = "https://console.example.test/billing/hosted-continuations/original_view";
+  const labels = { en: "Open billing in Takoserver Console", ja: "Takoserver Consoleで請求を開く" };
+  for (const [languageQuery, browserPreferences, expected] of [
+    ["&lang=ja", "en-US,ja;q=0.2", "ja"],
+    ["&lang=en", "ja-JP,en;q=0.2", "en"],
+    ["", "en-US;q=0.25, JA-jp;q=0.8", "ja"],
+    ["", "ja;q=0.5,en;q=0.5", "ja"],
+    ["", "ja;q=0, fr;q=1, *;q=1", "en"],
+  ] as const) {
+    const f = fixture();
+    f.rpc.fetchWorkspaceDashboard = async () => new Response(null, {
+      status: 303, headers: { location: destination, "content-language": "fr" },
+    });
+    const result = await fetch(post(root + query + languageQuery, "workspaceId=ws_selected", {
+      "content-type": "application/x-www-form-urlencoded",
+      "accept-language": browserPreferences,
+    }), f.env);
+
+    expect(result.status).toBe(200);
+    const html = await result.text();
+    expect(html).toContain(`<html lang="${expected}">`);
+    expect(result.headers.get("content-language")).toBe(expected);
+    expect(html).toContain(`<a href="${destination}" referrerpolicy="no-referrer">${labels[expected]}</a>`);
+  }
+});
+
 test("base POST refuses malformed or non-HTTPS receiver navigation without exposing it", async () => {
   for (const location of [null, "javascript:alert(1)", "http://console.example.test/view", "//console.example.test/view", "https://user:password@console.example.test/view", "https://console.example.test/view#fragment", "https://console.example.test/a b", "https://console.example.test/" + "x".repeat(4097)]) {
     const f = fixture();
