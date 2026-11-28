@@ -518,6 +518,29 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
+    test("connection labels distinguish saved OAuth from a token for the same provider", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      const fixture = await accountFixture(page);
+      const credentialRecipe = { id: "cloudflare", secretPartition: "provider-credentials" };
+      const token = { ...DIRECT, displayName: "Token connection", credentialRecipe: { ...credentialRecipe, authMode: "api_token" } };
+      const oauth = {
+        ...DIRECT,
+        id: "conn_oauth_fixture",
+        displayName: "OAuth connection",
+        materialization: "oauth",
+        credentialRecipe: { ...credentialRecipe, authMode: "oauth" },
+      };
+      const legacy = { ...DIRECT, id: "conn_legacy_fixture", displayName: "Legacy connection" };
+      await page.route((url) => url.pathname === "/api/v1/connections", (route) =>
+        route.fulfill({ json: { connections: [token, oauth, legacy] } }));
+      await page.goto("/connections", { waitUntil: "domcontentloaded" });
+      const rowNote = (name: string) => page.locator(".conn-details").filter({ hasText: name }).locator(".tg-settings-note");
+      await expect(rowNote(token.displayName)).toHaveText("Cloudflare — API トークン");
+      await expect(rowNote(oauth.displayName)).toHaveText("Cloudflare — OAuth");
+      await expect(rowNote(legacy.displayName)).toHaveText("Cloudflare");
+      expect(fixture.mutations).toEqual([]);
+    });
+
     test("connection removal cannot act on rows from the previous legacy workspace", async ({ page }) => {
       await page.addInitScript(() => {
         localStorage.setItem("tg_lang", "ja");

@@ -33,10 +33,8 @@ import {
 } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import { ArrowLeft, ChevronRight, Plug, Plus, RefreshCw } from "lucide-solid";
-import {
-  providerSetupOptionsFromCredentialRecipes,
-  type ProviderConnectionSetupOption,
-} from "../../account/lib/api.ts";
+import type { CredentialRecipe } from "takosumi-contract";
+import { credentialRecipePresentationText } from "../../account/lib/api.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
 import { currentSessionCheck } from "../../account/lib/session.ts";
 import {
@@ -94,19 +92,19 @@ interface ConnectionListSnapshot {
 
 function providerConnectionProviderLabel(
   connection: ProviderConnection,
-  options: readonly ProviderConnectionSetupOption[],
+  recipes: readonly CredentialRecipe[],
+  language: string,
 ): string {
-  const recipe = connection.credentialRecipe;
-  const exact = options.find(
-    (option) =>
-      (recipe
-        ? option.credentialRecipe.id === recipe.id &&
-          option.credentialRecipe.authMode === recipe.authMode
-        : false) ||
-      option.providerSource === connection.providerSource ||
-      option.providerAliases.includes(connection.providerSource),
-  );
-  return exact?.label ?? readableProviderSourceLabel(connection.providerSource);
+  const binding = connection.credentialRecipe;
+  const recipe = binding && recipes.find((entry) =>
+    entry.id === binding.id && entry.secretPartition === binding.secretPartition &&
+    (entry.terraformSource === "*" || entry.terraformSource.includes(connection.providerSource)));
+  const provider = recipe?.displayName ?? readableProviderSourceLabel(connection.providerSource);
+  const methodLabel = credentialRecipePresentationText(
+    binding ? recipe?.authModes[binding.authMode]?.presentation?.displayName : undefined,
+    language,
+  ) ?? (binding?.authMode === "oauth" || connection.materialization === "oauth" ? "OAuth" : undefined);
+  return methodLabel ? `${provider} — ${methodLabel}` : provider;
 }
 
 /**
@@ -185,12 +183,8 @@ export default function ConnectionsTab(props: {
   };
   const installedCredentialRecipes = () =>
     credentialRecipes.error ? [] : (credentialRecipes.latest?.recipes ?? []);
-  const providerOptions = createMemo(() =>
-    providerSetupOptionsFromCredentialRecipes(
-      installedCredentialRecipes(),
-      locale(),
-    ),
-  );
+  const providerLabel = (connection: ProviderConnection) =>
+    providerConnectionProviderLabel(connection, installedCredentialRecipes(), locale());
   const [lastCreatedConnectionName, setLastCreatedConnectionName] =
     createSignal<string | null>(null);
   const [lastCreatedConnectionId, setLastCreatedConnectionId] = createSignal<
@@ -250,15 +244,7 @@ export default function ConnectionsTab(props: {
       : connection.scope !== "operator";
     if (disposed || !matchesScope) return;
     // Never show a raw conn_… id in the toast — fall back to the provider name.
-    setLastCreatedConnectionName(
-      providerConnectionDisplayName(connection) ||
-        providerOptions().find(
-          (candidate) =>
-            candidate.providerSource === connection.providerSource ||
-            candidate.providerAliases.includes(connection.providerSource),
-        )?.label ||
-        readableProviderSourceLabel(connection.providerSource),
-    );
+    setLastCreatedConnectionName(providerConnectionDisplayName(connection) || providerLabel(connection));
     setLastCreatedConnectionId(connection.id);
     setLastCreatedVerifiedHint(false);
     await refreshConnections();
@@ -469,7 +455,7 @@ export default function ConnectionsTab(props: {
     // empty-string displayName must not slip through `??` and render 「」.
     const name =
       providerConnectionDisplayName(connection) ||
-      providerConnectionProviderLabel(connection, providerOptions());
+      providerLabel(connection);
     const apps = appsUsing(connection.id);
     const consequence =
       apps === undefined
@@ -549,7 +535,7 @@ export default function ConnectionsTab(props: {
         {(id) => (
           <Show when={connectionById().get(id)}>
             {(connection) => {
-              const provider = () => providerConnectionProviderLabel(connection(), providerOptions());
+              const provider = () => providerLabel(connection());
               const displayName = () => providerConnectionDisplayName(connection()) || provider();
               return (
                 <li class="tg-settings-list-item">
