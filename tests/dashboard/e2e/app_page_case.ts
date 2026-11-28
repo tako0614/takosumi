@@ -749,13 +749,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           }
           if (path === `${capsulePath}/app`) {
             const written = writes.length > 0;
+            const observedAutoUpdate = savedAutoUpdate;
             if (written) appReadsAfterWrite += 1;
             else if (++readsBeforeWrite === 2 && overlapping) await held;
             return route.fulfill({ json: {
               app: appView(CAPSULE_ID, PORTABLE_EXPECTATIONS.appName, {
                 progress: { revisionPreparing: overlapping && !written },
                 version: {
-                  updateAvailable: false, stale: false, autoUpdate: savedAutoUpdate,
+                  updateAvailable: false, stale: false, autoUpdate: observedAutoUpdate,
                   current: { ref: "main", commit: written ? "2222222" : "1111111" },
                 },
               }),
