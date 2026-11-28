@@ -34,7 +34,6 @@ import { currentSessionCheck, type SessionRecord } from "../account/lib/session.
 import {
   abandonUnappliedCapsule,
   approveRun,
-  capsuleAbandonmentCompleted,
   ControlApiError,
   ControlApiIndeterminateError,
   cancelRun,
@@ -1311,6 +1310,12 @@ function Inner(props: { readonly session: SessionRecord }) {
     if (pending && !pending.isCurrent()) pending.controller.abort();
   });
   onCleanup(() => restartConfirmation()?.controller.abort());
+  let pendingRestart: {
+    readonly path: string;
+    readonly sourceId: string;
+    readonly installConfigId: string;
+    readonly isCurrent: () => boolean;
+  } | undefined;
 
   const restartFailedInitialPlan = createAction(async () => {
     const currentRun = runLatest();
@@ -1327,14 +1332,15 @@ function Inner(props: { readonly session: SessionRecord }) {
 
     const attempt = { plan: currentRun, epoch: runEpoch };
     const { subject, primaryAccountId } = props.session;
-    const isCurrent = () => ownsApply(attempt) &&
+    const sessionIsCurrent = currentSessionCheck();
+    const isCurrent = () => ownsApply(attempt) && sessionIsCurrent() &&
       props.session.subject === subject && props.session.primaryAccountId === primaryAccountId;
     if (!isCurrent()) return;
 
     try {
       // The old Run and immutable snapshot remain in history. The server
       // atomically checks that only the never-applied app is abandoned.
-      const currentCapsule = await getCapsule(instId, { isCurrent });
+      const currentCapsule = await getCapsule(instId, { isCurrent, cache: "no-store" });
       if (!isCurrent()) return;
       if (
         currentCapsule.id !== instId ||
@@ -1345,17 +1351,26 @@ function Inner(props: { readonly session: SessionRecord }) {
       ) {
         throw new Error(t("run.restartLatestSourceUnavailable"));
       }
-      const [source, installConfig] = await Promise.all([
-        getSource(currentCapsule.sourceId, { isCurrent }),
-        getInstallConfig(currentCapsule.installConfigId, { isCurrent }),
-      ]);
-      if (!isCurrent()) return;
-      const restartPath = installReturnPathFromPrefill({
-        git: source.url,
-        sourcePath: source.defaultPath,
-        ...(installConfig.modulePath ? { path: installConfig.modulePath } : {}),
-        name: currentCapsule.name,
-      });
+      // A completed abandonment can retire its source before the browser
+      // receives the response. Retry with the prefill from this Run and session.
+      let restartPath: string | undefined;
+      if (currentCapsule.status === "destroyed" && pendingRestart?.isCurrent() &&
+        pendingRestart.sourceId === currentCapsule.sourceId &&
+        pendingRestart.installConfigId === currentCapsule.installConfigId) {
+        restartPath = pendingRestart.path;
+      } else {
+        const [source, installConfig] = await Promise.all([
+          getSource(currentCapsule.sourceId, { isCurrent }),
+          getInstallConfig(currentCapsule.installConfigId, { isCurrent }),
+        ]);
+        if (!isCurrent()) return;
+        restartPath = installReturnPathFromPrefill({
+          git: source.url,
+          sourcePath: source.defaultPath,
+          ...(installConfig.modulePath ? { path: installConfig.modulePath } : {}),
+          name: currentCapsule.name,
+        });
+      }
       if (!restartPath) {
         throw new Error(t("run.restartLatestSourceUnavailable"));
       }
@@ -1375,16 +1390,17 @@ function Inner(props: { readonly session: SessionRecord }) {
 
       // After a dropped response the server may report alreadyDeleted; the
       // destroyed projection is still required before navigation.
-      const deleted = await abandonUnappliedCapsule(instId, { isCurrent });
+      pendingRestart = { path: restartPath, sourceId: currentCapsule.sourceId,
+        installConfigId: currentCapsule.installConfigId, isCurrent };
+      const abandoned = await abandonUnappliedCapsule({
+        id: currentCapsule.id,
+        workspaceId: currentCapsule.workspaceId,
+      }, { isCurrent });
       if (!isCurrent()) return;
-      if (
-        !capsuleAbandonmentCompleted(deleted, {
-          id: currentCapsule.id,
-          workspaceId: currentCapsule.workspaceId,
-        })
-      ) {
+      if (!abandoned) {
         throw new Error(t("run.restartLatestSourceUnavailable"));
       }
+      pendingRestart = undefined;
       clearWorkspaceProjectionCaches(currentCapsule.workspaceId);
       navigate(appendAppHandoff(restartPath, appHandoff) ?? restartPath);
     } catch (cause) {
@@ -1423,6 +1439,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     if (id === lastRunId) return;
     lastRunId = id;
     runEpoch += 1;
+    pendingRestart = undefined;
     revisionRetryAttempts.clear();
     rollbackAttemptKeys.clear();
     applyReadController?.abort();

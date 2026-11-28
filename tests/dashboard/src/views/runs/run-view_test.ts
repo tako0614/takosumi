@@ -161,9 +161,11 @@ describe("RunView", () => {
     expect(restart).toContain("getInstallConfig(currentCapsule.installConfigId, { isCurrent })");
     expect(restart).toContain("installReturnPathFromPrefill({");
     expect(restart).not.toContain("ref:");
-    expect(restart).toContain("await abandonUnappliedCapsule(instId, { isCurrent })");
-    expect(restart).toContain("capsuleAbandonmentCompleted(deleted, {");
-    expect(restart).not.toContain('currentCapsule.status === "destroyed"');
+    expect(restart).toContain("await abandonUnappliedCapsule({");
+    expect(restart).toContain("workspaceId: currentCapsule.workspaceId");
+    expect(restart).toContain("if (!abandoned)");
+    expect(restart).toContain("pendingRestart?.isCurrent()");
+    expect(restart).toContain("pendingRestart.sourceId === currentCapsule.sourceId");
     expect(restart).toContain("alreadyDeleted");
     expect(restart.indexOf("getSource(currentCapsule.sourceId, { isCurrent })")).toBeLessThan(
       restart.indexOf("await abandonUnappliedCapsule"),
