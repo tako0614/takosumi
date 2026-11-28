@@ -13,12 +13,14 @@ export function reAdoptionRevisionFromError(cause: unknown, capsuleId: string, s
   if (!(cause instanceof ControlApiError) || !sourceId || !cause.body || typeof cause.body !== "object") return undefined;
   const body = cause.body as { nextAction?: unknown; revisionPlan?: {
     id?: unknown; operation?: unknown; capsuleId?: unknown; sourceId?: unknown; sourceSnapshotId?: unknown;
-    phase?: unknown; revision?: { targetRef?: unknown };
+    compatibilityReportId?: unknown; phase?: unknown; revision?: { targetRef?: unknown };
   } };
   const plan = body.revisionPlan;
   if (!plan || plan.operation !== "revision" || plan.capsuleId !== capsuleId || plan.sourceId !== sourceId ||
     typeof plan.id !== "string" || !plan.id || typeof plan.sourceSnapshotId !== "string" || !plan.sourceSnapshotId ||
     typeof plan.revision?.targetRef !== "string" || !plan.revision.targetRef) return undefined;
+  if (cause.code === "revision_already_current" &&
+    (typeof plan.compatibilityReportId !== "string" || !plan.compatibilityReportId)) return undefined;
   return plan.phase === "failed" || (cause.code === "re_adoption_target_changed" && body.nextAction === "review_run")
     ? plan.id : undefined;
 }
