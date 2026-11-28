@@ -82,6 +82,16 @@ import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
 const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
 const PERSONAL_CONNECTION_USAGE_SOURCE = "personal";
 
+interface ConnectionListScope {
+  readonly workspaceId?: string;
+}
+
+interface ConnectionListSnapshot {
+  readonly scope: ConnectionListScope;
+  readonly sessionIsCurrent: () => boolean;
+  readonly connections: readonly ProviderConnection[];
+}
+
 function providerConnectionProviderLabel(
   connection: ProviderConnection,
   options: readonly ProviderConnectionSetupOption[],
@@ -128,6 +138,7 @@ export default function ConnectionsTab(props: {
   const { confirm } = useConfirmDialog();
   const workspaceId = () => props.workspaceId;
   const connectionListWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;
+  const connectionListScope = createMemo((): ConnectionListScope => ({ workspaceId: connectionListWorkspaceId() }));
   const requests = new AbortController();
   let disposed = false;
   onCleanup(() => {
@@ -136,11 +147,15 @@ export default function ConnectionsTab(props: {
   });
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
-    createResource<readonly ProviderConnection[], { workspaceId?: string }, () => boolean>(
-      () => ({ workspaceId: connectionListWorkspaceId() }),
-      ({ workspaceId: id }, { refetching }) => listProviderConnections(id, typeof refetching === "function"
-        ? { cache: "no-store", signal: requests.signal, isCurrent: refetching }
-        : undefined),
+    createResource<ConnectionListSnapshot, ConnectionListScope, () => boolean>(
+      connectionListScope,
+      async (scope, { refetching }) => {
+        const sessionIsCurrent = currentSessionCheck();
+        const connections = await listProviderConnections(scope.workspaceId, typeof refetching === "function"
+          ? { cache: "no-store", signal: requests.signal, isCurrent: refetching }
+          : undefined);
+        return { scope, sessionIsCurrent, connections };
+      },
     );
   const [credentialRecipes] = createResource(connectionSetupCatalog);
   // Personal ownership is authoritative. The selected legacy workspace is
@@ -213,8 +228,11 @@ export default function ConnectionsTab(props: {
   // An errored resource THROWS on read; every data read goes through this
   // guarded accessor so a failed list surfaces the error toast below instead
   // of crashing the tab.
-  const providerConnectionRows = (): readonly ProviderConnection[] =>
-    providerConnections.error ? [] : (providerConnections.latest ?? []);
+  const currentConnectionList = () => {
+    const latest = providerConnections.error ? undefined : providerConnections.latest;
+    if (latest?.scope === connectionListScope() && latest.sessionIsCurrent()) return latest;
+  };
+  const providerConnectionRows = () => currentConnectionList()?.connections ?? [];
   const hasProviderConnections = () => providerConnectionRows().length > 0;
   const shouldShowCreateForm = () => createFormOpen();
 
@@ -390,9 +408,11 @@ export default function ConnectionsTab(props: {
   // without this every row's delete button would look busy during a single
   // revoke.
   const [removingId, setRemovingId] = createSignal<string | null>(null);
+  const [removalScope, setRemovalScope] = createSignal<() => boolean>();
   const [removalUnconfirmed, setRemovalUnconfirmed] = createSignal(false);
   const remove = createAction(async (id: string, isCurrent: () => boolean) => {
     setRemovingId(id);
+    setRemovalScope(() => isCurrent);
     setRemovalUnconfirmed(false);
     try {
       const outcome = await revokeConnection(id, { signal: requests.signal, isCurrent });
@@ -442,9 +462,9 @@ export default function ConnectionsTab(props: {
   const confirmRemoveProviderConnection = async (
     connection: ProviderConnection,
   ) => {
-    const displayedWorkspaceId = connectionListWorkspaceId();
-    const sessionIsCurrent = currentSessionCheck();
-    const isCurrent = () => !disposed && sessionIsCurrent() && displayedWorkspaceId === connectionListWorkspaceId();
+    const displayedList = currentConnectionList();
+    if (!displayedList?.connections.includes(connection)) return;
+    const isCurrent = () => !disposed && displayedList.sessionIsCurrent() && displayedList.scope === connectionListScope();
     // Same name fallback as the list row: never a raw conn_… id, and an
     // empty-string displayName must not slip through `??` and render 「」.
     const name =
@@ -463,7 +483,7 @@ export default function ConnectionsTab(props: {
       confirmText: t("conn.remove.confirm"),
       danger: true,
     });
-    if (!ok || !isCurrent() || remove.busy()) return;
+    if (!ok || !isCurrent() || remove.busy() || !providerConnectionForConnectionId(connection.id)) return;
     void remove.run(connection.id, isCurrent);
   };
 
@@ -735,11 +755,13 @@ export default function ConnectionsTab(props: {
         }
       />
 
-      <ActionError error={remove.error} />
-      <Show when={removalUnconfirmed()}>
-        <Toast tone="neutral" onDismiss={() => setRemovalUnconfirmed(false)}>
-          {t("conn.remove.unconfirmed")}
-        </Toast>
+      <Show when={removalScope()?.()}>
+        <ActionError error={remove.error} />
+        <Show when={removalUnconfirmed()}>
+          <Toast tone="neutral" onDismiss={() => setRemovalUnconfirmed(false)}>
+            {t("conn.remove.unconfirmed")}
+          </Toast>
+        </Show>
       </Show>
       <Show when={hasProviderConnections()}>
         {providerConnectionList()}
@@ -801,7 +823,7 @@ export default function ConnectionsTab(props: {
 
       {/* First-load skeleton only — refetch after create/test/revoke keeps the
           list rendered instead of flashing two skeleton cards each time. */}
-      <Show when={providerConnections.loading && !providerConnections.latest}>
+      <Show when={providerConnections.loading && !currentConnectionList()}>
         <Skeleton variant="card" count={2} />
       </Show>
     </div>

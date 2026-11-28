@@ -518,6 +518,42 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
+    test("connection removal cannot act on rows from the previous legacy workspace", async ({ page }) => {
+      await page.addInitScript(() => {
+        localStorage.setItem("tg_lang", "ja");
+        localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha");
+      });
+      const fixture = await accountFixture(page);
+      await page.route("**/api/v1/apps**", (route) =>
+        route.fulfill({ status: 404, json: { error: { code: "route_not_found" } } }));
+      const incoming = Promise.withResolvers<Route>();
+      const beta = { ...DIRECT, id: "conn_ws_beta", workspaceId: "ws_beta", displayName: "Cloudflare Beta" };
+      await page.route((url) => url.pathname === "/api/v1/provider-connections" && !url.searchParams.has("projection"), (route) => {
+        expect(route.request().method()).toBe("GET");
+        const workspace = new URL(route.request().url()).searchParams.get("workspaceId");
+        if (workspace === "ws_beta") {
+          incoming.resolve(route);
+          return;
+        }
+        expect(workspace).toBe("ws_alpha");
+        return route.fulfill({ json: { providerConnections: [DIRECT] } });
+      });
+      await page.goto("/connections", { waitUntil: "domcontentloaded" });
+      const previous = page.locator(".conn-details").filter({ hasText: DIRECT.displayName });
+      await expect(previous.locator("summary")).toBeVisible();
+      await previous.locator("summary").click();
+      await expect(previous.getByRole("button", { name: "削除", exact: true })).toBeEnabled();
+      await page.locator(".topbar select.workspace-switcher").selectOption("ws_beta");
+      const betaRead = await incoming.promise;
+      try {
+        await expect(previous).toHaveCount(0);
+      } finally {
+        await betaRead.fulfill({ json: { providerConnections: [beta] } });
+      }
+      await expect(page.locator(".conn-details").filter({ hasText: beta.displayName })).toBeVisible();
+      expect(fixture.mutations).toEqual([]);
+    });
+
     for (const scenario of ["committed", "retained", "stalled", "readback unavailable", "denied", "acknowledged"] as const) {
       test(`connection removal refreshes its list without repeating the POST (${scenario})`, async ({ page }) => {
         const errors = collectPageErrors(page);

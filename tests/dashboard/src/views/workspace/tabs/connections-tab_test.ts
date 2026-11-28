@@ -86,8 +86,8 @@ describe("ConnectionsTab guided-first add flow", () => {
     expect(source).toContain("readonly workspaceId?: string;");
     expect(formSource).toContain("readonly workspaceId?: string;");
     expect(source).toContain("const connectionListWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;");
-    expect(source).toContain("() => ({ workspaceId: connectionListWorkspaceId() })");
-    expect(source).toContain("({ workspaceId: id }, { refetching }) => listProviderConnections(id,");
+    expect(source).toContain("({ workspaceId: connectionListWorkspaceId() })");
+    expect(source).toContain("listProviderConnections(scope.workspaceId,");
     expect(source).toContain("loadConnectionUsage(");
     expect(formSource).toContain("connection.scope !== \"operator\"");
     expect(source).toContain("connection.scope !== \"operator\"");
