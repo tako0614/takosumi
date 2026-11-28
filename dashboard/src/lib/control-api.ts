@@ -3253,7 +3253,9 @@ export async function getRun(id: string, options: Pick<RequestOpts, "cache" | "i
  * pushes the run on every change and closes at a terminal status, so the run
  * screen updates in real time instead of polling. Same-origin cookie auth
  * (EventSource sends credentials). Returns a disposer; falls back via `onError`
- * when EventSource is unavailable or the stream drops.
+ * when EventSource is unavailable, the stream drops, or a server that
+ * advertises heartbeats stops sending them. Quiet older servers keep their
+ * existing stream behavior after the initial snapshot.
  */
 export function openRunStream(
   id: string,
@@ -3271,17 +3273,50 @@ export function openRunStream(
     `${BASE}/runs/${encodeURIComponent(id)}/stream`,
     { withCredentials: true },
   );
-  source.onopen = () => handlers.onOpen?.();
+  let closed = false;
+  let supportsHeartbeat = false;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(idleTimer);
+    source.close();
+  };
+  const expectFrame = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      close();
+      handlers.onError?.();
+    }, 30_000);
+  };
+  source.onopen = () => {
+    if (closed) return;
+    supportsHeartbeat = false;
+    expectFrame();
+    handlers.onOpen?.();
+  };
+  source.addEventListener("run-heartbeat", () => {
+    if (!closed && supportsHeartbeat) expectFrame();
+  });
   source.onmessage = (event) => {
+    if (closed) return;
     try {
-      const data = JSON.parse(event.data) as { run?: Run };
-      if (data?.run) handlers.onRun(data.run);
+      const data = JSON.parse(event.data) as { run?: Run; heartbeat?: boolean };
+      if (data?.run?.id !== id) return;
+      supportsHeartbeat ||= data.heartbeat === true;
+      if (supportsHeartbeat) expectFrame();
+      else clearTimeout(idleTimer);
+      handlers.onRun(data.run);
     } catch {
       /* ignore a malformed frame */
     }
   };
-  source.onerror = () => handlers.onError?.();
-  return () => source.close();
+  source.onerror = () => {
+    if (closed) return;
+    clearTimeout(idleTimer);
+    handlers.onError?.();
+  };
+  return close;
 }
 
 async function postRunDecision(

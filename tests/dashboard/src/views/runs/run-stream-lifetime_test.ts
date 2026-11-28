@@ -39,12 +39,13 @@ if (Bun.env.TAKOSUMI_RUN_STREAM_TEST_CLIENT !== "1") {
     "run", "mutateRun", "refetchRun", "refetchLogs", effect + "\nreturn sseActive;",
   );
 
-  class RecordingEventSource {
+  class RecordingEventSource extends EventTarget {
     onopen?: () => void;
     onerror?: () => void;
     onmessage?: (event: { data: string }) => void;
     closes = 0;
     constructor(readonly url: string, readonly options: { withCredentials: boolean }) {
+      super();
       connections.push(this);
     }
     close() { this.closes++; }
