@@ -1921,12 +1921,24 @@ export async function setCapsuleAutoUpdate(
   enabled: boolean,
   scope: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<void> {
+  let dispatched = false;
+  let responseStatus: number | undefined;
   try {
-    await controlFetch<unknown>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}`, {
-      ...scope, method: "PATCH", body: { autoUpdate: enabled },
-    });
-  } catch (cause) {
-    if (!isMutationOutcomeUnknown(cause)) throw cause;
+    await withControlDeadline("Automatic update setting", scope, (requestScope) => controlFetch<unknown>(
+      `${BASE}/capsules/${encodeURIComponent(capsuleId)}`,
+      {
+        ...requestScope,
+        method: "PATCH",
+        body: { autoUpdate: enabled },
+        beforeDispatch: () => { dispatched = true; },
+        onResponseStatus: (status) => { responseStatus = status; },
+      },
+    ));
+  } catch (failure) {
+    throwIfReadRetired(scope);
+    const rejection = clientRejectionOnDeadline(responseStatus, failure);
+    if (rejection) throw rejection;
+    if (!dispatched || !isMutationOutcomeUnknown(failure)) throw failure;
   }
   throwIfReadRetired(scope);
 }
