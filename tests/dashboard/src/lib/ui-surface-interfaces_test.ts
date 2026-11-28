@@ -392,6 +392,36 @@ describe("dashboard UI-surface Interface consumer", () => {
     ]);
   });
 
+  test("an exact Capsule can read its launcher without a Workspace selector", async () => {
+    const calls: string[] = [];
+    const surface = uiInterface();
+    const metadata = surface.metadata as Record<string, unknown>;
+    const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+      calls.push(String(input));
+      return Response.json({ interfaces: [
+        uiInterface({ metadata: { ...metadata, id: "if_other", ownerRef: { kind: "Capsule", id: "cap_other" } } }),
+        uiInterface({ metadata: { ...metadata, id: "if_unscoped", workspaceId: "" } }),
+        surface,
+      ] });
+    };
+    const surfaces = await listAuthorizedUiSurfaces(undefined, { capsuleId: "cap_1", fetch: fetcher });
+    expect(surfaces.map(({ interfaceId, url }) => [interfaceId, url])).toEqual([["if_ui", "https://office.example.test/app"]]);
+    expect(calls).toEqual(["/api/v1/ui-surfaces?capsuleId=cap_1"]);
+    expect(await listAuthorizedUiSurfaces("ws_different", { capsuleId: "cap_1", fetch: fetcher })).toEqual([]);
+  });
+
+  test("a missing Workspace permits neither legacy fallback nor an unscoped launcher read", async () => {
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+      calls.push(String(input));
+      return Response.json({ error: "not_found" }, { status: 404 });
+    };
+    await expect(listAuthorizedUiSurfaces(undefined, { fetch: fetcher })).rejects.toThrow("workspaceId is required");
+    await expect(listAuthorizedUiSurfaces(undefined, { capsuleId: " ", fetch: fetcher })).rejects.toThrow("capsuleId is required");
+    await expect(listAuthorizedUiSurfaces(undefined, { capsuleId: "cap_1", fetch: fetcher })).rejects.toThrow("404");
+    expect(calls).toEqual(["/api/v1/ui-surfaces?capsuleId=cap_1"]);
+  });
+
   test("app launcher denial and failure never read the legacy Workspace projection", async () => {
     for (const status of [401, 403, 503]) {
       const calls: string[] = [];

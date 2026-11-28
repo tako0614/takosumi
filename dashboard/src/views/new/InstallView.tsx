@@ -479,14 +479,10 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     const current = attempt.response();
     if (!id || current?.installPlan.id !== id || current.userAction.kind !== "review_run" ||
         current.userAction.capsuleId !== capsuleId || sourceMismatch() || completed()?.capsuleId === capsuleId) return;
-    const workspaceId = current.installPlan.workspaceId || currentWorkspaceId() || undefined;
+    const workspaceId = current.installPlan.workspaceId || undefined;
     clearCapsuleListCache(workspaceId);
     attempt.finish();
     setCompleted({ capsuleId });
-    if (!workspaceId) {
-      setCompleted({ capsuleId, settled: true });
-      return;
-    }
     completionRead?.abort();
     const controller = new AbortController();
     completionRead = controller;
@@ -501,7 +497,7 @@ function AppInstallPage(props: { readonly principalId: string; readonly accountI
     try {
       for (let index = 0; index < SCREEN_READ_ATTEMPTS; index += 1) {
         try {
-          const screens = await listAuthorizedUiSurfaces(workspaceId, { capsuleId, signal: controller.signal });
+          const screens = await listAuthorizedUiSurfaces(workspaceId, { capsuleId, signal: controller.signal, isCurrent });
           if (!isReading()) return;
           const url = screens[0]?.url;
           if (url) {

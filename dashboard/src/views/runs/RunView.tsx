@@ -858,7 +858,7 @@ function Inner(props: { readonly session: SessionRecord }) {
       const { workspaceId, capsuleId: id } = scope;
       const owner = readOptions();
       let incomplete = false;
-      const surfaces = await listAuthorizedUiSurfaces(workspaceId, {
+      const surfaces = await listAuthorizedUiSurfaces(workspaceId || undefined, {
         capsuleId: id,
         isCurrent: () => owner.isCurrent() && completedRunUiSurfaceKey() === scope,
         reuseRecentSharedAuthProbe: !refetching,
