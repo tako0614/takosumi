@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  abandonUnappliedCapsule,
   capsuleAbandonmentCompleted,
   deleteCapsule,
 } from "../../../../dashboard/src/lib/control-api.ts";
@@ -36,21 +37,37 @@ describe("Capsule DELETE", () => {
 });
 
 describe("Capsule abandonment readback", () => {
+  const expected = { id: "cap_1", workspaceId: "ws_1" };
+  const destroyedCapsule = {
+    id: "cap_1",
+    workspaceId: "ws_1",
+    name: "service",
+    slug: "service",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+    environment: "production",
+    currentStateGeneration: 0,
+    status: "destroyed",
+    createdAt: "2026-08-29T00:00:00.000Z",
+    updatedAt: "2026-08-29T00:01:00.000Z",
+  };
+
+  test("confirms an acknowledged abandonment without a body by reading the same Capsule without cache", async () => {
+    const calls: { path: string; method?: string; cache?: RequestCache }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ path: String(input), method: init?.method, cache: init?.cache });
+      return init?.method === "POST"
+        ? new Response(null, { status: 202 })
+        : Response.json({ capsule: destroyedCapsule });
+    }) as typeof fetch;
+    await expect(abandonUnappliedCapsule(expected)).resolves.toBe(true);
+    expect(calls).toEqual([
+      { path: "/api/v1/capsules/cap_1/abandon", method: "POST", cache: undefined },
+      { path: "/api/v1/capsules/cap_1", method: "GET", cache: "no-store" },
+    ]);
+  });
+
   test("accepts the first response and a lost-ack retry only with destroyed readback", () => {
-    const expected = { id: "cap_1", workspaceId: "ws_1" };
-    const destroyedCapsule = {
-      id: "cap_1",
-      workspaceId: "ws_1",
-      name: "service",
-      slug: "service",
-      sourceId: "src_1",
-      installConfigId: "cfg_1",
-      environment: "production",
-      currentStateGeneration: 0,
-      status: "destroyed",
-      createdAt: "2026-08-29T00:00:00.000Z",
-      updatedAt: "2026-08-29T00:01:00.000Z",
-    };
     expect(
       capsuleAbandonmentCompleted(
         {

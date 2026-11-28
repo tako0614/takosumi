@@ -2010,6 +2010,19 @@ export interface CapsuleAbandonmentExpectation {
   readonly workspaceId?: string;
 }
 
+function matchesAbandonedCapsule(
+  capsule: Capsule,
+  expected: CapsuleAbandonmentExpectation,
+): boolean {
+  return (
+    capsule.id === expected.id &&
+    capsule.workspaceId === expected.workspaceId &&
+    capsule.status === "destroyed" &&
+    capsule.currentStateGeneration === 0 &&
+    capsule.currentStateVersionId === undefined
+  );
+}
+
 /**
  * Accepts only the authoritative terminal readback for an unapplied Capsule
  * abandonment. The `alreadyDeleted` branch covers a lost acknowledgement, but
@@ -2024,14 +2037,8 @@ export function capsuleAbandonmentCompleted(
     value.abandoned === true && value.alreadyDeleted === undefined;
   const lostAcknowledgementRetry =
     value.alreadyDeleted === true && value.abandoned === undefined;
-  return (
-    value.capsule.id === expected.id &&
-    value.capsule.workspaceId === expected.workspaceId &&
-    value.capsule.status === "destroyed" &&
-    value.capsule.currentStateGeneration === 0 &&
-    value.capsule.currentStateVersionId === undefined &&
-    (firstAcknowledgement || lostAcknowledgementRetry)
-  );
+  return (firstAcknowledgement || lostAcknowledgementRetry) &&
+    matchesAbandonedCapsule(value.capsule, expected);
 }
 
 /**
@@ -2039,13 +2046,34 @@ export function capsuleAbandonmentCompleted(
  * applied Capsule without creating the destroy Plan used by generic DELETE.
  */
 export async function abandonUnappliedCapsule(
-  capsuleId: string,
+  expected: CapsuleAbandonmentExpectation,
   options: Pick<RequestOpts, "isCurrent"> = {},
-): Promise<DeleteCapsuleResult | unknown> {
-  return await controlFetch<DeleteCapsuleResult | unknown>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/abandon`,
-    { method: "POST", isCurrent: options.isCurrent },
-  );
+): Promise<boolean> {
+  let responseStatus: number | undefined;
+  let receipt: unknown;
+  const acknowledged = () => responseStatus === 202 || responseStatus === 200;
+  try {
+    receipt = await withControlDeadline("Unfinished install abandonment", options, (scope) =>
+      controlFetch(`${BASE}/capsules/${encodeURIComponent(expected.id)}/abandon`, {
+        ...scope,
+        method: "POST",
+        onResponseStatus: (status) => { responseStatus = status; },
+      }),
+    );
+  } catch (failure) {
+    throwIfReadRetired(options);
+    if (!(acknowledged() && failure instanceof ControlApiError && failure.code === "request_timeout")) {
+      throw clientRejectionOnDeadline(responseStatus, failure) ?? failure;
+    }
+  }
+  if (receipt !== undefined || !acknowledged()) {
+    return capsuleAbandonmentCompleted(receipt, expected);
+  }
+  // The ledger can reach destroyed before terminal cleanup completes. Only
+  // the endpoint's success status can authorize confirming its result by GET.
+  const capsule = await withControlDeadline("Unfinished install read", { ...options, cache: "no-store" },
+    (scope) => getCapsule(expected.id, scope));
+  return matchesAbandonedCapsule(capsule, expected);
 }
 
 /**

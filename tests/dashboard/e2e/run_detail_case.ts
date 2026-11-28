@@ -185,11 +185,31 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
       });
     }
 
-    for (const retire of [true, false]) {
-      test(retire
-        ? "leaving a failed install Run retires its start-over confirmation"
-        : "an active start-over confirmation abandons only the reviewed unfinished install", async ({ page }) => {
-        await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+    const startOverCases = {
+      retire: "leaving a failed install Run retires its start-over confirmation",
+      acknowledged: "an active start-over confirmation abandons only the reviewed unfinished install",
+      stalledBody: "start over reads the original app when the abandonment success body stalls",
+      wrongApp: "start over stays on the failed Run when abandonment readback identifies another workspace",
+      missingAcknowledgement: "start over requires an explicit retry when no abandonment acknowledgement arrives",
+    } as const;
+    for (const [scenario, title] of Object.entries(startOverCases)) {
+      test(title, async ({ page }) => {
+        await page.addInitScript(() => {
+          localStorage.setItem("tg_lang", "en");
+          const send = window.fetch.bind(window);
+          window.fetch = async (...args) => {
+            const response = await send(...args);
+            if (response.headers.has("x-fixture-stalled-abandonment-body")) {
+              Object.defineProperty(response, "json", {
+                value: () => {
+                  document.documentElement.dataset.abandonmentBodyStalled = "true";
+                  return new Promise(() => {});
+                },
+              });
+            }
+            return response;
+          };
+        });
         const capsuleId = "cap_restart_unapplied";
         const sourceId = "src_restart_unapplied";
         const configId = "cfg_restart_unapplied";
@@ -202,18 +222,41 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         const capsule = { id: capsuleId, workspaceId: failed.workspaceId, name: "Unfinished install", slug: "unfinished-install",
           environment: "production", installConfigId: configId, sourceId, status: "error", currentStateGeneration: 0,
           createdAt, updatedAt: createdAt };
+        const stalledBody = scenario === "stalledBody" || scenario === "wrongApp";
         const writes: string[] = [];
-        await page.route("**/api/v1/**", (route) => {
+        const readback: string[] = [];
+        let closed = false;
+        const acknowledgement = Promise.withResolvers<void>();
+        await page.route("**/api/v1/**", async (route) => {
           const request = route.request();
           const path = new URL(request.url()).pathname;
           if (request.method() !== "GET") writes.push(`${request.method()} ${path}`);
-          if (path === abandonedPath) return route.fulfill({ json: { abandoned: true, capsule: { ...capsule, status: "destroyed" } } });
-          if (path === `/api/v1/capsules/${capsuleId}`) return route.fulfill({ json: { capsule } });
+          if (path === abandonedPath) {
+            const projection = { ...capsule, status: "destroyed" };
+            if (closed) return route.fulfill({ json: { alreadyDeleted: true, capsule: projection } });
+            closed = true;
+            if (scenario === "missingAcknowledgement") {
+              await acknowledgement.promise;
+              return route.abort("failed").catch(() => {});
+            }
+            return route.fulfill({ status: 202, json: { abandoned: true, capsule: projection },
+              ...(stalledBody ? { headers: { "x-fixture-stalled-abandonment-body": "1" } } : {}) });
+          }
+          if (path === `/api/v1/capsules/${capsuleId}`) {
+            if (closed) readback.push(path);
+            return route.fulfill({ json: { capsule: closed ? {
+              ...capsule, status: "destroyed",
+              workspaceId: scenario === "wrongApp" ? "ws_other" : capsule.workspaceId,
+            } : capsule } });
+          }
           if (path === `/api/v1/capsules/${next.capsuleId}`) return route.fulfill({ json: { capsule: { ...capsule, id: next.capsuleId, name: "Replacement app" } } });
-          if (path === `/api/v1/sources/${sourceId}`) return route.fulfill({ json: { source: {
-            id: sourceId, workspaceId: failed.workspaceId, name: capsule.name, url: git, defaultRef: "main",
-            defaultPath: ".", status: "active", autoSync: false, createdAt, updatedAt: createdAt,
-          } } });
+          if (path === `/api/v1/sources/${sourceId}`) {
+            if (closed) return route.fulfill({ status: 404, json: { error: "not_found" } });
+            return route.fulfill({ json: { source: {
+              id: sourceId, workspaceId: failed.workspaceId, name: capsule.name, url: git, defaultRef: "main",
+              defaultPath: ".", status: "active", autoSync: false, createdAt, updatedAt: createdAt,
+            } } });
+          }
           if (path === `/api/v1/capsule-configs/${configId}`) return route.fulfill({ json: { installConfig: { id: configId, modulePath: "deploy/cloudflare" } } });
           if (path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: "" });
           if (path.endsWith("/logs")) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
@@ -231,7 +274,7 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
         await expect(dialog).toContainText("Unfinished install");
         expect(writes).toEqual([]);
 
-        if (retire) {
+        if (scenario === "retire") {
           await page.evaluate((path) => {
             history.pushState(history.state, "", path);
             window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
@@ -240,10 +283,41 @@ export function registerRunDetailCases(mode: DashboardE2EMode) {
           await expect(dialog).toHaveCount(0);
           expect(writes).toEqual([]);
         } else {
+          const timed = stalledBody || scenario === "missingAcknowledgement";
+          if (timed) await page.clock.install();
           await dialog.getByRole("button", { name: caption, exact: true }).click();
+          if (timed) {
+            try {
+              await expect.poll(() => writes).toEqual([`POST ${abandonedPath}`]);
+              if (stalledBody) {
+                await expect(page.locator("html")).toHaveAttribute("data-abandonment-body-stalled", "true");
+              }
+              await page.clock.fastForward(30_001);
+              if (scenario === "wrongApp") {
+                await expect(startOver).toBeEnabled({ timeout: 2_000 });
+                await expect(page).toHaveURL(new RegExp(`/runs/${failed.id}$`, "u"));
+                expect(writes).toEqual([`POST ${abandonedPath}`]);
+                expect(readback).toEqual([`/api/v1/capsules/${capsuleId}`]);
+                return;
+              }
+              if (scenario === "missingAcknowledgement") {
+                await expect(startOver).toBeEnabled({ timeout: 2_000 });
+                await expect(page).toHaveURL(new RegExp(`/runs/${failed.id}$`, "u"));
+                expect(readback).toEqual([]);
+                expect(writes).toEqual([`POST ${abandonedPath}`]);
+                await startOver.click();
+                await dialog.getByRole("button", { name: caption, exact: true }).click();
+              }
+            } finally {
+              acknowledgement.resolve();
+            }
+          }
           await expect(page).toHaveURL((url) => url.pathname === "/new" && url.searchParams.get("git") === git &&
-            url.searchParams.get("path") === "deploy/cloudflare" && !url.searchParams.has("ref"));
-          expect(writes).toEqual([`POST ${abandonedPath}`]);
+            url.searchParams.get("path") === "deploy/cloudflare" && !url.searchParams.has("ref"), { timeout: timed ? 2_000 : 10_000 });
+          expect(writes).toEqual(scenario === "missingAcknowledgement"
+            ? [`POST ${abandonedPath}`, `POST ${abandonedPath}`]
+            : [`POST ${abandonedPath}`]);
+          if (scenario === "stalledBody") expect(readback).toEqual([`/api/v1/capsules/${capsuleId}`]);
         }
       });
     }
