@@ -106,6 +106,13 @@ owner membership implicitly in this profile. Existing mutation admission,
 management-epoch checks and durable write CAS remain in the owning Control
 operations. Run streams revalidate the RP grant and canonical account together
 with current membership before emitting later snapshots.
+The first Run snapshot advertises support for named `run-heartbeat` events.
+An unchanged Run sends a heartbeat on the existing stream cadence after the
+normal authorization check. When an open stream has no initial snapshot or
+an advertised heartbeat stream stops delivering frames, the Dashboard falls
+back to the same authenticated Run read after 30 seconds of silence. Quiet
+streams from older servers keep their existing behavior after the initial
+snapshot.
 The shared-profile public Control facade accepts the RP cookie path. The
 optional personal-access-token path below is its only human Bearer lane.
 Machine protocol and private operator/Run credentials retain their separately

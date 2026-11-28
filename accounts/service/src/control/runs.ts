@@ -389,7 +389,7 @@ export function runStatusStream(
       try {
         if (request.signal.aborted || !(await stillAuthorized())) return;
         let last = await publicRun(operations, initialRun);
-        if (!(await stillAuthorized(true)) || !send({ run: last })) return;
+        if (!(await stillAuthorized(true)) || !send({ run: last, heartbeat: true })) return;
         let interval = MIN_MS;
         while (
           !cancelled &&
@@ -426,7 +426,7 @@ export function runStatusStream(
             interval = MIN_MS; // responsive again right after a change
           } else {
             if (controller.desiredSize === null || controller.desiredSize <= 0) break;
-            controller.enqueue(encoder.encode(`: ping\n\n`));
+            controller.enqueue(encoder.encode("event: run-heartbeat\ndata: {}\n\n"));
             interval = Math.min(MAX_INTERVAL_MS, Math.round(interval * 1.4));
           }
         }

@@ -132,6 +132,24 @@ async function routedStream(
   return reader;
 }
 
+test("a quiet authorized Run advertises and emits an empty named heartbeat", async () => {
+  const f = fixture();
+  const response = runStatusStream(f.ctx, f.getRun().id, f.getRun(), f.timing);
+  const reader = response.body!.getReader();
+  try {
+    const text = new TextDecoder();
+    expect(text.decode((await reader.read()).value)).toContain('"heartbeat":true');
+    await f.tick(2_500);
+    expect(text.decode((await reader.read()).value)).toBe("event: run-heartbeat\ndata: {}\n\n");
+    expect(f.runReads).toBe(1);
+    f.setMemberStatus("revoked");
+    await f.tick(60_000);
+    expect(await reader.read()).toEqual({ done: true, value: undefined });
+  } finally {
+    await reader.cancel();
+  }
+});
+
 test("ordinary PAT route closes a stream when the persisted token is revoked", async () => {
   const f = fixture();
   const store = new InMemoryAccountsStore();

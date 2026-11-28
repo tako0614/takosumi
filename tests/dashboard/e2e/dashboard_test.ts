@@ -1881,6 +1881,82 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
+  for (const variant of ["advertised heartbeats stop", "legacy stays quiet", "initial snapshot is missing"] as const) {
+    test(`an open Run stream recovers safely when ${variant}`, async ({ page }) => {
+      test.skip(mode !== "portable", "controlled stream; no live mutations");
+      await page.clock.install();
+      const id = "run_poll_e2e";
+      const run = {
+        id, workspaceId: "ws_alpha", capsuleId: "cap_poll_e2e", type: "plan", status: "running",
+        createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
+      };
+      let reads = 0;
+      const writes: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() !== "GET" && routePath(request.url()).startsWith("/api/v1/")) {
+          writes.push(request.method());
+        }
+      });
+      await page.addInitScript(({ snapshot, variant }) => {
+        const native = window.EventSource;
+        function controlled(url: string | URL, init?: EventSourceInit) {
+          if (!String(url).endsWith(`/runs/${snapshot.id}/stream`)) return new native(url, init);
+          const transport = new EventTarget();
+          const receiveHeartbeat = () => transport.dispatchEvent(new MessageEvent("run-heartbeat", { data: "{}" }));
+          window.addEventListener("fixture-run-heartbeat", receiveHeartbeat);
+          const source = Object.assign(transport, {
+            onopen: undefined as ((event: Event) => void) | undefined,
+            onmessage: undefined as ((event: MessageEvent) => void) | undefined,
+            close() {
+              window.removeEventListener("fixture-run-heartbeat", receiveHeartbeat);
+              document.documentElement.dataset.runStreamClosed = "true";
+            },
+          });
+          queueMicrotask(() => {
+            source.onopen?.(new Event("open"));
+            if (variant !== "initial snapshot is missing") {
+              source.onmessage?.(new MessageEvent("message", {
+                data: JSON.stringify({ run: snapshot, ...(variant === "advertised heartbeats stop" ? { heartbeat: true } : {}) }),
+              }));
+            }
+            document.documentElement.dataset.runStreamReady = "true";
+          });
+          return source;
+        }
+        Object.defineProperty(window, "EventSource", { value: controlled, configurable: true });
+      }, { snapshot: run, variant });
+      await page.route(`**/api/v1/runs/${id}`, (route) => {
+        reads += 1;
+        return route.fulfill({ json: { run: { ...run, status: reads === 1 ? "running" : "cancelled" } } });
+      });
+      await gotoDashboardDocument(page, `/runs/${id}`);
+      const root = page.locator("html");
+      await expect(root).toHaveAttribute("data-run-stream-ready", "true");
+      if (variant !== "initial snapshot is missing") {
+        await page.clock.runFor(20_000);
+        if (variant === "advertised heartbeats stop") {
+          await page.evaluate(() => window.dispatchEvent(new Event("fixture-run-heartbeat")));
+        }
+        await page.clock.runFor(20_000);
+        expect(reads).toBe(1);
+        await expect(root).not.toHaveAttribute("data-run-stream-closed", "true");
+        if (variant === "legacy stays quiet") {
+          expect(writes).toEqual([]);
+          return;
+        }
+        await page.clock.runFor(14_000);
+      } else {
+        await page.clock.runFor(34_000);
+      }
+      await expect(root).toHaveAttribute("data-run-stream-closed", "true");
+      await expect(page.getByText(/^(Cancelled|取り消し済み|キャンセル済み)$/u).first()).toBeVisible();
+      expect(reads).toBe(2);
+      await page.clock.runFor(10_000);
+      expect(reads).toBe(2);
+      expect(writes).toEqual([]);
+    });
+  }
+
   test("an unreadable service keeps the shell and shows not found", async ({
     page,
   }) => {
