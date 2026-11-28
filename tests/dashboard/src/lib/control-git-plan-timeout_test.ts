@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test";
 import { setImmediate as realSetImmediate } from "node:timers";
 import {
+  advanceGitRevisionPlan,
   createReviewableGitRevisionPlan,
   type GitPlanPollCadence,
 } from "../../../../dashboard/src/lib/control-api.ts";
@@ -39,8 +40,9 @@ function flushContinuations(): Promise<void> {
 async function expectDeadline(
   outcome: () => unknown,
   kind: "revision",
+  activeTimers = 1,
 ) {
-  expect(jest.getTimerCount()).toBe(1);
+  expect(jest.getTimerCount()).toBe(activeTimers);
   jest.advanceTimersByTime(24);
   await flushContinuations();
   expect(outcome()).toBeUndefined();
@@ -61,6 +63,44 @@ function response(kind: "revision", nextAction: "reconcile" | "review_run") {
     nextAction,
   }), { headers: { "content-type": "application/json" } });
 }
+
+test("a stalled revision command reads the same saved Plan before the overall deadline", async () => {
+  const paths: string[] = [];
+  const revisionPath = "/api/v1/revision-plans/revision_1";
+  const entered = deferred<void>();
+  let commandSignal: AbortSignal | null | undefined;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    paths.push(`${init?.method ?? "GET"} ${path}`);
+    if (init?.method === "POST") {
+      commandSignal = init.signal;
+      const stored = response("revision", "review_run");
+      stored.json = () => {
+        entered.resolve();
+        return new Promise(() => {});
+      };
+      return stored;
+    }
+    expect(init?.cache).toBe("no-store");
+    return Response.json({
+      nextAction: "review_run",
+      revisionPlan: { id: "revision_1", capsuleId: "cap_1", operation: "revision", phase: "reviewable", planRunId: "plan_1" },
+    });
+  }) as typeof fetch;
+
+  const outcome = observe(advanceGitRevisionPlan("revision_1", { expectedCapsuleId: "cap_1" }));
+  await entered.promise;
+  jest.advanceTimersByTime(29_999);
+  await flushContinuations();
+  expect(paths).toEqual([`POST ${revisionPath}/reconcile`]);
+  expect(outcome()).toBeUndefined();
+  jest.advanceTimersByTime(1);
+  await flushContinuations();
+  expect(commandSignal?.aborted).toBe(true);
+  expect(paths).toEqual([`POST ${revisionPath}/reconcile`, `GET ${revisionPath}`]);
+  expect(outcome()).toMatchObject({ value: { revisionPlan: { id: "revision_1", planRunId: "plan_1" } } });
+  expect(jest.getTimerCount()).toBe(0);
+});
 
 // The install coordinator is followed by the install page itself (TASK-0115
 // Phase 3b); only the revision coordinator keeps the bounded client loop.
@@ -97,7 +137,7 @@ for (const kind of ["revision"] as const) {
 
       const outcome = observe(start(25));
       await entered.promise;
-      await expectDeadline(outcome, kind);
+      await expectDeadline(outcome, kind, blockedPhase === "reconcile" ? 2 : 1);
       expect(aborted).toBe(true);
       expect(calls).toHaveLength(blockedPhase === "create" ? 1 : 2);
       stalled = false;
@@ -138,10 +178,8 @@ for (const kind of ["revision"] as const) {
     const entered = deferred<void>();
     const pause = deferred<void>();
     let pauseMs: number | undefined;
-    let signal: AbortSignal | null | undefined;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
       calls.push(String(input));
-      signal = init?.signal;
       return response(kind, "reconcile");
     }) as typeof fetch;
 
@@ -157,7 +195,6 @@ for (const kind of ["revision"] as const) {
     expect(pauseMs).toBe(250);
     expect(calls).toHaveLength(2);
     await expectDeadline(outcome, kind);
-    expect(signal?.aborted).toBe(true);
 
     // The pause is still pending when the caller rejects. Even a late pause
     // completion must not issue another reconcile, approve, or apply command.

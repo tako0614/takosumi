@@ -2536,19 +2536,21 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const installAttemptPath = "/api/v1/install-plans/gip_00000000005ea7e5";
       const installReconcilePath = `${installAttemptPath}/reconcile`;
+      const revisionAttemptPath = "/api/v1/revision-plans/grp_states_e";
+      const revisionReconcilePath = `${revisionAttemptPath}/reconcile`;
       if (scenario === "states") {
         await page.clock.install();
-        await page.addInitScript((path) => {
+        await page.addInitScript(() => {
           const send = window.fetch.bind(window);
           window.fetch = async (input, init) => {
             const response = await send(input, init);
-            if (document.documentElement.dataset.holdInstallProgress === "true" &&
-              init?.method === "POST" && new URL(response.url).pathname === path && response.ok) {
+            if (init?.method === "POST" && response.ok &&
+              document.documentElement.dataset.holdProgressPath === new URL(response.url).pathname) {
               Object.defineProperty(response, "json", { value: () => new Promise(() => {}) });
             }
             return response;
           };
-        }, installReconcilePath);
+        });
       }
       if (replacementExpiresBeforeReview) {
         await page.clock.setFixedTime(new Date("2026-11-25T12:00:00.000Z"));
@@ -2602,6 +2604,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       };
       let attemptAwaitsInput = false;
       let installReviewSaved = false;
+      let revisionReviewSaved = false;
       let viewUnavailable = false;
       const uninstallReservationId = "uninstall_states_e";
       const capsule = () => ({
@@ -3043,7 +3046,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             links: { self: "/api/v1/install-plans/gip_00000000005ea7e5", run: `/api/v1/runs/${installPlan.id}` },
           } });
         }
-        if (path === "/api/v1/revision-plans/grp_states_e/reconcile" && request.method() === "POST") {
+        if ((path === revisionReconcilePath && request.method() === "POST") ||
+          (path === revisionAttemptPath && request.method() === "GET" && revisionReviewSaved)) {
+          revisionReviewSaved = true;
           return route.fulfill({ json: {
             revisionPlan: { id: "grp_states_e", operation: "revision", phase: "reviewable", generation: 4, capsuleId: ID, planRunId: revisionPlanRun.id },
             nextAction: "review_run",
@@ -4220,7 +4225,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       scene = "install_stalled";
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(app).toHaveAttribute("data-app-state", "needs_attention");
-      await page.evaluate(() => { document.documentElement.dataset.holdInstallProgress = "true"; });
+      await page.evaluate((path) => { document.documentElement.dataset.holdProgressPath = path; }, installReconcilePath);
       const stored = page.waitForResponse((response) =>
         response.request().method() === "POST" && new URL(response.url()).pathname === installReconcilePath && response.ok());
       await header.getByRole("button", { name: "Continue installing", exact: true }).click();
@@ -4272,7 +4277,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app).toHaveAttribute("data-app-state", "installed");
       const stalledRevision = problems.locator('[data-problem="revision-stalled"]');
       await expect(stalledRevision).toContainText("Getting an update ready stopped partway");
+      await page.evaluate((path) => { document.documentElement.dataset.holdProgressPath = path; }, revisionReconcilePath);
+      const revisionStored = page.waitForResponse((response) =>
+        response.request().method() === "POST" && new URL(response.url()).pathname === revisionReconcilePath && response.ok());
       await stalledRevision.getByRole("button", { name: "Continue", exact: true }).click();
+      expect(await (await revisionStored).finished()).toBeNull();
+      const revisionRecovered = page.waitForResponse((response) =>
+        response.request().method() === "GET" && new URL(response.url()).pathname === revisionAttemptPath && response.ok(),
+        { timeout: 7_500 });
+      await page.clock.fastForward(30_001);
+      expect((await (await revisionRecovered).json()).revisionPlan.planRunId).toBe(revisionPlanRun.id);
       await expect(problems.getByTestId("app-review").getByRole("button", { name: "Allow and update", exact: true })).toBeEnabled();
 
       // A stopped version change waits behind a change under review instead
