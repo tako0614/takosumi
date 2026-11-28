@@ -38,6 +38,7 @@ import {
   type ProviderConnectionSetupOption,
 } from "../../account/lib/api.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
+import { currentSessionCheck } from "../../account/lib/session.ts";
 import {
   providerConnectionStatusLabel,
   providerConnectionTone,
@@ -126,23 +127,29 @@ export default function ConnectionsTab(props: {
 }) {
   const { confirm } = useConfirmDialog();
   const workspaceId = () => props.workspaceId;
+  const connectionListWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;
+  const requests = new AbortController();
   let disposed = false;
-  onCleanup(() => { disposed = true; });
+  onCleanup(() => {
+    disposed = true;
+    requests.abort();
+  });
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
-    createResource(
-      () => ({ workspaceId: workspaceId() ?? (currentWorkspaceId() || undefined) }),
-      ({ workspaceId: id }) => listProviderConnections(id || currentWorkspaceId() || undefined),
+    createResource<readonly ProviderConnection[], { workspaceId?: string }, () => boolean>(
+      () => ({ workspaceId: connectionListWorkspaceId() }),
+      ({ workspaceId: id }, { refetching }) => listProviderConnections(id, typeof refetching === "function"
+        ? { cache: "no-store", signal: requests.signal, isCurrent: refetching }
+        : undefined),
     );
   const [credentialRecipes] = createResource(connectionSetupCatalog);
   // Personal ownership is authoritative. The selected legacy workspace is
   // only a fallback if the new /apps endpoint is missing.
-  const legacyUsageWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;
   // Which owner apps use each connection. Not read inside the install review.
   const [usage, { refetch: refetchUsage }] = createResource(
     () => {
       if (props.embedded) return null;
-      const id = legacyUsageWorkspaceId();
+      const id = connectionListWorkspaceId();
       return id ? `legacy:${id}` : PERSONAL_CONNECTION_USAGE_SOURCE;
     },
     (source) => loadConnectionUsage(
@@ -383,17 +390,27 @@ export default function ConnectionsTab(props: {
   // without this every row's delete button would look busy during a single
   // revoke.
   const [removingId, setRemovingId] = createSignal<string | null>(null);
-  const remove = createAction(async (id: string) => {
+  const [removalUnconfirmed, setRemovalUnconfirmed] = createSignal(false);
+  const remove = createAction(async (id: string, isCurrent: () => boolean) => {
     setRemovingId(id);
+    setRemovalUnconfirmed(false);
     try {
-      await revokeConnection(id);
+      const outcome = await revokeConnection(id, { signal: requests.signal, isCurrent });
+      if (!isCurrent()) return;
+      setRemovalUnconfirmed(outcome === "unconfirmed");
       if (lastCreatedConnectionId() === id) {
         setLastCreatedConnectionId(null);
         setLastCreatedConnectionName(null);
         setLastCreatedVerifiedHint(false);
       }
-      await refreshConnections();
-      if (!props.embedded && !disposed) void refetchUsage();
+      // The list represents current visibility. An absent row is not a
+      // receipt for this POST, so keep the unconfirmed notice when needed.
+      await refetchProviderConnections(isCurrent);
+      if (!isCurrent()) return;
+      props.onChanged?.();
+      if (!props.embedded) void refetchUsage();
+    } catch (error) {
+      if (isCurrent()) throw error;
     } finally {
       setRemovingId(null);
     }
@@ -425,6 +442,9 @@ export default function ConnectionsTab(props: {
   const confirmRemoveProviderConnection = async (
     connection: ProviderConnection,
   ) => {
+    const displayedWorkspaceId = connectionListWorkspaceId();
+    const sessionIsCurrent = currentSessionCheck();
+    const isCurrent = () => !disposed && sessionIsCurrent() && displayedWorkspaceId === connectionListWorkspaceId();
     // Same name fallback as the list row: never a raw conn_… id, and an
     // empty-string displayName must not slip through `??` and render 「」.
     const name =
@@ -443,8 +463,8 @@ export default function ConnectionsTab(props: {
       confirmText: t("conn.remove.confirm"),
       danger: true,
     });
-    if (!ok) return;
-    void remove.run(connection.id);
+    if (!ok || !isCurrent() || remove.busy()) return;
+    void remove.run(connection.id, isCurrent);
   };
 
   /** Personal/workspace connections can be removed; operator-provided ones cannot. */
@@ -715,8 +735,13 @@ export default function ConnectionsTab(props: {
         }
       />
 
+      <ActionError error={remove.error} />
+      <Show when={removalUnconfirmed()}>
+        <Toast tone="neutral" onDismiss={() => setRemovalUnconfirmed(false)}>
+          {t("conn.remove.unconfirmed")}
+        </Toast>
+      </Show>
       <Show when={hasProviderConnections()}>
-        <ActionError error={remove.error} />
         {providerConnectionList()}
       </Show>
       <Show

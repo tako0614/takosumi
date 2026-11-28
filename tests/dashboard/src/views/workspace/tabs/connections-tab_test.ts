@@ -85,9 +85,9 @@ describe("ConnectionsTab guided-first add flow", () => {
   test("personal Account connections need no workspace selector", () => {
     expect(source).toContain("readonly workspaceId?: string;");
     expect(formSource).toContain("readonly workspaceId?: string;");
-    expect(source).toContain("() => ({ workspaceId: workspaceId() ?? (currentWorkspaceId() || undefined) })");
-    expect(source).toContain("({ workspaceId: id }) => listProviderConnections(id || currentWorkspaceId() || undefined)");
-    expect(source).toContain("const legacyUsageWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;");
+    expect(source).toContain("const connectionListWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;");
+    expect(source).toContain("() => ({ workspaceId: connectionListWorkspaceId() })");
+    expect(source).toContain("({ workspaceId: id }, { refetching }) => listProviderConnections(id,");
     expect(source).toContain("loadConnectionUsage(");
     expect(formSource).toContain("connection.scope !== \"operator\"");
     expect(source).toContain("connection.scope !== \"operator\"");

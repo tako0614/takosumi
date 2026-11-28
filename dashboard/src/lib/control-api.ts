@@ -3545,9 +3545,11 @@ async function readConnectionsForOwnership(
 
 export async function listProviderConnections(
   workspaceId?: string,
-  options: Pick<RequestOpts, "reuseRecentSharedAuthProbe"> = {},
+  options: Pick<RequestOpts, "cache" | "isCurrent" | "reuseRecentSharedAuthProbe" | "signal"> = {},
 ): Promise<readonly ProviderConnection[]> {
-  return await listProviderConnectionsWithSignal(workspaceId, undefined, options);
+  if (!options.isCurrent) return await listProviderConnectionsWithSignal(workspaceId, options.signal, options);
+  return await withControlDeadline("Connection list", options, (scope) =>
+    listProviderConnectionsWithSignal(workspaceId, scope.signal, { ...options, ...scope }));
 }
 
 export async function listProviderConnectionsWithSignal(
@@ -3691,14 +3693,30 @@ export async function testConnection(connectionId: string): Promise<unknown> {
 }
 
 /**
- * Revokes a Workspace-owned ProviderConnection (`POST /api/v1/connections/:id/revoke`,
- * 204). The sealed credential blob is deleted server-side.
+ * Revokes the selected ProviderConnection once. An unknown outcome requires
+ * a list read, never another POST. Only a 204 acknowledges the removal.
  */
-export async function revokeConnection(connectionId: string): Promise<void> {
-  await controlFetch<void>(
-    `${BASE}/connections/${encodeURIComponent(connectionId)}/revoke`,
-    { method: "POST" },
-  );
+export async function revokeConnection(connectionId: string, scope: ControlReadScope): Promise<"acknowledged" | "unconfirmed"> {
+  let dispatched = false;
+  let responseStatus: number | undefined;
+  try {
+    await withControlDeadline("Connection removal", scope, (requestScope) => controlFetch<void>(
+      `${BASE}/connections/${encodeURIComponent(connectionId)}/revoke`,
+      {
+        ...requestScope,
+        method: "POST",
+        beforeDispatch: () => { dispatched = true; },
+        onResponseStatus: (status) => { responseStatus = status; },
+      },
+    ));
+  } catch (failure) {
+    throwIfReadRetired(scope);
+    const rejection = clientRejectionOnDeadline(responseStatus, failure);
+    if (rejection && responseStatus !== 408) throw rejection;
+    if (!dispatched || (responseStatus !== 408 && !isMutationOutcomeUnknown(failure))) throw failure;
+  }
+  throwIfReadRetired(scope);
+  return responseStatus === 204 ? "acknowledged" : "unconfirmed";
 }
 
 export interface ConnectionOAuthStart {
