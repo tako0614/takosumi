@@ -110,6 +110,7 @@ test("actual form drops a late context for another person and never automaticall
     state.scope.principalId = "person_b";
     release(); await read;
     expect(state.controller.context()).toBeUndefined();
+    expect(state.controller.canRead()).toBe(true);
     await state.controller.submit();
     expect(calls).toBe(1);
   } finally { state.dispose(); }

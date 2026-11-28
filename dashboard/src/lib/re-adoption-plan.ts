@@ -40,7 +40,7 @@ export function createReAdoptionPlanSubmission(
     assertCurrent();
     if (completed) return completed;
     if (!acknowledged) {
-      const response = await createCapsuleInstallConfigReAdoption(capsuleId, request, adoptionKey);
+      const response = await createCapsuleInstallConfigReAdoption(capsuleId, request, adoptionKey, { isCurrent });
       const receipt = response?.installConfigReAdoption;
       if (response?.capsule?.id !== capsuleId || receipt?.sourceSnapshotId !== request.sourceSnapshotId ||
         !receipt.targetInstallConfigId || response.capsule.installConfigId !== receipt.targetInstallConfigId ||
