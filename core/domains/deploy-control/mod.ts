@@ -1,4 +1,5 @@
 import { capsuleWithOwnershipForAdmission } from "./store.ts";
+import { pendingRepositoryReAdoptionReceipt } from "../capsules/repository_re_adoption.ts";
 import type { CommittedApplyReceiptCommand, CommittedApplyReceiptProbeCommand } from "./committed_apply_receipt.ts";
 /**
  * OpenTofu-native deployment-control-plane domain.
@@ -2411,6 +2412,8 @@ export class OpenTofuController {
         capsule.id,
       );
       if (epoch === undefined) return;
+      const config = await this.#store.getInstallConfig(capsule.installConfigId);
+      if (!config || await pendingRepositoryReAdoptionReceipt(capsule, config)) return;
       const claim = await this.#store.updateCapsuleLifecycle({
         capsuleId: capsule.id,
         expected: capsuleLifecycleExpected(capsule, epoch),

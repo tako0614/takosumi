@@ -1,7 +1,7 @@
 import { installDisplayName } from "./install-names.ts";
 import { normalizeInstallConfigSourceUrl } from "takosumi-contract/install-configs";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
-import { capsuleInstallConfigReAdoptionAuthoritySnapshot } from "./install-config-re-adoptions.ts";
+import { capsuleInstallConfigReAdoptionAuthoritySnapshot, readPendingRepositoryReAdoption } from "./install-config-re-adoptions.ts";
 import { matchesCurrentRevision, revisionTargetIdentity } from "./install-config-re-adoption-context.ts";
 import { sameGitName } from "./revision-plans.ts";
 import type { AppAccess } from "takosumi-contract/app-access";
@@ -64,6 +64,7 @@ import {
   gitRevisionPreparationStalled,
   type PreparingGitPlanCoordinator,
 } from "../../../../core/domains/install-plans/store.ts";
+import { pendingRepositoryReAdoptionReceipt } from "../../../../core/domains/capsules/repository_re_adoption.ts";
 import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
@@ -260,14 +261,16 @@ export async function readCapsuleAppView(
   owner?: AppAccess,
 ): Promise<CapsuleAppView> {
   const { operations } = ctx;
-  const [overview, source, adopted] = await Promise.all([
-    readAppOverview(ctx, capsule, now, optional(() => operations.capsules.getInstallConfig(capsule.installConfigId)), appReadInventory(operations, "app")),
+  const config = optional(() => operations.capsules.getInstallConfig(capsule.installConfigId));
+  const [overview, source, adopted, installConfig] = await Promise.all([
+    readAppOverview(ctx, capsule, now, config, appReadInventory(operations, "app")),
     capsule.status === "destroyed"
       ? Promise.resolve<Optional<Source>>({ failed: false })
       : optional(async () => (await operations.getSource(capsule.sourceId)).source),
     capsule.status !== "destroyed" && capsuleIsApplied(capsule) && capsule.currentStateVersionId
       ? optional(() => operations.getCapsuleAdoptedSourceRevision(capsule.id))
       : Promise.resolve<Optional<CapsuleAdoptedSourceRevision | undefined>>({ failed: false }),
+    config,
   ]);
   const incomplete = new Set(overview.view.incomplete);
   const { applied, latestRun, problems, uninstall } = overview.view;
@@ -277,7 +280,10 @@ export async function readCapsuleAppView(
     latestRun?.type === "destroy_plan" || latestRun?.type === "destroy_apply"
   );
   const [version, displays, destroyIds] = await Promise.all([
-    readVersion(operations, capsule, { source: source.value, adopted: adopted.value, onIncomplete: () => incomplete.add("version") }),
+    readVersion(operations, capsule, {
+      source: source.value, adopted: adopted.value, installConfig: installConfig.value,
+      onIncomplete: () => incomplete.add("version"),
+    }),
     optional(async () => new Map(await Promise.all([...overview.linkedApps.values()].map(async (app) =>
       [app.id, await linkedAppDisplay(ctx, app)] as const)))),
     readDestroyIds && needsDestroyIds
@@ -382,16 +388,20 @@ async function readAppOverview(
   const changedReviewBase = review?.type === "plan" && guard?.planId === review.id &&
     guard.capsuleId === capsule.id && guard.currentStateVersionId !== undefined &&
     guard.currentStateVersionId !== (capsule.currentStateVersionId ?? null);
+  const configForReview = installConfig.value;
   const supersededReview = changedReviewBase || (review?.type === "plan" &&
-    installConfig.value?.internal?.reAdoption?.capsuleId === capsule.id &&
+    configForReview?.internal?.reAdoption?.capsuleId === capsule.id &&
     (await optional(async () => {
       const [{ planRun }, epoch] = await Promise.all([
         operations.getPlanRun(review.id),
         operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id),
       ]);
+      if (planRun.capsuleId !== capsule.id) return false;
       // Core treats a missing epoch on historical Plans as epoch 1.
-      return planRun.capsuleId === capsule.id &&
-        (planRun.capsuleExecutionAuthorityEpoch ?? 1) < epoch;
+      if ((planRun.capsuleExecutionAuthorityEpoch ?? 1) < epoch) return true;
+      if (planRun.operation !== "update" || planRun.origin?.kind === "rollback") return false;
+      const pending = await pendingRepositoryReAdoptionReceipt(capsule, configForReview);
+      return pending !== undefined && pending.sourceSnapshotId !== planRun.sourceSnapshotId;
     })).value === true);
   const derived = deriveCapsuleAppStatus({
     capsule,
@@ -1064,6 +1074,7 @@ async function readVersion(
   input: {
     readonly source?: Source;
     readonly adopted?: CapsuleAdoptedSourceRevision;
+    readonly installConfig?: InstallConfig;
     readonly onIncomplete: () => void;
   },
 ): Promise<CapsuleAppVersion> {
@@ -1074,6 +1085,14 @@ async function readVersion(
     ? credentialFreeRepositoryUrl(input.source.url)
     : undefined;
   const current = input.adopted;
+  let saved: SourceSnapshot | undefined;
+  if (current && input.source && input.installConfig) {
+    try {
+      saved = await readPendingRepositoryReAdoption(operations, capsule, input.installConfig, input.source);
+    } catch {
+      input.onIncomplete();
+    }
+  }
   let latest: SourceSnapshot | undefined;
   if (current) {
     try {
@@ -1108,6 +1127,7 @@ async function readVersion(
           },
         }
       : {}),
+    ...(saved ? { savedReAdoption: { ref: saved.ref, commit: saved.resolvedCommit } } : {}),
     updateAvailable: Boolean(
       current && latest && latest.resolvedCommit !== current.resolvedCommit,
     ),

@@ -624,6 +624,8 @@ export const ja = {
   "app.version.checkTitle": "新しいバージョンの確認",
   "app.version.checkHint": "同じブランチやタグの最新のバージョンを読み、変わる内容を表示します。まだ何も適用しません。",
   "app.version.check": "新しいバージョンを確認",
+  "app.version.savedSettings": "保存済みの導入設定",
+  "app.version.reviewSavedSettings": "保存した設定の変更を確認",
   "app.version.update": "更新",
   "app.version.autoTitle": "自動更新",
   "app.version.autoLabel": "新しいバージョンが見つかったら自動で更新する",

@@ -45,10 +45,12 @@ export default function AppVersionSection(props: {
   const [showAllPrevious, setShowAllPrevious] = createSignal(false);
   let previousListRef: HTMLUListElement | undefined;
   const current = () => versionLabel(props.version.current?.ref, props.version.current?.commit);
+  const saved = () => props.version.savedReAdoption;
   // Freshness only reflects a newer commit of the same tracked source ref.
   const updateAvailable = () => props.version.updateAvailable || props.version.stale;
-  const newVersion = () =>
-    props.version.updateAvailable && props.version.latest
+  const newVersion = () => saved()
+    ? versionLabel(saved()?.ref, saved()?.commit)
+    : props.version.updateAvailable && props.version.latest
       ? versionLabel(props.version.latest.ref, props.version.latest.commit)
       : undefined;
   // Previous applied versions, newest first. The current one is not offered.
@@ -109,29 +111,29 @@ export default function AppVersionSection(props: {
       <div class="ap-callout" classList={{ "ap-callout-info": updateAvailable() }} data-testid="app-update">
         <div>
           <strong>
-            {updateAvailable() ? t("app.version.updateAvailable") : t("app.version.checkTitle")}
+            {saved() ? t("app.version.savedSettings") : updateAvailable() ? t("app.version.updateAvailable") : t("app.version.checkTitle")}
           </strong>
           <Show when={newVersion()}>
             {(label) => (
               <p>
-                {t("app.version.newVersion")}{" "}
+                <Show when={!saved()}>{t("app.version.newVersion")}{" "}</Show>
                 <code data-testid="app-new-version">{label()}</code>
               </p>
             )}
           </Show>
-          <Show when={!updateAvailable()}>
+          <Show when={!saved() && !updateAvailable()}>
             <p>{t("app.version.checkHint")}</p>
           </Show>
         </div>
         <Button
-          variant={updateAvailable() ? "primary" : "secondary"}
+          variant={saved() || updateAvailable() ? "primary" : "secondary"}
           type="button"
           icon={<RefreshCw size={16} />}
           busy={props.starting}
           disabled={props.reviewBusy || !props.revisionReady}
-          onClick={() => props.onUpdate()}
+          onClick={() => props.onUpdate(saved()?.ref)}
         >
-          {updateAvailable() ? t("app.version.update") : t("app.version.check")}
+          {saved() ? t("app.version.reviewSavedSettings") : updateAvailable() ? t("app.version.update") : t("app.version.check")}
         </Button>
       </div>
 

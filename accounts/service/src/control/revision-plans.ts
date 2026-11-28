@@ -47,6 +47,7 @@ import {
 } from "./shared.ts";
 import { requireResourceAccess } from "./app-authorization.ts";
 import { declaredRepositoryManifestModulePath } from "./repo-owned-install-config.ts";
+import { readPendingRepositoryReAdoption } from "./install-config-re-adoptions.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_DIAGNOSTIC_CODE = 64;
@@ -488,6 +489,11 @@ function permanentRevisionControllerOutcome(
         message:
           "The initial install review pins a different SourceSnapshot. Apply that Plan before revising.",
       };
+    case "re_adoption_target_changed":
+      return {
+        code: "re_adoption_target_changed",
+        message: "The saved repository settings no longer match the app's source and state.",
+      };
     default:
       break;
   }
@@ -594,6 +600,9 @@ async function advanceRevisionSource(
   operations: ControlPlaneOperations,
 ): Promise<StoredGitRevisionPlan> {
   const identity = await assertRevisionIdentity(plan, operations);
+  if (identity.savedReAdoption) {
+    return await prepareRevisionCompatibility(plan, identity.savedReAdoption);
+  }
   const evidence = await revisionSourceEvidence(plan);
   let sync: SourceSyncRun;
   if (plan.sourceSyncRunId) {
@@ -639,9 +648,17 @@ async function advanceRevisionSource(
     // An intervening sync can give the same Git commit a new Snapshot ID.
     // Analyze this exact Snapshot before offering its inputs, but do not Plan it.
   }
+  return prepareRevisionCompatibility(plan, snapshot, sync.id);
+}
+
+async function prepareRevisionCompatibility(
+  plan: StoredGitRevisionPlan,
+  snapshot: SourceSnapshot,
+  sourceSyncRunId?: string,
+): Promise<StoredGitRevisionPlan> {
   const compatibility = await revisionCompatibilityEvidence(plan, snapshot);
   return progressed(plan, {
-    sourceSyncRunId: sync.id,
+    sourceSyncRunId,
     sourceSnapshotId: snapshot.id,
     compatibilityRequestDigest: compatibility.requestDigest,
     compatibilityCheckRunId: compatibility.runId,
@@ -701,14 +718,18 @@ async function analyzeRevisionCompatibility(
   operations: ControlPlaneOperations,
 ): Promise<StoredGitRevisionPlan> {
   const identity = await assertRevisionIdentity(plan, operations);
-  const snapshot = await sourceSnapshotById(
+  const snapshot = identity.savedReAdoption ?? await sourceSnapshotById(
     operations,
     plan.sourceId,
     plan.sourceSnapshotId!,
   );
-  const sync = await operations.getSourceSyncRun(plan.sourceSyncRunId!);
-  assertSourceSyncMatches(sync, plan, identity.source, await revisionSourceEvidence(plan));
-  assertRevisionSnapshotMatches(snapshot, plan, sync);
+  if (plan.sourceSyncRunId) {
+    const sync = await operations.getSourceSyncRun(plan.sourceSyncRunId);
+    assertSourceSyncMatches(sync, plan, identity.source, await revisionSourceEvidence(plan));
+    assertRevisionSnapshotMatches(snapshot, plan, sync);
+  } else if (!identity.savedReAdoption || snapshot.id !== plan.sourceSnapshotId) {
+    throw permanent("source_snapshot_scope_mismatch", "The revision has no exact saved SourceSnapshot.");
+  }
   const evidence = await revisionCompatibilityEvidence(plan, snapshot);
   if (
     plan.compatibilityRequestDigest !== evidence.requestDigest ||
@@ -824,6 +845,7 @@ interface RevisionIdentity {
   readonly modulePath: string;
   /** The Source revision of the applied state, when the Capsule has one. */
   readonly adopted?: CapsuleAdoptedSourceRevision;
+  readonly savedReAdoption?: SourceSnapshot;
 }
 
 function hasUnadoptedRepositoryModule(identity: RevisionIdentity, snapshot: SourceSnapshot): boolean {
@@ -919,12 +941,25 @@ async function assertRevisionIdentity(
       "The pinned Capsule, Source, state generation, or InstallConfig changed before planning.",
     );
   }
+  const savedReAdoption = await readPendingRepositoryReAdoption(
+    operations, capsule, installConfig, source, capsuleExecutionAuthorityEpoch,
+  );
+  if (savedReAdoption &&
+    (!sameGitName(savedReAdoption.ref, plan.revision.targetRef) ||
+      savedReAdoption.path !== plan.source.path ||
+      (plan.sourceSnapshotId !== undefined && savedReAdoption.id !== plan.sourceSnapshotId))) {
+    throw permanent(
+      "re_adoption_target_changed",
+      "The saved settings review requires the repository snapshot they were adopted from.",
+    );
+  }
   return {
     capsule,
     source,
     installConfig,
     modulePath,
     ...(adoptedSourceRevision ? { adopted: adoptedSourceRevision } : {}),
+    ...(savedReAdoption ? { savedReAdoption } : {}),
   };
 }
 

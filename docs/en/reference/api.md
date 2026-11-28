@@ -655,9 +655,11 @@ authority returns 409 and requires rereading.
 failed revision Plan has one exact saved coordinator link, not authorization or
 re-adoption authority. It differs from the existing pre-Plan preparation/stall
 `progress.revisionPlanId`. Re-adoption removes the stale hint; the existing Run
-`origin.kind=revision/ref` supports normal revision retry. Before review, match
-the new Plan's snapshot/config/state/ref against the selected context. If the
-same branch moves to another commit, do not review/apply the old answers blindly.
+`origin.kind=revision/ref` supports normal revision retry. Until the app applies
+its saved repository settings, `version.savedReAdoption` identifies the ref and
+commit of the reviewed snapshot. The revision coordinator uses that exact
+snapshot when the requested ref matches, even if the branch has moved.
+Review and Apply use the ordinary Plan.
 
 `GET /api/v1/capsules/{capsuleId}/app` returns one view of an installed app.
 The control plane computes `state` and `primaryAction` from the Capsule, this

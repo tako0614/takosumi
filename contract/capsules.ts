@@ -860,6 +860,11 @@ export interface CapsuleAppVersion {
     readonly commit: string;
     readonly fetchedAt: string;
   };
+  /** The exact Git version whose saved repository settings await review. */
+  readonly savedReAdoption?: {
+    readonly ref: string;
+    readonly commit: string;
+  };
   /** True when `latest` names a different commit than `current`. */
   readonly updateAvailable: boolean;
   /**
