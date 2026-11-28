@@ -106,6 +106,16 @@ export default function NotificationDevicesCard() {
               <For each={rows()}>
                 {(pusher) => {
                   const health = () => notificationPusherHealth(pusher);
+                  let removeTriggerRef: HTMLButtonElement | undefined;
+                  let cancelRemoveRef: HTMLButtonElement | undefined;
+                  const openRemoveConfirm = () => {
+                    setConfirming(pusher.id);
+                    requestAnimationFrame(() => cancelRemoveRef?.focus());
+                  };
+                  const cancelRemoveConfirm = () => {
+                    setConfirming(undefined);
+                    requestAnimationFrame(() => removeTriggerRef?.focus());
+                  };
                   return (
                     <li class="acct-row" data-pusher-health={health()}>
                       <div class="acct-row-main">
@@ -149,15 +159,20 @@ export default function NotificationDevicesCard() {
                           when={confirming() === pusher.id}
                           fallback={
                             <Button
+                              ref={removeTriggerRef}
                               variant="ghost"
                               size="sm"
-                              onClick={() => setConfirming(pusher.id)}
+                              onClick={openRemoveConfirm}
                             >
                               {t("account.devices.remove")}
                             </Button>
                           }
                         >
-                          <div class="acct-confirm" role="group">
+                          <div
+                            class="acct-confirm"
+                            role="group"
+                            aria-label={`${t("account.devices.remove")}: ${pusher.device_display_name}`}
+                          >
                             <span>{t("account.devices.removeConsequence")}</span>
                             <Button
                               variant="danger"
@@ -168,9 +183,11 @@ export default function NotificationDevicesCard() {
                               {t("account.devices.removeConfirm")}
                             </Button>
                             <Button
+                              ref={cancelRemoveRef}
                               variant="ghost"
                               size="sm"
-                              onClick={() => setConfirming(undefined)}
+                              disabled={busy()}
+                              onClick={cancelRemoveConfirm}
                             >
                               {t("common.cancel")}
                             </Button>

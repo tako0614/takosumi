@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
+  acknowledgeNotifications,
   attentionCount,
   attentionEvents,
   type FeedEntry,
@@ -58,6 +59,28 @@ describe("attentionCount workspace scoping", () => {
   test("empty feed counts zero", () => {
     expect(attentionCount(undefined, "workspace_a")).toBe(0);
     expect(attentionCount([], "workspace_a")).toBe(0);
+  });
+
+  test("acknowledgeNotifications clears attentionCount via localStorage", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const store = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => store.set(key, value),
+        removeItem: (key: string) => store.delete(key),
+      },
+    });
+    try {
+      expect(attentionCount(feed, "workspace_a")).toBe(1);
+      acknowledgeNotifications(feed);
+      expect(attentionCount(feed, "workspace_a")).toBe(0);
+      expect(attentionCount(feed)).toBe(0);
+    } finally {
+      if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+    }
   });
 });
 

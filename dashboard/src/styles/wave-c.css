@@ -115,6 +115,13 @@
   width: fit-content;
   cursor: pointer;
 }
+@media (pointer: coarse) {
+  .wc-inline-details > summary,
+  .wc-conn-test-detail > summary {
+    min-height: var(--tg-control-height);
+    padding-block: 10px;
+  }
+}
 .wc-conn-detail-line {
   display: block;
   margin-top: 3px;

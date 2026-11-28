@@ -698,6 +698,10 @@
   overflow-x: hidden;
   overflow-y: auto;
 }
+.app-shell-content .auth-page {
+  min-height: 60vh;
+  padding: var(--tg-s-6) 0;
+}
 .auth-page::before {
   display: none;
 }

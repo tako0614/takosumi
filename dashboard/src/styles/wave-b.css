@@ -99,6 +99,13 @@
   color: var(--tg-fg-muted);
   padding: var(--tg-s-2) 0;
 }
+@media (pointer: coarse) {
+  .wb-disclosure > summary,
+  .wb-inline-details > summary {
+    min-height: var(--tg-control-height);
+    padding-block: 10px;
+  }
+}
 .wb-disclosure[open] > summary {
   color: var(--tg-fg-muted);
   margin-bottom: var(--tg-s-3);
@@ -461,7 +468,7 @@
       color-mix(in srgb, var(--tg-accent) 14%, transparent),
       transparent 34%
     ),
-    var(--tg-bg-elevated);
+    var(--tg-bg-elev);
 }
 .wb-billing-wallet-main {
   display: flex;
@@ -569,6 +576,9 @@
 .wb-billing-amount span {
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-xs);
+}
+.wb-billing-amount.tg-btn-primary span {
+  color: var(--tg-accent-fg);
 }
 .wb-billing-tax-note {
   margin: 0;

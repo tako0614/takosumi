@@ -28,6 +28,8 @@ interface Props {
   children: (session: Accessor<SessionRecord>) => JSX.Element;
   loadingFallback?: JSX.Element;
   transportRecoveryLayout?: (body: JSX.Element) => JSX.Element;
+  /** True when already mounted inside AppShell's `<main>` landmark. */
+  insideMain?: boolean;
 }
 
 type AuthState = Exclude<SessionState["kind"], "loading"> | "loading";
@@ -160,33 +162,42 @@ export default function AuthGuard(props: Props) {
         ))}
       </Match>
       <Match when={state() === "maintenance" || state() === "error"}>
-        {withRecoveryLayout(<main class="auth-page">
-          <div class="sign-in-panel notfound-panel">
-            <h1 class="sign-in-title">
-              {canSignInAgain() ? t("auth.sessionCouldNotVerify") : state() === "maintenance"
-                ? t("auth.sessionMaintenanceTitle")
-                : t("errorBoundary.title")}
-            </h1>
-            <p class="sign-in-sub">
-              {canSignInAgain() ? t("auth.sessionSignInAgainHint") : state() === "maintenance"
-                ? t("auth.sessionMaintenanceBody")
-                : t("errorBoundary.body")}
-            </p>
-            <Show when={canSignInAgain()}>
-              <Button variant="secondary" type="button" onClick={() => redirectToSignIn(true)}>
-                {t("auth.sessionSignInAgain")}
+        {(() => {
+          const panel = (
+            <div class="sign-in-panel notfound-panel">
+              <h1 class="sign-in-title">
+                {canSignInAgain() ? t("auth.sessionCouldNotVerify") : state() === "maintenance"
+                  ? t("auth.sessionMaintenanceTitle")
+                  : t("errorBoundary.title")}
+              </h1>
+              <p class="sign-in-sub">
+                {canSignInAgain() ? t("auth.sessionSignInAgainHint") : state() === "maintenance"
+                  ? t("auth.sessionMaintenanceBody")
+                  : t("errorBoundary.body")}
+              </p>
+              <Show when={canSignInAgain()}>
+                <Button variant="secondary" type="button" onClick={() => redirectToSignIn(true)}>
+                  {t("auth.sessionSignInAgain")}
+                </Button>
+              </Show>
+              <Button variant="primary" type="button" onClick={retrySession}>
+                {t("common.retry")}
               </Button>
-            </Show>
-            <Button variant="primary" type="button" onClick={retrySession}>
-              {t("common.retry")}
-            </Button>
-            <Show when={failure()?.status && failure()!.status > 0}>
-              <span class="sr-only" aria-live="polite">
-                {failure()!.status}
-              </span>
-            </Show>
-          </div>
-        </main>)}
+              <Show when={failure()?.status && failure()!.status > 0}>
+                <span class="sr-only" aria-live="polite">
+                  {failure()!.status}
+                </span>
+              </Show>
+            </div>
+          );
+          return withRecoveryLayout(
+            props.insideMain ? (
+              <div class="auth-page">{panel}</div>
+            ) : (
+              <main class="auth-page">{panel}</main>
+            ),
+          );
+        })()}
       </Match>
       <Match when={state() === "authenticated" && session()}>
         {(s) => (

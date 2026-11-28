@@ -29,6 +29,9 @@ describe("AuthGuard session failure boundary", () => {
     expect(source).toContain("onSessionStateChange");
     expect(source).toContain('state() === "maintenance" || state() === "error"');
     expect(source).toContain('<main class="auth-page">');
+    expect(source).toContain('<div class="auth-page">');
+    expect(source).toContain("insideMain?: boolean;");
+    expect(source).toContain("props.insideMain ?");
     expect(source).toContain('<div class="sign-in-panel notfound-panel">');
     expect(source).toContain('t("auth.sessionMaintenanceTitle")');
     expect(source).toContain('t("errorBoundary.title")');

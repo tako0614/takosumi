@@ -61,7 +61,7 @@ describe("dashboard form, spinner, title, and touch-target accessibility", () =>
     const shellCss = read("styles/shell.css");
     expect(appListSource).toContain('class="av-search-empty-wrap"');
     expect(appListSource).toContain('t("apps.showAllApps")');
-    expect(appListSource).toContain("!event.isComposing && event.keyCode !== 229");
+    expect(appListSource).toContain("!isImeComposing(event)");
     expect(runViewSource).toContain("function DiagnosticPre(");
     expect(runViewSource).toContain('class="wa-pre-copy"');
     expect(runViewSource).toContain('parts.join(" · ")');
@@ -129,5 +129,56 @@ describe("dashboard form, spinner, title, and touch-target accessibility", () =>
     expect(accountViewsCss).toMatch(/\.tg-settings-tip > summary\s*\{[^}]*min-width:\s*var\(--tg-control-height\);/u);
     expect(componentsCss).toMatch(/@media \(pointer: coarse\)\s*\{[^@]*\.tg-checkbox\s*\{\s*min-height:\s*var\(--tg-control-height\);/u);
     expect(componentsCss).toMatch(/@media \(pointer: coarse\)\s*\{[^@]*\.tg-toast-dismiss\s*\{\s*min-width:\s*var\(--tg-control-height\);\s*min-height:\s*var\(--tg-control-height\);/u);
+  });
+
+  test("Wave 4: inline confirm focus/labels, empty-state cancel, nested main guard, reactive notifications ack, shared IME helper, touch targets, and CSS tokens", () => {
+    const apiKeysSource = read("views/account/components/TakosumiApiKeysCard.tsx");
+    const devicesSource = read("views/account/components/NotificationDevicesCard.tsx");
+    const connectionsTabSource = read("views/workspace/tabs/ConnectionsTab.tsx");
+    const pageSource = read("views/account/components/auth/Page.tsx");
+    const authGuardSource = read("views/account/components/auth/AuthGuard.tsx");
+    const storeBrowserSource = read("views/store/StoreBrowser.tsx");
+    const notificationsLibSource = read("lib/notifications.ts");
+    const notificationsViewSource = read("views/notifications/NotificationsView.tsx");
+    const baseCss = read("styles/base.css");
+    const waveBCss = read("styles/wave-b.css");
+    const waveCCss = read("styles/wave-c.css");
+    const appViewsCss = read("styles/app-views.css");
+
+    // Inline confirms hand focus to Cancel on open, restore to trigger on
+    // cancel, disable Cancel while busy, and give role="group" an aria-label.
+    expect(apiKeysSource).toContain("requestAnimationFrame(() => cancelRevokeRef?.focus())");
+    expect(apiKeysSource).toContain("requestAnimationFrame(() => revokeTriggerRef?.focus())");
+    expect(apiKeysSource).toContain('aria-label={`${t("account.apiKeys.revoke")}: ${key.name}`}');
+    expect(devicesSource).toContain("requestAnimationFrame(() => cancelRemoveRef?.focus())");
+    expect(devicesSource).toContain("requestAnimationFrame(() => removeTriggerRef?.focus())");
+    expect(devicesSource).toContain('aria-label={`${t("account.devices.remove")}: ${pusher.device_display_name}`}');
+
+    // Empty-state connection creation can be closed back to EmptyState.
+    expect(connectionsTabSource).toContain("!props.embedded || hasProviderConnections()");
+
+    // AuthGuard inside Page.tsx renders <div> instead of nested <main>.
+    expect(pageSource).toContain("<AuthGuard insideMain>");
+    expect(authGuardSource).toContain('props.insideMain ? (\n              <div class="auth-page">{panel}</div>');
+
+    // Remaining IME checks use the shared isImeComposing helper.
+    expect(appListSource).toContain("isImeComposing(event)");
+    expect(appListSource).not.toContain("keyCode !== 229");
+    expect(storeBrowserSource.match(/!isImeComposing\(e\)/gu)?.length).toBe(3);
+    expect(storeBrowserSource).not.toContain("keyCode !== 229");
+
+    // Notifications page reacts to mark-all-read and preserves focus + SR announcement.
+    expect(notificationsLibSource).toContain("void acknowledgedVersion();");
+    expect(notificationsLibSource).toContain("setAcknowledgedVersion((n) => n + 1);");
+    expect(notificationsViewSource).toContain('t("notif.attention", { n: 0 })');
+    expect(notificationsViewSource).toContain('document.getElementById("main")?.focus()');
+
+    // Disclosure summaries and skip link reach 44px on touch; undefined tokens are fixed.
+    expect(baseCss).toMatch(/\.skip-link\s*\{[^}]*min-height:\s*var\(--tg-control-height\);/u);
+    expect(waveBCss).toMatch(/@media \(pointer: coarse\)\s*\{[^}]*\.wb-disclosure > summary,\s*\.wb-inline-details > summary/u);
+    expect(waveCCss).toMatch(/@media \(pointer: coarse\)\s*\{[^}]*\.wc-inline-details > summary,\s*\.wc-conn-test-detail > summary/u);
+    expect(waveBCss).not.toContain("var(--tg-bg-elevated)");
+    expect(waveBCss).toContain(".wb-billing-amount.tg-btn-primary span");
+    expect(appViewsCss).not.toContain("var(--tg-fs-md)");
   });
 });

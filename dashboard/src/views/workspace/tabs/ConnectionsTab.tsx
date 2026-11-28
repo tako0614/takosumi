@@ -763,7 +763,9 @@ export default function ConnectionsTab(props: {
         onCreated={afterConnectionCreated}
         verifyConnection={verifyCreatedConnection}
         onCancel={
-          hasProviderConnections() ? closeCreateForm : undefined
+          !props.embedded || hasProviderConnections()
+            ? closeCreateForm
+            : undefined
         }
       />
 

@@ -269,7 +269,10 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setCreated(undefined)}
+                  onClick={() => {
+                    setCreated(undefined);
+                    requestAnimationFrame(() => createTriggerRef?.focus());
+                  }}
                 >
                   {t("common.dismiss")}
                 </Button>
@@ -423,6 +426,16 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
               <For each={keyRows()}>
                 {(key) => {
                   const status = () => apiKeyStatus(key);
+                  let revokeTriggerRef: HTMLButtonElement | undefined;
+                  let cancelRevokeRef: HTMLButtonElement | undefined;
+                  const openRevokeConfirm = () => {
+                    setConfirmingRevoke(key.id);
+                    requestAnimationFrame(() => cancelRevokeRef?.focus());
+                  };
+                  const cancelRevokeConfirm = () => {
+                    setConfirmingRevoke(undefined);
+                    requestAnimationFrame(() => revokeTriggerRef?.focus());
+                  };
                   return (
                     <li class="acct-row">
                       <div class="acct-row-main">
@@ -474,15 +487,20 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
                             when={confirmingRevoke() === key.id}
                             fallback={
                               <Button
+                                ref={revokeTriggerRef}
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setConfirmingRevoke(key.id)}
+                                onClick={openRevokeConfirm}
                               >
                                 {t("account.apiKeys.revoke")}
                               </Button>
                             }
                           >
-                            <div class="acct-confirm" role="group">
+                            <div
+                              class="acct-confirm"
+                              role="group"
+                              aria-label={`${t("account.apiKeys.revoke")}: ${key.name}`}
+                            >
                               <span>{t("account.apiKeys.revokeConsequence")}</span>
                               <Button
                                 variant="danger"
@@ -493,9 +511,11 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
                                 {t("account.apiKeys.revokeConfirm")}
                               </Button>
                               <Button
+                                ref={cancelRevokeRef}
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setConfirmingRevoke(undefined)}
+                                disabled={busy()}
+                                onClick={cancelRevokeConfirm}
                               >
                                 {t("common.cancel")}
                               </Button>
