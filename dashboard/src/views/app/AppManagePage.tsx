@@ -1009,7 +1009,7 @@ export default function AppManagePage(props: {
     return managed() && typeof ref === "string" && ref.trim().length > 0;
   };
   const createRevisionRun = async (requested?: string, isCurrent?: () => boolean): Promise<string> => {
-    const ref = (requested ?? currentRef())?.trim();
+    const ref = (requested ?? app()?.version.savedReAdoption?.ref ?? currentRef())?.trim();
     if (!managed() || !ref) {
       throw new ControlApiError(
         409,

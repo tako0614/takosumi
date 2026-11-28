@@ -662,6 +662,9 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 `uninstall.impact.usedBy` は、削除の影響を受ける利用側を示します。提供元を削除しても利用側の
 アプリは残り、他の提供元へは自動で切り替えません。秘密の値、Output の値、画面の起動 URL
 以外の Interface 入力は含みません。
+リポジトリの導入設定を再採用して未適用の場合、`version.savedReAdoption` が保存した
+ref とコミットを示します。その ref の変更確認は、ブランチが進んだ場合も保存済みの
+Snapshot に対して作成します。適用は通常のPlanの確認後に行います。
 接続を選び直す手動削除の対象は `uninstall.recoveryConnectionIds` で確認できます。現在の
 StateVersion を作った適用済みプランの Provider に対応する保存済み接続 ID だけが入ります。
 空配列は対象を確定できなかった場合も含みます。交換先は破棄プラン作成と Apply 時に検証します。

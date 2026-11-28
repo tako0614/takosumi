@@ -13,6 +13,7 @@ import { readCommittedApplyReceiptCommand, readCommittedApplyReceiptProbeCommand
  * source surfaces. Method bodies are moved byte-for-byte.
  */
 import { scheduledUninstallAuthorizationFailure, UNINSTALL_AUTHORIZATION_REASONS } from "../../capsules/uninstall_authorization.ts";
+import { pendingRepositoryReAdoptionReceipt } from "../../capsules/repository_re_adoption.ts";
 import {
   planScopeSelectors,
   type JsonValue,
@@ -2978,6 +2979,21 @@ export class RunEngine {
           `Capsule ${capsuleId}`,
       );
     }
+    const pendingReAdoption = !destroy && internal.origin?.kind !== "rollback"
+      ? await pendingRepositoryReAdoptionReceipt(capsule, installConfig) : undefined;
+    if (pendingReAdoption && (
+      internal.autoApplyRequested ||
+      pendingReAdoption.previousExecutionAuthorityEpoch + 1 !== compatibilityExecutionAuthorityEpoch ||
+      installConfig.workspaceId !== capsule.workspaceId ||
+      pendingReAdoption.sourceSnapshotId !== installConfig.internal?.sourceSnapshotId ||
+      (internal.sourceSnapshotId && internal.sourceSnapshotId !== pendingReAdoption.sourceSnapshotId)
+    )) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Review the saved repository settings against their exact SourceSnapshot before applying.",
+        { reason: "re_adoption_target_changed" },
+      );
+    }
     const runnerProfileId = internal.runnerProfileId ?? installConfig.runnerId;
     const runnerProfile = await this.#requireRunnerProfile(
       runnerProfileId ?? this.#defaultRunnerProfileId,
@@ -3209,9 +3225,8 @@ export class RunEngine {
         "accepted" &&
       !capsule.currentStateVersionId &&
       !destroy;
-    const repositoryInstallUxSnapshotId = acceptedRepositoryInstallUx
-      ? installConfig.internal?.sourceSnapshotId
-      : undefined;
+    const repositoryInstallUxSnapshotId = pendingReAdoption?.sourceSnapshotId ??
+      (acceptedRepositoryInstallUx ? installConfig.internal?.sourceSnapshotId : undefined);
     if (acceptedRepositoryInstallUx && !repositoryInstallUxSnapshotId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -5204,6 +5219,21 @@ export class RunEngine {
       await this.#requireScheduledUninstallAuthorization(plannedCapsule);
     }
     assertStateGenerationMatches(planRun, plannedCapsule);
+    // Plans saved before repository re-adoption was pinned also need this
+    // check. An explicit Apply can only use the source of the saved settings.
+    if (plannedCapsule && planRun.operation === "update" && planRun.origin?.kind !== "rollback") {
+      const config = await this.#store.getInstallConfig(plannedCapsule.installConfigId);
+      const pending = config && await pendingRepositoryReAdoptionReceipt(plannedCapsule, config);
+      if (pending && (internal.requireAutoUpdate ||
+        pending.sourceSnapshotId !== planRun.sourceSnapshotId ||
+        pending.previousExecutionAuthorityEpoch + 1 !== planRun.capsuleExecutionAuthorityEpoch)) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "Review the saved repository settings against their exact SourceSnapshot before applying.",
+          { reason: "re_adoption_target_changed" },
+        );
+      }
+    }
     // Preserve the authority validated against this Plan through all later
     // asynchronous preparation. Recapturing the Capsule at insertion would
     // authorize a stale Plan against its replacement or newer state.

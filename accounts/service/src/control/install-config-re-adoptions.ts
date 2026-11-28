@@ -6,6 +6,7 @@ import type {
   InstallConfig,
   InstallConfigCommittedPostApplyRecoveryProof,
 } from "takosumi-contract/install-configs";
+import { normalizeInstallConfigSourceUrl } from "takosumi-contract/install-configs";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
@@ -35,6 +36,7 @@ import {
 } from "./shared.ts";
 import { isPlainJsonObject, modulePathValue } from "./parse.ts";
 import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/default_install_config.ts";
+import { pendingRepositoryReAdoptionReceipt, reAdoptionTargetInstallConfigId } from "../../../../core/domains/capsules/repository_re_adoption.ts";
 import {
   adoptRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
@@ -793,26 +795,39 @@ export async function capsuleInstallConfigReAdoptionAuthoritySnapshot(
   };
 }
 
-/**
- * Deterministic id of the re-adoption successor for one idempotency key. The
- * scope slot holds the Capsule's frozen `scopeRef` under the historical
- * `workspaceId` key, so a retry finds the same successor after Workspace is
- * removed.
- */
-export async function reAdoptionTargetInstallConfigId(input: {
-  readonly scopeRef: string;
-  readonly capsuleId: string;
-  readonly actorSubject: string;
-  readonly idempotencyKeyHash: string;
-}): Promise<string> {
-  const digest = await stableJsonDigest({
-    kind: "capsule_install_config_re_adoption_v1",
-    workspaceId: input.scopeRef,
-    capsuleId: input.capsuleId,
-    actorSubject: input.actorSubject,
-    idempotencyKeyHash: input.idempotencyKeyHash,
+export { reAdoptionTargetInstallConfigId };
+
+/** The exact source of a repository re-adoption that still awaits its Apply. */
+export async function readPendingRepositoryReAdoption(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+  config: InstallConfig,
+  source: Source,
+  executionEpoch?: number,
+): Promise<SourceSnapshot | undefined> {
+  const receipt = await pendingRepositoryReAdoptionReceipt(capsule, config);
+  if (!receipt) return undefined;
+
+  const epoch = executionEpoch ?? await operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id);
+  const snapshot = await operations.getSourceSnapshot(receipt.sourceSnapshotId).catch((error: unknown) => {
+    if (error instanceof OpenTofuControllerError && error.code === "not_found") return undefined;
+    throw error;
   });
-  return `icfg_${digest.replace(/^sha256:/u, "").slice(0, 16)}`;
+  if (!snapshot || config.workspaceId !== capsule.workspaceId ||
+    receipt.previousExecutionAuthorityEpoch + 1 !== epoch || !await hasValidDerivedTargetSeal(config) ||
+    capsule.status === "uninstalled" || capsule.status === "disabled" || capsule.status === "destroyed" ||
+    config.internal?.sourceSnapshotId !== receipt.sourceSnapshotId ||
+    source.id !== capsule.sourceId || source.workspaceId !== capsule.workspaceId || source.status !== "active" ||
+    snapshot.id !== receipt.sourceSnapshotId || snapshot.origin !== "git" ||
+    snapshot.workspaceId !== capsule.workspaceId || snapshot.sourceId !== source.id ||
+    normalizeInstallConfigSourceUrl(snapshot.url) !== normalizeInstallConfigSourceUrl(source.url)) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "The saved repository settings no longer match the app's source and state.",
+      { reason: "re_adoption_target_changed" },
+    );
+  }
+  return snapshot;
 }
 
 function parseRequest(

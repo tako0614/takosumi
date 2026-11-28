@@ -21,6 +21,7 @@ import {
   sealInstallConfigSuccessor,
 } from "../../../../accounts/service/src/control/install-config-re-adoptions.ts";
 import type { CapsuleConfigurationPlanResponse } from "takosumi-contract";
+import type { CapsuleAppResponse } from "takosumi-contract/capsules";
 import type {
   RepositoryInstallUxInput,
   RepositoryManifestDocument,
@@ -7014,6 +7015,51 @@ test("re-adoption uses a sealed exact post-apply receipt without promoting runti
   expect(publicTargetJson).not.toContain(recovery.failedApply.id);
   expect(publicTargetJson).not.toContain(recovery.stateVersion.stateRef);
   expect(publicTargetJson).not.toContain(recovery.output.rawArtifactRef);
+});
+
+test("a saved re-adoption can be reviewed when an older Plan used a different snapshot", async () => {
+  const fixture = await reAdoptionRouteFixture("pinned-review");
+  await seedProviderConnections(fixture.deployStore, fixture.seeded.capsule);
+  await applyRevisedSourceSnapshot(fixture, "pinned-review");
+  const capsuleId = fixture.seeded.capsule.id;
+  const authority = {
+    operations: fixture.operations, store: fixture.accountStore, cookie: fixture.cookie,
+  };
+  const path = `/api/v1/capsules/${capsuleId}`;
+  const previousPlanId = (await fixture.operations.listRuns(fixture.seeded.workspace.id))
+    .find((run) => run.type === "plan")!.id;
+  const { planRun: previousPlan } = await fixture.operations.getPlanRun(previousPlanId);
+  await controlJson({
+    ...authority, method: "POST", path: `${path}/install-config-re-adoptions`,
+    headers: { "idempotency-key": "re-adopt-pinned-review-v1" },
+    body: {
+      ...reAdoptionBody(fixture, await readReAdoptionGuard(fixture)),
+      reviewedUserVariables: { public_url: TAKOS_PUBLIC_ORIGIN },
+    },
+  }, 200);
+  const capsule = await fixture.operations.capsules.getCapsule(capsuleId);
+  const legacyPlanId = "plan_pinned_review_wrong_snapshot";
+  const timestamp = Date.now() + 1;
+  await fixture.deployStore.putPlanRun({
+    ...previousPlan, id: legacyPlanId, operation: "update", appliedApplyRunId: undefined,
+    capsuleCurrentStateVersionId: capsule.currentStateVersionId,
+    capsuleExecutionAuthorityEpoch: await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(capsuleId),
+    baseStateGeneration: capsule.currentStateGeneration, createdAt: timestamp, updatedAt: timestamp,
+  });
+
+  const { app } = await controlJson<CapsuleAppResponse>({
+    ...authority, method: "GET", path: `${path}/app`,
+  }, 200);
+  expect(app.latestRun?.id).toBe(legacyPlanId);
+  expect(app.progress.review).toBeUndefined();
+  expect(app.version.savedReAdoption).toEqual({
+    ref: fixture.seeded.snapshot.ref, commit: fixture.seeded.snapshot.resolvedCommit,
+  });
+  const refused = await controlJson<{ error: { details: { reason: string } } }>({
+    ...authority, method: "POST", path: `/api/v1/runs/${legacyPlanId}/apply`,
+  }, 409);
+  expect(refused.error.details.reason).toBe("re_adoption_target_changed");
+  expect(fixture.runner.applyJobs).toHaveLength(1);
 });
 
 test("re-adoption guard becomes stale when an exact recovery row drifts", async () => {
