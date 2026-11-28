@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createCapsuleConfigurationPlan, getCapsuleConfigurationContext } from "../../../../dashboard/src/lib/control-api.ts";
+import { createCapsuleConfigurationPlan, getCapsuleConfigurationContext, resumeCapsuleConfigurationPlan } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -113,6 +113,28 @@ describe("Capsule Configuration Plan client", () => {
     await expect(createCapsuleConfigurationPlan("cap_1", request, "same"))
       .rejects.toMatchObject({ code: "invalid_configuration_plan_response" });
     expect(posts).toBe(1);
+  });
+
+  test("resuming settings preserves a definite conflict and treats an incomplete one as unconfirmed", async () => {
+    const calls: RequestInit[] = [];
+    const replies = [
+      Response.json({ error: { code: "failed_precondition", message: "Configuration changed.", details: { reason: "authority_changed" } } }, { status: 409 }),
+      new Response('{"error":', { status: 409, headers: { "content-type": "application/json" } }),
+    ];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("/api/v1/capsules/cap_1/configuration-plans");
+      calls.push(init!);
+      return replies.shift()!;
+    }) as typeof fetch;
+    const resume = { installConfigId: "config_2", authorityGuard: `sha256:${"a".repeat(64)}` };
+    await expect(resumeCapsuleConfigurationPlan("cap_1", resume)).rejects.toMatchObject({
+      status: 409, code: "failed_precondition", reason: "authority_changed", isIndeterminate: false,
+    });
+    await expect(resumeCapsuleConfigurationPlan("cap_1", resume)).rejects.toMatchObject({
+      operation: "configuration_plan", isIndeterminate: true,
+    });
+    expect(calls.map(({ method, body }) => ({ method, body: JSON.parse(String(body)) })))
+      .toEqual([{ method: "POST", body: { resume } }, { method: "POST", body: { resume } }]);
   });
 
   test("ignores a 401 from a configuration context read whose view retired", async () => {

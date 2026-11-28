@@ -9,7 +9,7 @@
  * reviewed in place and applies only from the explicit approval click.
  * `/apps/:id` is the canonical URL; older app URLs redirect there.
  */
-import { type BrowserContext, expect, test, type Page } from "@playwright/test";
+import { type BrowserContext, expect, test, type Page, type Route } from "@playwright/test";
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 import reAdoptionCoreSeam from "../fixtures/re-adoption-core-seam.json" with { type: "json" };
 import {
@@ -1778,17 +1778,22 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       ["missing", "leaves nothing to approve without a saved Plan"],
       ["saved-timeout", "reads back the saved settings and reopens the same Plan"],
       ["prepared-timeout", "resumes a saved configuration whose Plan has not been created"],
+      ["stalled-response", "reopens the saved Plan when the browser receives no response"],
+      ["incomplete-conflict", "reopens the saved Plan after an unreadable 409 response"],
       ["competing", "does not offer a replay when another Plan is pending and only the guard changed"],
       ["unrelated", "keeps the draft after applying a different Plan with the same values"],
     ] as const) test(
       `a lost settings response ${title}`,
       async ({ page }) => {
         const preparedOnly = outcome === "prepared-timeout";
+        const stalledResponse = outcome === "stalled-response";
+        const incompleteConflict = outcome === "incomplete-conflict";
         const planSaveTimeout = outcome === "saved-timeout" || preparedOnly;
         const saved = outcome !== "missing" && !preparedOnly;
         const rebound = outcome !== "missing" && outcome !== "competing";
         const retryExact = outcome === "matching" || planSaveTimeout;
         let planSaved = saved;
+        if (stalledResponse) await page.clock.install();
         await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
         const errors = pageErrors(page);
         const now = "2026-10-01T00:00:00.000Z";
@@ -1810,6 +1815,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         let submitted = false;
         let applied = false;
         let appReadsAfterSubmit = 0;
+        let stalled: Route | undefined;
         let originalRequest: { readonly body: unknown; readonly key: string } | undefined;
         await page.route("**/api/v1/**", async (route) => {
           const request = route.request();
@@ -1860,6 +1866,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             }
             originalRequest = { body, key };
             submitted = true;
+            if (stalledResponse) {
+              stalled = route;
+              return;
+            }
+            if (incompleteConflict) {
+              return route.fulfill({ status: 409, contentType: "application/json", body: '{"error":' });
+            }
             if (planSaveTimeout) return route.fulfill({ status: 409, json: { error: {
               code: "failed_precondition", message: "Timed out saving the Plan.",
               details: { reason: "capsule_plan_creation_timeout", stage: "plan_run_create", timeoutMs: 25_000 },
@@ -1889,14 +1902,20 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         const region = settings.getByRole("textbox", { name: /^region/iu });
         const start = settings.getByRole("button", { name: "Review", exact: true });
         await region.fill("changed");
-        const lost = page.waitForResponse((response) =>
-          response.url().endsWith(planPath) && response.status() === (planSaveTimeout ? 409 : 502));
+        const lost = stalledResponse ? undefined : page.waitForResponse((response) =>
+          response.url().endsWith(planPath) && response.status() === (planSaveTimeout || incompleteConflict ? 409 : 502));
         const contextReadback = page.waitForResponse((response) =>
           submitted && new URL(response.url()).pathname === appPath && response.status() === 200);
         await start.click();
-        await lost;
+        if (stalledResponse) {
+          await expect.poll(() => Boolean(stalled)).toBe(true);
+          await page.clock.fastForward(30_001);
+        } else {
+          await lost;
+        }
         await expect.poll(() => appReadsAfterSubmit).toBe(1);
         await contextReadback;
+        await stalled?.abort("failed").catch(() => undefined);
         const waiting = page.locator('[data-problem="review-waiting"]');
         if (saved || preparedOnly) {
           if (preparedOnly) {
