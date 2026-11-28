@@ -760,7 +760,11 @@ test("only the selected staging base view 503 owns the failure phase header, nev
 });
 
 test("base view timeout remains finite, traced and single-dispatch at 120 seconds", async () => {
-  for (const value of [request(), post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" })]) {
+  const query = "?workspaceId=ws_selected";
+  const browserForm = post(root + query + "&lang=ja", "workspaceId=ws_selected", {
+    accept: "text/html", "content-type": "application/x-www-form-urlencoded",
+  });
+  for (const value of [request(), post(root + query, { workspaceId: "ws_selected" }), browserForm]) {
     const f = fixture();
     let dispatched = 0;
     let release!: (value: Response) => void;
@@ -786,6 +790,12 @@ test("base view timeout remains finite, traced and single-dispatch at 120 second
       await Promise.resolve();
       expect(dispatched).toBe(1);
       expect(result.status).toBe(503);
+      if (value === browserForm) {
+        expect(result.headers.get("content-language")).toBe("ja");
+        expect(await result.text()).toContain(`href="${root}${query}&amp;lang=ja"`);
+      } else {
+        expect(await result.json()).toEqual({ error: "billing_unavailable" });
+      }
     } finally {
       globalThis.setTimeout = original;
     }
@@ -898,6 +908,78 @@ test("base POST gives the Console confirmation the same language as the billing 
     expect(result.headers.get("content-language")).toBe(expected);
     expect(html).toContain(`<a href="${destination}" referrerpolicy="no-referrer">${labels[expected]}</a>`);
   }
+});
+
+test("an unconfirmed browser view POST offers one GET for the same Workspace and language", async () => {
+  const query = "?workspaceId=ws_selected";
+  for (const [phase, languageQuery, expected] of [
+    ["dispatch-rejected", "&lang=ja", "ja"],
+    ["dispatch-nonresponse", "", "en"],
+  ] as const) {
+    const f = fixture();
+    const dispatched: Request[] = [];
+    f.rpc.fetchWorkspaceDashboard = async (request) => {
+      dispatched.push(request);
+      if (phase === "dispatch-rejected") throw new Error("synthetic unavailable dispatch");
+      return undefined as unknown as Response;
+    };
+    const { result, calls } = await captureFailurePhase(() => fetch(post(root + query + languageQuery, "workspaceId=ws_selected", {
+      accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+      "content-type": "application/x-www-form-urlencoded",
+      "accept-language": "en-US,ja;q=0.2",
+    }), f.env));
+
+    expect(result.status).toBe(503);
+    expect(result.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(result.headers.get("content-language")).toBe(expected);
+    expect(result.headers.get("cache-control")).toBe("private, no-store");
+    expect(result.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(result.headers.get("content-security-policy")).toContain("form-action 'none'");
+    expect(result.headers.get("location")).toBeNull();
+    expect(result.headers.get("x-takosumi-failure-phase")).toBe(phase);
+    expect(calls).toEqual([[failurePhaseMarker, phase, f.seen.auth[0]!.headers.get("x-takosumi-internal-billing-trace")]]);
+    const html = await result.text();
+    expect(html).toContain(`<html lang="${expected}">`);
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain("<script");
+    expect([...html.matchAll(/href="([^"]+)"/gu)].map((match) => match[1])).toEqual([
+      `${root}${query}&amp;lang=${expected}`,
+    ]);
+    expect(dispatched.map((request) => [request.method, new URL(request.url).search])).toEqual([["POST", query]]);
+  }
+});
+
+test("browser billing recovery leaves API requests, financial forms and known Hosted responses intact", async () => {
+  const query = "?workspaceId=ws_selected";
+  const form = "workspaceId=ws_selected";
+  const browserHeaders = { accept: "text/html", "content-type": "application/x-www-form-urlencoded" };
+  for (const value of [
+    request(root + query, { headers: { accept: "text/html" } }),
+    post(root + query, { workspaceId: "ws_selected" }, { accept: "text/html" }),
+    post(root + query, form, { ...browserHeaders, accept: "application/json" }),
+    post(root + "/subscription" + query, new URLSearchParams(start).toString(), browserHeaders),
+  ]) {
+    const f = fixture();
+    f.rpc.fetchWorkspaceDashboard = async () => { throw new Error("synthetic unavailable dispatch"); };
+    const { result } = await captureFailurePhase(() => fetch(value, f.env));
+    expect(result.status).toBe(503);
+    expect(await result.json()).toEqual({ error: "billing_unavailable" });
+  }
+
+  const beforeDispatch = fixture();
+  beforeDispatch.rpc.authenticateSharedAuth = async () => ({ kind: "unavailable" });
+  const denied = await captureFailurePhase(() => fetch(post(root + query, form, browserHeaders), beforeDispatch.env));
+  expect(denied.result.headers.get("x-takosumi-failure-phase")).toBe("auth-unavailable");
+  expect(await denied.result.json()).toEqual({ error: "billing_unavailable" });
+  expect(beforeDispatch.seen.dashboard).toHaveLength(0);
+
+  const known = fixture();
+  const selector = { error: "billing_capture_unknown", continuationRef: "view_original" };
+  known.rpc.fetchWorkspaceDashboard = async () => Response.json(selector, { status: 503 });
+  const { result } = await captureFailurePhase(() => fetch(post(root + query + "&lang=ja", form, browserHeaders), known.env));
+  expect(result.status).toBe(503);
+  expect(result.headers.get("x-takosumi-failure-phase")).toBe("receiver-returned503");
+  expect(await result.json()).toEqual(selector);
 });
 
 test("base POST refuses malformed or non-HTTPS receiver navigation without exposing it", async () => {
