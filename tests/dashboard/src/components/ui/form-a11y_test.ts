@@ -146,13 +146,18 @@ describe("dashboard form, spinner, title, and touch-target accessibility", () =>
     const appViewsCss = read("styles/app-views.css");
 
     // Inline confirms hand focus to Cancel on open, restore to trigger on
-    // cancel, disable Cancel while busy, and give role="group" an aria-label.
+    // cancel, disable Cancel and sibling triggers while busy, restore focus
+    // after confirm completes, and give role="group" an aria-label.
     expect(apiKeysSource).toContain("requestAnimationFrame(() => cancelRevokeRef?.focus())");
     expect(apiKeysSource).toContain("requestAnimationFrame(() => revokeTriggerRef?.focus())");
     expect(apiKeysSource).toContain('aria-label={`${t("account.apiKeys.revoke")}: ${key.name}`}');
+    expect(apiKeysSource.match(/disabled=\{busy\(\)\}/gu)?.length).toBeGreaterThanOrEqual(2);
+    expect(apiKeysSource).toContain("createTriggerRef?.isConnected");
     expect(devicesSource).toContain("requestAnimationFrame(() => cancelRemoveRef?.focus())");
     expect(devicesSource).toContain("requestAnimationFrame(() => removeTriggerRef?.focus())");
     expect(devicesSource).toContain('aria-label={`${t("account.devices.remove")}: ${pusher.device_display_name}`}');
+    expect(devicesSource.match(/disabled=\{busy\(\)\}/gu)?.length).toBeGreaterThanOrEqual(2);
+    expect(devicesSource).toContain('(nextTrigger ?? document.getElementById("main"))?.focus()');
 
     // Empty-state connection creation can be closed back to EmptyState.
     expect(connectionsTabSource).toContain("!props.embedded || hasProviderConnections()");
@@ -175,8 +180,8 @@ describe("dashboard form, spinner, title, and touch-target accessibility", () =>
 
     // Disclosure summaries and skip link reach 44px on touch; undefined tokens are fixed.
     expect(baseCss).toMatch(/\.skip-link\s*\{[^}]*min-height:\s*var\(--tg-control-height\);/u);
-    expect(waveBCss).toMatch(/@media \(pointer: coarse\)\s*\{[^}]*\.wb-disclosure > summary,\s*\.wb-inline-details > summary/u);
-    expect(waveCCss).toMatch(/@media \(pointer: coarse\)\s*\{[^}]*\.wc-inline-details > summary,\s*\.wc-conn-test-detail > summary/u);
+    expect(waveBCss).toMatch(/@media \(pointer: coarse\)\s*\{[^}]*\.wb-disclosure > summary,\s*\.wb-inline-details > summary\s*\{\s*min-width:\s*var\(--tg-control-height\);\s*min-height:\s*var\(--tg-control-height\);/u);
+    expect(waveCCss).toMatch(/@media \(pointer: coarse\)\s*\{[^}]*\.wc-inline-details > summary,\s*\.wc-conn-test-detail > summary\s*\{\s*min-width:\s*var\(--tg-control-height\);\s*min-height:\s*var\(--tg-control-height\);/u);
     expect(waveBCss).not.toContain("var(--tg-bg-elevated)");
     expect(waveBCss).toContain(".wb-billing-amount.tg-btn-primary span");
     expect(appViewsCss).not.toContain("var(--tg-fs-md)");

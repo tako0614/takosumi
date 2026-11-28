@@ -183,11 +183,18 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
       // A lost response can follow a committed revocation. Read the same
       // key's status without submitting the revocation again.
       const refreshed = await refetch();
-      if (requests.signal.aborted || !sessionIsCurrent() || !failure) return;
-      if (!refreshed?.some((key) => key.id === tokenId && key.revoked_at)) {
-        throw failure.cause;
+      if (requests.signal.aborted || !sessionIsCurrent()) return;
+      if (failure) {
+        if (!refreshed?.some((key) => key.id === tokenId && key.revoked_at)) {
+          throw failure.cause;
+        }
+        setConfirmingRevoke(undefined);
       }
-      setConfirmingRevoke(undefined);
+      requestAnimationFrame(() =>
+        (createTriggerRef?.isConnected
+          ? createTriggerRef
+          : document.getElementById("main"))?.focus(),
+      );
     } catch (cause) {
       if (!requests.signal.aborted && sessionIsCurrent()) {
         setError(friendlyError(cause, t).message);
@@ -429,6 +436,7 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
                   let revokeTriggerRef: HTMLButtonElement | undefined;
                   let cancelRevokeRef: HTMLButtonElement | undefined;
                   const openRevokeConfirm = () => {
+                    if (busy()) return;
                     setConfirmingRevoke(key.id);
                     requestAnimationFrame(() => cancelRevokeRef?.focus());
                   };
@@ -490,6 +498,7 @@ export default function TakosumiApiKeysCard(props: { readonly subject: string })
                                 ref={revokeTriggerRef}
                                 variant="ghost"
                                 size="sm"
+                                disabled={busy()}
                                 onClick={openRevokeConfirm}
                               >
                                 {t("account.apiKeys.revoke")}

@@ -102,6 +102,7 @@
 @media (pointer: coarse) {
   .wb-disclosure > summary,
   .wb-inline-details > summary {
+    min-width: var(--tg-control-height);
     min-height: var(--tg-control-height);
     padding-block: 10px;
   }

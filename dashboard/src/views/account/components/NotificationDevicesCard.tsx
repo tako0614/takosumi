@@ -27,15 +27,27 @@ export default function NotificationDevicesCard() {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
   const [confirming, setConfirming] = createSignal<string>();
+  let listSectionRef: HTMLElement | undefined;
 
   const remove = async (pusherId: string) => {
     if (busy()) return;
+    const removedIndex = rows().findIndex((row) => row.id === pusherId);
     setBusy(true);
     setError(undefined);
     try {
       await deleteNotificationPusher(pusherId);
       setConfirming(undefined);
       await refetch();
+      requestAnimationFrame(() => {
+        const triggers = listSectionRef?.querySelectorAll<HTMLElement>(
+          ".acct-row-actions button",
+        );
+        const nextTrigger =
+          triggers && triggers.length > 0
+            ? triggers[Math.min(Math.max(removedIndex, 0), triggers.length - 1)]
+            : undefined;
+        (nextTrigger ?? document.getElementById("main"))?.focus();
+      });
     } catch (cause) {
       setError(friendlyError(cause, t).message);
     } finally {
@@ -71,7 +83,11 @@ export default function NotificationDevicesCard() {
         )}
       </Show>
 
-      <section class="acct-list-section" aria-label={t("account.devices.listLabel")}>
+      <section
+        ref={listSectionRef}
+        class="acct-list-section"
+        aria-label={t("account.devices.listLabel")}
+      >
         <h2 class="acct-list-title">{t("account.devices.listLabel")}</h2>
         <Switch>
           <Match when={list.error}>
@@ -109,6 +125,7 @@ export default function NotificationDevicesCard() {
                   let removeTriggerRef: HTMLButtonElement | undefined;
                   let cancelRemoveRef: HTMLButtonElement | undefined;
                   const openRemoveConfirm = () => {
+                    if (busy()) return;
                     setConfirming(pusher.id);
                     requestAnimationFrame(() => cancelRemoveRef?.focus());
                   };
@@ -162,6 +179,7 @@ export default function NotificationDevicesCard() {
                               ref={removeTriggerRef}
                               variant="ghost"
                               size="sm"
+                              disabled={busy()}
                               onClick={openRemoveConfirm}
                             >
                               {t("account.devices.remove")}

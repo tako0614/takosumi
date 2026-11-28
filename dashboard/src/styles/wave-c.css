@@ -118,6 +118,7 @@
 @media (pointer: coarse) {
   .wc-inline-details > summary,
   .wc-conn-test-detail > summary {
+    min-width: var(--tg-control-height);
     min-height: var(--tg-control-height);
     padding-block: 10px;
   }
