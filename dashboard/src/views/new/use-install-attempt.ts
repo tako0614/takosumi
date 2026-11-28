@@ -480,6 +480,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   let wake: (() => void) | undefined;
   /** The sheet answer in flight, so Review can wait for it instead of failing. */
   let answerRun: Promise<unknown> | undefined;
+  let answerAbort: AbortController | undefined;
   /** An unconfirmed start keeps its key and the release already sent to the server. */
   let pendingStart:
     | {
@@ -490,10 +491,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       }
     | undefined;
 
-  /** Stop following now: wake the pause and abort the reconcile in flight. */
+  /** Stop following now and abort any outstanding coordinator requests. */
   const halt = () => {
     stopRequested = true;
     driveAbort?.abort();
+    answerAbort?.abort();
     wake?.();
   };
 
@@ -836,11 +838,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     await driveRun?.catch(() => undefined);
   };
 
-  const refresh = async (expected = epoch): Promise<GitInstallPlanResponse | undefined> => {
+  const refresh = async (expected = epoch, signal?: AbortSignal): Promise<GitInstallPlanResponse | undefined> => {
     const current = response();
     if (!current) return undefined;
     try {
       return accept(await getGitInstallPlan(current.installPlan.id, {
+        signal,
         isCurrent: () => !disposed && expected === epoch,
       }), expected);
     } catch {
@@ -1030,6 +1033,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const current = response();
     if (!current || mutating()) return undefined;
     const expected = epoch;
+    const isCurrent = () => !disposed && expected === epoch &&
+      (!legacyWorkspaceContext || currentWorkspaceId() === legacyWorkspaceSelection);
+    const controller = new AbortController();
+    answerAbort = controller;
     setMutating(kind);
     setError(undefined);
     const run = (async () => {
@@ -1037,12 +1044,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         const next = await answerGitInstallAttempt(current.installPlan.id, {
           expectedGeneration: current.installPlan.generation,
           ...patch,
-        });
+        }, { signal: controller.signal, isCurrent });
         return accept(next, expected);
       } catch (cause) {
-        if (disposed || expected !== epoch) return undefined;
+        if (controller.signal.aborted || !isCurrent()) return undefined;
         // Whatever happened, show the attempt as the server holds it now.
-        await refresh(expected);
+        await refresh(expected, controller.signal);
+        if (controller.signal.aborted || !isCurrent()) return undefined;
         setError(
           outcomeUnknown(cause) && kind === "continue"
             ? t("installStore.error.continueUnconfirmed")
@@ -1050,6 +1058,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         );
         return undefined;
       } finally {
+        answerAbort = undefined;
         if (!disposed) setMutating(undefined);
       }
     })();
@@ -1292,10 +1301,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    */
   const confirm = async (): Promise<void> => {
     if (confirming() || locked()) return;
+    const expected = epoch;
     setConfirming(true);
     try {
       while (answerRun) await answerRun.catch(() => undefined);
-      if (locked()) return;
+      if (disposed || expected !== epoch || locked()) return;
       if (interfaceLinksToSend() !== undefined) return;
       const current = response();
       if (current?.userAction.kind !== "provide_inputs") return;
@@ -1340,6 +1350,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         },
         "continue",
       );
+      if (disposed || expected !== epoch) return;
       if (!next) {
         // Not sent again on its own: the person continues or changes
         // something. (A read that shows it went through dated its Plan.)
