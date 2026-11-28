@@ -341,6 +341,7 @@ import {
   sourceSyncRunImmutableIdentityMatches,
   sourceSyncRunStoredIdentityMatches,
   publicStoredRun,
+  withoutPendingAutoApply,
   preserveStoredRunManagementAuthority,
   restoreRunCreationIdentityMatches,
   storeRunManagementAuthority,
@@ -3363,7 +3364,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           )
         : undefined;
     const appGuard = run.capsuleId !== undefined
-      ? d1AppApplyAdmissionGuardStmt(this.#orm, run, appOwnershipPhysical)
+      ? d1AppApplyAdmissionGuardStmt(
+        this.#orm, run, appOwnershipPhysical, expectedCapsule?.requireReservedAutoApply,
+      )
       : undefined;
     const insert = this.#orm
       .insert(schema.runs)
@@ -3683,12 +3686,20 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           input.expectExactRun === undefined
             ? undefined
             : and(
-                eq(
-                  schema.runs.runJson,
-                  d1RunJsonPreservingAuthority(input.expectExactRun),
-                ),
+                isPlanRunRecord(input.expectExactRun)
+                  ? and(
+                    // The Apply commit preserves the reservation from the
+                    // stored row. Match that key separately from JSON order.
+                    eq(sql`json_extract(${schema.runs.runJson}, '$.pendingAutoApplyRunId')`,
+                      input.expectExactRun.pendingAutoApplyRunId!),
+                    eq(sql`json_remove(${schema.runs.runJson}, '$.pendingAutoApplyRunId')`,
+                      d1RunJsonPreservingAuthority(withoutPendingAutoApply(input.expectExactRun))),
+                  )
+                  : eq(schema.runs.runJson, d1RunJsonPreservingAuthority(input.expectExactRun)),
                 eq(schema.runs.status, input.expectExactRun.status),
-                eq(schema.runs.type, applyRunType(input.expectExactRun)),
+                eq(schema.runs.type, input.kind === "plan"
+                  ? RUN_KIND_PLAN
+                  : input.expectExactRun.operation === "destroy" ? "destroy_apply" : RUN_KIND_APPLY),
                 input.expectExactRun.capsuleId === undefined
                   ? isNull(schema.runs.capsuleId)
                   : eq(schema.runs.capsuleId, input.expectExactRun.capsuleId),
@@ -13163,7 +13174,8 @@ function d1UpsertRunStmt(
   run: PlanRun | ApplyRun | SourceSyncRun | Run,
 ) {
   const generic = run as Partial<Run>;
-  const publicRun = publicStoredRun(run);
+  const plan = isPlanRunRecord(run);
+  const publicRun = publicStoredRun(plan ? withoutPendingAutoApply(run) : run);
   const values = {
     id: run.id,
     runGroupId: generic.runGroupId ?? null,
@@ -13178,13 +13190,15 @@ function d1UpsertRunStmt(
     runJson: publicRun as unknown,
     createdAt: String(run.createdAt),
   };
-  const set = {
-    ...values,
-    runJson: type === RUN_KIND_PLAN || type === "destroy_plan" || type === "drift_check" ||
-        type === RUN_KIND_APPLY || type === "destroy_apply"
-      ? d1RunJsonPreservingAuditEvents(publicRun as PlanRun | ApplyRun)
-      : d1RunJsonPreservingAuthority(publicRun),
-  };
+  const merged = plan || type === RUN_KIND_APPLY || type === "destroy_apply"
+    ? d1RunJsonPreservingAuditEvents(publicRun as PlanRun | ApplyRun)
+    : d1RunJsonPreservingAuthority(publicRun);
+  // An Apply may have captured its Plan before its reservation was cleared.
+  const runJson = plan ? sql`json_patch(${merged}, CASE
+    WHEN json_type(${schema.runs.runJson}, '$.pendingAutoApplyRunId') = 'text'
+    THEN json_object('pendingAutoApplyRunId', json_extract(${schema.runs.runJson}, '$.pendingAutoApplyRunId'))
+    ELSE '{}'
+  END)` : merged;
   return orm
     .insert(schema.runs)
     .values(values)
@@ -13194,7 +13208,7 @@ function d1UpsertRunStmt(
       // conditional conflict update remains a last-line fence if this helper
       // is reused outside one of those commit tails.
       setWhere: d1RunStoredIdentityWhere(run, [type]),
-      set,
+      set: { ...values, runJson },
     });
 }
 
@@ -13683,6 +13697,7 @@ function d1AppPlanAdmissionGuardStmt(
 
 function d1AppApplyAdmissionGuardStmt(
   orm: DrizzleD1Database<typeof schema>, run: ApplyRun, physical: boolean,
+  requireReservedAutoApply?: true,
 ) {
   const capsule = schema.capsules;
   const plan = schema.runs;
@@ -13701,9 +13716,20 @@ function d1AppApplyAdmissionGuardStmt(
   ));
   const existing = orm.select({ one: sql`1` }).from(schema.runs)
     .where(eq(schema.runs.id, run.id));
+  const reserved = requireReservedAutoApply === true
+    ? orm.select({ one: sql`1` }).from(plan).where(and(
+      eq(plan.id, run.planRunId),
+      eq(plan.type, RUN_KIND_PLAN),
+      eq(plan.status, "succeeded"),
+      eq(plan.workspaceId, run.workspaceId),
+      eq(plan.capsuleId, run.capsuleId!),
+      sql`json_extract(${plan.runJson}, '$.pendingAutoApplyRunId') = ${run.id}`,
+      sql`json_type(${plan.runJson}, '$.appliedApplyRunId') IS NULL`,
+    ))
+    : undefined;
   return orm.insert(legacyCapsuleGuardTable).select(orm.select(d1InvalidCapsuleGuardRow(run.capsuleId!))
     .from(sql`(select 1) as app_apply_guard_source`)
-    .where(and(notExists(current), notExists(existing))));
+    .where(and(or(notExists(current), reserved && notExists(reserved)), notExists(existing))));
 }
 
 function d1AppClaimAdmissionWhere(

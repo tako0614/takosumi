@@ -35,6 +35,8 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
+import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
@@ -356,6 +358,137 @@ test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client
   // The install's first Apply is marked `create` (the install-complete notification).
   expect(activity.filter((event) => event.action === "run.applied").map((event) => event.metadata.operation).sort())
     .toEqual(["create", "update"]);
+});
+
+function pauseAfterAutomaticPlanCommit(store: OpenTofuControlStore) {
+  const saved = Promise.withResolvers<string>();
+  const ack = Promise.withResolvers<void>();
+  const transition = store.transitionRun.bind(store);
+  let paused = false;
+  store.transitionRun = async (input) => {
+    const result = await transition(input);
+    if (result.won && input.kind === "plan" && input.run.autoApplyRequested === true &&
+        input.run.status === "succeeded" && !paused) {
+      paused = true;
+      saved.resolve(input.run.id);
+      await ack.promise;
+    }
+    return result;
+  };
+  return { saved: saved.promise, resume: () => ack.resolve() };
+}
+
+for (const adapter of ["memory", "d1", "postgres"] as const) {
+  test(`redelivery resumes an exact automatic Apply after the succeeded Plan was saved (${adapter})`, async () => {
+    const client = adapter === "postgres" ? await PGliteSqlClient.create() : undefined;
+    const store = client ? new SqlOpenTofuControlStore({ client }) : adapter === "d1"
+      ? new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())
+      : new InMemoryOpenTofuControlStore();
+    let release: (() => void) | undefined;
+    let original: Promise<void> | undefined;
+    try {
+      const { controller, runner, initialPlanCalls, initialApplyCalls } =
+        await buildActiveCapsule({ autoUpdate: true, store, ownedApp: adapter === "memory" });
+      const gate = pauseAfterAutomaticPlanCommit(store);
+      release = gate.resume;
+      const owner = (await store.getWorkspace("ws_test001"))?.ownerUserId;
+      original = syncNewCommit(controller, owner);
+      const planId = await Promise.race([gate.saved, original.then(() => {
+        throw new Error("automatic Plan did not reach the persisted boundary");
+      })]);
+      const saved = await store.getPlanRun(planId);
+      expect(saved).toMatchObject({ status: "succeeded", autoApplyRequested: true });
+      expect(saved?.appliedApplyRunId).toBeUndefined();
+      expect(saved?.pendingAutoApplyRunId).toBeString();
+      expect(await controller.getRun(planId)).not.toHaveProperty("pendingAutoApplyRunId");
+      expect((await controller.getPlanRun(planId)).planRun).not.toHaveProperty("pendingAutoApplyRunId");
+      expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(1);
+      expect(runner.applyCalls).toBe(initialApplyCalls);
+
+      const dispatch = { action: "plan", workspaceId: "ws_test001", runId: planId } as const;
+      await Promise.all([controller.dispatchQueuedRun(dispatch), controller.dispatchQueuedRun(dispatch)]);
+      release();
+      await original;
+      const settled = await store.getPlanRun(planId);
+      expect(runner.planCalls).toBe(initialPlanCalls + 1);
+      expect(runner.applyCalls).toBe(initialApplyCalls + 1);
+      expect(settled?.appliedApplyRunId).toBe(saved?.pendingAutoApplyRunId);
+      expect(settled?.pendingAutoApplyRunId).toBeUndefined();
+      expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(2);
+      expect((await store.listActivityEvents("ws_test001"))
+        .filter(event => event.action === "capsule.auto_update_apply_started")).toHaveLength(1);
+    } finally {
+      release?.();
+      await original?.catch(() => undefined);
+      await client?.close();
+    }
+  }, 30_000);
+}
+
+test("redelivery adopts a queued automatic Apply after losing its registration acknowledgment", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  const { controller, runner, initialApplyCalls, initialPlanCalls } =
+    await buildActiveCapsule({ autoUpdate: true, store });
+  const gate = pauseAfterAutomaticPlanCommit(store);
+  const original = syncNewCommit(controller);
+  try {
+    const planId = await Promise.race([gate.saved, original.then(() => {
+      throw new Error("automatic Plan did not reach the persisted boundary");
+    })]);
+    const reserved = (await store.getPlanRun(planId))?.pendingAutoApplyRunId;
+    if (!reserved) throw new Error("automatic Plan has no Apply reservation");
+    const begin = store.beginApplyRun.bind(store);
+    let dropAck = true;
+    store.beginApplyRun = async (...args) => {
+      const result = await begin(...args);
+      if (dropAck && result.status === "created" && result.run.id === reserved) {
+        dropAck = false;
+        throw new Error("lost Apply registration acknowledgment");
+      }
+      return result;
+    };
+    const dispatch = { action: "plan", workspaceId: "ws_test001", runId: planId } as const;
+    await expect(controller.dispatchQueuedRun(dispatch)).rejects.toThrow("lost Apply registration acknowledgment");
+    expect((await store.getApplyRun(reserved))?.status).toBe("queued");
+    expect((await store.getPlanRun(planId))?.pendingAutoApplyRunId).toBe(reserved);
+    expect(runner.applyCalls).toBe(initialApplyCalls);
+
+    await controller.dispatchQueuedRun(dispatch);
+    expect(runner.planCalls).toBe(initialPlanCalls + 1);
+    expect(runner.applyCalls).toBe(initialApplyCalls + 1);
+    expect((await store.getApplyRun(reserved))?.status).toBe("succeeded");
+    expect((await store.getPlanRun(planId))?.appliedApplyRunId).toBe(reserved);
+    expect((await store.getPlanRun(planId))?.pendingAutoApplyRunId).toBeUndefined();
+  } finally {
+    gate.resume();
+    await original;
+  }
+});
+
+test("redelivery settles an opt-out before a later opt-in", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { controller, runner, initialApplyCalls } = await buildActiveCapsule({ autoUpdate: true, store });
+  const capsules = new CapsulesService({ store });
+  const gate = pauseAfterAutomaticPlanCommit(store);
+  const original = syncNewCommit(controller);
+  try {
+    const planId = await Promise.race([gate.saved, original.then(() => {
+      throw new Error("automatic Plan did not reach the persisted boundary");
+    })]);
+    expect((await store.getPlanRun(planId))?.pendingAutoApplyRunId).toBeString();
+    await capsules.setCapsuleAutoUpdate("cap_auto0001", false);
+    const dispatch = { action: "plan", workspaceId: "ws_test001", runId: planId } as const;
+    await controller.dispatchQueuedRun(dispatch);
+    expect((await store.getPlanRun(planId))?.pendingAutoApplyRunId).toBeUndefined();
+    await capsules.setCapsuleAutoUpdate("cap_auto0001", true);
+    await controller.dispatchQueuedRun(dispatch);
+    expect(runner.applyCalls).toBe(initialApplyCalls);
+    expect((await store.listActivityEvents("ws_test001"))
+      .filter(event => event.action === "capsule.auto_update_apply_failed")).toHaveLength(0);
+  } finally {
+    gate.resume();
+    await original;
+  }
 });
 
 test.each(["while the Plan runs", "just before Apply registration"] as const)(

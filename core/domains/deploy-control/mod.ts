@@ -346,6 +346,7 @@ export function publicPlanRun(planRun: PlanRun): PublicPlanRun {
   const {
     executionInputsDigest: _executionInputsDigest,
     providerLockArtifact: _providerLockArtifact,
+    pendingAutoApplyRunId: _pendingAutoApplyRunId,
     ...publicRecord
   } = planRun;
   return publicRecord;

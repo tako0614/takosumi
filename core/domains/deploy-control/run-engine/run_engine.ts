@@ -240,6 +240,7 @@ import {
   type WorkspaceManagementAuthority,
   type BeginApplyRunResult,
   type OpenTofuControlStore,
+  withoutPendingAutoApply,
   type PlanRunInputs,
   planRunExecutionInputsDigestMaterial,
 } from "../store.ts";
@@ -5213,7 +5214,9 @@ export class RunEngine {
           planRun.capsuleExecutionAuthorityEpoch ?? 1,
           scheduledUninstall,
         ),
-        ...(internal.requireAutoUpdate ? { requireAutoUpdate: true as const } : {}),
+        ...(internal.requireAutoUpdate
+          ? { requireAutoUpdate: true as const, requireReservedAutoApply: true as const }
+          : {}),
       }
       : undefined;
     // Source snapshot revalidation (spec invariant 10): an env-driven plan is
@@ -5981,8 +5984,7 @@ export class RunEngine {
       );
     }
     if (!this.#shouldProcessRun(planRun.status, planRun.heartbeatAt)) {
-      // Terminal, or a sibling consumer holds it with a fresh heartbeat: no-op.
-      return planRun;
+      return await this.#continuePendingAutoApply(planRun);
     }
     let inputs: PlanRunInputs;
     try {
@@ -6026,10 +6028,11 @@ export class RunEngine {
     const claimMs = finiteElapsedMs(claimStartedAt, performance.now());
     if (!claim.won) {
       // A sibling consumer already claimed this run (or a cancel won the row).
-      // Do NOT dispatch the runner; return the row the winner persisted.
-      return claim.run;
+      // Never replay the Plan; the winner may have left a pending Apply.
+      return await this.#continuePendingAutoApply(claim.run);
     }
     const running = claim.run;
+    let completed: PlanRun;
     try {
       const environmentStartedAt = performance.now();
       const runEnvironment = await this.#runEnv.resolveRunEnvironment({
@@ -6050,7 +6053,7 @@ export class RunEngine {
         running,
         runEnvironment,
       );
-      return await this.#executePlan(
+      completed = await this.#executePlan(
         runningWithEnv,
         claim.leaseToken,
         profile,
@@ -6081,8 +6084,9 @@ export class RunEngine {
     } catch (error) {
       if (isRunnerInfrastructureRequeueError(error)) throw error;
       const failedRun = runEnvironmentFailedRun(running, error);
-      return await this.#failPlanRun(failedRun, claim.leaseToken, error);
+      completed = await this.#failPlanRun(failedRun, claim.leaseToken, error);
     }
+    return await this.#continuePendingAutoApply(completed);
   }
 
   /**
@@ -6614,79 +6618,75 @@ export class RunEngine {
     return snapshot;
   }
 
-  /**
-   * Server-side auto-continue for the auto-update pipeline (and any plan
-   * created with `autoApplyRequested`): a CLEAN completed plan — `succeeded`,
-   * which an approval-parked (destructive), policy-blocked, or drift-check
-   * plan never reaches — applies itself so no client has to press deploy.
-   * `createApplyRun` re-verifies every apply precondition (policy pass, plan
-   * artifact, apply-once, destroy approval), so this path adds no bypass. A
-   * failure records an Activity event and leaves the succeeded plan for manual
-   * continuation; it never fails the plan itself.
-   */
-  async #maybeAutoApplyCompletedPlan(planRun: PlanRun): Promise<void> {
-    if (planRun.autoApplyRequested !== true) return;
-    if (planRun.driftCheck === true) return;
-    if (planRun.status !== "succeeded") return;
-    if (planRun.operation === "destroy") return;
-    if (planRun.requiresApproval === true) return;
-    if (planRun.appliedApplyRunId) return;
-    // Unknown resource changes (as opposed to an empty list) mean the
-    // delete/replace approval gate could not be evaluated. Never continue such
-    // a Plan unattended; it stays available for an explicit Apply.
-    if (planRun.planResourceChanges === undefined) return;
-    // A known-empty change list still continues: it is not proof that nothing
-    // changed, because an output-only change needs an Apply to publish the new
-    // Output, and the Plan carries no output-change evidence to tell the two
-    // apart. (Runner adapters used to collapse an empty list to "absent", so
-    // production never skipped these Plans either.)
-    try {
-      // Finishing a held Plan is allowed after draining. Starting its automatic
-      // Apply is a separate admission bound to the Plan's original epoch, not
-      // whichever active epoch happens to exist when the result arrives.
-      const authority = await this.#store.getRunManagementAuthority({
-        id: planRun.id,
-        workspaceId: planRun.workspaceId,
-        kind: "plan",
-      });
-      if (authority === undefined) {
-        throw workspaceManagementAdmissionConflictError();
+  /** Resume only the Apply identity reserved by the succeeded Plan's writer. */
+  async #continuePendingAutoApply(plan: PlanRun): Promise<PlanRun> {
+    if (!plan.pendingAutoApplyRunId) return plan;
+    const current = await this.#requirePlanRun(plan.id);
+    const applyRunId = current.pendingAutoApplyRunId;
+    if (!applyRunId || !isEligibleAutomaticPlan(current)) return current;
+
+    let failure: OpenTofuControllerError | undefined;
+    const alreadyApplied = current.appliedApplyRunId !== undefined;
+    if (!alreadyApplied) {
+      try {
+        // Preserve the Plan's original Workspace authority and reuse the
+        // existing Apply admission with all current Capsule and Plan checks.
+        const authority = await this.#store.getRunManagementAuthority({
+          id: current.id,
+          workspaceId: current.workspaceId,
+          kind: "plan",
+        });
+        if (authority === undefined) throw workspaceManagementAdmissionConflictError();
+        await this.createApplyRun(
+          { planRunId: current.id, expected: applyExpectedGuardFromPlanRun(current) },
+          { actor: current.createdBy },
+          { applyRunId, expectedWorkspaceManagementAuthority: authority, requireAutoUpdate: true },
+        );
+      } catch (error) {
+        // A lost database or dispatch acknowledgment is indeterminate. Keep
+        // the reserved id for normal retry, including an existing Apply.
+        if (!(error instanceof OpenTofuControllerError) || error.code === "internal_error" ||
+            isRunnerInfrastructureRequeueError(error)) throw error;
+        failure = error;
       }
-      await this.createApplyRun(
-        {
-          planRunId: planRun.id,
-          expected: applyExpectedGuardFromPlanRun(planRun),
-        },
-        { actor: planRun.createdBy },
-        {
-          expectedWorkspaceManagementAuthority: authority,
-          requireAutoUpdate: true,
-        },
-      );
-      await this.#recordActivity({ workspaceId: planRun.workspaceId,
-        actorId: "system:auto-update", action: "capsule.auto_update_apply_started",
-        targetType: "capsule", targetId: planRun.capsuleId ?? planRun.id,
-        metadata: { planRunId: planRun.id } });
-    } catch (error) {
-      if (error instanceof OpenTofuControllerError && isRecord(error.details)) {
-        const reason = error.details.reason;
-        if (reason === "auto_update_disabled") return;
-        // The storage fence rejects concurrent changes atomically. Only a
-        // confirmed opt-out makes that refusal an expected stop.
-        if (reason === "capsule_execution_authority_changed" && planRun.capsuleId &&
-          (await this.#store.getCapsule(planRun.capsuleId).catch(() => undefined))?.autoUpdate === false) return;
-      }
-      await this.#recordActivity({
-        workspaceId: planRun.workspaceId,
-        action: "capsule.auto_update_apply_failed",
-        targetType: "capsule",
-        targetId: planRun.capsuleId ?? planRun.id,
-        metadata: {
-          planRunId: planRun.id,
-          message: error instanceof Error ? error.message : String(error),
-        },
-      });
     }
+
+    const observed = await this.#requirePlanRun(current.id);
+    if (observed.pendingAutoApplyRunId !== applyRunId) return observed;
+    const settled = withoutPendingAutoApply(observed);
+    const result = await this.#store.transitionRun({
+      id: observed.id,
+      kind: "plan",
+      expectFrom: ["succeeded"],
+      expectExactRun: observed,
+      run: settled,
+    });
+    if (!result.won) {
+      const latest = await this.#requirePlanRun(observed.id);
+      if (latest.pendingAutoApplyRunId === applyRunId) {
+        throw new Error("Automatic Apply settlement conflicted with a Plan update");
+      }
+      return latest;
+    }
+
+    const targetId = observed.capsuleId ?? observed.id;
+    if ((!alreadyApplied && !failure) || observed.appliedApplyRunId === applyRunId) {
+      await this.#recordActivity({ workspaceId: observed.workspaceId,
+        actorId: "system:auto-update", action: "capsule.auto_update_apply_started",
+        targetType: "capsule", targetId, metadata: { planRunId: observed.id } });
+    } else if (failure && observed.appliedApplyRunId === undefined) {
+      const reason = isRecord(failure.details) ? failure.details.reason : undefined;
+      // Only a confirmed opt-out makes a storage admission conflict an
+      // expected stop. A manual Apply remains available for this Plan.
+      if (reason !== "auto_update_disabled" &&
+          !(reason === "capsule_execution_authority_changed" && observed.capsuleId &&
+            (await this.#store.getCapsule(observed.capsuleId).catch(() => undefined))?.autoUpdate === false)) {
+        await this.#recordActivity({ workspaceId: observed.workspaceId,
+          action: "capsule.auto_update_apply_failed", targetType: "capsule", targetId,
+          metadata: { planRunId: observed.id, message: failure.message } });
+      }
+    }
+    return settled;
   }
 
   /**
@@ -9322,7 +9322,10 @@ export class RunEngine {
       // plan→apply TOCTOU pin (S2): hash the resolved provider env bindings this
       // plan was reviewed against onto the plan (capsule-context runs only),
       // so the apply mint can assert nothing was swapped between plan and apply.
-      const updated = await this.#pinResolvedBindingsDigest(completed);
+      const verified = await this.#pinResolvedBindingsDigest(completed);
+      const updated = isEligibleAutomaticPlan(verified) && verified.appliedApplyRunId === undefined
+        ? { ...verified, pendingAutoApplyRunId: this.#newId("apply") }
+        : verified;
       // Terminal write of the running plan (succeeded / waiting_approval /
       // failed): route through the fenced transition so the lease fence column is
       // cleared on the same write (a raw put* would leave a stale lease_token on
@@ -9371,7 +9374,6 @@ export class RunEngine {
           result.planResourceChanges ?? [],
         );
       }
-      await this.#maybeAutoApplyCompletedPlan(updated);
       return updated;
     } catch (error) {
       if (isRetryableRunnerInfrastructureError(error)) {
@@ -13605,6 +13607,14 @@ function moduleVariableMaterializationError(
     `module_variable_materialization_failed: ${redactString(detail)}`,
     { reason: "module_variable_materialization_failed" },
   );
+}
+
+function isEligibleAutomaticPlan(plan: PlanRun): boolean {
+  // A known empty change list may still publish changed outputs. An unknown
+  // list cannot establish that approval for a destructive change is unnecessary.
+  return plan.autoApplyRequested === true && plan.status === "succeeded" &&
+    plan.policy.status === "passed" && plan.operation === "update" && plan.driftCheck !== true && plan.requiresApproval !== true &&
+    Array.isArray(plan.planResourceChanges);
 }
 
 async function assertApplyRunCreationAuthority(
