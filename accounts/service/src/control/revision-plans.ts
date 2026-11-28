@@ -916,7 +916,8 @@ async function assertRevisionIdentity(
  * that is not in error. A provider failure can persist state (the current
  * StateVersion advances while the Capsule is `error`), and a restored or
  * recovered state has no successful Apply of its own; retrying either must
- * plan again rather than report that nothing changed.
+ * plan again rather than report that nothing changed. An explicit re-adoption
+ * also needs a Plan while the app still runs the state it had at re-adoption.
  */
 async function runsAdoptedRevision(
   plan: StoredGitRevisionPlan,
@@ -929,6 +930,14 @@ async function runsAdoptedRevision(
     !isAdoptedRevision(plan, identity.adopted, resolvedCommit) ||
     capsule.status === "error" ||
     !capsule.currentStateVersionId
+  ) {
+    return false;
+  }
+  const reAdoption = identity.installConfig.internal?.reAdoption;
+  if (
+    reAdoption?.capsuleId === capsule.id &&
+    reAdoption.previousStateVersionId === capsule.currentStateVersionId &&
+    reAdoption.previousStateGeneration === capsule.currentStateGeneration
   ) {
     return false;
   }
