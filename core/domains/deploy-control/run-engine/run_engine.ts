@@ -6653,6 +6653,9 @@ export class RunEngine {
 
     const observed = await this.#requirePlanRun(current.id);
     if (observed.pendingAutoApplyRunId !== applyRunId) return observed;
+    const consumedByAnotherApply = observed.appliedApplyRunId !== undefined &&
+      observed.appliedApplyRunId !== applyRunId;
+    if (consumedByAnotherApply) await this.#cancelSupersededAutoApply(observed, applyRunId);
     const settled = withoutPendingAutoApply(observed);
     const result = await this.#store.transitionRun({
       id: observed.id,
@@ -6670,7 +6673,8 @@ export class RunEngine {
     }
 
     const targetId = observed.capsuleId ?? observed.id;
-    if ((!alreadyApplied && !failure) || observed.appliedApplyRunId === applyRunId) {
+    if ((!consumedByAnotherApply && !alreadyApplied && !failure) ||
+        observed.appliedApplyRunId === applyRunId) {
       await this.#recordActivity({ workspaceId: observed.workspaceId,
         actorId: "system:auto-update", action: "capsule.auto_update_apply_started",
         targetType: "capsule", targetId, metadata: { planRunId: observed.id } });
@@ -6687,6 +6691,24 @@ export class RunEngine {
       }
     }
     return settled;
+  }
+
+  async #cancelSupersededAutoApply(plan: PlanRun, applyRunId: string): Promise<void> {
+    const apply = await this.#store.getApplyRun(applyRunId);
+    if (!apply || apply.status !== "queued" || !runCanCancelDuringDrain(apply) ||
+        apply.id !== applyRunId || apply.planRunId !== plan.id ||
+        apply.workspaceId !== plan.workspaceId || apply.capsuleId !== plan.capsuleId ||
+        apply.operation !== plan.operation || apply.runnerProfileId !== plan.runnerProfileId ||
+        await stableJsonDigest(apply.expected) !== await stableJsonDigest(applyExpectedGuardFromPlanRun(plan))) return;
+    try {
+      // Reuse the same cancellation CAS as ordinary Apply. It refuses a
+      // claim won after our read, even if the claimant subsequently requeues.
+      await this.#cancelRun(apply.id);
+    } catch (error) {
+      if (!(error instanceof OpenTofuControllerError) || error.code !== "failed_precondition") throw error;
+      const current = await this.#store.getApplyRun(apply.id);
+      if (current?.status === "queued" && runCanCancelDuringDrain(current)) throw error;
+    }
   }
 
   /**

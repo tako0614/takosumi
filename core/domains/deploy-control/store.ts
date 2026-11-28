@@ -1167,6 +1167,8 @@ export function reservedAutoApplyMatches(
 ): boolean {
   return expected.requireReservedAutoApply !== true || (
     plan?.pendingAutoApplyRunId === run.id && plan.status === "succeeded" &&
+      plan.id === run.planRunId && plan.workspaceId === run.workspaceId &&
+      plan.capsuleId === run.capsuleId && plan.operation === run.operation &&
       plan.appliedApplyRunId === undefined
   );
 }

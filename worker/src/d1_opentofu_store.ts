@@ -13723,6 +13723,10 @@ function d1AppApplyAdmissionGuardStmt(
       eq(plan.status, "succeeded"),
       eq(plan.workspaceId, run.workspaceId),
       eq(plan.capsuleId, run.capsuleId!),
+      sql`json_extract(${plan.runJson}, '$.id') = ${run.planRunId}`,
+      sql`json_extract(${plan.runJson}, '$.workspaceId') = ${run.workspaceId}`,
+      sql`json_extract(${plan.runJson}, '$.capsuleId') = ${run.capsuleId!}`,
+      sql`json_extract(${plan.runJson}, '$.operation') = ${run.operation}`,
       sql`json_extract(${plan.runJson}, '$.pendingAutoApplyRunId') = ${run.id}`,
       sql`json_type(${plan.runJson}, '$.appliedApplyRunId') IS NULL`,
     ))

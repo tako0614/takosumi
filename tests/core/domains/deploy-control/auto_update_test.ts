@@ -465,6 +465,91 @@ test("redelivery adopts a queued automatic Apply after losing its registration a
   }
 });
 
+for (const [adapter, lateConsumption] of [
+  ["memory", false], ["d1", false], ["postgres", false], ["memory", true],
+] as const) {
+  test(`redelivery cancels only the unstarted auto Apply superseded by a manual Apply (${adapter}, ${lateConsumption ? "late" : "early"})`, async () => {
+    const client = adapter === "postgres" ? await PGliteSqlClient.create() : undefined;
+    const store = client ? new SqlOpenTofuControlStore({ client }) : adapter === "d1"
+      ? new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())
+      : new InMemoryOpenTofuControlStore();
+    const authorityRead = Promise.withResolvers<void>();
+    const releaseAuthority = Promise.withResolvers<void>();
+    let releasePlan: (() => void) | undefined;
+    let original: Promise<void> | undefined;
+    let redelivery: Promise<void> | undefined;
+    try {
+      const { controller, runner, initialApplyCalls, initialPlanCalls } =
+        await buildActiveCapsule({ autoUpdate: true, store, ownedApp: adapter === "memory" });
+      const gate = pauseAfterAutomaticPlanCommit(store);
+      releasePlan = gate.resume;
+      const owner = (await store.getWorkspace("ws_test001"))?.ownerUserId;
+      original = syncNewCommit(controller, owner);
+      const planId = await Promise.race([gate.saved, original.then(() => {
+        throw new Error("automatic Plan did not reach the persisted boundary");
+      })]);
+      const plan = await store.getPlanRun(planId);
+      const reserved = plan?.pendingAutoApplyRunId;
+      if (!plan || !reserved) throw new Error("automatic Plan has no Apply reservation");
+      const begin = store.beginApplyRun.bind(store);
+      store.beginApplyRun = async (...args) => {
+        const result = await begin(...args);
+        if (result.status === "created" && result.run.id === reserved) {
+          throw new Error("lost Apply registration acknowledgment");
+        }
+        return result;
+      };
+      const dispatch = { action: "plan", workspaceId: plan.workspaceId, runId: planId } as const;
+      await expect(controller.dispatchQueuedRun(dispatch)).rejects.toThrow("lost Apply registration acknowledgment");
+      expect(await store.getApplyRun(reserved)).toMatchObject({ status: "queued", planRunId: planId });
+      expect(runner.applyCalls).toBe(initialApplyCalls);
+
+      if (lateConsumption) {
+        const getAuthority = store.getRunManagementAuthority.bind(store);
+        store.getRunManagementAuthority = async (input) => {
+          const result = await getAuthority(input);
+          if (input.kind === "plan" && input.id === planId) {
+            authorityRead.resolve();
+            await releaseAuthority.promise;
+          }
+          return result;
+        };
+        redelivery = controller.dispatchQueuedRun(dispatch);
+        await Promise.race([authorityRead.promise, redelivery.then(() => {
+          throw new Error("redelivery did not reach the original authority fence");
+        })]);
+      }
+      const manual = (await controller.createApplyRun({ planRunId: planId,
+        expected: applyExpectedGuardFromPlanRun(plan) }, { actor: owner })).applyRun;
+      expect(manual.id).not.toBe(reserved);
+      expect(manual.status).toBe("succeeded");
+      expect((await store.getPlanRun(planId))?.appliedApplyRunId).toBe(manual.id);
+      const generation = (await store.getCapsule("cap_auto0001"))?.currentStateGeneration;
+      expect(generation).toBe(2);
+
+      releaseAuthority.resolve();
+      await (redelivery ?? controller.dispatchQueuedRun(dispatch));
+      await controller.dispatchQueuedRun(dispatch);
+      const cancelled = await store.getApplyRun(reserved);
+      expect(cancelled?.status).toBe("cancelled");
+      expect(cancelled?.startedAt).toBeUndefined();
+      expect(cancelled?.auditEvents.filter(event => event.type === "apply.cancelled")).toHaveLength(1);
+      expect(await store.getApplyRun(manual.id)).toEqual(manual);
+      expect((await store.getPlanRun(planId))?.appliedApplyRunId).toBe(manual.id);
+      expect((await store.getPlanRun(planId))?.pendingAutoApplyRunId).toBeUndefined();
+      expect((await store.getCapsule("cap_auto0001"))?.currentStateGeneration).toBe(generation);
+      expect(runner.planCalls).toBe(initialPlanCalls + 1);
+      expect(runner.applyCalls).toBe(initialApplyCalls + 1);
+    } finally {
+      releaseAuthority.resolve();
+      releasePlan?.();
+      await redelivery?.catch(() => undefined);
+      await original?.catch(() => undefined);
+      await client?.close();
+    }
+  }, 30_000);
+}
+
 test("redelivery settles an opt-out before a later opt-in", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const { controller, runner, initialApplyCalls } = await buildActiveCapsule({ autoUpdate: true, store });
