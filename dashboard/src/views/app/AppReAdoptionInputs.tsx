@@ -40,7 +40,7 @@ export default function AppReAdoptionInputs(props: {
     setReading(true);
     setError(undefined);
     try {
-      const next = await getCapsuleInstallConfigReAdoptionContext(held[0], held[1]);
+      const next = await getCapsuleInstallConfigReAdoptionContext(held[0], held[1], { isCurrent: () => inScope(held) });
       if (!inScope(held)) return;
       setContext(next);
       setContextScope(held);
@@ -50,7 +50,7 @@ export default function AppReAdoptionInputs(props: {
     } catch (cause) {
       if (inScope(held)) setError(friendlyError(cause, t).message);
     } finally {
-      if (inScope(held)) setReading(false);
+      if (alive) setReading(false);
     }
   };
   const edit = (name: string, update: Partial<ReAdoptionInputDraft>) => {

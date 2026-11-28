@@ -1400,10 +1400,13 @@ export async function createCapsuleInstallConfigReAdoption(
   capsuleId: string,
   request: CreateCapsuleInstallConfigReAdoptionRequest,
   idempotencyKey: string,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<CapsuleInstallConfigReAdoptionResponse> {
-  return await controlFetch<CapsuleInstallConfigReAdoptionResponse>(
+  return await submitBoundedControlWrite<CapsuleInstallConfigReAdoptionResponse>(
+    "Install configuration re-adoption",
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/install-config-re-adoptions`,
     {
+      ...options,
       method: "POST",
       headers: { "idempotency-key": idempotencyKey },
       body: request,
@@ -1415,10 +1418,11 @@ export async function createCapsuleInstallConfigReAdoption(
 export async function getCapsuleInstallConfigReAdoptionContext(
   capsuleId: string,
   revisionPlanId: string,
+  options: Pick<RequestOpts, "isCurrent"> = {},
 ): Promise<CapsuleInstallConfigReAdoptionInputContext> {
-  const body = await controlFetch<CapsuleInstallConfigReAdoptionInputContextResponse>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/install-config-re-adoption-context${query({ revisionPlanId })}`,
-  );
+  const path = `${BASE}/capsules/${encodeURIComponent(capsuleId)}/install-config-re-adoption-context${query({ revisionPlanId })}`;
+  const body = await withControlDeadline("Target inputs read", options, (scope) =>
+    controlFetch<CapsuleInstallConfigReAdoptionInputContextResponse>(path, scope));
   const value = body?.installConfigReAdoptionContext;
   const nonempty = (field: unknown): field is string => typeof field === "string" && field.length > 0;
   const names = new Set<string>();
