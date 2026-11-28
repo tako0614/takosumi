@@ -1160,6 +1160,31 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
       expect(errors).toEqual([]);
     });
+    test("an installed app offers Open without a Workspace selection or selector", async ({ page }) => {
+      const fixture = await detailFixture(page, base, false, false, "not_applicable", { workspaceId: "" });
+      await page.addInitScript(() => localStorage.removeItem("takosumi.currentWorkspaceId"));
+      await page.route((url) => url.pathname === "/api/v1/workspaces", (route) =>
+        route.fulfill({ json: { workspaces: [] } }));
+      const launcherReads: string[] = [];
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (url.pathname.endsWith("/ui-surfaces")) launcherReads.push(url.pathname + url.search);
+      });
+
+      await page.goto(sourceUrl);
+      await openInstallSheet(page);
+      const review = await waitForPlan(page);
+      await review.getByRole("button", { name: "Install", exact: true }).click();
+      await expect.poll(() => fixture.mutations.filter((mutation) => mutation === applyMutation).length).toBe(1);
+      fixture.finish();
+      const complete = page.getByTestId("install-complete");
+      await expect(complete.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "https://apps.example.test/inline-app");
+      await expect(complete.getByRole("link", { name: "Manage app", exact: true })).toHaveAttribute("href", `/apps/${capId}`);
+      expect(launcherReads).toEqual([`/api/v1/ui-surfaces?capsuleId=${capId}`]);
+      expect(fixture.attempts.latest()?.workspaceId).toBe("");
+      expect(await page.evaluate(() => localStorage.getItem("takosumi.currentWorkspaceId"))).toBeNull();
+    });
+
     for (const outcome of ["needs attention", "uninstalled", "installed"] as const) {
       test(`a saved install shows the app's current ${outcome} state after reload`, async ({ page }) => {
         const fixture = await detailFixture(page, base);

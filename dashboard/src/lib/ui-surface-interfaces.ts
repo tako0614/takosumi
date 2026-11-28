@@ -107,10 +107,12 @@ export interface UiSurfaceReadOptions {
 const MAX_UI_SURFACE_PAGES = 10_000;
 
 export async function listAuthorizedUiSurfaces(
-  workspaceId: string,
+  workspaceId: string | undefined,
   options: UiSurfaceReadOptions = {},
 ): Promise<readonly AuthorizedUiSurface[]> {
-  const normalizedWorkspaceId = requiredId(workspaceId, "workspaceId");
+  const normalizedWorkspaceId = workspaceId === undefined
+    ? undefined
+    : requiredId(workspaceId, "workspaceId");
   const normalizedCapsuleId =
     options.capsuleId === undefined
       ? undefined
@@ -119,8 +121,11 @@ export async function listAuthorizedUiSurfaces(
   if (normalizedCapsuleId !== undefined) {
     params.set("capsuleId", normalizedCapsuleId);
   }
-  const legacyPath = `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces`;
+  const legacyPath = normalizedWorkspaceId === undefined
+    ? undefined
+    : `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces`;
   let basePath = normalizedCapsuleId ? "/api/v1/ui-surfaces" : legacyPath;
+  if (basePath === undefined) throw new Error("workspaceId is required");
   const interfaces: unknown[] = [];
   let incomplete = false;
   const seenCursors = new Set<string>();
@@ -136,7 +141,7 @@ export async function listAuthorizedUiSurfaces(
       // Only an absent initial route selects an older host's projection.
       // Denial, unavailability, empty results and failed later pages never
       // replace the app decision with Workspace membership.
-      if (page !== 0 || basePath === legacyPath ||
+      if (page !== 0 || legacyPath === undefined || basePath === legacyPath ||
           !(error instanceof UiSurfaceResponseError) || error.status !== 404) throw error;
       basePath = legacyPath;
       body = await fetchJson(`${basePath}${query}`, options);
@@ -180,7 +185,7 @@ export async function listAuthorizedUiSurfaces(
 
 export function parseUiSurfaceInterface(
   value: unknown,
-  workspaceId: string,
+  workspaceId: string | undefined,
 ): UiSurfaceCandidate | null {
   const record = isRecord(value) ? value : null;
   const metadata = record && isRecord(record.metadata) ? record.metadata : null;
@@ -200,6 +205,7 @@ export function parseUiSurfaceInterface(
   const resolvedRevision = nonNegativeInteger(status?.resolvedRevision);
   const interfaceId = text(metadata?.id);
   const interfaceName = text(metadata?.name);
+  const interfaceWorkspaceId = text(metadata?.workspaceId);
   const capsuleOwned = ownerRef?.kind === "Capsule";
   const capsuleId = capsuleOwned ? text(ownerRef?.id) : null;
   const uiSurface =
@@ -210,7 +216,9 @@ export function parseUiSurfaceInterface(
   if (
     record?.apiVersion !== TAKOSUMI_API_VERSION ||
     record.kind !== "Interface" ||
-    metadata?.workspaceId !== workspaceId ||
+    !interfaceWorkspaceId ||
+    metadata?.workspaceId !== interfaceWorkspaceId ||
+    (workspaceId !== undefined && interfaceWorkspaceId !== workspaceId) ||
     !interfaceId ||
     !interfaceName ||
     !isValidInterfaceName(interfaceName) ||
