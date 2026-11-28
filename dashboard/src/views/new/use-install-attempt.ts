@@ -842,14 +842,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     await driveRun?.catch(() => undefined);
   };
 
-  const refresh = async (expected = epoch, signal?: AbortSignal): Promise<GitInstallPlanResponse | undefined> => {
+  const refresh = async (expected = epoch, signal?: AbortSignal, ownsRead = () => true): Promise<GitInstallPlanResponse | undefined> => {
     const current = response();
     if (!current) return undefined;
+    const isCurrent = () => !disposed && expected === epoch && ownsRead();
     try {
-      return accept(await getGitInstallPlan(current.installPlan.id, {
-        signal,
-        isCurrent: () => !disposed && expected === epoch,
-      }), expected);
+      const fresh = await getGitInstallPlan(current.installPlan.id, { signal, isCurrent });
+      return isCurrent() ? accept(fresh, expected) : undefined;
     } catch {
       return undefined;
     }
@@ -1161,12 +1160,14 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const adoptConnection = async (
     requirement: GitInstallPlanConnectionRequirement,
     connectionId: string,
+    isCurrent = () => true,
   ): Promise<"selected" | "not_offered" | "unavailable"> => {
+    if (!isCurrent()) return "unavailable";
     if (response()?.userAction.kind !== "provide_inputs") {
       return (await chooseConnection(requirement, connectionId)) ? "selected" : "unavailable";
     }
-    const fresh = await refresh();
-    if (fresh?.userAction.kind !== "provide_inputs") return "unavailable";
+    const fresh = await refresh(epoch, undefined, isCurrent);
+    if (!isCurrent() || fresh?.userAction.kind !== "provide_inputs") return "unavailable";
     const row = fresh.userAction.connections.find(
       (candidate) =>
         candidate.provider === requirement.provider &&

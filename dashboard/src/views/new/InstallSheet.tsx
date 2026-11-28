@@ -41,6 +41,7 @@ import { friendlyError } from "../../lib/error-copy.ts";
 import { interfaceLabel } from "../../lib/interface-labels.ts";
 import { providerConnectionStatusLabel } from "../../lib/labels.ts";
 import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
+import { currentSessionCheck } from "../account/lib/session.ts";
 import ConnectionCreateForm from "../workspace/connections/ConnectionCreateForm.tsx";
 import { PlannedResources } from "../app/PlannedResources.tsx";
 import InstallExecution from "./InstallExecution.tsx";
@@ -433,6 +434,8 @@ export function InstallScreen(props: {
   readonly storeModulePath?: string | undefined;
   readonly onDone: (capsuleId: string) => void;
 }) {
+  let disposed = false;
+  onCleanup(() => { disposed = true; });
   const attempt = () => props.attempt;
   const view = () => props.attempt.view();
   const plan = () => props.attempt.response()?.installPlan;
@@ -487,9 +490,9 @@ export function InstallScreen(props: {
   };
 
   /** A connection saved from the screen is chosen for its row once offered there. */
-  const adopt = async (requirement: GitInstallPlanConnectionRequirement, connectionId: string) => {
-    const result = await attempt().adoptConnection(requirement, connectionId);
-    if (result === "selected") {
+  const adopt = async (requirement: GitInstallPlanConnectionRequirement, connectionId: string, isCurrent = () => true) => {
+    const result = await attempt().adoptConnection(requirement, connectionId, isCurrent);
+    if (result === "selected" && isCurrent()) {
       setRowError(requirement);
       if (connecting() === connectionKey(requirement)) {
         setConnecting(undefined);
@@ -502,19 +505,32 @@ export function InstallScreen(props: {
   // Typed credentials are tested once after saving, as on the connections
   // page; OAuth connections arrive verified and skip the test.
   const verify = async (requirement: GitInstallPlanConnectionRequirement, connectionId: string) => {
+    const currentAttempt = attempt();
+    const attemptId = plan()?.id;
+    const sessionIsCurrent = currentSessionCheck();
+    const key = connectionKey(requirement);
+    const isCurrent = () => !disposed && sessionIsCurrent() && !locked() &&
+      attemptId !== undefined && attempt() === currentAttempt && plan()?.id === attemptId &&
+      rows().some((row) => connectionKey(row) === key);
+    if (!isCurrent()) return;
     try {
-      const result = (await testConnection(connectionId)) as { readonly status?: string } | undefined;
-      if (result?.status && result.status !== "verified") {
+      const result = await testConnection(connectionId, { isCurrent });
+      if (!isCurrent()) return;
+      if (result.status === "unconfirmed") {
+        setRowError(requirement, t("conn.test.unconfirmed"));
+        return;
+      }
+      if (result.status !== "verified") {
         setRowError(requirement, t("conn.test.notReady", {
           status: providerConnectionStatusLabel(result.status),
         }));
         return;
       }
     } catch (cause) {
-      setRowError(requirement, friendlyError(cause, t).message);
+      if (isCurrent()) setRowError(requirement, friendlyError(cause, t).message);
       return;
     }
-    if ((await adopt(requirement, connectionId)) === "not_offered") {
+    if ((await adopt(requirement, connectionId, isCurrent)) === "not_offered" && isCurrent()) {
       setRowError(requirement, t("installStore.connectionNotAllowed"));
     }
   };

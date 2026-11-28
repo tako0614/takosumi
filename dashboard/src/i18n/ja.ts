@@ -1213,6 +1213,7 @@ export const ja = {
   "conn.test": "接続を確認",
   "conn.testing": "確認中…",
   "conn.test.notReady": "この接続はまだ使えません（状態: {status}）。",
+  "conn.test.unconfirmed": "接続の確認結果を取得できませんでした。接続一覧で状態を確認してください。",
   "conn.remove.confirmTitle": "「{name}」を削除",
 
   // --- notifications -------------------------------------------------------------

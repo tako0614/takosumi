@@ -2401,7 +2401,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
     });
 
-    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionReadbackDeadline", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "reviewDifferentConnectionSetupRequired", "reviewDifferentConnectionRemoved", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "scheduledUnavailable", "uninstallScheduledDuringReplacement", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement"] as const) test({
+    for (const scenario of ["states", "reviewDifferentConnection", "reviewDifferentConnectionInventoryUnavailable", "reviewDifferentConnectionPreflightDeadline", "reviewDifferentConnectionLostResponse", "reviewDifferentConnectionReadbackDeadline", "reviewDifferentConnectionSavedLate", "reviewDifferentConnectionTimedOut", "reviewDifferentConnectionReserved", "reviewDifferentConnectionReloaded", "reviewDifferentConnectionApprovedElsewhere", "reviewDifferentConnectionRejected", "reviewDifferentConnectionSetupRequired", "reviewDifferentConnectionRemoved", "staleReview", "staleReviewSetupRequired", "lostReplacementResponse", "lostReplacementOnInstalledApp", "partialRecovery", "replacementExpiresBeforeReview", "replacementRowDisappears", "replacementRowBecomesRequired", "replacementInventoryChanges", "replacementAccountChanges", "firstRemovalReserved", "sharedKeyConflict", "effectiveRequiredNoOption", "effectiveRequiredWithOption", "restoreOriginal", "effectiveHealthyOptional", "unusedUnavailable", "scheduledUnavailable", "uninstallScheduledDuringReplacement", "unusedOnlyUnavailable", "firstRemovalRefusal", "failedOpenReview", "indeterminateOpenReview", "noReplacement", "refreshInitialReplacement", "reverifyReplacement", "unconfirmedNewReplacement"] as const) test({
       states: "each state the server reports reads as it is, with its one next step in place",
       reviewDifferentConnection: "an owner can choose another uninstall connection before approving",
       reviewDifferentConnectionInventoryUnavailable: "an uninstall review holds old approval until checking replacement connections finishes",
@@ -2442,6 +2442,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       noReplacement: "uninstall recovery opens connections when no verified replacement is available",
       refreshInitialReplacement: "uninstall recovery refreshes an empty connection chooser without leaving the app",
       reverifyReplacement: "uninstall recovery can return after rechecking a saved connection",
+      unconfirmedNewReplacement: "uninstall waits for explicit verification of a new replacement after an unreadable response",
     }[scenario], async ({ page }) => {
       const lostReplacementOnInstalledApp = scenario === "lostReplacementOnInstalledApp";
       const replacementReadbackDeadline = scenario === "reviewDifferentConnectionReadbackDeadline";
@@ -2532,7 +2533,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const openReviewFailure = scenario === "failedOpenReview" || indeterminateOpenReview;
       const reverifyReplacement = scenario === "reverifyReplacement";
       const refreshInitialReplacement = scenario === "refreshInitialReplacement";
-      const noReplacement = scenario === "noReplacement" || refreshInitialReplacement || reverifyReplacement;
+      const unconfirmedNewReplacement = scenario === "unconfirmedNewReplacement";
+      const noReplacement = scenario === "noReplacement" || refreshInitialReplacement || reverifyReplacement || unconfirmedNewReplacement;
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const installAttemptPath = "/api/v1/install-plans/gip_00000000005ea7e5";
       const installReconcilePath = `${installAttemptPath}/reconcile`;
@@ -2571,6 +2573,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       let replacementVerified = !noReplacement;
       let incompleteReplacementTested = false;
       let replacementTesting = false;
+      let replacementTestPosts = 0;
       let releaseReplacementVerification = () => {};
       const replacementVerification = noReplacement
         ? new Promise<void>((resolve) => { releaseReplacementVerification = resolve; })
@@ -2862,9 +2865,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (noReplacement && path === "/api/v1/connections/conn_saved/test" && request.method() === "POST") {
           replacementTesting = true;
+          replacementTestPosts += 1;
           await replacementVerification;
           replacementVerified = true;
-          return route.fulfill({ json: { status: "verified" } });
+          if (unconfirmedNewReplacement && replacementTestPosts === 2) {
+            return route.fulfill({ status: 403, json: { error: "forbidden" } });
+          }
+          return route.fulfill({ json: unconfirmedNewReplacement && replacementTestPosts === 1 ? {} : { status: "verified" } });
         }
         if (reverifyReplacement && path === "/api/v1/connections/conn_incomplete/test" && request.method() === "POST") {
           incompleteReplacementTested = true;
@@ -3221,6 +3228,24 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         } finally {
           releaseReplacementVerification();
         }
+        if (unconfirmedNewReplacement) {
+          const row = page.getByRole("listitem").filter({ hasText: "Existing Cloudflare connection" });
+          await expect(row.getByText("Verified", { exact: true }).first()).toBeVisible();
+          await expect(page.getByText("Couldn't confirm the result. Check the status in Connections.")).toBeVisible();
+          await expect(backToUninstall).toHaveCount(0);
+          expect(seenMutations).toEqual(setupMutations);
+          await row.locator("summary").click();
+          const verify = row.getByRole("button", { name: "Test connection", exact: true });
+          const refused = page.waitForResponse(response =>
+            new URL(response.url()).pathname === "/api/v1/connections/conn_saved/test" && response.status() === 403);
+          await verify.click();
+          await refused;
+          await expect(verify).toBeEnabled();
+          await expect(backToUninstall).toHaveCount(0);
+          setupMutations.push(verificationPath);
+          await verify.click();
+          setupMutations.push(verificationPath);
+        }
         await expect(backToUninstall).toHaveAttribute("href", `/apps/${ID}`);
         if (reverifyReplacement) {
           const row = page.getByRole("listitem").filter({ hasText: "Second Cloudflare connection" });
@@ -3282,7 +3307,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           `POST /api/v1/capsules/${ID}/destroy-plan`,
         ]);
         expect(errors).toEqual([]);
-        traffic.assertNoFailures();
+        if (unconfirmedNewReplacement) {
+          expect(traffic.failures.map(({ kind, status, url }) => [kind, status, new URL(url).pathname])).toEqual([
+            ["response", 403, "/api/v1/connections/conn_saved/test"],
+          ]);
+        } else {
+          traffic.assertNoFailures();
+        }
         return;
       }
 

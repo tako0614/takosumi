@@ -1207,6 +1207,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.empty.message": "Connect a cloud to use it with your apps.",
   "conn.test": "Test connection",
   "conn.testing": "Checking…",
+  "conn.test.unconfirmed": "Couldn't confirm the result. Check the status in Connections.",
   "conn.test.notReady": "This connection isn't ready yet (status: {status}).",
   "conn.remove.confirmTitle": "Remove “{name}”",
 

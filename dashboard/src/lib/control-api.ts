@@ -3813,11 +3813,28 @@ export async function createSourceHttpsTokenConnection(input: {
  * (`POST /api/v1/connections/:id/test`). Returns the backend's verification
  * projection (status etc.); secret values never round-trip.
  */
-export async function testConnection(connectionId: string): Promise<unknown> {
-  return await controlFetch<unknown>(
-    `${BASE}/connections/${encodeURIComponent(connectionId)}/test`,
-    { method: "POST" },
-  );
+export async function testConnection(
+  connectionId: string,
+  scope: ControlReadScope = {},
+): Promise<{ readonly status: "verified" | "pending" | "expired" | "unconfirmed"; readonly detail?: string }> {
+  let dispatched = false;
+  let result: unknown;
+  try {
+    result = await submitBoundedControlWrite<unknown>(
+      "Connection verification",
+      `${BASE}/connections/${encodeURIComponent(connectionId)}/test`,
+      { ...scope, method: "POST", beforeDispatch: () => { dispatched = true; } },
+    );
+  } catch (failure) {
+    throwIfReadRetired(scope);
+    const requestTimedOut = failure instanceof ControlApiError && failure.status === 408;
+    if (!dispatched || (!requestTimedOut && !isMutationOutcomeUnknown(failure))) throw failure;
+  }
+  throwIfReadRetired(scope);
+  if (isRecord(result) && (result.status === "verified" || result.status === "pending" || result.status === "expired")) {
+    return { status: result.status, ...(typeof result.detail === "string" ? { detail: result.detail } : {}) };
+  }
+  return { status: "unconfirmed" };
 }
 
 /**

@@ -16,7 +16,9 @@ describe("/new Provider Connections return context", () => {
     expect(sheet).not.toContain("<ConnectionsTab");
     expect(sheet).toContain("<ConnectionCreateForm");
     expect(sheet).toContain("initialProviderSource={requirement().provider}");
-    expect(sheet).toContain("attempt().adoptConnection(requirement, connectionId)");
+    expect(sheet).toContain(
+      "attempt().adoptConnection(requirement, connectionId, isCurrent)",
+    );
     for (const source of [sheet, view, controller]) {
       expect(source).not.toContain("providerConnectionsHrefForInstallReturn");
       expect(source).not.toContain("sessionStorage");
@@ -52,12 +54,16 @@ describe("/new Provider Connections return context", () => {
     expect(controller).toContain(
       "providerBindings: bindingsWith(current.userAction.connections, requirement, connectionId)",
     );
-    // A connection made in the sheet is chosen only once the coordinator offers it.
+    // A newly saved connection must still belong to the current attempt and be
+    // offered by the coordinator before the sheet chooses it.
     const adopt = controller.slice(
       controller.indexOf("const adoptConnection = async"),
       controller.indexOf("/** The name the install uses now"),
     );
-    expect(adopt).toContain("await refresh()");
+    expect(adopt).toContain("await refresh(epoch, undefined, isCurrent)");
+    expect(adopt).toContain(
+      'if (!isCurrent() || fresh?.userAction.kind !== "provide_inputs") return "unavailable"',
+    );
     expect(adopt).toContain('return "not_offered"');
   });
 
