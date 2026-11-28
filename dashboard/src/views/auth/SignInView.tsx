@@ -221,6 +221,7 @@ export function SignInPanel() {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <path d="M9 18l6-6-6-6" />
             </svg>
@@ -257,6 +258,7 @@ export function SignInPanel() {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              aria-hidden="true"
             >
               <path d="M9 18l6-6-6-6" />
             </svg>
@@ -395,6 +397,11 @@ export function SignInCallbackView() {
     provider?: string;
   }>();
   const [error, setError] = createSignal<string | null>(null);
+  // The tab title is what a user sees after switching back from the provider
+  // tab; leaving it at 「サインイン処理中…」 hid the failure.
+  createEffect(() => {
+    if (error()) setDocumentTitle(t("auth.failed"));
+  });
   const [retryHref, setRetryHref] = createSignal("/sign-in");
   const signInErrorMessage = (err: Error): string => {
     const message = err.message?.trim();
@@ -441,7 +448,7 @@ export function SignInCallbackView() {
   });
 
   return (
-    <div class="auth-page">
+    <main class="auth-page">
       <Show
         when={!error()}
         fallback={
@@ -452,7 +459,7 @@ export function SignInCallbackView() {
             </p>
             <a
               href={retryHref()}
-              class="btn btn-secondary"
+              class="tg-btn tg-btn-primary"
               style="margin-top: 24px;"
             >
               {t("auth.backToSignIn")}
@@ -460,9 +467,9 @@ export function SignInCallbackView() {
           </div>
         }
       >
-        <p class="auth-spinner">{t("auth.processing")}</p>
+        <p class="auth-spinner" role="status">{t("auth.processing")}</p>
       </Show>
-    </div>
+    </main>
   );
 }
 

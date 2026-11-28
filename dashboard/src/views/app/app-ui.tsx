@@ -17,6 +17,7 @@ import type { AppPageSection } from "../../lib/app-links.ts";
 import { formatDateTime, relativeTime, t } from "../../i18n/index.ts";
 import { type OpenRouteScreen, screenOpenRoute } from "../../lib/open-choice-state.ts";
 import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
+import { isImeComposing } from "../../lib/ime.ts";
 
 /** Relative time ("5分前"), with the exact date and time on hover. */
 export function RelativeTime(props: { readonly iso: string }): JSX.Element {
@@ -148,7 +149,7 @@ export function OpenAppButton(props: {
     if (container && !container.contains(event.target as Node)) setOpen(false);
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && open()) {
+    if (event.key === "Escape" && !isImeComposing(event) && open()) {
       event.stopPropagation();
       setOpen(false);
       container?.querySelector<HTMLElement>("[aria-haspopup]")?.focus();

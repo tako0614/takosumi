@@ -89,6 +89,11 @@ function Inner() {
         <Switch>
           <Match when={home.loading && !firstPage()}><LauncherSkeleton /></Match>
           <Match when={home.error}>
+            <Show when={!showSearch()}>
+              <div class="av-section-head">
+                <h1 id={titleId}>{t("apps.sectionYours")}</h1>
+              </div>
+            </Show>
             <Toast tone="error">
               {t("common.fetchFailedGeneric")}
               <Button variant="secondary" size="sm" type="button" onClick={() => void refresh()}>{t("common.retry")}</Button>

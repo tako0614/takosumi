@@ -108,6 +108,7 @@ export default function LegalView(props: Props) {
                 <A
                   class="legal-nav-link"
                   classList={{ active: page() === key }}
+                  aria-current={page() === key ? "page" : undefined}
                   href={key === "support" ? "/support" : `/legal/${key}`}
                 >
                   {COPY[language()][key].title}

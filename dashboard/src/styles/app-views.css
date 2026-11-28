@@ -1100,6 +1100,7 @@
  * tap size. Desktop (fine pointer) keeps the compact sizing. */
 @media (pointer: coarse) {
   .av-service-row-delete,
+  .legal-brand,
   .legal-lang button,
   .legal-sign-in,
   .legal-nav-link {

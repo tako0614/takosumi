@@ -14,12 +14,14 @@
   color: var(--tg-fg);
   line-height: var(--tg-lh-body);
 }
-.app-shell a:not(.tg-btn) {
+/* The skip link sits on a solid accent fill and keeps its own white label
+   (base.css); inheriting the body ink here dropped it to 3.5:1 in light. */
+.app-shell a:not(.tg-btn, .skip-link) {
   color: inherit;
   text-decoration: none;
   transition: color 120ms ease;
 }
-.app-shell a:not(.tg-btn):hover {
+.app-shell a:not(.tg-btn, .skip-link):hover {
   /* AA-safe red leaf (raw --tg-accent fails AA as small text in light and on
      --tg-bg-hi in dark). */
   color: var(--tg-accent-text);
@@ -833,8 +835,14 @@
   font-weight: 750;
   margin: 0 0 var(--tg-s-2);
   line-height: var(--tg-lh-snug);
-  overflow-wrap: normal;
+  /* keep-all keeps Japanese phrases whole, but a long phrase such as
+     「サインインに失敗しました」 has no break point and ran past the card on a
+     phone. auto-phrase (where supported) breaks between phrases and balance
+     avoids a one-character last line; `anywhere` is the overflow safety net. */
+  overflow-wrap: anywhere;
   word-break: keep-all;
+  word-break: auto-phrase;
+  text-wrap: balance;
 }
 .sign-in-sub {
   color: var(--tg-fg-muted);
@@ -978,6 +986,18 @@
 .sign-in-retry:hover {
   border-color: var(--tg-line-strong);
   background: var(--tg-bg-subtle);
+}
+/* Touch: first-run sign-in has only the providers, the theme switcher and the
+   provider re-check; the last two were 32px and 40px. Declared after their
+   base rules so the coarse-pointer size wins. */
+@media (pointer: coarse) {
+  .auth-theme-btn {
+    width: 44px;
+    height: 44px;
+  }
+  .sign-in-retry {
+    min-height: var(--tg-control-height);
+  }
 }
 .sign-in-terms {
   margin-top: var(--tg-s-5);

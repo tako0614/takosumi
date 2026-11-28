@@ -10,6 +10,7 @@
  * `button` as focusable, so the first link or input added to it would have let
  * Tab escape to the inert page behind. One selector, one order, one cleanup.
  */
+import { isImeComposing } from "./ime.ts";
 import { inertBackground } from "./modal-inert.ts";
 
 /** Everything that can hold focus inside a dialog. */
@@ -45,6 +46,9 @@ export function openModalDialog(options: ModalDialogOptions): () => void {
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
+      // Escape that cancels an IME conversion in a field inside the dialog
+      // belongs to the field, not the dialog.
+      if (isImeComposing(event)) return;
       event.preventDefault();
       options.onDismiss();
       return;
