@@ -1116,7 +1116,7 @@ export default function AppManagePage(props: {
       async (isCurrent) => {
         const attempt = app()?.progress.installPlanId;
         if (!attempt) return extractRunId(await planCapsule(capsuleId()));
-        const advanced = await advanceGitInstallPlan(attempt, { isCurrent });
+        const advanced = await advanceGitInstallPlan(attempt, { isCurrent, expectedCapsuleId: capsuleId() });
         if (!isCurrent()) return;
         if (advanced.installPlan.planRunId) return advanced.installPlan.planRunId;
         // The install waits for a person (connections, settings, a module,

@@ -50,7 +50,7 @@ function installResponse(generation: number, done: boolean, step = 0) {
       ...(done ? { planRunId: "plan_1" } : {}),
     },
     nextAction: done ? "review_run" : "reconcile",
-    userAction: done ? { kind: "review", planRunId: "plan_1" } : { kind: "wait", phase },
+    userAction: done ? { kind: "review_run", planRunId: "plan_1", capsuleId: "cap_1" } : { kind: "wait", phase },
     links: { self: "/api/v1/install-plans/ip_1" },
   };
 }
@@ -109,7 +109,7 @@ test("continuing an install backs off while each claim only bumps the generation
     (generation, done) => installResponse(generation, done),
     30_000,
   );
-  const response = await advanceGitInstallPlan("ip_1", { timeoutMs: 600_000, pollCadence });
+  const response = await advanceGitInstallPlan("ip_1", { expectedCapsuleId: "cap_1", timeoutMs: 600_000, pollCadence });
   expect(response.installPlan.planRunId).toBe("plan_1");
   // 250 + 500 + 1_000 + 2_000 * 15 crosses the 30 s Source sync on the 19th
   // wait; the first reconcile comes before the loop. A floor-only loop would
@@ -123,9 +123,54 @@ test("continuing an install keeps the floor while each round brings new evidence
     (generation, done, round) => installResponse(generation, done, round),
     5_000,
   );
-  await advanceGitInstallPlan("ip_1", { timeoutMs: 600_000, pollCadence });
+  await advanceGitInstallPlan("ip_1", { expectedCapsuleId: "cap_1", timeoutMs: 600_000, pollCadence });
   expect(clock.waits.length).toBeGreaterThan(0);
   expect(clock.waits.every((delay) => delay === 250)).toBe(true);
+});
+
+test("continuing an install reads its saved review after a lost reconcile reply", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    requests.push(`${method} ${String(input)}`);
+    return method === "POST" ? json({ error: "upstream_closed" }, 502) : json(installResponse(5, true));
+  }) as typeof fetch;
+
+  const response = await advanceGitInstallPlan("ip_1", { expectedCapsuleId: "cap_1" });
+  expect(response.installPlan.planRunId).toBe("plan_1");
+  expect(requests).toEqual(["POST /api/v1/install-plans/ip_1/reconcile", "GET /api/v1/install-plans/ip_1"]);
+});
+
+test("an uncertain install resume refuses pending or mismatched review evidence", async () => {
+  const review = installResponse(5, true);
+  const unconfirmed = [
+    installResponse(5, false),
+    { ...review, installPlan: { ...review.installPlan, id: "ip_other" } },
+    { ...review, installPlan: { ...review.installPlan, capsuleId: "cap_other" } },
+    { ...review, userAction: { ...review.userAction, planRunId: "plan_other" } },
+  ];
+  for (const saved of unconfirmed) {
+    const methods: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      methods.push(method);
+      return method === "POST" ? json({ error: "reconcile_conflict" }, 409) : json(saved);
+    }) as typeof fetch;
+    await expect(advanceGitInstallPlan("ip_1", { expectedCapsuleId: "cap_1" }))
+      .rejects.toMatchObject({ status: 409, code: "reconcile_conflict" });
+    expect(methods).toEqual(["POST", "GET"]);
+  }
+});
+
+test("a refused install resume never replaces the rejection with a saved review", async () => {
+  const methods: string[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    methods.push(init?.method ?? "GET");
+    return json({ error: "forbidden" }, 403);
+  }) as typeof fetch;
+  await expect(advanceGitInstallPlan("ip_1", { expectedCapsuleId: "cap_1" }))
+    .rejects.toMatchObject({ status: 403, code: "forbidden" });
+  expect(methods).toEqual(["POST"]);
 });
 
 test("continuing a version change backs off while each claim only bumps the generation", async () => {
@@ -148,7 +193,7 @@ test("retiring the app page stops an accepted install reconciliation without dis
     return json(installResponse(requests.length, requests.length > 1));
   }) as typeof fetch;
 
-  await expect(advanceGitInstallPlan("ip_1", { isCurrent: () => current }))
+  await expect(advanceGitInstallPlan("ip_1", { expectedCapsuleId: "cap_1", isCurrent: () => current }))
     .rejects.toMatchObject({ name: "AbortError" });
   expect(requests).toEqual(["/api/v1/install-plans/ip_1/reconcile"]);
 });
