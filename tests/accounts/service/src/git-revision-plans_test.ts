@@ -853,6 +853,52 @@ test("a revision to the exact applied commit is already current; the same commit
   expect(tracking.counts.sync).toBe(1);
 });
 
+test.each([
+  { stateVersionId: "sv_three", generation: 3, expectedPhase: "syncing_source", syncs: 1 },
+  { stateVersionId: "sv_two", generation: 2, expectedPhase: "failed", syncs: 0 },
+])("the same commit can be reviewed only while the re-adopted configuration is unapplied ($expectedPhase)", async (
+  { stateVersionId, generation, expectedPhase, syncs },
+) => {
+  const commit = "1".repeat(40);
+  const fixture = revisionFixture({ adoptedRef: commit });
+  const previous = fixture.installConfig;
+  const next = {
+    ...previous,
+    id: "cfg_revision_readopted",
+    internal: {
+      reAdoption: {
+        capsuleId: fixture.capsule.id,
+        actorSubject: WORKSPACE.ownerUserId,
+        reason: "Adopt launcher from the current commit",
+        idempotencyKeyHash: "fixture",
+        requestDigest: "fixture",
+        previousInstallConfigId: previous.id,
+        previousInstallConfigDigest: await stableJsonDigest(previous),
+        previousCapsuleStatus: "active",
+        previousStateVersionId: stateVersionId,
+        previousStateGeneration: generation,
+        previousExecutionAuthorityEpoch: 1,
+        authorityGuard: "fixture",
+        derivedTargetDigest: "fixture",
+        baseInstallConfigId: defaultCapsuleInstallConfig().id,
+        sourceSnapshotId: "snapshot_launcher",
+      },
+    },
+  } satisfies InstallConfig;
+  fixture.replaceInstallConfig(next);
+  fixture.mutateCapsule({ installConfigId: next.id });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: commit },
+    { "idempotency-key": "review-readopted-launcher" },
+  );
+  expect(created.status).toBe(201);
+  const settled = await fixture.reconcile((await created.json()).revisionPlan.id);
+  expect(settled.status).toBe(200);
+  expect((await settled.json()).revisionPlan.phase).toBe(expectedPhase);
+  expect(fixture.counts).toEqual({ sync: syncs, compatibility: 0, plan: 0 });
+  expect(fixture.applyCalls).toBe(0);
+});
+
 test("retrying a version whose Apply failed or left the app in error plans again instead of answering already current", async () => {
   const commit = "1".repeat(40);
   const failedApply = revisionFixture({ adoptedRef: commit, adoptedApplyStatus: "failed" });
