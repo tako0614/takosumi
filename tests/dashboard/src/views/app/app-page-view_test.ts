@@ -242,7 +242,7 @@ describe("installed app page", () => {
   });
 
   test("uninstall is one implementation: grace period stated first and cancellable", () => {
-    expect(page).toContain("await deleteCapsule(inst.id);");
+    expect(page).toContain("await deleteCapsule(inst.id, { isCurrent: () => ownsUninstall(operation) });");
     expect(page).toContain("await cancelCapsuleUninstall(inst.id, uninstallId, scope);");
     expect(page).not.toContain("dependencyWarning");
     expect(page).not.toContain("dependencyCheck");

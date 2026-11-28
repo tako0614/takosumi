@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import type { Capsule } from "takosumi-contract";
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 import {
@@ -2199,9 +2199,71 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         release();
       }
     });
-    test("lost uninstall and cancellation answers recover the current reservation without resending", async ({ page }) => {
+    test("a confirmed uninstall does not dispatch after the app changes during Hosted preflight", async ({ page }) => {
+      const f = await detailFixture(page, base); f.finish();
+      await page.addInitScript((readMarker) => {
+        const fetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const response = await fetch(input, init);
+          if (new Headers(init?.headers).get(readMarker) !== "1") return response;
+          const headers = new Headers(response.headers);
+          headers.set(readMarker, "1");
+          return new Response(response.body, { status: response.status, headers });
+        };
+      }, "x-takosumi-shared-auth-read");
+      let holdNextProbe = false;
+      let heldProbe: Route | undefined;
+      const authenticated = { json: { authenticated: true } };
+      await page.route("**/auth/oidc/session", (route) => {
+        if (holdNextProbe && !heldProbe) {
+          heldProbe = route;
+          return;
+        }
+        return route.fulfill(authenticated);
+      });
+      try {
+        await page.goto(`/apps/${capId}`);
+        const section = await openUninstall(page);
+        await section.getByRole("button", { name: "Uninstall", exact: true }).click();
+        holdNextProbe = true;
+        await page.getByRole("dialog").getByRole("button", { name: "Uninstall", exact: true }).click();
+        await expect.poll(() => Boolean(heldProbe)).toBe(true);
+        const otherApp = PORTABLE_CAPSULES.ws_beta[0];
+        await page.evaluate((id) => {
+          history.pushState(null, "", `/apps/${id}`);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }, otherApp.id);
+        await expect(page).toHaveURL(new RegExp(`/apps/${otherApp.id}$`, "u"));
+        await heldProbe!.fulfill(authenticated);
+        heldProbe = undefined;
+        holdNextProbe = false;
+        await expect(page.getByRole("heading", { level: 1, name: otherApp.name })).toBeVisible();
+        expect(f.mutations).toEqual([]);
+        expect(f.capsule().uninstall).toBeUndefined();
+      } finally {
+        await heldProbe?.abort("failed").catch(() => undefined);
+      }
+    });
+    for (const stalled of [false, true]) test(`${stalled ? "stalled" : "lost"} uninstall and cancellation answers recover the current reservation without resending`, async ({ page }) => {
       const f = await detailFixture(page, base); f.finish(); f.loseRemovalAnswer(); f.loseCancellationAnswer();
-      await page.clock.setFixedTime(new Date(now));
+      const capsulePath = `/api/v1/capsules/${capId}`;
+      if (stalled) {
+        await page.clock.install({ time: new Date(now) });
+        await page.addInitScript(({ capsulePath, cancelPath }) => {
+          const fetch = window.fetch.bind(window);
+          window.fetch = async (input, init) => {
+            const response = await fetch(input, init);
+            const path = new URL(response.url).pathname;
+            if ((init?.method === "DELETE" && path === capsulePath) ||
+              (init?.method === "POST" && path === cancelPath)) {
+              return new Promise<Response>(() => {});
+            }
+            return response;
+          };
+        }, { capsulePath, cancelPath: cancelUninstallPath });
+      } else {
+        await page.clock.setFixedTime(new Date(now));
+      }
       let contextReads = 0;
       let metadata: "normal" | "other" | "missing" | "unavailable" = "normal";
       await page.route(`**/api/v1/capsules/${capId}`, (route) => {
@@ -2219,6 +2281,10 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const section = await openUninstall(page);
       await section.getByRole("button", { name: "Uninstall", exact: true }).click();
       await page.getByRole("dialog").getByRole("button", { name: "Uninstall", exact: true }).click();
+      if (stalled) {
+        await expect.poll(() => f.capsule().uninstall?.phase).toBe("scheduled");
+        await page.clock.fastForward(30_001);
+      }
       const appPage = page.getByTestId("app-page");
       await expect(appPage).toHaveAttribute("data-app-state", "uninstall_scheduled");
       // This is the current reservation, not proof of who created it.
@@ -2233,6 +2299,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       // The server committed exactly one cancellation, although its answer was lost.
       await expect.poll(() => f.mutations.filter((m) => m === `POST ${cancelUninstallPath}`).length).toBe(1);
       expect(f.capsule().uninstall).toMatchObject({ id: scheduled.id, revision: 2, phase: "cancelled" });
+      if (stalled) await page.clock.fastForward(30_001);
       await expect(appPage).toHaveAttribute("data-app-state", "installed");
       await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
       expect(contextReads).toBeGreaterThan(before);
