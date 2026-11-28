@@ -3013,7 +3013,7 @@ async function waitForPlatformCodeRunnerStartup(
     if (remaining <= 0) throw deadlineError();
     return command
       ? command(argv, stdin, cwd, environment)
-      : requiredCommand(argv, stdin, cwd, environment, remaining);
+      : runPlatformStartupRead(argv, remaining, cwd, environment);
   };
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const remaining = deadline - performance.now();
@@ -8534,19 +8534,32 @@ function rewritePrivate(path: string, bytes: Uint8Array): void {
   syncDirectory(dirname(path));
 }
 
+/** The startup poll has no stdin and shares one countdown across provider reads. */
+export function runPlatformStartupRead(
+  argv: readonly string[],
+  timeoutMs: number,
+  cwd?: string,
+  environment?: Record<string, string>,
+): Promise<CommandResult> {
+  return requiredCommand(argv, undefined, cwd, environment, timeoutMs);
+}
+
 async function requiredCommand(
   argv: readonly string[],
   stdin?: Uint8Array,
   cwd = ROOT,
   environment = childEnvironment(),
-  timeoutMs = COMMAND_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<CommandResult> {
+  const pipeDeadline = timeoutMs === undefined ? undefined : new AbortController();
+  const separateGroup = pipeDeadline !== undefined && process.platform !== "win32";
   const child = Bun.spawn([...argv], {
     cwd,
     stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
     env: environment,
+    detached: separateGroup,
   });
   if (stdin !== undefined) {
     if (!child.stdin)
@@ -8557,12 +8570,32 @@ async function requiredCommand(
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
+    pipeDeadline?.abort();
+    // The Wrangler launcher forwards SIGTERM but not SIGKILL. Stop its
+    // process group, and release our pipe readers even if a child kept a pipe.
+    if (separateGroup) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+        return;
+      } catch {
+        // The group may already have exited.
+      }
+    }
     child.kill("SIGKILL");
-  }, timeoutMs);
+  }, timeoutMs ?? COMMAND_TIMEOUT_MS);
+  const readOutput = (stream: ReadableStream<Uint8Array>) => {
+    const body = pipeDeadline
+      ? stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>(), { signal: pipeDeadline.signal })
+      : stream;
+    return new Response(body).arrayBuffer().catch((error: unknown) => {
+      if (pipeDeadline?.signal.aborted) return new ArrayBuffer(0);
+      throw error;
+    });
+  };
   const [exitCode, stdoutBuffer, stderrBuffer] = await Promise.all([
     child.exited,
-    new Response(child.stdout).arrayBuffer(),
-    new Response(child.stderr).arrayBuffer(),
+    readOutput(child.stdout),
+    readOutput(child.stderr),
   ]).finally(() => clearTimeout(timer));
   const stdoutBytes = new Uint8Array(stdoutBuffer);
   const stderrBytes = new Uint8Array(stderrBuffer);

@@ -30,6 +30,7 @@ import {
   runPlatformWorkerHostedAuthMaintenanceActivation,
   runPlatformWorkerCodeRelease,
   runPlatformWorkerLoginAdmissionRelease,
+  runPlatformStartupRead,
   selectRecoveredVersion,
   secretNames,
   type PlatformReleaseCommand,
@@ -1117,6 +1118,43 @@ test("routine staging startup exits before build when the selected Runner, timin
     expect(result.startupWaits).toHaveLength(expectedWaits);
     expect([result.gateCount, result.buildCount, result.uploadCount, result.activationCount]).toEqual([0, 0, 0, 0]);
     expect(result.results).toEqual([]);
+  }
+});
+
+test.skipIf(process.platform === "win32")("the startup read deadline settles with an inherited Wrangler-style output pipe", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "takosumi-runner-startup-process-"));
+  const pidFile = join(scratch, "descendant.pid");
+  // This launcher makes a child that inherits its output, as Wrangler does.
+  const launcher = `
+    import { spawn } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], {
+      stdio: ["ignore", "inherit", "inherit", "ipc"],
+    });
+    writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+    setInterval(() => {}, 1000);
+  `;
+  const result = runPlatformStartupRead([process.execPath, "-e", launcher], 500, scratch)
+    .then(() => undefined, (error: unknown) => error);
+  let alarm: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      result,
+      new Promise<string>((done) => { alarm = setTimeout(() => done("still pending"), 1_600); }),
+    ]);
+    expect(outcome).toBeInstanceOf(PlatformCommandError);
+    expect(outcome).toMatchObject({ timedOut: true });
+    expect(Number(readFileSync(pidFile, "utf8"))).toBeGreaterThan(0);
+  } finally {
+    clearTimeout(alarm);
+    try {
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      if (Number.isSafeInteger(pid) && pid > 0) process.kill(pid, "SIGKILL");
+    } catch {
+      // The fixture's descendant may already have exited.
+    }
+    await result;
+    rmSync(scratch, { recursive: true, force: true });
   }
 });
 
