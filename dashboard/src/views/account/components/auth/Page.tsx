@@ -30,5 +30,5 @@ export default function Page(props: Props) {
       document.title = `${props.title} — ${dashboardProductName()}`;
     }
   });
-  return <AuthGuard>{(session) => props.children(session)}</AuthGuard>;
+  return <AuthGuard insideMain>{(session) => props.children(session)}</AuthGuard>;
 }

@@ -32,6 +32,7 @@ import {
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
 import { Search, SlidersHorizontal, X } from "lucide-solid";
 import { openModalDialog } from "../../lib/modal-dialog.ts";
+import { isImeComposing } from "../../lib/ime.ts";
 import AppFace from "../../components/AppFace.tsx";
 import { matchingInstalledApps, type InstalledAppSummary } from "takosumi-contract";
 import { appPageHref } from "../../lib/app-links.ts";
@@ -449,7 +450,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             value={searchInput()}
             onInput={(e) => setSearchInput(e.currentTarget.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && searchInput()) {
+              if (e.key === "Escape" && !isImeComposing(e) && searchInput()) {
                 e.preventDefault();
                 e.stopPropagation();
                 clearSearch();
@@ -478,7 +479,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             aria-controls={displayOptionsId}
             onClick={() => setOptionsOpen((open) => !open)}
             onKeyDown={(e) => {
-              if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && optionsOpen()) {
+              if (e.key === "Escape" && !isImeComposing(e) && optionsOpen()) {
                 e.preventDefault();
                 e.stopPropagation();
                 setOptionsOpen(false);
@@ -526,7 +527,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         class="tcs-options-panel"
         hidden={!optionsOpen()}
         onKeyDown={(e) => {
-          if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && optionsOpen()) {
+          if (e.key === "Escape" && !isImeComposing(e) && optionsOpen()) {
             e.preventDefault();
             e.stopPropagation();
             setOptionsOpen(false);

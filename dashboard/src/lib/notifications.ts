@@ -215,6 +215,7 @@ export function attentionCount(
 }
 
 const ACK_STORAGE_KEY = "takosumi.notifications.acknowledgedAt";
+const [acknowledgedVersion, setAcknowledgedVersion] = createSignal(0);
 
 /**
  * Read the "everything up to here has been seen" mark.
@@ -224,6 +225,7 @@ const ACK_STORAGE_KEY = "takosumi.notifications.acknowledgedAt";
  * — long enough that users learn to ignore it and miss the next real failure.
  */
 export function readAcknowledgedAt(): number {
+  void acknowledgedVersion();
   if (typeof localStorage === "undefined") return 0;
   const raw = localStorage.getItem(ACK_STORAGE_KEY);
   const value = raw ? Date.parse(raw) : Number.NaN;
@@ -256,6 +258,7 @@ export function onNotificationsAcknowledged(listener: () => void): () => void {
   return () => ackListeners.delete(listener);
 }
 function notifyAcknowledged(): void {
+  setAcknowledgedVersion((n) => n + 1);
   for (const listener of [...ackListeners]) listener();
 }
 

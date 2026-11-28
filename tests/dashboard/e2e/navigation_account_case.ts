@@ -948,6 +948,245 @@ export function registerNavigationAccountCases(mode: string): void {
       });
     }
 
+    test("notifications mark-all-read updates the banner, bell badge, focus, and live region immediately", async ({ page }) => {
+      const errors = collectPageErrors(page);
+      await page.addInitScript(() => {
+        localStorage.setItem("tg_lang", "ja");
+        localStorage.removeItem("takosumi.notifications.acknowledgedAt");
+      });
+      await page.route("**/api/v1/dashboard/bootstrap*", async (route) => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.get("includeWorkspaces") !== "false") {
+          return route.continue();
+        }
+        const response = await route.fetch();
+        const { session } = await response.json();
+        return route.fulfill({
+          response,
+          json: {
+            session,
+            ...(url.searchParams.get("includeNotifications") === "true"
+              ? {
+                  notifications: [{
+                    workspaceHandle: "ws_alpha",
+                    event: {
+                      id: "event_wave4_failure",
+                      workspaceId: "ws_alpha",
+                      action: "run.failed",
+                      targetType: "run",
+                      targetId: "run_wave4_failure",
+                      metadata: { capsuleId: "app_wave4", capsuleName: "Wave4 App" },
+                      createdAt: "2026-11-04T00:00:00Z",
+                    },
+                  }],
+                }
+              : {}),
+          },
+        });
+      });
+
+      await page.goto("/notifications", { waitUntil: "domcontentloaded" });
+      const summary = page.locator(".wc-notif-summary");
+      const markAll = page.getByRole("button", { name: "すべて既読にする", exact: true });
+      const badge = page.locator(".topbar-badge");
+      await expect(summary).toContainText("要対応の出来事が 1 件あります。");
+      await expect(markAll).toBeVisible();
+      await expect(badge).toHaveText("1");
+
+      await markAll.click();
+      await expect(summary).toHaveCount(0);
+      await expect(markAll).toHaveCount(0);
+      await expect(badge).toHaveCount(0);
+      await expect(page.locator("#main")).toBeFocused();
+      await expect(page.locator('p.sr-only[role="status"]')).toHaveText(
+        "要対応の出来事が 0 件あります。",
+      );
+      expect(errors).toEqual([]);
+    });
+
+    test("account inline confirmations preserve focus, disable sibling triggers while busy, and restore focus after confirm", async ({ page }) => {
+      const errors = collectPageErrors(page);
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      const fixture = await accountFixture(page);
+
+      // Part 1: /account/cli API keys
+      let tokens = [
+        {
+          id: "pat_cli_1",
+          subject: "sub_portable_e2e",
+          name: "開発用 CLI",
+          prefix: "tks_8f2a",
+          scopes: ["read"],
+          created_at: "2026-10-01T00:00:00.000Z",
+        },
+        {
+          id: "pat_cli_2",
+          subject: "sub_portable_e2e",
+          name: "補助 CLI",
+          prefix: "tks_9b3c",
+          scopes: ["read"],
+          created_at: "2026-10-02T00:00:00.000Z",
+        },
+      ];
+      let releaseRevoke!: () => void;
+      const revokeHeld = new Promise<void>((resolve) => {
+        releaseRevoke = resolve;
+      });
+      await page.route((url) => url.pathname === "/api/v1/account/tokens", (route) => {
+        expect(route.request().method()).toBe("GET");
+        return route.fulfill({ json: { tokens, next_cursor: null } });
+      });
+      await page.route("**/api/v1/account/tokens/pat_cli_1/revoke", async (route) => {
+        expect(route.request().method()).toBe("POST");
+        await revokeHeld;
+        tokens = tokens.map((token) =>
+          token.id === "pat_cli_1"
+            ? { ...token, revoked_at: "2026-10-03T00:00:00.000Z" }
+            : token
+        );
+        return route.fulfill({ status: 200, json: { ok: true } });
+      });
+
+      await page.goto("/account/cli", { waitUntil: "domcontentloaded" });
+      const keyRow1 = page.getByRole("listitem").filter({ hasText: "開発用 CLI" });
+      const keyRow2 = page.getByRole("listitem").filter({ hasText: "補助 CLI" });
+      const keyRow1Trigger = keyRow1.getByRole("button", { name: "無効にする", exact: true });
+      const keyRow2Trigger = keyRow2.getByRole("button", { name: "無効にする", exact: true });
+      await keyRow1Trigger.click();
+      const keyConfirmGroup = keyRow1.getByRole("group", { name: "無効にする: 開発用 CLI" });
+      await expect(keyConfirmGroup).toBeVisible();
+      const keyCancel = keyConfirmGroup.getByRole("button", { name: "キャンセル", exact: true });
+      await expect(keyCancel).toBeFocused();
+      await keyCancel.click();
+      await expect(keyConfirmGroup).toHaveCount(0);
+      await expect(keyRow1Trigger).toBeFocused();
+
+      await keyRow1Trigger.click();
+      await expect(keyCancel).toBeFocused();
+      await keyConfirmGroup.getByRole("button", { name: "無効にする", exact: true }).click();
+      await expect(keyCancel).toBeDisabled();
+      await expect(keyRow2Trigger).toBeDisabled();
+      releaseRevoke();
+      await expect(keyRow1.getByText("無効", { exact: true })).toBeVisible();
+      await expect(keyRow1Trigger).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "キーを作成", exact: true })).toBeFocused();
+
+      // Part 2: /account/devices notification pushers
+      let pushers = [
+        {
+          id: "npsh_pixel",
+          kind: "webpush",
+          app_id: "com.takosumi",
+          pushkey: "BFixturePushKey1",
+          data: { url: "https://relay.example.test/push/1" },
+          device_display_name: "Pixel 9",
+          lang: "ja-JP",
+          created_at: "2026-10-01T00:00:00.000Z",
+          updated_at: "2026-10-01T00:00:00.000Z",
+          last_success_at: "2026-10-28T00:00:00.000Z",
+          last_failure_at: null,
+          last_failure_status: null,
+          failing: false,
+        },
+        {
+          id: "npsh_iphone",
+          kind: "webpush",
+          app_id: "com.takosumi",
+          pushkey: "BFixturePushKey2",
+          data: { url: "https://relay.example.test/push/2" },
+          device_display_name: "iPhone 16",
+          lang: "ja-JP",
+          created_at: "2026-10-02T00:00:00.000Z",
+          updated_at: "2026-10-02T00:00:00.000Z",
+          last_success_at: "2026-10-28T00:00:00.000Z",
+          last_failure_at: null,
+          last_failure_status: null,
+          failing: false,
+        },
+      ];
+      let releaseDelete!: () => void;
+      const deleteHeld = new Promise<void>((resolve) => {
+        releaseDelete = resolve;
+      });
+      await page.route((url) => url.pathname === "/api/v1/account/notification-pushers", (route) => {
+        expect(route.request().method()).toBe("GET");
+        return route.fulfill({
+          json: {
+            web_push_public_key: "BFixtureVapidPublicKey",
+            web_push_unavailable_reason: null,
+            pushers,
+          },
+        });
+      });
+      await page.route((url) => url.pathname.startsWith("/api/v1/account/notification-pushers/"), async (route) => {
+        expect(route.request().method()).toBe("DELETE");
+        const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() ?? "");
+        if (id === "npsh_pixel") await deleteHeld;
+        pushers = pushers.filter((entry) => entry.id !== id);
+        return route.fulfill({ status: 204, body: "" });
+      });
+
+      await page.goto("/account/devices", { waitUntil: "domcontentloaded" });
+      const devRow1 = page.getByRole("listitem").filter({ hasText: "Pixel 9" });
+      const devRow2 = page.getByRole("listitem").filter({ hasText: "iPhone 16" });
+      const devRow1Trigger = devRow1.getByRole("button", { name: "消す", exact: true });
+      const devRow2Trigger = devRow2.getByRole("button", { name: "消す", exact: true });
+      await devRow1Trigger.click();
+      const devConfirmGroup = devRow1.getByRole("group", { name: "消す: Pixel 9" });
+      await expect(devConfirmGroup).toBeVisible();
+      const devCancel = devConfirmGroup.getByRole("button", { name: "キャンセル", exact: true });
+      await expect(devCancel).toBeFocused();
+      await devCancel.click();
+      await expect(devConfirmGroup).toHaveCount(0);
+      await expect(devRow1Trigger).toBeFocused();
+
+      await devRow1Trigger.click();
+      await expect(devCancel).toBeFocused();
+      await devConfirmGroup.getByRole("button", { name: "端末を消す", exact: true }).click();
+      await expect(devCancel).toBeDisabled();
+      await expect(devRow2Trigger).toBeDisabled();
+      releaseDelete();
+      await expect(devRow1).toHaveCount(0);
+      await expect(devRow2Trigger).toBeFocused();
+
+      // Removing the final device restores focus to #main once the empty state renders.
+      await devRow2Trigger.click();
+      const lastGroup = devRow2.getByRole("group", { name: "消す: iPhone 16" });
+      await lastGroup.getByRole("button", { name: "端末を消す", exact: true }).click();
+      await expect(page.getByText("まだ端末はありません。", { exact: true })).toBeVisible();
+      await expect(page.locator("#main")).toBeFocused();
+
+      expect(fixture.mutations).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+
+    test("empty-state connections form can be closed back to the empty state and restores focus", async ({ page }) => {
+      const errors = collectPageErrors(page);
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      const fixture = await accountFixture(page);
+      await page.route((url) => url.pathname === "/api/v1/connections", (route) => {
+        expect(route.request().method()).toBe("GET");
+        return route.fulfill({ json: { connections: [] } });
+      });
+      await page.route((url) => url.pathname === "/api/v1/provider-connections", (route) => {
+        expect(route.request().method()).toBe("GET");
+        return route.fulfill({ json: { providerConnections: [] } });
+      });
+
+      await page.goto("/connections", { waitUntil: "domcontentloaded" });
+      const addButton = page.locator("[data-add-connection]");
+      await expect(addButton).toBeVisible();
+      await addButton.click();
+      const closeButton = page.getByRole("button", { name: "閉じる", exact: true });
+      await expect(closeButton).toBeVisible();
+      await closeButton.click();
+      await expect(closeButton).toHaveCount(0);
+      await expect(addButton).toBeVisible();
+      await expect(addButton).toBeFocused();
+      expect(fixture.mutations).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+
     test("old URLs land where the behavior lives now", async ({ page }) => {
       const errors = collectPageErrors(page);
       await accountFixture(page);

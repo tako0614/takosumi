@@ -966,7 +966,7 @@
 }
 .hosted-resource-card-heading h2 {
   margin: var(--tg-s-1) 0 0;
-  font-size: var(--tg-fs-md);
+  font-size: var(--tg-fs-base);
 }
 .hosted-resource-card-details {
   display: grid;

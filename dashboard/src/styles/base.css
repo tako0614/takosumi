@@ -116,8 +116,11 @@ main {
 .skip-link {
   position: absolute;
   left: var(--tg-s-2);
-  top: -56px;
+  top: -64px;
   z-index: var(--tg-z-skip);
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tg-control-height);
   padding: var(--tg-s-2) var(--tg-s-4);
   background: var(--tg-accent-emphasis);
   color: var(--tg-accent-fg);

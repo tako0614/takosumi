@@ -188,8 +188,9 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).toContain('class="tcs-search-clear"');
     expect(storeBrowserSource).toContain('aria-label={s("clearSearch", props.locale)}');
     expect(storeBrowserSource).toContain(
-      'if (e.key === "Escape" && !e.isComposing && e.keyCode !== 229 && searchInput())',
+      'if (e.key === "Escape" && !isImeComposing(e) && searchInput())',
     );
+    expect(storeBrowserSource).not.toContain("e.keyCode !== 229");
     expect(storeBrowserSource).toContain("e.stopPropagation();");
     expect(storeBrowserSource).toContain('class="tcs-active-chip"');
     expect(storeBrowserSource).toContain("optionsTriggerEl?.focus()");

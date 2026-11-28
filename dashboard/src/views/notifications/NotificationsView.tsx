@@ -10,7 +10,7 @@
  */
 import "../../styles/wave-b.css";
 import "../../styles/wave-c.css";
-import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
+import { createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js";
 import { A } from "@solidjs/router";
 import { AlertTriangle, Bell } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
@@ -153,6 +153,12 @@ export default function NotificationsView() {
         const failureCount = () =>
           attentionCount(feed(), selectedWorkspaceId());
         const openFailures = createMemo(() => attentionEvents(feed()));
+        const [acknowledgedNotice, setAcknowledgedNotice] = createSignal(false);
+        const markAllRead = () => {
+          acknowledgeNotifications(feed());
+          setAcknowledgedNotice(true);
+          requestAnimationFrame(() => document.getElementById("main")?.focus());
+        };
 
         return (
           <>
@@ -165,13 +171,18 @@ export default function NotificationsView() {
                     variant="secondary"
                     size="sm"
                     type="button"
-                    onClick={() => acknowledgeNotifications(feed())}
+                    onClick={markAllRead}
                   >
                     {t("notif.markAllRead")}
                   </Button>
                 </Show>
               }
             />
+            <p class="sr-only" role="status" aria-live="polite">
+              <Show when={acknowledgedNotice() && failureCount() === 0}>
+                {t("notif.attention", { n: 0 })}
+              </Show>
+            </p>
 
             <Switch>
               <Match when={loading()}>

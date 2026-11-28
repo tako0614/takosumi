@@ -22,6 +22,7 @@ import { appPageHref } from "../../lib/app-links.ts";
 import { screenOpenRoute } from "../../lib/open-choice-state.ts";
 import { openRouteAnchor, openRouteAria } from "../../lib/app-launch-link.ts";
 import { GIT_INSTALL_ENTRY } from "../../lib/install-link.ts";
+import { isImeComposing } from "../../lib/ime.ts";
 
 type MarkKind = "alert" | "info" | "warn" | "quiet";
 const STATE_MARK: Readonly<Partial<Record<AppState, { readonly label: MessageKey; readonly kind: MarkKind }>>> = {
@@ -72,7 +73,7 @@ function Inner() {
               value={query()}
               onInput={(event) => setQuery(event.currentTarget.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229 && query()) {
+                if (event.key === "Escape" && !isImeComposing(event) && query()) {
                   event.preventDefault();
                   event.stopPropagation();
                   clearSearch();

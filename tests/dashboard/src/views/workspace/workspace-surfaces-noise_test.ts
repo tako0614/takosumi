@@ -76,8 +76,9 @@ describe("workspace and account surfaces", () => {
     );
     expect(connectionsTabSource).toContain("open={shouldShowCreateForm()}");
     expect(connectionsTabSource).toContain(
-      "hasProviderConnections() ? closeCreateForm : undefined",
+      "!props.embedded || hasProviderConnections()",
     );
+    expect(connectionsTabSource).toContain("? closeCreateForm");
     expect(connectionsTabSource).toContain("onClick={openCreateForm}");
     expect(connectionsTabSource).toMatch(/const closeCreateForm = \(\) => \{\s*setCreateFormOpen\(false\);/u);
     expect(connectionCreateFormSource).toContain("<Show when={props.open ?? true}>");
