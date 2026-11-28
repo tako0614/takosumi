@@ -1085,6 +1085,10 @@ refused or failed before reaching the provider stops with
 teardown that fails after reaching the provider ends in `error`, like any
 failed destroy.
 `destroy-plan` creates an immediate destroy plan.
+When saved app settings have not been applied, the destroy plan takes its
+explicit module input mapping from the applied settings. If the saved history
+cannot verify that mapping, the request returns `409 failed_precondition` with
+`details.reason: "destroy_applied_variables_unproven"`.
 When the server cannot prove that the replacement matches the applied account and settings, it returns
 `409 failed_precondition` with `details.reason: "destroy_connection_recovery_unproven"`.
 When the cause can be determined, `details.connectionRecoveryFailure` contains

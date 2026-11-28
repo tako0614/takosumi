@@ -2,6 +2,23 @@ import { capsuleScopeRef } from "takosumi-contract/capsules";
 import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
+/** Digest of an immutable successor, excluding the seal stored inside it. */
+export function installConfigSuccessorDigest(target: InstallConfig): Promise<string> {
+  const receipt = target.internal?.reAdoption;
+  if (!receipt) return stableJsonDigest(target);
+  const { derivedTargetDigest: _seal, ...receiptWithoutSeal } = receipt;
+  return stableJsonDigest({
+    ...target,
+    internal: { ...target.internal, reAdoption: receiptWithoutSeal },
+  });
+}
+
+export async function hasValidDerivedTargetSeal(target: InstallConfig): Promise<boolean> {
+  const receipt = target.internal?.reAdoption;
+  return Boolean(receipt && /^sha256:[0-9a-f]{64}$/u.test(receipt.derivedTargetDigest) &&
+    await installConfigSuccessorDigest(target) === receipt.derivedTargetDigest);
+}
+
 /** Deterministic successor identity shared by the writer and Plan admission. */
 export async function reAdoptionTargetInstallConfigId(input: {
   readonly scopeRef: string;

@@ -627,7 +627,10 @@ destroy-plan が bridge になります。猶予なしで破棄したい client 
 所有者が計画を取り消した、または破棄が provider に届く前に拒否・失敗した場合は
 `uninstall.blockedReason` を残して止まり、所有者が取り消すか即時削除を選びます。
 provider に届いた破棄が失敗した場合は、通常の破棄失敗と同じく `error` になります。
-`destroy-plan` は猶予なしの破棄計画を作ります。アプリ所有者は
+`destroy-plan` は猶予なしの破棄計画を作ります。アプリの新しい設定が保存済みで未適用なら、
+削除Planの明示的なモジュール入力には適用済みの設定を使います。
+保存された履歴から入力を確定できないときは `409 failed_precondition` と
+`details.reason: "destroy_applied_variables_unproven"` を返します。アプリ所有者は
 `{"destroyProviderConnectionReplacements":[{"connectionId":"old-id","replacementConnectionId":"new-id"}]}`
 で、クラウドアカウントと適用済みの接続設定が一致する確認済み接続を選び直せます。
 破棄が一部進んで state が保存されていれば、

@@ -36,7 +36,7 @@ import {
 } from "./shared.ts";
 import { isPlainJsonObject, modulePathValue } from "./parse.ts";
 import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/default_install_config.ts";
-import { pendingRepositoryReAdoptionReceipt, reAdoptionTargetInstallConfigId } from "../../../../core/domains/capsules/repository_re_adoption.ts";
+import { hasValidDerivedTargetSeal, installConfigSuccessorDigest, pendingRepositoryReAdoptionReceipt, reAdoptionTargetInstallConfigId } from "../../../../core/domains/capsules/repository_re_adoption.ts";
 import {
   adoptRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
@@ -446,33 +446,7 @@ export async function handleCapsuleInstallConfigReAdoption(
   });
 }
 
-function derivedTargetWithoutSeal(target: InstallConfig): unknown {
-  const receipt = target.internal?.reAdoption;
-  if (!receipt) return target;
-  const {
-    derivedTargetDigest: _derivedTargetDigest,
-    ...receiptWithoutSeal
-  } = receipt;
-  return {
-    ...target,
-    internal: {
-      ...target.internal,
-      reAdoption: receiptWithoutSeal,
-    },
-  };
-}
-
-export async function hasValidDerivedTargetSeal(
-  target: InstallConfig,
-): Promise<boolean> {
-  const receipt = target.internal?.reAdoption;
-  return Boolean(
-    receipt &&
-      DIGEST.test(receipt.derivedTargetDigest) &&
-      (await stableJsonDigest(derivedTargetWithoutSeal(target))) ===
-        receipt.derivedTargetDigest,
-  );
-}
+export { hasValidDerivedTargetSeal };
 
 /**
  * Seals an already-composed insert-only InstallConfig successor.
@@ -502,9 +476,7 @@ export async function sealInstallConfigSuccessor(input: {
       },
     },
   })) as InstallConfig;
-  const derivedTargetDigest = await stableJsonDigest(
-    derivedTargetWithoutSeal(provisional),
-  );
+  const derivedTargetDigest = await installConfigSuccessorDigest(provisional);
   return {
     ...provisional,
     internal: {
