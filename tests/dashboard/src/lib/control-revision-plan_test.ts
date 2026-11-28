@@ -138,6 +138,7 @@ test.each([
   { start: "continue", status: 409, code: "reconcile_in_progress" },
   { start: "continue", status: 409, code: "reconcile_conflict" },
   { start: "continue", status: 0, code: "transport_error" },
+  { start: "create", status: 200, code: "truncated_body" },
 ] as const)("a $status $code from revision reconcile reads the stored review", async ({ start, status, code }) => {
   const calls: string[] = [];
   const createPath = "/api/v1/capsules/capsule_1/revision-plans";
@@ -149,6 +150,7 @@ test.each([
     if (method === "POST" && path === createPath) return json(revisionResponse("reconcile"), 201);
     if (method === "POST" && path === `${revisionPath}/reconcile`) {
       if (status === 0) throw new TypeError("Failed to fetch");
+      if (status === 200) return new Response('{"revisionPlan":', { headers: { "content-type": "application/json" } });
       return json({ error: { code } }, status);
     }
     if (method === "GET" && path === revisionPath) {

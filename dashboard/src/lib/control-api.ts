@@ -1566,11 +1566,10 @@ export async function reconcileGitRevisionPlan(
   revisionPlanId: string,
   options: Pick<RequestOpts, "signal" | "isCurrent"> = {},
 ): Promise<GitRevisionPlanResponse> {
-  throwIfAborted(options.signal);
-  throwIfReadRetired(options);
-  return await controlFetch<GitRevisionPlanResponse>(
+  return await submitBoundedControlWrite<GitRevisionPlanResponse>(
+    "Update progress",
     `${BASE}/revision-plans/${encodeURIComponent(revisionPlanId)}/reconcile`,
-    { method: "POST", signal: options.signal, isCurrent: options.isCurrent },
+    { ...options, method: "POST" },
   );
 }
 
@@ -1581,10 +1580,12 @@ async function reconcileGitRevisionPlanForReview(
   capsuleId?: string,
 ): Promise<GitRevisionPlanResponse> {
   try {
-    return await reconcileGitRevisionPlan(revisionPlanId, options);
+    const response = await reconcileGitRevisionPlan(revisionPlanId, options);
+    if (response?.revisionPlan) return response;
+    throw new ControlApiError(0, "request_indeterminate", "The update progress response could not be read.");
   } catch (failure) {
     const needsReadback = failure instanceof ControlApiError
-      ? failure.status >= 500 ||
+      ? failure.status === 0 || failure.status >= 500 ||
         (failure.status === 409 &&
           (failure.code === "reconcile_in_progress" || failure.code === "reconcile_conflict"))
       : failure instanceof TypeError;
@@ -1594,10 +1595,8 @@ async function reconcileGitRevisionPlanForReview(
 
     // A GET is enough if this exact coordinator already settled. Pending
     // preparation still requires explicit continuation after the failure.
-    const response = await controlFetch<GitRevisionPlanResponse>(
-      `${BASE}/revision-plans/${encodeURIComponent(revisionPlanId)}`,
-      { ...options, cache: "no-store" },
-    );
+    const response = await withControlDeadline("Update attempt read", { ...options, cache: "no-store" }, (scope) =>
+      controlFetch<GitRevisionPlanResponse>(`${BASE}/revision-plans/${encodeURIComponent(revisionPlanId)}`, scope));
     throwIfAborted(options.signal);
     throwIfReadRetired(options);
     const plan = response?.revisionPlan;
