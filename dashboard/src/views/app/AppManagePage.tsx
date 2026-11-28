@@ -449,7 +449,9 @@ export default function AppManagePage(props: {
   createEffect(() => {
     const inst = capsule();
     if (inst) setDocumentTitle(displayName() || inst.name);
-    else if (context.error) setDocumentTitle(t("app.notFound"));
+    else if (context.error) {
+      setDocumentTitle(notFound() ? t("app.notFound") : t("app.loadFailedTitle"));
+    }
   });
 
   createEffect(() => {
@@ -1731,6 +1733,7 @@ export default function AppManagePage(props: {
             when={notFound()}
             fallback={
               <EmptyState
+                headingLevel={1}
                 title={t("app.loadFailedTitle")}
                 message={friendlyError(error(), t).message}
                 action={
@@ -1746,6 +1749,7 @@ export default function AppManagePage(props: {
             }
           >
             <EmptyState
+              headingLevel={1}
               title={t("app.notFound")}
               message={t("app.notFoundMessage")}
               action={

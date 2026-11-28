@@ -19,6 +19,7 @@ import {
   themePreference,
   type ThemePreference,
 } from "../../../../lib/theme.ts";
+import { isImeComposing } from "../../../../lib/ime.ts";
 import { dashboardDocsHref } from "../../../../lib/runtime-capabilities.ts";
 
 // The Takos embedded shell keeps its external docs site; the standalone
@@ -57,7 +58,7 @@ export default function UserMenu() {
       if (focusWasInside) triggerRef?.focus();
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && open()) {
+      if (e.key === "Escape" && !isImeComposing(e) && open()) {
         setOpen(false);
         triggerRef?.focus();
       }

@@ -253,7 +253,7 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
                         {(details) => <p class="tg-card-subtitle">{details()}</p>}
                       </Show>
                       <a
-                        class="btn btn-secondary"
+                        class="tg-btn tg-btn-secondary"
                         href={platformContributionHref(
                           contribution,
                           workspaceId,

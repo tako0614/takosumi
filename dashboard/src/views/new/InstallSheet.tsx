@@ -38,6 +38,7 @@ import { appPageHref } from "../../lib/app-links.ts";
 import { appStateSentence } from "../../lib/app-page.ts";
 import { getCapsuleAppWithSignal, getRun, testConnection } from "../../lib/control-api.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { isImeComposing } from "../../lib/ime.ts";
 import { interfaceLabel } from "../../lib/interface-labels.ts";
 import { providerConnectionStatusLabel } from "../../lib/labels.ts";
 import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
@@ -757,7 +758,9 @@ export function InstallScreen(props: {
     const type = (value: string) => attempt().setDraft(variable().name, value, { typing: true });
     const leave = () => attempt().commitDraft(variable().name);
     const leaveOnEnter = (event: KeyboardEvent) => {
-      if (event.key === "Enter") {
+      // Enter that confirms an IME conversion must not commit the setting
+      // (and start preparing the install again) with half-typed text.
+      if (event.key === "Enter" && !isImeComposing(event)) {
         event.preventDefault();
         leave();
       }
@@ -1027,7 +1030,7 @@ export function InstallScreen(props: {
                       onInput={(event) => attempt().setVersionDraft(event.currentTarget.value)}
                       onBlur={() => attempt().commitVersion()}
                       onKeyDown={(event) => {
-                        if (event.key === "Enter") {
+                        if (event.key === "Enter" && !isImeComposing(event)) {
                           event.preventDefault();
                           attempt().commitVersion();
                         }
@@ -1056,7 +1059,7 @@ export function InstallScreen(props: {
                   onInput={(event) => attempt().setNameDraft(event.currentTarget.value)}
                   onBlur={() => void attempt().saveName()}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") {
+                    if (event.key === "Enter" && !isImeComposing(event)) {
                       event.preventDefault();
                       void attempt().saveName();
                     }

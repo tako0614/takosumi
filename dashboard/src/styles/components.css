@@ -897,7 +897,12 @@ a.wordmark {
 
 /* Keep the shared target size in compact action rows on touch devices too. */
 @media (pointer: coarse) {
-  .tg-btn-sm {
+  .tg-btn-sm,
+  .tg-checkbox {
+    min-height: var(--tg-control-height);
+  }
+  .tg-toast-dismiss {
+    min-width: var(--tg-control-height);
     min-height: var(--tg-control-height);
   }
   .tg-page-actions .tg-btn {

@@ -534,12 +534,14 @@
   }
 }
 
-/* Touch targets (WCAG 2.5.8 / M37): coarse pointers get a ≥40px tap size on the
-   store's compact chips + small buttons; fine pointers keep the dense sizing. */
+/* Touch targets (WCAG 2.5.8 / M37): coarse pointers get a ≥44px tap size on the
+   store's compact buttons, chips, and selects; fine pointers keep dense sizing. */
 @media (pointer: coarse) {
+  .tcs-btn,
   .tcs-btn.tcs-sm,
-  .tcs-chip {
-    min-height: 40px;
+  .tcs-chip,
+  .tcs-select-label .tcs-sort {
+    min-height: 44px;
   }
   .tcs-chip {
     display: inline-flex;

@@ -40,6 +40,7 @@ function RouteErrorFallback(props: {
   return (
     <div role="alert">
       <EmptyState
+        headingLevel={1}
         icon={<AlertCircle size={28} />}
         title={t("errorBoundary.routeTitle")}
         message={t("errorBoundary.routeBody")}

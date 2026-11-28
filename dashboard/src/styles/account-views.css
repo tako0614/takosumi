@@ -381,6 +381,7 @@
   display: flex;
   align-items: center;
   width: fit-content;
+  min-width: var(--tg-control-height);
   min-height: 44px;
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
