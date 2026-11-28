@@ -58,6 +58,7 @@ import {
   type OpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { applyWorkspacePolicyBake, planWorkspacePolicyBake } from "../../../../core/domains/deploy-control/workspace_policy_bake.ts";
 import {
   GIT_REVISION_PREPARATION_STALL_AFTER_MS,
   type StoredGitInstallPlan,
@@ -7060,6 +7061,140 @@ test("a saved re-adoption can be reviewed when an older Plan used a different sn
   }, 409);
   expect(refused.error.details.reason).toBe("re_adoption_target_changed");
   expect(fixture.runner.applyJobs).toHaveLength(1);
+});
+
+async function seedRetainedStateRestore(
+  fixture: Awaited<ReturnType<typeof reAdoptionRouteFixture>>,
+  stateVersionId?: string,
+) {
+  const { deployStore, operations, seeded } = fixture;
+  const capsule = await operations.capsules.getCapsule(seeded.capsule.id);
+  const source = (await deployStore.getStateVersion(stateVersionId ?? capsule.currentStateVersionId!))!;
+  const restoreId = `restore_${capsule.id}`;
+  const restored = {
+    ...source, id: `${source.id}_restored`, generation: capsule.currentStateGeneration + 1,
+    createdByRunId: restoreId, createdAt: new Date().toISOString(),
+  };
+  await deployStore.putBackupRun({
+    id: restoreId, type: "restore", status: "succeeded", createdBy: "user_test",
+    workspaceId: source.workspaceId, capsuleId: source.capsuleId, environment: source.environment,
+    restoreStateGeneration: source.generation, restoredFromStateVersionId: source.id,
+    restoredStateVersionId: restored.id, createdAt: restored.createdAt,
+  });
+  await deployStore.putStateVersion(restored);
+  await deployStore.putCapsule({ ...capsule, currentStateVersionId: restored.id, currentStateGeneration: restored.generation });
+  return restored.generation;
+}
+
+test.each(["complete", "restored", "restored-older", "partial", "restored-partial", "policy-baked", "unproven"] as const)("uninstall uses the applied settings for a %s deletion", async (outcome) => {
+  const suffix = `pending-re-adoption-uninstall-${outcome}`;
+  const { database, fixture } = await d1ReAdoptionRouteFixture(suffix);
+  await seedProviderConnections(fixture.deployStore, fixture.seeded.capsule);
+  const appliedSnapshot = await applyRevisedSourceSnapshot(fixture, suffix);
+  const { operations, runner, seeded } = fixture;
+  const firstStateId = (await operations.capsules.getCapsule(seeded.capsule.id)).currentStateVersionId!;
+  const authority = { operations, store: fixture.accountStore, cookie: fixture.cookie };
+  const path = `/api/v1/capsules/${seeded.capsule.id}`;
+  const save = async (publicUrl: string, key: string) => controlJson({
+    ...authority, method: "POST", path: `${path}/install-config-re-adoptions`,
+    headers: { "idempotency-key": key },
+    body: {
+      ...reAdoptionBody(fixture, await readReAdoptionGuard(fixture)),
+      reviewedUserVariables: { public_url: publicUrl },
+    },
+  }, 200);
+  const firstPendingUrl = "https://first-pending.example.test";
+  await save(firstPendingUrl, "uninstall-after-first-re-adoption");
+  if (outcome === "restored-older") {
+    const { planRun } = await operations.createCapsulePlan(seeded.capsule.id, { actor: "user_test" });
+    expect(runner.planJobs.at(-1)?.variables.public_url).toBe(firstPendingUrl);
+    const applied = await operations.createApplyRun({ planRunId: planRun.id, expected: applyExpectedGuardFromPlanRun(planRun) });
+    expect(applied.applyRun.status).toBe("succeeded");
+    expect(applied.capsule?.currentStateGeneration).toBe(2);
+  }
+  const pendingUrl = "https://latest-pending.example.test";
+  await save(pendingUrl, "uninstall-after-latest-re-adoption");
+  if (outcome === "policy-baked") {
+    const workspace = (await fixture.deployStore.getWorkspace(seeded.workspace.id))!;
+    await fixture.deployStore.putWorkspace({
+      ...workspace, policy: { allowedProviders: [FIXTURE_CLOUDFLARE_PROVIDER] },
+    });
+    const bake = await planWorkspacePolicyBake(fixture.deployStore);
+    expect((await applyWorkspacePolicyBake(fixture.deployStore, bake.digest)).baked).toEqual([seeded.capsule.id]);
+  }
+  const beforeDestroy = await operations.capsules.getCapsule(seeded.capsule.id);
+  const pending = await operations.capsules.getInstallConfig(beforeDestroy.installConfigId);
+  expect(pending.variableMapping.public_url).toBe(pendingUrl);
+  if (outcome === "policy-baked") {
+    expect(pending.internal?.reAdoption).toBeUndefined();
+    expect(pending.internal?.workspacePolicyBake).toBeDefined();
+  }
+  if (outcome === "unproven") {
+    const predecessorId = pending.internal!.reAdoption!.previousInstallConfigId;
+    const amended = await database.prepare(
+      "update install_configs set record_json = json_set(record_json, '$.variableMapping.public_url', ?) where id = ?",
+    ).bind("https://different.example.test", predecessorId).run();
+    expect(amended.meta?.changes).toBe(1);
+    expect((await operations.capsules.getInstallConfig(predecessorId)).variableMapping.public_url)
+      .toBe("https://different.example.test");
+    const response = await controlJson<{ error: { details: { reason: string } } }>({
+      ...authority, method: "DELETE", path: `${path}?immediate=true`,
+      headers: { "idempotency-key": "unproven-destroy-config" },
+    }, 409);
+    expect(response.error.details.reason).toBe("destroy_applied_variables_unproven");
+    expect(runner.planJobs).toHaveLength(1);
+    expect(runner.destroyJobs).toHaveLength(0);
+    expect(await operations.capsules.getCapsule(seeded.capsule.id)).toEqual(beforeDestroy);
+    return;
+  }
+  const destroyPlan = (key: string) => controlJson<{ run: { id: string } }>({
+    ...authority, method: "DELETE", path: `${path}?immediate=true`,
+    headers: { "idempotency-key": key },
+  }, 202);
+  if (outcome === "restored") await seedRetainedStateRestore(fixture);
+  if (outcome === "restored-older") expect(await seedRetainedStateRestore(fixture, firstStateId)).toBe(3);
+  const { run } = await destroyPlan("destroy-applied-config");
+  const destroy = runner.planJobs.at(-1)!;
+  expect(destroy.planRun.id).toBe(run.id);
+  expect(destroy.planRun.operation).toBe("destroy");
+  expect(destroy.planRun.sourceSnapshotId).toBe(appliedSnapshot.id);
+  expect(destroy.variables.public_url).toBe(TAKOS_PUBLIC_ORIGIN);
+  expect(runner.destroyJobs).toHaveLength(0);
+
+  const partialFailure = outcome === "partial" || outcome === "restored-partial";
+  runner.destroy = async job => {
+    runner.destroyJobs.push(job);
+    return {
+      ...(partialFailure ? { providerExecutionFailure: { kind: "provider_execution_failed", statePersistence: "persisted" } as const } : {}),
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+      stateDigest: STATE_DIGEST,
+      executionEvidence: fixtureExecutionEvidence(job, "destroy", partialFailure ? { outcome: "provider_failed_state_persisted" } : {}),
+    };
+  };
+  await controlJson({ ...authority, method: "POST", path: `/api/v1/runs/${run.id}/approve` }, 200);
+  const attempted = await controlJson<{ run: { status: string } }>({ ...authority, method: "POST", path: `/api/v1/runs/${run.id}/apply` }, 201);
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(runner.applyJobs).toHaveLength(outcome === "restored-older" ? 2 : 1);
+  if (!partialFailure) {
+    expect(attempted.run).toMatchObject({ status: "succeeded" });
+    expect((await operations.capsules.getCapsule(seeded.capsule.id)).status).toBe("destroyed");
+    return;
+  }
+  expect(attempted.run.status).toBe("failed");
+  const partial = await operations.capsules.getCapsule(seeded.capsule.id);
+  expect(partial.status).toBe("error");
+  expect(partial.currentStateGeneration).toBe(beforeDestroy.currentStateGeneration + 1);
+  expect(runner.destroyJobs).toHaveLength(1);
+
+  const retryGeneration = outcome === "restored-partial" ? await seedRetainedStateRestore(fixture) : partial.currentStateGeneration;
+  const retry = (await destroyPlan("destroy-after-partial-state")).run;
+  expect(runner.planJobs.at(-1)).toMatchObject({
+    planRun: { id: retry.id, sourceSnapshotId: appliedSnapshot.id, baseStateGeneration: retryGeneration },
+    variables: { public_url: TAKOS_PUBLIC_ORIGIN },
+  });
+  const beforeApproval = await operations.capsules.getCapsule(seeded.capsule.id);
+  expect(beforeApproval.installConfigId).toBe(beforeDestroy.installConfigId);
+  expect(runner.destroyJobs).toHaveLength(1);
 });
 
 test("re-adoption guard becomes stale when an exact recovery row drifts", async () => {

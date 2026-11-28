@@ -13,7 +13,7 @@ import { readCommittedApplyReceiptCommand, readCommittedApplyReceiptProbeCommand
  * source surfaces. Method bodies are moved byte-for-byte.
  */
 import { scheduledUninstallAuthorizationFailure, UNINSTALL_AUTHORIZATION_REASONS } from "../../capsules/uninstall_authorization.ts";
-import { pendingRepositoryReAdoptionReceipt } from "../../capsules/repository_re_adoption.ts";
+import { hasValidDerivedTargetSeal, pendingRepositoryReAdoptionReceipt } from "../../capsules/repository_re_adoption.ts";
 import {
   planScopeSelectors,
   type JsonValue,
@@ -2920,15 +2920,12 @@ export class RunEngine {
     // Refuse before compatibility checks, source/configuration preparation, or
     // Run creation, including destroy/uninstall and drift-check plans.
     await this.#assertCapsuleHasNoRetiredDependencies(capsuleId);
-    // Capture before the first Capsule read: old compatibility evidence must
-    // never be paired with an epoch obtained after an InstallConfig rebind.
-    // Destroy does not select or project compatibility evidence.
-    const compatibilityExecutionAuthorityEpoch = destroy
-      ? undefined
-      : await planCreationStage(
-          "compatibility_authority_load",
-          this.#store.getCapsuleExecutionAuthorityEpoch(capsuleId),
-        );
+    // Capture before the first Capsule read so source or teardown input
+    // evidence is never paired with an epoch obtained after a rebind.
+    const compatibilityExecutionAuthorityEpoch = await planCreationStage(
+      "compatibility_authority_load",
+      this.#store.getCapsuleExecutionAuthorityEpoch(capsuleId),
+    );
     const capsule = await planCreationStage(
       "capsule_load",
       this.#requireCapsule(capsuleId),
@@ -3021,13 +3018,14 @@ export class RunEngine {
     // produced the current StateVersion. CompatibilityReport rows are
     // admission evidence for create/update only; they are not teardown
     // authority and may be unreadable legacy storage.
-    const appliedPlan =
+    const appliedState =
       destroy && capsule.currentStateGeneration > 0
         ? await planCreationStage(
             "current_state_plan_load",
-            this.#currentStatePlanRunForCapsule(capsule),
+            this.#currentStatePlanProvenance(capsule),
           )
         : undefined;
+    const appliedPlan = appliedState?.plan;
     if (destroy && capsule.currentStateGeneration > 0 && !appliedPlan) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -3042,6 +3040,9 @@ export class RunEngine {
         { reason: "destroy_source_snapshot_missing" },
       );
     }
+    const destroyVariableConfig = appliedState
+      ? await this.#destroyVariableConfiguration(capsule, installConfig, appliedState, compatibilityExecutionAuthorityEpoch)
+      : undefined;
     let destroyConnectionRecovery: PlanRun["destroyConnectionRecovery"];
     const canRetryWithOriginalConnections =
       appliedPlan?.operation === "destroy" && appliedPlan.destroyConnectionRecovery !== undefined &&
@@ -3375,6 +3376,7 @@ export class RunEngine {
       this.#capsulePlanRequest({
         capsule,
         installConfig,
+        destroyVariableConfig,
         source,
         snapshot,
         operation,
@@ -4043,6 +4045,7 @@ export class RunEngine {
   async #capsulePlanRequest(input: {
     readonly capsule: Capsule;
     readonly installConfig: InstallConfig;
+    readonly destroyVariableConfig?: InstallConfig;
     readonly source: Source;
     readonly snapshot: SourceSnapshot;
     readonly operation: "create" | "update" | "destroy";
@@ -4076,6 +4079,78 @@ export class RunEngine {
     };
   }
 
+  /** Resolve the input mapping before any saved settings that were never applied. */
+  async #destroyVariableConfiguration(
+    capsule: Capsule,
+    currentConfig: InstallConfig,
+    appliedState: {
+      readonly plan: PlanRun;
+      readonly producer: StateVersion;
+    },
+    executionEpoch: number | undefined,
+  ): Promise<InstallConfig | undefined> {
+    const receipt = currentConfig.internal?.reAdoption;
+    if (!currentConfig.internal?.workspacePolicyBake &&
+      (!receipt?.previousStateVersionId || receipt.capsuleId !== capsule.id)) return;
+
+    const unavailable = () => new OpenTofuControllerError(
+      "failed_precondition",
+      "The applied input mapping for this app cannot be verified for deletion.",
+      { reason: "destroy_applied_variables_unproven" },
+    );
+    let state = appliedState;
+    // A partial destroy advances state without adopting any saved settings.
+    // Follow its verified predecessor after resolving any Restore edges.
+    while (state.plan.operation === "destroy") {
+      const { plan, producer } = state;
+      if (!plan.capsuleCurrentStateVersionId || !plan.baseStateGeneration ||
+        plan.baseStateGeneration + 1 !== producer.generation) throw unavailable();
+      const previous = await this.#currentStatePlanProvenance({
+        ...capsule,
+        currentStateVersionId: plan.capsuleCurrentStateVersionId,
+        currentStateGeneration: plan.baseStateGeneration,
+      });
+      if (!previous) throw unavailable();
+      state = previous;
+    }
+
+    // Restore can return to a different generation than the one named by a
+    // later settings receipt. The producing Plan's epoch identifies which
+    // configuration was installed even across that jump.
+    const appliedEpoch = state.plan.capsuleExecutionAuthorityEpoch ?? 1;
+    if (typeof executionEpoch !== "number" || !Number.isSafeInteger(appliedEpoch) ||
+      appliedEpoch < 1 || appliedEpoch > executionEpoch) throw unavailable();
+    let config = currentConfig;
+    const seen = new Set<string>();
+    while (true) {
+      const reAdoption = config.internal?.reAdoption;
+      const policyBake = reAdoption ? undefined : config.internal?.workspacePolicyBake;
+      const predecessor = reAdoption ?? policyBake;
+      if (!predecessor) break;
+      if (seen.has(config.id) || config.workspaceId !== capsule.workspaceId) throw unavailable();
+      seen.add(config.id);
+      if (reAdoption) {
+        const previousEpoch = reAdoption.previousExecutionAuthorityEpoch;
+        if (reAdoption.capsuleId !== capsule.id || !Number.isSafeInteger(previousEpoch) ||
+          previousEpoch < 1 || previousEpoch >= executionEpoch ||
+          !await hasValidDerivedTargetSeal(config)) throw unavailable();
+        if (previousEpoch < appliedEpoch) break;
+        executionEpoch = previousEpoch;
+      }
+      const previous = await this.#store.getInstallConfig(predecessor.previousInstallConfigId);
+      if (!previous || previous.id !== predecessor.previousInstallConfigId ||
+        (previous.workspaceId !== undefined && previous.workspaceId !== capsule.workspaceId) ||
+        await stableJsonDigest(previous) !== predecessor.previousInstallConfigDigest) throw unavailable();
+      // A policy-only successor has no re-adoption epoch. Its predecessor is
+      // safe to follow for this read only if the two input mappings agree.
+      if (policyBake && (policyBake.workspaceId !== capsule.workspaceId ||
+        stableStringify([config.variableMapping, config.installContextVariableMapping]) !==
+          stableStringify([previous.variableMapping, previous.installContextVariableMapping]))) throw unavailable();
+      config = previous;
+    }
+    return config;
+  }
+
   /**
    * Generic Capsule plan request: the snapshot source stays as the child module
    * to be copied under the Takosumi generated root. The generated root itself is
@@ -4085,6 +4160,7 @@ export class RunEngine {
     input: {
       readonly capsule: Capsule;
       readonly installConfig: InstallConfig;
+      readonly destroyVariableConfig?: InstallConfig;
       readonly operation: "create" | "update" | "destroy";
       readonly appliedDestroyProviderScope?: true;
       readonly destroyConnectionRecovery?: PlanRun["destroyConnectionRecovery"];
@@ -4177,9 +4253,10 @@ export class RunEngine {
     // The module's `workspace_id` context input is the Capsule's frozen
     // derivation scope: apps build storage paths, cookie contexts and resource
     // names from it, so it must never move when Workspace goes away.
+    const variableConfig = input.destroyVariableConfig ?? input.installConfig;
     const explicitVariables = mergeInstallContextVariables(
-      input.installConfig.variableMapping,
-      input.installConfig.installContextVariableMapping,
+      variableConfig.variableMapping,
+      variableConfig.installContextVariableMapping,
       {
         workspaceId: capsuleScopeRef(input.capsule),
         capsuleId: input.capsule.id,
@@ -4968,20 +5045,20 @@ export class RunEngine {
   }
 
   async #currentStatePlanRunForCapsule(capsule: Capsule): Promise<PlanRun | undefined> {
+    return (await this.#currentStatePlanProvenance(capsule))?.plan;
+  }
+
+  async #currentStatePlanProvenance(capsule: Capsule) {
     const current = await this.#currentStateVersionForCapsule(capsule);
     if (!current) return;
-    return await this.#validatedPlanRunForStateVersion(
-      capsule,
-      current,
-      new Set(),
-    );
+    return this.#validatedPlanRunForStateVersion(capsule, current, new Set());
   }
 
   async #validatedPlanRunForStateVersion(
     capsule: Capsule,
     stateVersion: StateVersion,
     seenStateVersionIds: Set<string>,
-  ): Promise<PlanRun | undefined> {
+  ): Promise<{ readonly plan: PlanRun; readonly producer: StateVersion } | undefined> {
     if (
       seenStateVersionIds.has(stateVersion.id) ||
       seenStateVersionIds.size >= 64 ||
@@ -4999,12 +5076,12 @@ export class RunEngine {
       const planRun = await this.#store.getPlanRun(applyRun.planRunId);
       return planRun &&
         planRunMatchesAppliedState(capsule, stateVersion, applyRun, planRun)
-        ? planRun
+        ? { plan: planRun, producer: stateVersion }
         : undefined;
     }
 
     const recoveredPlan = await recoveryPlanForStateVersion(this.#store, capsule, stateVersion);
-    if (recoveredPlan) return recoveredPlan;
+    if (recoveredPlan) return { plan: recoveredPlan, producer: stateVersion };
 
     const restoreRun = await this.#store.getBackupRun(
       stateVersion.createdByRunId,
