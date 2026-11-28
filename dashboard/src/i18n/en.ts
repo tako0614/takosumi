@@ -1139,6 +1139,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.genericEnv.removeRow": "Remove this row",
   "conn.remove.cta": "Remove",
   "conn.remove.confirm": "Remove",
+  "conn.remove.unconfirmed": "Couldn't confirm the removal. Check the connection list before trying again.",
   "conn.remove.affectsApps":
     "{apps} use this connection. Finish uninstalling any apps you want to remove before removing this connection. Removing it first also stops scheduled uninstalls.",
   "conn.remove.noApps": "No app uses this connection.",

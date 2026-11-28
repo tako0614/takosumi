@@ -518,6 +518,110 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
+    test("connection removal cannot act on rows from the previous legacy workspace", async ({ page }) => {
+      await page.addInitScript(() => {
+        localStorage.setItem("tg_lang", "ja");
+        localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha");
+      });
+      const fixture = await accountFixture(page);
+      await page.route("**/api/v1/apps**", (route) =>
+        route.fulfill({ status: 404, json: { error: { code: "route_not_found" } } }));
+      const incoming = Promise.withResolvers<Route>();
+      const beta = { ...DIRECT, id: "conn_ws_beta", workspaceId: "ws_beta", displayName: "Cloudflare Beta" };
+      await page.route((url) => url.pathname === "/api/v1/provider-connections" && !url.searchParams.has("projection"), (route) => {
+        expect(route.request().method()).toBe("GET");
+        const workspace = new URL(route.request().url()).searchParams.get("workspaceId");
+        if (workspace === "ws_beta") {
+          incoming.resolve(route);
+          return;
+        }
+        expect(workspace).toBe("ws_alpha");
+        return route.fulfill({ json: { providerConnections: [DIRECT] } });
+      });
+      await page.goto("/connections", { waitUntil: "domcontentloaded" });
+      const previous = page.locator(".conn-details").filter({ hasText: DIRECT.displayName });
+      await expect(previous.locator("summary")).toBeVisible();
+      await previous.locator("summary").click();
+      await expect(previous.getByRole("button", { name: "削除", exact: true })).toBeEnabled();
+      await page.locator(".topbar select.workspace-switcher").selectOption("ws_beta");
+      const betaRead = await incoming.promise;
+      try {
+        await expect(previous).toHaveCount(0);
+      } finally {
+        await betaRead.fulfill({ json: { providerConnections: [beta] } });
+      }
+      await expect(page.locator(".conn-details").filter({ hasText: beta.displayName })).toBeVisible();
+      expect(fixture.mutations).toEqual([]);
+    });
+
+    for (const scenario of ["committed", "retained", "stalled", "readback unavailable", "denied", "acknowledged"] as const) {
+      test(`connection removal refreshes its list without repeating the POST (${scenario})`, async ({ page }) => {
+        const errors = collectPageErrors(page);
+        await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+        if (scenario === "stalled") await page.clock.install();
+        const fixture = await accountFixture(page);
+        const replacement = { ...DIRECT, id: "conn_personal_replacement", displayName: "代替 Cloudflare キー" };
+        let listReads = 0;
+        let revokeRequests = 0;
+        let stalled: Route | undefined;
+        await page.route((url) => url.pathname === "/api/v1/connections", (route) => {
+          expect(route.request().method()).toBe("GET");
+          listReads += 1;
+          if (scenario === "readback unavailable" && listReads === 2) return route.abort("failed");
+          void stalled?.abort("failed").catch(() => undefined);
+          const retained = revokeRequests === 0 || scenario === "retained" || scenario === "denied";
+          return route.fulfill({ json: { connections: retained ? [DIRECT, replacement, OPERATOR] : [replacement, OPERATOR] } });
+        });
+        await page.route(`**/api/v1/connections/${DIRECT.id}/revoke`, (route) => {
+          expect(route.request().method()).toBe("POST");
+          revokeRequests += 1;
+          if (scenario === "stalled") {
+            stalled = route;
+            return;
+          }
+          if (scenario === "acknowledged") return route.fulfill({ status: 204 });
+          if (scenario === "denied") return route.fulfill({ status: 403, json: { error: "forbidden" } });
+          return route.abort("failed");
+        });
+
+        await page.goto("/connections", { waitUntil: "domcontentloaded" });
+        const direct = page.locator(".conn-details").filter({ hasText: DIRECT.displayName });
+        const operator = page.locator(".conn-details").filter({ hasText: OPERATOR.displayName });
+        await direct.locator("summary").click();
+        await direct.getByRole("button", { name: "削除", exact: true }).click();
+        const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog")).first();
+        await dialog.getByRole("button", { name: "削除する", exact: true }).click();
+        await expect.poll(() => revokeRequests).toBe(1);
+        if (scenario === "stalled") await page.clock.fastForward(30_001);
+
+        const notice = page.getByText(/接続の削除結果を確認できませんでした/u);
+        if (scenario === "denied") {
+          await expect(page.getByRole("alert")).toBeVisible();
+          await expect(notice).toHaveCount(0);
+          expect(listReads).toBe(1);
+        } else {
+          if (scenario === "acknowledged") await expect(notice).toHaveCount(0);
+          else await expect(notice).toBeVisible();
+          await expect.poll(() => listReads).toBe(2);
+        }
+        if (scenario === "readback unavailable") {
+          await page.getByRole("button", { name: "再試行", exact: true }).click();
+          await expect.poll(() => listReads).toBe(3);
+        }
+        await expect(operator).toBeVisible();
+        await expect(page.locator(".conn-details").filter({ hasText: replacement.displayName })).toBeVisible();
+        if (scenario === "retained" || scenario === "denied") {
+          await expect(direct).toBeVisible();
+          await expect(direct.getByRole("button", { name: "削除", exact: true })).toBeEnabled();
+        } else {
+          await expect(direct).toHaveCount(0);
+        }
+        expect(revokeRequests).toBe(1);
+        expect(fixture.mutations).toEqual([]);
+        expect(errors).toEqual([]);
+      });
+    }
+
     test("アカウント has only personal profile, usage, CLI and notification device sections", async ({ page }) => {
       const errors = collectPageErrors(page);
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));

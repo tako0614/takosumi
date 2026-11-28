@@ -1147,6 +1147,7 @@ export const ja = {
   "conn.genericEnv.removeRow": "この行を消す",
   "conn.remove.cta": "削除",
   "conn.remove.confirm": "削除する",
+  "conn.remove.unconfirmed": "接続の削除結果を確認できませんでした。操作をやり直す前に接続一覧を確認してください。",
   "conn.remove.affectsApps":
     "{apps} がこの接続を使っています。取り除きたいアプリがあれば、アンインストールが完了してから接続を削除してください。先に接続を削除すると、予約済みのアンインストールも止まります。",
   "conn.remove.noApps": "この接続を使っているアプリはありません。",
