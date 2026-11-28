@@ -189,7 +189,7 @@ function summarizeControlError(error: unknown): ControlApiErrorSummary {
  * issuing another mutation.
  */
 export class ControlApiIndeterminateError extends ControlApiError {
-  readonly operation: "apply" | "source_create" | "source_patch" | "rollback_plan";
+  readonly operation: "apply" | "source_create" | "source_patch" | "rollback_plan" | "configuration_plan";
   readonly isIndeterminate = true;
   readonly causeSummary?: ControlApiErrorSummary;
 
@@ -1363,14 +1363,31 @@ async function submitCapsuleConfigurationPlan(
   },
   options: Pick<RequestOpts, "headers" | "isCurrent">,
 ): Promise<CapsuleConfigurationPlanResponse> {
-  const result = await controlFetch<CapsuleConfigurationPlanResponse>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/configuration-plans`,
-    {
-      method: "POST",
-      body: request,
-      ...options,
-    },
-  );
+  let responseStatus: number | undefined;
+  let result: CapsuleConfigurationPlanResponse;
+  try {
+    result = await withControlDeadline("Settings Plan", options, (scope) =>
+      controlFetch<CapsuleConfigurationPlanResponse>(
+        `${BASE}/capsules/${encodeURIComponent(capsuleId)}/configuration-plans`,
+        {
+          ...scope,
+          method: "POST",
+          body: request,
+          headers: options.headers,
+          onResponseStatus: (status) => { responseStatus = status; },
+        },
+      ));
+  } catch (failure) {
+    throwIfReadRetired(options);
+    // The issuer can save the configuration before Control reports a Plan
+    // timeout as 409. An unreadable conflict body cannot confirm refusal.
+    if (responseStatus === 409 && failure instanceof ControlApiError &&
+      (failure.code === "request_timeout" ||
+        (failure.status === 409 && failure.code === undefined && failure.isHttpStatusFallback))) {
+      throw new ControlApiIndeterminateError("configuration_plan", "The saved settings Plan could not be confirmed.", failure);
+    }
+    throw clientRejectionOnDeadline(responseStatus, failure) ?? failure;
+  }
   const planRunId = result?.configurationPlan?.planRunId;
   if (typeof planRunId !== "string" || !planRunId.trim()) {
     throw new ControlApiError(502, "invalid_configuration_plan_response", "Configuration planning returned no Plan identifier.");
