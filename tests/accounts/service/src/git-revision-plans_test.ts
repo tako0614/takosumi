@@ -853,6 +853,44 @@ test("a revision to the exact applied commit is already current; the same commit
   expect(tracking.counts.sync).toBe(1);
 });
 
+test.each(["matching", "wrong_capsule", "wrong_snapshot", "already_adopted"])(
+  "an already-current revision exposes only applicable adoption evidence (%s)",
+  async (scenario) => {
+    const commit = "1".repeat(40);
+    const fixture = revisionFixture({
+      adoptedRef: commit,
+      acceptedRepositoryInstallUx: scenario === "already_adopted",
+    });
+    fixture.seedAppliedRepository({
+      capsuleId: scenario === "wrong_capsule" ? "cap_other" : fixture.capsule.id,
+      sourceSnapshotId: scenario === "wrong_snapshot" ? "snap_other" : "snap_adopted_revision",
+    });
+    const created = await fixture.request(
+      "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: commit },
+      { "idempotency-key": "check-current-repo-inputs" },
+    );
+    expect(created.status).toBe(201);
+    const settled = await fixture.reconcile((await created.json()).revisionPlan.id);
+    expect(settled.status).toBe(200);
+    const result = await settled.json();
+    expect(result).toMatchObject({
+      nextAction: "none",
+      revisionPlan: { phase: "failed", diagnostic: { code: "revision_already_current" } },
+    });
+    if (scenario === "matching") {
+      expect(result.revisionPlan).toMatchObject({
+        sourceSnapshotId: "snap_adopted_revision", compatibilityReportId: "caprep_applied",
+      });
+    } else {
+      expect(result.revisionPlan.compatibilityReportId).toBeUndefined();
+    }
+    expect(result.revisionPlan.planRunId).toBeUndefined();
+    expect(fixture.counts).toEqual({ sync: 0, compatibility: 0, plan: 0 });
+    expect(fixture.approvalCalls).toBe(0);
+    expect(fixture.applyCalls).toBe(0);
+  },
+);
+
 test.each([
   { stateVersionId: "sv_three", generation: 3, expectedPhase: "syncing_source", syncs: 1 },
   { stateVersionId: "sv_two", generation: 2, expectedPhase: "failed", syncs: 0 },
@@ -1299,6 +1337,11 @@ function revisionFixture(
       if (!snapshot) throw new OpenTofuControllerError("not_found", "missing");
       return snapshot;
     },
+    getCompatibilityReport: async (id: string) => {
+      const report = reports.get(id);
+      if (!report) throw new OpenTofuControllerError("not_found", "missing");
+      return { report };
+    },
     listSourceSnapshots: async () => ({ snapshots: [...snapshots.values()] }),
     listRuns: async () => [...runs.values()],
     createSourceCompatibilityCheck: async (
@@ -1416,7 +1459,7 @@ function revisionFixture(
       };
     },
     getRun: async (id: string) => {
-      if (id === "apply_three") {
+      if (id === "apply_three" && !runs.has(id)) {
         return {
           id,
           workspaceId: WORKSPACE.id,
@@ -1610,6 +1653,33 @@ function revisionFixture(
     },
     counts,
     sourceSyncActors,
+    seedAppliedRepository(reportScope: Pick<CapsuleCompatibilityReport, "capsuleId" | "sourceSnapshotId">) {
+      const snapshotId = "snap_adopted_revision";
+      const reportId = "caprep_applied";
+      snapshots.set(snapshotId, {
+        id: snapshotId, origin: "git", workspaceId: WORKSPACE.id, sourceId: source.id, url: source.url,
+        ref: options.adoptedRef!, resolvedCommit: "1".repeat(40), path: "deploy/app",
+        archiveRef: "archive/applied", archiveDigest: `sha256:${"b".repeat(64)}`, archiveSizeBytes: 42,
+        fetchedByRunId: "ssr_applied", fetchedAt: WORKSPACE.createdAt,
+        repositoryManifest: {
+          status: "present", digest: `sha256:${"a".repeat(64)}`,
+          document: {
+            apiVersion: "takosumi.com/v2.5", kind: "Repository",
+            install: { modules: { "deploy/app/deploy/app": { inputs: [], interfaces: [] } } },
+          },
+        },
+      });
+      reports.set(reportId, {
+        ...reportScope, id: reportId, sourceId: source.id, modulePath: "deploy/app", level: "ready",
+        findings: [], providerPackages: [], rootProviderRequirements: [], resources: [],
+        dataSources: [], provisioners: [], createdAt: WORKSPACE.createdAt,
+      });
+      runs.set("apply_three", {
+        id: "apply_three", type: "apply", status: "succeeded", workspaceId: WORKSPACE.id,
+        capsuleId: capsule.id, sourceSnapshotId: snapshotId, compatibilityReportId: reportId,
+        createdAt: WORKSPACE.createdAt,
+      });
+    },
     /** The ownership the coordinator reads after a refused Source sync. */
     attachOwnership(managementState: "active" | "draining" | "frozen") {
       (operations as { appOwnership?: unknown }).appOwnership = {

@@ -130,6 +130,16 @@ test("only a structured failed same-app source revision can open the input conte
   expect(reAdoptionRevisionFromError(new Error("revision_failed"), "capsule_a", "source_a")).toBeUndefined();
 });
 
+test("an up-to-date notice opens target inputs only with retained compatibility evidence", () => {
+  const body = { ...failedTarget(), nextAction: "none" };
+  const error = (compatibilityReportId?: string) => new ControlApiError(
+    409, "revision_already_current", "fixture",
+    { ...body, revisionPlan: { ...body.revisionPlan, compatibilityReportId } },
+  );
+  expect(reAdoptionRevisionFromError(error(), "capsule_a", "source_a")).toBeUndefined();
+  expect(reAdoptionRevisionFromError(error("report_applied"), "capsule_a", "source_a")).toBe("revision_failed");
+});
+
 test("actual form permits reread only for closed no-rebind outcomes and retains uncertain answers", async () => {
   for (const reason of ["capsule_install_config_rebind_conflict", "capsule_install_config_rebind_busy", "activity_failed", undefined]) {
     const state = controllers();
